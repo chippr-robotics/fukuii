@@ -114,7 +114,7 @@ keeps nodes in its LRU and its `persist()` is a no-op.
 
 For the engine swap this means: the **durability contract to preserve is "commit-ordered, with one synced barrier at
 finalization"**, not "WAL semantics". A copy-on-write B+tree with a durable commit per transaction gives the same
-property with no WAL at all. The ingest side's relaxed policy (spec 016 T056, `StateIngest.Durability`) maps to
+property with no WAL at all. The ingest side's relaxed policy (spec 016 T056, `StateIngest.Durability`) maps to, for example on libmdbx,
 `MDBX_SAFE_NOSYNC` / `MDBX_UTTERLY_NOSYNC` on the ingest transactions only, and DC-1's barrier maps to a synced commit
 before `completeSnapSync`.
 
@@ -133,7 +133,9 @@ before `completeSnapSync`.
 
 These are the baseline numbers Phase 0 must reproduce and the new engine must beat (spec SC-002..SC-005).
 
-## 8. What libmdbx gives and what it costs (desk evaluation; every row is a Phase 0 measurement)
+## 8. What libmdbx gives and what it costs (desk evaluation of the leading candidate; every row is a Phase 0 measurement)
+
+*Revised 2026-10-17: libmdbx is the leading candidate, not the decision. §12 widens the field and GT-1 picks by measurement.*
 
 | Property | RocksDB today | libmdbx | Consequence for fukuii |
 | --- | --- | --- | --- |
@@ -185,7 +187,7 @@ database. This spec's only obligation to it is negative: the stateless closure (
 engine, the flat stores, the FFM bindings or the key-level recorder's host-side plumbing (spec DC-8). The engine swap is
 host-only, which is the "clean ZK sandboxing" property the user asked for.
 
-## 11. Summary of the evaluation
+## 11. Summary of the evaluation (as of the first draft; §12–§15 revise the engine conclusion)
 
 - The pain is real and recorded in the repo: write stalls under a process-wide lock (F1), three-fold state writes
   during SNAP on ETH plus reference-count rewrites on every chain (F2), trie-walk reads for every account and slot
@@ -195,7 +197,110 @@ host-only, which is the "clean ZK sandboxing" property the user asked for.
   for execution, changesets instead of reference counts, one trie as a commitment structure) is the larger and
   consensus-adjacent part, and it is where the read and write amplification actually goes away.
 - libmdbx fits fukuii's existing single-writer shape, and its two sharp edges (long readers, no compression) are
-  measurable and manageable. The real risk is the **JVM binding**, and the answer is JDK 25 FFM over the amalgamated
+  measurable and manageable. Its real risk is the **JVM binding**; the answer is JDK 25 FFM over the amalgamated
   source rather than a third-party JNI.
 - The spec must gate every step on measurement against today's baseline, keep state roots byte-identical on both chains,
   and resolve the 017 DC-8 conflict with a key-set recorder before flat reads are turned on.
+
+## 12. The wider field: hot-tier candidates for the GT-1 bake-off
+
+*Added 2026-10-17 after the user's direction that libmdbx is not a hard requirement.* The hot tier must be embedded and
+in-process (see §13 for why networked engines are excluded from it). Candidates, with the desk reasons they are in or
+out, each to be confirmed or refuted by the harness (spec FR-021):
+
+| Candidate | Model | JVM route | Desk strengths | Desk risks | In the bake-off? |
+| --- | --- | --- | --- | --- | --- |
+| **libmdbx** | COW B+tree, single writer, MVCC readers, no WAL, no compaction | JDK 25 FFM over vendored amalgamation (no stable Maven artifact; §8) | no stall source outside commit; readers never block; used by Erigon and reth | binding is ours to own; long readers grow the file; no compression; COW amp on random keys | **Yes** |
+| **LMDB** | same model, older and smaller | `lmdbjava` (published, maintained) | the binding exists today | no automatic geometry; large txns spill poorly; same long-reader growth; `MDB_NOTLS` needed for Pekko threads | **Yes** (binding-maturity control) |
+| **RocksDB + flat model + close-fence** | LSM | `rocksdbjni` (today) | zero binding risk; Besu Bonsai proves flat-on-LSM | compaction and flush stalls remain; spec 015 budget remains; `deleteRange` grind (§7) | **Yes** (the control arm that must be beaten) |
+| **JetBrains Xodus** | log-structured, snapshot isolation, pure JVM | Maven | no native code; MVCC | GC of the log is background work (a stall source); JVM heap pressure; little EL precedent | Assessed; in only if it binds in a day |
+| **H2 MVStore** | COW B-tree pages in a single file, pure JVM | Maven | no native code; MVCC-ish | page cache on the JVM heap competes with `-Xmx`; background compaction of chunks; single-writer by lock | Assessed; in only if it binds in a day |
+| **Chronicle Map** | off-heap hash map, mmap | Maven | zero-copy, very fast point reads | no range scans (SNAP serving, healing walks need them); fixed-size entries; persistence model is a snapshot, not a transaction log | **No** (no ordered scan) |
+| **Pebble / Badger-class LSMs** | LSM, Go | none | geth's choice | not reachable from the JVM | **No** |
+| **fukuii segment store** (append-only mmap files for immutable chain data) | our own, FFM `MemorySegment` | none needed | headers/bodies/receipts never compete with state; zero-copy; the reth "static files" / Erigon ".seg" pattern | we own the format and its recovery; not a state store | **Paired with every candidate** (spec FR-022) |
+
+Ranking before measurement: libmdbx on the stall and reader properties; RocksDB on binding maturity; LMDB in between.
+The harness decides; the user chooses; INF-007 records.
+
+**What "Scala 3 database patterns" buys regardless of engine** (spec DC-12): typed `ReadTxn`/`WriteTxn` capabilities
+that make the single-writer invariant and the bounded-reader rule compile-time properties; opaque key types for the flat
+stores; `inline`-derived codecs so no reflection or runtime schema sits on the hot path; FFM `MemorySegment` reads so
+values are not copied into `IndexedSeq[Byte]`; `fs2.Stream` only from windowed APIs. These are the parts of the design
+that a Scala 3 codebase can do better than the Go and Rust clients' equivalents, and they are engine-agnostic.
+
+## 13. Networked engines: ClickHouse and ScyllaDB
+
+*Added 2026-10-17 at the user's request.*
+
+**Why neither can be the hot state store.** Both run as separate processes and are reached over a socket. A loopback
+round trip (serialize, syscall, scheduler, deserialize) costs on the order of 50–200 µs; an in-process page read from a
+warm mmap or block cache costs on the order of 0.1–1 µs. At 10⁵–10⁶ state reads per gigablock, the round trips alone
+exceed any plausible block time. Both are also merge-based: ScyllaDB is an LSM (memtables, SSTables, compaction, the
+same stall class as RocksDB, now behind a network); ClickHouse's MergeTree writes immutable parts and merges them in the
+background, and its point-lookup path (sparse primary index, granules of thousands of rows) is designed for scans, not
+for a `get(key)`. No production EL stores state in a networked database; reth, Erigon, geth, Besu and Nethermind all use
+an embedded store.
+
+**Where ClickHouse fits: the cold tier.** The access patterns that are badly served by a key-value state store are
+exactly ClickHouse's strengths:
+
+| Workload | Today | Cold tier (ClickHouse) |
+| --- | --- | --- |
+| `eth_getLogs` over long ranges | bloom-filter scan over receipts, block by block (`EthFilterService`, `FilterManager`) | columnar scan with address/topic indexes; the standard indexer stack (ethereum-etl, Xatu, Goldsky-class services) already does this |
+| Execution witnesses (017 FR-004 slow-tier store) | planned content-addressed node store | one table keyed by block hash; de-duplication by node hash is a `ReplacingMergeTree` |
+| Changesets past the pruning window (archive) | kept in the hot store forever | aged out asynchronously; historical state reconstruction by replay |
+| Expired history (#1483, EIP-4444) | not implemented | era/era1 files (spec 013 §5.6) as the canonical format; ClickHouse as the queryable index over them |
+| Traces, per-block metrics | not stored | append-only tables |
+
+Constraints that follow (spec FR-024, FR-025): writes are asynchronous and bounded, never on the import path; the hot
+tier is the source of truth within the pruning window; a node is complete without any cold store; the operator runs
+ClickHouse (a second process on the 16 GiB host class is a real cost and is part of the GT-3 assessment). The JVM
+client is the official `clickhouse-java` artifact (Maven, maintained).
+
+**ScyllaDB.** A distributed, Cassandra-compatible wide-column store. Its value is horizontal partitioning and
+replication across nodes under a key-value access pattern. The EL is a single node; its key-value needs are served
+better in-process; its analytical needs (logs, history) are columnar, not wide-column. There is no tier in fukuii that
+ScyllaDB serves better than the alternatives above. Assessed and declined (spec NG-9).
+
+## 14. Gigablock scale: what the storage side must provide
+
+*Added 2026-10-17.* The user's goal is efficiency at "much larger blocks and execution if ETH moves to gigablocks". The
+public record from the clients that have pursued gigagas-per-second throughput (re-verify at planning; Paradigm's reth
+performance write-ups of 2024 and the Reth 2.0 release of 2026-04) is consistent on where the time goes and what moved
+it:
+
+- **The serial state root was the largest single cost** (reported at more than three quarters of time-to-seal before
+  the work), because the trie was re-walked and re-hashed after execution finished. The fix was a **sparse trie**
+  updated in the background during execution and, in Reth 2.0, **cached across blocks**, bringing the end-of-block
+  root step to a few milliseconds on mainnet.
+- **Disk reads are the second cost**, cut by fetching only uncached trie portions ("partial proofs") and by flat state.
+- **Parallel execution** keys on knowing the access pattern ahead of time; EIP-7928 block-level access lists (live on
+  Amsterdam, spec 009) make that pattern consensus-validated rather than predicted.
+
+For fukuii this translates into spec DC-13: reads scale with cores (snapshot isolation, no shared lock); one commit per
+block; a parallel, cached state root that is byte-identical to the serial walk; memory per block proportional to the
+write and access sets; witnesses proportional to the access set; immutable data off the state engine; and nothing in
+the storage API that assumes one executing thread. The engine choice matters here only negatively: an engine with a
+shared lock, background stalls or per-read copies gets in the way; none of them delivers the parallel state root, which
+is `mpt/` and `ledger/` work under the consensus protocol (`beacon`, `forge`).
+
+**ETC at gigablock scale.** ETC's gas limit is set by miners and is far below ETH's, and ETC has no BALs. The same
+storage architecture serves it (flat reads, changesets, one layout; DC-9), and the parallel state root keys on the
+recorded write set where no BAL exists. ETC gets the latency and amplification wins now and the scale headroom for free.
+
+## 15. Baseline and targets (to be filled by Phase 0)
+
+| Figure | Today (RocksDB, basic pruning) Mordor | Today Platåberget | Chosen engine 1× | 10× | 30× |
+| --- | --- | --- | --- | --- | --- |
+| p50 / p99 `[IMPORT-TIMING]` per block | [MEASURE] | [MEASURE] | | | |
+| longest read wait at `DataSource` | [MEASURE] | [MEASURE] | | | |
+| engine bytes written ÷ block state bytes | [MEASURE] | [MEASURE] | | | |
+| state-root time ÷ import time (serial today) | [MEASURE] | [MEASURE] | | | |
+| DB size on disk (same synced state) | [MEASURE] | [MEASURE] | | | |
+| RSS / cgroup `memory.current` under import | [MEASURE] | [MEASURE] | | | |
+| SNAP `[STORAGE-PERF]` rate | [MEASURE] | [MEASURE] | | | |
+| resync from checkpoint archive (ETC) / snapshot (ETH) | [MEASURE] | [MEASURE] | | | |
+| witness bytes and generation time per block | (017) | (017) | | | |
+| read throughput, 1 vs 8 reader threads during commit | [MEASURE] | [MEASURE] | | | |
+
+SC-012's targets are confirmed or revised from the 1× column and recorded here before any Track F slice merges.

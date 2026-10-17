@@ -492,11 +492,13 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 ## Related specs
 
 - **Spec 016** (SNAP controller split and its 2026-10-11 amendment): delivers `StateIngest`; prerequisite.
-- **Spec 018** (storage engine consolidation): sits **beneath** this spec's `StateAccess` and spec 016's `StateIngest`
-  and swaps RocksDB for libmdbx with a flat state layout. It does not change this spec's signatures. It **amends DC-8**
+- **Spec 018** (storage architecture for gigablock-scale execution): sits **beneath** this spec's `StateAccess` and
+  spec 016's `StateIngest` and replaces RocksDB with an embedded engine chosen by bake-off, a flat state layout and a
+  parallel state root; its optional cold tier is a candidate home for this spec's slow-tier witness store (FR-004). It
+  does not change this spec's signatures. It **amends DC-8**
   (its DC-7): under a flat execution read path the recorder becomes a key-set recorder plus a trie proof walk, and the
   witness must stay byte-identical to `RecordingMptStorage`'s on the differential set (018 SC-007). Until that is
-  green, DC-8 and `RecordingMptStorage` stand as written here. It also extends the DC-15 check to name `db.mdbx` and
+  green, DC-8 and `RecordingMptStorage` stand as written here. It also extends the DC-15 check to name the engine binding, `db/` and
   `java.lang.foreign` (018 DC-8). Sequence: 016 → 017 → 018 → 019 (user decision, 2026-10-17).
 - **Spec 019** (zkVM guest program, renumbered from 018 on 2026-10-17): compiles this spec's `StatelessExecutor` for a
   bare-metal RISC-V zkVM target. Depends on DC-15 and on G-2's executor existing and passing the differential test on

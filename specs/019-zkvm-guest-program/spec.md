@@ -213,8 +213,8 @@ coordinated so the "Technology & Architecture Constraints" section is rewritten 
   bridges) is a later decision; the chain spec makes it a configuration change, not a new program, if it happens.
 - **NG-6 A second EVM.** The guest is fukuii's existing EVM compiled or translated for another target, not a rewrite.
   Under Approach B the translator consumes the same source; a hand-maintained C port is excluded.
-- **NG-7 A storage engine in the guest.** The guest reads a witness and nothing else (DC-7). Spec 018's host data tier
-  (libmdbx, flat state, changesets) is invisible to it.
+- **NG-7 A storage engine in the guest.** The guest reads a witness and nothing else (DC-7). Spec 018's host data
+  tiers (the hot-tier engine, flat state, changesets, the cold tier) are invisible to it.
 - **NG-8 A general-purpose Scala-to-C compiler.** Approach B's translator covers the stateless closure's subset and is
   allowed to reject everything else.
 
@@ -246,9 +246,9 @@ fixed-width `UInt256` is expected to be faster on the JVM too, and that is measu
 
 **DC-7 — The witness is the only thing that crosses the host/guest boundary.** The host (the node, with spec 018's data
 tier) produces the `ExecutionWitness`; the guest consumes it over an in-memory `WitnessMptStorage` (017 FR-005) and has
-no database, no file system and no storage engine of any kind. No type from `db/`, from spec 018's flat stores or
-changesets, or from `java.lang.foreign` may appear in the stateless closure; spec 018 DC-8 enforces this from the host
-side, and the guest build (A) or the subset checker (B) enforces it from this side. The guest's memory is the witness
+no database, no file system and no storage engine of any kind. No type from `db/`, from spec 018's flat stores,
+changesets, segment store or cold tier, or from `java.lang.foreign` may appear in the stateless closure; spec 018 DC-8
+enforces this from the host side, and the guest build (A) or the subset checker (B) enforces it from this side. The guest's memory is the witness
 plus the block plus bounded working state, and OQ-4's ceiling is stated in those terms.
 
 **DC-8 — The subset is a ratchet, whichever route wins.** Even under Approach A, the stateless closure is held to the
@@ -379,9 +379,10 @@ reproduces them bit for bit.
 
 - **Spec 017** (state capabilities and execution witnesses): prerequisite. Supplies `StatelessExecutor`, the
   witness format and the dependency boundary.
-- **Spec 018** (storage engine consolidation): prerequisite. Settles the host data tier (libmdbx, flat state,
-  changesets) beneath the capability gateways and guarantees (its DC-8) that the stateless closure gains no engine
-  dependency; its SC-007 keeps witnesses byte-identical under the flat read path, so the guest's input does not change
-  while the host changes.
+- **Spec 018** (storage architecture for gigablock-scale execution): prerequisite. Settles the host data tiers (an
+  embedded hot-tier engine chosen by bake-off, flat state, changesets, a parallel state root, an optional cold tier)
+  beneath the capability gateways and guarantees (its DC-8) that the stateless closure gains no engine dependency; its
+  SC-007 keeps witnesses byte-identical under the flat read path, so the guest's input does not change while the host
+  changes.
 - **Spec 009** (Amsterdam fork support): the guest must cover Amsterdam semantics, including BALs and the EIP-8037
   gas accounting that spec 009 calls load-bearing.
