@@ -844,6 +844,7 @@ listed only as an inertness oracle.
 * `actors/TrieNodeHealingCoordinator.scala:2237` doc "Replaces startParallelFrontierDFS" (history, acceptable).
 * **Legit DFS (do not rename)**: `StateValidator.scala:223,253,266,273,303,304,342` (`walkAccountTrieDFS`, `walkStorageTrieDFS`, explicit stack) — the validator really is DFS.
 * Tests with stale wording: `SNAPSyncControllerSpec:482`, `FrontierRebuildSpec:12,15`, `HealingFrontierResumeSpec:32,52,53,101,141–166`, `HealingTrieFixtures:363` (all say "DFS" for the BFS rebuild; `RebuildFrontierBfsMultiSeedSpec` already uses BFS).
+* **[016] R1 (T080) correction:** the `SSC` #1188 note (`:407` above), `StateValidationModule.validateState`'s copy of it and `SNAPSyncControllerSpec:482` describe the controller's Hash-scheme healing walk (`startTrieWalk` → `StateValidator.findMissingNodesStreaming` → `walkAccountTrieDFS`), which is a real DFS, so they keep "DFS". What T080 renamed and what it left is in tasks.md T080.
 
 ## R10. Open items placed on modules
 

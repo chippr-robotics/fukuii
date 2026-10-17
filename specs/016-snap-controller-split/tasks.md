@@ -2490,15 +2490,61 @@ Any other rise is still forbidden. Instances:
 
 ## R1 — Renames and final check
 
-- [ ] T080 [R1] DFS → BFS in comments, scaladoc and test **descriptions** (research.md R9 list). `StateValidator`'s
+- [x] T080 [R1] DFS → BFS in comments, scaladoc and test **descriptions** (research.md R9 list). `StateValidator`'s
   DFS names are **not** changed, and neither is the `healing-visited-cap` config key.
-- [ ] T090 [R1] Routing-doc check. For every row, verify that:
+  - **As built** (branch `refactor/snap-016-r1-renames-routing`, one plain refactor commit; partial: the test names
+    are left, below). R9's line numbers predate the split, so the list was re-run (`grep -niE 'dfs|depth.?first'`
+    over `snap/`, its tests and `sync.conf`) and each hit checked against the code: the post-SNAP frontier rebuild is
+    `FrontierRebuildBfs` (BFS since #1352), while the controller's Hash-scheme healing walk (`startTrieWalk` →
+    `StateValidator.findMissingNodesStreaming` → `walkAccountTrieDFS`) is a real DFS.
+  - Renamed to BFS (frontier rebuild): `SSC` `healingVisitedCap` note ("frontier-rebuild BFS `visited` LRU"),
+    `HealingOrchestrator.healingFrontierStorageOpt` doc ("always full BFS on restart"), `FrontierRebuildSpec` scaladoc
+    (2), `HealingFrontierResumeSpec` scaladoc and comments (7), `HealingTrieFixtures.childlessLeafRoot` doc.
+  - Left, correct as DFS (R9 listed them as stale): the #1188 notes in `SSC` (`healingValidatedRoot`, "DFS-walked
+    end-to-end"), `StateValidationModule.validateState` ("via DFS") and `SNAPSyncControllerSpec` (the same note):
+    they describe the controller's StateValidator walk. Left as history: `FrontierRebuildBfs` "Replaces
+    startParallelFrontierDFS". Left by rule: `StateValidator`, `healing-visited-cap`, and no log text (the heal log
+    lines already say BFS).
+  - **Left, blocked by verify:** `sync.conf` "the full DFS is skipped" (`src/main/resources` is frozen on split
+    branches, step 4), and in `HealingFrontierResumeSpec` the four test names ("... skip the full-state DFS", "...
+    re-runs the full-state DFS", "fall back to the full-state DFS ..." ×2) and the comment "must fall back to the full
+    DFS": each line carries `should`/`must`/`taggedAs`, which the step 3 test-hunk guard rejects on a
+    `refactor/snap-016-*` branch whatever the trailers. They need a `test/snap-016-*` PR with `# test-files:` (and a
+    resources-allowed fix PR for `sync.conf`), or stay. Outside R9's scope and unchanged: DFS wording about the heal
+    walk in `db/storage/HealingFrontierStorage.scala` (3) and `RocksDbDataSource.scala` (1).
+  - Build: `sbt compile-all` green; `scalafmtAll` changed nothing. `testOnly` `FrontierRebuildSpec` and
+    `HealingFrontierResumeSpec`: 13/13 green (a first run under host load timed out the 3-s `eventually` of "resume from
+    a COMPLETE persisted frontier" once, 12/13; the rerun passed; the commit changes comments only). Not run:
+    `testEssential`.
+- [x] T090 [R1] Routing-doc check. For every row, verify that:
   - the files exist;
   - each listed log tag is emitted in one of them (`grep`);
   - each metric is registered in `SNAPSyncMetrics` or in one of them;
   - each config key is parsed in `SNAPSyncConfig` and consumed in one of them.
 
   Every row is marked "target (post-split)".
+  - **As built** (same branch, one commit). The check is a script, `scripts/snap-split/routing_check.py` (standard
+    library; extraction is by backticks, so prose and negative notes are not claims; `SSC` and `{A,B}` are expanded,
+    `src/.../<rest>` is the one file under `src/main/scala` ending in `<rest>`; a tag counts only on a non-comment
+    line; `*` in a metric or key is a wildcard; "consumed" is a `.<field>` read of the key's `SNAPSyncConfig` field;
+    `network.*` keys are skipped as not `sync.snap-sync` keys). Self-test `tests/test_routing_check.py` (16 cases),
+    run by `snap-split-verify` with the other self-tests. Result: 7/21 rows before, **21/21** after the doc fixes.
+  - Per row (line in the doc): controller core: status flipped; `[SNAP]` removed (in `PivotSelector` since M8c);
+    `timeout` moved to Download supervision (read by the coordinator spawns); `enabled` and `max-retries` are a code
+    gap (below). Peer pool: the "no longer logs" note made plain text. The three network sub-rows and requests/proofs:
+    status flipped ("unchanged"). Pivot selection, pivot refresh, download supervision, stagnation watchdog, healing
+    orchestration, state validation, lifecycle: passed as they were (download supervision gains `timeout`). Resume:
+    `controller/DownloadSupervisor.scala` qualified; the readers of the recovery keys outside `snap/` named
+    (`StorageRecoveryActor`, `CombinedRecoveryScanActor`, `SyncController`). Intake gate: the `[ACCOUNT-IDLE]` emitter
+    (`AccountRangeCoordinator`) named. Finalization: `chain-download-boosted-concurrent-requests` is a code gap. ARC:
+    `AccountPeerDispatch.scala` qualified twice, `[STORAGE-STATE]` removed (ARC no longer emits it; only a comment in
+    `AccountTaskLifecycle`), spawn site named. ByteCode, SRC, TNHC, shared window: the spawn site that reads the keys
+    named (`DownloadSupervisor`; `HealingOrchestrator.spawnHealingCoordinator`; `SSC`'s `intakeBudget` and
+    during-accounts cap); SRC's size 1,998 → 1,471; TNHC's target says C-H5 done. The doc's header no longer says
+    draft.
+  - **Code gaps (reported, not fixed; FR-034):** `sync.snap-sync.enabled`, `max-retries` and
+    `chain-download-boosted-concurrent-requests` are parsed by `SNAPSyncConfig.fromConfig` but no code reads the
+    field (SNAP is gated by `sync.do-snap-sync`). The doc names them without backticks and says so. For CHASE-QUEUE.
 
 ## Placed open items (NOT in this series; each is a separate fix PR against the current layout)
 
