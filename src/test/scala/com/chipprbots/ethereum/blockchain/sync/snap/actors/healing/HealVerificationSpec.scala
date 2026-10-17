@@ -11,6 +11,8 @@ import scala.collection.mutable
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
@@ -34,6 +36,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** `HealVerification`'s state, environment, walk launchers and completion check as plain fields (spec 016 C-H3). The
@@ -67,6 +70,15 @@ private class StubHealVerificationState(
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[HealVerificationSpec])
   val asyncLog: org.slf4j.Logger = log
   val prunedHealVerification: Boolean = prunedEnabled
+  def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] =
+    throw new UnsupportedOperationException("HealVerification read networkPeerManager")
+  def requestTracker: SNAPRequestTracker = throw new UnsupportedOperationException(
+    "HealVerification read requestTracker"
+  )
+  def snapSyncController: ActorRef[SNAPSyncController.Command] =
+    throw new UnsupportedOperationException("HealVerification read snapSyncController")
+  val batchSize: Int = 32
+  val movingRootDeltaHeal: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   def mptStorage: MptStorage = notReached("mptStorage")

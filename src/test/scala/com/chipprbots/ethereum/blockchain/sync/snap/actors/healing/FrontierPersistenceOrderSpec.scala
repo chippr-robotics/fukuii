@@ -16,6 +16,8 @@ import ch.qos.logback.core.read.ListAppender
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
@@ -38,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** An `MptStorage` that, at each `persist()`, takes a snapshot of the frontier store for the nodes of the write being
@@ -82,6 +85,15 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   val storageScheme: StorageScheme = StorageScheme.Hash
   val prunedHealVerification: Boolean = true
+  def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] =
+    throw new UnsupportedOperationException("FrontierPersistence read networkPeerManager")
+  def requestTracker: SNAPRequestTracker = throw new UnsupportedOperationException(
+    "FrontierPersistence read requestTracker"
+  )
+  def snapSyncController: ActorRef[SNAPSyncController.Command] =
+    throw new UnsupportedOperationException("FrontierPersistence read snapSyncController")
+  val batchSize: Int = 32
+  val movingRootDeltaHeal: Boolean = false
   val mptStorage: OrderRecordingMptStorage = new OrderRecordingMptStorage(Some(frontierStore))
   val frontierPersistenceEnabled: Boolean = true
   val decoupledHealServeRoot: Boolean = false
