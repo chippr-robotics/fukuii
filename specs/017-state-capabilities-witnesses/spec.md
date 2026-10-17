@@ -10,7 +10,7 @@ the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the dec
 **Revised again 2026-10-11 (Ethereum roadmap alignment)**: ETH mainnet is the design driver. The witness is now
 specified as the execution-specs `ExecutionWitness` served over `debug_executionWitness` (DC-11, DC-16), the model is
 free of MPT-specific types ahead of EIP-7864 (DC-12), every validity-relevant read is recorded (DC-13), BALs give a
-self-check (DC-14), and the stateless core keeps a dependency boundary that spec 018 (zkVM guest) builds on (DC-15).
+self-check (DC-14), and the stateless core keeps a dependency boundary that spec 019 (zkVM guest) builds on (DC-15).
 To be fleshed out with `/speckit-specify`
 and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints section below is binding
 on that later work.
@@ -73,7 +73,7 @@ witness. The dead `vm.external.*` config that `VmConfig` still parses is removed
 
 ## Strategic motivation
 
-**ETH mainnet is the design driver.** *(Every roadmap statement in this section, in DC-11 to DC-16 and in spec 018 is
+**ETH mainnet is the design driver.** *(Every roadmap statement in this section, in DC-11 to DC-16 and in spec 019 is
 unverified as of this stub and is to be re-verified at `/speckit-plan` time: the EF L1-zkEVM roadmap's asks, FOCIL
 (EIP-7805) and frame transactions (EIP-8141) as Hegota must-ships, Ere, and the phase numbering. Treat them as the
 working hypothesis, not as settled.)* The decisive input is the Ethereum Foundation's L1-zkEVM roadmap (2026): L1 is
@@ -86,7 +86,7 @@ prover → CL verifier. The roadmap assigns EL clients two projects:
    tests, and the RPC in execution-apis. Reth is named as the reference implementation, and Kona already consumes the
    endpoint in production.
 2. **A guest program.** A stateless validation program built reproducibly for a standardized bare-metal RISC-V target.
-   That is spec 018, which builds on this spec's `StatelessExecutor`.
+   That is spec 019, which builds on this spec's `StatelessExecutor`.
 
 This spec is fukuii's delivery of project 1. It also positions fukuii for the other roadmap items that change the
 witness: block-level access lists (EIP-7928, shipped in Amsterdam), FOCIL (EIP-7805) and frame
@@ -115,7 +115,7 @@ The original motivations still hold:
   execution-specs `ExecutionWitness` format (DC-11, DC-16).
 - G-7 A witness model and recorder that are not tied to the hexary MPT, so EIP-7864 changes a backend, not the
   design (DC-12).
-- G-8 A `StatelessExecutor` with a dependency boundary narrow enough for spec 018 to compile it for a zkVM target
+- G-8 A `StatelessExecutor` with a dependency boundary narrow enough for spec 019 to compile it for a zkVM target
   (DC-15).
 
 ## Non-goals
@@ -130,7 +130,7 @@ The original motivations still hold:
   `Difficulty`, `TotalDifficulty`) are reused, not reworked.
 - **NG-5 Consensus changes.** Witness capture observes execution; it never changes a state root, gas figure or hash.
 - **NG-6 Witness capture during SNAP.** See DC-5.
-- **NG-7 The zkVM guest program.** Spec 018 owns it. This spec only keeps the stateless core buildable for it
+- **NG-7 The zkVM guest program.** Spec 019 owns it. This spec only keeps the stateless core buildable for it
   (DC-15).
 - **NG-8 A proof-verifying validation mode.** Accepting a zk proof in place of re-execution is the roadmap's end
   state, but it is out of scope here. `StateAccess` and `SyncMode` must not preclude it: a later spec adds block
@@ -268,8 +268,8 @@ on DC-2's warm-equals-cold test and the differential test.
 Pekko actors or streams, Cats Effect, Monix, or other JVM-runtime-only libraries. Its public API is pure: block bytes,
 witness bytes and chain spec in, `Either[Error, postRoot]` out, with no I/O and no threads. Existing JVM-only
 dependencies in that closure (Pekko `ByteString` across `vm`, `mpt`, `domain`, `rlp`, `bytes` and `crypto`;
-BouncyCastle hex and crypto) are **inventoried, not removed**, as input to spec 018. A dependency check in the
-style of DC-4 enforces "no new ones". Rationale: spec 018 compiles this closure for a bare-metal RISC-V zkVM target.
+BouncyCastle hex and crypto) are **inventoried, not removed**, as input to spec 019. A dependency check in the
+style of DC-4 enforces "no new ones". Rationale: spec 019 compiles this closure for a bare-metal RISC-V zkVM target.
 Keeping it clean costs nothing now and is expensive to recover later.
 
 **DC-16 — RPC retention and serving.** `debug_executionWitness` is bounded by what can be produced, and that depends
@@ -449,7 +449,7 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 - **SC-007** Over a Sepolia capture run of at least 10,000 Amsterdam blocks, the BAL self-check (DC-14) reports zero
   gaps.
 - **SC-008** The DC-15 dependency check is green, and the inventory of existing JVM-only dependencies in the stateless
-  closure is published as an input to spec 018.
+  closure is published as an input to spec 019.
 - **SC-009** Under a saturating load of `debug_executionWitness` regeneration requests, block import time
   (`[IMPORT-TIMING]`) does not regress beyond the agreed tolerance, excess requests are rejected with the explicit
   error, and the import path is shown to share no executor or lock with regeneration.
@@ -492,8 +492,17 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
 ## Related specs
 
 - **Spec 016** (SNAP controller split and its 2026-10-11 amendment): delivers `StateIngest`; prerequisite.
-- **Spec 018** (zkVM guest program): compiles this spec's `StatelessExecutor` for a bare-metal RISC-V zkVM target.
-  Depends on DC-15 and on G-2's executor existing and passing the differential test on the JVM first.
+- **Spec 018** (storage architecture for gigablock-scale execution): sits **beneath** this spec's `StateAccess` and
+  spec 016's `StateIngest` and replaces RocksDB with an embedded engine chosen by bake-off, a flat state layout and a
+  parallel state root; its optional cold tier is a candidate home for this spec's slow-tier witness store (FR-004). It
+  does not change this spec's signatures. It **amends DC-8**
+  (its DC-7): under a flat execution read path the recorder becomes a key-set recorder plus a trie proof walk, and the
+  witness must stay byte-identical to `RecordingMptStorage`'s on the differential set (018 SC-007). Until that is
+  green, DC-8 and `RecordingMptStorage` stand as written here. It also extends the DC-15 check to name the engine binding, `db/` and
+  `java.lang.foreign` (018 DC-8). Sequence: 016 → 017 → 018 → 019 (user decision, 2026-10-17).
+- **Spec 019** (zkVM guest program, renumbered from 018 on 2026-10-17): compiles this spec's `StatelessExecutor` for a
+  bare-metal RISC-V zkVM target. Depends on DC-15 and on G-2's executor existing and passing the differential test on
+  the JVM first, and on spec 018's host data tier being settled.
 
 ## Known tasks (seed for /speckit-tasks)
 
