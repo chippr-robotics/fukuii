@@ -362,7 +362,6 @@ private[snap] trait HealingOrchestrator
               healingMinParallelism = snapSyncConfig.healingMinParallelism,
               healingReservedCores = snapSyncConfig.healingReservedCores,
               storageScheme = snapSyncConfig.storageScheme,
-              pathNodeStorageOpt = stateIngest.pathNodes,
               frontierHighWater = snapSyncConfig.healingFrontierHighWater,
               frontierLowWater = snapSyncConfig.healingFrontierLowWater,
               scopedHealVerification = snapSyncConfig.scopedHealVerification,

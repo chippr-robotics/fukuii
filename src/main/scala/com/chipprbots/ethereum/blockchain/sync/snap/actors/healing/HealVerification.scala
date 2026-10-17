@@ -7,7 +7,6 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.VerificationBFSComplete
@@ -38,8 +37,7 @@ private[actors] trait HealVerificationState:
   def prunedEnabled: Boolean
 
 /** What the frontier-rebuild walk calls for a Path-scheme read: `readPathVerifiedNode`, the bytes at the entry's own
-  * path, counted present only when they hash to the entry's hash. It stays in the core until C-H3 (`HealVerification`)
-  * moves it.
+  * path, counted present only when they hash to the entry's hash. `HealVerification` provides it (spec 016 C-H3).
   */
 private[actors] trait PathVerifiedReadApi:
   def readPathVerifiedNode(hash: ByteString, pathset: Seq[ByteString]): Option[MptNode]
@@ -68,7 +66,7 @@ private[actors] trait HealCompletionApi:
   * that call it and handle the verdict (`healVerificationArms`, the completion gate).
   */
 private[actors] trait HealVerification extends PathVerifiedReadApi with PathVerifiedRlpApi:
-  this: TrieNodeHealingCoordinatorImpl =>
+  this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi =>
 
   /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
     * against a superseded root or found missing nodes. Starts the walk directly (not via HealingCheckCompletion): the
@@ -176,7 +174,7 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     */
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
     import com.chipprbots.ethereum.mpt.HexPrefix
-    pathNodeStorageOpt.flatMap { pns =>
+    stateIngest.pathNodes.flatMap { pns =>
       val stored: Option[Array[Byte]] = pathset match
         case Seq(compactPath) =>
           pns.readAccountNode(HexPrefix.decode(compactPath.toArray)._1)

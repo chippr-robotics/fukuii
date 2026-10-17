@@ -21,7 +21,6 @@ import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -58,7 +57,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     healingMinParallelism: Int = TrieNodeHealingCoordinator.DefaultMinParallelism,
     healingReservedCores: Int = TrieNodeHealingCoordinator.DefaultReservedCores,
     val storageScheme: StorageScheme = StorageScheme.Hash,
-    val pathNodeStorageOpt: Option[PathNodeStorage] = None,
     val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
     val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
     val frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
@@ -107,7 +105,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     with TrieNodeHealingEnv
     with FrontierPersistenceState
     with FrontierRebuildBfsState
-    with PathVerifiedReadApi:
+    with HealVerificationState
+    with HealCompletionApi:
 
   import TrieNodeHealingCoordinator.*
 
@@ -1557,7 +1556,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             case StorageScheme.Path =>
               // PathScheme: write directly by nibble path (no batching needed — healing is low-volume).
               // pathset = [HP-path] for account trie, [accountHash32, HP-path] for storage trie.
-              pathNodeStorageOpt.foreach { pns =>
+              stateIngest.pathNodes.foreach { pns =>
                 def writeAt(task: HealingEntry): Unit =
                   val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(task.pathset.last.toArray)._1
                   if task.pathset.size > 1 then
@@ -2154,7 +2153,6 @@ object TrieNodeHealingCoordinator:
       healingMinParallelism: Int = DefaultMinParallelism,
       healingReservedCores: Int = DefaultReservedCores,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorageOpt: Option[PathNodeStorage] = None,
       frontierHighWater: Int = DefaultFrontierHighWater,
       frontierLowWater: Int = DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = FrontierBackpressureMaxWaitMs,
@@ -2195,7 +2193,6 @@ object TrieNodeHealingCoordinator:
           healingMinParallelism = healingMinParallelism,
           healingReservedCores = healingReservedCores,
           storageScheme = storageScheme,
-          pathNodeStorageOpt = pathNodeStorageOpt,
           frontierHighWater = frontierHighWater,
           frontierLowWater = frontierLowWater,
           frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,

@@ -53,20 +53,22 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   */
 object HealingTrieFixtures:
 
-  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2): through it the coordinator reads only
-    * `healingFrontier`, the spec's frontier store (or `None`), and `bfsQueue`, the spec's BFS queue (or `None`, the
-    * coordinator's in-memory fallback); every other member throws, so a test that reaches one is a change in what
-    * healing reads through the capability.
+  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2, C-H3): through it the coordinator reads only
+    * `healingFrontier`, the spec's frontier store (or `None`), `bfsQueue`, the spec's BFS queue (or `None`, the
+    * coordinator's in-memory fallback), and `pathNodes`, the spec's Path-scheme node store (or `None`, the Hash
+    * scheme); every other member throws, so a test that reaches one is a change in what healing reads through the
+    * capability.
     */
   def healingIngest(
       frontier: Option[HealingFrontierStorage],
-      bfsQueueStore: Option[BfsQueueStorage] = None
+      bfsQueueStore: Option[BfsQueueStorage] = None,
+      pathNodeStore: Option[PathNodeStorage] = None
   ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
-      def pathNodes: Option[PathNodeStorage] = notReached("pathNodes")
+      def pathNodes: Option[PathNodeStorage] = pathNodeStore
       def bytecode: EvmCodeStorage = notReached("bytecode")
       def chainReader: BlockchainReader = notReached("chainReader")
       def chainWriter: BlockchainWriter = notReached("chainWriter")
@@ -137,14 +139,13 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt),
+        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
         healingMinParallelism = healingMinParallelism,
         healingReservedCores = healingReservedCores,
         storageScheme = storageScheme,
-        pathNodeStorageOpt = pathNodeStorageOpt,
         frontierHighWater = frontierHighWater,
         frontierLowWater = frontierLowWater,
         frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,

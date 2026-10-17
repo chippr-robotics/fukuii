@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -157,7 +156,6 @@ trait ChildFactories:
       healingMinParallelism: Int = TrieNodeHealingCoordinator.DefaultMinParallelism,
       healingReservedCores: Int = TrieNodeHealingCoordinator.DefaultReservedCores,
       storageScheme: StorageScheme = StorageScheme.Hash,
-      pathNodeStorageOpt: Option[PathNodeStorage] = None,
       frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
       frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
@@ -187,7 +185,6 @@ trait ChildFactories:
       healingMinParallelism = healingMinParallelism,
       healingReservedCores = healingReservedCores,
       storageScheme = storageScheme,
-      pathNodeStorageOpt = pathNodeStorageOpt,
       frontierHighWater = frontierHighWater,
       frontierLowWater = frontierLowWater,
       frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,
