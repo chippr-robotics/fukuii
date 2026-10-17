@@ -1314,6 +1314,7 @@ STORAGE_NAME_ALLOW_V2 = STORAGE_NAME_ALLOW | frozenset({
     "createStorageTask",           # StorageTask companion factory (a task value, not a store)
     "validateStorageRanges",       # SNAPRequestTracker response validation (pure)
     "verifyStorageRange",          # MerkleProofVerifier proof check over the response's own nodes (pure)
+    "verifyStorageChunk",          # StorageRangeCoordinator per-account wrapper over verifyStorageRange (pure)
     "attachStorageConsumer",       # SnapIntakeBudget admission counter
     "pendingStorageTasks",         # SnapIntakeBudget admission counter
     "setStoragePendingTries",      # SNAPSyncMetrics gauge setters

@@ -1973,7 +1973,7 @@ Any other rise is still forbidden. Instances:
       `staleRootFailuresByAccount`'s doc, which stays in the core with the field; the #1533 rationale block stays above
       the queue fields in the core; the moved `maxEmptyResponsesPerTask` and `maxStaleRootFailuresPerAccount` sit in the
       trait without the field-block comments that explain them.
-    - Follow-up (tooling, not this slice): add `verifyStorageChunk` (the pure companion wrapper of
+    - Follow-up, done (tooling PR before C-H3; no measured count moved, the wildcard import counting 0 already) (tooling, not this slice): add `verifyStorageChunk` (the pure companion wrapper of
       `MerkleProofVerifier.verifyStorageRange`) to `STORAGE_NAME_ALLOW_V2`, so a module may import it by name; C-H3 and
       C-H5 may meet the same import shape.
     - Owed: the second-specialist review (prism), forge's "no ETC behaviour change" sign-off (SRC runs on ETC), and vault
