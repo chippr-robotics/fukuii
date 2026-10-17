@@ -447,7 +447,9 @@ None names the Sepolia node.
 - **SC-001** After the last controller slice (M11), `SNAPSyncController.scala` holds no more than about 1,000 lines:
   shell, constructor, companion `apply` and config. No `snap/controller/` module exceeds about 900 lines, and `syncing`
   contains no `currentPhase ==` test.
-- **SC-002** After the last coordinator slice, no coordinator file exceeds about 1,000 lines.
+- **SC-002** After the last coordinator slice, no coordinator file exceeds about 1,000 lines. **Amended (user
+  decision 2026-10-17):** the as-built coordinator sizes are accepted in place of the bound; see "Amendment 2026-10-17:
+  SC-002 coordinator file size" below.
 - **SC-003** The five pin tests and the S0c golden vectors exist and pass from S0 onward, and are never edited by a
   move PR.
 - **SC-004** Zero assertion changes across the regression suites over the whole series, checked per PR.
@@ -586,6 +588,30 @@ before the coordinator stage (T060), and every coordinator task is amended:
   - in addition, an A/B on that same host (pre-wrap build vs post-wrap build, same chain, same starting state) shows no
     regression. If the pre-wrap build cannot reproduce ~1.7M/h, the fresh same-host pre-wrap measurement becomes the
     baseline, and the PR says so.
+
+## Amendment 2026-10-17: SC-002 coordinator file size (user decision)
+
+**Decision, verbatim from the user (2026-10-17):** "I am comfortable with the current file sizes, we can update
+SC-002."
+
+**Why.** The coordinator stage (C-B1, C-A1–C-A4, C-S1–C-S4, C-H0–C-H5, C-X) moved each coordinator's phase work into
+module files under `snap/actors/{bytecode,account,storage,healing}/`. The cores keep the behaviour arms, the
+lifecycle, the progress and the fields, so three of them stay above the ~1,000-line bound. Meeting it would take
+further C-* slices (for example moving arm groups out of the cores); the user chose to amend SC-002 instead. SC-002
+was checked at C-H5 (T075) and after C-X (T076) and was not met at either (tasks.md T075, T076).
+
+**As built** (`wc -l` at C-X on staging, `ee02abf3f`; R1 changes no coordinator code):
+
+| Coordinator file (`snap/actors/`) | Lines |
+|---|---|
+| `TrieNodeHealingCoordinator.scala` | 1,532 |
+| `StorageRangeCoordinator.scala` | 1,471 |
+| `AccountRangeCoordinator.scala` | 1,147 |
+| `ByteCodeCoordinator.scala` | 548 |
+
+**SC-002 as amended.** After the last coordinator slice, each coordinator core holds its arms, lifecycle, progress and
+fields, and its phase work is in the module files named by the routing doc. The sizes above are the accepted
+outcome; no further C-* slice is planned for size alone. SC-001 (the controller) is unchanged.
 
 ## Open Questions
 

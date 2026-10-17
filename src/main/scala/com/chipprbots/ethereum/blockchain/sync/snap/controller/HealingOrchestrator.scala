@@ -314,7 +314,7 @@ private[snap] trait HealingOrchestrator
   // end if !trieWalkInProgress && currentPhase == StateHealing
 
   /** Layer 2: shared, lazily-built persisted-frontier handle for the healing coordinator. `None` (the default,
-    * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full DFS on restart. Reuses
+    * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full BFS on restart. Reuses
     * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open. Handed to the healing
     * spawn as `stateIngest.healingFrontier` (spec 016 C-H1), by-name, so it is still built on the first spawn.
     */

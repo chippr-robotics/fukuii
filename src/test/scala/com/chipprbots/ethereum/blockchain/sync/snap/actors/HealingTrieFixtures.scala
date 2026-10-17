@@ -399,7 +399,7 @@ object HealingTrieFixtures:
 
     WideLevelFixture(storage = storage, rootHash = ByteString(root.hash), expectedFrontier = missingCount)
 
-  /** A childless present leaf root: the trivial trie used to take the restart (resume/DFS) branch without any walk
+  /** A childless present leaf root: the trivial trie used to take the restart (resume/BFS) branch without any walk
     * discovering anything. Mirrors `HealingFrontierResumeSpec.storedRoot`. Returns `(storage, rootHash)`.
     */
   def childlessLeafRoot(): (TestMptStorage, ByteString) =

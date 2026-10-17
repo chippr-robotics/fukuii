@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 /** Layer-2 resume behaviour of [[TrieNodeHealingCoordinator]] — `sync.snap-sync.healing-frontier-persistence`.
   *
-  * On `[HEAL-RESTART]` (root already in storage), a non-empty persisted frontier is loaded and the full-state DFS is
+  * On `[HEAL-RESTART]` (root already in storage), a non-empty persisted frontier is loaded and the full-state BFS is
   * skipped; an empty/absent/disabled frontier falls back to the provably-complete walk. New enqueues are mirrored to
   * the persisted store. See docs/design/healing-frontier-scale.md (Layer 2).
   *
@@ -49,8 +49,8 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
   private def hash(i: Int): ByteString = kec256(ByteString(s"frontier-entry-$i"))
   private def pathset(i: Int): Seq[ByteString] = Seq(ByteString(Array[Byte](0x20, i.toByte)))
 
-  /** A trivially-present root node so `StartTrieNodeHealing` takes the restart (resume/DFS) branch. A childless leaf ⇒
-    * the fallback DFS discovers nothing ⇒ pendingTasks stays 0 unless resume populated it.
+  /** A trivially-present root node so `StartTrieNodeHealing` takes the restart (resume/BFS) branch. A childless leaf ⇒
+    * the fallback BFS discovers nothing ⇒ pendingTasks stays 0 unless resume populated it.
     */
   private def storedRoot(storage: TestMptStorage): ByteString =
     val leaf = LeafNode(ByteString(1), ByteString(1))
@@ -98,7 +98,7 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
     )
     val store = new HealingFrontierStorage(dataSource)
     if prePopulate.nonEmpty then store.update(Nil, prePopulate).commit()
-    if markComplete then store.markComplete() // simulate a prior rebuild DFS that ran to completion
+    if markComplete then store.markComplete() // simulate a prior rebuild BFS that ran to completion
 
     val controllerProbe = testKit.createTestProbe[SNAPSyncController.Command]()
     val storage = new TestMptStorage()
@@ -142,7 +142,7 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
       val entries = (0 until 7).map(i => hash(i) -> pathset(i))
       withResumeFixture(persistence = true, prePopulate = entries, markComplete = true) { (coordinator, root, _, _) =>
         coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(root)
-        // Resume loads the 7 persisted entries (a childless-leaf-root DFS would have found 0).
+        // Resume loads the 7 persisted entries (a childless-leaf-root BFS would have found 0).
         eventually(timeout(3.seconds), interval(100.millis))(pendingTasks(coordinator) shouldBe entries.size)
       }
     }
@@ -153,7 +153,7 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
     val partial = (0 until 5).map(i => hash(i) -> pathset(i))
     withResumeFixture(persistence = true, prePopulate = partial, markComplete = false) { (coordinator, root, _, _) =>
       coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(root)
-      // No resume of the 5 partial entries; the childless-leaf-root DFS finds nothing → pendingTasks stays 0.
+      // No resume of the 5 partial entries; the childless-leaf-root BFS finds nothing → pendingTasks stays 0.
       eventually(timeout(2.seconds), interval(100.millis))(pendingTasks(coordinator) shouldBe 0)
     }
   }
@@ -163,7 +163,7 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
     withResumeFixture(persistence = false, prePopulate = (0 until 5).map(i => hash(i) -> pathset(i))) {
       (coordinator, root, _, _) =>
         coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(root)
-        // No resume; the childless-leaf-root DFS finds nothing. Contrast with the resume test (reaches 7).
+        // No resume; the childless-leaf-root BFS finds nothing. Contrast with the resume test (reaches 7).
         eventually(timeout(2.seconds), interval(100.millis))(pendingTasks(coordinator) shouldBe 0)
     }
   }
