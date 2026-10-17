@@ -176,7 +176,7 @@ Outputs go into `research.md` §12 and the two ADR drafts. None of these merge c
 | R-9 (GT-3) | Cold-tier assessment: which RPC and operator needs the hot tier cannot serve within the pruning window; cost of a ClickHouse process on the 16 GiB class or a second host; files-only alternative (era + witness files); `clickhouse-java` fitness | go / no-go on the ClickHouse adapter; the `ColdStore` seam ships either way |
 | R-10 | Gigablock workload design (OQ-12): concatenated real deltas vs uniform-random keys; the host class for the 30× profile (DC-10) | the harness workload; SC-012 targets |
 | R-11 (FR-028) | RPC read-load arm: provision Geth, Besu, Erigon and Reth on the same hardware and synced range; fixture ranges (OQ-14); the trace/log/call workload at concurrency 1/8/64 with and without import; interference metrics | SC-015 baseline; the only basis for any external performance statement |
-| R-12 (T-011 impact analysis) | `beacon` and `forge` impact analysis for the fixed-width `UInt256`: every `BigInt` entry point in `vm/`, `domain/UInt256`, precompiles, gas arithmetic; overflow and sign edge cases; allocation profile of trace re-execution before and after | OQ-13 (in-spec or own spec); T-011 design |
+| R-12 | *(moved to spec 021 GT-1)* The `UInt256` impact analysis is spec 021's first gate; this plan only schedules the SC-016 re-measurement after 021 lands | SC-016 timing |
 
 Phase 0 exit: GT-0, GT-1 (both arms) and GT-3 reported to the user; the engine chosen; R-3 baseline, SC-012 and SC-015
 figures published in `research.md` §15; INF-007 drafted; T-010 (close-fence) merged on RocksDB; `/speckit-clarify` run
@@ -251,7 +251,7 @@ Track H exit: SC-014; the node with no cold store is byte-identical on every RPC
 | R1 | Bounded read executors (FR-027): dedicated pools for `debug_trace*`, range `eth_getLogs`, `eth_call`/`eth_simulateV1`, witness regeneration (017 DC-16 shares this mechanism); per-method caps in `jsonrpc` config; explicit rejection error; rpc-compat and graphql unchanged | **conduit**; flow; eye |
 | R2 | Streaming compile-time codecs for trace and log output (FR-029): circe derivation, fs2 chunked response, json4s removed from those paths; byte-identical JSON on the rpc-compat vectors | conduit; prism |
 | R3 | json4s retired from the rest of `jsonrpc/` (FR-029); the dependency removed | conduit; prism |
-| R4 | Fixed-width `UInt256` (FR-030, T-011): `beacon`/`forge` impact analysis (R-12) → implementation → ethereum/tests both chains → 017 differential → allocation profile → `[IMPORT-TIMING]`; or split into its own spec per OQ-13 | **beacon + forge**; wraith; eye |
+| R4 | *(spec 021)* Fixed-width `UInt256` is delivered by spec 021 (after spec 020, in parallel with 017); this track only consumes it | spec 021 owners |
 | R5 | GT-1 RPC arm re-run after R1–R4 (SC-015, SC-016); figures published beside the comparators | eye |
 
 Track R exit: SC-015 and SC-016; DC-15 holds under the harness; operator docs describe the DC-16 topology
@@ -265,7 +265,6 @@ Track R exit: SC-015 and SC-016; DC-15 holds under the harness; operator docs de
 | The parallel state root diverges from the serial walk | SC-001 under FR-023 | flag off; the serial walk stays the producer; `beacon`/`forge` review the subtree partition |
 | The 30× profile does not fit any host we have | R-10 | state the host class; report 10× as the gate and 30× as measured headroom |
 | Cold-tier process competes with the node on the 16 GiB host | GT-3 | files-only alternative; or a second host in the runbook |
-| Fixed-width `UInt256` diverges on an overflow or sign edge | ethereum/tests, 017 differential (R4) | flag off; `BigInt` path stays until byte-identical; `beacon`/`forge` own the edge-case table |
 | Read load degrades import despite executors (shared storage lock or page cache) | SC-015 interference figure | T-010 first; then the engine; per-method caps lowered until the bound holds |
 | External material claims figures GT-1 has not produced | FR-028 rule | nothing leaves until the RPC arm has run on the same hardware as the comparators |
 | Long readers grow the file | oldest-reader gauge, file size gauge | DC-5 rules; E4's test; the WARN names the origin |
@@ -282,7 +281,7 @@ by default until F7. Rollback at any Track H slice: `NoopColdStore`.
 ## Specialist routing
 
 - `vault`: everything under `db/` (engine, segments, cold seam); owns INF-007 and the storage protocol rewrite.
-- `forge` (ETC) and `beacon` (ETH): F3, F6, F6b and R4 (`UInt256`) before implementation; E3, F2, F4 sign-off; both review F5.
+- `forge` (ETC) and `beacon` (ETH): F3, F6, F6b before implementation; E3, F2, F4 sign-off; both review F5. (`UInt256` review is spec 021's.)
 - `herald`: SNAP serving from flat state is unchanged (F4); eth/69 history advertisement (H2).
 - `flow`: fs2 `Stream` boundaries for bounded readers (E4); cold-tier queue and backpressure (H1).
 - `conduit`: `debug_executionWitness` unchanged (F5); RPC docs (E7); `eth_getLogs` routing (H4); Track R executors and codecs (R1–R3).
