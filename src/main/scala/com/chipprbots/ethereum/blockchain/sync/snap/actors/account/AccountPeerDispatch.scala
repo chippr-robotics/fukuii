@@ -8,6 +8,7 @@ import scala.collection.mutable
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
+import com.chipprbots.ethereum.blockchain.sync.snap.AdaptiveResponseBytes
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotStateUnservable
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
@@ -241,33 +242,24 @@ private[actors] trait AccountPeerDispatch
   def activePeerCount: Int =
     knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p))
 
-  // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
-  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
-  // on responsive peers, scaling down on failures.
-  private lazy val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
-  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private lazy val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
-  private lazy val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private lazy val decreaseFactor: Double = 0.5 // Scale down on failure/empty
+  // Per-peer adaptive byte budgeting: the shared window (spec 016 C-X) over this coordinator's map and logger.
+  // Geth's snap handler supports up to 2MB responses; start at the configured target, probe upward on responsive
+  // peers, scale down on failures.
+  private lazy val responseWindow: AdaptiveResponseBytes =
+    new AdaptiveResponseBytes(
+      "account",
+      BigInt(initialResponseBytesConfig),
+      BigInt(minResponseBytesConfig),
+      peerResponseBytesTarget,
+      log
+    )
 
-  def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
+  def responseBytesTargetFor(peer: Peer): BigInt = responseWindow.targetFor(peer)
 
   def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes then
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
+    responseWindow.onSuccess(peer, requested, received)
 
-  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit =
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing account responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = responseWindow.onFailure(peer, reason)
 
   private lazy val peerCooldownDefault = 30.seconds
   // Peer-scarcity threshold and the shorter cooldown applied below it. On a 1-3 peer pool a fixed 30s cooldown after a
