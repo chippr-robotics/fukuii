@@ -2215,9 +2215,78 @@ Any other rise is still forbidden. Instances:
     - Owed: vault (the queue path above), forge ("no ETC behaviour change": the Hash walk and the pruned oracle are
       ETC's path), beacon (the Path reads and location keys), the second-specialist review (prism). Characterization §7 (step 13) lists no node run for
       C-H2; a Mordor heal restart (the walk's crash-recovery path) is the orchestrator's call.
-- [ ] T073 [C-H3] `HealVerification` (vault; T060: plus `readPathVerifiedRlp`/`Node`. Adopts `pathNodeStorageOpt` →
+- [x] T073 [C-H3] `HealVerification` (vault; T060: plus `readPathVerifiedRlp`/`Node`. Adopts `pathNodeStorageOpt` →
   `pathNodes`). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
   lowers the baseline total.
+  - **No stop.** The adopted store is read where it was (the spawn passed `stateIngest.pathNodes`, SNAPSyncController's
+    strict `pathNodeStorageOpt`), so no construction or first read moves; the coordinator now reads the capability's
+    `val` per use, the same instance. No dropped default at a spawn site (the production spawn passed the store; the
+    test shim keeps its own `pathNodeStorageOpt` and hands it to its `StateIngest`), no store joins the session-value
+    list, no durability change (the Path write is the same `writeAccountNode`/`writeStorageNode` on the same store).
+  - **As built** (branch `refactor/snap-016-ch3-heal-verification`, three code commits and this docs commit). (1)
+    Prerequisite: `HealVerificationState`, `PathVerifiedRlpApi` (`readPathVerifiedRlp`) and `HealCompletionApi`
+    (`isComplete`, C-H5's, still in the core) are declared in the new `actors/healing/HealVerification.scala`;
+    `PathVerifiedReadApi` moves there unchanged from `FrontierRebuildBfs.scala` (which drops its `MptNode` import);
+    `FrontierRebuildApi` (both `startFrontierBFS` overloads) in `FrontierRebuildBfs.scala`, which `FrontierRebuildBfs`
+    now extends (the `FrontierDrainApi` precedent); `TrieNodeHealingEnv` gains `prunedHealVerification` (the parameter
+    becomes a `val`); `pathNodeStorageOpt` becomes a `val` for the move's temporary self-type (the C-H1
+    `healingFrontierStorage` precedent); the three healing spec stubs gain the Env member. (2) The move commit
+    (`# moved:` 5 names) takes `reverifyCurrentRoot`, `startVerificationBFS`, `startScopedVerification`,
+    `readPathVerifiedRlp` and `readPathVerifiedNode`, byte-identical, with their scaladocs. No field moves. The four
+    `private` entry points and the read lose `private` (the core calls them); the core members the module reaches become
+    public (`stateRoot`, `trieWalkInProgress`, `verificationPassComplete`, the five scoped/pruned observability vars,
+    `isComplete`); the core drops its `kec256` import. The module trait extends `PathVerifiedReadApi` and
+    `PathVerifiedRlpApi`. (3) The narrowing commit, `# adopts: StateIngest TrieNodeHealingCoordinator`: self-type
+    `HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi`; the Impl adds `with
+    HealVerificationState with HealCompletionApi` and drops its own `with PathVerifiedReadApi` (the module provides it).
+    `pathNodeStorageOpt: Option[PathNodeStorage] = None` is dropped from the Impl constructor, `apply`, `new`,
+    `ChildFactories.trieNodeHealingCoordinator` (and its `PathNodeStorage` import) and the `HealingOrchestrator` spawn;
+    the module's read in `readPathVerifiedRlp` and the core's Path-scheme healed-node write in `processActiveResponse`
+    (C-H5's code; characterization §4.2: a parameter the core also uses is substituted in the core in the same commit)
+    read `stateIngest.pathNodes`; the core drops its `PathNodeStorage` import. The capability's bare `capability-map:
+    pathNodeStorageOpt -> pathNodes` maps it (no `adopt-map` line); verify's `[adopts]` reports "drops
+    pathNodeStorageOpt -> stateIngest.pathNodes".
+    - **Judgement calls.** (a) `PathVerifiedReadApi` moves to the file of the module that provides it, as C-H2's note
+      asked; `HealVerification` extends it, so `FrontierRebuildBfs`'s self-type is satisfied through the module, and
+      the trait's text is unchanged except its scaladoc's "stays in the core until C-H3". (b) `readPathVerifiedRlp`
+      gets its own `PathVerifiedRlpApi` rather than joining `PathVerifiedReadApi`, so C-H2's recorded interface (and
+      its stub) stays as it is; C-H5's module will take it in its self-type for `isNodeInStorage`. (c) The launchers
+      are reached through a new `FrontierRebuildApi` that `FrontierRebuildBfs` extends, not a self-type on the module
+      (the C-H2 `FrontierDrainApi` precedent). (d) `isComplete` is reached through `HealCompletionApi`, declared in
+      the consumer's file (as C-H2 declared `PathVerifiedReadApi` in its own); C-H5 may move it when it moves
+      `isComplete`. (e) `prunedHealVerification` goes on the Env (a constructor setting, the `storageScheme`
+      precedent), not State. (f) `prunedEnabled` is a State member under rule (d), as in C-H1 and C-H2.
+    - **Path node store (for vault and beacon).** *Instance:* `stateIngest.pathNodes` is SNAPSyncController's strict
+      `pathNodeStorageOpt` (`Some(new PathNodeStorage(flatSlotStorage.dataSource))` under Path, `None` under Hash), the
+      value the spawn passed before; the coordinator reads the capability's `val` on each use (a field read, no
+      construction, no I/O). *Option semantics, both schemes:* under Hash (ETC/Mordor) it is `None`, so
+      `readPathVerifiedRlp` returns `None` and the healed-node write is skipped, exactly as with the `None` parameter,
+      and neither is reached under Hash (`isNodeInStorage`, the frontier walk and `processActiveResponse` dispatch on
+      `storageScheme` first). Under Path it is the one store: reads at the entry's own path, present only when the
+      bytes hash to the entry's hash (unchanged), writes by path on the actor thread (unchanged). *Threads:* the reads
+      run on the actor thread (presence check) and on the healing writer and reader dispatchers (the walk), as before.
+    - Counts: `HealVerification` State 12 (R14b 11: the ten vars and `prunedSubtreeCount`; plus `prunedEnabled`), Api
+      2 traits = R14b (`FrontierRebuildApi`, `HealCompletionApi`; verify counts 3 members, the two overloads and
+      `isComplete`). `TrieNodeHealingEnv` 13 (G9: + `prunedHealVerification`), one store (`mptStorage`).
+    - Storage total **571 → 558** (counter v2), a fall with no exception: the adoption −14 (TNHC −7: constructor,
+      `apply`, `new` argument and import; `ChildFactories` 48 → 43; `HealingOrchestrator` 39 → 37); kept +1: the
+      module's `MptStorage` import for the moved `MptStorage.decodeNode`. `TrieNodeHealingCoordinator.scala` 42 → 31,
+      `actors/healing/HealVerification.scala` 0 → 5 (the characterization's 4, `stateIngest.healingFrontier`,
+      `stateIngest.pathNodes`, `.readStorageNode`, `MptStorage`, plus the import). `storage-baseline.json` records it
+      with a fresh justification line (C-H2's moved to the history).
+    - Tests (`# new-tests:`): `HealVerificationSpec` (8 cases, a plain `AnyFlatSpec`; the stub State, Env, launchers
+      and completion flag, a `PathNodeStorage` over `EphemDataSource`): account and storage verified reads; stale
+      bytes, an empty slot, an empty and a three-element pathset and a missing store all absent; decode, and bytes that
+      hash right but do not decode reported absent; `reverifyCurrentRoot`'s direct full-root walk and its four
+      deferring conditions (`HealingCheckCompletion` to `self`, the verdict reset either way); the full-root entry's
+      pruned engagement on and off with the counter reset; the scoped entry's seed mapping, observability and
+      completion against its launch root. `HealingTrieFixtures.healingIngest` gains `pathNodeStore` (default `None`);
+      the shim passes its `pathNodeStorageOpt` there; `RecordingChildFactories` records `stateIngest.pathNodes` in the
+      unchanged `ChildSpawn.Healing.pathNodeStorageOpt`. No assertion changed.
+    - Build: `sbt compile-all` green on each code commit (prerequisite, move, narrowing); scalafmtAll applied (scaladoc reflow only, folded into the commit that wrote each line; the moved bodies unchanged). `testOnly` over 30 suites, 175 tests, all green: `HealVerificationSpec` (8), `FrontierRebuildBfsSpec`, `FrontierRebuildSpec`, `FrontierPersistenceSpec`, `FrontierPersistenceOrderSpec`, `TrieNodeHealingCoordinatorSpec`, `TrieNodeHealingDispatchTableSpec`, `TrieNodeHealingWorkerSpec`, the scope-capture and scoped-verification specs, `StaleVerificationWalkSpec`, `RebuildFrontierBfsMultiSeedSpec`, `CleanRebuildEarlyCompletionSpec`, `HealingFrontierResumeSpec`, the four pruned-heal specs, the three decoupled-heal specs, the three scoped-verification specs, `PathHealPresenceSpec`, `SubtreeCompleteSeedingSpec`, `HealedAccountCodeSpec`, `ChildFactoriesSpec`, `SNAPSyncControllerPinSpec`, `HealingOrchestratorSpec`. Not run: `testEssential`.
+    - Owed: vault (the store path above), forge ("no ETC behaviour change": the Hash scheme's `None` store and the
+      pruned-verification entry are ETC's path), beacon (the Path reads and the healed-node write), the
+      second-specialist review (prism). Characterization §7 (step 14) lists no node run for C-H3.
 - [ ] T074 [C-H4] `HealDispatch` (T060: a zero-reference slice; grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
   the baseline total.
 - [ ] T075 [C-H5] `HealResponseProcessing` (T060: plus `isNodeInStorage`. It adopts `evmCodeStorage`, whose `None` test

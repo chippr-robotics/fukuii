@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
-import com.chipprbots.ethereum.mpt.MptNode
 
 /** The coordinator state `FrontierRebuildBfs` reads and writes (spec 016 C-H2, research.md R14b). The core's behaviour
   * arms and the code C-H3…C-H5 will move touch them too, or rule (d) keeps them in the core, so the Impl keeps them as
@@ -46,12 +45,12 @@ private[actors] trait FrontierRebuildBfsState:
   def HealingMinParallelism: Int
   def HealingReservedCores: Int
 
-/** What the frontier-rebuild walk calls for a Path-scheme read: `readPathVerifiedNode`, the bytes at the entry's own
-  * path, counted present only when they hash to the entry's hash. It stays in the core until C-H3 (`HealVerification`)
-  * moves it.
+/** What the verification launchers (C-H3, `HealVerification`) call in `FrontierRebuildBfs`: the walk's two launchers,
+  * one seed or many. A separate trait, so the C-H2 interfaces stay as recorded.
   */
-private[actors] trait PathVerifiedReadApi:
-  def readPathVerifiedNode(hash: ByteString, pathset: Seq[ByteString]): Option[MptNode]
+private[actors] trait FrontierRebuildApi:
+  def startFrontierBFS(root: ByteString, rootPath: ByteString, isStor: Boolean, onComplete: Long => Unit): Unit
+  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: Long => Unit): Unit
 
 /** TrieNodeHealingCoordinator's frontier-rebuild walk (spec 016 C-H2, coordinator-characterization.md §3.4): the
   * multi-seed level-order BFS over the locally stored trie (`rebuildFrontierBFS`), which reads each level from the BFS
@@ -62,7 +61,7 @@ private[actors] trait PathVerifiedReadApi:
   * no state writes besides the scratch BFS queue. The coordinator core keeps the behaviour arms that launch it and
   * handle its output (`frontierRebuildArms`) and the verification launchers that reuse it.
   */
-private[actors] trait FrontierRebuildBfs:
+private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
   this: FrontierRebuildBfsState & TrieNodeHealingEnv & PathVerifiedReadApi & FrontierDrainApi =>
 
   /** Rebuild the healing frontier from locally-stored trie nodes using level-order BFS.
