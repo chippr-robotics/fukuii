@@ -49,12 +49,6 @@ private[actors] trait PathVerifiedReadApi:
 private[actors] trait PathVerifiedRlpApi:
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]]
 
-/** What `reverifyCurrentRoot` calls in the core: `isComplete`, nothing pending and nothing in flight (C-H5's member,
-  * still in the core).
-  */
-private[actors] trait HealCompletionApi:
-  def isComplete: Boolean
-
 /** TrieNodeHealingCoordinator's heal verification (spec 016 C-H3, coordinator-characterization.md §3.4): the
   * verification entry points that re-walk the trie before the heal may complete — `reverifyCurrentRoot` (discard the
   * last verdict and walk the current root again), `startVerificationBFS` (the full-root walk, with the spec 005 pruned

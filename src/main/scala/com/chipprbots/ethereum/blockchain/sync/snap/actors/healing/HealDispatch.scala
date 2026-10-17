@@ -51,6 +51,20 @@ private[actors] trait HealDispatchState:
   def healingStagnationTimeoutMs: Long
   def totalNodesHealed: Int
 
+/** What the response processing (C-H5) calls in `HealDispatch`: the spec 004 unservable-attempt surfacing of a task a
+  * response left unsatisfied, the per-peer `responseBytes` budget (read for the log line, grown on a served response,
+  * halved on an empty one), the cooldown of a peer that answered empty, the pipelined dispatch to the peer that just
+  * answered and the throttle update.
+  */
+private[actors] trait HealDispatchApi:
+  def noteUnservableAttempt(hash: ByteString): Unit
+  def responseBytesTargetFor(peer: Peer): BigInt
+  def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit
+  def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit
+  def recordPeerCooldown(peer: Peer, reason: String): Unit
+  def dispatchIfPossible(peer: Peer): Unit
+  def updateHealThrottle(delivered: Int, elapsedMs: Long): Unit
+
 /** TrieNodeHealingCoordinator's heal dispatch (spec 016 C-H4, coordinator-characterization.md §3.4): the adaptive
   * throttle (`updateHealThrottle`, `effectiveBatchSize`), the per-peer `responseBytes` budget, the per-peer cooldowns
   * and in-flight count, building and sending `GetTrieNodes` (`requestNextBatch`, against the walk, serve or moving
@@ -60,7 +74,7 @@ private[actors] trait HealDispatchState:
   * (`noteUnservableAttempt`) and the root gauge label (`shortRootLabel`). The coordinator core keeps the behaviour arms
   * that call it (`healDispatchArms`).
   */
-private[actors] trait HealDispatch:
+private[actors] trait HealDispatch extends HealDispatchApi:
   this: HealDispatchState & TrieNodeHealingEnv & FrontierGaugesApi =>
 
   private var healThrottle: Double = 1.0 // divisor (1 = full speed, 4096 = one node at a time)

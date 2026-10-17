@@ -82,6 +82,8 @@ private class StubHealDispatchState(
   val frontierHighWater: Int = 100
   val frontierLowWater: Int = 10
   val frontierBackpressureMaxWaitMs: Long = 0L
+  val scopedHealMaxPaths: Int = 200_000
+  val healedCodeCheck: Boolean = false
 
   // FrontierGaugesApi
   var gaugeEmits: Int = 0

@@ -60,7 +60,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
     val frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
     scopedHealVerification: Boolean = true,
-    scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
+    val scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
     // spec 005 (Pruned descend-and-stop verification). When true AND `storageScheme == Hash`, the completeness walk
     // prunes any present node that has a durable subtree-complete record (HealingFrontierStorage CF 'g'), making a
     // fresh node's first verification O(missing-frontier). Off OR Path scheme ⇒ the unchanged full-trie walk. Consensus
@@ -90,10 +90,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
     val movingRootDeltaHeal: Boolean = false,
-    // Where contract bytecode lives. A healed account leaf whose codeHash is not in here is reported to the controller
-    // (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. None (bare construction,
-    // most specs) reports nothing, byte-identical to before.
-    evmCodeStorage: Option[EvmCodeStorage] = None,
+    // The healed-code check. When true, a healed account leaf whose codeHash is not in `evmCodeStorage` is reported to
+    // the controller (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. The
+    // production spawn passes true; false (bare construction, most specs) reports nothing and never reads the store.
+    val healedCodeCheck: Boolean = false,
+    // Where contract bytecode lives: the store the healed-code check reads (only while `healedCodeCheck` is on).
+    val evmCodeStorage: EvmCodeStorage,
     // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
     // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
@@ -140,7 +142,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   // codeHashes of account leaves healed in the response being processed whose bytecode is not in `evmCodeStorage`.
   // Filled by discoverMissingChildren, drained and sent to the controller once per response.
-  private val healedCodeHashesThisResponse: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
+  private lazy val healedCodeHashesThisResponse: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -339,7 +341,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // empty now may serve after a refresh — so the set is also auto-cleared periodically (see
   // HealingStagnationCheck). 5 strikes mirrors Account/Storage's EmptyResponseStrikeThreshold.
   private val emptyResponseStrikes = mutable.Map.empty[String, Int]
-  private val EmptyResponseStrikeThreshold: Int = 5
+  private lazy val EmptyResponseStrikeThreshold: Int = 5
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
@@ -1498,11 +1500,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
   private def recordHealedCodeHash(account: Account): Unit =
-    evmCodeStorage.foreach { codes =>
+    if healedCodeCheck then
       val codeHash = account.codeHash
-      if codeHash != Account.EmptyCodeHash && codes.get(codeHash.value).isEmpty then
+      if codeHash != Account.EmptyCodeHash && evmCodeStorage.get(codeHash.value).isEmpty then
         healedCodeHashesThisResponse += codeHash.value
-    }
 
   private def flushHealedCodeHashes(): Unit =
     if healedCodeHashesThisResponse.nonEmpty then
@@ -1890,7 +1891,8 @@ object TrieNodeHealingCoordinator:
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
       movingRootDeltaHeal: Boolean = false,
-      evmCodeStorage: Option[EvmCodeStorage] = None,
+      healedCodeCheck: Boolean = false,
+      evmCodeStorage: EvmCodeStorage,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
@@ -1923,6 +1925,7 @@ object TrieNodeHealingCoordinator:
           decoupledHealServeRoot = decoupledHealServeRoot,
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
+          healedCodeCheck = healedCodeCheck,
           evmCodeStorage = evmCodeStorage,
           walkLocalOnly = walkLocalOnly
         ).start()

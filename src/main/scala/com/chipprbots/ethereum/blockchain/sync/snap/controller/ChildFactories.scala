@@ -166,7 +166,8 @@ trait ChildFactories:
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal: Boolean = false,
-      evmCodeStorage: Option[EvmCodeStorage] = None,
+      healedCodeCheck: Boolean = false,
+      evmCodeStorage: EvmCodeStorage,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
@@ -195,6 +196,7 @@ trait ChildFactories:
       decoupledHealServeRoot = decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal = movingRootDeltaHeal,
+      healedCodeCheck = healedCodeCheck,
       evmCodeStorage = evmCodeStorage,
       walkLocalOnly = walkLocalOnly
     )

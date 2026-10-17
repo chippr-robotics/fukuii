@@ -9,6 +9,7 @@ import scala.concurrent.ExecutionContext
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -79,6 +80,12 @@ object HealingTrieFixtures:
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = frontier
       def bfsQueue: Option[BfsQueueStorage] = bfsQueueStore
+
+  /** A bytecode store for a coordinator built with the healed-code check off, which never reads it (spec 016 C-H5
+    * prerequisite: the coordinator's store parameter is no longer an `Option`; the check's on/off is
+    * `healedCodeCheck`).
+    */
+  def unreadCodeStore: EvmCodeStorage = new EvmCodeStorage(EphemDataSource())
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"TrieNodeHealingCoordinator read StateIngest.$member")
@@ -156,7 +163,8 @@ object HealingTrieFixtures:
         decoupledHealServeRoot = decoupledHealServeRoot,
         decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
         movingRootDeltaHeal = movingRootDeltaHeal,
-        evmCodeStorage = evmCodeStorage,
+        healedCodeCheck = evmCodeStorage.isDefined,
+        evmCodeStorage = evmCodeStorage.getOrElse(unreadCodeStore),
         walkLocalOnly = walkLocalOnly
       )
     )

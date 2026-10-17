@@ -74,7 +74,8 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
           concurrency = 4,
           stateIngest = HealingTrieFixtures.healingIngest(None),
           healingWriterEcOverride = Some(neverRuns),
-          healingReaderEcOverride = Some(neverRuns)
+          healingReaderEcOverride = Some(neverRuns),
+          evmCodeStorage = HealingTrieFixtures.unreadCodeStore
         )
         captured.start()
       }

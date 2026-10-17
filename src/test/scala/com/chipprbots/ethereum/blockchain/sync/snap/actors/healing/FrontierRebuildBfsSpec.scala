@@ -100,6 +100,8 @@ private class StubFrontierRebuildState(
     throw new UnsupportedOperationException("FrontierRebuildBfs read snapSyncController")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
+  val scopedHealMaxPaths: Int = 200_000
+  val healedCodeCheck: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   val frontierPersistenceEnabled: Boolean = false
