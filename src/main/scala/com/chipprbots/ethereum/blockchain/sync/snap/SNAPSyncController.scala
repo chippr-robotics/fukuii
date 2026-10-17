@@ -1507,7 +1507,7 @@ case class SNAPSyncConfig(
     healingBatchSize: Int = 16,
     healingConcurrency: Int = 16,
     healingMaxInFlightPerPeer: Int = 1,
-    // Cap on the post-SNAP frontier-rebuild DFS `visited` LRU (entries). Bounds heap during the
+    // Cap on the post-SNAP frontier-rebuild BFS `visited` LRU (entries). Bounds heap during the
     // full-state walk (≈ cap × 80 B; 4,000,000 ≈ 320 MB) so the walk completes instead of OOM-looping.
     // Completeness is independent of this value. See docs/design/healing-frontier-scale.md.
     healingVisitedCap: Int = actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
