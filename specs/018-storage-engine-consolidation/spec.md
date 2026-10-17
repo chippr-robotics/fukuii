@@ -137,8 +137,8 @@ The user named ScyllaDB and ClickHouse as patterns to consider. The evaluation (
 - G-9 RocksDB removed from the build one minor release after the new engine becomes the default, with operator
   migration guidance for both chains.
 - G-10 A read-serving path that never blocks import and never is blocked by it: bounded, dedicated executors for
-  `debug_trace*` and heavy reads, compile-time-derived streaming codecs for trace and log output, and a fixed-width
-  `UInt256` so trace re-execution does not allocate per arithmetic op.
+  `debug_trace*` and heavy reads, compile-time-derived streaming codecs for trace and log output; the fixed-width
+  `UInt256` that removes per-op allocation from trace re-execution is spec 021.
 - G-11 Measured, not asserted: the GT-1 harness has an RPC read-load arm that compares fukuii with Geth, Besu, Erigon
   and Reth on the same hardware, and no external throughput claim is made before it has run.
 
@@ -224,11 +224,10 @@ serving) runs beside all of them and gates none.
 16. **Streaming, compile-time codecs for large results.** Trace and log responses are encoded by circe codecs derived
     at compile time (no reflection) and streamed over fs2 as they are produced, never materialised as one tree; json4s
     is retired from the trace and log paths first and from `jsonrpc/` as a whole by the end of the track.
-17. **Fixed-width `UInt256`.** `UInt256` is reimplemented over fixed-width limbs (four `Long`s or equivalent) with no
-    `BigInt` on the arithmetic path, byte-identical to the current implementation on every ethereum/tests vector and the
-    017 differential set. This is EVM code: it follows the consensus-change protocol (`beacon` for ETH, `forge` for
-    ETC) and lands behind the usual oracles. It also satisfies spec 019 FR-003b. If `/speckit-plan` finds it large
-    enough, it is split into its own spec; the requirement stays here.
+17. **Fixed-width `UInt256` → spec 021.** Split into its own spec on 2026-10-17 (user decision, OQ-13):
+    `specs/021-fixed-width-uint256/`. It is pure consensus code under the consensus-change protocol and is not
+    scheduled behind any storage gate. This spec keeps only the dependency: 018 SC-016 re-measures trace re-execution
+    after 021 lands, and Track R item 15/16 do not wait for it.
 18. **History reads for analytics.** Archive and long-window reads needed by traces over history are served from
     changesets plus the cold tier (Track H, OQ-3), with the documented error beyond what is configured.
 
@@ -621,9 +620,8 @@ carries the full load.
   import interference; no external throughput or concurrency claim MAY be published before it has run (G-11).
 - **FR-029** Trace and log responses MUST be encoded by compile-time-derived codecs and streamed as produced; json4s
   MUST be removed from the trace and log paths in Track R and from `jsonrpc/` by the end of the track.
-- **FR-030** `UInt256` MUST be reimplemented fixed-width with no `BigInt` on the arithmetic path, byte-identical on
-  every ethereum/tests vector and the 017 differential set, under the consensus-change protocol (`beacon`, `forge`);
-  the change MUST be measured on `[IMPORT-TIMING]` and on trace re-execution time. It satisfies spec 019 FR-003b.
+- **FR-030** *(moved to spec 021)* The fixed-width `UInt256` requirement is spec 021's FR-001..008. This spec
+  MUST re-measure trace re-execution (SC-016) once spec 021 lands and MUST NOT duplicate its implementation.
 - **FR-031** The `dbLock` close-fence (DC-4) MUST ship as its own PR on the RocksDB engine as soon as GT-0 has reported,
   independent of the engine decision (T-010); it is the one Track E change that does not wait for GT-1.
 
@@ -690,9 +688,9 @@ carries the full load.
   within 2× its no-import figure; a request beyond the queue bound is rejected within its timeout. Figures are
   published beside Geth, Besu, Erigon and Reth on the same hardware; no target relative to them is set until the first
   run exists.
-- **SC-016** After FR-030, trace re-execution of the fixture blocks allocates no `BigInt` on the arithmetic path
-  (allocation profile), every ethereum/tests vector and the 017 differential set are byte-identical, and
-  `[IMPORT-TIMING]` improves or is within the 10% budget.
+- **SC-016** After spec 021 lands, the GT-1 RPC arm is re-run: trace re-execution of the fixture blocks shows no
+  `BigInteger` allocation on the arithmetic path (spec 021 SC-003) and the trace p99 figure is republished beside the
+  comparators.
 
 ## Assumptions
 
@@ -730,8 +728,8 @@ carries the full load.
   mode is the recommended default; the fully unsynced mode only if GT-0/GT-1 show it matters and SNAP resume covers it.
 - **OQ-7** *(decided 2026-10-17, user)* The lock fix (research §8, alternative 2) ships as its own PR on RocksDB as soon
   as GT-0 has reported, whatever the attribution (FR-031, T-010); GT-0 still runs so the before/after is recorded.
-- **OQ-13** Whether the fixed-width `UInt256` (FR-030, T-011) is executed inside this spec or split into its own
-  consensus spec at `/speckit-plan`; the requirement and the oracles are the same either way.
+- **OQ-13** *(decided 2026-10-17, user)* The fixed-width `UInt256` is its own spec, **021**
+  (`specs/021-fixed-width-uint256/`); T-011 here is closed in favour of 021's task seed.
 - **OQ-14** Which trace fixtures the GT-1 RPC arm uses: a fixed Sepolia range with known heavy contracts (recommended)
   plus a Mordor range, so both chains have figures.
 - **OQ-8** Engine and page-cache sizing guidance for operators who run a CL client on the same 16 GiB host; and the
@@ -778,9 +776,7 @@ carries the full load.
 - **T-010 (standalone fix PR, after GT-0 reports; FR-031)** Replace `RocksDbDataSource.dbLock` with a close-fence (an
   open/closed state plus in-flight count); SC-004-style saturating-write test; `vault` owns, `eye` validates on
   Mordor and Platåberget. Ships on the RocksDB engine, independent of GT-1.
-- **T-011 (consensus protocol; FR-030)** Fixed-width `UInt256`: `beacon` and `forge` impact analysis first, then the
-  implementation, ethereum/tests on both chains, the 017 differential set, allocation profile, `[IMPORT-TIMING]`.
-  Decide at `/speckit-plan` whether it stays here or becomes its own spec (OQ-13).
+- **T-011** *(moved)* Fixed-width `UInt256` is spec 021 (T-000..T-007 there).
 - **T-012 (Track R)** Bounded read executors and per-method caps (FR-027); circe streaming codecs for traces and logs
   (FR-029); `conduit` owns, `flow` reviews the streams, `prism` reviews.
 - **T-013 (Phase 0, GT-1)** The RPC read-load arm of the harness (FR-028), with the four comparator clients provisioned
