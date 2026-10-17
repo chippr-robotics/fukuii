@@ -23,7 +23,7 @@ The zkVM guest (spec 019) never sees any of it.
 
 ## Technical Context
 
-**Language/Version**: Scala 3.3.8 (3.3 LTS) on JDK 25; sbt 1.10.7 today. The LTS audit of 2026-10-17 (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`) recommends moving to **Scala 3.9 LTS** and sbt 1.12.x before spec 017 starts (its R-1, R-2); if that lands, the bake-off harness and every Track E/F/H slice target 3.9 and the JDK 25 FFM API is unaffected. JDK 25 is the current LTS and stays.
+**Language/Version**: Scala 3.3.8 (3.3 LTS) on JDK 25; sbt 1.10.7 today. The LTS audit of 2026-10-17 (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`) recommends moving to **Scala 3.9 LTS** and sbt 1.12.x before spec 017 starts (its R-1, R-2; stubbed as spec 020, `specs/020-scala-3-9-lts-migration/`); if that lands, the bake-off harness and every Track E/F/H slice target 3.9 and the JDK 25 FFM API is unaffected. JDK 25 is the current LTS and stays.
 
 **Primary Dependencies**: the hot-tier engine GT-1 selects. Candidates and their routes (research §12): libmdbx
 (amalgamated C source vendored under `db/<engine>/native/`, bound through `java.lang.foreign` with `jextract`-generated

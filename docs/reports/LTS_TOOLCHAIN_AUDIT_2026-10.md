@@ -148,7 +148,7 @@ commons-io 2.22.0, log4cats 2.8.0, scodec 2.3.3, scala-logging 3.9.6, kamon 2.8.
 
 ## 6. Recommendations
 
-- **R-1 (spec-required, sequence it before spec 017).** Scala 3.3.8 → 3.9.0 LTS as its own spec: build tool first
+- **R-1 (spec-required, sequence it before spec 017; stubbed as `specs/020-scala-3-9-lts-migration/`).** Scala 3.3.8 → 3.9.x LTS as its own spec: build tool first
   (R-2), then the compiler with the `-source:3.4-migration` … `-source:3.9-migration` rewrites one step per commit,
   then scalafmt 3.11.x / sbt-scalafix 0.14.9 / sbt-scoverage 2.4.4, then libraries. Fold the pending P3b `given`
   migration into it. Gate on `testEssential`, `testStandard` with coverage, ethereum/tests on both chains, and the
