@@ -2287,8 +2287,62 @@ Any other rise is still forbidden. Instances:
     - Owed: vault (the store path above), forge ("no ETC behaviour change": the Hash scheme's `None` store and the
       pruned-verification entry are ETC's path), beacon (the Path reads and the healed-node write), the
       second-specialist review (prism). Characterization §7 (step 14) lists no node run for C-H3.
-- [ ] T074 [C-H4] `HealDispatch` (T060: a zero-reference slice; grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
+- [x] T074 [C-H4] `HealDispatch` (T060: a zero-reference slice; grep recorded, total unchanged). Narrowing takes `StateIngest` where it touches storage, never `StateAccess`; lowers
   the baseline total.
+  - **No stop.** A zero-reference slice (characterization §5): the moved code holds no storage reference, so nothing is
+    adopted, no store's construction or first read moves, no spawn site or default changes, no session value is
+    declared, and `apply`, `ChildFactories`, the `HealingOrchestrator` spawn and `ChildFactoriesSpec` are unchanged.
+  - **As built** (branch `refactor/snap-016-ch4-heal-dispatch`, three code commits and this docs commit). (1)
+    Prerequisite: `HealDispatchState` declared in the new `actors/healing/HealDispatch.scala`; `FrontierGaugesApi`
+    (`emitHealingFrontierGauges`) in `FrontierPersistence.scala`, which `FrontierPersistence` now extends (the
+    `FrontierDrainApi` precedent); `TrieNodeHealingEnv` gains `networkPeerManager`, `requestTracker`,
+    `snapSyncController`, `batchSize` and `movingRootDeltaHeal` (the parameters become `val`s; the four healing spec
+    stubs gain the members); the twelve constants only the dispatch reads become `private lazy val` (the C-S1
+    precedent). (2) The move commit (`# moved:` 28 names) takes, byte-identical with their comments and scaladocs, the
+    throttle's `healThrottle`/`healPending` (literal-initialised private vars of the trait) and six constants,
+    `shortRootLabel`, `noteUnservableAttempt`, the response budget (five constants, `responseBytesTargetFor`,
+    `adjustResponseBytesOnSuccess`/`OnFailure`), `peerCooldownDefault`, `isPeerCoolingDown`, `recordPeerCooldown`,
+    `inFlightForPeer`, `dispatchIfPossible`, `updateHealThrottle`, `effectiveBatchSize`, `requestNextBatch`,
+    `handleTimeout` and `tryRedispatchPendingTasks`. The ten the core calls lose `private`; the fifteen core fields the
+    module reaches become public; the core drops its `GetTrieNodes` import. (3) The narrowing commit: self-type
+    `HealDispatchState & TrieNodeHealingEnv & FrontierGaugesApi`; the Impl adds `with HealDispatchState`. No
+    `# adopts:`.
+    - **Judgement calls.** (a) The response-bytes trio moves here, as the characterization row and plan.md's C-H4 row
+      place it and as C-A1/C-S1 moved ARC's and SRC's; C-X (T076) dedupes the three module copies (T075b's finding:
+      TNHC's hard-coded 524288/51200 become parameters there). (b) `lastThrottleAdjustMs` is the dispatch's alone, but
+      its `System.currentTimeMillis()` initializer is not a literal, so rule (d) keeps it in the core as a State `var`;
+      `healRate` stays because the `[HEAL-PULSE]` arm logs it. (c) `emitHealingFrontierGauges` is reached through a new
+      `FrontierGaugesApi` in the provider's file, not a self-type on the other module. (d) No provider Api for C-H5:
+      the core calls the moved members through the Impl; C-H5 declares what its module needs (the C-S2/C-S4
+      precedent). (e) The five constructor values go on the Env (settings and actor refs, the C-S1 `StorageRangeEnv`
+      precedent), not State. (f) Timers: nothing timer-related moves. The `TimerScheduler` is read only by `start()`
+      (the stagnation pulse, core); the dispatch's one deferred action is the request tracker's timeout callback,
+      `self ! HealingRequestTimeout(requestId)`, which reaches `handleTimeout` through the core's arm on the mailbox.
+      plan.md's C-H4 row lists `[HEAL-WATCHDOG]`; that log line is the stagnation pulse's and stays in the core.
+    - Counts: `HealDispatch` State 21 (R14b 18, plus `maxConcurrentRequests`, `rawFlushThreshold`,
+      `healingStagnationTimeoutMs`, immutable vals rule (d) keeps in the core), Api 1 (= R14b, `FrontierGaugesApi`).
+      `TrieNodeHealingEnv` 18 (G9: + the five constructor values; no store).
+    - Storage total **558, unchanged** (the tasks.md exception): the §5 grep over
+      `actors/healing/HealDispatch.scala` prints `[]` under `STORAGE_NAME_ALLOW_V2`; `TrieNodeHealingCoordinator.scala`
+      stays at 31, `TrieNodeHealingEnv.scala` at 3. `storage-baseline.json` is unchanged.
+    - Tests (`# new-tests:`): `HealDispatchSpec` (10 cases, `ScalaTestWithActorTestKit`; the stub State, Env and
+      gauges counter, test inboxes for `self`, the peer manager and the controller, a real `SNAPRequestTracker` whose
+      in-flight timers each case cancels): the throttle up to the 8-path cap, its one-second hold and recovery; the
+      one-path floor; the `GetTrieNodes` root (walk, serve when decoupled, walk under the moving root) with the queued
+      paths and the initial budget; the per-peer and global caps and no dispatch to a stateless or cooling peer or
+      under the refresh latch; `handleTimeout`'s cooldown, halved budget, re-queue and completion check; the decoupled
+      attempt count and the once-only stagnation escalation; the `[HEAL-FLOOR]` revive on the periodic path only; the
+      response budget; `noteUnservableAttempt`; `shortRootLabel`. No existing assertion changed.
+    - Build: `sbt compile-all` green on each code commit (prerequisite, move, narrowing); scalafmtAll applied
+      (scaladoc reflow and three stub lines, folded into the commit that wrote each line; the moved bodies unchanged).
+      `testOnly` over 25 suites, 171 tests, all green: `HealDispatchSpec` (10), `HealVerificationSpec`,
+      `FrontierRebuildBfsSpec`, `FrontierPersistenceSpec`, `FrontierPersistenceOrderSpec`,
+      `TrieNodeHealingCoordinatorSpec`, `TrieNodeHealingDispatchTableSpec`, `TrieNodeHealingWorkerSpec`, the scope-capture
+      and scoped-verification specs, `StaleVerificationWalkSpec`, `ResponseWindowGoldenSpec`, the four pruned-heal specs,
+      the three decoupled-heal specs, the three scoped-verification specs, `PathHealPresenceSpec`, `ChildFactoriesSpec`,
+      `HealingOrchestratorSpec`. Not run: `testEssential`.
+    - Owed: forge ("no ETC behaviour change": the Hash scheme's dispatch is ETC's path), the second-specialist review
+      (prism). No vault review (no storage) and no node run (characterization §7) for this slice.
 - [ ] T075 [C-H5] `HealResponseProcessing` (T060: plus `isNodeInStorage`. It adopts `evmCodeStorage`, whose `None` test
   default turns the healed-code check off, so the narrowing needs `Option[StateIngest]` or a flag. `RecordingChildFactories`
   keeps `ChildSpawn.Healing`'s fields for the protected pin. Add vault, and a Mordor heal restart). Narrowing takes `StateIngest` (healed nodes and code), never `StateAccess`;
