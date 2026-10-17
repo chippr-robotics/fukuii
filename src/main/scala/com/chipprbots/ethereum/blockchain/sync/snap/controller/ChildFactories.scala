@@ -27,7 +27,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.B
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -166,7 +165,7 @@ trait ChildFactories:
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal: Boolean = false,
-      evmCodeStorage: Option[EvmCodeStorage] = None,
+      healedCodeCheck: Boolean = false,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
@@ -195,7 +194,7 @@ trait ChildFactories:
       decoupledHealServeRoot = decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal = movingRootDeltaHeal,
-      evmCodeStorage = evmCodeStorage,
+      healedCodeCheck = healedCodeCheck,
       walkLocalOnly = walkLocalOnly
     )
 

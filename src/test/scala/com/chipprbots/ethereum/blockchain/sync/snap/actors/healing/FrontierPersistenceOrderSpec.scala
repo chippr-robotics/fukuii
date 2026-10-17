@@ -94,6 +94,8 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
     throw new UnsupportedOperationException("FrontierPersistence read snapSyncController")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
+  val scopedHealMaxPaths: Int = 200_000
+  val healedCodeCheck: Boolean = false
   val mptStorage: OrderRecordingMptStorage = new OrderRecordingMptStorage(Some(frontierStore))
   val frontierPersistenceEnabled: Boolean = true
   val decoupledHealServeRoot: Boolean = false

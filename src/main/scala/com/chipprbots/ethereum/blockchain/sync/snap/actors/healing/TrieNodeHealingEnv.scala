@@ -15,8 +15,9 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
   * that the gauges report, the frontier backpressure marks; the storage scheme the frontier walk reads and de-dups by,
   * C-H2; the spec 005 pruned-verification flag the verification entry logs, C-H3; the peer manager the `GetTrieNodes`
   * requests go to, the request tracker, the controller, the configured batch size and the spec 009 moving-root flag the
-  * dispatch reads, C-H4). Constructor parameters and immutable values only, so it is a capability-like trait, counted
-  * apart from the modules' `<Module>State` (research.md R14b). The coordinator Impl implements it.
+  * dispatch reads, C-H4; the spec 003 scoped-verification cap and the healed-code check flag the response processing
+  * reads, C-H5). Constructor parameters and immutable values only, so it is a capability-like trait, counted apart from
+  * the modules' `<Module>State` (research.md R14b). The coordinator Impl implements it.
   *
   * `log` is the actor's context logger, for the actor thread only; `asyncLog` is the plain SLF4J logger the off-thread
   * bodies use (the frontier walk on the healing writer and reader dispatchers, C-H2).
@@ -45,3 +46,5 @@ private[actors] trait TrieNodeHealingEnv:
   def snapSyncController: ActorRef[SNAPSyncController.Command]
   def batchSize: Int
   def movingRootDeltaHeal: Boolean
+  def scopedHealMaxPaths: Int
+  def healedCodeCheck: Boolean
