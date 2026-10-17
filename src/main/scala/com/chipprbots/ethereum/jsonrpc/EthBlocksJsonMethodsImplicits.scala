@@ -135,6 +135,36 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits:
       override def encodeJson(t: BlockByBlockHashResponse): JValue =
         JsonEncoder.encode(t.blockResponse)
 
+  /** The header object of eth_getHeaderBy*: the block object without its body-derived members (execution-apis `Header`
+    * schema; go-ethereum RPCMarshalHeader). Reuses the block encoder so every header field, including the Amsterdam
+    * blockAccessListHash/slotNumber, stays identical to eth_getBlockByNumber's.
+    */
+  private val BodyDerivedKeys = Set("size", "transactions", "uncles", "withdrawals", "totalDifficulty")
+  private def encodeHeader(block: BaseBlockResponse): JValue =
+    baseBlockResponseEncoder.encodeJson(block) match
+      case JObject(fields) => JObject(fields.filterNot { case (k, _) => BodyDerivedKeys.contains(k) })
+      case other           => other
+
+  given eth_getHeaderByHash: (JsonMethodDecoder[HeaderByHashRequest] & JsonEncoder[HeaderByHashResponse]) =
+    new JsonMethodDecoder[HeaderByHashRequest] with JsonEncoder[HeaderByHashResponse]:
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, HeaderByHashRequest] =
+        params match
+          case Some(JArray(JString(blockHash) :: Nil)) => extractHash(blockHash).map(HeaderByHashRequest.apply)
+          case _                                       => Left(InvalidParams())
+
+      override def encodeJson(t: HeaderByHashResponse): JValue =
+        t.headerResponse.map(encodeHeader).getOrElse(JNull)
+
+  given eth_getHeaderByNumber: (JsonMethodDecoder[HeaderByNumberRequest] & JsonEncoder[HeaderByNumberResponse]) =
+    new JsonMethodDecoder[HeaderByNumberRequest] with JsonEncoder[HeaderByNumberResponse]:
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, HeaderByNumberRequest] =
+        params match
+          case Some(JArray(blockStr :: Nil)) => extractBlockParam(blockStr).map(HeaderByNumberRequest.apply)
+          case _                             => Left(InvalidParams())
+
+      override def encodeJson(t: HeaderByNumberResponse): JValue =
+        t.headerResponse.map(encodeHeader).getOrElse(JNull)
+
   given eth_getBlockByNumber: (JsonMethodDecoder[BlockByNumberRequest] & JsonEncoder[BlockByNumberResponse]) =
     new JsonMethodDecoder[BlockByNumberRequest] with JsonEncoder[BlockByNumberResponse]:
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, BlockByNumberRequest] =

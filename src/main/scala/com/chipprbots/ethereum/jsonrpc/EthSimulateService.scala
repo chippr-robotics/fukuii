@@ -39,7 +39,8 @@ object EthSimulateService:
       feeRecipient: Option[Address] = None,
       prevRandao: Option[ByteString] = None,
       baseFeePerGas: Option[BigInt] = None,
-      blobBaseFee: Option[BigInt] = None
+      blobBaseFee: Option[BigInt] = None,
+      difficulty: Option[BigInt] = None
   )
 
   case class StateOverride(
@@ -342,6 +343,18 @@ class EthSimulateService(
 
     // Build simulated block header
     val simHeader = buildBlockHeader(parentHeader, blockOverrides, validation)
+    // execution-apis BlockOverrides: a client that supports `difficulty` MUST reject it with -32602 for a block after
+    // the merge (post-merge difficulty is 0). Post-merge here means the header is not the HefEmpty (pre-London PoW) shape,
+    // the only one buildBlockHeader gives a non-zero difficulty.
+    if blockOverrides.exists(_.difficulty.isDefined) && simHeader.extraFields != BlockHeader.HeaderExtraFields.HefEmpty
+    then
+      break(
+        Left(
+          JsonRpcError.InvalidParams(
+            s"block ${simHeader.number.value}: difficulty override is not allowed after the merge"
+          )
+        )
+      )
 
     // Amsterdam (ETH only; no ETC chain schedules it): the block is processed as a real Amsterdam block is, and its
     // EIP-7928 access list is built from that processing (execution-apis eth_simulateV1 notes, "Block access list").
@@ -632,7 +645,7 @@ class EthSimulateService(
 
     // Pre-merge blocks have non-zero difficulty
     val difficulty: Difficulty = extraFields match
-      case HefEmpty => parentHeader.difficulty // Inherit PoW difficulty
+      case HefEmpty => ov.difficulty.map(Difficulty(_)).getOrElse(parentHeader.difficulty) // PoW: override or inherit
       case _        => Difficulty.Zero // Post-merge
 
     BlockHeader(
