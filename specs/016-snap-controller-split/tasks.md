@@ -2413,7 +2413,8 @@ Any other rise is still forbidden. Instances:
       `StorageRangeCoordinator.scala` 1,471, `AccountRangeCoordinator.scala` 1,147, `ByteCodeCoordinator.scala` 548.
       C-X (T076) removes only the three response-window copies (tens of lines), so SC-002 will not hold after it
       either: three cores keep their arms, lifecycle and fields above the bound. A user decision (amend SC-002, or plan
-      further C-* slices, e.g. moving arm groups) before R1.
+      further C-* slices, e.g. moving arm groups) before R1. **Resolved 2026-10-17:** SC-002 amended to these sizes
+      (spec.md, "Amendment 2026-10-17: SC-002 coordinator file size").
     - Tests (`# new-tests:`): `HealResponseProcessingSpec` (10 cases, `ScalaTestWithActorTestKit`; the stub State,
       Env and recording interfaces, inboxes for `self` and the controller, a `TestMptStorage`, an ephemeral frontier
       store and `PathNodeStorage`): the hash-matched accept and dropped mismatch, the re-queue and its
@@ -2475,6 +2476,8 @@ Any other rise is still forbidden. Instances:
     four coordinator files are exactly as after C-H5: `TrieNodeHealingCoordinator.scala` 1,532,
     `StorageRangeCoordinator.scala` 1,471, `AccountRangeCoordinator.scala` 1,147, `ByteCodeCoordinator.scala` 548.
     Three exceed the ~1,000 bound; the decision (amend SC-002 or plan further C-* slices) is the user's, before R1.
+    **Resolved 2026-10-17:** the user accepted these sizes and SC-002 is amended (spec.md, "Amendment 2026-10-17:
+    SC-002 coordinator file size").
   - Tests (`# new-tests:`): `AdaptiveResponseBytesSpec` (9 cases, Tier 1): seeding, read-side clamps without rewrite,
     the exact 90% boundary, no growth below it / for a zero request / at the ceiling, rounding and the growth cap,
     halving with rounding and the floor, the seed-before-halve of an unseen peer, the DEBUG line's level, logger and
