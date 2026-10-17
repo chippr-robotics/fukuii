@@ -106,6 +106,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     with FrontierPersistenceState
     with FrontierRebuildBfsState
     with HealVerificationState
+    with HealDispatchState
     with HealCompletionApi:
 
   import TrieNodeHealingCoordinator.*

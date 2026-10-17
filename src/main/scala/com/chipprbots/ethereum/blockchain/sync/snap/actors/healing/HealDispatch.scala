@@ -10,7 +10,6 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
@@ -62,7 +61,7 @@ private[actors] trait HealDispatchState:
   * that call it (`healDispatchArms`).
   */
 private[actors] trait HealDispatch:
-  this: TrieNodeHealingCoordinatorImpl =>
+  this: HealDispatchState & TrieNodeHealingEnv & FrontierGaugesApi =>
 
   private var healThrottle: Double = 1.0 // divisor (1 = full speed, 4096 = one node at a time)
   private var healPending: Long = 0 // nodes queued for DB write (rawNodeBuffer.size)
