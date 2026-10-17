@@ -28,6 +28,12 @@ object EthBlocksService:
   case class BlockByBlockHashRequest(blockHash: ByteString, fullTxs: Boolean)
   case class BlockByBlockHashResponse(blockResponse: Option[BaseBlockResponse])
 
+  case class HeaderByHashRequest(blockHash: ByteString)
+  case class HeaderByHashResponse(headerResponse: Option[BaseBlockResponse])
+
+  case class HeaderByNumberRequest(block: BlockParam)
+  case class HeaderByNumberResponse(headerResponse: Option[BaseBlockResponse])
+
   case class BlockByNumberRequest(block: BlockParam, fullTxs: Boolean)
   case class BlockByNumberResponse(blockResponse: Option[BaseBlockResponse])
 
@@ -222,6 +228,34 @@ class EthBlocksService(
         )
       }
     Right(BlockByNumberResponse(blockResponseOpt))
+  }
+
+  /** Implements eth_getHeaderByHash: the block header as the eth_getBlockByHash object minus the body-derived fields
+    * (see the encoder), or None for an unknown or non-exposed hash. Same exposure rule as getByBlockHash.
+    */
+  def getHeaderByHash(request: HeaderByHashRequest): ServiceResponse[HeaderByHashResponse] = IO {
+    val hash = BlockHash(request.blockHash)
+    val headerOpt = blockchainReader.getBlockHeaderByHash(hash).orElse(blockQueue.getBlockByHash(hash).map(_.header))
+    val isExposed = headerOpt.exists { h =>
+      blockchainReader.getBlockHeaderByNumber(h.number.value).exists(_.hash == h.hash) ||
+      blockchainReader.getReceiptsByHash(h.hash).isDefined
+    }
+    val response =
+      if !isExposed then None
+      else headerOpt.map(h => BlockResponse(Block(h, BlockBody(Nil, Nil)), emitTotalDifficulty = false))
+    Right(HeaderByHashResponse(response))
+  }
+
+  /** Implements eth_getHeaderByNumber (number or latest/safe/finalized/earliest/pending tag). */
+  def getHeaderByNumber(request: HeaderByNumberRequest): ServiceResponse[HeaderByNumberResponse] = IO {
+    val response = resolveBlock(request.block).toOption.map { case ResolvedBlock(block, pending) =>
+      BlockResponse(
+        Block(block.header, BlockBody(Nil, Nil)),
+        pendingBlock = pending.isDefined,
+        emitTotalDifficulty = false
+      )
+    }
+    Right(HeaderByNumberResponse(response))
   }
 
   def getBlockTransactionCountByNumber(

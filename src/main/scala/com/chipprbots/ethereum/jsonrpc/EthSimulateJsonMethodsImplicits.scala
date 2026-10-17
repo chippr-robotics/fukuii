@@ -49,16 +49,25 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
 
       private def decodeBlockStateCall(obj: JObject): Either[JsonRpcError, BlockStateCall] =
         val blockOverrides = (obj \ "blockOverrides") match
-          case bo: JObject => Some(decodeBlockOverrides(bo))
-          case _           => None
+          case bo: JObject =>
+            unknownKey(bo, KnownBlockOverrideKeys) match
+              case Some(k) => return Left(InvalidParams(s"invalid argument 0: unknown field \"$k\" in block override"))
+              case None    => Some(decodeBlockOverrides(bo))
+          case _ => None
 
         val stateOverrides = (obj \ "stateOverrides") match
           case JObject(fields) =>
             val parsed = fields.map {
               case (addrHex, value: JObject) =>
                 extractAddress(JString(addrHex)) match
-                  case Right(addr) => Right((addr, decodeStateOverride(value)))
-                  case Left(_)     => Left(InvalidParams(s"invalid address: $addrHex"))
+                  case Right(addr) =>
+                    unknownKey(value, KnownStateOverrideKeys) match
+                      case Some(k) =>
+                        Left(
+                          InvalidParams(s"invalid argument 0: unknown field \"$k\" in state override for $addrHex")
+                        )
+                      case None => Right((addr, decodeStateOverride(value)))
+                  case Left(_) => Left(InvalidParams(s"invalid address: $addrHex"))
               case (k, _) => Left(InvalidParams(s"invalid state override entry: $k"))
             }
             if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get
@@ -77,6 +86,27 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
 
         Right(BlockStateCall(blockOverrides, stateOverrides, calls))
 
+      // execution-apis: "A client MUST reject a key that it does not support with error code -32602." The key sets
+      // are the schema's (src/schemas/execute.yaml); `difficulty` is accepted here and rejected post-merge by the
+      // service, which knows the simulated block's era.
+      private val KnownBlockOverrideKeys =
+        Set(
+          "number",
+          "time",
+          "gasLimit",
+          "feeRecipient",
+          "prevRandao",
+          "baseFeePerGas",
+          "blobBaseFee",
+          "withdrawals",
+          "difficulty"
+        )
+      private val KnownStateOverrideKeys =
+        Set("balance", "nonce", "code", "state", "stateDiff", "movePrecompileToAddress")
+
+      private def unknownKey(obj: JObject, known: Set[String]): Option[String] =
+        obj.obj.collectFirst { case (k, _) if !known.contains(k) => k }
+
       private def decodeBlockOverrides(obj: JObject): BlockOverrides =
         BlockOverrides(
           number = optQty(obj, "number"),
@@ -85,7 +115,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           feeRecipient = (obj \ "feeRecipient").extractOpt[String].flatMap(s => extractAddress(JString(s)).toOption),
           prevRandao = optBytes(obj, "prevRandao"),
           baseFeePerGas = optQty(obj, "baseFeePerGas"),
-          blobBaseFee = optQty(obj, "blobBaseFee")
+          blobBaseFee = optQty(obj, "blobBaseFee"),
+          difficulty = optQty(obj, "difficulty")
         )
 
       private def decodeStateOverride(obj: JObject): StateOverride =

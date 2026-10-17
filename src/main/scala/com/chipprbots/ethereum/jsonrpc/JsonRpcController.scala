@@ -183,6 +183,10 @@ case class JsonRpcController(
       )
     case req @ JsonRpcRequest(_, "eth_getBlockByHash", _, _) =>
       handle[BlockByBlockHashRequest, BlockByBlockHashResponse](ethBlocksService.getByBlockHash, req)
+    case req @ JsonRpcRequest(_, "eth_getHeaderByHash", _, _) =>
+      handle[HeaderByHashRequest, HeaderByHashResponse](ethBlocksService.getHeaderByHash, req)
+    case req @ JsonRpcRequest(_, "eth_getHeaderByNumber", _, _) =>
+      handle[HeaderByNumberRequest, HeaderByNumberResponse](ethBlocksService.getHeaderByNumber, req)
     case req @ JsonRpcRequest(_, "eth_getBlockByNumber", _, _) =>
       handle[BlockByNumberRequest, BlockByNumberResponse](ethBlocksService.getBlockByNumber, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionByBlockHashAndIndex", _, _) =>
