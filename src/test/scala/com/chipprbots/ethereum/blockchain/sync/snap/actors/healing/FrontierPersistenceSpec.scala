@@ -14,6 +14,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
@@ -78,6 +79,8 @@ private class StubFrontierPersistenceState(
 
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[FrontierPersistenceSpec])
+  val asyncLog: org.slf4j.Logger = log
+  val storageScheme: StorageScheme = StorageScheme.Hash
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   val mptStorage: RecordingMptStorage = new RecordingMptStorage(frontierStore)

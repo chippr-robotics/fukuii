@@ -32,6 +32,12 @@ private[actors] trait FrontierPersistenceState:
   def prunedEnabled: Boolean
   def healingWriterEc: ExecutionContext
 
+/** What the frontier-rebuild walk (C-H2) calls in `FrontierPersistence`: the backpressure wait before each emitted
+  * batch. A separate trait, so the C-H1 interfaces stay as recorded.
+  */
+private[actors] trait FrontierDrainApi:
+  def awaitFrontierDrain(): Unit
+
 /** TrieNodeHealingCoordinator's frontier persistence and healed-node flush (spec 016 C-H1,
   * coordinator-characterization.md §3.4): the Layer-2 persisted-frontier mirror (persist on enqueue, unpersist after a
   * durable flush, clear on invalidation; CF `g`), the backlog gauges and the frontier walk's backpressure wait, and the
@@ -39,7 +45,7 @@ private[actors] trait FrontierPersistenceState:
   * otherwise), which writes the staged spec 005 subtree-complete records only after the nodes are durable. The
   * coordinator core keeps the behaviour arms that call it (`frontierPersistenceArms` handles `FlushComplete`).
   */
-private[actors] trait FrontierPersistence:
+private[actors] trait FrontierPersistence extends FrontierDrainApi:
   this: FrontierPersistenceState & TrieNodeHealingEnv =>
 
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---

@@ -2144,8 +2144,77 @@ Any other rise is still forbidden. Instances:
     - Owed: vault (the frontier write path above, the lazy healing members), forge ("no ETC behaviour change": the
       Hash-scheme subtree records and the healed-node flush are ETC's path), beacon (Path scheme), the second-specialist
       review (prism), and the **Mordor heal restart** (characterization §7), run by the orchestrator.
-- [ ] T072 [C-H2] `FrontierRebuildBfs` (T060: adopts `bfsQueueStorageOpt` per D-T060-1; add vault). Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
+- [x] T072 [C-H2] `FrontierRebuildBfs` (T060: adopts `bfsQueueStorageOpt` per D-T060-1; add vault). Narrowing takes `StateIngest` (presence reads), never `StateAccess`; lowers the
   baseline total.
+  - **No stop.** The one candidate was the BFS queue's construction thread (below); the T071 precedent settles it (the
+    same move, recorded and merged for `healingFrontier`). No dropped default at a spawn site (the production spawn
+    passed `stateIngest.bfsQueue`; the test shim keeps its own `bfsQueueStorageOpt` and hands it to its `StateIngest`),
+    no store joins the session-value list (`bfsQueue` is a rule (d) core val reached through State, the C-S3
+    `storageDoneStorage` precedent), no durability change (the queue is scratch).
+  - **As built** (branch `refactor/snap-016-ch2-frontier-rebuild`, three code commits and this docs commit). (1)
+    Prerequisite: `FrontierRebuildBfsState` and `PathVerifiedReadApi` (`readPathVerifiedNode`, C-H3's, still in the
+    core) are declared in the new `actors/healing/FrontierRebuildBfs.scala`; `FrontierDrainApi` (`awaitFrontierDrain`)
+    in `FrontierPersistence.scala`, which `FrontierPersistence` now extends (a separate trait so C-H1's interfaces stay
+    as recorded, the C-S3 `StorageTrieFlushApi` precedent); `TrieNodeHealingEnv` gains `storageScheme` (the parameter
+    becomes a `val`) and `asyncLog` (loses `private`); the two `FrontierPersistence` spec stubs gain both. (2) The move
+    commit (`# moved:` 8 names, nine definitions) takes `rebuildFrontierBFS` (with the older single-seed scaladoc before
+    it), both `startFrontierBFS` overloads, and the six visit-key helpers with their section comment, byte-identical.
+    No field moves. Both launchers lose `private` (the core calls them); the walk and the helpers stay `private`. The
+    core members the module reaches become public; the core drops `Await`, `Duration`, `BfsEntry` and
+    `HealingFrontierStorage` imports. `boundedVisitedSet`, `computeEffectiveParallelism` and `BfsChunkSize` stay on the
+    companion (the bodies name them qualified; no `export`). (3) The narrowing commit, `# adopts: StateIngest
+    TrieNodeHealingCoordinator`: self-type `FrontierRebuildBfsState & TrieNodeHealingEnv & PathVerifiedReadApi &
+    FrontierDrainApi`; the Impl adds `with FrontierRebuildBfsState with PathVerifiedReadApi`.
+    `bfsQueueStorageOpt: Option[BfsQueueStorage] = None` is dropped from the Impl constructor, `apply`, `new`,
+    `ChildFactories.trieNodeHealingCoordinator` (and its `BfsQueueStorage` import) and the `HealingOrchestrator` spawn;
+    the core's `bfsQueue` reads `stateIngest.bfsQueue.getOrElse(new InMemoryBfsQueueStorage())`. The capability's bare
+    `capability-map: bfsQueueStorageOpt -> bfsQueue` maps it (no `adopt-map` line). A second adoption on a coordinator
+    that already takes `stateIngest`: a pure drop, verify's `[adopts]` reports "drops bfsQueueStorageOpt ->
+    stateIngest.bfsQueue".
+    - **Judgement calls.** (a) The queue's first read moves (the T071 precedent, below). (b) `asyncLog` goes on the Env
+      (a logger, beside `log`), not State; `storageScheme` on the Env (a constructor setting). (c) The nine immutable
+      core vals the walk reads (`bfsQueue`, both dispatchers, `prunedEnabled`, `FrontierBatchSize`, the four walk caps)
+      are State members under rule (d), as C-H1 did for `prunedEnabled` and `healingWriterEc`. (d)
+      `awaitFrontierDrain` is reached through a new `FrontierDrainApi` rather than a self-type on the module trait.
+    - **BFS queue path (for vault).** *Instance:* `stateIngest.bfsQueue` forwards, by-name, to `HealingOrchestrator`'s
+      lazy `bfsQueueStorageOpt` (`Some(new RocksDbBfsQueueStorage(flatSlots.dataSource, BfsQueueNamespace))`), the
+      instance the spawn passed before. *First read:* it moves from the spawn (the controller's thread, evaluating the
+      factory's arguments) to the coordinator's construction (the core's `bfsQueue` val, inside `Behaviors.setup` on the
+      coordinator's `sync-dispatcher` thread), unconditionally (unlike `healingFrontier`, whose read at construction is
+      behind `prunedEnabled`). Building the store allocates an `AtomicLong` and does no I/O; the namespace is opened with
+      the DB; the lazy val is thread-safe. A supervisor restart re-runs setup and reads the same instance (before, the
+      behaviour reused the spawn's `Option`); `None` (tests) still builds a fresh `InMemoryBfsQueueStorage` per Impl.
+      *Queue I/O, unchanged:* `clear()` and the seed `enqueueBatch` at walk entry, the level `deleteRange` and the final
+      `clear()` on the healing writer thread; chunked `iterateRange` reads and child `enqueueBatch` on the writer thread
+      (serial) or the healing reader threads (a split level). *Durability:* none relied on; the queue is scratch, cleared
+      on entry and exit (whole keyspace, so a crash's leftovers go), levels tombstoned as consumed. The walk's node reads
+      (`mptStorage.multiGetNodes` under Hash, `readPathVerifiedNode` under Path) and the spec 005 oracle's
+      `isSubtreeComplete` on `stateIngest.healingFrontier` (captured once per walk, `prunedStore`) are unchanged.
+    - Counts: `FrontierRebuildBfs` State 11 (R14b 2: `verificationBFSRunning`, `prunedSubtreeCount`; plus nine rule (d)
+      vals), Api 2 (= R14b). `TrieNodeHealingEnv` 12 (G9: + `storageScheme`, `asyncLog`), one store (`mptStorage`).
+    - Storage total **582 → 571** (counter v2), a fall with no exception: the adoption −13 (TNHC −6, `ChildFactories`
+      53 → 48, `HealingOrchestrator` 41 → 39); kept +2: State's `bfsQueue` declaration and its import, and the module's
+      `HealingFrontierStorage` import (+3), less the core's `HealingFrontierStorage` import (−1).
+      `TrieNodeHealingCoordinator.scala` 53 → 42, `actors/healing/FrontierRebuildBfs.scala` 0 → 7 (the characterization's
+      4 genuine refs, the six `.isStorage` uncounted under v2, plus the three declarations). `storage-baseline.json`
+      records it with a fresh justification line (C-H1's moved to the history).
+    - Tests (`# new-tests:`): `FrontierRebuildBfsSpec` (7 cases, a plain `AnyFlatSpec`; the stub State, Env, Path read
+      and drain wait over the `HealingTrieFixtures` tries, both dispatchers `ExecutionContext.parasitic`): the launcher
+      flag and the `onComplete` count, one `FrontierRebuilt` per missing node with its pathset on the branch and the
+      extension de-dup arms, one drain wait per batch and an empty queue after; a complete trie; a throwing queue
+      (`FrontierWalkFailed`, no `onComplete`); the descend-and-stop oracle on and off; two seeds sharing one visited set;
+      the Path scheme's path-verified reads (no hash batch read) and per-location de-dup (the shared node walked at both
+      locations). `HealingTrieFixtures.healingIngest` gains `bfsQueueStore` (default `None`); the shim passes its
+      `bfsQueueStorageOpt` there; `RecordingChildFactories` records `stateIngest.bfsQueue` in the unchanged
+      `ChildSpawn.Healing.bfsQueueStorageOpt`. No assertion changed.
+    - Build: `sbt Test/compile` green (an unused `scala.concurrent.Future` import in the core, found by the first compile, is dropped in the move commit); scalafmtAll applied. `testOnly` over 28 suites, 165 tests, all green: `FrontierRebuildBfsSpec` (7), `FrontierPersistenceSpec`, `FrontierPersistenceOrderSpec`, `TrieNodeHealingCoordinatorSpec`, `TrieNodeHealingDispatchTableSpec`,
+      `TrieNodeHealingWorkerSpec`, the scope-capture and scoped-verification specs, `FrontierRebuildSpec`, `RebuildFrontierBfsMultiSeedSpec`, `CleanRebuildEarlyCompletionSpec`, `HealingFrontierResumeSpec`, the four pruned-heal
+      specs, the three decoupled-heal specs, the three scoped-verification specs, `PathHealPresenceSpec`, `SubtreeCompleteSeedingSpec`, `HealedAccountCodeSpec`, `ChildFactoriesSpec`, `SNAPSyncControllerPinSpec`,
+      `HealingOrchestratorSpec`. Not run: `testEssential`.
+    - #1350 and #1349 (placed at this module) are not touched: a move PR fixes nothing (FR-034).
+    - Owed: vault (the queue path above), forge ("no ETC behaviour change": the Hash walk and the pruned oracle are
+      ETC's path), beacon (the Path reads and location keys), the second-specialist review (prism). Characterization §7 (step 13) lists no node run for
+      C-H2; a Mordor heal restart (the walk's crash-recovery path) is the orchestrator's call.
 - [ ] T073 [C-H3] `HealVerification` (vault; T060: plus `readPathVerifiedRlp`/`Node`. Adopts `pathNodeStorageOpt` →
   `pathNodes`). Narrowing takes `StateIngest` (verification reads), never `StateAccess`;
   lowers the baseline total.

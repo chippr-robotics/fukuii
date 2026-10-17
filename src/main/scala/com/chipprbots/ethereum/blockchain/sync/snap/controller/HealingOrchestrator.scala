@@ -327,8 +327,8 @@ private[snap] trait HealingOrchestrator
     else None
 
   // The frontier-rebuild BFS queue, always `Some` (the coordinator falls back to an in-memory queue only on `None`).
-  // Handed to the healing spawn as `stateIngest.bfsQueue` (spec 016 C-H1), by-name, so it is still built on the first
-  // spawn.
+  // The healing coordinator reads it as `stateIngest.bfsQueue` (spec 016 C-H2), by-name: once per coordinator
+  // construction (its `bfsQueue` val), so it is built at the first coordinator's setup, on that coordinator's thread.
   private[snap] lazy val bfsQueueStorageOpt: Option[BfsQueueStorage] =
     Some(new RocksDbBfsQueueStorage(stateIngest.flatSlots.dataSource, Namespaces.BfsQueueNamespace))
 
@@ -361,7 +361,6 @@ private[snap] trait HealingOrchestrator
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
               healingMinParallelism = snapSyncConfig.healingMinParallelism,
               healingReservedCores = snapSyncConfig.healingReservedCores,
-              bfsQueueStorageOpt = stateIngest.bfsQueue,
               storageScheme = snapSyncConfig.storageScheme,
               pathNodeStorageOpt = stateIngest.pathNodes,
               frontierHighWater = snapSyncConfig.healingFrontierHighWater,

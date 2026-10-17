@@ -53,11 +53,15 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   */
 object HealingTrieFixtures:
 
-  /** The healing coordinator's `StateIngest` (spec 016 C-H1): through it the coordinator reads only `healingFrontier`,
-    * the spec's frontier store (or `None`); every other member throws, so a test that reaches one is a change in what
+  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2): through it the coordinator reads only
+    * `healingFrontier`, the spec's frontier store (or `None`), and `bfsQueue`, the spec's BFS queue (or `None`, the
+    * coordinator's in-memory fallback); every other member throws, so a test that reaches one is a change in what
     * healing reads through the capability.
     */
-  def healingIngest(frontier: Option[HealingFrontierStorage]): StateIngest =
+  def healingIngest(
+      frontier: Option[HealingFrontierStorage],
+      bfsQueueStore: Option[BfsQueueStorage] = None
+  ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
       def stateTries: StateStorage = notReached("stateTries")
@@ -72,7 +76,7 @@ object HealingTrieFixtures:
       def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = frontier
-      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+      def bfsQueue: Option[BfsQueueStorage] = bfsQueueStore
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"TrieNodeHealingCoordinator read StateIngest.$member")
@@ -133,13 +137,12 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest = healingIngest(healingFrontierStorage),
+        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
         healingMinParallelism = healingMinParallelism,
         healingReservedCores = healingReservedCores,
-        bfsQueueStorageOpt = bfsQueueStorageOpt,
         storageScheme = storageScheme,
         pathNodeStorageOpt = pathNodeStorageOpt,
         frontierHighWater = frontierHighWater,
