@@ -309,7 +309,9 @@ reproduces them bit for bit.
   guest subset (DC-8), landing before any guest build configuration.
 - **FR-003b** Under Approach B, `UInt256` MUST be reimplemented fixed-width, byte-identical to the current
   implementation on every ethereum/tests vector and the 017 differential set, under the consensus-change protocol
-  (`beacon` for ETH, `forge` for ETC) before the translator consumes it.
+  (`beacon` for ETH, `forge` for ETC) before the translator consumes it. Spec 018 FR-030 / T-011 pulls this forward as
+  a host-side performance change (trace re-execution allocates per arithmetic op today, research §16 there); if it
+  lands first, this FR is satisfied by it and SP-1b consumes the fixed-width type.
 - **FR-003c** The guest MUST contain no storage engine, file system or database code (DC-7).
 - **FR-004** The guest MUST read the block and `ExecutionWitness` through the zkVM's input mechanism and write its
   result through the zkVM's output mechanism.
@@ -366,8 +368,8 @@ reproduces them bit for bit.
   C header) or LLVM IR? Default: C.
 - **OQ-1d** Which TASTy version the translator targets. TASTy follows the compiler minor; the LTS audit of 2026-10-17
   (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`, R-1) recommends the repo move from Scala 3.3 LTS to 3.9 LTS before
-  spec 017. The translator and `tasty-query` pin must match the repo's compiler at SP-1b time; do not build it against
-  3.3's TASTy if the migration is scheduled.
+  spec 017; that move is **spec 020** (`specs/020-scala-3-9-lts-migration/`), sequenced 016 → 020 → 017 → 018 → 019.
+  The translator and `tasty-query` pin match the compiler spec 020 lands (3.9's TASTy); it is not built against 3.3's.
 - **OQ-2** Which zkVMs to target first. Prefer the ones Ere already integrates and that the roadmap's benchmarks use.
 - **OQ-3** Whether exceptions can be kept in the guest, or the shared code must adopt an exception-free subset.
   Under B the answer is "no exceptions"; under A it is SP-1a's finding.
