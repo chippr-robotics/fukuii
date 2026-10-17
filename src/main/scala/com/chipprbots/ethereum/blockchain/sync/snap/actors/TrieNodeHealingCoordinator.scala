@@ -43,11 +43,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     context: ActorContext[TrieNodeHealingCoordinator.Command],
     timers: TimerScheduler[TrieNodeHealingCoordinator.Command],
     initialStateRoot: ByteString,
-    networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
-    requestTracker: SNAPRequestTracker,
+    val networkPeerManager: org.apache.pekko.actor.typed.ActorRef[NetworkPeerManagerActor.Command],
+    val requestTracker: SNAPRequestTracker,
     val mptStorage: MptStorage,
-    batchSize: Int,
-    snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+    val batchSize: Int,
+    val snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
     concurrency: Int,
     visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
     val stateIngest: StateIngest,
@@ -90,7 +90,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // default false (bare construction stays on the spec-004 path); the production default-on flows from SNAPSyncConfig
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
-    movingRootDeltaHeal: Boolean = false,
+    val movingRootDeltaHeal: Boolean = false,
     // Where contract bytecode lives. A healed account leaf whose codeHash is not in here is reported to the controller
     // (SNAPSyncController.HealedCodeHashes) so the bytecode is fetched before SNAP finalises. None (bare construction,
     // most specs) reports nothing, byte-identical to before.
@@ -223,21 +223,21 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var healPending: Long = 0 // nodes queued for DB write (rawNodeBuffer.size)
   private var lastThrottleAdjustMs: Long = System.currentTimeMillis()
 
-  private val ThrottleIncrease = 1.33
-  private val ThrottleDecrease = 1.25
+  private lazy val ThrottleIncrease = 1.33
+  private lazy val ThrottleDecrease = 1.25
   // MaxThrottle caps the divisor on `batchSize` (default 32). With MaxThrottle=4 the floor
   // is 32/4 = 8 paths per GetTrieNodes request, well above the previous floor of 2 that
   // throttled healing to ~6 nodes/sec on Mordor (issue #1159). The cap is high enough to
   // brake hard if the disk-flush thread genuinely can't keep up, but doesn't permanently
   // pin batches at a wire-inefficient size.
-  private val MaxThrottle = 4.0
-  private val MinThrottle = 1.0
+  private lazy val MaxThrottle = 4.0
+  private lazy val MinThrottle = 1.0
   // Throttle up only when the unflushed buffer is genuinely contended — at 80% of the
   // flush threshold. The previous heuristic (`healPending > 2 * healRate`) compared an
   // absolute buffer size (max ~1000) against a rate-derived target (~10 at 5 nodes/sec),
   // which the buffer almost always exceeds, locking healThrottle at MaxThrottle forever.
-  private val ThrottleUpFillRatio = 0.8
-  private val RateMeasurementImpact = 0.005 // geometric EMA weight per node
+  private lazy val ThrottleUpFillRatio = 0.8
+  private lazy val RateMeasurementImpact = 0.005 // geometric EMA weight per node
 
   // Crash-recovery BFS: emit frontier in batches so healing starts before traversal completes.
   // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
@@ -404,11 +404,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
 
   // Per-peer adaptive byte budgeting
-  private val minResponseBytes: BigInt = 50 * 1024
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private val initialResponseBytes: BigInt = 512 * 1024
-  private val increaseFactor: Double = 1.25
-  private val decreaseFactor: Double = 0.5
+  private lazy val minResponseBytes: BigInt = 50 * 1024
+  private lazy val maxResponseBytes: BigInt = 2 * 1024 * 1024
+  private lazy val initialResponseBytes: BigInt = 512 * 1024
+  private lazy val increaseFactor: Double = 1.25
+  private lazy val decreaseFactor: Double = 0.5
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -433,7 +433,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   // Peer cooldown
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 30.seconds
+  private lazy val peerCooldownDefault = 30.seconds
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
