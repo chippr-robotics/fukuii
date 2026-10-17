@@ -304,3 +304,27 @@ recorded write set where no BAL exists. ETC gets the latency and amplification w
 | read throughput, 1 vs 8 reader threads during commit | [MEASURE] | [MEASURE] | | | |
 
 SC-012's targets are confirmed or revised from the 1× column and recorded here before any Track F slice merges.
+
+## 16. An external claim, checked against the code: "Scala 3 gives fukuii a scalability edge for G-SIB read loads"
+
+*Added 2026-10-17 at the user's request, after an assessment (LLM-generated, citing fukuii.com, INF-001 and vendor
+pages) claimed fukuii has a structural advantage over Besu and Geth for enterprise risk analysis, traces and millions
+of concurrent reads. The claims are recorded here with what the tree shows, so the specs carry the correction and the
+work it implies (spec Track R, US-8, T-010, T-011).*
+
+| Claim | What the tree shows (staging 0.9.99) | Verdict |
+| --- | --- | --- |
+| Opaque types give zero-allocation hot paths; Geth passes raw `[]byte` and is "prone to memory-safety bugs" | 14 opaque types exist, but the underlying hot-path types are `Array[Byte]`, Pekko `ByteString` and `BigInt`, all heap objects; erasing the wrapper does not remove them. `UInt256` wraps `scala.math.BigInt`; `vm/` references `BigInt` 485 times. Geth's `common.Address` is `[20]byte`, `common.Hash` is `[32]byte` (typed, stack-allocated value types) and its EVM uses `uint256`, allocation-free on arithmetic. Go is memory-safe. | **Wrong.** On EVM arithmetic Geth has the zero-allocation story; fukuii allocates per op. Fix: fixed-width `UInt256` (T-011). |
+| Union/match types and `inline` let fukuii parse traces with zero allocation while Besu's class hierarchies and "runtime reflection" bog it down | 1 union-typed alias and 9 `inline def`s in `src/main`. Union types compile to `Object` plus type tests, no faster than Java 21 sealed interfaces and pattern `switch`. Besu's tracing path uses no reflection. fukuii's RPC layer uses json4s (reflection-based extraction) in 40 of 60 `jsonrpc/` files; circe (compile-time derivation, already a dependency) in 3. | **Wrong today; the potential is real.** The reflection cost is on fukuii's side. Fix: compile-time codecs and streaming for trace output (Track R). |
+| CE3 fibers and Pekko let "millions of read-only pipelines" run without blocking the EVM path; Geth is mutex-bound, Besu blocks on RocksDB | `RocksDbDataSource.dbLock`: every write batch under a process-wide write lock, every read under the read lock; a flush stall blocks all RPC reads (F1; spec 015 R2, 30 s flush measured). Fibers sit above the lock. Geth's state reads are snapshot-based without a global lock and Geth backed the largest RPC providers for years. | **Inverted.** The failure mode described for Besu is fukuii's today. Fix: close-fence (T-010), then the engine (Track E). |
+| Comparators: Geth and Besu | The clients analytics shops run for trace-heavy and historical loads are Erigon and Reth (flat state, MVCC store, static files, history indices). | **Wrong field.** GT-1's RPC arm compares against all four (FR-028). |
+| "Native integration with Spark pipelines" | None exists. | **False.** |
+| A single node serves millions of concurrent risk queries | No EL does this. Providers run a validating node, snapshot-seeded read replicas and an indexer tier; the node is the deterministic source. | **Wrong unit of analysis.** Spec DC-16 states the topology; Track H is the indexer tier. |
+
+**What is true.** Scala 3 gives fukuii correctness and velocity advantages: capability traits as types (`StateIngest`,
+`StateAccess`), opaque keys that cannot be confused, ADTs for trace events, compile-time codec derivation that can
+remove reflection, fs2 for backpressured streaming of large results. Those become runtime advantages only after
+Track R, T-010 and T-011 land, and they never make the JVM beat Go on arithmetic or beat Java on the same JVM.
+
+**Rule for external material.** No throughput or concurrency claim about fukuii leaves the project until GT-1's RPC
+arm (FR-028) has produced the figures on the same hardware as the comparators.

@@ -309,7 +309,9 @@ reproduces them bit for bit.
   guest subset (DC-8), landing before any guest build configuration.
 - **FR-003b** Under Approach B, `UInt256` MUST be reimplemented fixed-width, byte-identical to the current
   implementation on every ethereum/tests vector and the 017 differential set, under the consensus-change protocol
-  (`beacon` for ETH, `forge` for ETC) before the translator consumes it.
+  (`beacon` for ETH, `forge` for ETC) before the translator consumes it. Spec 018 FR-030 / T-011 pulls this forward as
+  a host-side performance change (trace re-execution allocates per arithmetic op today, research §16 there); if it
+  lands first, this FR is satisfied by it and SP-1b consumes the fixed-width type.
 - **FR-003c** The guest MUST contain no storage engine, file system or database code (DC-7).
 - **FR-004** The guest MUST read the block and `ExecutionWitness` through the zkVM's input mechanism and write its
   result through the zkVM's output mechanism.
