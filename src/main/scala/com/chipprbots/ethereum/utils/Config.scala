@@ -322,7 +322,16 @@ object DaoForkConfig:
       override val includeOnForkIdList: Boolean = daoConfig.getBoolean("include-on-fork-id-list")
 
 case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]):
-  val blockchainConfig: BlockchainConfig = blockchains(network)
+  // Same exception type as the plain `blockchains(network)` lookup this replaces; only the message is new. Generated
+  // networks (Ephemery) live in `custom-chains-dir`, so a missing or unprepared directory surfaces here.
+  val blockchainConfig: BlockchainConfig = blockchains.getOrElse(
+    network,
+    throw new NoSuchElementException(
+      s"blockchain network '$network' is not configured (known: ${blockchains.keys.toSeq.sorted.mkString(", ")}). " +
+        "Networks without a built-in chain config are loaded from <custom-chains-dir>/<network>-chain.conf " +
+        "(fukuii.blockchains.custom-chains-dir); for Ephemery run scripts/ephemery/fetch-genesis.sh first."
+    )
+  )
 object BlockchainsConfig extends Logger:
   private val networkKey = "network"
   private val customChainsDirKey = "custom-chains-dir"
