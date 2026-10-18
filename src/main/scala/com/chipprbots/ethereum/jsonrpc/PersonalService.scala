@@ -7,7 +7,12 @@ import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
+import cats.data.EitherT
 import cats.effect.IO
+import cats.effect.SyncIO
+import cats.effect.std.Semaphore
+
+import java.util.concurrent.ConcurrentHashMap
 
 import scala.util.Try
 
@@ -15,7 +20,10 @@ import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.*
 import com.chipprbots.ethereum.jsonrpc.PersonalService.*
@@ -46,11 +54,18 @@ object PersonalService:
   case class LockAccountRequest(address: Address)
   case class LockAccountResponse(result: Boolean)
 
-  case class SendTransactionWithPassphraseRequest(tx: TransactionRequest, passphrase: String)
+  case class SendTransactionWithPassphraseRequest(tx: TxArgs, passphrase: String)
   case class SendTransactionWithPassphraseResponse(txHash: ByteString)
 
-  case class SendTransactionRequest(tx: TransactionRequest)
+  case class SendTransactionRequest(tx: TxArgs)
   case class SendTransactionResponse(txHash: ByteString)
+
+  /** eth_signTransaction (`passphrase = None`: the account must be unlocked) and personal_signTransaction. */
+  case class SignTransactionRequest(tx: TxArgs, passphrase: Option[String])
+  case class SignTransactionResponse(result: SignTransactionResult)
+
+  case class FillTransactionRequest(tx: TxArgs)
+  case class FillTransactionResponse(result: SignTransactionResult)
 
   case class SignRequest(message: ByteString, address: Address, passphrase: Option[String])
   case class SignResponse(signature: ECDSASignature)
@@ -82,6 +97,8 @@ trait PersonalServiceAPI:
       request: SendTransactionWithPassphraseRequest
   ): ServiceResponse[SendTransactionWithPassphraseResponse]
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
+  def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse]
+  def fillTransaction(request: FillTransactionRequest): ServiceResponse[FillTransactionResponse]
 
 class PersonalService(
     keyStore: KeyStore,
@@ -90,6 +107,7 @@ class PersonalService(
     txPoolConfig: TxPoolConfig,
     configBuilder: BlockchainConfigBuilder,
     ethTxService: EthTxService,
+    gasEstimator: TxGasEstimator,
     scheduler: Scheduler
 ) extends PersonalServiceAPI
     with Logger:
@@ -166,62 +184,156 @@ class PersonalService(
   def sendTransaction(
       request: SendTransactionWithPassphraseRequest
   ): ServiceResponse[SendTransactionWithPassphraseResponse] =
-    val maybeWalletUnlocked = IO {
-      keyStore.unlockAccount(request.tx.from, request.passphrase).left.map(handleError)
-    }
-
-    maybeWalletUnlocked.flatMap {
-      case Right(wallet) =>
-        val futureTxHash = sendTransaction(request.tx, wallet)
-        futureTxHash
-          .map(txHash => Right(SendTransactionWithPassphraseResponse(txHash)))
-          .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
-      case Left(err) => IO.pure(Left(err))
+    IO(unlockWithPassphrase(request.tx.from, request.passphrase)).flatMap {
+      case Right(wallet) => send(request.tx, wallet).map(_.map(SendTransactionWithPassphraseResponse.apply))
+      case Left(err)     => IO.pure(Left(err))
     }
 
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse] =
-    IO(unlockedWallets.get(request.tx.from)).flatMap {
-      case Some(wallet) =>
-        val futureTxHash = sendTransaction(request.tx, wallet)
-        futureTxHash
-          .map(txHash => Right(SendTransactionResponse(txHash)))
-          .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
-
-      case None => IO.pure(Left(AccountLocked))
+    IO(request.tx.from.flatMap(unlockedWallets.get)).flatMap {
+      case Some(wallet) => send(request.tx, wallet).map(_.map(SendTransactionResponse.apply))
+      case None         => IO.pure(Left(AccountLocked))
     }
 
-  private def sendTransaction(request: TransactionRequest, wallet: Wallet): IO[ByteString] =
+  /** eth_signTransaction / personal_signTransaction: go-ethereum `TransactionAPI.SignTransaction`
+    * (internal/ethapi/api.go:1904-1949). `gas`, the fee fields and `nonce` must be given; the rest is defaulted as for
+    * a send (blobs allowed, sidecar version 1 iff Osaka is active at the head and blobs were passed); the signed
+    * transaction is returned, not submitted. personal_signTransaction (geth's former `PersonalAPI.SignTransaction`)
+    * first requires `from` ("sender not specified") and signs with the given passphrase instead of an unlocked account.
+    */
+  def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse] =
+    val args = request.tx
+    (for
+      _ <- EitherT.cond[IO](
+        request.passphrase.isEmpty || args.from.isDefined,
+        (),
+        LogicError("sender not specified")
+      )
+      _ <- EitherT.fromEither[IO](TxDefaults.checkSignable(args).left.map(_.toJsonRpcError))
+      head <- EitherT(chainHead)
+      version = if args.blobs.exists(_.nonEmpty) then BlobTxSidecar.versionAt(head) else BlobTxSidecar.Version0
+      (filled, tx) <- prepare(args, head, TxDefaults.SidecarConfig(blobSidecarAllowed = true, version))
+      wallet <- EitherT.fromEither[IO](signingWallet(args.from, request.passphrase))
+      stx = signWith(wallet, tx, head)
+    yield SignTransactionResponse(SignTransactionResult(stx, sidecarOf(filled)))).value
+      .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
+
+  /** eth_fillTransaction: go-ethereum `TransactionAPI.FillTransaction` (internal/ethapi/api.go:1721-1740). Every
+    * default a send would fill (blobs allowed, sidecar version by Osaka at the head), returned unsigned with its RLP.
+    * Needs no account.
+    */
+  def fillTransaction(request: FillTransactionRequest): ServiceResponse[FillTransactionResponse] =
+    (for
+      head <- EitherT(chainHead)
+      sidecarConfig = TxDefaults.SidecarConfig(blobSidecarAllowed = true, BlobTxSidecar.versionAt(head))
+      (filled, tx) <- prepare(request.tx, head, sidecarConfig)
+    yield FillTransactionResponse(SignTransactionResult.unsigned(tx, sidecarOf(filled)))).value
+      .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
+
+  /** eth_sendTransaction / personal_sendTransaction: go-ethereum `TransactionAPI.SendTransaction`
+    * (internal/ethapi/api.go:1688-1719). Blob transactions are refused (geth: "This API is not capable for submitting
+    * blob transaction with sidecar"). With `nonce` absent, defaulting it, signing and submitting run under a per-sender
+    * lock (geth `nonceLock`), so two concurrent sends from one account cannot be given the same pool nonce.
+    */
+  private def send(args: TxArgs, wallet: Wallet): IO[Either[JsonRpcError, ByteString]] =
+    val run: IO[Either[JsonRpcError, ByteString]] =
+      if args.isEip4844 then IO.pure(Left(LogicError("signing blob transactions not supported")))
+      else
+        (for
+          head <- EitherT(chainHead)
+          (_, tx) <- prepare(args.copy(from = Some(wallet.address)), head, TxDefaults.SidecarConfig.NotAllowed)
+          stx = signWith(wallet, tx, head)
+          hash <- EitherT(submitLocal(stx))
+        yield hash).value
+    val locked = if args.nonce.isEmpty then nonceLock(wallet.address).permit.surround(run) else run
+    locked.recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
+
+  /** Type gate, go-ethereum `setDefaults`, then `ToTransaction(DynamicFeeTxType)`: legacy when a gas price was given or
+    * defaulted (before London), EIP-1559 otherwise, unless the fields or `type` select another type.
+    */
+  private def prepare(
+      args: TxArgs,
+      head: BlockHeader,
+      sidecar: TxDefaults.SidecarConfig
+  ): EitherT[IO, JsonRpcError, (TxArgs, Transaction)] =
+    for
+      _ <- EitherT.fromEither[IO](TxDefaults.checkTypeActive(args, head).left.map(_.toJsonRpcError))
+      filled <- EitherT(TxDefaults.setDefaults(args, defaultsEnv(head), sidecar))
+      tx <- EitherT.fromEither[IO](
+        filled.toTransaction(blockchainConfig.chainId, TxArgs.DynamicFeeType).left.map(_.toJsonRpcError)
+      )
+    yield (filled, tx)
+
+  /** The sidecar a filled request carries: only when blobs were passed. (geth attaches an empty sidecar to a signed
+    * blob transaction given only versioned hashes, whose network form then carries no blobs; that form is not one a
+    * pool accepts, so here such a transaction is returned in its canonical form instead.)
+    */
+  private def sidecarOf(filled: TxArgs): Option[BlobTxSidecar] =
+    if filled.isEip4844 then BlobTxSidecar.fromArgs(filled) else None
+
+  private def signWith(wallet: Wallet, tx: Transaction, head: BlockHeader): SignedTransaction =
+    wallet.signTx(tx, TxDefaults.legacySigningChainId(head)).tx
+
+  /** Hand a locally signed transaction to the pool, through the same admission eth_sendRawTransaction applies (#1629
+    * S0: `EthTxService.admitLocal` → `TxAdmission.validateLocal`, go-ethereum's pool rules and messages: type active at
+    * the head, chain id, intrinsic gas, fee caps and minimum tip, nonce, balance). A refused transaction is never
+    * pooled or announced. geth's `SubmitTransaction` likewise sends eth_sendTransaction's signed transaction through
+    * the pool's validation (api.go:1654-1686). eth_sendTransaction never carries a blob sidecar.
+    */
+  private def submitLocal(stx: SignedTransaction): IO[Either[JsonRpcError, ByteString]] =
+    IO {
+      ethTxService.admitLocal(stx, hasSidecar = false).map { _ =>
+        log.debug("Trying to add personal transaction: {}", stx.hash.toHex)
+        txPool ! AddOrOverrideTransaction(stx)
+        stx.hash.value
+      }
+    }
+
+  private def defaultsEnv(head: BlockHeader): TxDefaults.Env =
+    TxDefaults.Env(
+      head = head,
+      config = blockchainConfig,
+      suggestGasPrice = () => ethTxService.suggestGasPrice(),
+      // eth_maxPriorityFeePerGas (EthBlocksService.maxPriorityFeePerGas) answers the configured minimum tip
+      suggestGasTipCap = () => blockchainConfig.minTip,
+      poolNonce = address => poolNonce(address, head),
+      estimateGas = args => gasEstimator.estimateGas(args, head)
+    )
+
+  private def chainHead: IO[Either[JsonRpcError, BlockHeader]] =
+    IO(blockchainReader.getBestBlock.map(_.header).toRight(LogicError("chain head not available")))
+
+  /** go-ethereum `GetPoolNonce`: one past the sender's highest pending nonce, else its nonce at the head. */
+  private def poolNonce(address: Address, head: BlockHeader): IO[BigInt] =
     given timeout: Timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
     given sc: Scheduler = scheduler
+    txPool
+      .askForTyped[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactionsReq(_))
+      .map { pendingTxs =>
+        val senderTxsNonces = pendingTxs.pendingTransactions
+          .collect { case ptx if ptx.stx.senderAddress == address => ptx.stx.tx.tx.nonce }
+        Try(senderTxsNonces.max).toOption.map(_ + 1)
+      }
+      .map(_.orElse(getAccount(address, head).map(_.nonce.toBigInt)).getOrElse(blockchainConfig.accountStartNonce))
 
-    val pendingTxsFuture =
-      txPool.askForTyped[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactionsReq(_))
-    val latestPendingTxNonceFuture: IO[Option[BigInt]] = pendingTxsFuture.map { pendingTxs =>
-      val senderTxsNonces = pendingTxs.pendingTransactions
-        .collect { case ptx if ptx.stx.senderAddress == wallet.address => ptx.stx.tx.tx.nonce }
-      Try(senderTxsNonces.max).toOption
-    }
-    latestPendingTxNonceFuture.map { maybeLatestPendingTxNonce =>
-      val maybeCurrentNonce = getCurrentAccount(request.from).map(_.nonce.toBigInt)
-      val maybeNextTxNonce = maybeLatestPendingTxNonce.map(_ + 1).orElse(maybeCurrentNonce)
-      val tx = request.toTransaction(
-        maybeNextTxNonce.getOrElse(blockchainConfig.accountStartNonce),
-        request.gasPrice.getOrElse(ethTxService.suggestGasPrice())
-      )
+  private val nonceLocks = new ConcurrentHashMap[Address, Semaphore[IO]]()
 
-      val stx =
-        if blockchainReader.getBestBlockNumber >= blockchainConfig.forkBlockNumbers.eip155BlockNumber then
-          wallet.signTx(tx, Some(blockchainConfig.chainId.value))
-        else wallet.signTx(tx, None)
-      log.debug("Trying to add personal transaction: {}", stx.tx.hash.toHex)
+  private def nonceLock(address: Address): Semaphore[IO] =
+    nonceLocks.computeIfAbsent(address, _ => Semaphore.in[SyncIO, IO](1).unsafeRunSync())
 
-      txPool ! AddOrOverrideTransaction(stx.tx)
+  /** personal_*: the keystore account opened with the passphrase; eth_*: an account unlocked beforehand. */
+  private def signingWallet(from: Option[Address], passphrase: Option[String]): Either[JsonRpcError, Wallet] =
+    passphrase match
+      case Some(pass) => unlockWithPassphrase(from, pass)
+      case None       => from.flatMap(unlockedWallets.get).toRight(AccountLocked)
 
-      stx.tx.hash.value
-    }
+  private def unlockWithPassphrase(from: Option[Address], passphrase: String): Either[JsonRpcError, Wallet] =
+    from match
+      case Some(address) => keyStore.unlockAccount(address, passphrase).left.map(handleError)
+      case None          => Left(AccountLocked)
 
-  private def getCurrentAccount(address: Address): Option[Account] =
-    blockchainReader.getAccount(blockchainReader.getBestBranch, address, blockchainReader.getBestBlockNumber)
+  private def getAccount(address: Address, head: BlockHeader): Option[Account] =
+    blockchainReader.getAccount(blockchainReader.getBestBranch, address, head.number.value)
 
   private def getMessageToSign(message: ByteString) =
     val prefixed: Array[Byte] =

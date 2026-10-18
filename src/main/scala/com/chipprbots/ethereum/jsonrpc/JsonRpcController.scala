@@ -210,6 +210,13 @@ case class JsonRpcController(
       handle[SendRawTransactionRequest, SendRawTransactionResponse](ethTxService.sendRawTransaction, req)
     case req @ JsonRpcRequest(_, "eth_sendTransaction", _, _) =>
       handle[SendTransactionRequest, SendTransactionResponse](personalService.sendTransaction, req)
+    case req @ JsonRpcRequest(_, "eth_signTransaction", _, _) =>
+      handle[SignTransactionRequest, SignTransactionResponse](personalService.signTransaction, req)(
+        eth_signTransaction,
+        eth_signTransaction
+      )
+    case req @ JsonRpcRequest(_, "eth_fillTransaction", _, _) =>
+      handle[FillTransactionRequest, FillTransactionResponse](personalService.fillTransaction, req)
     case req @ JsonRpcRequest(_, "eth_call", _, _) =>
       handle[CallRequest, CallResponse](ethInfoService.call, req)(eth_call, eth_call)
     case req @ JsonRpcRequest(_, "eth_estimateGas", _, _) =>
@@ -467,6 +474,12 @@ case class JsonRpcController(
       handle[SendTransactionWithPassphraseRequest, SendTransactionWithPassphraseResponse](
         personalService.sendTransaction,
         req
+      )
+
+    case req @ JsonRpcRequest(_, "personal_signTransaction", _, _) =>
+      handle[SignTransactionRequest, SignTransactionResponse](personalService.signTransaction, req)(
+        personal_signTransaction,
+        personal_signTransaction
       )
 
     case req @ JsonRpcRequest(_, "personal_unlockAccount", _, _) =>

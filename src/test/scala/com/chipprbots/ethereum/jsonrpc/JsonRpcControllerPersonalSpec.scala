@@ -159,7 +159,7 @@ class JsonRpcControllerPersonalSpec
     val params: List[JValue] = JObject(
       "from" -> Address(42).toString,
       "to" -> Address(123).toString,
-      "value" -> 1000
+      "value" -> "0x3e8"
     ) :: JString("passphrase") :: Nil
 
     val txHash: ByteString = ByteString(1, 2, 3, 4)

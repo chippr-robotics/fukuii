@@ -269,8 +269,11 @@ class EthTxService(
     *
     * Every rejection is -32000 with go-ethereum's message, except initcode over EIP-3860's limit, which keeps the
     * -32602 INITCODE_SIZE_EXCEEDED that hive's withdrawals "Max Initcode Size" test was matched against (07f0bc608).
+    *
+    * Shared with eth_sendTransaction / personal_sendTransaction (PersonalService.submitLocal, #1629 S2), so every local
+    * submission meets the same gate.
     */
-  private def admitLocal(
+  private[jsonrpc] def admitLocal(
       stx: SignedTransaction,
       hasSidecar: Boolean
   ): Either[JsonRpcError, Unit] =
