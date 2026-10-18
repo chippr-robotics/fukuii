@@ -14,7 +14,7 @@ Fukuii includes a preconfigured GitHub Codespaces environment for development.
 The devcontainer configuration sets up a complete Scala development environment with:
 
 - **JDK 25** (Temurin distribution)
-- **sbt 1.10.7+** — Scala Build Tool
+- **sbt 1.13.0+** — Scala Build Tool
 - **Scala 3.3.7 LTS** — Primary Scala version
 - **Metals** — Scala Language Server for VS Code
 - **Git submodules** — Automatically initialized

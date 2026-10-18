@@ -329,7 +329,7 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Integration)
           :+ (parallelExecution := false)
           :+ (testGrouping := {
             val tests = (definedTests).value
