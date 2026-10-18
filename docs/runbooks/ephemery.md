@@ -30,7 +30,7 @@ scripts/ephemery/fetch-genesis.sh                      # latest release -> ~/.fu
 scripts/ephemery/fetch-genesis.sh --release ephemery-164 --out /chipprbots/blockchain/ephemery
 ```
 
-Requires `curl`, `tar`, `jq`. It writes `OUT/ephemery-N/` and points `OUT/current` at it:
+Requires bash >= 4, `curl`, `tar`, `jq`. It writes `OUT/ephemery-N/` and points `OUT/current` at it:
 
 | Path | What |
 |------|------|
@@ -81,12 +81,14 @@ another node or an sbt build on the 16 GB soak host.
 
 ## 3. Run Lighthouse
 
-Lighthouse has no built-in Ephemery network; use the release directory as `--testnet-dir`. Osaka/Fulu is
+Lighthouse has no built-in Ephemery network; use the release directory as `--testnet-dir`. It reads the CL
+bootnodes from `boot_enr.yaml` in that directory, so no `--boot-nodes` flag is needed (`release.env` also
+carries them as `BOOTNODE_ENR_LIST`, from the release's `boot_enr.txt`, for other CL clients). Osaka/Fulu is
 active at genesis, so the CL must be Fulu-capable (the `sigp/lighthouse:v8.3.0-rc.0` image already on the
 host is).
 
 ```bash
-source OUT/current/release.env      # sets OUT_DIR (absolute), TESTNET_DIR, BOOTNODE_ENR_LIST
+source OUT/current/release.env      # sets OUT_DIR (absolute), TESTNET_DIR
 docker run -d --name ephemery-lighthouse --network host \
   -v "$OUT_DIR/ephemery-lighthouse":/data \
   -v "$TESTNET_DIR":/network:ro \
@@ -95,7 +97,6 @@ docker run -d --name ephemery-lighthouse --network host \
   lighthouse bn --testnet-dir /network --datadir /data \
     --execution-endpoint http://127.0.0.1:8561 --execution-jwt /jwt.hex \
     --checkpoint-sync-url https://checkpoint-sync.ephemery.ethpandaops.io \
-    --boot-nodes "$BOOTNODE_ENR_LIST" \
     --port 9010 --quic-port 9011 \
     --http --http-address 127.0.0.1 --http-port 5062 \
     --metrics --metrics-address 127.0.0.1 --metrics-port 5064
@@ -135,5 +136,7 @@ before and after the BPOs, but only per-chain blob-schedule configuration makes 
   (`values.env` on `master` announces the next iteration)
 - Network overview, RPC, checkpoint endpoints: <https://github.com/ephemery-testnet/ephemery-resources>
 - Reset/retention tooling for other clients: <https://github.com/ephemery-testnet/ephemery-scripts>
+- Fixture check: `scripts/ephemery/check-fixture.sh` regenerates `ephemery-164` with the current script
+  and diffs it against `src/test/resources/ephemery/ephemery-164/` (run after any script change).
 - Test: `EphemeryGenesisSpec` builds the `ephemery-164` genesis from the script's output and checks the
   published hash and the live fork ids.

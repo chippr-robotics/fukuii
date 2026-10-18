@@ -11,7 +11,8 @@
 # Output layout (default OUT = $HOME/.fukuii/ephemery-network):
 #   OUT/ephemery-N/testnet/                 the release's testnet-all.tar.gz, verbatim. Also a valid
 #                                           Lighthouse --testnet-dir (config.yaml, genesis.ssz,
-#                                           deploy_block.txt, boot_enr.yaml).
+#                                           deploy_block.txt, boot_enr.yaml — Lighthouse reads its
+#                                           CL bootnodes from boot_enr.yaml there).
 #   OUT/ephemery-N/chains/ephemery-chain.conf    generated fukuii chain config (custom-chains-dir)
 #   OUT/ephemery-N/chains/ephemery-genesis.json  genesis.json re-encoded for GenesisDataLoader
 #   OUT/ephemery-N/conf/ephemery.conf       operator conf: points fukuii at the chains dir above and a
@@ -36,9 +37,14 @@
 # re-encode. A blob schedule that differs from the values fukuii hard-codes is a WARNING (see the
 # runbook, docs/runbooks/ephemery.md, "Known limitation: blob schedule").
 #
-# Requires: bash, curl, tar, jq.
+# Requires: bash >= 4, curl, tar, jq.
 
 set -euo pipefail
+
+if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+  echo "fetch-genesis: ERROR: bash >= 4 is required (running ${BASH_VERSION:-not bash})" >&2
+  exit 1
+fi
 
 REPO="ephemery-testnet/ephemery-genesis"
 RELEASE=""
@@ -59,10 +65,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# RELEASE and OUT are interpolated into paths (DEST, rm -rf targets), HOCON and release.env: accept only
+# release tags of the published form and output paths without quoting/substitution metacharacters.
+if [[ -n "$RELEASE" && ! "$RELEASE" =~ ^ephemery-[0-9]+$ ]]; then
+  die "--release must look like ephemery-<N> (got '$RELEASE')"
+fi
+if [[ "$OUT" == *[\"\\\$\`\'$'\n']* ]]; then
+  die "--out must not contain quotes, backslashes, \$, backticks or newlines (got '$OUT')"
+fi
+
 for tool in jq tar; do command -v "$tool" >/dev/null || die "$tool is required"; done
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+STAGE=""
+cleanup() { rm -rf "$WORK"; if [[ -n "$STAGE" ]]; then rm -rf "$STAGE"; fi; }
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------------------------------
 # 1. Obtain the release's testnet directory
@@ -143,14 +160,19 @@ DEPOSIT="$(jq -r '.config.depositContractAddress // "null"' "$G")"
 
 # Blob schedule: fukuii hard-codes the mainnet/Sepolia BPO parameters (EngineApiService, OpCode.BLOBBASEFEE,
 # BlobGasUtils); it cannot take them from config. Report every difference.
-declare -A FUKUII_BLOBS=(
-  [cancun]="3/6/3338477" [prague]="6/9/5007716" [osaka]="6/9/5007716"
-  [bpo1]="10/15/8346193" [bpo2]="14/21/11684671"
-)
+fukuii_blobs() {
+  case "$1" in
+    cancun) echo "3/6/3338477" ;;
+    prague | osaka) echo "6/9/5007716" ;;
+    bpo1) echo "10/15/8346193" ;;
+    bpo2) echo "14/21/11684671" ;;
+    *) echo "" ;;
+  esac
+}
 BLOB_MISMATCH=""
 while IFS=$'\t' read -r fork value; do
   [[ -n "$fork" ]] || continue
-  expected="${FUKUII_BLOBS[$fork]:-}"
+  expected="$(fukuii_blobs "$fork")"
   if [[ -z "$expected" ]]; then
     die "blobSchedule declares fork '$fork', which fukuii has no blob parameters for"
   elif [[ "$expected" != "$value" ]]; then
@@ -167,6 +189,20 @@ done < <(jq -r '.config.blobSchedule // {} | to_entries[] | "\(.key)\t\(.value.t
 # excessBlobGas as HEX whether or not they carry 0x. go-ethereum's genesis.json accepts decimal for these
 # (Ephemery writes timestamp as the decimal string "1790276400"); loaded verbatim, that becomes timestamp
 # 0x1790276400 and a genesis hash no peer accepts — silently. Convert every such field to 0x-hex here.
+# Top-level genesis keys. GenesisDataLoader reads only the header fields below (+ alloc) and derives every other
+# header field itself (parentHash, number and gasUsed are zero; withdrawalsRoot, parentBeaconBlockRoot, requestsHash
+# are the empty values). Any other key, or a non-zero value of the derived ones, would be dropped silently.
+KNOWN_TOP_KEYS='["config","alloc","nonce","mixHash","mixhash","difficulty","extraData","gasLimit","coinbase",
+  "timestamp","baseFeePerGas","blobGasUsed","excessBlobGas","parentHash","number","gasUsed"]'
+unknown_top="$(jq -r --argjson k "$KNOWN_TOP_KEYS" 'keys - $k | join(",")' "$G")"
+[[ -z "$unknown_top" ]] || die "genesis.json declares top-level keys fukuii does not read: $unknown_top"
+nonzero_derived="$(jq -r '[("parentHash", "number", "gasUsed") as $k | select(.[$k] != null)
+  | select((.[$k] | tostring | ltrimstr("0x") | ltrimstr("0X") | test("^0*$")) | not) | $k] | join(",")' "$G")"
+[[ -z "$nonzero_derived" ]] || die "genesis.json sets non-zero values fukuii does not read: $nonzero_derived"
+if [[ "$(jq -r 'if .mixHash != null and .mixhash != null and .mixHash != .mixhash then "conflict" else "" end' "$G")" == "conflict" ]]; then
+  die "genesis.json has both mixHash and mixhash with different values"
+fi
+
 to_hex() { # $1 = field name, $2 = value (decimal or 0x-hex, string or number)
   local v="$2"
   if [[ "$v" =~ ^0[xX][0-9a-fA-F]+$ ]]; then echo "0x${v:2}" | tr 'A-F' 'a-f'
@@ -212,7 +248,12 @@ EXPECTED_HASH=""
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 DEST="$OUT/$RELEASE"
-STAGE="$WORK/stage"
+if [[ -e "$OUT/current" && ! -L "$OUT/current" ]]; then
+  die "$OUT/current exists and is not a symlink; move it away first"
+fi
+# Stage on the same filesystem as DEST so the final moves are renames.
+STAGE="$(mktemp -d "$OUT/.stage.XXXXXX")"
+chmod u=rwx,go=rx "$STAGE" # mktemp -d creates 0700; DEST inherits this mode
 mkdir -p "$STAGE/chains" "$STAGE/conf"
 cp -a "$T" "$STAGE/testnet"
 
@@ -372,10 +413,12 @@ if [[ -e "$DEST" ]]; then
   # Keep an existing datadir; replace only generated files.
   rm -rf "$DEST/testnet" "$DEST/chains" "$DEST/conf" "$DEST/release.env"
   mv "$STAGE/testnet" "$STAGE/chains" "$STAGE/conf" "$STAGE/release.env" "$DEST/"
+  rmdir "$STAGE"
 else
   mv "$STAGE" "$DEST"
 fi
-ln -sfn "$RELEASE" "$OUT/current"
+STAGE=""
+ln -sfnT "$RELEASE" "$OUT/current"
 
 if [[ ! -e "$OUT/ephemery-local.conf" ]]; then
   cat > "$OUT/ephemery-local.conf" <<'EOF'
