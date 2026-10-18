@@ -366,15 +366,21 @@ object PendingTransactionsManager:
       // geth's txpool.pricelimit; ETC, ECIP-1122: the tip paid at the current base fee >= 1 wei before Olympia,
       // minTip from it).
       val bestHeaderOpt = Option(blockchainReader).flatMap(_.getBestBlock).map(_.header)
-      val afterTipCheck = afterPendingNonceCheck.filter { stx =>
-        TxAdmission.tipRejection(stx.tx.tx, bestHeaderOpt) match
-          case Some(rejection) =>
-            context.log.debug("Rejecting tx {} from {}: {}", stx.tx.hash.toHex, stx.senderAddress, rejection.message)
+      // 3. Type active at the head: TxAdmission.typeRejection, the gate local submission applies (go-ethereum and
+      // core-geth reject in txpool.ValidateTransaction). Without it a pre-Olympia ETC pool admitted and gossiped peer
+      // 0x2/0x4 txs the miner could then select. No head (a pool built without a reader): no gate, as before.
+      val afterTipAndTypeCheck = afterPendingNonceCheck.filter { stx =>
+        val rejection = TxAdmission
+          .tipRejection(stx.tx.tx, bestHeaderOpt)
+          .orElse(bestHeaderOpt.flatMap(TxAdmission.typeRejection(stx.tx.tx, _)))
+        rejection match
+          case Some(r) =>
+            context.log.debug("Rejecting tx {} from {}: {}", stx.tx.hash.toHex, stx.senderAddress, r.message)
             false
           case None => true
       }
 
-      if blockchainReader == null || stateStorage == null then return afterTipCheck
+      if blockchainReader == null || stateStorage == null then return afterTipAndTypeCheck
       try
         import com.chipprbots.ethereum.domain.Account
         import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -389,7 +395,7 @@ object PendingTransactionsManager:
               Account.accountSerializer
             )
 
-            val accountsBySender = afterTipCheck
+            val accountsBySender = afterTipAndTypeCheck
               .map(_.senderAddress)
               .map { senderAddress =>
                 val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
@@ -397,7 +403,7 @@ object PendingTransactionsManager:
               }
               .toMap
 
-            afterTipCheck.filter { stx =>
+            afterTipAndTypeCheck.filter { stx =>
               accountsBySender.get(stx.senderAddress).flatten.exists { account =>
                 val tx = stx.tx.tx
                 // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
@@ -407,12 +413,12 @@ object PendingTransactionsManager:
             }
           case None =>
             // No best block — only accept txs from senders we've already seen
-            afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+            afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
       catch
         case _: Exception =>
           // MPT failed — only accept txs from senders with established pending nonces
           // (unknown senders can't be validated without state)
-          afterTipCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+          afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
 
     def isTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Boolean =
       knownTransactions.isKnown(signedTransaction.hash.value, peerId)

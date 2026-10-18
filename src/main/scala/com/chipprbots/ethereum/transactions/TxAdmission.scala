@@ -183,11 +183,14 @@ object TxAdmission:
     val tip =
       if isEthFamily then tipCap(tx)
       else
-        val baseFee = head.flatMap(_.baseFee).getOrElse {
-          if isOlympiaActive || head.isEmpty then cfg.baseFeeFloor else BigInt(0)
-        }
+        // No head reads as before Olympia (no base fee, 1 wei floor), consistent with `minTip` above.
+        val baseFee = head.flatMap(_.baseFee).getOrElse(if isOlympiaActive then cfg.baseFeeFloor else BigInt(0))
         Transaction.effectiveGasPrice(tx, Some(baseFee)) - baseFee
     Option.when(tip < minTip)(Rejection.TipBelowMinimum(tip, minTip))
+
+  /** [[TxTypeGate]]: `tx`'s type must be active at `head`. */
+  def typeRejection(tx: Transaction, head: BlockHeader)(using cfg: BlockchainConfig): Option[Rejection] =
+    TxTypeGate.inactiveFork(tx, head).map(Rejection.TypeNotSupported(txType(tx), _))
 
   /** The checks against the sender's account at the head (`ValidateTransactionWithState`): nonce not below the
     * account's, balance covering [[upfrontCost]]. A nonce above the account's is not refused: the transaction waits.
@@ -219,7 +222,7 @@ object TxAdmission:
     val evmConfig = EvmConfig.forBlock(head.number.value, head.unixTimestamp, cfg)
     def check(failure: Option[Rejection]): Either[Rejection, Unit] = failure.toLeft(())
     for
-      _ <- check(TxTypeGate.inactiveFork(tx, head).map(Rejection.TypeNotSupported(txType(tx), _)))
+      _ <- check(typeRejection(tx, head))
       _ <- check(initCodeRejection(tx, evmConfig))
       _ <- check(gasCapRejection(tx, head))
       _ <- check(Option.when(head.gasLimit.value < tx.gasLimit.value)(Rejection.ExceedsBlockGasLimit))
