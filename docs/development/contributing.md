@@ -24,7 +24,7 @@ We are committed to providing a welcoming and inclusive environment for all cont
 To contribute to Fukuii, you'll need:
 
 - **JDK 25** - Required for building and running the project
-- **sbt** - Scala build tool (version 1.10.7 or higher)
+- **sbt** - Scala build tool (version 1.13.0 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
 
