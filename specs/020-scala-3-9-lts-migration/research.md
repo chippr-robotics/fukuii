@@ -24,8 +24,7 @@ Facts re-verified on 2026-10-17 for this plan:
 
 **Decision**: **Stay on scalafmt 3.8.3 for the whole of spec 020.** Move to 3.11.x in a follow-up PR (**FU-1**) that
 lands after 020's last PR and before spec 017's first implementation PR. FU-1 carries the hand change to the
-`taggedAs (…) in new Fixture:` construct as its own commit, then a format-only commit. This needs the user to amend
-G-3, FR-003 and SC-005, which name 3.11.x (see F-1).
+`taggedAs (…) in new Fixture:` construct as its own commit, then a format-only commit. **Accepted by the user 2026-10-17**; G-3, FR-003 and SC-005 amended.
 
 **Rationale**:
 - **DC-8 is the deciding constraint.** It lists everything a migration PR may contain: build and tooling bumps, the
@@ -123,7 +122,7 @@ The scalafix half is proved in PR 2: add a scratch `import scala.util._` to a `b
 
 ## R-3 — sbt version and plugin target list
 
-**Decision**: **sbt 1.13.0** (not 1.12.15), with the plugin set below. PR 1 holds the bumps that run unchanged on
+**Decision** (confirmed by the user 2026-10-17): **sbt 1.13.0** (not 1.12.15), with the plugin set below. PR 1 holds the bumps that run unchanged on
 Scala 3.3.8. The compiler-tied artifacts ride with PR 3.
 
 **Rationale for 1.13.0**: FR-002 asks for "the latest 1.x patch", which is 1.13.0 (2026-08-21, more than eight weeks
@@ -279,6 +278,8 @@ removal pending; `@nowarn("id=205")` (hides a semantic choice, which DC-3 forbid
 
 ## R-6 — DC-4 warning ratchet
 
+**Deferrals confirmed by the user 2026-10-17** (2 E029, 2 `trait App`: dated `@nowarn`, `dc4-ledger.md` + CHASE-QUEUE).
+
 **References** (GT-1, `-source:3.9`): **365** on 3.3.8, **605** after the 3.4 step (**the DC-4 / FR-005 ceiling**),
 and **91** after the full chain with the ratchets at error.
 
@@ -346,7 +347,7 @@ ratchet table and in `dc4-ledger.md` in this spec directory: site, reason, date,
   records: the LTS adoption (3.3 maintenance ends about 2027-09), `-source:3.9` plus the import guard instead of
   `future` (with the 1,541-site cost), the 016 → 020 → 017 sequencing and its reasons (019's TASTy target), staying
   on scalafmt 3.8.3, and the five-module TASTy break.
-- **OQ-6 recommendation: three separate amendments, not one.** GT-3 asks that the technology section be "edited once
+- **OQ-6 (user decision 2026-10-17): separate amendments, not one; 020 lands 1.1.1 + INF-009 now.** GT-3 asks that the technology section be "edited once
   per release train". That cannot hold. 020's PATCH must merge before 020's toolchain PRs (GT-3 itself), which is
   months before spec 018's GT-2 (INF-007, the storage engine) and spec 019's CG-1 (Scala Native). Each amendment
   edits a different clause (toolchain string, storage engine, native target), so three small PRs conflict only
@@ -367,20 +368,20 @@ ratchet table and in `dc4-ledger.md` in this spec directory: site, reason, date,
 
 ## F — Findings: spec against tree and evidence
 
-| # | Spec text | Evidence | Proposed resolution | Needs user? |
+| # | Spec text | Evidence | Proposed resolution | Status |
 |---|---|---|---|---|
-| F-1 | G-3, FR-003 and SC-005 require **scalafmt 3.11.x** | No 3.11.x parses the tree unmodified (GT-1 §5.1). The hand fix conflicts with DC-8 (R-1) | Amend G-3, FR-003 and SC-005 to "scalafmt 3.8.3 retained; 3.11.x in FU-1 before spec 017" | **Yes** |
-| F-2 | SC-005: "`formatAll` and `formatCheck` green … across all modules" | Both aliases run `scalafixAll`/`--check`, which is red on staging (GT-1 §5.2). The Clarification puts root's about 6,500-line scalafix debt out of scope | Read SC-005 as: `scalafmtCheckAll` green on every module; `scalafixAll --check` green on `bytes` and `rlp`; elsewhere **no new findings** against the GT-2 count | **Yes** |
-| F-3 | SC-003: rpc-compat **40/40** | GT-2 and FR-006: 273/273 since #1616. CLAUDE.md's SPECKIT block (from 009) also says 40 | Use the GT-2 re-measured count. Fix SC-003's text | Yes (text) |
-| F-4 | G-1 and FR-001: "`-source:future` semantics preserved"; DC-6: keep both properties | Clarification: `-source:3.9`; the guard keeps `import x.*`; future-deprecation surfacing is **not** carried | The Clarification is binding. `scala3-style.md` records the mapping in PR 7. G-1/FR-001 wording is stale | No (decided) |
-| F-5 | DC-4 names the inaccessible-companion deprecation "first among" the new categories | 0 occurrences at 3.9.0 | Recorded as 0 in the final table | No |
+| F-1 | G-3, FR-003 and SC-005 require **scalafmt 3.11.x** | No 3.11.x parses the tree unmodified (GT-1 §5.1). The hand fix conflicts with DC-8 (R-1) | Amend G-3, FR-003 and SC-005 to "scalafmt 3.8.3 retained; 3.11.x in FU-1 before spec 017" | Resolved 2026-10-17: accepted, spec amended |
+| F-2 | SC-005: "`formatAll` and `formatCheck` green … across all modules" | Both aliases run `scalafixAll`/`--check`, which is red on staging (GT-1 §5.2). The Clarification puts root's about 6,500-line scalafix debt out of scope | Read SC-005 as: `scalafmtCheckAll` green on every module; `scalafixAll --check` green on `bytes` and `rlp`; elsewhere **no new findings** against the GT-2 count | Resolved 2026-10-17: accepted, SC-005 amended |
+| F-3 | SC-003: rpc-compat **40/40** | GT-2 and FR-006: 273/273 since #1616. CLAUDE.md's SPECKIT block (from 009) also says 40 | Use the GT-2 re-measured count. Fix SC-003's text | Resolved: SC-003 amended |
+| F-4 | G-1 and FR-001: "`-source:future` semantics preserved"; DC-6: keep both properties | Clarification: `-source:3.9`; the guard keeps `import x.*`; future-deprecation surfacing is **not** carried | The Clarification is binding. `scala3-style.md` records the mapping in PR 7. G-1/FR-001 wording is stale | Resolved: G-1/FR-001 amended |
+| F-5 | DC-4 names the inaccessible-companion deprecation "first among" the new categories | 0 occurrences at 3.9.0 | Recorded as 0 in the final table | Resolved: DC-4 notes 0 |
 | F-6 | (side) `admin_exportChain` writes a 4-byte length per block; `ChainImporter` reads concatenated RLP | `AdminService.scala:334–337` against `ChainImporter.decodeBlocks` | R-4 uses `debug_getRawBlock`. CHASE-QUEUE candidate (`conduit`); not fixed here (DC-8) | No |
 | F-7 | DC-4 and FR-005: "CHASE-QUEUE entry" for each deferral | CHASE-QUEUE is git-ignored | Also record in `dc4-ledger.md` (tracked) | No |
-| F-8 | GT-3: the technology section edited "once per release train" | 020's PATCH must precede 020's toolchain PRs, months before 018/019 | OQ-6: three amendments (R-8) | **Yes** (OQ-6) |
-| F-9 | The Problem paragraph: "the 3.8 scalafmt dialect does not parse 3.9 syntax" | 3.8.3 parses the migrated tree | Text only | No |
+| F-8 | GT-3: the technology section edited "once per release train" | 020's PATCH must precede 020's toolchain PRs, months before 018/019 | OQ-6: three amendments (R-8) | Resolved 2026-10-17: separate amendments |
+| F-9 | The Problem paragraph: "the 3.8 scalafmt dialect does not parse 3.9 syntax" | 3.8.3 parses the migrated tree | Text only | Resolved: Problem text amended |
 | F-10 | Audit and spec: published modules `bytes`, `crypto`, `rlp` | five, with `scalanet` and `scalanetDiscovery` (already corrected in DC-7 by the Clarification) | — | No |
 | F-11 | GT-1: "34 files" with the scalameta failure | A grep of the multi-line `taggedAs` shape finds 96 files | Lower bound against upper bound; FU-1 measures | No |
-| F-13 | GT-2, DC-5 and SC-004: a fixed **Platåberget** range | glamsterdam-devnet-8 liveness unconfirmed (soak stopped since 2026-10-05) | If retired, use a post-Amsterdam **Sepolia** range with the same rule | **Yes**, if it is retired |
+| F-13 | GT-2, DC-5 and SC-004: a fixed **Platåberget** range | glamsterdam-devnet-8 liveness unconfirmed (soak stopped since 2026-10-05) | If retired, use a post-Amsterdam **Sepolia** range with the same rule | Stated contingency |
 | F-12 | (side) `ci.yml` job name and artifact names hard-code `Scala 3.3.8` (lines 33, 200, 221, 233, 243). `docs/development/{scala-build,contributing}.md` name sbt 1.10.7 and stale `target/scala-3.3.7` paths | grep | PR 3 updates `ci.yml` names; PR 7 updates the docs | No |
 
 ---

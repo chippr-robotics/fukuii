@@ -48,6 +48,20 @@ That host runs JDK 21.0.12, so GT-2 re-measures on JDK 25.
   bytes, crypto, rlp, **scalanet** and **scalanetDiscovery**. DC-7 applies to all five.
 - Q: OQ-4 and OQ-5? → A: both are moot. Spec 016 completed with R1 (#1622) on 2026-10-17, so GT-0 holds.
 
+### Session 2026-10-17 (plan): user decisions on the `/speckit-plan` open items
+
+- Q: scalafmt for 020 (plan R-1, F-1)? → A: **stay on 3.8.3 for all of 020.** 3.11.x is follow-up **FU-1**, before spec
+  017's first PR. FU-1 tries a config-only fix first; otherwise each hand-edited file must be proved whitespace-only.
+  G-3, FR-003 and SC-005 are amended accordingly.
+- Q: how is SC-005 read, given that `formatAll`/`formatCheck` run scalafix, which is red on staging (F-2)? → A:
+  `scalafmtCheckAll` green on every module, using the per-module form, and scalafix with **no new findings** outside
+  `bytes` and `rlp` (which stay green).
+- Q: sbt 1.12.15 or 1.13.0 (plan R-3)? → A: **1.13.0**.
+- Q: one constitution amendment for 018, 019 and 020, or separate ones (OQ-6)? → A: **separate.** 020 lands
+  constitution 1.1.1 and ADR INF-009 now.
+- Q: the 2 new E029 sites and the 2 `trait App` sites (plan R-6)? → A: **defer** with dated `@nowarn`, recorded in
+  `dc4-ledger.md` and CHASE-QUEUE.
+
 Facts from GT-1 that the plan must take as given:
 - **The rewrite chain runs on the 3.9 compiler.** 3.3.8 rejects `-source:3.4-migration`. The first compiler PR is therefore
   "3.9.0 + `-source:3.4-migration -rewrite`" (DC-2 step 1).
@@ -85,8 +99,8 @@ not: since 3.7 given search picks the **most general** matching instance, which 
 inaccessible companions warn in 3.9 and stop resolving in 3.10; artifacts built with 3.9 cannot be consumed by 3.3
 projects, which matters for the published `bytes`, `crypto` and `rlp` modules. Several flags the build relies on
 (`-source:future`, `-Ykind-projector`, `-Wconf:id=E198:error`, `-Xmax-inlines:64`) must be re-verified against the
-new compiler, and the formatting and analysis toolchain (scalafmt 3.8.3, sbt-scalafix 0.13.0, sbt-scoverage 2.2.2)
-must move with it because the 3.8 scalafmt dialect does not parse 3.9 syntax.
+new compiler, and the analysis toolchain (sbt-scalafix 0.13.0, sbt-scoverage 2.2.2) must move with it. scalafmt 3.8.3 parses
+the migrated tree (GT-1), but not syntax introduced after 3.3 that 020 does not write, such as the 3.6 `given` syntax.
 
 Done late, the migration is paid three times: once for the code that exists, once more for everything 017 and 018 add
 in the meantime, and a third time for spec 019's translator, which is tied to the TASTy version it was built against.
@@ -94,12 +108,12 @@ Done now, between 016 and 017, it is paid once.
 
 ## Goals
 
-- G-1 fukuii compiles, formats, lints and tests on the latest Scala 3.9.x patch, with `-source:future` semantics
-  preserved (`import x.*` enforced), zero compile errors and no regression of the warning ratchet.
-- G-2 sbt on the latest 1.x line (1.12.15 at audit time) and the plugin set current on that line, including the
+- G-1 fukuii compiles, formats, lints and tests on the latest Scala 3.9.x patch, under `-source:3.9`, with `import x.*`
+  enforced by the import guard (Clarifications), zero compile errors and no regression of the warning ratchet.
+- G-2 sbt on the latest 1.x line (1.13.0; 1.12.15 at audit time) and the plugin set current on that line, including the
   organisation move of sbt-javaagent to `com.github.sbt`.
-- G-3 scalafmt 3.11.x, sbt-scalafix 0.14.x and sbt-scoverage 2.4.x, with `sbt formatAll` and `sbt formatCheck` green
-  on the whole codebase.
+- G-3 scalafmt stays 3.8.3 (3.11.x is follow-up FU-1, before spec 017); sbt-scalafix 0.14.x and sbt-scoverage 2.4.x;
+  `scalafmtCheckAll` green on every module and scalafix with no new findings (SC-005).
 - G-4 The pending P3b `given`/`using` migration completed as part of this spec, so the 3.7 prioritisation change is
   reviewed once.
 - G-5 Consensus outputs byte-for-byte unchanged on both chains, and import performance within the constitution's ~10%
@@ -163,7 +177,7 @@ repo's `given` migration (`scala3-given-migration.md`, G1 to G3 pitfalls) is com
 prioritisation change and the `implicit` to `given` conversion are reviewed together, once.
 
 **DC-4 — The warning ratchet only tightens.** `-Wconf:id=E198:error` and `-Wconf:cat=unchecked:error` stay errors. New
-warning categories 3.9 introduces (the inaccessible-companion deprecation first among them) enter the ratchet at step 2
+warning categories 3.9 introduces (the inaccessible-companion deprecation was expected first among them; GT-1 found 0 at 3.9.0) enter the ratchet at step 2
 (risk-stratified commit, `risk-stratified-commit.md`) and are promoted to errors before this spec closes, or deferred
 with a dated `@nowarn` and a CHASE-QUEUE entry. The total warning count after the migration is at or below the GT-1
 inventory's post-3.4 count, and the per-category table is in the final PR.
@@ -225,8 +239,8 @@ validation node.
 
 ### User Story 3 — Spec 017 starts on one toolchain (Priority: P1)
 
-The first spec 017 implementation PR is opened against a `staging` that is already on 3.9, with scalafmt 3.11 and
-scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewritten.
+The first spec 017 implementation PR is opened against a `staging` that is already on 3.9, with scalafix 0.14 (and
+scalafmt 3.11 via FU-1); nothing in 017, 018 or 019 is written against 3.3 and later rewritten.
 
 **Independent Test**: GT-0's ordering holds; spec 019's OQ-1d resolves to "3.9 TASTy".
 
@@ -255,12 +269,13 @@ scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewri
 
 ### Functional Requirements (stub level; refined by /speckit-specify)
 
-- **FR-001** The build MUST compile on the latest Scala 3.9.x patch with 0 errors and `-source:future` enforcement
-  preserved (DC-6), through the ordered rewrite steps of DC-2.
+- **FR-001** The build MUST compile on the latest Scala 3.9.x patch with 0 errors under `-source:3.9`, with `import x.*`
+  enforced by the import guard (DC-6, Clarifications), through the ordered rewrite steps of DC-2.
 - **FR-002** `sbt.version` MUST be on the latest 1.x patch and every sbt-1 plugin on its latest version, including
   sbt-javaagent at `com.github.sbt`; sbt 2 MUST NOT be adopted here (NG-1).
-- **FR-003** scalafmt MUST be on a 3.11.x version whose `scala3` dialect parses the migrated tree; sbt-scalafix on 0.14.x;
-  sbt-scoverage on 2.4.x; `sbt formatAll` and `sbt formatCheck` MUST be green.
+- **FR-003** scalafmt MUST stay on 3.8.3 within this spec (3.11.x is FU-1, before spec 017); sbt-scalafix on 0.14.x;
+  sbt-scoverage on 2.4.x; `scalafmtCheckAll` MUST be green on every module, and scalafix MUST report no new findings
+  (SC-005).
 - **FR-004** The 3.7 given-prioritisation sites MUST be listed and made explicit, and P3b of the `given` migration MUST
   be complete (DC-3).
 - **FR-005** The warning ratchet MUST not regress: the final warning count is at or below the GT-1 post-3.4 count, new
@@ -288,10 +303,12 @@ scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewri
 - **SC-001** `sbt compile-all` on the latest 3.9.x: 0 errors; warning count at or below the GT-1 post-3.4 figure, with
   the per-category table published.
 - **SC-002** `testEssential` at the GT-2 count with 0 failures; `testStandard` coverage at or above the GT-2 figure.
-- **SC-003** ethereum/tests green on both chains; hive rpc-compat 40/40 and graphql 2/2 unchanged in either direction.
+- **SC-003** ethereum/tests green on both chains; hive rpc-compat at the GT-2 count (273/273 since #1616) and graphql at
+  the GT-2 count, unchanged in either direction.
 - **SC-004** The two-tree import differential on the GT-2 Mordor and Platåberget ranges: every state root and receipt
   root equal; `[IMPORT-TIMING]` p50 and p99 within 10% of baseline.
-- **SC-005** `sbt formatAll` and `sbt formatCheck` green on scalafmt 3.11.x and sbt-scalafix 0.14.x across all modules.
+- **SC-005** On scalafmt 3.8.3 and sbt-scalafix 0.14.x: `scalafmtCheckAll` green on every module (per-module form),
+  `scalafixAll --check` green on `bytes` and `rlp`, and no new scalafix findings elsewhere against the GT-2 count.
 - **SC-006** `-source:3.7-migration` emits zero prioritisation warnings on the final tree, and the P3b ratchet greps
   report zero remaining targets.
 - **SC-007** The first spec 017 implementation PR is opened against a 3.9 `staging` (GT-0 held).
@@ -322,7 +339,7 @@ scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewri
   with no source change? Recommended: yes, with the user's approval, since it removes one variable from GT-1.
 - **OQ-5** *Moot: 016 complete (R1 #1622).* Which spec 016 slices remain at GT-0, and is there a natural pause (after R1 renames, T080/T090) to cut
   from?
-- **OQ-6** Whether ADR INF-009 and spec 018's INF-007 and spec 019's CG-1 amend the constitution's technology section
+- **OQ-6** *Resolved 2026-10-17: separate amendments; 020 lands 1.1.1 + INF-009 now.* Whether ADR INF-009 and spec 018's INF-007 and spec 019's CG-1 amend the constitution's technology section
   in one PR or three (GT-3).
 - **OQ-7** *Resolved 2026-10-17: replace the pin; five published modules.* Whether the CI matrix should build on both 3.3.8 and 3.9.x during the migration (a cross-build the
   constitution forbids, so no) or the migration branch simply replaces the pin (recommended).

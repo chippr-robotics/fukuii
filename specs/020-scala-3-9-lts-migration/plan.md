@@ -21,7 +21,7 @@ tooling, then libraries (none are forced). GT-1 sized the work:
 
 The build uses `-source:3.9`. A grep plus scalafix guard keeps `import x.*` enforced (R-2). **scalafmt stays on 3.8.3**
 for this spec, because DC-8 rules out hand-editing up to 96 test files to satisfy a formatter. The 3.11 move becomes a
-follow-up (FU-1) before spec 017. This needs the user to amend G-3, FR-003 and SC-005 (research F-1).
+follow-up (FU-1) before spec 017. The user accepted this on 2026-10-17 and G-3, FR-003 and SC-005 are amended (research F-1).
 
 Consensus safety comes from an import differential: the canonical headers' state and receipt roots on fixed Mordor
 and Platåberget ranges, with 3.3 and 3.9 jars on the same frozen datadir. The same runs give the `[IMPORT-TIMING]`
@@ -158,15 +158,21 @@ CLAUDE.md; .claude/agent-protocols/{scala3-style,scala3-given-migration,warning-
 **Structure Decision**: no new modules or packages. The only new source files are the CI guard scripts. Everything
 else is edits to existing build, CI, protocol and source files, as listed above.
 
-## Decisions for the user
+## Decisions for the user — resolved 2026-10-17
 
-1. **F-1**: accept scalafmt 3.8.3 for 020, with 3.11.x as FU-1 before spec 017. This amends G-3, FR-003 and SC-005.
-2. **F-2**: the SC-005 reading: `scalafmtCheckAll` green everywhere; scalafix "no new findings" outside `bytes`/`rlp`.
-3. **F-8 / OQ-6**: three separate constitution amendments (020 now; 018 and 019 later).
-4. **F-3**: SC-003's rpc-compat figure is replaced by the GT-2 count (273/273 since #1616).
-5. R-3: sbt **1.13.0** over the spec's 1.12.15 (FR-002's "latest 1.x" already allows it; confirm).
-6. R-6: defer the 2 new E029 and the 2 `trait App` sites with dated `@nowarn`, not fix them inside 020.
-7. F-13: if glamsterdam-devnet-8 is retired, the ETH-family differential range comes from post-Amsterdam Sepolia.
+Recorded in spec.md under Clarifications, "Session 2026-10-17 (plan)".
+
+1. **F-1**: scalafmt 3.8.3 for all of 020; 3.11.x is FU-1 before spec 017 (config-only first, otherwise a
+   whitespace-only proof per file). G-3, FR-003 and SC-005 amended. **Resolved.**
+2. **F-2**: SC-005 reads: `scalafmtCheckAll` green on every module (per-module form); scalafix no new findings outside
+   `bytes`/`rlp`. **Resolved.**
+3. **F-8 / OQ-6**: separate constitution amendments; 020 lands 1.1.1 + INF-009 now (PR 0). **Resolved.**
+4. **F-3**: SC-003 now uses the GT-2 count (273/273 since #1616). **Resolved** (spec edit).
+5. **R-3**: sbt **1.13.0**. **Resolved.**
+6. **R-6**: the 2 new E029 and 2 `trait App` sites are deferred with dated `@nowarn` (`dc4-ledger.md` + CHASE-QUEUE).
+   **Resolved.**
+7. **F-13**: if glamsterdam-devnet-8 is retired, the ETH-family differential range comes from post-Amsterdam Sepolia.
+   **Stated contingency** (no further decision needed).
 
 ## Complexity Tracking
 
