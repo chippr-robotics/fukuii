@@ -7,22 +7,20 @@ import com.chipprbots.scalanet.discovery.hash.Hash
 
 /** Discovery protocol messages from https://github.com/ethereum/devp2p/blob/master/discv4.md
   *
-  * Note that these case classes dont' contain the packet-type, e.g. 0x01 for Ping,
-  * because in our case that has to be handled by the Codec, so if it's RLP then
-  * it has to correctly prepend the discriminant byte so that it can later deserialize
-  * the data as well. Incidentally this works fine with the signing.
+  * Note that these case classes dont' contain the packet-type, e.g. 0x01 for Ping, because in our case that has to be
+  * handled by the Codec, so if it's RLP then it has to correctly prepend the discriminant byte so that it can later
+  * deserialize the data as well. Incidentally this works fine with the signing.
   */
 sealed trait Payload
 
-object Payload {
+object Payload:
   sealed trait Request extends Payload
   sealed trait Response extends Payload
 
-  trait HasExpiration[T <: Payload] {
+  trait HasExpiration[T <: Payload]:
     // Absolute UNIX timestamp: seconds since epoch.
     def expiration: Long
     def withExpiration(at: Long): T
-  }
 
   case class Ping(
       // Must be 4.
@@ -33,9 +31,8 @@ object Payload {
       // Current ENR sequence number of the sender.
       enrSeq: Option[Long]
   ) extends Request
-      with HasExpiration[Ping] {
+      with HasExpiration[Ping]:
     def withExpiration(e: Long): Ping = copy(expiration = e)
-  }
 
   case class Pong(
       // Copy of `to` from the corresponding ping packet.
@@ -46,36 +43,31 @@ object Payload {
       // Current ENR of the sender of Pong.
       enrSeq: Option[Long]
   ) extends Response
-      with HasExpiration[Pong] {
+      with HasExpiration[Pong]:
     def withExpiration(e: Long): Pong = copy(expiration = e)
-  }
 
   case class FindNode(
       // 65-byte secp256k1 public key
       target: PublicKey,
       expiration: Long
   ) extends Request
-      with HasExpiration[FindNode] {
+      with HasExpiration[FindNode]:
     def withExpiration(e: Long): FindNode = copy(expiration = e)
-  }
 
   case class Neighbors(
       nodes: List[Node],
       expiration: Long
   ) extends Response
-      with HasExpiration[Neighbors] {
+      with HasExpiration[Neighbors]:
     def withExpiration(e: Long): Neighbors = copy(expiration = e)
-  }
 
   case class ENRRequest(
       expiration: Long
   ) extends Request
-      with HasExpiration[ENRRequest] {
+      with HasExpiration[ENRRequest]:
     def withExpiration(e: Long): ENRRequest = copy(expiration = e)
-  }
 
   case class ENRResponse(
       requestHash: Hash,
       enr: EthereumNodeRecord
   ) extends Response
-}

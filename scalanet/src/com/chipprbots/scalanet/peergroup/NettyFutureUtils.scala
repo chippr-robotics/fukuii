@@ -8,13 +8,12 @@ import io.netty
 import io.netty.util.concurrent.Future
 import io.netty.util.concurrent.GenericFutureListener
 
-private[scalanet] object NettyFutureUtils {
-  def toTask(f: => netty.util.concurrent.Future[_]): IO[Unit] = {
-    val future = f  // Assign to val first as required by Scala 3
+private[scalanet] object NettyFutureUtils:
+  def toTask(f: => netty.util.concurrent.Future[?]): IO[Unit] =
+    val future = f // Assign to val first as required by Scala 3
     fromNettyFuture(IO.delay(future)).void
-  }
 
-  def fromNettyFuture[A](ff: IO[netty.util.concurrent.Future[A]]): IO[A] = {
+  def fromNettyFuture[A](ff: IO[netty.util.concurrent.Future[A]]): IO[A] =
     ff.flatMap { nettyFuture =>
       IO.async { cb =>
         IO {
@@ -23,44 +22,33 @@ private[scalanet] object NettyFutureUtils {
         }
       }
     }
-  }
 
   // Helper to handle completed futures - extracted to object-level to avoid redefinition
-  private def handleCompleted[A](future: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit = {
-    if (future.isSuccess) {
-      cb(Right(future.getNow))
-    } else {
-      future.cause() match {
+  private def handleCompleted[A](future: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit =
+    if future.isSuccess then cb(Right(future.getNow))
+    else
+      future.cause() match
         case _: CancellationException =>
           ()
         case ex => cb(Left(ex))
-      }
-    }
-  }
 
-  private def subscribeToFuture[A](cf: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit = {
+  private def subscribeToFuture[A](cf: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit =
     // Check if the future is already complete to avoid executor rejection
-    if (cf.isDone) {
+    if cf.isDone then
       // Future is already complete, invoke callback immediately
       handleCompleted(cf, cb)
-    } else {
+    else
       // Try to add listener, but handle rejection gracefully
-      try {
-        cf.addListener(new GenericFutureListener[Future[A]] {
-          override def operationComplete(future: Future[A]): Unit = {
-            handleCompleted(future, cb)
-          }
-        })
-      } catch {
+      try
+        cf.addListener(
+          new GenericFutureListener[Future[A]]:
+            override def operationComplete(future: Future[A]): Unit =
+              handleCompleted(future, cb)
+        )
+      catch
         case _: java.util.concurrent.RejectedExecutionException =>
           // Event loop is shutting down or already shut down.
           // Check if the future has completed in the meantime.
-          if (cf.isDone) {
-            handleCompleted(cf, cb)
-          }
-          // If not done, we can't do anything. The operation is being cancelled anyway.
-      }
-    }
+          if cf.isDone then handleCompleted(cf, cb)
+      // If not done, we can't do anything. The operation is being cancelled anyway.
     ()
-  }
-}

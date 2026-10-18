@@ -4,7 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.BitVector
 
-class XorOrderingSpec extends AnyFlatSpec with Matchers {
+class XorOrderingSpec extends AnyFlatSpec with Matchers:
 
   val id0 = BitVector.fromValidBin("0000")
 
@@ -16,12 +16,9 @@ class XorOrderingSpec extends AnyFlatSpec with Matchers {
       ids.foreach { a =>
         ids.foreach { b =>
           val result = ordering.compare(a, b)
-          if (Xor.d(a, base) < Xor.d(b, base))
-            result shouldBe -1
-          else if (Xor.d(a, base) > Xor.d(b, base))
-            result shouldBe 1
-          else
-            result shouldBe 0
+          if Xor.d(a, base) < Xor.d(b, base) then result shouldBe -1
+          else if Xor.d(a, base) > Xor.d(b, base) then result shouldBe 1
+          else result shouldBe 0
         }
       }
     }
@@ -42,4 +39,3 @@ class XorOrderingSpec extends AnyFlatSpec with Matchers {
 
     an[IllegalArgumentException] should be thrownBy ordering.compare(lhs, rhs)
   }
-}

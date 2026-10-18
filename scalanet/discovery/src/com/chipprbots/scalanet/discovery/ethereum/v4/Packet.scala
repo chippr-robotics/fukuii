@@ -19,14 +19,14 @@ import scodec.bits.BitVector
 /** Wire format from https://github.com/ethereum/devp2p/blob/master/discv4.md
   *
   * The packet type is included in the data.
-  * */
+  */
 case class Packet(
     hash: Hash,
     signature: Signature,
     data: BitVector
 )
 
-object Packet {
+object Packet:
   val MacBitsSize: Int = 32 * 8 // Keccak256
   val SigBitsSize: Int = 65 * 8 // Secp256k1
   val MaxPacketBitsSize: Int = 1280 * 8
@@ -45,7 +45,7 @@ object Packet {
     }
 
   private def packetDecoder(allowDecodeOverMaxPacketSize: Boolean): Decoder[Packet] =
-    for {
+    for
       _ <- Decoder { bits =>
         Attempt
           .guard(
@@ -57,22 +57,22 @@ object Packet {
       hash <- consumeNBits("Hash", MacBitsSize).map(Hash(_))
       signature <- consumeNBits("Signature", SigBitsSize).map(Signature(_))
       data <- consumeRemainingBits
-    } yield Packet(hash, signature, data)
+    yield Packet(hash, signature, data)
 
   private val packetEncoder: Encoder[Packet] =
     Encoder[Packet] { (packet: Packet) =>
-      for {
+      for
         _ <- Attempt.guard(packet.hash.value.size == MacBitsSize, "Unexpected hash size.")
         _ <- Attempt.guard(packet.signature.value.size == SigBitsSize, "Unexpected signature size.")
         bits <- Attempt.successful {
           packet.hash.value ++ packet.signature.value ++ packet.data
         }
         _ <- Attempt.guard(bits.size <= MaxPacketBitsSize, "Encoded packet exceeded maximum size.")
-      } yield bits
+      yield bits
     }
 
-  /** Create a codec for packets. Some Ethereum clients don't respect the size limits;
-    * for compatibility with them the check during decode can be turned off.
+  /** Create a codec for packets. Some Ethereum clients don't respect the size limits; for compatibility with them the
+    * check during decode can be turned off.
     */
   def packetCodec(allowDecodeOverMaxPacketSize: Boolean): Codec[Packet] =
     Codec[Packet](packetEncoder, packetDecoder(allowDecodeOverMaxPacketSize))
@@ -82,22 +82,21 @@ object Packet {
       payload: Payload,
       privateKey: PrivateKey
   )(implicit codec: Codec[Payload], sigalg: SigAlg): Attempt[Packet] =
-    for {
+    for
       data <- codec.encode(payload)
       signature = sigalg.sign(privateKey, data)
       hash = Keccak256(signature.value ++ data)
-    } yield Packet(hash, signature, data)
+    yield Packet(hash, signature, data)
 
   /** Validate the hash, recover the public key by validating the signature, and deserialize the payload. */
   def unpack(packet: Packet)(implicit codec: Codec[Payload], sigalg: SigAlg): Attempt[(Payload, PublicKey)] =
-    for {
+    for
       hash <- Attempt.successful(Keccak256(packet.signature.value ++ packet.data))
       _ <- Attempt.guard(hash == packet.hash, "Invalid hash.")
       publicKey <- sigalg.recoverPublicKey(packet.signature, packet.data)
       payload <- codec.decodeValue(packet.data)
-    } yield (payload, publicKey)
+    yield (payload, publicKey)
 
   implicit val show: Show[Packet] = Show.show[Packet] { p =>
     s"""Packet(hash = hex"${p.hash.value.toHex}", signature = hex"${p.signature.value.toHex}", data = hex"${p.data.toHex}")"""
   }
-}

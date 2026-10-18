@@ -279,12 +279,11 @@ class StaticUDPPeerGroup[M] private (
     yield ()
 
     if timeoutNanos <= 0 then IO.unit
-    else {
+    else
       val period = config.serverChannelIdleTimeout / 4
       (IO.sleep(period) >> reap.handleErrorWith(ex =>
         IO(logger.error("Idle server channel reaper failed", ex))
       )).foreverM
-    }
 
   private def getClientChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =
     clientChannelsRef.get.map {
@@ -473,10 +472,9 @@ class StaticUDPPeerGroup[M] private (
                   s"Server bound to address ${config.bindAddress}. Channel state: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}"
                 )
                 cb(Right(ch))
-              else {
+              else
                 logger.error(s"Failed to bind to ${config.bindAddress}", future.cause())
                 cb(Left(InitializationError(s"Failed to bind to ${config.bindAddress}", future.cause())))
-              }
             }
             // Return cancellation token
             Some(IO(bindFuture.cancel(false)).void)
@@ -493,10 +491,9 @@ class StaticUDPPeerGroup[M] private (
           if future.isSuccess || future.isCancelled then
             logger.info(s"UDP channel closed successfully")
             cb(Right(()))
-          else {
+          else
             logger.error(s"Failed to close channel", future.cause())
             cb(Left(new Exception("Failed to close channel", future.cause())))
-          }
         }
       }
     }

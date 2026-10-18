@@ -11,7 +11,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class Pbkdf2HMacSha256Spec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
+class Pbkdf2HMacSha256Spec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks:
 
   "pbkdf2HMacSha256" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
@@ -42,4 +42,3 @@ class Pbkdf2HMacSha256Spec extends AnyFlatSpec with Matchers with ScalaCheckProp
       pbkdf2HMacSha256(pass, salt, c, dklen) shouldEqual derivedKey
     }
   }
-}

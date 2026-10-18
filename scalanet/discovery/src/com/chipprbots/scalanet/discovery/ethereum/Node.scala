@@ -11,11 +11,10 @@ import com.chipprbots.scalanet.peergroup.Addressable
 import com.chipprbots.scalanet.peergroup.InetAddressOps.*
 import scodec.bits.ByteVector
 
-case class Node(id: Node.Id, address: Node.Address) {
+case class Node(id: Node.Id, address: Node.Address):
   protected[discovery] lazy val kademliaId: Hash = Node.kademliaId(id)
-}
 
-object Node {
+object Node:
 
   /** 64 bit uncompressed Secp256k1 public key. */
   type Id = PublicKey
@@ -28,12 +27,11 @@ object Node {
       ip: InetAddress,
       udpPort: Int,
       tcpPort: Int
-  ) {
+  ):
     protected[discovery] def checkRelay[A: Addressable](sender: A): Boolean =
       Address.checkRelay(sender = Addressable[A].getAddress(sender).getAddress, address = ip)
-  }
-  object Address {
-    def fromEnr(enr: EthereumNodeRecord): Option[Node.Address] = {
+  object Address:
+    def fromEnr(enr: EthereumNodeRecord): Option[Node.Address] =
       import EthereumNodeRecord.Keys
 
       def tryParse[T](key: ByteVector)(f: ByteVector => T): Option[T] =
@@ -47,23 +45,19 @@ object Node {
       def tryParsePort(key: ByteVector): Option[Int] =
         tryParse[Int](key)(bytes => bytes.toInt(signed = false))
 
-      for {
-        ip <- tryParseIP(Keys.ip6) orElse tryParseIP(Keys.ip)
-        udp <- tryParsePort(Keys.udp6) orElse tryParsePort(Keys.udp)
-        tcp <- tryParsePort(Keys.tcp6) orElse tryParsePort(Keys.tcp)
-      } yield Node.Address(ip, udpPort = udp, tcpPort = tcp)
-    }
+      for
+        ip <- tryParseIP(Keys.ip6).orElse(tryParseIP(Keys.ip))
+        udp <- tryParsePort(Keys.udp6).orElse(tryParsePort(Keys.udp))
+        tcp <- tryParsePort(Keys.tcp6).orElse(tryParsePort(Keys.tcp))
+      yield Node.Address(ip, udpPort = udp, tcpPort = tcp)
 
     /** Check that an address relayed by the sender is valid:
-      * - Special and unspecified addresses are invalid.
-      * - LAN/loopback addresses are valid if the sender is also LAN/loopback.
-      * - Other addresses are valid.
+      *   - Special and unspecified addresses are invalid.
+      *   - LAN/loopback addresses are valid if the sender is also LAN/loopback.
+      *   - Other addresses are valid.
       */
-    def checkRelay(sender: InetAddress, address: InetAddress): Boolean = {
-      if (address.isSpecial || address.isUnspecified) false
-      else if (address.isLoopbackAddress && !sender.isLoopbackAddress) false
-      else if (address.isLAN && !sender.isLAN) false
+    def checkRelay(sender: InetAddress, address: InetAddress): Boolean =
+      if address.isSpecial || address.isUnspecified then false
+      else if address.isLoopbackAddress && !sender.isLoopbackAddress then false
+      else if address.isLAN && !sender.isLAN then false
       else true
-    }
-  }
-}

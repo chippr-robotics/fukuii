@@ -11,7 +11,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class ScryptSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
+class ScryptSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks:
 
   "scrypt" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
@@ -58,4 +58,3 @@ class ScryptSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks
       scrypt(pass, salt, n, r, p, dklen) shouldEqual derivedKey
     }
   }
-}

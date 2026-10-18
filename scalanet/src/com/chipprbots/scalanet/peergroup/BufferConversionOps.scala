@@ -2,20 +2,16 @@ package com.chipprbots.scalanet.peergroup
 
 import java.nio.ByteBuffer
 
-trait BufferConversionOps {
+trait BufferConversionOps:
 
-  implicit class ByteBufferConversionOps(val byteBuffer: ByteBuffer) {
-    def toArray: Array[Byte] = {
-      if (byteBuffer.hasArray)
-        byteBuffer.array
+  implicit class ByteBufferConversionOps(val byteBuffer: ByteBuffer):
+    def toArray: Array[Byte] =
+      if byteBuffer.hasArray then byteBuffer.array
       else {
         (byteBuffer: java.nio.Buffer).position(0)
         val arr = new Array[Byte](byteBuffer.remaining())
         byteBuffer.get(arr)
         arr
       }
-    }
-  }
-}
 
 object BufferConversionOps extends BufferConversionOps

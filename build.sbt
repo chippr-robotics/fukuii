@@ -453,6 +453,8 @@ addCommandAlias(
     |; crypto / scalafmtAll
     |; rlp / scalafixAll
     |; rlp / scalafmtAll
+    |; scalanet / scalafmtAll
+    |; scalanetDiscovery / scalafmtAll
     |; scalafixAll
     |; scalafmtAll
     |""".stripMargin
@@ -468,6 +470,8 @@ addCommandAlias(
     |; crypto / scalafmtCheckAll
     |; rlp / scalafixAll --check
     |; rlp / scalafmtCheckAll
+    |; scalanet / scalafmtCheckAll
+    |; scalanetDiscovery / scalafmtCheckAll
     |; scalafixAll --check
     |; scalafmtCheckAll
     |""".stripMargin

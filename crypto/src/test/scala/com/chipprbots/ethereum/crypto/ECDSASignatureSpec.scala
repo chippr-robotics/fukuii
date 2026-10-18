@@ -13,7 +13,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
-class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with SecureRandomBuilder {
+class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with SecureRandomBuilder:
   "ECDSASignature" should "recover public key correctly for go ethereum transaction" taggedAs (
     UnitTest,
     CryptoTest
@@ -92,4 +92,3 @@ class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         result shouldBe expected
     }
   }
-}

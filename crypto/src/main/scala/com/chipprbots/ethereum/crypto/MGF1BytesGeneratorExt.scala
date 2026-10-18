@@ -7,17 +7,16 @@ import org.bouncycastle.crypto.Digest
 /** This class is borrowed from bouncycastle project The only change made is addition of 'counterStart' parameter to
   * conform to Crypto++ capabilities
   */
-class MGF1BytesGeneratorExt(digest: Digest) {
+class MGF1BytesGeneratorExt(digest: Digest):
   val digestSize: Int = digest.getDigestSize
 
-  private def itoOSP(i: Int, sp: Array[Byte]): Unit = {
+  private def itoOSP(i: Int, sp: Array[Byte]): Unit =
     sp(0) = (i >>> 24).toByte
     sp(1) = (i >>> 16).toByte
     sp(2) = (i >>> 8).toByte
     sp(3) = (i >>> 0).toByte
-  }
 
-  def generateBytes(outputLength: Int, seed: Array[Byte]): ByteString = {
+  def generateBytes(outputLength: Int, seed: Array[Byte]): ByteString =
 
     val counterStart = 1
     val hashBuf = new Array[Byte](digestSize)
@@ -34,12 +33,7 @@ class MGF1BytesGeneratorExt(digest: Digest) {
 
         val spaceLeft = outputLength - (i * digestSize)
 
-        if (spaceLeft > digestSize) {
-          ByteString(hashBuf)
-        } else {
-          ByteString(hashBuf).dropRight(digestSize - spaceLeft)
-        }
+        if spaceLeft > digestSize then ByteString(hashBuf)
+        else ByteString(hashBuf).dropRight(digestSize - spaceLeft)
       }
       .foldLeft(ByteString.empty) { case (acc, bs) => acc ++ bs }
-  }
-}

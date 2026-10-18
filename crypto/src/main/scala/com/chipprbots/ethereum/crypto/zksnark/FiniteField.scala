@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.crypto.zksnark
 
-trait FiniteField[A] {
+trait FiniteField[A]:
   def zero: A
   def one: A
   def add(a: A, b: A): A
@@ -12,12 +12,11 @@ trait FiniteField[A] {
   def dbl(a: A): A = add(a, a)
   def isZero(a: A): Boolean
   def isValid(a: A): Boolean
-}
 
-object FiniteField {
+object FiniteField:
   def apply[T](implicit field: FiniteField[T]): FiniteField[T] = field
-  object Ops {
-    implicit class FiniteFieldOps[T](t: T)(implicit F: FiniteField[T]) {
+  object Ops:
+    implicit class FiniteFieldOps[T](t: T)(implicit F: FiniteField[T]):
       def +(o: T): T = F.add(t, o)
       def *(o: T): T = F.mul(t, o)
       def -(o: T): T = F.sub(t, o)
@@ -27,6 +26,3 @@ object FiniteField {
       def negated(): T = F.neg(t)
       def isValid(): Boolean = F.isValid(t)
       def isZero(): Boolean = F.isZero(t)
-    }
-  }
-}

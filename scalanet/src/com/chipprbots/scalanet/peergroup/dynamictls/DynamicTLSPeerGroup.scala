@@ -49,24 +49,25 @@ import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import scodec.Codec
 import scodec.bits.BitVector
 
-/**
-  * PeerGroup implementation on top of TLS.
-  * the encoded bytes provided by the callers codec are not identical to the bytes put on the wire (since a
-  * length field is prepended to the byte stream). This class therefore cannot be used to talk to general services
-  * that are not instances of TLSPeerGroup.
+/** PeerGroup implementation on top of TLS. the encoded bytes provided by the callers codec are not identical to the
+  * bytes put on the wire (since a length field is prepended to the byte stream). This class therefore cannot be used to
+  * talk to general services that are not instances of TLSPeerGroup.
   *
-  * @param config bind address etc. See the companion object.
-  * @param codec  a codec for reading writing messages to NIO ByteBuffer.
-  * @tparam M the message type.
+  * @param config
+  *   bind address etc. See the companion object.
+  * @param codec
+  *   a codec for reading writing messages to NIO ByteBuffer.
+  * @tparam M
+  *   the message type.
   */
 class DynamicTLSPeerGroup[M] private (
     val config: Config,
     serverQueue: CloseableQueue[ServerEvent[PeerInfo, M]]
-)(
-    implicit codec: Codec[M]
+)(implicit
+    codec: Codec[M]
 ) extends TerminalPeerGroup[PeerInfo, M]
     with ProxySupport[PeerInfo, M]
-    with StrictLogging {
+    with StrictLogging:
 
   private val sslServerCtx: SslContext = DynamicTLSPeerGroupUtils.buildCustomSSlContext(SSLContextForServer, config)
 
@@ -86,21 +87,21 @@ class DynamicTLSPeerGroup[M] private (
     .group(workerGroup)
     .handler(new LoggingHandler(LogLevel.DEBUG))
     .channel(classOf[NioServerSocketChannel])
-    .childHandler(new ChannelInitializer[SocketChannel]() {
-      override def initChannel(ch: SocketChannel): Unit = {
-        new ServerChannelBuilder[M](
-          config.peerInfo.id,
-          serverQueue,
-          ch,
-          sslServerCtx,
-          config.framingConfig,
-          config.maxIncomingMessageQueueSize,
-          throttlingFilter,
-          config.stalePeerDetectionConfig
-        )
-        logger.info(s"$processAddress received inbound from ${ch.remoteAddress()}.")
-      }
-    })
+    .childHandler(
+      new ChannelInitializer[SocketChannel]():
+        override def initChannel(ch: SocketChannel): Unit =
+          new ServerChannelBuilder[M](
+            config.peerInfo.id,
+            serverQueue,
+            ch,
+            sslServerCtx,
+            config.framingConfig,
+            config.maxIncomingMessageQueueSize,
+            throttlingFilter,
+            config.stalePeerDetectionConfig
+          )
+          logger.info(s"$processAddress received inbound from ${ch.remoteAddress()}.")
+    )
     .option[Integer](ChannelOption.SO_BACKLOG, 128)
     .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, new DefaultMaxBytesRecvByteBufAllocator)
     .childOption[java.lang.Boolean](ChannelOption.SO_KEEPALIVE, true)
@@ -108,13 +109,13 @@ class DynamicTLSPeerGroup[M] private (
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 
   private def initialize: IO[Unit] =
-    toTask(serverBind).handleErrorWith {
-      case NonFatal(e) => IO.raiseError(InitializationError(e.getMessage, e.getCause))
+    toTask(serverBind).handleErrorWith { case NonFatal(e) =>
+      IO.raiseError(InitializationError(e.getMessage, e.getCause))
     } *> IO(logger.info(s"Server bound to address ${config.bindAddress}"))
 
   override def processAddress: PeerInfo = config.peerInfo
 
-  private def createChannel(to: PeerInfo, proxyConfig: Option[Socks5Config]): Resource[IO, Channel[PeerInfo, M]] = {
+  private def createChannel(to: PeerInfo, proxyConfig: Option[Socks5Config]): Resource[IO, Channel[PeerInfo, M]] =
     // Creating new ssl context for each client is necessary, as this is only reliable way to pass peerInfo to TrustManager
     // which takes care of validating certificates and server node id.
     // Using Netty SSLEngine.getSession.putValue does not work as expected as until successfulhandshake there is no separate
@@ -131,37 +132,30 @@ class DynamicTLSPeerGroup[M] private (
         config.stalePeerDetectionConfig
       ).initialize
     )(_.close())
-  }
 
-  override def client(to: PeerInfo): Resource[IO, Channel[PeerInfo, M]] = {
+  override def client(to: PeerInfo): Resource[IO, Channel[PeerInfo, M]] =
     createChannel(to, None)
-  }
 
-  override def client(to: PeerInfo, proxyConfig: Socks5Config): Resource[IO, Channel[PeerInfo, M]] = {
+  override def client(to: PeerInfo, proxyConfig: Socks5Config): Resource[IO, Channel[PeerInfo, M]] =
     createChannel(to, Some(proxyConfig))
-  }
 
   override def nextServerEvent: IO[Option[ServerEvent[PeerInfo, M]]] =
     serverQueue.next
 
-  private def shutdown: IO[Unit] = {
-    for {
+  private def shutdown: IO[Unit] =
+    for
       _ <- IO(logger.debug("Start shutdown of tls peer group for peer {}", processAddress))
       _ <- serverQueue.close(discard = true)
       _ <- toTask(serverBind.channel().close())
       _ <- toTask(workerGroup.shutdownGracefully())
       _ <- IO(logger.debug("Tls peer group shutdown for peer {}", processAddress))
-    } yield ()
-  }
-}
+    yield ()
 
-object DynamicTLSPeerGroup {
+object DynamicTLSPeerGroup:
   case class PeerInfo(id: BitVector, address: InetMultiAddress)
-  object PeerInfo {
-    implicit val peerInfoAddressable: Addressable[PeerInfo] = new Addressable[PeerInfo] {
+  object PeerInfo:
+    implicit val peerInfoAddressable: Addressable[PeerInfo] = new Addressable[PeerInfo]:
       override def getAddress(a: PeerInfo): InetSocketAddress = a.address.inetSocketAddress
-    }
-  }
 
   final case class ConfigError(description: String)
 
@@ -177,63 +171,60 @@ object DynamicTLSPeerGroup {
       lengthIncludesLengthFieldLength: Boolean
   )
 
-  object FramingConfig {
-    sealed abstract class ValidLengthFieldLength {
+  object FramingConfig:
+    sealed abstract class ValidLengthFieldLength:
       def value: Int
-    }
-    case object SingleByteLength extends ValidLengthFieldLength {
+    case object SingleByteLength extends ValidLengthFieldLength:
       val value = 1
-    }
-    case object TwoByteLength extends ValidLengthFieldLength {
+    case object TwoByteLength extends ValidLengthFieldLength:
       val value = 2
-    }
-    case object ThreeByteLength extends ValidLengthFieldLength {
+    case object ThreeByteLength extends ValidLengthFieldLength:
       val value = 3
-    }
-    case object FourByteLength extends ValidLengthFieldLength {
+    case object FourByteLength extends ValidLengthFieldLength:
       val value = 4
-    }
-    case object EightByteLength extends ValidLengthFieldLength {
+    case object EightByteLength extends ValidLengthFieldLength:
       val value = 8
-    }
 
-    object ValidLengthFieldLength {
-      def apply(i: Int): Either[ConfigError, ValidLengthFieldLength] = {
-        i match {
+    object ValidLengthFieldLength:
+      def apply(i: Int): Either[ConfigError, ValidLengthFieldLength] =
+        i match
           case 1 => Right(SingleByteLength)
           case 2 => Right(TwoByteLength)
           case 3 => Right(ThreeByteLength)
           case 4 => Right(FourByteLength)
           case 8 => Right(EightByteLength)
           case _ => Left(ConfigError("lengthFieldLength should be one of (1, 2, 3, 4, 8)"))
-        }
-      }
-    }
 
-    private def check(test: Boolean, message: String): Either[ConfigError, Unit] = {
+    private def check(test: Boolean, message: String): Either[ConfigError, Unit] =
       Either.cond(test, (), ConfigError(message))
-    }
 
-    /**
+    /** Configures framing format for all the peers in PeerGroup
       *
-      * Configures framing format for all the peers in PeerGroup
+      * Check [[io.netty.handler.codec.LengthFieldPrepender]] and
+      * [[io.netty.handler.codec.LengthFieldBasedFrameDecoder]] for good description of all the fields
       *
-      * Check [[io.netty.handler.codec.LengthFieldPrepender]] and [[io.netty.handler.codec.LengthFieldBasedFrameDecoder]]
-      * for good description of all the fields
-      *
-      * @param maxFrameLength the maximum length of the frame. If the length of the frame is greater than this value
-      *                       channel with generate DecodingError event.
-      * @param lengthFieldOffset the offset of the length field.
-      * @param lengthFieldLength  the length of the length field. Must be 1, 2, 3, 4 or 8 bytes.
-      * @param decodingLengthAdjustment  the compensation value to add to the value of the length field when decoding.
-      * @param encodingLengthAdjustment the compensation value to add to the value of the length field when encoding.
-      * @param initialBytesToStrip the number of first bytes to strip out from the decoded frame. In standard framing setup
-      *                            it should be equal to lengthFieldLength.
-      * @param failFast  If true, a DecodingError event is generated as soon as the decoder notices the length of the frame will
-      *                  exceed maxFrameLength regardless of whether the entire frame has been read. If false,
-      *                  a DecodingError event is generated after the entire frame that exceeds maxFrameLength has been read.
-      * @param byteOrder the ByteOrder of the length field.
-      * @param lengthIncludesLengthFieldLength if true, the length of the prepended length field is added to the value of the prepended length field.
+      * @param maxFrameLength
+      *   the maximum length of the frame. If the length of the frame is greater than this value channel with generate
+      *   DecodingError event.
+      * @param lengthFieldOffset
+      *   the offset of the length field.
+      * @param lengthFieldLength
+      *   the length of the length field. Must be 1, 2, 3, 4 or 8 bytes.
+      * @param decodingLengthAdjustment
+      *   the compensation value to add to the value of the length field when decoding.
+      * @param encodingLengthAdjustment
+      *   the compensation value to add to the value of the length field when encoding.
+      * @param initialBytesToStrip
+      *   the number of first bytes to strip out from the decoded frame. In standard framing setup it should be equal to
+      *   lengthFieldLength.
+      * @param failFast
+      *   If true, a DecodingError event is generated as soon as the decoder notices the length of the frame will exceed
+      *   maxFrameLength regardless of whether the entire frame has been read. If false, a DecodingError event is
+      *   generated after the entire frame that exceeds maxFrameLength has been read.
+      * @param byteOrder
+      *   the ByteOrder of the length field.
+      * @param lengthIncludesLengthFieldLength
+      *   if true, the length of the prepended length field is added to the value of the prepended length field.
       */
     def buildConfig(
         maxFrameLength: Int,
@@ -245,15 +236,15 @@ object DynamicTLSPeerGroup {
         failFast: Boolean = true,
         byteOrder: ByteOrder = ByteOrder.BIG_ENDIAN,
         lengthIncludesLengthFieldLength: Boolean = false
-    ): Either[ConfigError, FramingConfig] = {
+    ): Either[ConfigError, FramingConfig] =
       def validateLengthFieldLengthWithMaxFrame(
           lengthFieldLength: ValidLengthFieldLength
-      ): Either[ConfigError, Unit] = {
-        val prefixAdjustment = if (lengthIncludesLengthFieldLength) lengthFieldLength.value else 0
+      ): Either[ConfigError, Unit] =
+        val prefixAdjustment = if lengthIncludesLengthFieldLength then lengthFieldLength.value else 0
 
         val maximalMessageLength = maxFrameLength + encodingLengthAdjustment + prefixAdjustment
 
-        lengthFieldLength match {
+        lengthFieldLength match
           case SingleByteLength if maximalMessageLength >= 256 =>
             Left(ConfigError(s"length $maximalMessageLength does not fit into a byte"))
           case TwoByteLength if maximalMessageLength >= 65536 =>
@@ -261,11 +252,9 @@ object DynamicTLSPeerGroup {
           case ThreeByteLength if maximalMessageLength >= 16777216 =>
             Left(ConfigError(s"length $maximalMessageLength does not fit into a medium integer"))
           case _ => Right(())
-        }
-      }
 
       val smallEnoughOffset = lengthFieldOffset <= maxFrameLength - lengthFieldLength
-      for {
+      for
         _ <- check(maxFrameLength > 0, "maxFrameLength should be positive")
         _ <- check(lengthFieldOffset >= 0, "lengthFieldOffset should be non negative")
         _ <- check(initialBytesToStrip >= 0, "initialBytesToStrip should be non negative")
@@ -275,59 +264,54 @@ object DynamicTLSPeerGroup {
           smallEnoughOffset,
           "lengthFieldOffset should be smaller or equal (maxFrameLength - lengthFieldLength)"
         )
+      yield new FramingConfig(
+        maxFrameLength,
+        lengthFieldOffset,
+        validLengthField,
+        encodingLengthAdjustment,
+        decodingLengthAdjustment,
+        initialBytesToStrip,
+        failFast,
+        byteOrder,
+        lengthIncludesLengthFieldLength
+      ) {}
 
-      } yield {
-        new FramingConfig(
-          maxFrameLength,
-          lengthFieldOffset,
-          validLengthField,
-          encodingLengthAdjustment,
-          decodingLengthAdjustment,
-          initialBytesToStrip,
-          failFast,
-          byteOrder,
-          lengthIncludesLengthFieldLength
-        ) {}
-      }
-    }
-
-    /**
+    /** Configures framing format for all the peers in PeerGroup, which will prepend length to all messages when
+      * encoding and strip this length when decoding.
       *
-      * Configures framing format for all the peers in PeerGroup, which will prepend length to all messages when encoding
-      * and strip this length when decoding.
-      *
-      * @param maxFrameLength the maximum length of the frame. If the length of the frame is greater than this value
-      *                       channel with generate DecodingError event.
-      * @param lengthFieldLength  the length of the length field. Must be 1, 2, 3, 4 or 8 bytes.
+      * @param maxFrameLength
+      *   the maximum length of the frame. If the length of the frame is greater than this value channel with generate
+      *   DecodingError event.
+      * @param lengthFieldLength
+      *   the length of the length field. Must be 1, 2, 3, 4 or 8 bytes.
       */
     def buildStandardFrameConfig(
         maxFrameLength: Int,
         lengthFieldLength: Int
-    ): Either[ConfigError, FramingConfig] = {
+    ): Either[ConfigError, FramingConfig] =
       buildConfig(maxFrameLength, 0, lengthFieldLength, lengthFieldLength)
-    }
-  }
 
-  /**
+  /** Config which enables specifying minimal duration between subsequent incoming connections attempts from the same ip
+    * address
     *
-    * Config which enables specifying minimal duration between subsequent incoming connections attempts from the same
-    * ip address
-    *
-    * @param throttleLocalhost if connections from localhost should also be throttled. Useful for test and testnets
-    *                          when user want to quickly connects several peers to server
-    * @param throttlingDuration minimal duration between subsequent incoming connections from same ip
+    * @param throttleLocalhost
+    *   if connections from localhost should also be throttled. Useful for test and testnets when user want to quickly
+    *   connects several peers to server
+    * @param throttlingDuration
+    *   minimal duration between subsequent incoming connections from same ip
     */
   case class IncomingConnectionThrottlingConfig(throttleLocalhost: Boolean, throttlingDuration: FiniteDuration)
 
-  /**
-    * Configures detection on idle peer
-    * @param readerIdleTime a ChannelIdle event whose state is ReaderIdle will be triggered when
-    *                       no read was performed for the specified period of time on given channel. Specify 0 to disable.
-    * @param writerIdleTime a ChannelIdle event whose state is WriterIdle will be triggered when
-    *                       no write was performed for the specified period of time on given channel. Specify 0 to disable.
-    * @param allIdleTime a ChannelIdle event whose state is AllIdle will be triggered when
-    *                      neither read nor write was performed for the specified period of time on given channel. Specify 0 to disable.
-    *
+  /** Configures detection on idle peer
+    * @param readerIdleTime
+    *   a ChannelIdle event whose state is ReaderIdle will be triggered when no read was performed for the specified
+    *   period of time on given channel. Specify 0 to disable.
+    * @param writerIdleTime
+    *   a ChannelIdle event whose state is WriterIdle will be triggered when no write was performed for the specified
+    *   period of time on given channel. Specify 0 to disable.
+    * @param allIdleTime
+    *   a ChannelIdle event whose state is AllIdle will be triggered when neither read nor write was performed for the
+    *   specified period of time on given channel. Specify 0 to disable.
     */
   case class StalePeerDetectionConfig(
       readerIdleTime: FiniteDuration,
@@ -335,19 +319,26 @@ object DynamicTLSPeerGroup {
       allIdleTime: FiniteDuration
   )
 
-  /**
+  /** Configuration for DynamicTlsPeerGroup with all possible options
     *
-    * Configuration for DynamicTlsPeerGroup with all possible options
-    *
-    * @param bindAddress the interface to which server should be bind
-    * @param peerInfo local id of the peer and server address
-    * @param connectionKeyPair keyPair used in negotiating tls connections
-    * @param connectionCertificate  connection certificate of local node
-    * @param useNativeTlsImplementation should native or java tls implementation be used
-    * @param framingConfig details about framing on the wire
-    * @param maxIncomingMessageQueueSize max number of un-read messages per remote peer
-    * @param incomingConnectionsThrottling optional possibility to throttle incoming connections
-    * @param stalePeerDetectionConfig optional possibility to detect if remote peer is idle
+    * @param bindAddress
+    *   the interface to which server should be bind
+    * @param peerInfo
+    *   local id of the peer and server address
+    * @param connectionKeyPair
+    *   keyPair used in negotiating tls connections
+    * @param connectionCertificate
+    *   connection certificate of local node
+    * @param useNativeTlsImplementation
+    *   should native or java tls implementation be used
+    * @param framingConfig
+    *   details about framing on the wire
+    * @param maxIncomingMessageQueueSize
+    *   max number of un-read messages per remote peer
+    * @param incomingConnectionsThrottling
+    *   optional possibility to throttle incoming connections
+    * @param stalePeerDetectionConfig
+    *   optional possibility to detect if remote peer is idle
     */
   case class Config(
       bindAddress: InetSocketAddress,
@@ -361,7 +352,7 @@ object DynamicTLSPeerGroup {
       stalePeerDetectionConfig: Option[StalePeerDetectionConfig]
   )
 
-  object Config {
+  object Config:
     // FIXME: For now we support only Secp256 keys in ethereum format
     def apply(
         bindAddress: InetSocketAddress,
@@ -373,8 +364,7 @@ object DynamicTLSPeerGroup {
         maxIncomingMessageQueueSize: Int,
         incomingConnectionsThrottling: Option[IncomingConnectionThrottlingConfig],
         stalePeerDetectionConfig: Option[StalePeerDetectionConfig]
-    ): Try[Config] = {
-
+    ): Try[Config] =
       SignedKeyExtensionNodeData(keyType, hostKeyPair, Secp256r1, secureRandom, SHA256withECDSA).map { nodeData =>
         Config(
           bindAddress,
@@ -388,7 +378,6 @@ object DynamicTLSPeerGroup {
           stalePeerDetectionConfig
         )
       }
-    }
 
     def apply(
         bindAddress: InetSocketAddress,
@@ -400,7 +389,7 @@ object DynamicTLSPeerGroup {
         maxIncomingMessageQueueSize: Int,
         incomingConnectionsThrottling: Option[IncomingConnectionThrottlingConfig],
         stalePeerDetectionConfig: Option[StalePeerDetectionConfig]
-    ): Try[Config] = {
+    ): Try[Config] =
       val convertedKeyPair = CryptoUtils.convertBcToJceKeyPair(hostKeyPair)
       Config(
         bindAddress,
@@ -413,13 +402,11 @@ object DynamicTLSPeerGroup {
         incomingConnectionsThrottling,
         stalePeerDetectionConfig
       )
-    }
-  }
 
   /** Create the peer group as a resource that is guaranteed to initialize itself and shut itself down at the end. */
   def apply[M: Codec](config: Config): Resource[IO, DynamicTLSPeerGroup[M]] =
     Resource.make {
-      for {
+      for
         // Using MPMC because the channel creation event is only pushed after the SSL handshake,
         // which should take place on the channel thread, not the boss thread.
         queue <- CloseableQueue.unbounded[ServerEvent[PeerInfo, M]]
@@ -430,7 +417,5 @@ object DynamicTLSPeerGroup {
         // it will start and stop the server anyway, and the interface itself suggests that one can always start concuming
         // server events, so this is cleaner semantics.
         _ <- pg.initialize
-      } yield pg
+      yield pg
     }(_.shutdown)
-
-}

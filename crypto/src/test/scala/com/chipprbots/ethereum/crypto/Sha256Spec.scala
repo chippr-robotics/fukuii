@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** `sha256` backs the SHA256 precompile (0x02) on every ETH and ETC fork, so its output is consensus. It runs on the
   * JDK's `MessageDigest`; BouncyCastle's `SHA256Digest`, the implementation it replaced, is kept here as the oracle.
   */
-class Sha256Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers {
+class Sha256Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers:
 
   // FIPS 180-4 examples (NIST CSRC "SHA-256" example values) plus the SHA256-precompile input of ethereum/tests
   // static_Call50000_sha256: 50,000 zero bytes.
@@ -36,13 +36,12 @@ class Sha256Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     ("\u0000" * 50000, "5b4b67b5d68e02c992760de07640472efe53a7f7553865f83262d0a74efc3e5d")
   )
 
-  private def bouncyCastleSha256(input: Array[Byte]): Array[Byte] = {
+  private def bouncyCastleSha256(input: Array[Byte]): Array[Byte] =
     val digest = new SHA256Digest()
     val out = Array.ofDim[Byte](digest.getDigestSize)
     digest.update(input, 0, input.length)
     digest.doFinal(out, 0)
     out
-  }
 
   test("SHA-256 matches the FIPS 180-4 examples", UnitTest, CryptoTest) {
     forAll(examples) { (input, result) =>
@@ -71,5 +70,3 @@ class Sha256Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
       sha256(bytes).toArray.toSeq shouldEqual bouncyCastleSha256(bytes.toArray).toSeq
     }
   }
-
-}

@@ -21,7 +21,7 @@ case class EthereumNodeRecord(
     content: EthereumNodeRecord.Content
 )
 
-object EthereumNodeRecord {
+object EthereumNodeRecord:
 
   implicit val byteVectorOrdering: Ordering[ByteVector] =
     Ordering.by[ByteVector, Seq[Byte]](_.toSeq)
@@ -32,12 +32,11 @@ object EthereumNodeRecord {
       // Normally clients treat the values as RLP, however we don't have access to the RLP types here, hence it's just bytes.
       attrs: SortedMap[ByteVector, ByteVector]
   )
-  object Content {
+  object Content:
     def apply(seq: Long, attrs: (ByteVector, ByteVector)*): Content =
       Content(seq, SortedMap(attrs*))
-  }
 
-  object Keys {
+  object Keys:
     def key(k: String): ByteVector =
       ByteVector(k.getBytes(UTF_8))
 
@@ -67,7 +66,6 @@ object EthereumNodeRecord {
 
     /** The keys above have pre-defined meaning, but there can be arbitrary entries in the map. */
     val Predefined: Set[ByteVector] = Set(id, secp256k1, ip, tcp, udp, ip6, tcp6, udp6)
-  }
 
   def apply(signature: Signature, seq: Long, attrs: (ByteVector, ByteVector)*): EthereumNodeRecord =
     EthereumNodeRecord(
@@ -75,40 +73,37 @@ object EthereumNodeRecord {
       EthereumNodeRecord.Content(seq, attrs*)
     )
 
-  def apply(privateKey: PrivateKey, seq: Long, attrs: (ByteVector, ByteVector)*)(
-      implicit sigalg: SigAlg,
+  def apply(privateKey: PrivateKey, seq: Long, attrs: (ByteVector, ByteVector)*)(implicit
+      sigalg: SigAlg,
       codec: Codec[Content]
-  ): Attempt[EthereumNodeRecord] = {
+  ): Attempt[EthereumNodeRecord] =
     val content = EthereumNodeRecord.Content(seq, attrs*)
     codec.encode(content).map { data =>
       val sig = sigalg.removeRecoveryId(sigalg.sign(privateKey, data))
       EthereumNodeRecord(sig, content)
     }
-  }
 
-  /** Encode an unsigned 16-bit port as a canonical big-endian byte vector with no leading
-    * zeros, per EIP-778's RLP rules (matches go-ethereum's `uint16` enr entry).
-    *   - port == 0   → empty byte vector (RLP-canonical zero)
-    *   - port < 256  → single byte
-    *   - else        → exactly 2 bytes (big-endian)
+  /** Encode an unsigned 16-bit port as a canonical big-endian byte vector with no leading zeros, per EIP-778's RLP
+    * rules (matches go-ethereum's `uint16` enr entry).
+    *   - port == 0 → empty byte vector (RLP-canonical zero)
+    *   - port < 256 → single byte
+    *   - else → exactly 2 bytes (big-endian)
     *
-    * The legacy `ByteVector.fromInt(port)` form emitted 4 bytes with leading zeros, which
-    * geth's strict RLP decoder rejects → falls back to default 0 → triggers errLowPort.
+    * The legacy `ByteVector.fromInt(port)` form emitted 4 bytes with leading zeros, which geth's strict RLP decoder
+    * rejects → falls back to default 0 → triggers errLowPort.
     */
   private def encodePort(port: Int): ByteVector =
-    if (port == 0) ByteVector.empty
-    else if (port < 256) ByteVector(port.toByte)
+    if port == 0 then ByteVector.empty
+    else if port < 256 then ByteVector(port.toByte)
     else ByteVector.fromShort(port.toShort)
 
-  def fromNode(node: Node, privateKey: PrivateKey, seq: Long, customAttrs: (ByteVector, ByteVector)*)(
-      implicit sigalg: SigAlg,
+  def fromNode(node: Node, privateKey: PrivateKey, seq: Long, customAttrs: (ByteVector, ByteVector)*)(implicit
+      sigalg: SigAlg,
       codec: Codec[Content]
-  ): Attempt[EthereumNodeRecord] = {
+  ): Attempt[EthereumNodeRecord] =
     val (ipKey, tcpKey, udpKey) =
-      if (node.address.ip.isInstanceOf[Inet6Address])
-        (Keys.ip6, Keys.tcp6, Keys.udp6)
-      else
-        (Keys.ip, Keys.tcp, Keys.udp)
+      if node.address.ip.isInstanceOf[Inet6Address] then (Keys.ip6, Keys.tcp6, Keys.udp6)
+      else (Keys.ip, Keys.tcp, Keys.udp)
 
     val standardAttrs = List(
       Keys.id -> ByteVector("v4".getBytes(UTF_8)),
@@ -128,14 +123,11 @@ object EthereumNodeRecord {
     val attrs = standardAttrs ++ customAttrs.filterNot(kv => Keys.Predefined(kv._1))
 
     apply(privateKey, seq, attrs*)
-  }
 
   def validateSignature(
       enr: EthereumNodeRecord,
       publicKey: PublicKey
-  )(implicit sigalg: SigAlg, codec: Codec[Content]): Attempt[Boolean] = {
+  )(implicit sigalg: SigAlg, codec: Codec[Content]): Attempt[Boolean] =
     codec.encode(enr.content).map { data =>
       sigalg.verify(publicKey, enr.signature, data)
     }
-  }
-}

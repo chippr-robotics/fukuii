@@ -9,7 +9,7 @@ import scala.collection.immutable.HashMap
 import scala.collection.immutable.ListSet
 
 class TimeSet[T] private (val clock: Clock, val timestamps: HashMap[T, Long], val underlying: ListSet[T])
-    extends AbstractSet[T] {
+    extends AbstractSet[T]:
 
   private def this(clock: Clock) = this(clock, HashMap[T, Long](), ListSet[T]())
 
@@ -36,29 +36,23 @@ class TimeSet[T] private (val clock: Clock, val timestamps: HashMap[T, Long], va
   def touch(elem: T): TimeSet[T] =
     this + elem
 
-  private def remove(elem: T): TimeSet[T] = {
+  private def remove(elem: T): TimeSet[T] =
     new TimeSet[T](clock, timestamps - elem, underlying - elem)
-  }
 
-  private def addAll(elems: T*): TimeSet[T] = {
+  private def addAll(elems: T*): TimeSet[T] =
     val t = clock.millis()
     elems.foldLeft(this) { (acc, next) =>
       new TimeSet[T](clock, acc.timestamps + (next -> t), (acc.underlying - next) + next)
     }
-  }
-}
 
-object TimeSet {
+object TimeSet:
 
   private val emptyInstance = new TimeSet[Any]()
 
   def empty[T]: TimeSet[T] = emptyInstance.asInstanceOf[TimeSet[T]]
 
-  def apply[T](elems: T*): TimeSet[T] = {
+  def apply[T](elems: T*): TimeSet[T] =
     new TimeSet[T]().addAll(elems*)
-  }
 
-  def apply[T](clock: Clock, elems: T*): TimeSet[T] = {
+  def apply[T](clock: Clock, elems: T*): TimeSet[T] =
     new TimeSet[T](clock).addAll(elems*)
-  }
-}

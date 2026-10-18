@@ -11,11 +11,11 @@ import org.scalatest.matchers.should.Matchers
 import scodec.Codec
 import scodec.codecs
 
-class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
+class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers:
 
   // Simple message type for testing
   case class TestMessage(content: String)
-  
+
   implicit val testMessageCodec: Codec[TestMessage] = codecs.utf8.xmap(
     str => TestMessage(str),
     msg => msg.content
@@ -31,13 +31,13 @@ class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
     )
 
     val test = StaticUDPPeerGroup[TestMessage](config).use { peerGroup =>
-      for {
+      for
         // Verify the peer group was created successfully
         _ <- IO(peerGroup should not be null)
         // Try to get the channel count to ensure internal state is initialized
         count <- peerGroup.channelCount
         _ <- IO(count shouldBe 0) // No client channels yet
-      } yield ()
+      yield ()
     }
 
     test.unsafeRunSync()
@@ -53,14 +53,14 @@ class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
     val test = StaticUDPPeerGroup[TestMessage](serverConfig).use { peerGroup =>
       // Create a client channel to ourselves (loopback)
       peerGroup.client(peerGroup.processAddress).use { channel =>
-        for {
+        for
           // Verify the channel was created
           _ <- IO(channel should not be null)
           _ <- IO(channel.to shouldBe peerGroup.processAddress)
           // Verify channel count increased
           count <- peerGroup.channelCount
           _ <- IO(count shouldBe 1)
-        } yield ()
+        yield ()
       }
     }
 
@@ -76,28 +76,29 @@ class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
       channelCapacity = 10,
       receiveBufferSizeBytes = 1024
     )
-    
+
     val config2 = StaticUDPPeerGroup.Config(
       bindAddress = new InetSocketAddress("127.0.0.1", 0),
       channelCapacity = 10,
       receiveBufferSizeBytes = 1024
     )
 
-    val test = for {
+    val test = for
       pg1 <- StaticUDPPeerGroup[TestMessage](config1)
       pg2 <- StaticUDPPeerGroup[TestMessage](config2)
-    } yield (pg1, pg2)
+    yield (pg1, pg2)
 
-    test.use { case (peerGroup1, peerGroup2) =>
-      // Just verify both peer groups were created successfully
-      for {
-        _ <- IO(peerGroup1 should not be null)
-        _ <- IO(peerGroup2 should not be null)
-        count1 <- peerGroup1.channelCount
-        count2 <- peerGroup2.channelCount
-        _ <- IO(count1 shouldBe 0)
-        _ <- IO(count2 shouldBe 0)
-      } yield ()
-    }.unsafeRunSync()
+    test
+      .use { case (peerGroup1, peerGroup2) =>
+        // Just verify both peer groups were created successfully
+        for
+          _ <- IO(peerGroup1 should not be null)
+          _ <- IO(peerGroup2 should not be null)
+          count1 <- peerGroup1.channelCount
+          count2 <- peerGroup2.channelCount
+          _ <- IO(count1 shouldBe 0)
+          _ <- IO(count2 shouldBe 0)
+        yield ()
+      }
+      .unsafeRunSync()
   }
-}

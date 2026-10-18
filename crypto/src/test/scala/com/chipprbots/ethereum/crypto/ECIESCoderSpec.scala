@@ -10,7 +10,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
+class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder:
 
   "ECIESCoder" should "decrypt encrypted message" taggedAs (UnitTest, CryptoTest) in {
 
@@ -60,4 +60,3 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
 
     decryptedPayload.sameElements(payload) shouldBe true
   }
-}

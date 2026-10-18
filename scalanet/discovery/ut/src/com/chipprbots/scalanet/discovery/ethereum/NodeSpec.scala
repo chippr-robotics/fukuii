@@ -7,7 +7,7 @@ import org.scalatest.prop.TableDrivenPropertyChecks
 import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import java.net.InetSocketAddress
 
-class NodeSpec extends AnyFlatSpec with Matchers with TableDrivenPropertyChecks {
+class NodeSpec extends AnyFlatSpec with Matchers with TableDrivenPropertyChecks:
 
   behavior of "Node.Address.checkRelay"
 
@@ -25,26 +25,23 @@ class NodeSpec extends AnyFlatSpec with Matchers with TableDrivenPropertyChecks 
   )
 
   it should "correctly calculate the flag for sender-address pairs" in {
-    forAll(cases) {
-      case (sender, relayed, isValid) =>
-        withClue(s"$relayed from $sender") {
-          val senderIP = InetAddress.getByName(sender)
-          val relayedIP = InetAddress.getByName(relayed)
+    forAll(cases) { case (sender, relayed, isValid) =>
+      withClue(s"$relayed from $sender") {
+        val senderIP = InetAddress.getByName(sender)
+        val relayedIP = InetAddress.getByName(relayed)
 
-          Node.Address.checkRelay(sender = senderIP, address = relayedIP) shouldBe isValid
-        }
+        Node.Address.checkRelay(sender = senderIP, address = relayedIP) shouldBe isValid
+      }
     }
   }
 
   it should "work on the address instance" in {
-    forAll(cases) {
-      case (sender, relayed, isValid) =>
-        withClue(s"$relayed from $sender") {
-          val nodeAddress = Node.Address(InetAddress.getByName(relayed), 30000, 40000)
-          val senderMulti = InetMultiAddress(new InetSocketAddress(InetAddress.getByName(sender), 50000))
+    forAll(cases) { case (sender, relayed, isValid) =>
+      withClue(s"$relayed from $sender") {
+        val nodeAddress = Node.Address(InetAddress.getByName(relayed), 30000, 40000)
+        val senderMulti = InetMultiAddress(new InetSocketAddress(InetAddress.getByName(sender), 50000))
 
-          nodeAddress.checkRelay(senderMulti) shouldBe isValid
-        }
+        nodeAddress.checkRelay(senderMulti) shouldBe isValid
+      }
     }
   }
-}

@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
-object RLPImplicitConversions {
+object RLPImplicitConversions:
 
   implicit def toEncodeable[T](value: T)(implicit enc: RLPEncoder[T]): RLPEncodeable = enc.encode(value)
 
@@ -37,5 +37,3 @@ object RLPImplicitConversions {
   implicit def stringFromEncodeable: (RLPEncodeable) => String = fromEncodeable[String]
 
   implicit def byteArrayFromEncodeable: (RLPEncodeable) => Array[Byte] = fromEncodeable[Array[Byte]]
-
-}

@@ -18,51 +18,43 @@ import scodec.bits.ByteVector
 
 /** discv5 async pipeline — outbound RPC + inbound dispatch.
   *
-  * Outbound flow: caller invokes `ping` / `findNode` / `talkRequest`.
-  * The network checks for an existing session with the peer:
-  *   - With session: encrypt the payload under writeKey, send. Register a
-  *     pending-request Deferred keyed on (peerId, requestId), wait on it
-  *     with a timeout, and complete when an inbound MessagePacket arrives
-  *     carrying the matching requestId.
-  *   - Without session: send a "random-content" message that the peer
-  *     can't decrypt, so they reply with WHOAREYOU. Track this as a
-  *     pending-outbound-handshake. When the WHOAREYOU arrives, derive
-  *     an ephemeral key, sign idNonce, build a Handshake packet with the
-  *     original payload encrypted under the new session key, and send.
+  * Outbound flow: caller invokes `ping` / `findNode` / `talkRequest`. The network checks for an existing session with
+  * the peer:
+  *   - With session: encrypt the payload under writeKey, send. Register a pending-request Deferred keyed on (peerId,
+  *     requestId), wait on it with a timeout, and complete when an inbound MessagePacket arrives carrying the matching
+  *     requestId.
+  *   - Without session: send a "random-content" message that the peer can't decrypt, so they reply with WHOAREYOU.
+  *     Track this as a pending-outbound-handshake. When the WHOAREYOU arrives, derive an ephemeral key, sign idNonce,
+  *     build a Handshake packet with the original payload encrypted under the new session key, and send.
   *
-  * Inbound flow: a single fiber consumes from the [[CloseableQueue]] that
-  * `V5DemuxResponder` pushes to. For each (sender, bytes):
+  * Inbound flow: a single fiber consumes from the [[CloseableQueue]] that `V5DemuxResponder` pushes to. For each
+  * (sender, bytes):
   *   - Decode the [[Packet]] under the local node id mask.
-  *   - MessagePacket: try to decrypt with the session for (srcId, sender).
-  *     If the decoded payload is a Response (Pong, Nodes, TalkResponse),
-  *     correlate to a pending Deferred. Otherwise dispatch to the supplied
-  *     [[DiscoveryRPC]] handler (so the service-level layer can update
-  *     kbuckets, fetch ENR records, etc.). Note: the sync responder
-  *     [[Discv5SyncResponder]] already replies to inbound requests;
-  *     this path runs after to do bookkeeping.
-  *   - Whoareyou: pair with a pending-outbound-handshake; build the
-  *     handshake response and send.
-  *   - Handshake: usually handled by sync responder; if it surfaces here
-  *     (sync was rate-limited or threw) we re-handle defensively.
+  *   - MessagePacket: try to decrypt with the session for (srcId, sender). If the decoded payload is a Response (Pong,
+  *     Nodes, TalkResponse), correlate to a pending Deferred. Otherwise dispatch to the supplied [[DiscoveryRPC]]
+  *     handler (so the service-level layer can update kbuckets, fetch ENR records, etc.). Note: the sync responder
+  *     [[Discv5SyncResponder]] already replies to inbound requests; this path runs after to do bookkeeping.
+  *   - Whoareyou: pair with a pending-outbound-handshake; build the handshake response and send.
+  *   - Handshake: usually handled by sync responder; if it surfaces here (sync was rate-limited or threw) we re-handle
+  *     defensively.
   */
-trait DiscoveryNetwork[A] extends DiscoveryRPC[DiscoveryNetwork.Peer[A]] {
+trait DiscoveryNetwork[A] extends DiscoveryRPC[DiscoveryNetwork.Peer[A]]:
 
-  /** Start consuming the inbound dispatch queue. The returned `Deferred`
-    * is the cancellation signal — `complete(())` it to stop the consumer
-    * fiber. Mirrors v4's `startHandling`. */
+  /** Start consuming the inbound dispatch queue. The returned `Deferred` is the cancellation signal — `complete(())` it
+    * to stop the consumer fiber. Mirrors v4's `startHandling`.
+    */
   def startHandling(handler: DiscoveryRPC[DiscoveryNetwork.Peer[A]]): IO[Deferred[IO, Unit]]
-}
 
-object DiscoveryNetwork {
+object DiscoveryNetwork:
 
   /** Peer is the (NodeId, address) pair. address is typically `InetMultiAddress`. */
   final case class Peer[A](id: ByteVector, address: A)
 
-  /** Tracks our outbound that's waiting on a WHOAREYOU. When the WHOAREYOU
-    * arrives we know the peer's id (it's the auth-data SrcID; here we
-    * assume it matches the peer we initiated to) and we proceed to build
-    * the handshake response. */
-  private final case class PendingOutbound(
+  /** Tracks our outbound that's waiting on a WHOAREYOU. When the WHOAREYOU arrives we know the peer's id (it's the
+    * auth-data SrcID; here we assume it matches the peer we initiated to) and we proceed to build the handshake
+    * response.
+    */
+  final private case class PendingOutbound(
       payload: Payload.Request,
       requestDeferred: Deferred[IO, Payload.Response],
       sentNonce: ByteVector
@@ -84,7 +76,7 @@ object DiscoveryNetwork {
       sigalg: SigAlg,
       temporal: Temporal[IO]
   ): IO[DiscoveryNetwork[A]] = IO {
-    new DiscoveryNetwork[A] with LazyLogging {
+    new DiscoveryNetwork[A] with LazyLogging:
 
       private val pendingRequests =
         new ConcurrentHashMap[(ByteVector, ByteVector), Deferred[IO, Payload.Response]]()
@@ -96,7 +88,7 @@ object DiscoveryNetwork {
 
       // ---- DiscoveryRPC ------------------------------------------------
 
-      override def ping(peer: Peer[A], localEnrSeq: Long): IO[Option[DiscoveryRPC.PingResult]] = {
+      override def ping(peer: Peer[A], localEnrSeq: Long): IO[Option[DiscoveryRPC.PingResult]] =
         val reqId = Payload.randomRequestId(8)
         val ping = Payload.Ping(reqId, localEnrSeq)
         sendRequest(peer, ping, reqId).map {
@@ -104,9 +96,8 @@ object DiscoveryNetwork {
             Some(DiscoveryRPC.PingResult(pong.enrSeq, pong.recipientIp, pong.recipientPort))
           case _ => None
         }
-      }
 
-      override def findNode(peer: Peer[A], distances: List[Int]): IO[Option[List[EthereumNodeRecord]]] = {
+      override def findNode(peer: Peer[A], distances: List[Int]): IO[Option[List[EthereumNodeRecord]]] =
         val reqId = Payload.randomRequestId(8)
         val fn = Payload.FindNode(reqId, distances)
         // Nodes responses can be paginated; for v1 we take the first page only.
@@ -114,32 +105,31 @@ object DiscoveryNetwork {
           case Some(nodes: Payload.Nodes) => Some(nodes.enrs)
           case _                          => None
         }
-      }
 
       override def talkRequest(
           peer: Peer[A],
           protocol: ByteVector,
           message: ByteVector
-      ): IO[Option[ByteVector]] = {
+      ): IO[Option[ByteVector]] =
         val reqId = Payload.randomRequestId(8)
         val tq = Payload.TalkRequest(reqId, protocol, message)
         sendRequest(peer, tq, reqId).map {
           case Some(tr: Payload.TalkResponse) => Some(tr.message)
           case _                              => None
         }
-      }
 
       // ---- Outbound RPC core --------------------------------------------
 
-      /** Send a request payload; resolve the returned IO with the matching
-        * Response when it arrives, or None on timeout / error. */
+      /** Send a request payload; resolve the returned IO with the matching Response when it arrives, or None on timeout
+        * / error.
+        */
       private def sendRequest(
           peer: Peer[A],
           payload: Payload.Request,
           requestId: ByteVector
-      ): IO[Option[Payload.Response]] = {
+      ): IO[Option[Payload.Response]] =
         val peerAddr = toInetSocketAddress(peer.address)
-        for {
+        for
           deferred <- Deferred[IO, Payload.Response]
           _ <- IO {
             val _ = pendingRequests.put((peer.id, requestId), deferred)
@@ -149,14 +139,13 @@ object DiscoveryNetwork {
             .timeout(config.requestTimeout)
             .attempt
           _ <- IO { val _ = pendingRequests.remove((peer.id, requestId)) }
-        } yield result.toOption
-      }
+        yield result.toOption
 
       private def sendOrInitiateHandshake(
           peerNodeId: ByteVector,
           peerAddr: InetSocketAddress,
           payload: Payload.Request
-      ): IO[Unit] = {
+      ): IO[Unit] =
         sessions.getIO(Session.SessionId(peerNodeId, peerAddr)).flatMap {
           case Some(session) =>
             sendEncrypted(peerNodeId, peerAddr, session, payload)
@@ -166,7 +155,6 @@ object DiscoveryNetwork {
             // the handshake from there.
             sendRandomTrigger(peerNodeId, peerAddr, payload)
         }
-      }
 
       /** Send a request payload encrypted under an existing session. */
       private def sendEncrypted(
@@ -192,14 +180,14 @@ object DiscoveryNetwork {
         full
       }.flatMap(bytes => peerGroup.sendRaw(peerAddr, bytes))
 
-      /** Send a random-content message to trigger a WHOAREYOU. We record the
-        * nonce we sent so the WHOAREYOU's response field correlates back to
-        * the original [[payload]] we wanted to deliver. */
+      /** Send a random-content message to trigger a WHOAREYOU. We record the nonce we sent so the WHOAREYOU's response
+        * field correlates back to the original [[payload]] we wanted to deliver.
+        */
       private def sendRandomTrigger(
           peerNodeId: ByteVector,
           peerAddr: InetSocketAddress,
           payload: Payload.Request
-      ): IO[Unit] = for {
+      ): IO[Unit] = for
         nonce <- IO(Packet.randomNonce)
         iv = Packet.randomIv
         authData = localNodeId
@@ -221,13 +209,13 @@ object DiscoveryNetwork {
           val _ = pendingOutbound.put(nonce, PendingOutbound(payload, deferred, nonce))
         }
         _ <- peerGroup.sendRaw(peerAddr, full)
-      } yield ()
+      yield ()
 
       // ---- Inbound consumer --------------------------------------------
 
       override def startHandling(
           handler: DiscoveryRPC[Peer[A]]
-      ): IO[Deferred[IO, Unit]] = for {
+      ): IO[Deferred[IO, Unit]] = for
         cancel <- Deferred[IO, Unit]
         _ <- Stream
           .repeatEval(dispatchQueue.next)
@@ -246,16 +234,16 @@ object DiscoveryNetwork {
           .drain
           .start
           .void
-      } yield cancel
+      yield cancel
 
       private def processInbound(
           sender: InetSocketAddress,
           bytes: ByteVector,
           handler: DiscoveryRPC[Peer[A]]
-      ): IO[Unit] = {
-        Packet.decode(bytes, localNodeId).toEither match {
+      ): IO[Unit] =
+        Packet.decode(bytes, localNodeId).toEither match
           case Right(packet) =>
-            packet match {
+            packet match
               case msg: Packet.MessagePacket =>
                 processMessage(sender, msg, bytes, handler)
               case who: Packet.WhoareyouPacket =>
@@ -263,22 +251,19 @@ object DiscoveryNetwork {
               case _: Packet.HandshakePacket =>
                 // Sync responder typically handles this; ignore here.
                 IO.unit
-            }
           case Left(_) =>
             // Mask mismatch or junk; drop.
             IO.unit
-        }
-      }
 
-      /** Decrypt the inbound message; if it's a Response, route to a pending
-        * request; if it's a Request, dispatch to the supplied handler so the
-        * service layer can do bookkeeping (the sync responder already replied). */
+      /** Decrypt the inbound message; if it's a Response, route to a pending request; if it's a Request, dispatch to
+        * the supplied handler so the service layer can do bookkeeping (the sync responder already replied).
+        */
       private def processMessage(
           sender: InetSocketAddress,
           msg: Packet.MessagePacket,
           rawBytes: ByteVector,
           handler: DiscoveryRPC[Peer[A]]
-      ): IO[Unit] = {
+      ): IO[Unit] =
         sessions.getIO(Session.SessionId(msg.header.srcId, sender)).flatMap {
           case None =>
             // No session — sync responder should have sent WHOAREYOU.
@@ -287,31 +272,29 @@ object DiscoveryNetwork {
             val maskedRegionEnd =
               Packet.MaskingIVSize + Packet.StaticHeaderSize + msg.header.authData.size.toInt
             val aad = rawBytes.take(maskedRegionEnd.toLong)
-            Session.decrypt(session.keys.readKey, msg.header.nonce, msg.messageCiphertext, aad).toEither match {
+            Session.decrypt(session.keys.readKey, msg.header.nonce, msg.messageCiphertext, aad).toEither match
               case Right(plaintext) =>
-                payloadCodec.decode(plaintext.bits).toEither match {
+                payloadCodec.decode(plaintext.bits).toEither match
                   case Right(decoded) =>
                     routePayload(sender, msg.header.srcId, decoded.value, handler)
                   case Left(_) => IO.unit
-                }
               case Left(_) => IO.unit
-            }
         }
-      }
 
-      /** Route a decoded payload: responses complete pending Deferreds;
-        * requests fall through to the handler (no reply — sync did that). */
+      /** Route a decoded payload: responses complete pending Deferreds; requests fall through to the handler (no reply
+        * — sync did that).
+        */
       private def routePayload(
           @annotation.unused sender: InetSocketAddress,
           srcId: ByteVector,
           payload: Payload,
           @annotation.unused handler: DiscoveryRPC[Peer[A]]
-      ): IO[Unit] = payload match {
+      ): IO[Unit] = payload match
         case response: Payload.Response =>
           val key = (srcId, response.requestId)
           IO(Option(pendingRequests.remove(key))).flatMap {
             case Some(deferred) => deferred.complete(response).void
-            case None =>
+            case None           =>
               // No pending request — late or unsolicited. Drop.
               IO.unit
           }
@@ -321,13 +304,12 @@ object DiscoveryNetwork {
           // its response anywhere. For now we just no-op; the v5 service
           // layer can override this hook in a future iteration.
           IO.unit
-      }
 
       /** Receive a WHOAREYOU we triggered: build the handshake response. */
       private def processWhoareyou(
           sender: InetSocketAddress,
           who: Packet.WhoareyouPacket
-      ): IO[Unit] = {
+      ): IO[Unit] =
         val triggerNonce = who.header.nonce
         IO(Option(pendingOutbound.remove(triggerNonce))).flatMap {
           case None =>
@@ -336,7 +318,6 @@ object DiscoveryNetwork {
           case Some(pending) =>
             sendHandshakeReply(sender, who, pending)
         }
-      }
 
       /** Build the handshake packet that completes the outbound flow:
         *   - Generate ephemeral keypair
@@ -352,7 +333,10 @@ object DiscoveryNetwork {
       ): IO[Unit] = IO {
         // Ephemeral keypair
         val (_, ephPriv) = sigalg.newKeyPair
-        val _ = Session.pubFromPriv(ephPriv.value.bytes, compressed = true) // MIGRATION: ephPub unused — handshake stub, TODO: complete when peerNodeId is tracked
+        val _ = Session.pubFromPriv(
+          ephPriv.value.bytes,
+          compressed = true
+        ) // MIGRATION: ephPub unused — handshake stub, TODO: complete when peerNodeId is tracked
 
         // The recipient's nodeId is what's encoded in the WHOAREYOU's auth data
         // we cannot recover from here directly — but we tracked it via outbound.
@@ -375,32 +359,28 @@ object DiscoveryNetwork {
 
       // ---- Address helpers ----------------------------------------------
 
-      /** Best-effort extraction of an InetSocketAddress from peer.address.
-        * Most call sites use `InetMultiAddress`; we accept that or a raw
-        * `InetSocketAddress` directly. */
+      /** Best-effort extraction of an InetSocketAddress from peer.address. Most call sites use `InetMultiAddress`; we
+        * accept that or a raw `InetSocketAddress` directly.
+        */
       private def toInetSocketAddress(address: A): InetSocketAddress =
-        address match {
+        address match
           case isa: InetSocketAddress => isa
-          case other =>
+          case other                  =>
             // Fall through to reflection — the only other expected case is
             // `InetMultiAddress` which has `inetSocketAddress` accessor.
-            try {
+            try
               val m = other.getClass.getMethod("inetSocketAddress")
               m.invoke(other).asInstanceOf[InetSocketAddress]
-            } catch {
+            catch
               case NonFatal(ex) =>
                 throw new IllegalArgumentException(
                   s"Cannot derive InetSocketAddress from peer.address ($other): ${ex.getMessage}"
                 )
-            }
-        }
-    }
   }
 
-  /** Minimal abstraction for "send raw bytes to a remote address". The
-    * production impl is [[com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup.sendRaw]]
-    * via an adapter; tests can supply an in-memory sink. */
-  trait PeerGroupSender[A] {
+  /** Minimal abstraction for "send raw bytes to a remote address". The production impl is
+    * [[com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup.sendRaw]] via an adapter; tests can supply an in-memory
+    * sink.
+    */
+  trait PeerGroupSender[A]:
     def sendRaw(remoteAddress: InetSocketAddress, bytes: ByteVector): IO[Unit]
-  }
-}
