@@ -623,7 +623,8 @@ trait EthInfoServiceBuilder:
     syncController,
     Capability.best(instanceConfig.supportedCapabilities),
     asyncConfig.askTimeout,
-    classicSystem.toTyped.scheduler
+    classicSystem.toTyped.scheduler,
+    com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
   )
 
 trait EthSimulateServiceBuilder:
@@ -804,7 +805,7 @@ trait TxPoolServiceBuilder:
   )
 
 trait DebugTracingServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
 
   lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
     new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
@@ -812,11 +813,12 @@ trait DebugTracingServiceBuilder:
       blockchainReader,
       mining,
       stxLedger,
-      storagesInstance.storages.transactionMappingStorage
+      storagesInstance.storages.transactionMappingStorage,
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
     )
 
 trait TraceServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
 
   lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
     new com.chipprbots.ethereum.jsonrpc.TraceService(
@@ -824,7 +826,8 @@ trait TraceServiceBuilder:
       blockchainReader,
       mining,
       stxLedger,
-      storagesInstance.storages.transactionMappingStorage
+      storagesInstance.storages.transactionMappingStorage,
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
     )
 
 trait JSONRpcConfigBuilder:

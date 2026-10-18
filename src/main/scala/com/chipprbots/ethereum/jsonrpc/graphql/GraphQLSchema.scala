@@ -28,6 +28,8 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.domain.FailureOutcome
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.HashOutcome
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.Receipt
@@ -38,6 +40,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.domain.TxLogEntry
+import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.BlockParam
@@ -266,35 +269,31 @@ object GraphQLSchema:
   private val TxHashArg: Argument[ByteString] = Argument("hash", Bytes32Type)
   private val RawDataArg: Argument[ByteString] = Argument("data", BytesType)
 
-  // Convert a CallData input map to EthInfoService.CallTx.
-  private def toCallTx(m: Map[String, Any]): EthInfoService.CallTx =
-    val from = m.get("from").flatMap(asOption[ByteString])
+  /** A CallData input (EIP-1767) as [[TxArgs]], executed by the same message-call path as eth_call: go-ethereum's
+    * GraphQL resolvers call `ethapi.DoCall` / `DoEstimateGas` with the same TransactionArgs. maxFeePerGas and
+    * maxPriorityFeePerGas therefore price the call as geth does (min(maxFee, baseFee + tip)) instead of being folded
+    * into gasPrice, and gasPrice together with either is refused, as geth's CallDefaults refuses it.
+    */
+  private def toTxArgs(m: Map[String, Any]): TxArgs =
     val toRaw = m.get("to").flatMap(asOption[ByteString])
-    val gas = m.get("gas").flatMap(asOption[Long]).map(BigInt(_))
-    val gasPrice = m.get("gasPrice").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
-    val maxFee = m.get("maxFeePerGas").flatMap(asOption[BigInt])
-    val value = m.get("value").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
-    val data = m.get("data").flatMap(asOption[ByteString]).getOrElse(ByteString.empty)
+    val data = m.get("data").flatMap(asOption[ByteString])
     // When the caller omits `to` AND provides no payload, treat the call as a zero-value
     // no-op transfer to the zero address — that's what geth returns for hive's
     // `pending.estimateGas(data: {})` test (expected 0x5208 = 21000, the plain-transfer
     // intrinsic gas cost). Only trigger contract-creation semantics when the caller
     // actually supplied initcode via `data`.
     val to =
-      if toRaw.isEmpty && data.isEmpty then Some(ByteString(new Array[Byte](20)))
-      else toRaw
-    // If dynamic fee fields are present but no legacy gasPrice, synthesise the legacy field to
-    // maxFeePerGas so the existing stxLedger.simulateTransaction path can run unchanged.
-    val effectiveGasPrice =
-      if m.get("gasPrice").flatMap(asOption[BigInt]).isDefined then gasPrice else maxFee.getOrElse(gasPrice)
-    EthInfoService.CallTx(
-      from = from,
+      if toRaw.isEmpty && data.forall(_.isEmpty) then Some(Address(0))
+      else toRaw.map(Address(_))
+    TxArgs(
+      from = m.get("from").flatMap(asOption[ByteString]).map(Address(_)),
       to = to,
-      gas = gas,
-      gasPrice = effectiveGasPrice,
-      value = value,
-      data = data,
-      gasPriceExplicit = m.get("gasPrice").flatMap(asOption[BigInt]).isDefined
+      gas = m.get("gas").flatMap(asOption[Long]).map(g => GasAmount(BigInt(g))),
+      gasPrice = m.get("gasPrice").flatMap(asOption[BigInt]).map(GasPrice(_)),
+      maxFeePerGas = m.get("maxFeePerGas").flatMap(asOption[BigInt]),
+      maxPriorityFeePerGas = m.get("maxPriorityFeePerGas").flatMap(asOption[BigInt]),
+      value = m.get("value").flatMap(asOption[BigInt]),
+      data = data
     )
 
   // cast: dynamic GraphQL argument map returns Any; callers supply the expected type A
@@ -734,7 +733,7 @@ object GraphQLSchema:
           OptionType(CallResultType),
           arguments = List(CallDataArg),
           resolve = c =>
-            val callTx = toCallTx(c.arg(CallDataArg))
+            val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
             val io = c.ctx.ethInfoService.call(req)
             val estGasIo = c.ctx.ethInfoService.estimateGas(req)
@@ -757,7 +756,7 @@ object GraphQLSchema:
           LongType,
           arguments = List(CallDataArg),
           resolve = c =>
-            val callTx = toCallTx(c.arg(CallDataArg))
+            val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
             c.ctx.ethInfoService
               .estimateGas(req)
@@ -824,7 +823,7 @@ object GraphQLSchema:
           OptionType(CallResultType),
           arguments = List(CallDataArg),
           resolve = c =>
-            val callTx = toCallTx(c.arg(CallDataArg))
+            val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             val fut = (for
               callE <- c.ctx.ethInfoService.call(req)
@@ -842,7 +841,7 @@ object GraphQLSchema:
           LongType,
           arguments = List(CallDataArg),
           resolve = c =>
-            val callTx = toCallTx(c.arg(CallDataArg))
+            val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             c.ctx.ethInfoService
               .estimateGas(req)

@@ -170,6 +170,107 @@ object EthSimulateService:
       .map { case (c, h) => if c.isLetter && Character.digit(h, 16) >= 8 then c.toUpper else c }
       .mkString
 
+  /** Applies execution-apis state overrides (balance, nonce, code, state, stateDiff, movePrecompileToAddress) to
+    * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call and
+    * eth_estimateGas (go-ethereum uses its one `override.StateOverride.Apply` for all three).
+    */
+  def applyStateOverrides(
+      world: InMemoryWorldStateProxy,
+      overrides: Map[Address, StateOverride],
+      existingRelocations: Map[Address, Address],
+      accountStartNonce: UInt256
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
+    var w = world
+    var relocations = existingRelocations
+
+    // First pass: validate movePrecompileToAddress and detect collisions
+    val allPrecompiles = Set(
+      Address(1),
+      Address(2),
+      Address(3),
+      Address(4),
+      Address(5),
+      Address(6),
+      Address(7),
+      Address(8),
+      Address(9),
+      Address(0x0b),
+      Address(0x0c),
+      Address(0x0d),
+      Address(0x0e),
+      Address(0x0f),
+      Address(0x10),
+      Address(0x11),
+      Address(0x100)
+    )
+    val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
+    for (address, ov) <- overrides do
+      ov.movePrecompileToAddress.foreach { targetAddr =>
+        if !allPrecompiles.contains(address) then
+          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
+        pendingMoves += (address -> targetAddr)
+      }
+    // Two precompiles moving to the same target is ambiguous — geth silently
+    // drops the colliding moves rather than erroring (matches the
+    // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
+    val targetCounts = pendingMoves.groupBy(_._2).view.mapValues(_.size).toMap
+    pendingMoves.foreach { case (src, tgt) =>
+      if targetCounts.getOrElse(tgt, 0) <= 1 then relocations = relocations + (src -> tgt)
+    }
+
+    // Second pass: apply overrides — only modify state when something other than
+    // movePrecompileToAddress is set; the precompile move is purely a routing
+    // override and must not create empty accounts at precompile source addresses.
+    for (address, ov) <- overrides do
+      val hasStateMutation =
+        ov.balance.isDefined || ov.nonce.isDefined || ov.code.isDefined ||
+          ov.state.isDefined || ov.stateDiff.isDefined
+      if hasStateMutation then
+        var account = w.getAccount(address).getOrElse(Account.empty(accountStartNonce))
+
+        ov.balance.foreach(bal => account = account.copy(balance = UInt256(bal)))
+        ov.nonce.foreach(n => account = account.copy(nonce = UInt256(n)))
+
+        w = w.saveAccount(address, account)
+
+        ov.code.foreach { code =>
+          w = w.saveCode(address, code)
+          // Update the account's codeHash immediately (not just in cache)
+          // This prevents EIP-161 from deleting the account as "empty"
+          val codeHash = if code.isEmpty then Account.EmptyCodeHash else CodeHash(ByteString(kec256(code.toArray)))
+          val acctWithCode = w.getAccount(address).getOrElse(Account.empty(accountStartNonce))
+          w = w.saveAccount(address, acctWithCode.copy(codeHash = codeHash))
+        }
+
+        ov.state.foreach { slots =>
+          // Full state replacement: clear all storage, then set specified slots
+          // Persist first so any cached storage changes are committed
+          w = InMemoryWorldStateProxy.persistState(w)
+          // Reset storageRoot to empty and clear storage cache by delete+recreate
+          val currentAcct = w.getAccount(address).getOrElse(Account.empty(accountStartNonce))
+          // Delete and re-save account to clear storage cache
+          w = w.deleteAccount(address)
+          w = w.saveAccount(address, currentAcct.copy(storageRoot = Account.EmptyStorageRootHash))
+          // Re-apply code if it was set
+          if currentAcct.codeHash != Account.EmptyCodeHash then
+            // Code is in the EVM code storage, re-associate it
+            ov.code.foreach(code => w = w.saveCode(address, code))
+          // Write the new slots on fresh (empty) storage
+          val storage = w.getStorage(address)
+          var s = storage
+          for (key, value) <- slots do s = s.store(key, value)
+          w = w.saveStorage(address, s)
+        }
+
+        ov.stateDiff.foreach { slots =>
+          val storage = w.getStorage(address)
+          var s = storage
+          for (key, value) <- slots do s = s.store(key, value)
+          w = w.saveStorage(address, s)
+        }
+    Right((w, relocations))
+  }
+
 class EthSimulateService(
     val blockchain: BlockchainImpl,
     val blockchainReader: BlockchainReader,
@@ -671,97 +772,8 @@ class EthSimulateService(
       world: InMemoryWorldStateProxy,
       overrides: Map[Address, StateOverride],
       existingRelocations: Map[Address, Address]
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
-    var w = world
-    var relocations = existingRelocations
-
-    // First pass: validate movePrecompileToAddress and detect collisions
-    val allPrecompiles = Set(
-      Address(1),
-      Address(2),
-      Address(3),
-      Address(4),
-      Address(5),
-      Address(6),
-      Address(7),
-      Address(8),
-      Address(9),
-      Address(0x0b),
-      Address(0x0c),
-      Address(0x0d),
-      Address(0x0e),
-      Address(0x0f),
-      Address(0x10),
-      Address(0x11),
-      Address(0x100)
-    )
-    val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
-    for (address, ov) <- overrides do
-      ov.movePrecompileToAddress.foreach { targetAddr =>
-        if !allPrecompiles.contains(address) then
-          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
-        pendingMoves += (address -> targetAddr)
-      }
-    // Two precompiles moving to the same target is ambiguous — geth silently
-    // drops the colliding moves rather than erroring (matches the
-    // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
-    val targetCounts = pendingMoves.groupBy(_._2).view.mapValues(_.size).toMap
-    pendingMoves.foreach { case (src, tgt) =>
-      if targetCounts.getOrElse(tgt, 0) <= 1 then relocations = relocations + (src -> tgt)
-    }
-
-    // Second pass: apply overrides — only modify state when something other than
-    // movePrecompileToAddress is set; the precompile move is purely a routing
-    // override and must not create empty accounts at precompile source addresses.
-    for (address, ov) <- overrides do
-      val hasStateMutation =
-        ov.balance.isDefined || ov.nonce.isDefined || ov.code.isDefined ||
-          ov.state.isDefined || ov.stateDiff.isDefined
-      if hasStateMutation then
-        var account = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-
-        ov.balance.foreach(bal => account = account.copy(balance = UInt256(bal)))
-        ov.nonce.foreach(n => account = account.copy(nonce = UInt256(n)))
-
-        w = w.saveAccount(address, account)
-
-        ov.code.foreach { code =>
-          w = w.saveCode(address, code)
-          // Update the account's codeHash immediately (not just in cache)
-          // This prevents EIP-161 from deleting the account as "empty"
-          val codeHash = if code.isEmpty then Account.EmptyCodeHash else CodeHash(ByteString(kec256(code.toArray)))
-          val acctWithCode = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          w = w.saveAccount(address, acctWithCode.copy(codeHash = codeHash))
-        }
-
-        ov.state.foreach { slots =>
-          // Full state replacement: clear all storage, then set specified slots
-          // Persist first so any cached storage changes are committed
-          w = InMemoryWorldStateProxy.persistState(w)
-          // Reset storageRoot to empty and clear storage cache by delete+recreate
-          val currentAcct = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          // Delete and re-save account to clear storage cache
-          w = w.deleteAccount(address)
-          w = w.saveAccount(address, currentAcct.copy(storageRoot = Account.EmptyStorageRootHash))
-          // Re-apply code if it was set
-          if currentAcct.codeHash != Account.EmptyCodeHash then
-            // Code is in the EVM code storage, re-associate it
-            ov.code.foreach(code => w = w.saveCode(address, code))
-          // Write the new slots on fresh (empty) storage
-          val storage = w.getStorage(address)
-          var s = storage
-          for (key, value) <- slots do s = s.store(key, value)
-          w = w.saveStorage(address, s)
-        }
-
-        ov.stateDiff.foreach { slots =>
-          val storage = w.getStorage(address)
-          var s = storage
-          for (key, value) <- slots do s = s.store(key, value)
-          w = w.saveStorage(address, s)
-        }
-    Right((w, relocations))
-  }
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] =
+    EthSimulateService.applyStateOverrides(world, overrides, existingRelocations, blockchainConfig.accountStartNonce)
 
   private def executeCalls(
       calls: Seq[SimulateCall],

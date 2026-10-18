@@ -71,8 +71,8 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits:
                   case _ =>
                     Left(JsonRpcError.InvalidParams("Each call must be [callObj, traceConfig]"))
                 }
-                decoded.foldRight[Either[JsonRpcError, List[(EthInfoService.CallTx, TraceConfig)]]](Right(Nil)) {
-                  (e, acc) => for h <- e; t <- acc yield h :: t
+                decoded.foldRight[Either[JsonRpcError, List[(TxArgs, TraceConfig)]]](Right(Nil)) { (e, acc) =>
+                  for h <- e; t <- acc yield h :: t
                 }
             yield TraceCallManyRequest(calls, block)
           case _ =>
