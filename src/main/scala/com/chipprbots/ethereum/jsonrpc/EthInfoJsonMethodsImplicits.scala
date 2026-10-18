@@ -8,8 +8,12 @@ import org.json4s.JsonDSL.*
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthInfoService.*
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
+import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionRequest
+import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionResponse
+import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionRequest
+import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SignRequest
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
@@ -86,14 +90,24 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits:
   given eth_sendTransaction: JsonMethodCodec[SendTransactionRequest, SendTransactionResponse] =
     new JsonMethodCodec[SendTransactionRequest, SendTransactionResponse]:
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendTransactionRequest] =
-        params match
-          case Some(JArray(JObject(tx) :: _)) =>
-            extractTx(tx.toMap).map(SendTransactionRequest.apply)
-          case _ =>
-            Left(InvalidParams())
+        txArgsParam(params).map(SendTransactionRequest.apply)
 
       def encodeJson(t: SendTransactionResponse): JValue =
         encodeAsHex(t.txHash)
+
+  given eth_signTransaction: JsonMethodCodec[SignTransactionRequest, SignTransactionResponse] =
+    new JsonMethodCodec[SignTransactionRequest, SignTransactionResponse]:
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignTransactionRequest] =
+        txArgsParam(params).map(SignTransactionRequest(_, passphrase = None))
+
+      def encodeJson(t: SignTransactionResponse): JValue = SignTransactionResult.encode(t.result)
+
+  given eth_fillTransaction: JsonMethodCodec[FillTransactionRequest, FillTransactionResponse] =
+    new JsonMethodCodec[FillTransactionRequest, FillTransactionResponse]:
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, FillTransactionRequest] =
+        txArgsParam(params).map(FillTransactionRequest.apply)
+
+      def encodeJson(t: FillTransactionResponse): JValue = SignTransactionResult.encode(t.result)
 
   given eth_call: (JsonMethodDecoder[CallRequest] & JsonEncoder[CallResponse]) =
     new JsonMethodDecoder[CallRequest] with JsonEncoder[CallResponse]:

@@ -707,7 +707,7 @@ trait EthFilterServiceBuilder:
 
 trait PersonalServiceBuilder:
   self: KeyStoreBuilder & BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder &
-    StorageBuilder & TxPoolConfigBuilder & EthTxServiceBuilder & ActorSystemBuilder =>
+    StorageBuilder & TxPoolConfigBuilder & EthTxServiceBuilder & EthInfoServiceBuilder & ActorSystemBuilder =>
 
   lazy val personalService: PersonalServiceAPI = new PersonalService(
     keyStore,
@@ -716,6 +716,7 @@ trait PersonalServiceBuilder:
     txPoolConfig,
     this,
     ethTxService,
+    new com.chipprbots.ethereum.jsonrpc.EthInfoTxGasEstimator(ethInfoService),
     classicSystem.toTyped.scheduler
   )
 
