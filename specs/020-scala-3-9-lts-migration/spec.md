@@ -23,6 +23,54 @@ latest LTS versions of scala, sbt, and jvm", then "stub the scala 3.9 migration 
 current (the LTS), sbt 1.10.7 five minors behind on the 1.x line, and Scala 3.3.8 the latest patch of a line that
 stopped being the recommended LTS on 2026-09-03.
 
+## Clarifications
+
+### Session 2026-10-17 (after the GT-1 inventory, `gt1-inventory.md`)
+
+GT-1 ran on Scala 3.9.0, the only 3.9 patch on Maven Central, on chipprbots-server with fukuii-mordor stopped (user decision).
+That host runs JDK 21.0.12, so GT-2 re-measures on JDK 25.
+
+- Q: Which `-source` level does the build use on 3.9 (OQ-2, DC-6)? → A: **`-source:3.9`**, plus a **scalafix guard** that keeps
+  `import x.*` enforced. User decision, 2026-10-17.
+  - On 3.9, `-source:future` also switches on the new control syntax and makes every remaining `implicit` an error. That is about
+    1,541 sites after a 63-file syntax rewrite, which would turn the toolchain move into a full given/using rewrite.
+  - No `-source:3.N` level enforces `import x.*`, so the guard carries that property. The tree has 0 `import x._` and 0 import
+    renames today.
+  - The future-deprecation surfacing that `future` gave is not carried over. `scala3-style.md` records the mapping (DC-6).
+- Q: Does staging's formatting get fixed inside 020? → A: **No.** It is a separate PR that lands before any 020 PR (user decision).
+  That PR is #1625: scalafmt 3.8.3 over bytes, crypto, rlp, scalanet and scalanetDiscovery, and the last two added to
+  `formatAll`/`formatCheck`. Root's `scalafixAll --check` lint debt (about 6,500 lines) is pre-existing and out of scope.
+- Q: `-Ykind-projector` (OQ-1)? → A: it is deprecated on 3.9 (`use -Xkind-projector`). The tree has **0** kind-projector sites
+  and compiles without it, so the compiler step drops the flag.
+- Q: Does `-Wconf:id=E198:error` survive (OQ-3)? → A: yes. E198 is still `UnusedSymbolID` on 3.9. 3.9 finds 13 new unused
+  imports, which the 3.4 rewrite deletes.
+- Q: Cross-build during the migration (OQ-7)? → A: no; replace the pin. GT-1 found **five** published modules, not three:
+  bytes, crypto, rlp, **scalanet** and **scalanetDiscovery**. DC-7 applies to all five.
+- Q: OQ-4 and OQ-5? → A: both are moot. Spec 016 completed with R1 (#1622) on 2026-10-17, so GT-0 holds.
+
+Facts from GT-1 that the plan must take as given:
+- **The rewrite chain runs on the 3.9 compiler.** 3.3.8 rejects `-source:3.4-migration`. The first compiler PR is therefore
+  "3.9.0 + `-source:3.4-migration -rewrite`" (DC-2 step 1).
+  - That PR also bumps sbt-scapegoat from 3.3.6 to 3.4.1, because 3.3.6 has no `_3.9.0` artifact and dependency
+    resolution fails before any compile.
+- **Eight hand fixes are needed before the chain compiles.** Each is its own commit, named for the construct:
+  - 5 × E172: an `Ordering` passed positionally to a context bound. Two of these are in SNAP main code.
+  - 3 × E171: `McpService` test arguments.
+- **Given prioritisation shows up at two steps, and DC-3's review covers both.**
+  - At 3.6, E205 warns at 371 sites, 364 of them RLP encoder/decoder choices.
+  - At 3.7, `using` is inserted at 514 sites in 187 files.
+- **scalafmt beyond 3.8.3 fails on one test construct.** 3.8.3 parses the migrated tree. Every scalafmt release from 3.8.4 to
+  3.11.5 fails to parse `taggedAs (\n…\n) in new Fixture:`, which occurs in up to 34 test files. The tooling step either fixes
+  that construct by hand first or stays on 3.8.3; the plan decides.
+- **sbt-scalafix moves from 0.13.0 to 0.14.9.** 0.13.0 cannot load its rules against 3.9 sources.
+- **Warning reference for DC-4, under `-source:3.9`:**
+
+  | Point | Warnings |
+  |---|---|
+  | 3.3.8 today | 365 |
+  | After the 3.4 step | 605 |
+  | After the full 3.4→3.9 chain, ratchets at error | 91 |
+
 ## Problem
 
 Scala 3.9.0 LTS (2026-09-03) opened the new Long Term Support line, with at least three years of maintenance. Scala
@@ -86,7 +134,7 @@ sbt-scalafix 0.14.x's semantic rules run. Then repeat with `-source:3.4-migratio
 how much of the inventory the first rewrite step clears. The report sizes the plan. Days, not weeks; off the node host.
 
 **GT-2 — Baseline.** Before any migration PR merges: `testEssential` count and result (last known 3,621 / 0),
-`testStandard` coverage figure, ethereum/tests on both chains, hive rpc-compat (40) and graphql (2), and the
+`testStandard` coverage figure, ethereum/tests on both chains, hive rpc-compat and graphql (counts re-measured at GT-2; rpc-compat is 273/273 since #1616), and the
 `[IMPORT-TIMING]` baseline on a fixed Mordor range and a fixed Platåberget range, all recorded in `research.md`. Every
 migration PR reports the same figures.
 
@@ -132,7 +180,7 @@ off ETC and `beacon` ETH on the differential, as a formality that costs a run an
 to surface future-deprecations early. If 3.9 changes what `future` means or rejects it, the plan chooses the flag that
 keeps those two properties and documents the mapping in `scala3-style.md`; it does not drop the enforcement.
 
-**DC-7 — Published modules move together.** `bytes`, `crypto` and `rlp` are published (`publishSettings`). A 3.9
+**DC-7 — Published modules move together.** `bytes`, `crypto`, `rlp`, `scalanet` and `scalanetDiscovery` are published (`publishSettings`). A 3.9
 artifact cannot be consumed by a 3.3 project, so all modules switch in the same release, the release notes flag it as a
 breaking change for downstream consumers of those artifacts, and the version bump follows `.github/VERSIONING.md`
 (MINOR at least).
@@ -217,7 +265,7 @@ scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewri
   be complete (DC-3).
 - **FR-005** The warning ratchet MUST not regress: the final warning count is at or below the GT-1 post-3.4 count, new
   categories are promoted to errors or deferred with dated `@nowarn` and a CHASE-QUEUE entry (DC-4).
-- **FR-006** ethereum/tests on both chains, hive rpc-compat (40) and graphql (2), and the two-tree import differential
+- **FR-006** ethereum/tests on both chains, hive rpc-compat and graphql (counts re-measured at GT-2; rpc-compat is 273/273 since #1616), and the two-tree import differential
   MUST pass unchanged; `[IMPORT-TIMING]` MUST stay within 10% of the GT-2 baseline (DC-5).
 - **FR-007** No PR in this spec MAY change a test expectation, a log line, a config default or an RPC response (DC-8).
 - **FR-008** All modules MUST switch compiler in one release; the published modules' version MUST be bumped per
@@ -265,18 +313,18 @@ scalafix 0.14; nothing in 017, 018 or 019 is written against 3.3 and later rewri
 
 ## Open Questions
 
-- **OQ-1** Does 3.9 accept `-Ykind-projector`, or has it moved or been removed? How many kind-projector sites exist
+- **OQ-1** *Resolved 2026-10-17, see Clarifications.* Does 3.9 accept `-Ykind-projector`, or has it moved or been removed? How many kind-projector sites exist
   (`-Ykind-projector` was added for "complex boopickle/circe derivations")? Answered by GT-1.
-- **OQ-2** Does `-source:future` on 3.9 still enforce `import x.*` and the same future-deprecations, or does it now mean
+- **OQ-2** *Resolved 2026-10-17: `-source:3.9` + scalafix import guard.* Does `-source:future` on 3.9 still enforce `import x.*` and the same future-deprecations, or does it now mean
   something broader that introduces new errors? Answered by GT-1.
-- **OQ-3** Does `-Wconf:id=E198` keep its id across minors, or does the ratchet need a category-based filter instead?
-- **OQ-4** May the sbt and plugin bumps (DC-1 step 1, audit R-2) land before spec 016 completes, as a build-only PR
+- **OQ-3** *Resolved 2026-10-17: id kept.* Does `-Wconf:id=E198` keep its id across minors, or does the ratchet need a category-based filter instead?
+- **OQ-4** *Moot: 016 complete.* May the sbt and plugin bumps (DC-1 step 1, audit R-2) land before spec 016 completes, as a build-only PR
   with no source change? Recommended: yes, with the user's approval, since it removes one variable from GT-1.
-- **OQ-5** Which spec 016 slices remain at GT-0, and is there a natural pause (after R1 renames, T080/T090) to cut
+- **OQ-5** *Moot: 016 complete (R1 #1622).* Which spec 016 slices remain at GT-0, and is there a natural pause (after R1 renames, T080/T090) to cut
   from?
 - **OQ-6** Whether ADR INF-009 and spec 018's INF-007 and spec 019's CG-1 amend the constitution's technology section
   in one PR or three (GT-3).
-- **OQ-7** Whether the CI matrix should build on both 3.3.8 and 3.9.x during the migration (a cross-build the
+- **OQ-7** *Resolved 2026-10-17: replace the pin; five published modules.* Whether the CI matrix should build on both 3.3.8 and 3.9.x during the migration (a cross-build the
   constitution forbids, so no) or the migration branch simply replaces the pin (recommended).
 
 ## Related specs
