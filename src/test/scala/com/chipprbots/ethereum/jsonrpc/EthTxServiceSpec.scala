@@ -437,7 +437,7 @@ class EthTxServiceSpec
   it should "reject a blob tx sent without its sidecar, as go-ethereum's pool does" taggedAs (
     UnitTest,
     RPCTest
-  ) in new TestSetup:
+  ) in new BlobAdmissibleSetup:
     val res =
       ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithoutSidecar))).unsafeRunSync()
 
@@ -447,7 +447,7 @@ class EthTxServiceSpec
   it should "hand a blob tx sent with its sidecar to the pool, sidecar included" taggedAs (
     UnitTest,
     RPCTest
-  ) in new TestSetup:
+  ) in new BlobAdmissibleSetup:
     val res = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
 
     res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
@@ -455,6 +455,40 @@ class EthTxServiceSpec
     pendingTransactionsManager.expectMsgPF() { case AddOrOverrideTransaction(_, rawBytes) =>
       rawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
     }
+
+  /** A chain on which the send-blob-tx vector is admissible (#1629 S0: eth_sendRawTransaction now applies pool
+    * admission). The vector is signed for the rpc-compat genesis chain, 0x0c72dd9d5e883e, needs Cancun active at the
+    * head, and its sender must be able to pay. The test config is ETC-shaped with no head, under which admission
+    * refuses the tx before its sidecar is looked at.
+    */
+  class BlobAdmissibleSetup(implicit system: ActorSystem) extends TestSetup:
+    private val vectorChain: BlockchainConfig = blockchainConfig.copy(
+      networkType = NetworkType.ETH,
+      chainId = ChainId(BigInt("0c72dd9d5e883e", 16)),
+      forkTimestamps = ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L))
+    )
+    private val head: BlockHeader = Fixtures.Blocks.ValidBlock.header.copy(
+      unixTimestamp = Timestamp(1L),
+      gasLimit = GasAmount(30_000_000)
+    )
+    private val readerWithFundedSender: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[BlockHeader] = Some(head)
+        override def getAccountAtStateRoot(
+            @scala.annotation.unused stateRoot: ByteString,
+            @scala.annotation.unused address: Address
+        ): Option[Account] =
+          Some(Account(balance = UInt256(BigInt(10).pow(24))))
+
+    override lazy val ethTxService: EthTxService = new EthTxService(
+      blockchain,
+      readerWithFundedSender,
+      mining,
+      pendingTransactionsManager.ref.toTyped[PendingTransactionsManager.Command],
+      getTransactionFromPoolTimeout,
+      storagesInstance.storages.transactionMappingStorage,
+      system.toTyped.scheduler
+    )(using vectorChain)
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup:

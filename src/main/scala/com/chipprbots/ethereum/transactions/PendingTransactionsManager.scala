@@ -362,43 +362,16 @@ object PendingTransactionsManager:
           case None               => true
       }
 
-      // 2. Minimum tip.
-      // ETC (ECIP-1122): the tip a tx pays at the current base fee must reach the floor. Pre-Olympia (Spiral):
-      // 1 wei, matching core-geth's txpool.pricelimit default. At/after Olympia: blockchainConfig.minTip (1 gwei).
-      // ETH-family (network-type = eth): go-ethereum's rule. The tx's tip CAP (maxPriorityFeePerGas, or gasPrice
-      // for legacy and access-list txs) must reach minTip, geth's txpool.pricelimit (1 wei unless configured).
-      // A tx whose fee cap sits exactly at today's base fee pays no tip at that base fee, yet it is includable
-      // once the base fee holds or falls, and geth pools and announces it. Measuring the effective tip there
-      // rejected it, so hive's devp2p Transaction/InvalidTxs/LargeTxRequest never saw it announced.
-      val bestBlockOpt = Option(blockchainReader).flatMap(_.getBestBlock)
-      val currentBaseFee = bestBlockOpt.flatMap(_.header.baseFee).getOrElse(blockchainConfig.baseFeeFloor)
-      val isEthFamily = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETH
-      val isOlympiaActive =
-        bestBlockOpt.exists(_.header.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
-      val effectiveMinTip = if isEthFamily || isOlympiaActive then blockchainConfig.minTip else BigInt(1)
-      def tipCap(tx: com.chipprbots.ethereum.domain.Transaction): BigInt =
-        import com.chipprbots.ethereum.domain.*
-        tx match
-          case t: TransactionWithDynamicFee => t.maxPriorityFeePerGas
-          case t: BlobTransaction           => t.maxPriorityFeePerGas
-          case t: SetCodeTransaction        => t.maxPriorityFeePerGas
-          case other                        => other.gasPrice.value
+      // 2. Minimum tip: the pool's rule for the head, stated once in TxAdmission.tipRejection (ETH: tip cap >= minTip,
+      // geth's txpool.pricelimit; ETC, ECIP-1122: the tip paid at the current base fee >= 1 wei before Olympia,
+      // minTip from it).
+      val bestHeaderOpt = Option(blockchainReader).flatMap(_.getBestBlock).map(_.header)
       val afterTipCheck = afterPendingNonceCheck.filter { stx =>
-        val effectiveTip =
-          if isEthFamily then tipCap(stx.tx.tx)
-          else
-            com.chipprbots.ethereum.domain.Transaction
-              .effectiveGasPrice(stx.tx.tx, Some(currentBaseFee)) - currentBaseFee
-        if effectiveTip < effectiveMinTip then
-          context.log.debug(
-            "Rejecting tx {} from {}: effectiveTip {} < minTip {}",
-            stx.tx.hash.toHex,
-            stx.senderAddress,
-            effectiveTip,
-            effectiveMinTip
-          )
-          false
-        else true
+        TxAdmission.tipRejection(stx.tx.tx, bestHeaderOpt) match
+          case Some(rejection) =>
+            context.log.debug("Rejecting tx {} from {}: {}", stx.tx.hash.toHex, stx.senderAddress, rejection.message)
+            false
+          case None => true
       }
 
       if blockchainReader == null || stateStorage == null then return afterTipCheck
@@ -427,11 +400,9 @@ object PendingTransactionsManager:
             afterTipCheck.filter { stx =>
               accountsBySender.get(stx.senderAddress).flatten.exists { account =>
                 val tx = stx.tx.tx
-                val nonceValid = tx.nonce >= account.nonce.toBigInt && tx.nonce < account.nonce.toBigInt + 1024
-                val maxGasCost = tx.gasLimit.value * tx.gasPrice.value
-                val totalCost = tx.value + maxGasCost
-                val balanceValid = account.balance.toBigInt >= totalCost
-                nonceValid && balanceValid
+                // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
+                // the rule local submission applies. A peer's tx may not run more than 1024 ahead of the account.
+                TxAdmission.stateRejection(tx, account).isEmpty && tx.nonce < account.nonce.toBigInt + 1024
               }
             }
           case None =>

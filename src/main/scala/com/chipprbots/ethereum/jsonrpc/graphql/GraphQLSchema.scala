@@ -1076,10 +1076,10 @@ object GraphQLSchema:
           import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 
           val raw = c.arg(RawDataArg)
-          // Parse and classify errors locally so hive sees the right errorCode / message. The
-          // underlying EthTxService returns `InvalidRequest` for every failure mode, which loses
-          // the distinction between decode/signature errors (Invalid params, -32602) and
-          // per-sender validity errors (Nonce too low, -32001).
+          // Parse and classify errors locally so hive sees the right errorCode / message: decode and
+          // signature errors are Invalid params (-32602), a stale nonce is Nonce too low (-32001).
+          // EthTxService then applies pool admission (TxAdmission.validateLocal, #1629 S0); any
+          // refusal there surfaces as Invalid params below.
           val parsed = scala.util.Try(raw.toArray.toSignedTransactionWithSidecar).toOption
           parsed match
             case None =>
