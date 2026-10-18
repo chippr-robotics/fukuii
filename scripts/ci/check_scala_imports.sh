@@ -6,7 +6,7 @@
 # Usage: check_scala_imports.sh [root-dir ...]   (default: the repository root)
 set -euo pipefail
 
-PATTERN='^[[:space:]]*import[[:space:]].*(\._[[:space:]]*($|,|//)|[{,][[:space:]]*_[[:space:]]*}|=>)'
+PATTERN='^[[:space:]]*import[[:space:]].*(\._[[:space:]]*($|,|;|//)|[{,][[:space:]]*_[[:space:]]*}|=>)'
 
 if [ "$#" -gt 0 ]; then
   roots=("$@")
@@ -20,7 +20,8 @@ for root in "${roots[@]}"; do
     if grep -nE "$PATTERN" "$f" | sed "s|^|$f:|"; then
       found=1
     fi
-  done < <(find "$root" \( -name .git -o -name target -o -name project -o -name node_modules -o -name .local -o -name .bsp \) -prune \
+  # project/ and .local/ are pruned at the root only, so a package directory with either name is still scanned.
+  done < <(find "$root" \( -path "$root/project" -o -path "$root/.local" -o -name .git -o -name target -o -name node_modules -o -name .bsp \) -prune \
              -o -type f -name '*.scala' -print0)
 done
 
