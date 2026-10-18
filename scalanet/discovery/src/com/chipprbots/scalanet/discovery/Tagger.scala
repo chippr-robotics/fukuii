@@ -23,7 +23,6 @@ trait Tagger[U, T]:
   object Tagged:
     def apply(underlying: U): Tagged = underlying
 
-    extension (tagged: Tagged)
-      def value: U = tagged
+    extension (tagged: Tagged) def value: U = tagged
 
   def apply(underlying: U): Tagged = Tagged(underlying)

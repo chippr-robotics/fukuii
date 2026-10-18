@@ -448,13 +448,12 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     def makePeerInFirstBucket: (Peer[InetSocketAddress], EthereumNodeRecord, Node.Address) =
       val (publicKey, privateKey) = sigalg.newKeyPair
       if Node.kademliaId(publicKey).value(0) == Node.kademliaId(localPublicKey).value(0) then makePeerInFirstBucket
-      else {
+      else
         val address = aRandomAddress()
         val node = makeNode(publicKey, address)
         val peer = Peer(publicKey, address)
         val enr = EthereumNodeRecord.fromNode(node, privateKey, seq = 1).require
         (peer, enr, node.address)
-      }
     val peer1 = makePeerInFirstBucket
     val peer2 = makePeerInFirstBucket
 

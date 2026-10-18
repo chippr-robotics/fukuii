@@ -108,10 +108,9 @@ object DiscoveryService:
 
     override def getRandomNode: IO[Option[Node]] = getNodes.map { all =>
       if all.isEmpty then None
-      else {
+      else
         val arr = all.toArray
         Some(arr(random.nextInt(arr.length)))
-      }
     }
 
     override def recordPeer(enr: EthereumNodeRecord): IO[Unit] = enrToNode(enr) match

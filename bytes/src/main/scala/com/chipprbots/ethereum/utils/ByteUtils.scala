@@ -162,7 +162,7 @@ object ByteUtils:
         off += 1
 
         i = i + 1
-    else {
+    else
       var off = 0
       var i = 0
       while i < arr.length do
@@ -177,7 +177,6 @@ object ByteUtils:
         off += 1
 
         i = i + 1
-    }
 
   /** Converts array of bytes to corresponding array of ints. Due to performance reasons needs to be as fast as possible
     * which means usage of while loops and var's.
@@ -208,7 +207,7 @@ object ByteUtils:
         arr(i) = ii
 
         i = i + 1
-    else {
+    else
       var off = 0
       var i = 0
 
@@ -224,4 +223,3 @@ object ByteUtils:
         arr(i) = ii
 
         i = i + 1
-    }

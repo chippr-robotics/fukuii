@@ -347,7 +347,7 @@ object DiscoveryService:
             Node.Address(ip, udpPort = state.node.address.udpPort, tcpPort = state.node.address.tcpPort)
           )
           if node == state.node then state -> Nil
-          else {
+          else
             val enr = EthereumNodeRecord.fromNode(node, privateKey, state.enr.content.seq + 1).require
             val notify = state.lastPongTimestampMap.keySet.toList
             state.copy(
@@ -356,7 +356,6 @@ object DiscoveryService:
               nodeMap = state.nodeMap.updated(node.id, node),
               enrMap = state.enrMap.updated(node.id, enr)
             ) -> notify
-          }
         }
         .flatMap { peers =>
           // Send our new ENR sequence to the peers so they can pull our latest data.
@@ -693,22 +692,20 @@ object DiscoveryService:
       stateRef
         .modify { state =>
           if state.isSelf(peer) then state -> None
-          else {
+          else
             val (_, bucket) = state.kBuckets.getBucket(peer)
             val (addToBucket, maybeEvict) =
               if bucket.contains(peer.kademliaId.value) || bucket.size < config.kademliaBucketSize then
                 // We can just update the records, the bucket either has room or won't need to grow.
                 true -> None
-              else {
+              else
                 // We have to consider evicting somebody or dropping this node.
                 val headKademliaId = state.kademliaIdToNodeId.keys
                   .find(_.value == bucket.head)
                   .getOrElse(throw new IllegalStateException(s"Bucket head not found in kademliaIdToNodeId map"))
                 false -> Some(state.nodeMap(state.kademliaIdToNodeId(headKademliaId)))
-              }
             // Store the ENR record and maybe update the k-buckets.
             state.withEnrAndAddress(peer, enr, address, addToBucket) -> maybeEvict
-          }
         }
         .flatMap {
           case None =>

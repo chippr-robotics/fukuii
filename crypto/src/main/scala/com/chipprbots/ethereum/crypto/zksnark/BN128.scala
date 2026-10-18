@@ -21,14 +21,13 @@ sealed abstract class BN128[T: FiniteField]:
 
   protected def createPointOnCurve(x: T, y: T): Option[Point[T]] =
     if x.isZero() && y.isZero() then Some(zero)
-    else {
+    else
       val point = Point(x, y, FiniteField[T].one)
       Some(point).filter(isValidPoint)
-    }
 
   def toAffineCoordinates(p1: Point[T]): Point[T] =
     if p1.isZero then Point(zero.x, FiniteField[T].one, zero.z)
-    else {
+    else
       val zInv = p1.z.inversed()
       val zInvSquared = zInv.squared()
       val zInvMul = zInv * zInvSquared
@@ -36,7 +35,6 @@ sealed abstract class BN128[T: FiniteField]:
       val ax = p1.x * zInvSquared
       val ay = p1.y * zInvMul
       Point(ax, ay, FiniteField[T].one)
-    }
 
   def toEthNotation(p1: Point[T]): Point[T] =
     val affine = toAffineCoordinates(p1)
@@ -49,17 +47,16 @@ sealed abstract class BN128[T: FiniteField]:
     */
   def isOnCurve(p1: Point[T]): Boolean =
     if p1.isZero then true
-    else {
+    else
       val z6 = (p1.z.squared() * p1.z).squared()
       val l = p1.y.squared()
       val r = (p1.x.squared() * p1.x) + (Fp_B * z6)
       l == r
-    }
 
   def add(p1: Point[T], p2: Point[T]): Point[T] =
     if p1.isZero then p2
     else if p2.isZero then p1
-    else {
+    else
       val z1Squared = p1.z.squared()
       val z2Squared = p2.z.squared()
 
@@ -73,7 +70,7 @@ sealed abstract class BN128[T: FiniteField]:
       val s2 = p2.y * z1Cubed
 
       if u1 == u2 && s1 == s2 then dbl(p1)
-      else {
+      else
         val h = u2 - u1
         val i = h.doubled().squared()
         val j = h * i
@@ -86,12 +83,10 @@ sealed abstract class BN128[T: FiniteField]:
         val z3 = zz * h
 
         Point(x3, y3, z3)
-      }
-    }
 
   def dbl(p1: Point[T]): Point[T] =
     if p1.isZero then p1
-    else {
+    else
       val a = p1.x.squared()
       val b = p1.y.squared()
       val c = b.squared()
@@ -106,7 +101,6 @@ sealed abstract class BN128[T: FiniteField]:
       val z3 = (p1.y * p1.z).doubled()
 
       Point(x3, y3, z3)
-    }
 
   /** Multiplication by scalar n is just addition n times e.g n * P = P + P + .. n times. Faster algorithm is used here,
     * which is known as: <a
@@ -114,7 +108,7 @@ sealed abstract class BN128[T: FiniteField]:
     */
   def mul(p1: Point[T], s: BigInt): Point[T] =
     if s == BigInt(0) || p1.isZero then zero
-    else {
+    else
       var i = s.bitLength - 1
       var result = zero
       while i >= 0 do
@@ -122,7 +116,6 @@ sealed abstract class BN128[T: FiniteField]:
         if s.testBit(i) then result = add(result, p1)
         i = i - 1
       result
-    }
 
   def isValidPoint(p1: Point[T]): Boolean =
     p1.isValid && isOnCurve(p1)

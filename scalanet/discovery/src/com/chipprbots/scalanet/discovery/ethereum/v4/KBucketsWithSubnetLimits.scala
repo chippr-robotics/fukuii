@@ -33,7 +33,7 @@ case class KBucketsWithSubnetLimits[A: Addressable](
   /** Add the peer to the underlying K-table unless doing so would violate some limit. */
   def add(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
     if contains(peer) then this
-    else {
+    else
       val ip = subnet(peer)
       val idx = getBucket(peer)._1
 
@@ -52,11 +52,10 @@ case class KBucketsWithSubnetLimits[A: Addressable](
           tableLevelCounts = tlc,
           bucketLevelCounts = blc
         )
-    }
 
   def remove(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
     if !contains(peer) then this
-    else {
+    else
       val ip = subnet(peer)
       val idx = getBucket(peer)._1
 
@@ -64,7 +63,6 @@ case class KBucketsWithSubnetLimits[A: Addressable](
       val blc = decrementForBucket(idx, ip)
 
       copy(table = table.remove(peer.kademliaId.value), tableLevelCounts = tlc, bucketLevelCounts = blc)
-    }
 
   def closestNodes(targetKademliaId: Hash, n: Int): List[BitVector] =
     table.closestNodes(targetKademliaId.value, n)
