@@ -83,6 +83,15 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     ok("""{"authorizationList":[]}""").authorizationList shouldBe Some(Nil)
   }
 
+  it should "match keys case-insensitively, exact case winning (Go encoding/json)" taggedAs (UnitTest) in {
+    ok(s"""{"GAS":"0x5","MaxFeePerGas":"0x2","To":"$A1"}""") shouldBe
+      TxArgs(gas = Some(GasAmount(5)), maxFeePerGas = Some(2), to = Some(Address(A1)))
+    ok("""{"Gas":"0x1","gas":"0x2"}""").gas shouldBe Some(GasAmount(2))
+    ok("""{"gas":"0x2","Gas":"0x1"}""").gas shouldBe Some(GasAmount(2))
+    ok(s"""{"accessList":[{"Address":"$A1","STORAGEKEYS":[]}]}""").accessList shouldBe
+      Some(List(AccessListItem(Address(A1), Nil)))
+  }
+
   it should "ignore unknown fields (geth)" taggedAs (UnitTest) in {
     ok("""{"foo":"bar","nonce":"0x1"}""") shouldBe TxArgs(nonce = Some(1))
   }
@@ -241,10 +250,6 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       (au, 0, 4),
       (s"""$au,$bh""", 0, 4),
       (""""gasPrice":"0x1"""", 0, 0),
-      // geth: gasPrice forces legacy, silently dropping an access list / blob hashes. Pinned on purpose; pass
-      // an explicit type to keep them.
-      (s""""gasPrice":"0x1",$al""", 0, 0),
-      (s""""gasPrice":"0x1",$bh""", 0, 0),
       // ToTransaction(defaultType)
       ("", 1, 1),
       ("", 2, 2),
@@ -260,6 +265,35 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     }
   }
 
+  it should "reject gasPrice with accessList or blob fields when no type is given (deliberate deviation from geth)" taggedAs (
+    UnitTest
+  ) in {
+    val al = s""""accessList":[]"""
+    val bh = s""""blobVersionedHashes":["$H1"]"""
+    val blobs = s""""blobs":["0x${"00" * TxArgsJson.BlobLength}"]"""
+    val cases = Table(
+      ("fields", "defaultType", "error"),
+      (al, 0, TxArgsError.GasPriceWithAccessListUntyped),
+      (al, 2, TxArgsError.GasPriceWithAccessListUntyped),
+      (bh, 0, TxArgsError.GasPriceWithBlobFields),
+      (blobs, 0, TxArgsError.GasPriceWithBlobFields),
+      (s"$al,$bh", 0, TxArgsError.GasPriceWithBlobFields)
+    )
+    forAll(cases) { (fields, default, error) =>
+      val args = ok(s"""{"to":"$A1","gasPrice":"0x1",$fields}""")
+      args.resolveType(default.toByte) shouldBe Left(error)
+      args.validateForSend shouldBe Left(error)
+      args.toTransaction(Mainnet).left.value shouldBe error
+      error.toJsonRpcError.code shouldBe -32602
+    }
+    TxArgsError.GasPriceWithAccessListUntyped.message shouldBe
+      """gasPrice with accessList requires "type": "0x1" (or use maxFeePerGas/maxPriorityFeePerGas)"""
+    TxArgsError.GasPriceWithBlobFields.message shouldBe
+      "blob fields require a blob transaction; gasPrice is not allowed"
+    // the call path keeps geth ToMessage semantics (lists are kept, not dropped), so it does not apply this rule
+    ok(s"""{"to":"$A1","gasPrice":"0x1",$al}""").validateForCall.isRight shouldBe true
+  }
+
   it should "reject an unsupported default type" taggedAs (UnitTest) in {
     TxArgs().resolveType(5.toByte) shouldBe Left(TxArgsError.TxTypeNotSupported)
   }
@@ -270,7 +304,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     val accepted = Table(
       ("type", "fields"),
       ("0x0", """"gasPrice":"0x1","chainId":"0x1""""),
-      ("0x1", """"gasPrice":"0x1","accessList":[]"""), // keeps the access list, unlike inference
+      ("0x1", """"gasPrice":"0x1","accessList":[]"""), // builds 2930; without the type this is an error
       ("0x1", ""),
       ("0x2", """"maxFeePerGas":"0x2","maxPriorityFeePerGas":"0x1","accessList":[]"""),
       ("0x2", ""),
@@ -363,6 +397,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
   "TxArgsError" should "map to -32000 or -32602 at the caller's choice" taggedAs (UnitTest) in {
     TxArgsError.DataInputMismatch.toLogicError.code shouldBe -32000
     TxArgsError.DataInputMismatch.toInvalidParams.code shouldBe -32602
+    TxArgsError.DataInputMismatch.toJsonRpcError.code shouldBe -32000
   }
 
   // ----------------------------------------------------------------------------------------------
@@ -387,8 +422,8 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     // go-ethereum core/types/transaction_test.go emptyEip2718Tx (same vector as TransactionSpec)
     val args = ok("""{"type":"0x1","chainId":"0x1","nonce":"0x3","gasPrice":"0x1","gas":"0x61a8",
       "to":"0xb94f5374fce5edbc8e2a8697c15331677e6ebf0b","value":"0xa","input":"0x5544","accessList":[]}""")
-    // without an explicit type, geth's gasPrice override turns this shape into a legacy tx (see the inference matrix)
-    args.copy(txType = None).toTransaction(Mainnet).value shouldBe a[LegacyTransaction]
+    // without an explicit type this shape is rejected (geth would silently build a legacy tx and drop the list)
+    args.copy(txType = None).toTransaction(Mainnet) shouldBe Left(TxArgsError.GasPriceWithAccessListUntyped)
     val tx = args.toTransaction(Mainnet).value
     tx shouldBe TransactionWithAccessList(
       1,
@@ -536,7 +571,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     val legacy = ok(s"""{"nonce":"0x9","gas":"0x5208","gasPrice":"0x1","to":"$A1","value":"0x1"}""")
       .toTransaction(Sepolia)
       .value
-    val twal = ok(s"""{"nonce":"0x9","gas":"0x5208","gasPrice":"0x1","to":"$A1",
+    val twal = ok(s"""{"type":"0x1","nonce":"0x9","gas":"0x5208","gasPrice":"0x1","to":"$A1",
       "accessList":[{"address":"$A2","storageKeys":["$H1"]}]}""").toTransaction(Sepolia).value
     val typed = typedVectors.map(v => ok(v._2).toTransaction(Sepolia).value)
     for tx <- legacy :: twal :: typed.toList do

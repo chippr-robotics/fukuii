@@ -20,11 +20,13 @@ import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
   *
   * No JSON-RPC error code is baked in: geth returns these from `setDefaults` / `CallDefaults` as -32000, while some
   * call-style endpoints want -32602. Each endpoint (S2 send/sign/fill, S3 call/estimate/trace, S4 simulate) picks the
-  * code via [[toLogicError]] or [[toInvalidParams]].
+  * code via [[toLogicError]] or [[toInvalidParams]]. Errors created with `invalidParams = true` are argument-shape
+  * errors that must always surface as -32602; [[toJsonRpcError]] honours that and otherwise falls back to -32000.
   */
-final case class TxArgsError(message: String):
+final case class TxArgsError(message: String, invalidParams: Boolean = false):
   def toLogicError: JsonRpcError = JsonRpcError.LogicError(message)
   def toInvalidParams: JsonRpcError = JsonRpcError.InvalidParams(message)
+  def toJsonRpcError: JsonRpcError = if invalidParams then toInvalidParams else toLogicError
 
 object TxArgsError:
   // go-ethereum internal/ethapi/transaction_args.go (setDefaults / setFeeDefaults / CallDefaults)
@@ -49,6 +51,15 @@ object TxArgsError:
   val BlobTxCreate: TxArgsError = TxArgsError("blob transaction of type create")
   val SetCodeTxCreate: TxArgsError = TxArgsError("EIP-7702 transaction cannot be used to create contract")
   val TxTypeNotSupported: TxArgsError = TxArgsError("transaction type not supported")
+
+  // fukuii-defined, deliberate deviation from geth (which silently builds a legacy tx and drops the list/blobs):
+  // fail-loudly rule, user decision 2026-10-18 (#1629). Always -32602.
+  val GasPriceWithAccessListUntyped: TxArgsError = TxArgsError(
+    """gasPrice with accessList requires "type": "0x1" (or use maxFeePerGas/maxPriorityFeePerGas)""",
+    invalidParams = true
+  )
+  val GasPriceWithBlobFields: TxArgsError =
+    TxArgsError("blob fields require a blob transaction; gasPrice is not allowed", invalidParams = true)
 
   // fukuii-defined (geth's TransactionArgs has no `type` field, so it has no equivalent rule)
   def FieldNotValidForType(field: String, txType: Byte): TxArgsError =
@@ -118,8 +129,11 @@ final case class TxArgs(
     *     setDefaults has always filled it by then; testing either field gives the same post-defaults result)
     *   - accessList present, or defaultType 0x1 -> 0x1
     *   - otherwise legacy
-    *   - then: gasPrice present -> legacy, overriding all of the above. NOTE: like geth, this silently drops an
-    *     accessList (or blob hashes) given together with gasPrice and no explicit type. Pass `type` to keep them.
+    *   - then: gasPrice present -> legacy, overriding all of the above
+    *   - DEVIATION from geth (deliberate fail-loudly rule, user decision 2026-10-18): where geth's override would
+    *     silently drop an accessList or blob fields given with gasPrice and no explicit type, this returns
+    *     [[TxArgsError.GasPriceWithBlobFields]] / [[TxArgsError.GasPriceWithAccessListUntyped]] (-32602) instead. An
+    *     explicit `"type": "0x1"` with gasPrice + accessList still builds an EIP-2930 transaction.
     *
     * gasPrice together with maxFeePerGas/maxPriorityFeePerGas, or with authorizationList, is an error in either case.
     */
@@ -145,7 +159,10 @@ final case class TxArgs(
         else if hasDynamicFee || defaultType == DynamicFeeType then DynamicFeeType
         else if accessList.isDefined || defaultType == AccessListType then AccessListType
         else LegacyType
-      Right(if gasPrice.isDefined then LegacyType else inferred)
+      if gasPrice.isEmpty then Right(inferred)
+      else if blobVersionedHashes.isDefined || blobs.isDefined then Left(GasPriceWithBlobFields)
+      else if accessList.isDefined then Left(GasPriceWithAccessListUntyped)
+      else Right(LegacyType)
 
   private def checkExplicitType(t: Byte): Either[TxArgsError, Unit] =
     val present: List[(String, Boolean)] = List(

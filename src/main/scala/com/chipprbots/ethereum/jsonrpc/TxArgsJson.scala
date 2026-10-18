@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
   *   - bytes: JSON string; `""` and `"0x"` are empty; otherwise prefix and an even number of hex digits
   *   - address / hash32 / blob / commitment / proof: exact length (`""` is length 0 and therefore rejected, so `"to":
   *     ""` is an error, not contract creation)
+  *   - keys match case-insensitively (Go encoding/json), exact case winning over case-folded duplicates
   *   - `null` is absent, everywhere; unknown fields are ignored (geth), although the schema says additionalProperties:
   *     false
   *   - `type` (not decoded by geth): schema `byte`, 1-2 hex digits after `0x`
@@ -159,13 +160,17 @@ object TxArgsJson:
   final private class FieldDecoder(fields: Map[String, JValue], argIndex: Int, structName: String = StructName):
     type Dec[A] = (JValue, String) => Either[JsonRpcError, A]
 
+    /** Go encoding/json matches keys case-insensitively; an exact-case key wins over case-folded ones. */
+    private def lookup(name: String): Option[JValue] =
+      fields.get(name).orElse(fields.collectFirst { case (k, v) if k.equalsIgnoreCase(name) => v })
+
     def opt[A](name: String)(dec: Dec[A]): Either[JsonRpcError, Option[A]] =
-      fields.get(name) match
+      lookup(name) match
         case None    => Right(None)
         case Some(v) => dec(v, name).map(Some(_))
 
     def req[A](name: String)(dec: Dec[A]): Either[JsonRpcError, A] =
-      fields.get(name) match
+      lookup(name) match
         case None    => Left(err(s"missing required field '$name' for $structName"))
         case Some(v) => dec(v, name)
 
