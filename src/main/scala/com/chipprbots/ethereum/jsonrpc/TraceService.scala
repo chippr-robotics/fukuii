@@ -513,6 +513,8 @@ class TraceService(
         None,
         Address(0),
         CallTxBuilder.callGas(callTx, gasCap),
-        Map.empty
+        Map.empty,
+        // geth TraceCall sets SkipExecutionGasCapCheck
+        skipExecutionGasCap = true
       )
     yield msg

@@ -144,7 +144,11 @@ class TypedCallPathSpec
     val head: BlockHeader = header.copy(stateRoot = TrieRoot(world.stateRootHash))
     blockchainWriter.save(Block(head, BlockBody(Nil, Nil, Some(Nil))), Nil, ChainWeight.zero, saveAsBestBlock = true)
 
-    def message(args: TxArgs, overrides: Option[BlockOverrides] = None): CallTxBuilder.CallMessage =
+    def message(
+        args: TxArgs,
+        overrides: Option[BlockOverrides] = None,
+        skipExecutionGasCap: Boolean = true
+    ): CallTxBuilder.CallMessage =
       CallTxBuilder
         .build(
           args.validateForCall.value,
@@ -152,7 +156,8 @@ class TypedCallPathSpec
           overrides,
           Address(0),
           args.gas.fold(BigInt(1_000_000))(_.value),
-          Map()
+          Map(),
+          skipExecutionGasCap
         )
         .value
 
@@ -163,8 +168,8 @@ class TypedCallPathSpec
     def output(args: TxArgs, overrides: Option[BlockOverrides] = None): ByteString =
       call(args, overrides).value.vmReturnData
 
-    def estimate(args: TxArgs): Either[StxLedger.CallEstimateFailure, BigInt] =
-      val m = message(args.copy(gas = Some(GasAmount(1_000_000))))
+    def estimate(args: TxArgs, gas: BigInt = 1_000_000): Either[StxLedger.CallEstimateFailure, BigInt] =
+      val m = message(args.copy(gas = Some(GasAmount(gas))), skipExecutionGasCap = false)
       ledger.estimateCallGas(m.stx, m.header, None, m.options)
 
     // syncController / scheduler / keyStore are never reached by the call methods (every request names `from`)
@@ -419,6 +424,140 @@ class TypedCallPathSpec
     r.accessList shouldBe List(AccessListItem(Probe, List(StorageKey(7))), AccessListItem(Collector, Nil))
     r.accessList.map(_.address) should not contain authority
 
+  // ── Review fixes (#1636) ───────────────────────────────────────────────────────────────────────────────────────
+
+  "eth_estimateGas" should "clamp its ceiling to EIP-7825's cap from Osaka until Amsterdam (gasestimator.go:67-69)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    given BlockchainConfig = amsterdamConfig
+    val noGas = TxArgs(to = Some(Probe))
+    CallTxBuilder.estimateGasCeiling(noGas, preAmsterdamHeader(46, 300), 50_000_000) shouldBe BigInt(1 << 24)
+    CallTxBuilder.estimateGasCeiling(noGas, preAmsterdamHeader(46, 150), 50_000_000) shouldBe BigInt(30_000_000)
+    CallTxBuilder.estimateGasCeiling(noGas, amsterdamHeader(46, 460), 50_000_000) shouldBe BigInt(30_000_000)
+    CallTxBuilder.estimateGasCeiling(noGas, amsterdamHeader(46, 460), 20_000_000) shouldBe BigInt(20_000_000)
+  }
+
+  it should "return a non-gas VM failure at the ceiling, and 'gas required exceeds allowance' for out of gas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val invalid = Address(0xfee7)
+    val spin = Address(0xfee8)
+    val over = StateOverride(code = Some(code("fe")))
+    val overridden = EthSimulateService
+      .applyStateOverrides(
+        ledger.worldAt(head),
+        Map(invalid -> over, spin -> StateOverride(code = Some(code("5b600056")))),
+        Map(),
+        UInt256.Zero
+      )
+      .value
+      ._1
+    def est(to: Address) =
+      val m = message(args(to, _.copy(gas = Some(GasAmount(100000)))), skipExecutionGasCap = false)
+      ledger.estimateCallGas(m.stx, m.header, Some(overridden), m.options)
+    est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
+      com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)
+    )
+    CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe
+      "invalid opcode: opcode 0xfe not defined"
+    est(spin).left.value shouldBe StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (100000)")
+
+  it should "keep go-ethereum's floor-data-gas message, and map only intrinsic gas to the allowance message" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    // Osaka, 1,000 non-zero bytes: intrinsic 37,000, EIP-7623 floor 61,000
+    val heavy = args(Probe, _.copy(data = Some(ByteString(Array.fill[Byte](1000)(1)))))
+    estimate(heavy, gas = 50000).left.value shouldBe
+      StxLedger.CallEstimateFailure.PreCheck("insufficient gas for floor data gas cost: have 50000, want 61000")
+    estimate(heavy, gas = 30000).left.value shouldBe
+      StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (30000)")
+
+  it should "estimate a plain transfer carrying an unused access list at its intrinsic cost, list included" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val listed = args(Probe, _.copy(accessList = Some(List(AccessListItem(Collector, List(StorageKey(1)))))))
+    // 21,000 + 2,400 (address) + 1,900 (slot): what geth answers after its 21,000 short-circuit run fails
+    estimate(listed).value shouldBe BigInt(25300)
+    estimate(args(Probe)).value shouldBe BigInt(21000)
+
+  "CallTxBuilder" should "refuse an authorizationList together with blob fields" taggedAs (UnitTest, RPCTest) in {
+    given BlockchainConfig = preAmsterdamConfig
+    val hash = BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31)))
+    for blob <- List[TxArgs => TxArgs](
+        _.copy(blobVersionedHashes = Some(List(hash))),
+        _.copy(maxFeePerBlobGas = Some(1))
+      )
+    do
+      val a = blob(args(Probe, _.copy(authorizationList = Some(Nil))))
+      CallTxBuilder.build(a, osakaHeader, None, Address(0), 100000, Map(), true).left.value.code shouldBe -32602
+  }
+
+  "callPreCheck" should "refuse more than six blobs from Osaka and oversized initcode (EIP-3860)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val hashes = List.fill(7)(BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31))))
+    call(args(BlobReader, _.copy(blobVersionedHashes = Some(hashes)))).left.value shouldBe
+      "blob transaction has too many blobs"
+    val initcode = ByteString(Array.fill[Byte](49153)(0))
+    call(
+      TxArgs(from = Some(senderAddress), data = Some(initcode), gas = Some(GasAmount(10_000_000)))
+    ).left.value shouldBe
+      "max initcode size exceeded: code size 49153, limit 49152"
+
+  "eth_createAccessList gasUsed" should "never be below the calldata floor, as geth's res.UsedGas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val data = ByteString(Array.fill[Byte](100)(1))
+    val r = service
+      .createAccessList(
+        CreateAccessListRequest(
+          args(Probe, _.copy(data = Some(data), gas = Some(GasAmount(100000)))),
+          BlockParam.Latest
+        )
+      )
+      .unsafeRunSync()
+      .value
+    // execution 21,000 + 1,600; EIP-7623 floor 21,000 + 10 * 400
+    call(args(Probe, _.copy(data = Some(data), gas = Some(GasAmount(100000))))).value.gasUsed shouldBe BigInt(22600)
+    r.gasUsed shouldBe BigInt(25000)
+
+  "eth_call at Amsterdam" should "skip the execution gas cap, as geth's eth_call and debug_traceCall do" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node(amsterdamConfig, amsterdamHeader(46, 460)):
+    val gasEcho = Address(0xfee9)
+    // GAS -> 32 bytes; a loop that burns gas until fewer than 1,000,000 remain
+    val burner = Address(0xfeea)
+    val overridden = EthSimulateService
+      .applyStateOverrides(
+        ledger.worldAt(head),
+        Map(
+          gasEcho -> StateOverride(code = Some(code("5a60005260206000f3"))),
+          burner -> StateOverride(code = Some(code("5b5a620f4240106000570" + "0")))
+        ),
+        Map(),
+        UInt256.Zero
+      )
+      .value
+      ._1
+    val txMax = BigInt(1 << 24)
+    def gasSeen(skip: Boolean): BigInt =
+      val m = message(args(gasEcho, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = skip)
+      BigInt(1, ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value.vmReturnData.toArray)
+    gasSeen(skip = true) should be > txMax
+    gasSeen(skip = false) should be < txMax
+    // a call that burns more than TX_MAX_GAS_LIMIT of execution gas succeeds
+    val m = message(args(burner, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = true)
+    val burnt = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value
+    burnt.vmError shouldBe None
+    burnt.gasUsed should be > txMax
+
   // ── ETC: per-chain gating ──────────────────────────────────────────────────────────────────────────────────────
 
   "CallTxBuilder on ETC before Olympia" should "refuse blob hashes, authorizations and an explicit type 0x2" taggedAs (
@@ -426,30 +565,31 @@ class TypedCallPathSpec
     RPCTest
   ) in {
     given BlockchainConfig = etcConfig
-    def build(a: TxArgs) = CallTxBuilder.build(a, etcHeader, None, Address(0), 100000, Map())
+    def build(a: TxArgs) = CallTxBuilder.build(a, etcHeader, None, Address(0), 100000, Map(), false)
     val hash = BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31)))
     build(args(Probe, _.copy(blobVersionedHashes = Some(List(hash))))).left.value.code shouldBe -32602
     build(args(Probe, _.copy(authorizationList = Some(Nil)))).left.value.message should include("type 4 not active")
-    build(args(Probe, _.copy(txType = Some(2), maxFeePerGas = Some(1)))).left.value.message should include(
-      "type 2 not active"
-    )
+    build(args(Probe, _.copy(txType = Some(2)))).left.value.message should include("type 2 not active")
   }
 
-  it should "ignore maxFeePerGas / maxPriorityFeePerGas without a type, as go-ethereum does before London" taggedAs (
+  it should "refuse maxFeePerGas / maxPriorityFeePerGas with go-ethereum's pre-London CallDefaults error" taggedAs (
     UnitTest,
     RPCTest
   ) in {
     given BlockchainConfig = etcConfig
-    val m = CallTxBuilder
-      .build(
-        args(Probe, _.copy(maxFeePerGas = Some(50), maxPriorityFeePerGas = Some(2))),
-        etcHeader,
-        None,
-        Address(0),
-        100000,
-        Map()
+    for fees <- List[TxArgs => TxArgs](
+        _.copy(maxFeePerGas = Some(50)),
+        _.copy(maxPriorityFeePerGas = Some(2)),
+        _.copy(txType = Some(2), maxFeePerGas = Some(1))
       )
-      .value
+    do
+      val err = CallTxBuilder.build(args(Probe, fees), etcHeader, None, Address(0), 100000, Map(), false).left.value
+      (err.code, err.message) shouldBe (
+        -32000,
+        "maxFeePerGas and maxPriorityFeePerGas are not valid before London is active"
+      )
+    // a legacy price runs as before, header untouched
+    val m = CallTxBuilder.build(args(Probe), etcHeader, None, Address(0), 100000, Map(), false).value
     m.stx.tx.tx shouldBe LegacyTransaction(0, GasPrice(0), GasAmount(100000), Some(Probe), 0, ByteString.empty)
     m.header shouldBe etcHeader
   }
@@ -463,7 +603,8 @@ class TypedCallPathSpec
         None,
         Address(0),
         100000,
-        Map()
+        Map(),
+        false
       )
       .value
       .stx

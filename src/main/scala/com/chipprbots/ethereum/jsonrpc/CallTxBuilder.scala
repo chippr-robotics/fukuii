@@ -6,7 +6,9 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.BlockOverrides
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.consensus.validators.std.StdSignedTransactionValidator
 import com.chipprbots.ethereum.transactions.TxTypeGate
+import com.chipprbots.ethereum.utils.NetworkType
 
 /** Turns [[TxArgs]] into the message fukuii executes for every message-call endpoint: eth_call, eth_estimateGas,
   * eth_createAccessList, debug_traceCall(Many), trace_call(Many) and GraphQL `call` / `estimateGas`.
@@ -28,11 +30,11 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
   *   - accessList present -> [[TransactionWithAccessList]] at the legacy price
   *   - otherwise [[LegacyTransaction]]
   *
-  * Fees (geth `ToMessage`): with no base fee at the block, the price is `gasPrice` (0 when absent) and the 1559 fields
-  * are ignored, exactly as geth ignores them before London; with a base fee, a given `gasPrice` is the price, fee cap
-  * and tip; otherwise the fee cap and tip are the 1559 fields (0 when absent) and the price is `min(feeCap, baseFee +
-  * tip)`, or 0 when both are 0. A message whose price is 0 runs with the block's base fee lowered to 0 (geth `doCall`:
-  * "Lower the basefee to 0 to avoid breaking EVM invariants"), so BASEFEE reads 0 there.
+  * Fees (geth `ToMessage`): with no base fee at the block, the price is `gasPrice` (0 when absent), and 1559 fields are
+  * refused as geth's `CallDefaults` refuses them before London; with a base fee, a given `gasPrice` is the price, fee
+  * cap and tip; otherwise the fee cap and tip are the 1559 fields (0 when absent) and the price is `min(feeCap, baseFee
+  * + tip)`, or 0 when both are 0. A message whose price is 0 runs with the block's base fee lowered to 0 (geth
+  * `doCall`: "Lower the basefee to 0 to avoid breaking EVM invariants"), so BASEFEE reads 0 there.
   */
 object CallTxBuilder:
 
@@ -64,11 +66,22 @@ object CallTxBuilder:
       case Some(gas)                               => gas
       case None                                    => if gasCap > 0 then gasCap else MaxUint64 / 2
 
-  /** The highest gas eth_estimateGas tries (geth `gasestimator.Estimate`): the requested gas if it is at least 21,000,
-    * else the block's gas limit; then the cap.
+  /** The highest gas eth_estimateGas tries (go-ethereum `gasestimator.Estimate`): the requested gas if it is at least
+    * 21,000, else the block's gas limit; clamped to EIP-7825's per-transaction cap where that cap bounds `tx.gas` (geth
+    * gasestimator.go: `hi > params.MaxTxGas && isOsaka && !isAmsterdam`; on ETC from Olympia, ECIP-1121, as S0's pool
+    * rule and the validator apply it); then the RPC gas cap.
     */
-  def estimateGasCeiling(args: TxArgs, header: BlockHeader, gasCap: BigInt): BigInt =
-    val hi = args.gas.map(_.value).filter(_ >= TxGas).getOrElse(header.gasLimit.value)
+  def estimateGasCeiling(args: TxArgs, header: BlockHeader, gasCap: BigInt)(using
+      blockchainConfig: BlockchainConfig
+  ): BigInt =
+    val requested = args.gas.map(_.value).filter(_ >= TxGas).getOrElse(header.gasLimit.value)
+    val ts = header.unixTimestamp
+    val txGasCapped =
+      !blockchainConfig.isAmsterdamTimestamp(ts) &&
+        (blockchainConfig.isOsakaTimestamp(ts) ||
+          (blockchainConfig.networkType == NetworkType.ETC &&
+            header.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber))
+    val hi = if txGasCapped then requested.min(StdSignedTransactionValidator.TxGasLimitCap) else requested
     if gasCap > 0 && hi > gasCap then gasCap else hi
 
   /** Build the message.
@@ -81,6 +94,9 @@ object CallTxBuilder:
     *   the message's gas limit ([[callGas]] / [[estimateGasCeiling]])
     * @param precompileRelocations
     *   `movePrecompileToAddress` state overrides, already applied to the world
+    * @param skipExecutionGasCap
+    *   true for eth_call and the trace calls, false for eth_estimateGas and eth_createAccessList (see
+    *   `StxLedger.CallOptions`)
     */
   def build(
       args: TxArgs,
@@ -88,11 +104,14 @@ object CallTxBuilder:
       blockOverrides: Option[BlockOverrides],
       defaultFrom: => Address,
       gas: BigInt,
-      precompileRelocations: Map[Address, Address]
+      precompileRelocations: Map[Address, Address],
+      skipExecutionGasCap: Boolean
   )(using blockchainConfig: BlockchainConfig): Either[JsonRpcError, CallMessage] =
     val header = applyBlockOverrides(target, blockOverrides)
     for
+      _ <- checkSetCodeWithBlobs(args)
       _ <- checkChainId(args)
+      _ <- checkLondon(args, header)
       _ <- checkActive(args, header)
     yield
       val (price, feeCap, tip) = fees(args, header.baseFee)
@@ -126,14 +145,37 @@ object CallTxBuilder:
       CallMessage(
         SignedTransactionWithSender(SignedTransaction(tx, ECDSASignature(0, 0, 0)), from),
         runHeader,
-        StxLedger.CallOptions(precompileRelocations, blobBaseFeeOverride)
+        StxLedger.CallOptions(precompileRelocations, blobBaseFeeOverride, skipExecutionGasCap)
       )
+
+  /** go-ethereum `CallDefaults` with a nil base fee: "maxFeePerGas and maxPriorityFeePerGas are not valid before London
+    * is active" (-32000). Applies to every block without a base fee: ETH before London, ETC before Olympia (core-geth's
+    * CallDefaults is the same). The base fee is the block context's, block overrides applied.
+    */
+  private def checkLondon(args: TxArgs, header: BlockHeader): Either[JsonRpcError, Unit] =
+    if header.baseFee.isEmpty && args.hasDynamicFee then
+      Left(JsonRpcError.LogicError("maxFeePerGas and maxPriorityFeePerGas are not valid before London is active"))
+    else Right(())
+
+  /** A set-code (EIP-7702) transaction carries no blobs: blob fields together with an authorizationList describe no
+    * transaction type, so they are refused (-32602) rather than one of them being dropped. go-ethereum's message would
+    * carry both; fukuii refuses, by the fail-loudly rule (S1's precedent).
+    */
+  private def checkSetCodeWithBlobs(args: TxArgs): Either[JsonRpcError, Unit] =
+    if args.authorizationList.isDefined && (args.blobVersionedHashes.isDefined || args.maxFeePerBlobGas.isDefined) then
+      Left(
+        JsonRpcError.InvalidParams(
+          "authorizationList cannot be combined with blobVersionedHashes or maxFeePerBlobGas: a set-code transaction " +
+            "carries no blobs"
+        )
+      )
+    else Right(())
 
   /** `(price, feeCap, tip)` per geth `ToMessage`. */
   private def fees(args: TxArgs, baseFee: Option[BigInt]): (BigInt, BigInt, BigInt) =
     (baseFee, args.gasPrice) match
       case (_, Some(gp)) => (gp.value, gp.value, gp.value)
-      case (None, None)  => (BigInt(0), BigInt(0), BigInt(0)) // pre-London: 1559 fields ignored, as geth does
+      case (None, None)  => (BigInt(0), BigInt(0), BigInt(0)) // pre-London (1559 fields refused by checkLondon)
       case (Some(base), None) =>
         val feeCap = args.maxFeePerGas.getOrElse(BigInt(0))
         val tip = args.maxPriorityFeePerGas.getOrElse(BigInt(0))
@@ -156,8 +198,9 @@ object CallTxBuilder:
     *   - an explicit `type` that is not active at the block (`TxTypeGate.activeTypes`): refused;
     *   - blobVersionedHashes before Cancun (every ETC block; ETH before Cancun): refused;
     *   - authorizationList where EIP-7702 is not active (ETC before Olympia, ETH before Prague): refused;
-    *   - maxFeePerGas / maxPriorityFeePerGas with no `type`, at a block without a base fee (ETC before Olympia, ETH
-    *     before London): IGNORED, exactly as geth's `ToMessage` ignores them — wallets send them unconditionally;
+    *   - maxFeePerGas / maxPriorityFeePerGas at a block without a base fee (ETC before Olympia, ETH before London):
+    *     -32000 "maxFeePerGas and maxPriorityFeePerGas are not valid before London is active", geth's `CallDefaults`
+    *     error ([[checkLondon]], which runs first);
     *   - accessList: accepted everywhere, as geth accepts it (before Berlin warmth is not priced, so it is inert).
     */
   private def checkActive(args: TxArgs, header: BlockHeader)(using

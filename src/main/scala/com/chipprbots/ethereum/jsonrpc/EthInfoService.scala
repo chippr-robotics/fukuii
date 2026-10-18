@@ -399,7 +399,8 @@ class EthInfoService(
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
       for
-        prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap))
+        // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
+        prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
         (msg, world) = prepared
         r <- stxLedger.simulateCall(msg.stx, msg.header, world, msg.options, tracer = None).left.map(preCheckError)
         response <- r.vmError match
@@ -416,12 +417,14 @@ class EthInfoService(
     IO {
       for
         resolved <- resolveBlock(req.block)
-        hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)
-        prepared <- prepareCall(req, resolved, hi)
+        hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
+        // the estimator does not skip the execution gas cap (gasestimator)
+        prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
         (msg, world) = prepared
         gas <- stxLedger.estimateCallGas(msg.stx, msg.header, world, msg.options).left.map {
           case StxLedger.CallEstimateFailure.Reverted(data) => revertError(data)
           case StxLedger.CallEstimateFailure.PreCheck(msg)  => JsonRpcError.LogicError(msg)
+          case StxLedger.CallEstimateFailure.Failed(error)  => JsonRpcError.LogicError(CallErrors.vmErrorMessage(error))
         }
       yield EstimateGasResponse(gas)
     }.recover { case _: MissingNodeException =>
@@ -457,7 +460,7 @@ class EthInfoService(
         )
         (world, relocations) = overridden
         gas = CallTxBuilder.callGas(req.tx, gasCap)
-        first <- CallTxBuilder.build(req.tx, header, None, defaultFrom, gas, relocations)(using blockchainConfig)
+        first <- CallTxBuilder.build(req.tx, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
         sender = first.stx.senderAddress
         excluded = accessListExclusions(req.tx, sender, first.header, world)
         result <- accessListFixedPoint(req.tx, header, gas, world, relocations, excluded)
@@ -480,16 +483,19 @@ class EthInfoService(
       val withList = args.copy(accessList = Some(accessList))
       val tracer = new AccessListTracer(accessList, excluded)
       val step = for
-        msg <- CallTxBuilder.build(withList, header, None, defaultFrom, gas, relocations)(using blockchainConfig)
+        // geth AccessList: no SkipExecutionGasCapCheck
+        msg <- CallTxBuilder.build(withList, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
         r <- stxLedger
           .simulateCall(msg.stx, msg.header, Some(world), msg.options, Some(tracer))
           .left
           .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${msg.stx.tx.hash.toHex} err: ${e.message}"))
-      yield r
+      yield (msg, r)
       step match
-        case Left(e) => Left(e)
-        case Right(r) if tracer.touchedSet == prev.touchedSet =>
-          Right(CreateAccessListResponse(accessList, r.gasUsed, r.vmError.map(CallErrors.vmErrorMessage)))
+        case Left(e)                                                 => Left(e)
+        case Right((msg, r)) if tracer.touchedSet == prev.touchedSet =>
+          // geth reports res.UsedGas, which is never below the calldata floor (EIP-7623 / EIP-7976)
+          val gasUsed = stxLedger.callFloorGas(msg.stx, msg.header).fold(r.gasUsed)(r.gasUsed.max)
+          Right(CreateAccessListResponse(accessList, gasUsed, r.vmError.map(CallErrors.vmErrorMessage)))
         case Right(_) if iteration + 1 >= MaxAccessListIterations =>
           Left(JsonRpcError.LogicError(s"access list did not converge after $MaxAccessListIterations runs"))
         case Right(_) => loop(tracer, iteration + 1)
@@ -519,14 +525,16 @@ class EthInfoService(
     */
   private def prepareCall(
       req: CallRequest,
-      gas: BigInt
+      gas: BigInt,
+      skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
-    resolveBlock(req.block).flatMap(prepareCall(req, _, gas))
+    resolveBlock(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
 
   private def prepareCall(
       req: CallRequest,
       resolved: ResolvedBlock,
-      gas: BigInt
+      gas: BigInt,
+      skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
     val header = resolved.block.header
     for
@@ -540,7 +548,15 @@ class EthInfoService(
             .applyStateOverrides(base, overrides, Map.empty, blockchainConfig.accountStartNonce)
             .map { case (w, relocations) => (Some(w), relocations) }
       (world, relocations) = overridden
-      msg <- CallTxBuilder.build(req.tx, header, req.blockOverrides, defaultFrom, gas, relocations)(using
+      msg <- CallTxBuilder.build(
+        req.tx,
+        header,
+        req.blockOverrides,
+        defaultFrom,
+        gas,
+        relocations,
+        skipExecutionGasCap
+      )(using
         blockchainConfig
       )
     yield (msg, world)

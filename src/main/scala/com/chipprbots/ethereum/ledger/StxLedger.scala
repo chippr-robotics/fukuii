@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
+import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.RevertOccurs
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
@@ -324,9 +325,13 @@ class StxLedger(
         if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)") else PreCheck(e.message)
       }
       atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
+      // gasestimator.Estimate: a failure at the ceiling that is not out-of-gas is the answer (a revert with its data);
+      // out of gas at the ceiling is "gas required exceeds allowance"
       _ <- atHi.error match
         case Some(RevertOccurs) => Left(Reverted(atHi.returnData))
-        case _                  => Right(())
+        case Some(OutOfGas)     => Left(PreCheck(s"gas required exceeds allowance ($hi)"))
+        case Some(other)        => Left(Failed(other))
+        case None               => Right(())
     yield
       val lowLimit = estimationLowerBound(stxHi, blockHeader)
       if hi < lowLimit then hi
@@ -385,7 +390,8 @@ class StxLedger(
     val overrides = SimulationOverrides(
       precompileRelocations = options.precompileRelocations,
       traceTransfers = false,
-      blobBaseFeeOverride = options.blobBaseFeeOverride
+      blobBaseFeeOverride = options.blobBaseFeeOverride,
+      skipExecutionGasCap = options.skipExecutionGasCap
     )
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, sender, world2, blockHeader, overrides)
     tracer.foreach(_.onTxStart(sender, tx.tx.receivingAddress, tx.tx.gasLimit.value, tx.tx.value, tx.tx.payload))
@@ -446,6 +452,10 @@ class StxLedger(
             case (h, i) if h.value.length != 32 || h.value(0) != StxLedger.BlobCommitmentVersionKzg => i
           }
           if bt.blobVersionedHashes.isEmpty then Left(E("blob transaction missing blob hashes"))
+          // Osaka (EIP-7594): at most BlobTxMaxBlobs per transaction; geth core ErrTooManyBlobs
+          else if blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp) &&
+            bt.blobVersionedHashes.size > StxLedger.BlobTxMaxBlobs
+          then Left(E("blob transaction has too many blobs"))
           else if badVersion.isDefined then Left(E(s"blob ${badVersion.get} has invalid hash version"))
           else
             val blobBaseFee = options.blobBaseFeeOverride.getOrElse(
@@ -464,6 +474,13 @@ class StxLedger(
         case sct: SetCodeTransaction if sct.authorizationList.isEmpty =>
           Left(E(s"EIP-7702 transaction with empty auth list (sender $address)"))
         case _ => Right(())
+      // EIP-3860 (geth preCheck `vm.CheckMaxInitCodeSize`), the same rule and limit the pool and validator apply
+      _ <-
+        val evmConfig = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
+        evmConfig.maxInitCodeSize match
+          case Some(max) if tx.isContractInit && evmConfig.eip3860Enabled && tx.payload.size > max =>
+            Left(E(s"max initcode size exceeded: code size ${tx.payload.size}, limit $max"))
+          case _ => Right(())
       _ <-
         val want = tx.gasLimit.value * feeCap + tx.value + blobGas * blobFeeCap
         if want == 0 then Right(())
@@ -479,9 +496,16 @@ class StxLedger(
         else
           floor match
             case Some(f) if gas < f =>
-              Left(E(s"insufficient gas for floor data gas cost: have $gas, want $f", gasShortfall = true))
+              Left(E(s"insufficient gas for floor data gas cost: have $gas, want $f"))
             case _ => Right(())
     yield ()
+
+  /** The calldata floor of `stx` where it is a validity rule (EIP-7623 from Prague / ETC Olympia, EIP-7976 at
+    * Amsterdam), else `None`. go-ethereum's `ExecutionResult.UsedGas` is never below it, which eth_createAccessList
+    * reports.
+    */
+  def callFloorGas(stx: SignedTransactionWithSender, blockHeader: BlockHeader): Option[BigInt] =
+    intrinsicAndFloor(stx, blockHeader)._2
 
   /** The intrinsic gas of `stx` and, where a calldata floor is a validity rule, the floor; the same functions
     * [[estimationLowerBound]] and the validator use.
@@ -614,17 +638,25 @@ object StxLedger:
     * @param blobBaseFeeOverride
     *   the blob base fee the upfront charge uses: 0 when the call's maxFeePerBlobGas is 0 or absent (geth lowers the
     *   blob base fee to 0 then), or a `blobBaseFee` block override
+    * @param skipExecutionGasCap
+    *   go-ethereum `Message.SkipExecutionGasCapCheck()`: at Amsterdam the whole gas left after the intrinsic cost is
+    *   execution gas, not only up to TX_MAX_GAS_LIMIT (EIP-8037). geth sets it for eth_call (internal/ethapi/api.go
+    *   `applyMessage`) and debug_traceCall (eth/tracers/api.go `TraceCall`), not for eth_estimateGas (gasestimator) or
+    *   eth_createAccessList (api.go `AccessList`). No effect before Amsterdam.
     */
   final case class CallOptions(
       precompileRelocations: Map[Address, Address],
-      blobBaseFeeOverride: Option[BigInt]
+      blobBaseFeeOverride: Option[BigInt],
+      skipExecutionGasCap: Boolean
   )
 
   object CallOptions:
-    val Empty: CallOptions = CallOptions(Map.empty, None)
+    val Empty: CallOptions = CallOptions(Map.empty, None, skipExecutionGasCap = false)
 
-  /** A message call refused before execution, with go-ethereum's message. `gasShortfall` marks the intrinsic-gas and
-    * calldata-floor checks, which eth_estimateGas reports as "gas required exceeds allowance".
+  /** A message call refused before execution, with go-ethereum's message. `gasShortfall` marks the intrinsic-gas check,
+    * the one go-ethereum's estimator treats as "raise the gas limit" (gasestimator.go `execute`:
+    * `core.ErrIntrinsicGas`) and so reports as "gas required exceeds allowance"; a calldata-floor shortfall keeps its
+    * own message there, as in geth.
     */
   final case class CallPreCheckError(message: String, gasShortfall: Boolean = false)
 
@@ -635,6 +667,12 @@ object StxLedger:
 
     /** Reverted at the highest gas tried; the revert data. Error code 3. */
     case Reverted(data: ByteString)
+
+    /** Failed at the highest gas tried for a reason other than gas (geth returns `result.Err`). -32000. */
+    case Failed(error: ProgramError)
+
+  /** EIP-7594 (Osaka) per-transaction blob limit, go-ethereum `params.BlobTxMaxBlobs`. */
+  val BlobTxMaxBlobs: Int = 6
 
   /** EIP-4844 GAS_PER_BLOB. */
   val GasPerBlob: BigInt = BigInt(131072)
