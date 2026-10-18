@@ -3,33 +3,32 @@ package com.chipprbots.ethereum.rlp
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** Regression for the unbounded-recursion DoS in [[RLP.rawDecode]]: a peer could send a small, deeply nested RLP payload
-  * that overflowed the call stack with a `StackOverflowError`, which `scala.util.Try` does not catch, so it escaped the
-  * decode call sites and — with Pekko's default `jvm-exit-on-fatal-error = on` — killed the node.
+/** Regression for the unbounded-recursion DoS in [[RLP.rawDecode]]: a peer could send a small, deeply nested RLP
+  * payload that overflowed the call stack with a `StackOverflowError`, which `scala.util.Try` does not catch, so it
+  * escaped the decode call sites and — with Pekko's default `jvm-exit-on-fatal-error = on` — killed the node.
   */
-class RLPNestingDepthSpec extends AnyFlatSpec with Matchers {
+class RLPNestingDepthSpec extends AnyFlatSpec with Matchers:
 
   /** `depth` nested single-element lists around an empty innermost list, built inside-out with correct RLP length
     * prefixes, without recursing (so the builder itself never overflows).
     */
-  private def nestedListBytes(depth: Int): Array[Byte] = {
+  private def nestedListBytes(depth: Int): Array[Byte] =
     var payload = Array[Byte](0x80.toByte) // innermost: empty string (a value, so `depth` counts list levels exactly)
     var i = 0
-    while (i < depth) {
+    while i < depth do
       val len = payload.length
       val prefix =
-        if (len <= 55) Array[Byte]((0xc0 + len).toByte)
+        if len <= 55 then Array[Byte]((0xc0 + len).toByte)
         else {
           var v = len
           var lb = Array.empty[Byte]
-          while (v > 0) { lb = (v & 0xff).toByte +: lb; v >>= 8 }
+          while v > 0 do
+            lb = (v & 0xff).toByte +: lb; v >>= 8
           ((0xf7 + lb.length).toByte) +: lb
         }
       payload = prefix ++ payload
       i += 1
-    }
     payload
-  }
 
   "RLP.rawDecode" should "decode a structure nested exactly at the maximum depth" in {
     // nestedListBytes(n) has the outermost list at nesting level 1, so n == MaxNestingDepth is the deepest accepted input.
@@ -56,7 +55,7 @@ class RLPNestingDepthSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "leave ordinary shallow structures unchanged" in {
-    val encoded = RLP.encode(RLPList(RLPValue("cat".getBytes), RLPList(RLPValue("puppy".getBytes)), RLPValue(Array.empty)))
+    val encoded =
+      RLP.encode(RLPList(RLPValue("cat".getBytes), RLPList(RLPValue("puppy".getBytes)), RLPValue(Array.empty)))
     RLP.encode(RLP.rawDecode(encoded)) shouldBe encoded
   }
-}

@@ -11,28 +11,29 @@ import com.chipprbots.ethereum.crypto.zksnark.*
 import com.chipprbots.ethereum.crypto.zksnark.FiniteField.Ops.*
 import com.chipprbots.ethereum.testing.Tags.*
 
-abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckPropertyChecks {
-  val bigIntGen: Gen[BigInteger] = for {
-    bytes <- Gen.listOfN(32, arbitrary[Byte])
-  } yield new BigInteger(1, bytes.toArray)
+abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckPropertyChecks:
+  val bigIntGen: Gen[BigInteger] =
+    for bytes <- Gen.listOfN(32, arbitrary[Byte])
+    yield new BigInteger(1, bytes.toArray)
 
   def fpGenerator: Gen[Fp] = bigIntGen.map(Fp(_)).retryUntil(fp => fp.isValid())
 
-  def fp2Generator: Gen[Fp2] = for {
+  def fp2Generator: Gen[Fp2] = for
     fp1 <- fpGenerator
-    _   <- fpGenerator // MIGRATION: fp2 was bound but unused; Fp2(fp1, fp1) appears intentional — discard to satisfy E198 ratchet
-  } yield Fp2(fp1, fp1)
+    _ <-
+      fpGenerator // MIGRATION: fp2 was bound but unused; Fp2(fp1, fp1) appears intentional — discard to satisfy E198 ratchet
+  yield Fp2(fp1, fp1)
 
-  def fp6Generator: Gen[Fp6] = for {
+  def fp6Generator: Gen[Fp6] = for
     fp1 <- fp2Generator
     fp2 <- fp2Generator
     fp3 <- fp2Generator
-  } yield Fp6(fp1, fp2, fp3)
+  yield Fp6(fp1, fp2, fp3)
 
-  def fp12Generator: Gen[Fp12] = for {
+  def fp12Generator: Gen[Fp12] = for
     fp1 <- fp6Generator
     fp2 <- fp6Generator
-  } yield Fp12(fp1, fp2)
+  yield Fp12(fp1, fp2)
 
   // Generator of valid field elements, for which all laws needs to be obeyed
   def fpGen: Gen[T]
@@ -119,21 +120,17 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
       assert(a.squared() == a * a)
     }
   }
-}
 
-class FpFieldSpec extends FieldSpec[Fp] {
+class FpFieldSpec extends FieldSpec[Fp]:
   override def fpGen: Gen[Fp] = fpGenerator
-}
 
-class Fp2FieldSpec extends FieldSpec[Fp2] {
+class Fp2FieldSpec extends FieldSpec[Fp2]:
   override def fpGen: Gen[Fp2] = fp2Generator
-}
 
-class Fp6FieldSpec extends FieldSpec[Fp6] {
+class Fp6FieldSpec extends FieldSpec[Fp6]:
   override def fpGen: Gen[Fp6] = fp6Generator
-}
 
-class Fp12FieldSpec extends FieldSpec[Fp12] {
+class Fp12FieldSpec extends FieldSpec[Fp12]:
   override def fpGen: Gen[Fp12] = fp12Generator
 
   test("cyclotomic exp on fp12", UnitTest, CryptoTest) {
@@ -204,4 +201,3 @@ class Fp12FieldSpec extends FieldSpec[Fp12] {
 
     assert(result == expected)
   }
-}

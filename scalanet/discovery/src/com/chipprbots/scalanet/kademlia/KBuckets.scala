@@ -5,35 +5,33 @@ import java.util.Random
 
 import scodec.bits.BitVector
 
-/**
-  *
-  * @param baseId the nodes own id.
-  * @param clock clock required to keep track of last usage of id in particular bucket
-  * @param buckets list of buckets, each bucket is sorted form least recently seen node id at head and most recently seen
-  *                at the tail
+/** @param baseId
+  *   the nodes own id.
+  * @param clock
+  *   clock required to keep track of last usage of id in particular bucket
+  * @param buckets
+  *   list of buckets, each bucket is sorted form least recently seen node id at head and most recently seen at the tail
   */
 class KBuckets[T <: BitVector] private (
     val baseId: T,
     val clock: Clock,
     val buckets: IndexedSeq[TimeSet[T]]
-) {
+):
 
   def this(baseId: T, clock: Clock) =
     this(baseId, clock, IndexedSeq.fill(baseId.length.toInt)(TimeSet[T](clock)))
 
-  /**
-    * Find the n nodes closest to nodeId in kBuckets.
-    * Return the resulting node records sorted by distance from the nodeId.
-    * The indices into the kBuckets are defined by their distance from referenceNodeId.
+  /** Find the n nodes closest to nodeId in kBuckets. Return the resulting node records sorted by distance from the
+    * nodeId. The indices into the kBuckets are defined by their distance from referenceNodeId.
     */
-  def closestNodes(nodeId: T, n: Int): List[T] = {
+  def closestNodes(nodeId: T, n: Int): List[T] =
     val ordering = new XorOrdering(nodeId)
 
     // returns ordered buckets: if bucket comes first in the result
     // then all of its elements are closer to nodeId that any element
     // from buckets further in the stream
     // virtual one-element bucket with baseId is added
-    def orderedBucketsIterator: Iterator[Seq[T]] = {
+    def orderedBucketsIterator: Iterator[Seq[T]] =
       // That part is simple in implementation but complex conceptually. It bases on observation that buckets can
       // be ordered by closeness to nodeId, i.e. for buckets A and B either all elements its elements are closer
       // to nodeId than any element of B or all elements from A are farther from nodeId than any element from B.
@@ -85,88 +83,73 @@ class KBuckets[T <: BitVector] private (
           .map(i => buckets(i).toSeq)
 
       closerBuckets ++ Iterator.single(Seq(baseId)) ++ furtherBuckets
-    }
 
-    if (n == 1) {
+    if n == 1 then
       // special case to avoid sorting the bucket
       orderedBucketsIterator.find(_.nonEmpty).map(_.min(ordering)).toList
-    } else {
-      orderedBucketsIterator.flatMap(_.sorted(ordering)).take(n).toList
-    }
-  }
+    else orderedBucketsIterator.flatMap(_.sorted(ordering)).take(n).toList
 
-  /**
-    * Add a node record into the KBuckets.
+  /** Add a node record into the KBuckets.
     *
-    * @return this KBuckets instance.
+    * @return
+    *   this KBuckets instance.
     */
-  def add(nodeId: T): KBuckets[T] = {
-    bucketOp(nodeId)(
-      (iBucket, bucket) => new KBuckets[T](baseId, clock, buckets.patch(iBucket, List(bucket + nodeId), 1))
+  def add(nodeId: T): KBuckets[T] =
+    bucketOp(nodeId)((iBucket, bucket) =>
+      new KBuckets[T](baseId, clock, buckets.patch(iBucket, List(bucket + nodeId), 1))
     )
-  }
 
-  /**
-    * Move a given nodeId to the tail of its respective bucket.
-    * @param nodeId the nodeId to touch
+  /** Move a given nodeId to the tail of its respective bucket.
+    * @param nodeId
+    *   the nodeId to touch
     * @return
     */
-  def touch(nodeId: T): KBuckets[T] = {
+  def touch(nodeId: T): KBuckets[T] =
     bucketOp(nodeId) { (iBucket, bucket) =>
       new KBuckets[T](baseId, clock, buckets.patch(iBucket, List(bucket.touch(nodeId)), 1))
     }
-  }
 
-  /**
-    * Query whether a given nodeId is present in the kbuckets.
+  /** Query whether a given nodeId is present in the kbuckets.
     *
-    * @return true if present
+    * @return
+    *   true if present
     */
-  def contains(nodeId: T): Boolean = {
+  def contains(nodeId: T): Boolean =
     nodeId == baseId || buckets(iBucket(nodeId)).contains(nodeId)
-  }
 
-  /**
-    * Remove an element by id.
+  /** Remove an element by id.
     *
-    * @param nodeId the nodeId to remove
+    * @param nodeId
+    *   the nodeId to remove
     * @return
     */
-  def remove(nodeId: T): KBuckets[T] = {
-    if (nodeId == baseId)
-      throw new UnsupportedOperationException("Cannot remove the baseId")
-    else if (!contains(nodeId)) {
-      this
-    } else {
+  def remove(nodeId: T): KBuckets[T] =
+    if nodeId == baseId then throw new UnsupportedOperationException("Cannot remove the baseId")
+    else if !contains(nodeId) then this
+    else {
       val (iBucket, bucket) = getBucket(nodeId)
       new KBuckets[T](baseId, clock, buckets.patch(iBucket, List(bucket - nodeId), 1))
     }
-  }
 
-  override def toString: String = {
+  override def toString: String =
     s"KBuckets(baseId = ${baseId.toHex}):\n\t${buckets.indices.map(i => s"$i: ${bucketToString(buckets(i))}").mkString("\n\t")}"
-  }
 
-  def getBucket(b: T): (Int, TimeSet[T]) = {
+  def getBucket(b: T): (Int, TimeSet[T]) =
     val i = iBucket(b)
     (i, buckets(i))
-  }
 
-  private def iBucket(b: T): Int = {
+  private def iBucket(b: T): Int =
     iBucket(Xor.d(b, baseId))
-  }
 
-  private def iBucket(b: BigInt): Int = {
+  private def iBucket(b: BigInt): Int =
     b.bitLength - 1
-  }
 
-  private def bucketToString(bucket: TimeSet[T]): String = {
+  private def bucketToString(bucket: TimeSet[T]): String =
     s"${bucket.iterator.map(id => s"(id=${id.toBin} / ${id.toHex}, d=${Xor.d(id, baseId)})").mkString(", ")}"
-  }
 
-  private def bucketOp(nodeId: T)(op: (Int, TimeSet[T]) => KBuckets[T]): KBuckets[T] = {
-    if (nodeId != baseId) {
-      if (nodeId.length != this.baseId.length)
+  private def bucketOp(nodeId: T)(op: (Int, TimeSet[T]) => KBuckets[T]): KBuckets[T] =
+    if nodeId != baseId then
+      if nodeId.length != this.baseId.length then
         throw new IllegalArgumentException(
           s"Illegal node id '${nodeId.toHex}' has bit length ${nodeId.size} but requires length ${baseId.size}."
         )
@@ -174,14 +157,8 @@ class KBuckets[T <: BitVector] private (
         val (iBucket, bucket) = getBucket(nodeId)
         op(iBucket, bucket)
       }
-    } else {
-      this
-    }
-  }
-}
+    else this
 
-object KBuckets {
-  def generateRandomId(length: Long, rnd: Random): BitVector = {
+object KBuckets:
+  def generateRandomId(length: Long, rnd: Random): BitVector =
     BitVector.bits(Range.Long(0, length, 1).map(_ => rnd.nextBoolean()))
-  }
-}

@@ -8,23 +8,22 @@ import cats.implicits.*
 import scala.util.Left
 import scala.util.Right
 
-/** Wraps an underlying concurrent queue so that polling can return None when
-  * the producer side is finished, or vice versa the producer can tell when
-  * the consumer is no longer interested in receiving more values.
+/** Wraps an underlying concurrent queue so that polling can return None when the producer side is finished, or vice
+  * versa the producer can tell when the consumer is no longer interested in receiving more values.
   *
-  *
-  * @param closed indicates whether the producer side has finished and whether
-  * the messages already in the queue should or discarded (true) or consumed (false).
-  * @param queue is the underlying message queue
+  * @param closed
+  *   indicates whether the producer side has finished and whether the messages already in the queue should or discarded
+  *   (true) or consumed (false).
+  * @param queue
+  *   is the underlying message queue
   */
 class CloseableQueue[A](
     closed: Deferred[IO, Boolean],
     queue: Queue[IO, A]
-) {
+):
   import CloseableQueue.Closed
 
-  /** Fetch the next item from the queue, or None if the production has finished
-    * and the queue has been emptied.
+  /** Fetch the next item from the queue, or None if the production has finished and the queue has been emptied.
     */
   def next: IO[Option[A]] =
     closed.tryGet.flatMap {
@@ -35,7 +34,7 @@ class CloseableQueue[A](
         // available in CE3. The recursive pattern is idiomatic in CE3 for this use case.
         def drainQueue: IO[Unit] = queue.tryTake.flatMap {
           case Some(_) => drainQueue
-          case None => IO.unit
+          case None    => IO.unit
         }
         drainQueue.as(None)
 
@@ -51,9 +50,9 @@ class CloseableQueue[A](
         }
     }
 
-  /** Stop accepting items in the queue. Clear items if `discard` is true, otherwise let them be drained.
-    * If the queue is already closed it does nothing; this is because either the producer or the consumer
-    * could have closed the queue before.
+  /** Stop accepting items in the queue. Clear items if `discard` is true, otherwise let them be drained. If the queue
+    * is already closed it does nothing; this is because either the producer or the consumer could have closed the queue
+    * before.
     */
   def close(discard: Boolean): IO[Unit] =
     closed.complete(discard).attempt.void
@@ -71,7 +70,9 @@ class CloseableQueue[A](
     // be that crucial to serve clients who overproduce.
     unlessClosed(queue.tryOffer(item))
 
-  /** Try to put a new item in the queue unless the queue has already been closed. Waits if the capacity has been reached. */
+  /** Try to put a new item in the queue unless the queue has already been closed. Waits if the capacity has been
+    * reached.
+    */
   def offer(item: A): IO[Either[Closed, Unit]] =
     unlessClosed {
       IO.race(closed.get, queue.offer(item)).map(_.leftMap(_ => Closed))
@@ -84,22 +85,19 @@ class CloseableQueue[A](
         IO.pure(Left(Closed)),
         task.map(Right(_))
       )
-}
 
-object CloseableQueue {
+object CloseableQueue:
 
   /** Indicate that the queue was closed. */
   object Closed
   type Closed = Closed.type
 
   /** Create a queue with a given capacity; 0 or negative means unbounded. */
-  def apply[A](capacity: Int): IO[CloseableQueue[A]] = {
-    for {
+  def apply[A](capacity: Int): IO[CloseableQueue[A]] =
+    for
       closed <- Deferred[IO, Boolean]
-      queue <- if (capacity <= 0) Queue.unbounded[IO, A] else Queue.bounded[IO, A](capacity)
-    } yield new CloseableQueue[A](closed, queue)
-  }
+      queue <- if capacity <= 0 then Queue.unbounded[IO, A] else Queue.bounded[IO, A](capacity)
+    yield new CloseableQueue[A](closed, queue)
 
   def unbounded[A]: IO[CloseableQueue[A]] =
     apply[A](capacity = 0)
-}

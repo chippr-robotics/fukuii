@@ -13,7 +13,7 @@ import org.bouncycastle.crypto.paddings.PaddedBufferedBlockCipher
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.params.ParametersWithIV
 
-trait SymmetricCipher {
+trait SymmetricCipher:
   def encrypt(secret: ByteString, iv: ByteString, message: ByteString): ByteString =
     process(true, secret, iv, message)
 
@@ -22,7 +22,7 @@ trait SymmetricCipher {
 
   protected def getCipher: BufferedBlockCipher
 
-  protected def process(forEncryption: Boolean, secret: ByteString, iv: ByteString, data: ByteString): ByteString = {
+  protected def process(forEncryption: Boolean, secret: ByteString, iv: ByteString, data: ByteString): ByteString =
     val cipher = getCipher
     cipher.reset()
     val params = new ParametersWithIV(new KeyParameter(secret.toArray), iv.toArray)
@@ -34,15 +34,11 @@ trait SymmetricCipher {
     val len = cipher.doFinal(output, offset)
 
     ByteString(output).take(offset + len)
-  }
-}
 
-object AES_CBC extends SymmetricCipher {
+object AES_CBC extends SymmetricCipher:
   protected def getCipher =
     new PaddedBufferedBlockCipher(CBCBlockCipher.newInstance(AESEngine.newInstance()), new PKCS7Padding)
-}
 
-object AES_CTR extends SymmetricCipher {
+object AES_CTR extends SymmetricCipher:
   protected def getCipher: BufferedBlockCipher =
     new BufferedBlockCipher(SICBlockCipher.newInstance(AESEngine.newInstance())): @annotation.nowarn("cat=deprecation")
-}

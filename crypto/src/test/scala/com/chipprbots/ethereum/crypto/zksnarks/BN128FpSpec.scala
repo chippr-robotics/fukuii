@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
 import com.chipprbots.ethereum.crypto.zksnark.Fp
 import com.chipprbots.ethereum.testing.Tags.*
 
-class BN128FpSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
+class BN128FpSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
 
   val testData: TableFor3[Fp, Fp, Fp] = Table[Fp, Fp, Fp](
     ("x", "y", "z"),
@@ -58,4 +58,3 @@ class BN128FpSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
       assert(BN128Fp.isOnCurve(affinePoint))
     }
   }
-}

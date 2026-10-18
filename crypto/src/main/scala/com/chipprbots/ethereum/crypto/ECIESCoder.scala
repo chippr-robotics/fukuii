@@ -15,7 +15,7 @@ import org.bouncycastle.crypto.modes.SICBlockCipher
 import org.bouncycastle.crypto.params.*
 import org.bouncycastle.math.ec.ECPoint
 
-object ECIESCoder {
+object ECIESCoder:
 
   val KeySize = 128
   val PublicKeyOverheadSize = 65
@@ -24,10 +24,10 @@ object ECIESCoder {
 
   @throws[IOException]
   @throws[InvalidCipherTextException]
-  def decrypt(privKey: BigInteger, cipher: Array[Byte], macData: Option[Array[Byte]] = None): Array[Byte] = {
+  def decrypt(privKey: BigInteger, cipher: Array[Byte], macData: Option[Array[Byte]] = None): Array[Byte] =
     // Security: minimum ciphertext = ephemeral pubkey (65) + IV (16) + MAC (32) + at least 1 byte
     // CVE-2026-22862: reject truncated ciphertexts before parsing components
-    if (cipher.length < OverheadSize + 1)
+    if cipher.length < OverheadSize + 1 then
       throw new InvalidCipherTextException(
         s"Ciphertext too short: ${cipher.length} < ${OverheadSize + 1}"
       )
@@ -40,7 +40,6 @@ object ECIESCoder {
     val cipherBody = new Array[Byte](is.available)
     is.read(cipherBody)
     decrypt(ephem, privKey, Some(IV), cipherBody, macData)
-  }
 
   @throws[InvalidCipherTextException]
   def decrypt(
@@ -49,7 +48,7 @@ object ECIESCoder {
       IV: Option[Array[Byte]],
       cipher: Array[Byte],
       macData: Option[Array[Byte]]
-  ): Array[Byte] = {
+  ): Array[Byte] =
     val aesEngine = AESEngine.newInstance()
 
     val iesEngine = new EthereumIESEngine(
@@ -64,14 +63,13 @@ object ECIESCoder {
     )
 
     iesEngine.processBlock(cipher, 0, cipher.length, forEncryption = false, macData)
-  }
 
   def encrypt(
       toPub: ECPoint,
       secureRandom: SecureRandom,
       plaintext: Array[Byte],
       macData: Option[Array[Byte]] = None
-  ): Array[Byte] = {
+  ): Array[Byte] =
 
     val gParam = new ECKeyGenerationParameters(curve, secureRandom)
 
@@ -93,9 +91,8 @@ object ECIESCoder {
     gen.init(new ECKeyGenerationParameters(curve, secureRandom))
 
     pub.getEncoded(false) ++ IV ++ iesEngine.processBlock(plaintext, 0, plaintext.length, forEncryption = true, macData)
-  }
 
-  private def makeIESEngine(pub: ECPoint, prv: BigInteger, IV: Option[Array[Byte]]) = {
+  private def makeIESEngine(pub: ECPoint, prv: BigInteger, IV: Option[Array[Byte]]) =
     val aesEngine = AESEngine.newInstance()
 
     val iesEngine = new EthereumIESEngine(
@@ -110,6 +107,3 @@ object ECIESCoder {
     )
 
     iesEngine
-  }
-
-}

@@ -11,7 +11,7 @@ sealed abstract class FieldElement
 
 case class Fp(inner: BigInt) extends FieldElement
 
-object Fp {
+object Fp:
 
   /** "p" field parameter of F_p, F_p2, F_p6 and F_p12
     */
@@ -30,7 +30,7 @@ object Fp {
 
   /** Implementation of finite field "Fp" modular arithmetic
     */
-  implicit object FpImpl extends FiniteField[Fp] {
+  implicit object FpImpl extends FiniteField[Fp]:
     override def zero: Fp = Fp(BigInt(0))
 
     override def one: Fp = Fp(BigInt(1))
@@ -60,12 +60,10 @@ object Fp {
 
     override def isZero(a: Fp): Boolean =
       a.inner == BigInt(0)
-  }
-}
 
 case class Fp2(a: Fp, b: Fp) extends FieldElement
 
-object Fp2 {
+object Fp2:
 
   // It is also Twist for Fp2
   val NON_RESIDUE: Fp2 = Fp2(Fp(BigInt(9)), Fp(BigInt(1)))
@@ -91,13 +89,12 @@ object Fp2 {
     Fp(BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208582"))
   )
 
-  def frobeniusMap(a: Fp2, power: Int): Fp2 = {
+  def frobeniusMap(a: Fp2, power: Int): Fp2 =
     val ra = a.a
     val rb = FROBENIUS_COEFFS_B(power % 2) * a.b
     Fp2(ra, rb)
-  }
 
-  implicit object Fp2Impl extends FiniteField[Fp2] {
+  implicit object Fp2Impl extends FiniteField[Fp2]:
     override def one: Fp2 = Fp2(FiniteField[Fp].one, FiniteField[Fp].zero)
 
     override def zero: Fp2 = Fp2(FiniteField[Fp].zero, FiniteField[Fp].zero)
@@ -108,7 +105,7 @@ object Fp2 {
     override def sub(a: Fp2, b: Fp2): Fp2 =
       Fp2(a.a - b.a, a.b - b.b)
 
-    override def mul(a: Fp2, b: Fp2): Fp2 = {
+    override def mul(a: Fp2, b: Fp2): Fp2 =
       val aa = a.a * b.a
       val bb = a.b * b.b
 
@@ -116,12 +113,11 @@ object Fp2 {
       val rb = (a.a + a.b) * (b.a + b.b) - aa - bb
 
       Fp2(ra, rb)
-    }
 
     override def neg(a: Fp2): Fp2 =
       Fp2(a.a.negated(), a.b.negated())
 
-    override def inv(a: Fp2): Fp2 = {
+    override def inv(a: Fp2): Fp2 =
       val t0 = a.a.squared()
       val t1 = a.b.squared()
       val t2 = t0 - (Fp.NON_RESIDUE * t1)
@@ -131,45 +127,38 @@ object Fp2 {
       val rb = (a.b * t3).negated()
 
       Fp2(ra, rb)
-    }
 
     override def isValid(a: Fp2): Boolean =
       a.a.isValid() && a.b.isValid()
 
     override def isZero(a: Fp2): Boolean = a == zero
 
-  }
-
   val B_Fp2: Fp2 = mulByConst(NON_RESIDUE.inversed(), Fp.B_Fp)
-}
 
 case class Fp6(a: Fp2, b: Fp2, c: Fp2) extends FieldElement
 
-object Fp6 {
+object Fp6:
 
   // Alg.12 in 'High-Speed Software Implementation of the Optimal Ate Pairing over Barreto–Naehrig Curves'
-  def mulByNonResidue(a: Fp6): Fp6 = {
+  def mulByNonResidue(a: Fp6): Fp6 =
     val ra = Fp2.NON_RESIDUE * a.c
     val rb = a.a
     val rc = a.b
 
     Fp6(ra, rb, rc)
-  }
 
-  def frobeniusMap(a: Fp6, power: Int): Fp6 = {
+  def frobeniusMap(a: Fp6, power: Int): Fp6 =
     val ra = Fp2.frobeniusMap(a.a, power)
     val rb = FROBENIUS_COEFFS_B(power % 6) * Fp2.frobeniusMap(a.b, power)
     val rc = FROBENIUS_COEFFS_C(power % 6) * Fp2.frobeniusMap(a.c, power)
 
     Fp6(ra, rb, rc)
-  }
 
-  def mulByConst(a: Fp6, b: Fp2): Fp6 = {
+  def mulByConst(a: Fp6, b: Fp2): Fp6 =
     val ra = a.a * b
     val rb = a.b * b
     val rc = a.c * b
     Fp6(ra, rb, rc)
-  }
 
   private val FROBENIUS_COEFFS_B: Array[Fp2] = Array[Fp2](
     new Fp2(
@@ -222,27 +211,25 @@ object Fp6 {
     )
   )
 
-  implicit object Fp6Impl extends FiniteField[Fp6] {
+  implicit object Fp6Impl extends FiniteField[Fp6]:
 
     override def one: Fp6 = Fp6(FiniteField[Fp2].one, FiniteField[Fp2].zero, FiniteField[Fp2].zero)
 
     override def zero: Fp6 = Fp6(FiniteField[Fp2].zero, FiniteField[Fp2].zero, FiniteField[Fp2].zero)
 
-    override def add(a: Fp6, b: Fp6): Fp6 = {
+    override def add(a: Fp6, b: Fp6): Fp6 =
       val ra = a.a + b.a
       val rb = a.b + b.b
       val rc = a.c + b.c
       Fp6(ra, rb, rc)
-    }
 
-    override def sub(a: Fp6, b: Fp6): Fp6 = {
+    override def sub(a: Fp6, b: Fp6): Fp6 =
       val ra = a.a - b.a
       val rb = a.b - b.b
       val rc = a.c - b.c
       Fp6(ra, rb, rc)
-    }
 
-    override def mul(a: Fp6, b: Fp6): Fp6 = {
+    override def mul(a: Fp6, b: Fp6): Fp6 =
       val t0 = a.a * b.a
       val t1 = a.b * b.b
       val t2 = a.c * b.c
@@ -252,11 +239,10 @@ object Fp6 {
       val rc = (a.a + a.c) * (b.a + b.c) - t0 + t1 - t2
 
       Fp6(ra, rb, rc)
-    }
 
     override def neg(a: Fp6): Fp6 = Fp6(a.a.negated(), a.b.negated(), a.c.negated())
 
-    override def inv(a: Fp6): Fp6 = {
+    override def inv(a: Fp6): Fp6 =
       val t0 = a.a.squared()
       val t1 = a.b.squared()
       val t2 = a.c.squared()
@@ -275,19 +261,16 @@ object Fp6 {
       val rc = c2 * t6
 
       Fp6(ra, rb, rc)
-    }
 
     override def isValid(a: Fp6): Boolean = a.a.isValid() && a.b.isValid() && a.c.isValid()
 
     override def isZero(a: Fp6): Boolean = a == zero
-  }
-}
 
 case class Fp12(a: Fp6, b: Fp6) extends FieldElement
 
-object Fp12 {
+object Fp12:
 
-  private def cyclotomicSquared(a: Fp12): Fp12 = {
+  private def cyclotomicSquared(a: Fp12): Fp12 =
     var z0 = a.a.a
     var z4 = a.a.b
     var z3 = a.a.c
@@ -333,10 +316,9 @@ object Fp12 {
     z5 = z5 + t3
 
     Fp12(Fp6(z0, z4, z3), Fp6(z2, z1, z5))
-  }
 
   // scalastyle:off method.length
-  def mulBy024(a: Fp12, ell0: Fp2, ellVw: Fp2, ellVv: Fp2): Fp12 = {
+  def mulBy024(a: Fp12, ell0: Fp2, ellVw: Fp2, ellVv: Fp2): Fp12 =
     var z0 = a.a.a
     var z1 = a.a.b
     var z2 = a.a.c
@@ -399,24 +381,19 @@ object Fp12 {
     z5 = t3
 
     Fp12(Fp6(z0, z1, z2), Fp6(z3, z4, z5))
-  }
 
-  private def cyclotomicExp(a: Fp12, exp: BigInt): Fp12 = {
+  private def cyclotomicExp(a: Fp12, exp: BigInt): Fp12 =
     var result = Fp12Impl.one
     var i = exp.bitLength - 1
 
-    while (i >= 0) {
+    while i >= 0 do
       result = cyclotomicSquared(result)
 
-      if (exp.testBit(i)) {
-        result = result * a
-      }
+      if exp.testBit(i) then result = result * a
 
       i = i - 1
-    }
 
     result
-  }
 
   private def unitaryInverse(a: Fp12): Fp12 =
     Fp12(a.a, a.b.negated())
@@ -427,15 +404,14 @@ object Fp12 {
   def finalExp(el: Fp12): Fp12 =
     finalExpLastChunk(finalExpFirstChunk(el))
 
-  private def finalExpFirstChunk(el: Fp12): Fp12 = {
+  private def finalExpFirstChunk(el: Fp12): Fp12 =
     val a = unitaryInverse(el)
     val b = el.inversed()
     val c = a * b
     val d = frobeniusMap(c, 2)
     d * c
-  }
 
-  private def finalExpLastChunk(el: Fp12): Fp12 = {
+  private def finalExpLastChunk(el: Fp12): Fp12 =
     val a = negExp(el, pairingFinalExp)
     val b = cyclotomicSquared(a)
     val c = cyclotomicSquared(b)
@@ -464,7 +440,6 @@ object Fp12 {
     val u = frobeniusMap(t, 3)
     val v = u * r
     v
-  }
 
   val pairingFinalExp: BigInt = BigInt("4965661367192848881")
 
@@ -516,13 +491,12 @@ object Fp12 {
     )
   )
 
-  private def frobeniusMap(a: Fp12, power: Int): Fp12 = {
+  private def frobeniusMap(a: Fp12, power: Int): Fp12 =
     val ra = Fp6.frobeniusMap(a.a, power)
     val rb = Fp6.mulByConst(Fp6.frobeniusMap(a.b, power), FROBENIUS_COEFFS_B(power % 12))
     Fp12(ra, rb)
-  }
 
-  implicit object Fp12Impl extends FiniteField[Fp12] {
+  implicit object Fp12Impl extends FiniteField[Fp12]:
     override def one: Fp12 = Fp12(FiniteField[Fp6].one, FiniteField[Fp6].zero)
 
     override def zero: Fp12 = Fp12(FiniteField[Fp6].zero, FiniteField[Fp6].zero)
@@ -531,17 +505,16 @@ object Fp12 {
 
     override def sub(a: Fp12, b: Fp12): Fp12 = Fp12(a.a - b.a, a.b - b.b)
 
-    override def mul(a: Fp12, b: Fp12): Fp12 = {
+    override def mul(a: Fp12, b: Fp12): Fp12 =
       val t0 = a.a * b.a
       val t1 = a.b * b.b
       val c0 = t0 + Fp6.mulByNonResidue(t1)
       val c1 = (a.a + a.b) * (b.a + b.b) - t0 - t1
       Fp12(c0, c1)
-    }
 
     override def neg(a: Fp12): Fp12 = Fp12(a.a.negated(), a.b.negated())
 
-    override def inv(a: Fp12): Fp12 = {
+    override def inv(a: Fp12): Fp12 =
       val t0 = a.a.squared()
       val t1 = a.b.squared()
 
@@ -552,10 +525,7 @@ object Fp12 {
       val rb = (a.b * t3).negated()
 
       Fp12(ra, rb)
-    }
 
     override def isValid(a: Fp12): Boolean = a.a.isValid() && a.b.isValid()
 
     override def isZero(a: Fp12): Boolean = a == zero
-  }
-}

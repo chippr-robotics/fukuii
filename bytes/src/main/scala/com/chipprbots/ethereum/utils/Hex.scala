@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.utils
 
-object Hex {
+object Hex:
   def toHexString(bytes: Array[Byte]): String =
     bytes.map("%02x".format(_)).mkString
 
@@ -8,4 +8,3 @@ object Hex {
     hex.toSeq.sliding(2, 2).toArray.map { s =>
       Integer.parseInt(s.mkString(""), 16).toByte
     }
-}

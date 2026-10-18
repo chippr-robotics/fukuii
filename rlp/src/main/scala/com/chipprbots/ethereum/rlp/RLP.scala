@@ -21,7 +21,7 @@ import scala.collection.immutable.Queue
   *     https://github.com/ethereum/wiki/wiki/%5BEnglish%5D-RLP
   */
 
-private[rlp] object RLP {
+private[rlp] object RLP:
 
   /** Reason for threshold according to Vitalik Buterin:
     *   - 56 bytes maximizes the benefit of both options
@@ -41,9 +41,10 @@ private[rlp] object RLP {
     *
     * Decoding a list recurses one JVM stack frame per level of nesting, and nothing else bounds that depth: a peer can
     * send up to [[com.chipprbots.ethereum.network.rlpx.MessageCodec.MaxDecompressedLength]] (16 MB) of a byte such as
-    * `0xc1`, which is millions of nested single-element lists. That overflows the call stack, and a `StackOverflowError`
-    * is a `VirtualMachineError`, which `scala.util.Try` (and `scala.util.control.NonFatal`) does NOT catch, so it
-    * escapes every decode call site and, with Pekko's default `jvm-exit-on-fatal-error = on`, takes the whole node down.
+    * `0xc1`, which is millions of nested single-element lists. That overflows the call stack, and a
+    * `StackOverflowError` is a `VirtualMachineError`, which `scala.util.Try` (and `scala.util.control.NonFatal`) does
+    * NOT catch, so it escapes every decode call site and, with Pekko's default `jvm-exit-on-fatal-error = on`, takes
+    * the whole node down.
     *
     * The cap turns that into an ordinary [[RLPException]], which the decode call sites already handle by dropping the
     * message or the peer. 64 is far above every structure fukuii decodes — the deepest block RLP across the entire
@@ -103,7 +104,7 @@ private[rlp] object RLP {
     *   A byte array with item encoded
     */
   private[rlp] def encode(input: RLPEncodeable): Array[Byte] =
-    input match {
+    input match
       case list: RLPList =>
         // Spec 007 US3 / T020 (FR-010-gated): build the concatenated item payload in a single
         // sized buffer instead of `foldLeft(Array())(_ ++ _)`, which reallocated and recopied the
@@ -124,11 +125,10 @@ private[rlp] object RLP {
         out
       case value: RLPValue =>
         val inputAsBytes = value.bytes
-        if (inputAsBytes.length == 1 && (inputAsBytes(0) & 0xff) < 0x80) inputAsBytes
+        if inputAsBytes.length == 1 && (inputAsBytes(0) & 0xff) < 0x80 then inputAsBytes
         else encodeLength(inputAsBytes.length, OffsetShortItem) ++ inputAsBytes
       case PrefixedRLPEncodable(prefix, prefixedRLPEncodeable) =>
         prefix +: encode(prefixedRLPEncodeable)
-    }
 
   /** This function transform a byte into byte array
     *
@@ -138,7 +138,7 @@ private[rlp] object RLP {
     *   encoded bytes
     */
   private[rlp] def byteToByteArray(singleByte: Byte): Array[Byte] =
-    if ((singleByte & 0xff) == 0) Array.empty[Byte]
+    if (singleByte & 0xff) == 0 then Array.empty[Byte]
     else Array[Byte](singleByte)
 
   /** This function converts a short value to a big endian byte array of minimal length
@@ -149,7 +149,7 @@ private[rlp] object RLP {
     *   encoded bytes
     */
   private[rlp] def shortToBigEndianMinLength(singleShort: Short): Array[Byte] =
-    if ((singleShort & 0xff) == singleShort) byteToByteArray(singleShort.toByte)
+    if (singleShort & 0xff) == singleShort then byteToByteArray(singleShort.toByte)
     else Array[Byte]((singleShort >> 8 & 0xff).toByte, (singleShort >> 0 & 0xff).toByte)
 
   /** This function converts an int value to a big endian byte array of minimal length
@@ -160,9 +160,9 @@ private[rlp] object RLP {
     *   encoded bytes
     */
   private[rlp] def intToBigEndianMinLength(singleInt: Int): Array[Byte] =
-    if (singleInt == (singleInt & 0xff)) byteToByteArray(singleInt.toByte)
-    else if (singleInt == (singleInt & 0xffff)) shortToBigEndianMinLength(singleInt.toShort)
-    else if (singleInt == (singleInt & 0xffffff))
+    if singleInt == (singleInt & 0xff) then byteToByteArray(singleInt.toByte)
+    else if singleInt == (singleInt & 0xffff) then shortToBigEndianMinLength(singleInt.toShort)
+    else if singleInt == (singleInt & 0xffffff) then
       Array[Byte]((singleInt >>> 16).toByte, (singleInt >>> 8).toByte, singleInt.toByte)
     else Array[Byte]((singleInt >>> 24).toByte, (singleInt >>> 16).toByte, (singleInt >>> 8).toByte, singleInt.toByte)
 
@@ -180,7 +180,7 @@ private[rlp] object RLP {
 
   /** Read a big-endian int from `data` at `offset` with `len` bytes, without allocating a slice. */
   private[rlp] def bigEndianMinLengthToInt(data: Array[Byte], offset: Int, len: Int): Int =
-    (len: @switch) match {
+    (len: @switch) match
       case 0 => 0: Short
       case 1 => data(offset) & 0xff
       case 2 => ((data(offset) & 0xff) << 8) + (data(offset + 1) & 0xff)
@@ -189,7 +189,6 @@ private[rlp] object RLP {
         ((data(offset) & 0xff) << 24) + ((data(offset + 1) & 0xff) << 16) +
           ((data(offset + 2) & 0xff) << 8) + (data(offset + 3) & 0xff)
       case _ => throw RLPException("Bytes don't represent an int")
-    }
 
   /** Converts a int value into a byte array.
     *
@@ -204,11 +203,11 @@ private[rlp] object RLP {
   /** Integer limitation goes up to 2&#94;31-1 so length can never be bigger than MAX_ITEM_LENGTH
     */
   private def encodeLength(length: Int, offset: Int): Array[Byte] =
-    if (length < SizeThreshold) Array((length + offset).toByte)
-    else if (length < MaxItemLength && length > 0xff) {
+    if length < SizeThreshold then Array((length + offset).toByte)
+    else if length < MaxItemLength && length > 0xff then
       val binaryLength: Array[Byte] = intToBytesNoLeadZeroes(length)
       (binaryLength.length + offset + SizeThreshold - 1).toByte +: binaryLength
-    } else if (length < MaxItemLength && length <= 0xff) Array((1 + offset + SizeThreshold - 1).toByte, length.toByte)
+    else if length < MaxItemLength && length <= 0xff then Array((1 + offset + SizeThreshold - 1).toByte, length.toByte)
     else throw RLPException("Input too long")
 
   /** This function calculates, based on RLP definition, the bounds of a single value.
@@ -223,25 +222,23 @@ private[rlp] object RLP {
     *   [[com.chipprbots.ethereum.rlp.ItemBounds]]
     */
   private[rlp] def getItemBounds(data: Array[Byte], pos: Int): ItemBounds =
-    if (data.isEmpty) throw RLPException("Empty Data")
+    if data.isEmpty then throw RLPException("Empty Data")
     else {
       val prefix: Int = data(pos) & 0xff
-      if (prefix == OffsetShortItem) {
-        ItemBounds(start = pos, end = pos, isList = false, isEmpty = true)
-      } else if (prefix < OffsetShortItem)
-        ItemBounds(start = pos, end = pos, isList = false)
-      else if (prefix <= OffsetLongItem) {
+      if prefix == OffsetShortItem then ItemBounds(start = pos, end = pos, isList = false, isEmpty = true)
+      else if prefix < OffsetShortItem then ItemBounds(start = pos, end = pos, isList = false)
+      else if prefix <= OffsetLongItem then
         val length = prefix - OffsetShortItem
         ItemBounds(start = pos + 1, end = pos + length, isList = false)
-      } else if (prefix < OffsetShortList) {
+      else if prefix < OffsetShortList then
         val lengthOfLength = prefix - OffsetLongItem
         val length = bigEndianMinLengthToInt(data, pos + 1, lengthOfLength)
         val beginPos = pos + 1 + lengthOfLength
         ItemBounds(start = beginPos, end = beginPos + length - 1, isList = false)
-      } else if (prefix <= OffsetLongList) {
+      else if prefix <= OffsetLongList then
         val length = prefix - OffsetShortList
         ItemBounds(start = pos + 1, end = pos + length, isList = true)
-      } else {
+      else {
         val lengthOfLength = prefix - OffsetLongList
         val length = bigEndianMinLengthToInt(data, pos + 1, lengthOfLength)
         val beginPos = pos + 1 + lengthOfLength
@@ -250,17 +247,14 @@ private[rlp] object RLP {
     }
 
   private def decodeWithPos(data: Array[Byte], pos: Int, depth: Int): (RLPEncodeable, Int) =
-    if (data.isEmpty) throw RLPException("data is too short")
-    else {
-      getItemBounds(data, pos) match {
+    if data.isEmpty then throw RLPException("data is too short")
+    else
+      getItemBounds(data, pos) match
         case ItemBounds(start, end, false, isEmpty) =>
-          RLPValue(if (isEmpty) Array.empty[Byte] else data.slice(start, end + 1)) -> (end + 1)
+          RLPValue(if isEmpty then Array.empty[Byte] else data.slice(start, end + 1)) -> (end + 1)
         case ItemBounds(start, end, true, _) =>
-          if (depth >= MaxNestingDepth)
-            throw RLPException(s"RLP nesting depth exceeds maximum of $MaxNestingDepth")
+          if depth >= MaxNestingDepth then throw RLPException(s"RLP nesting depth exceeds maximum of $MaxNestingDepth")
           RLPList(decodeListRecursive(data, start, end - start + 1, Queue(), depth + 1)*) -> (end + 1)
-      }
-    }
 
   @tailrec
   private def decodeListRecursive(
@@ -270,11 +264,10 @@ private[rlp] object RLP {
       acum: Queue[RLPEncodeable],
       depth: Int
   ): Queue[RLPEncodeable] =
-    if (length == 0) acum
+    if length == 0 then acum
     else {
       val (decoded, decodedEnd) = decodeWithPos(data, pos, depth)
       decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum :+ decoded, depth)
     }
-}
 
 private case class ItemBounds(start: Int, end: Int, isList: Boolean, isEmpty: Boolean = false)

@@ -18,25 +18,24 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 007 US1 — keccak-256 ThreadLocal digest reuse parity (FR-001..FR-005, INV-1..4).
   *
-  * Proves the per-thread reused `KeccakDigest(256)` (reset-on-entry) is byte-for-byte identical to a
-  * per-call `new KeccakDigest(256)`:
+  * Proves the per-thread reused `KeccakDigest(256)` (reset-on-entry) is byte-for-byte identical to a per-call `new
+  * KeccakDigest(256)`:
   *   - fixed golden vectors (independently verified against bcprov-jdk18on 1.84),
   *   - every public `kec256` overload agrees with an inline per-call oracle,
-  *   - reset-after-abort: a hash that throws between `update` and `doFinal` on a thread does NOT
-  *     corrupt the next hash on that SAME thread (the load-bearing INV-1/FR-002 guarantee),
+  *   - reset-after-abort: a hash that throws between `update` and `doFinal` on a thread does NOT corrupt the next hash
+  *     on that SAME thread (the load-bearing INV-1/FR-002 guarantee),
   *   - concurrency: N threads hashing independent inputs all agree with the single-thread oracle,
   *   - bounded footprint: exactly one digest instance per thread, none shared (FR-009/SC-006 anchor).
   */
-class Keccak256Spec extends AnyFlatSpec with Matchers {
+class Keccak256Spec extends AnyFlatSpec with Matchers:
 
   /** Independent oracle: a fresh `new KeccakDigest(256)` per call — exactly the pre-change impl. */
-  private def oracle(inputs: Array[Byte]*): Array[Byte] = {
+  private def oracle(inputs: Array[Byte]*): Array[Byte] =
     val d = new KeccakDigest(256)
     val out = Array.ofDim[Byte](d.getDigestSize)
     inputs.foreach(i => d.update(i, 0, i.length))
     d.doFinal(out, 0)
     out
-  }
 
   private def hex(bytes: Array[Byte]): String = Hex.toHexString(bytes)
 
@@ -134,7 +133,7 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
     // reused — a fresh thread would get a clean digest and would NOT catch a missing reset-on-entry.
     val pool = Executors.newSingleThreadExecutor()
     implicit val ec: ExecutionContext = ExecutionContext.fromExecutor(pool)
-    try {
+    try
       // Step 1: dirty THIS thread's reused digest via update() and throw BEFORE doFinal — exactly the
       // aborted-mid-update window doFinal's trailing reset never covers (uses the production digest
       // through a test-only hook; the digest reference never escapes).
@@ -148,7 +147,7 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
       val result = Await.result(afterAbort, 10.seconds)
       result shouldBe oracle(abcInput)
       hex(result) shouldBe "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
-    } finally pool.shutdownNow()
+    finally pool.shutdownNow()
   }
 
   // ---- T007: concurrency — no cross-thread bleed (FR-003 / FR-007). ----
@@ -161,7 +160,7 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
     val perThreadHashes = 2000
     val pool = Executors.newFixedThreadPool(nThreads)
     implicit val ec: ExecutionContext = ExecutionContext.fromExecutor(pool)
-    try {
+    try
       // Each thread hashes a distinct, deterministic stream of inputs; every result is checked
       // against the single-thread oracle. Interleaved hashing on shared dispatcher threads must never
       // let one thread's absorbed bytes leak into another's result.
@@ -175,7 +174,7 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
       }
       val results = Await.result(Future.sequence(futures), 60.seconds)
       results.foreach(_ shouldBe true)
-    } finally pool.shutdownNow()
+    finally pool.shutdownNow()
   }
 
   // ---- T009b: bounded footprint — exactly one digest instance per thread, none shared. ----
@@ -187,7 +186,7 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
     val nThreads = 8
     val pool = Executors.newFixedThreadPool(nThreads)
     implicit val ec: ExecutionContext = ExecutionContext.fromExecutor(pool)
-    try {
+    try
       // On each worker thread: hash a few times, capturing the digest IDENTITY (an Int, never the
       // reference — INV-2) before and after each hash. All samples on one thread must be identical
       // (one instance reused), and no identity may appear on two different threads (no sharing).
@@ -216,6 +215,5 @@ class Keccak256Spec extends AnyFlatSpec with Matchers {
       byThread.foreach { case (_, ids) => ids.size shouldBe 1 }
       val allIds = byThread.values.flatten.toSeq
       allIds.distinct.size shouldBe allIds.size // every distinct thread has a unique digest instance
-    } finally pool.shutdownNow()
+    finally pool.shutdownNow()
   }
-}

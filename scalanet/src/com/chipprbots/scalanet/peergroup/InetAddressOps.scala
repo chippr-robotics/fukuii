@@ -12,7 +12,7 @@ import com.github.jgonian.ipmath.Ipv4Range
 import com.github.jgonian.ipmath.Ipv6
 import com.github.jgonian.ipmath.Ipv6Range
 
-class InetAddressOps(val address: InetAddress) extends AnyVal {
+class InetAddressOps(val address: InetAddress) extends AnyVal:
   import InetAddressOps.*
 
   def isIPv4: Boolean =
@@ -30,15 +30,13 @@ class InetAddressOps(val address: InetAddress) extends AnyVal {
   def isUnspecified: Boolean =
     address == unspecified4 || address == unspecified6
 
-  private def isInRange4(infos: List[Ipv4Range]): Boolean = {
+  private def isInRange4(infos: List[Ipv4Range]): Boolean =
     val ip = toIpv4
     infos.exists(_.contains(ip))
-  }
 
-  private def isInRange6(infos: List[Ipv6Range]): Boolean = {
+  private def isInRange6(infos: List[Ipv6Range]): Boolean =
     val ip = toIpv6
     infos.exists(_.contains(ip))
-  }
 
   private def toIpv4 =
     Ipv4.of(address.getHostAddress)
@@ -46,18 +44,17 @@ class InetAddressOps(val address: InetAddress) extends AnyVal {
   private def toIpv6 =
     Ipv6.of(address.getHostAddress)
 
-  private def toAbstractIp: AbstractIp[_, _] =
-    if (isIPv4) toIpv4 else toIpv6
+  private def toAbstractIp: AbstractIp[?, ?] =
+    if isIPv4 then toIpv4 else toIpv6
 
-  private def toInetAddress(ip: AbstractIp[_, _]) =
+  private def toInetAddress(ip: AbstractIp[?, ?]) =
     InetAddress.getByName(ip.toString)
 
   /** Truncate the IP address to the first `prefixLength` bits. */
   def truncate(prefixLength: Int): InetAddress =
     toInetAddress(toAbstractIp.lowerBoundForPrefix(prefixLength))
-}
 
-object InetAddressOps {
+object InetAddressOps:
   implicit def toInetAddressOps(address: InetAddress): InetAddressOps =
     new InetAddressOps(address)
 
@@ -120,4 +117,3 @@ object InetAddressOps {
       "fe80::/10", // Link-Local
       "fc00::/7" // Unique-Local
     ).map(Ipv6Range.parse(_))
-}

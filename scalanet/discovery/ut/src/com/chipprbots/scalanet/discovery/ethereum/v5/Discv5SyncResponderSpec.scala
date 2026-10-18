@@ -16,42 +16,38 @@ import org.scalatest.matchers.should.Matchers
 
 /** Tests for [[Discv5SyncResponder]] focused on the wire-protocol responses.
   *
-  * NOTE: these tests use a stub `Codec[Payload]` rather than the real
-  * `V5RLPCodecs` (which lives in fukuii main and depends on
-  * `com.chipprbots.ethereum.rlp`). The stub round-trips correctly for the
-  * payload types we exercise; the production codec is tested in
-  * `V5RLPCodecsSpec`.
+  * NOTE: these tests use a stub `Codec[Payload]` rather than the real `V5RLPCodecs` (which lives in fukuii main and
+  * depends on `com.chipprbots.ethereum.rlp`). The stub round-trips correctly for the payload types we exercise; the
+  * production codec is tested in `V5RLPCodecsSpec`.
   *
-  * The full end-to-end "real codec + real wire" integration test lives in
-  * fukuii main as part of Step 9.
+  * The full end-to-end "real codec + real wire" integration test lives in fukuii main as part of Step 9.
   */
-class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
+class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers:
 
   // ---- Test infra: stub Codec[Payload] -------------------------------------
 
   // Tag bytes — match Payload.MessageType so the responder's pattern matches
   // the same discriminator the real codec produces.
   given stubPayloadCodec: Codec[Payload] = Codec[Payload](
-    (p: Payload) => {
+    (p: Payload) =>
       val tag = p.messageType
-      val body = p match {
-        case _: Payload.Ping        => ByteVector("ping".getBytes)
-        case _: Payload.Pong        => ByteVector("pong".getBytes)
-        case _: Payload.FindNode    => ByteVector("findnode".getBytes)
-        case _: Payload.Nodes       => ByteVector("nodes".getBytes)
-        case _: Payload.TalkRequest => ByteVector("talkreq".getBytes)
+      val body = p match
+        case _: Payload.Ping         => ByteVector("ping".getBytes)
+        case _: Payload.Pong         => ByteVector("pong".getBytes)
+        case _: Payload.FindNode     => ByteVector("findnode".getBytes)
+        case _: Payload.Nodes        => ByteVector("nodes".getBytes)
+        case _: Payload.TalkRequest  => ByteVector("talkreq".getBytes)
         case _: Payload.TalkResponse => ByteVector("talkresp".getBytes)
-      }
       Attempt.successful((ByteVector(tag) ++ body).bits)
-    },
-    (bits: BitVector) => {
+    ,
+    (bits: BitVector) =>
       // Pull off the type byte and synthesize a stub payload; we never
       // actually inspect content in these tests.
       val bytes = bits.toByteVector
-      if (bytes.isEmpty) Attempt.failure(Err("empty"))
-      else {
+      if bytes.isEmpty then Attempt.failure(Err("empty"))
+      else
         val tag = bytes(0)
-        val payloadOpt: Option[Payload] = tag match {
+        val payloadOpt: Option[Payload] = tag match
           case Payload.MessageType.Ping =>
             Some(Payload.Ping(ByteVector.fromValidHex("01020304"), enrSeq = 7L))
           case Payload.MessageType.Pong =>
@@ -75,13 +71,9 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
             )
           case _ =>
             None
-        }
-        payloadOpt match {
+        payloadOpt match
           case Some(p) => Attempt.successful(DecodeResult(p, BitVector.empty))
           case None    => Attempt.failure(Err(s"stub doesn't decode tag $tag"))
-        }
-      }
-    }
   )
 
   given sigalg: SigAlg = new MockSigAlg
@@ -96,7 +88,7 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
   private val localNodeId = Session.nodeIdFromPublicKey(localPub.value.bytes)
 
   // Stub local ENR — never actually inspected by responder logic in these tests.
-  private val stubLocalEnr: EthereumNodeRecord = {
+  private val stubLocalEnr: EthereumNodeRecord =
     import DefaultCodecs.given
     EthereumNodeRecord
       .fromNode(
@@ -108,16 +100,14 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
         seq = 1
       )
       .require
-  }
 
-  private val stubHandler: Discv5SyncResponder.Handler = new Discv5SyncResponder.Handler {
+  private val stubHandler: Discv5SyncResponder.Handler = new Discv5SyncResponder.Handler:
     val localEnr = stubLocalEnr
     val localEnrSeq = 1L
     def findNodes(distances: List[Int]): List[EthereumNodeRecord] =
-      if (distances.contains(0)) List(stubLocalEnr) else Nil
-  }
+      if distances.contains(0) then List(stubLocalEnr) else Nil
 
-  private def freshResponder() = {
+  private def freshResponder() =
     val sessions = new Session.SessionCache()
     val challenges = new Discv5SyncResponder.ChallengeCache()
     val bystanders = new Discv5SyncResponder.BystanderEnrTable()
@@ -130,17 +120,15 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
       bystanders = bystanders
     )
     (responder, sessions, challenges, bystanders)
-  }
 
   // ---- Tests --------------------------------------------------------------
 
   behavior.of("Discv5SyncResponder")
 
   /** Extract reply bytes from [[StaticUDPPeerGroup.SyncResult.Reply]], or fail. */
-  private def replyBitsOf(result: StaticUDPPeerGroup.SyncResult): BitVector = result match {
+  private def replyBitsOf(result: StaticUDPPeerGroup.SyncResult): BitVector = result match
     case StaticUDPPeerGroup.SyncResult.Reply(bits) => bits
-    case other => fail(s"expected SyncResult.Reply, got $other")
-  }
+    case other                                     => fail(s"expected SyncResult.Reply, got $other")
 
   it should "Pass non-discv5 bytes (mask mismatch) so v4 codec can try" in {
     val (responder, _, _, _) = freshResponder()
@@ -323,7 +311,7 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     )
 
     // Build no-session messages — they each consume a token.
-    def freshMessage(): BitVector = {
+    def freshMessage(): BitVector =
       val (_, peerPriv) = sigalg.newKeyPair
       val peerNodeId = Session.nodeIdFromPublicKey(sigalg.toPublicKey(peerPriv).value.bytes)
       val msg = Packet.MessagePacket(
@@ -331,7 +319,6 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
         ByteVector.fromValidHex("aa" * 32)
       )
       Packet.encode(msg, localNodeId).require.bits
-    }
 
     // 2 tokens in burst → 2 succeed (Reply for the sync WHOAREYOU)
     replyBitsOf(responder(sender, freshMessage()))
@@ -339,4 +326,3 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     // 3rd consumes empty bucket → falls through to async (Pass)
     responder(sender, freshMessage()) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
-}

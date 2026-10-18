@@ -17,12 +17,13 @@ import org.scalatest.matchers.should.Matchers
 import scodec.{Attempt, Codec, DecodeResult, Err}
 import scodec.bits.{BitVector, ByteVector}
 
-/** Tests for [[DiscoveryService]] focused on the high-level orchestration:
-  * record peers, getNodes/getRandomNode lookups, periodic discovery firing.
+/** Tests for [[DiscoveryService]] focused on the high-level orchestration: record peers, getNodes/getRandomNode
+  * lookups, periodic discovery firing.
   *
-  * The full kademlia behavior under load lives in production hive runs; these
-  * tests prove the wiring is correct and the resource lifecycle behaves. */
-class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
+  * The full kademlia behavior under load lives in production hive runs; these tests prove the wiring is correct and the
+  * resource lifecycle behaves.
+  */
+class DiscoveryServiceSpec extends AnyFlatSpec with Matchers:
 
   import DefaultCodecs.given
   given sigalg: SigAlg = new MockSigAlg
@@ -30,21 +31,19 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
   /** Stub Codec[Payload] — same shape as the DiscoveryNetworkSpec stub. */
   given stubCodec: Codec[Payload] = Codec[Payload](
     (p: Payload) => Attempt.successful((ByteVector(p.messageType) ++ ByteVector("body".getBytes)).bits),
-    (bits: BitVector) => {
+    (bits: BitVector) =>
       val b = bits.toByteVector
-      if (b.isEmpty) Attempt.failure(Err("empty"))
+      if b.isEmpty then Attempt.failure(Err("empty"))
       else
         Attempt.successful(
           DecodeResult(Payload.Ping(ByteVector.fromValidHex("01020304"), 1L), BitVector.empty)
         )
-    }
   )
 
   /** No-op sender. */
   val nullSender: DiscoveryNetwork.PeerGroupSender[InetSocketAddress] =
-    new DiscoveryNetwork.PeerGroupSender[InetSocketAddress] {
+    new DiscoveryNetwork.PeerGroupSender[InetSocketAddress]:
       override def sendRaw(remoteAddress: InetSocketAddress, bytes: ByteVector): IO[Unit] = IO.unit
-    }
 
   // ---- Test fixtures ------------------------------------------------------
 
@@ -55,11 +54,11 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
   )
   private val localNodeId = Session.nodeIdFromPublicKey(localPub.value.bytes)
 
-  private def buildService(@scala.annotation.unused bootstrapNodes: Set[Node] = Set.empty) = {
+  private def buildService(@scala.annotation.unused bootstrapNodes: Set[Node] = Set.empty) =
     val sessions = new Session.SessionCache()
     val challenges = new Discv5SyncResponder.ChallengeCache()
     val bystanders = new Discv5SyncResponder.BystanderEnrTable()
-    for {
+    for
       queue <- CloseableQueue.unbounded[(InetSocketAddress, ByteVector)]
       network <- DiscoveryNetwork[InetSocketAddress](
         peerGroup = nullSender,
@@ -80,8 +79,7 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
         discoveryInterval = 100.millis, // fire fast in tests
         lookupParallelism = 2
       )
-    } yield (network, sessions, bystanders, cfg)
-  }
+    yield (network, sessions, bystanders, cfg)
 
   // ---- Tests --------------------------------------------------------------
 
@@ -100,15 +98,14 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
       bootstrapNodes = Set.empty,
       config = cfg
     ).use { svc =>
-      for {
+      for
         nodes <- svc.getNodes
         random <- svc.getRandomNode
         enr <- svc.localEnr
-      } yield {
+      yield
         nodes shouldBe empty
         random shouldBe None
         enr.content.seq shouldBe 1L
-      }
     }.unsafeRunSync()
   }
 
@@ -137,10 +134,10 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
       // and we skip both the nodes-table insert and the bystander insert.
       // The behavior under real keys is exercised by the integration test
       // in fukuii main (Discv5IntegrationSpec).
-      for {
+      for
         _ <- svc.recordPeer(peerEnr)
         nodes <- svc.getNodes
-      } yield nodes shouldBe empty // mock pubkey didn't parse, so table stays empty
+      yield nodes shouldBe empty // mock pubkey didn't parse, so table stays empty
     }.unsafeRunSync()
   }
 
@@ -163,4 +160,3 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
     val ran = resource.use(_ => IO.pure("ok")).unsafeRunSync()
     ran shouldBe "ok"
   }
-}

@@ -12,7 +12,7 @@ import scodec.bits.BitVector
 
 import scala.util.Random
 
-class KBucketsSpec extends AnyFlatSpec with Matchers {
+class KBucketsSpec extends AnyFlatSpec with Matchers:
 
   behavior of "KBuckets"
 
@@ -60,10 +60,9 @@ class KBucketsSpec extends AnyFlatSpec with Matchers {
 
     val kBuckets2 = ids.foldLeft(kBuckets)((acc, next) => acc.add(next))
 
-    for (n <- 1 to ids.length) {
+    for n <- 1 to ids.length do
       val closestNodes = kBuckets2.closestNodes(arbitraryId, n)
       closestNodes shouldBe sortedRecords.take(n)
-    }
   }
 
   they should "require the closest single node is the node itself" in {
@@ -78,10 +77,8 @@ class KBucketsSpec extends AnyFlatSpec with Matchers {
       kBuckets2.closestNodes(nodeId, 1) shouldBe List(nodeId)
     }
   }
-}
 
-object KBucketsSpec {
+object KBucketsSpec:
   private val clock = Clock.systemUTC()
 
   private val kb = new KBuckets(aRandomBitVector(), clock)
-}

@@ -8,7 +8,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.util.Random
 
-object ByteUtils {
+object ByteUtils:
 
   /** Calculates number of matching bytes from the beginning of both arrays. Due to performance reasons needs to be as
     * fast as possible which means usage of while loops and var's.
@@ -20,21 +20,18 @@ object ByteUtils {
     * @return
     *   Length of common prefix shared by both arrays
     */
-  def matchingLength(a: Array[Byte], b: Array[Byte]): Int = {
+  def matchingLength(a: Array[Byte], b: Array[Byte]): Int =
     var prefixLen = 0
-    while (prefixLen < a.length && prefixLen < b.length && a(prefixLen) == b(prefixLen))
-      prefixLen = prefixLen + 1
+    while prefixLen < a.length && prefixLen < b.length && a(prefixLen) == b(prefixLen) do prefixLen = prefixLen + 1
     prefixLen
-  }
 
-  def bigIntegerToBytes(b: BigInteger, numBytes: Int): Array[Byte] = {
+  def bigIntegerToBytes(b: BigInteger, numBytes: Int): Array[Byte] =
     val bytes = new Array[Byte](numBytes)
     val biBytes = b.toByteArray
-    val start = if (biBytes.length == numBytes + 1) 1 else 0
+    val start = if biBytes.length == numBytes + 1 then 1 else 0
     val length = Math.min(biBytes.length, numBytes)
     System.arraycopy(biBytes, start, bytes, numBytes - length, length)
     bytes
-  }
 
   def bigIntToBytes(b: BigInt, numBytes: Int): Array[Byte] =
     bigIntegerToBytes(b.bigInteger, numBytes)
@@ -51,14 +48,13 @@ object ByteUtils {
     *   BigInt value, BigInt(0) for empty array
     */
   def bytesToBigInt(bytes: Array[Byte]): BigInt =
-    if (bytes.isEmpty) BigInt(0)
+    if bytes.isEmpty then BigInt(0)
     else BigInt(1, bytes)
 
-  def bigIntToUnsignedByteArray(i: BigInt): Array[Byte] = {
+  def bigIntToUnsignedByteArray(i: BigInt): Array[Byte] =
     val asByteArray = i.toByteArray
-    if (asByteArray.head == 0) asByteArray.tail
+    if asByteArray.head == 0 then asByteArray.tail
     else asByteArray
-  }
 
   /** Calculates xor distance between two byte arrays. Due to performance reasons needs to be as fast as possible which
     * means usage of while loops and var's.
@@ -70,63 +66,53 @@ object ByteUtils {
     * @return
     *   Array[Byte] - each element of array is equal to `(a(i) ^ b(i))`
     */
-  def xor(a: Array[Byte], b: Array[Byte]): Array[Byte] = {
+  def xor(a: Array[Byte], b: Array[Byte]): Array[Byte] =
     val ret = new Array[Byte](a.length)
     var i = 0
-    while (i < a.length) {
+    while i < a.length do
       ret(i) = (a(i) ^ b(i)).toByte
       i += 1
-    }
     ret
-  }
 
-  def or(arrays: Array[Byte]*): Array[Byte] = {
-    if (arrays.map(_.length).distinct.length > 1)
+  def or(arrays: Array[Byte]*): Array[Byte] =
+    if arrays.map(_.length).distinct.length > 1 then
       throw new IllegalArgumentException("All the arrays should have the same length")
-    if (arrays.isEmpty)
-      throw new IllegalArgumentException("There should be one or more arrays")
+    if arrays.isEmpty then throw new IllegalArgumentException("There should be one or more arrays")
 
     val zeroes = Array.fill(arrays.head.length)(0.toByte)
     arrays.foldLeft[Array[Byte]](zeroes) { case (prevOr, array) =>
       prevOr.zip(array).map { case (b1, b2) => (b1 | b2).toByte }
     }
-  }
 
-  def and(arrays: Array[Byte]*): Array[Byte] = {
-    if (arrays.map(_.length).distinct.length > 1)
+  def and(arrays: Array[Byte]*): Array[Byte] =
+    if arrays.map(_.length).distinct.length > 1 then
       throw new IllegalArgumentException("All the arrays should have the same length")
-    if (arrays.isEmpty)
-      throw new IllegalArgumentException("There should be one or more arrays")
+    if arrays.isEmpty then throw new IllegalArgumentException("There should be one or more arrays")
 
     val ones = Array.fill(arrays.head.length)(0xff.toByte)
     arrays.foldLeft[Array[Byte]](ones) { case (prevOr, array) =>
       prevOr.zip(array).map { case (b1, b2) => (b1 & b2).toByte }
     }
-  }
 
-  def randomBytes(len: Int): Array[Byte] = {
+  def randomBytes(len: Int): Array[Byte] =
     val arr = new Array[Byte](len)
     new Random().nextBytes(arr)
     arr
-  }
 
-  def bigEndianToShort(bs: Array[Byte]): Short = {
+  def bigEndianToShort(bs: Array[Byte]): Short =
     val n = bs(0) << 8
     (n | bs(1) & 0xff).toShort
-  }
 
-  def padLeft(bytes: ByteString, length: Int, byte: Byte = 0): ByteString = {
+  def padLeft(bytes: ByteString, length: Int, byte: Byte = 0): ByteString =
     val l = math.max(0, length - bytes.length)
     val fill = Array.fill[Byte](l)(byte)
     ByteString.apply(fill) ++ bytes
-  }
 
-  def compactPickledBytesToArray(buffer: ByteBuffer): Array[Byte] = {
+  def compactPickledBytesToArray(buffer: ByteBuffer): Array[Byte] =
     val data = Array.ofDim[Byte](buffer.limit())
     buffer.rewind()
     buffer.get(data)
     data
-  }
 
   def compactPickledBytes(buffer: ByteBuffer): ByteString =
     ByteString(compactPickledBytesToArray(buffer))
@@ -134,17 +120,15 @@ object ByteUtils {
   def byteSequenceToBuffer(bytes: IndexedSeq[Byte]): ByteBuffer =
     ByteBuffer.wrap(bytes.toArray)
 
-  def bytesToInts(bytes: Array[Byte], bigEndian: Boolean): Array[Int] = {
+  def bytesToInts(bytes: Array[Byte], bigEndian: Boolean): Array[Int] =
     val ret = new Array[Int](bytes.length / 4)
     bytesToIntsMut(bytes, ret, bigEndian)
     ret
-  }
 
-  def intsToBytes(ints: Array[Int], bigEndian: Boolean): Array[Byte] = {
+  def intsToBytes(ints: Array[Int], bigEndian: Boolean): Array[Byte] =
     val ret = new Array[Byte](ints.length * 4)
     intsToBytesMut(ints, ret, bigEndian)
     ret
-  }
 
   def getIntFromWord(arr: Array[Byte]): Int =
     ByteBuffer.wrap(arr, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt
@@ -163,10 +147,10 @@ object ByteUtils {
     *   Unit
     */
   def intsToBytesMut(arr: Array[Int], b: Array[Byte], bigEndian: Boolean): Unit =
-    if (!bigEndian) {
+    if !bigEndian then
       var off = 0
       var i = 0
-      while (i < arr.length) {
+      while i < arr.length do
         val ii = arr(i)
         b(off) = (ii & 0xff).toByte
         off += 1
@@ -178,11 +162,10 @@ object ByteUtils {
         off += 1
 
         i = i + 1
-      }
-    } else {
+    else {
       var off = 0
       var i = 0
-      while (i < arr.length) {
+      while i < arr.length do
         val ii = arr(i)
         b(off) = ((ii >> 24) & 0xff).toByte
         off += 1
@@ -194,7 +177,6 @@ object ByteUtils {
         off += 1
 
         i = i + 1
-      }
     }
 
   /** Converts array of bytes to corresponding array of ints. Due to performance reasons needs to be as fast as possible
@@ -211,10 +193,10 @@ object ByteUtils {
     *   Unit
     */
   def bytesToIntsMut(b: Array[Byte], arr: Array[Int], bigEndian: Boolean): Unit =
-    if (!bigEndian) {
+    if !bigEndian then
       var off = 0
       var i = 0
-      while (i < arr.length) {
+      while i < arr.length do
         var ii: Int = b(off) & 0x000000ff
         off += 1
         ii |= (b(off) << 8) & 0x0000ff00
@@ -226,12 +208,11 @@ object ByteUtils {
         arr(i) = ii
 
         i = i + 1
-      }
-    } else {
+    else {
       var off = 0
       var i = 0
 
-      while (i < arr.length) {
+      while i < arr.length do
         var ii: Int = b(off) << 24
         off += 1
         ii |= (b(off) << 16) & 0x00ff0000
@@ -243,7 +224,4 @@ object ByteUtils {
         arr(i) = ii
 
         i = i + 1
-      }
     }
-
-}

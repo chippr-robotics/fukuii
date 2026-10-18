@@ -24,7 +24,7 @@ import scodec.codecs.uint4
 import scodec.codecs.uint64
 import scodec.codecs.variableSizeBytes
 
-object DefaultCodecs {
+object DefaultCodecs:
 
   given publicKeyCodec: Codec[PublicKey] =
     bits.xmap(PublicKey(_), (pk: PublicKey) => pk.value)
@@ -42,20 +42,18 @@ object DefaultCodecs {
     )
 
   // Manual implementation for Node.Address
-  given addressCodec: Codec[Node.Address] = {
+  given addressCodec: Codec[Node.Address] =
     (inetAddressCodec :: int32 :: int32).xmap(
       { case (ip, udpPort, tcpPort) => Node.Address(ip, udpPort, tcpPort) },
       (addr: Node.Address) => (addr.ip, addr.udpPort, addr.tcpPort)
     )
-  }
 
   // Manual implementation for Node
-  given nodeCodec: Codec[Node] = {
+  given nodeCodec: Codec[Node] =
     (publicKeyCodec :: addressCodec).xmap(
       { case (id, address) => Node(id, address) },
       (node: Node) => (node.id, node.address)
     )
-  }
 
   given sortedMapCodec[K: Codec: Ordering, V: Codec]: Codec[SortedMap[K, V]] =
     list(Codec[(K, V)]).xmap(
@@ -70,7 +68,7 @@ object DefaultCodecs {
     sortedMapCodec[ByteVector, ByteVector]
 
   // ENR Content codec
-  given enrContentCodec: Codec[EthereumNodeRecord.Content] = {
+  given enrContentCodec: Codec[EthereumNodeRecord.Content] =
     given byteVectorCodec: Codec[ByteVector] = variableSizeBytes(uint16, bits).xmap(
       (bv: BitVector) => ByteVector(bv.toByteArray),
       (bv: ByteVector) => BitVector(bv.toArray)
@@ -79,79 +77,69 @@ object DefaultCodecs {
       { case (seq, attrs) => EthereumNodeRecord.Content(seq.toLong, attrs) },
       (content: EthereumNodeRecord.Content) => (BigInt(content.seq), content.attrs)
     )
-  }
 
   // ENR codec
-  given enrCodec: Codec[EthereumNodeRecord] = {
+  given enrCodec: Codec[EthereumNodeRecord] =
     (signatureCodec :: enrContentCodec).xmap(
       { case (signature, content) => EthereumNodeRecord(signature, content) },
       (enr: EthereumNodeRecord) => (enr.signature, enr.content)
     )
-  }
 
   // Ping codec
-  given pingCodec: Codec[Ping] = {
+  given pingCodec: Codec[Ping] =
     val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
     (int32 :: addressCodec :: addressCodec :: uint64 :: optionalLong).xmap(
-      { case (version, from, to, expiration, enrSeq) => 
-        Ping(version, from, to, expiration.toLong, enrSeq.map(_.toLong)) 
+      { case (version, from, to, expiration, enrSeq) =>
+        Ping(version, from, to, expiration.toLong, enrSeq.map(_.toLong))
       },
-      (ping: Ping) => 
-        (ping.version, ping.from, ping.to, BigInt(ping.expiration), ping.enrSeq.map(BigInt(_)))
+      (ping: Ping) => (ping.version, ping.from, ping.to, BigInt(ping.expiration), ping.enrSeq.map(BigInt(_)))
     )
-  }
 
   // Pong codec
-  given pongCodec: Codec[Pong] = {
+  given pongCodec: Codec[Pong] =
     val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
     (addressCodec :: hashCodec :: uint64 :: optionalLong).xmap(
-      { case (to, pingHash, expiration, enrSeq) => 
-        Pong(to, pingHash, expiration.toLong, enrSeq.map(_.toLong)) 
+      { case (to, pingHash, expiration, enrSeq) =>
+        Pong(to, pingHash, expiration.toLong, enrSeq.map(_.toLong))
       },
-      (pong: Pong) => 
-        (pong.to, pong.pingHash, BigInt(pong.expiration), pong.enrSeq.map(BigInt(_)))
+      (pong: Pong) => (pong.to, pong.pingHash, BigInt(pong.expiration), pong.enrSeq.map(BigInt(_)))
     )
-  }
 
   // FindNode codec
-  given findNodeCodec: Codec[FindNode] = {
+  given findNodeCodec: Codec[FindNode] =
     (publicKeyCodec :: uint64).xmap(
       { case (target, expiration) => FindNode(target, expiration.toLong) },
       (fn: FindNode) => (fn.target, BigInt(fn.expiration))
     )
-  }
 
   // Neighbors codec
-  given neighborsCodec: Codec[Neighbors] = {
+  given neighborsCodec: Codec[Neighbors] =
     (list(nodeCodec) :: uint64).xmap(
       { case (nodes, expiration) => Neighbors(nodes, expiration.toLong) },
       (n: Neighbors) => (n.nodes, BigInt(n.expiration))
     )
-  }
 
   // ENRRequest codec
-  given enrRequestCodec: Codec[ENRRequest] = {
+  given enrRequestCodec: Codec[ENRRequest] =
     uint64.xmap(
       (expiration: BigInt) => ENRRequest(expiration.toLong),
       (req: ENRRequest) => BigInt(req.expiration)
     )
-  }
 
   // ENRResponse codec
-  given enrResponseCodec: Codec[ENRResponse] = {
+  given enrResponseCodec: Codec[ENRResponse] =
     (hashCodec :: enrCodec).xmap(
       { case (requestHash, enr) => ENRResponse(requestHash, enr) },
       (resp: ENRResponse) => (resp.requestHash, resp.enr)
     )
-  }
 
   // Payload codec with discriminated union
   given payloadCodec: Codec[Payload] =
-    discriminated[Payload].by(uint4)
+    discriminated[Payload]
+      .by(uint4)
       .subcaseP(1) { case p: Ping => p }(pingCodec)
       .subcaseP(2) { case p: Pong => p }(pongCodec)
       .subcaseP(3) { case f: FindNode => f }(findNodeCodec)
       .subcaseP(4) { case n: Neighbors => n }(neighborsCodec)
       .subcaseP(5) { case e: ENRRequest => e }(enrRequestCodec)
       .subcaseP(6) { case e: ENRResponse => e }(enrResponseCodec)
-}

@@ -15,7 +15,7 @@ import org.bouncycastle.math.ec.ECPoint
 
 import com.chipprbots.ethereum.utils.ByteUtils
 
-object ECDSASignature {
+object ECDSASignature:
 
   val SLength = 32
   val RLength = 32
@@ -44,17 +44,16 @@ object ECDSASignature {
     ECDSASignature(BigInt(1, r.toArray), BigInt(1, s.toArray), BigInt(v & 0xff))
 
   def fromBytes(bytes65: ByteString): Option[ECDSASignature] =
-    if (bytes65.length == EncodedLength)
+    if bytes65.length == EncodedLength then
       Some(apply(bytes65.take(RLength), bytes65.drop(RLength).take(SLength), bytes65(64)))
-    else
-      None
+    else None
 
   def sign(messageHash: ByteString, prvKey: ByteString): ECDSASignature =
     sign(messageHash.toArray, keyPairFromPrvKey(prvKey.toArray))
 
   /** Sign a messageHash, expected to be a Keccak256 hash of the original data. */
-  def sign(messageHash: Array[Byte], keyPair: AsymmetricCipherKeyPair): ECDSASignature = {
-    if (messageHash.size != 32)
+  def sign(messageHash: Array[Byte], keyPair: AsymmetricCipherKeyPair): ECDSASignature =
+    if messageHash.size != 32 then
       throw new IllegalArgumentException(
         s"The message should be a hash, expected to be 32 bytes; got ${messageHash.size} bytes."
       )
@@ -70,7 +69,6 @@ object ECDSASignature {
     )
 
     ECDSASignature(r, s, v)
-  }
 
   /** Check that a pointSign is within the allowed values {27, 28}
     * @param pointSign
@@ -79,20 +77,18 @@ object ECDSASignature {
   private def checkPointSignValidity(pointSign: Byte): Option[Byte] =
     Some(pointSign).filter(pointSign => allowedPointSigns.contains(pointSign))
 
-  private def canonicalise(s: BigInt): BigInt = {
+  private def canonicalise(s: BigInt): BigInt =
     val halfCurveOrder: BigInt = curveParams.getN.shiftRight(1)
-    if (s > halfCurveOrder) BigInt(curve.getN) - s
+    if s > halfCurveOrder then BigInt(curve.getN) - s
     else s
-  }
 
-  private def calculateV(r: BigInt, s: BigInt, key: AsymmetricCipherKeyPair, messageHash: Array[Byte]): Option[Byte] = {
+  private def calculateV(r: BigInt, s: BigInt, key: AsymmetricCipherKeyPair, messageHash: Array[Byte]): Option[Byte] =
     // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
     val pubKey = key.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail
     val recIdOpt = Seq(positivePointSign, negativePointSign).find { i =>
       recoverPubBytes(r, s, i, messageHash).exists(java.util.Arrays.equals(_, pubKey))
     }
     recIdOpt
-  }
 
   private def recoverPubBytes(
       r: BigInt,
@@ -109,9 +105,9 @@ object ECDSASignature {
       val prime = curveFp.getQ
 
       checkPointSignValidity(recId).flatMap { recovery =>
-        if (xCoordinate.compareTo(prime) < 0) {
+        if xCoordinate.compareTo(prime) < 0 then
           val R = constructPoint(xCoordinate, recovery)
-          if (R.multiply(order).isInfinity) {
+          if R.multiply(order).isInfinity then
             val e = BigInt(1, messageHash)
             val rInv = r.modInverse(order)
             // Q = r^(-1)(sR - eG)
@@ -120,21 +116,19 @@ object ECDSASignature {
             // go-ethereum crypto.Ecrecover fail (transaction_signing.go recoverPlain: invalid sender; tx_setcode.go
             // Authority: authorization skipped). BouncyCastle encodes O as the single byte 0x00, whose tail is empty —
             // every caller would then hash an empty key into the fake address keccak256("")[12:].
-            if (q.isInfinity) None
+            if q.isInfinity then None
             // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
             else Some(q.getEncoded(false).tail)
-          } else None
-        } else None
+          else None
+        else None
       }
     }.toOption.flatten
 
-  private def constructPoint(xCoordinate: BigInt, recId: Int): ECPoint = {
+  private def constructPoint(xCoordinate: BigInt, recId: Int): ECPoint =
     val x9 = new X9IntegerConverter
     val compEnc = x9.integerToBytes(xCoordinate.bigInteger, 1 + x9.getByteLength(curve.getCurve))
-    compEnc(0) = if (recId == ECDSASignature.positivePointSign) 3.toByte else 2.toByte
+    compEnc(0) = if recId == ECDSASignature.positivePointSign then 3.toByte else 2.toByte
     curve.getCurve.decodePoint(compEnc)
-  }
-}
 
 /** ECDSASignature r and s are same as in documentation where signature is represented by tuple (r, s)
   *
@@ -148,7 +142,7 @@ object ECDSASignature {
   * @param v
   *   \- signature recovery value (can be recovery ID 27/28 or EIP-155 protected value CHAIN_ID*2+35+{0,1})
   */
-case class ECDSASignature(r: BigInt, s: BigInt, v: BigInt) {
+case class ECDSASignature(r: BigInt, s: BigInt, v: BigInt):
 
   /** returns ECC point encoded with on compression and without leading byte indicating compression
     * @param messageHash
@@ -168,12 +162,10 @@ case class ECDSASignature(r: BigInt, s: BigInt, v: BigInt) {
   def publicKey(messageHash: ByteString): Option[ByteString] =
     ECDSASignature.recoverPubBytes(r, s, v.toByte, messageHash.toArray[Byte]).map(ByteString(_))
 
-  def toBytes: ByteString = {
+  def toBytes: ByteString =
     import ECDSASignature.RLength
 
     def bigInt2Bytes(b: BigInt) =
       ByteUtils.padLeft(ByteString(b.toByteArray).takeRight(RLength), RLength, 0)
 
     bigInt2Bytes(r) ++ bigInt2Bytes(s) ++ ByteString(v.toByte)
-  }
-}

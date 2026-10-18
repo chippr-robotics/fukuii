@@ -33,16 +33,14 @@ import scodec.bits.ByteVector
   *
   * Auth-data layout depends on flag — see [[Packet.Header]] subtypes.
   *
-  * Mask: AES-128-CTR. The destination node ID's first 16 bytes are the AES key.
-  * The 16-byte IV at the front of the packet is the CTR start. Both encode and
-  * decode call the same mask function (XOR is symmetric).
+  * Mask: AES-128-CTR. The destination node ID's first 16 bytes are the AES key. The 16-byte IV at the front of the
+  * packet is the CTR start. Both encode and decode call the same mask function (XOR is symmetric).
   */
-sealed trait Packet {
+sealed trait Packet:
   def header: Packet.Header
   def messageCiphertext: ByteVector
-}
 
-object Packet {
+object Packet:
 
   // ---- Constants ----------------------------------------------------------
 
@@ -57,17 +55,17 @@ object Packet {
   val StaticHeaderSize: Int =
     ProtocolIdSize + VersionSize + FlagSize + NonceSize + AuthSizeSize // 23
 
-  /** Smallest legal packet (per spec): 16 IV + 23 static + smallest auth +
-    * smallest message-ct. Used to short-circuit decode of obvious junk. */
+  /** Smallest legal packet (per spec): 16 IV + 23 static + smallest auth + smallest message-ct. Used to short-circuit
+    * decode of obvious junk.
+    */
   val MinPacketSize: Int = 63
 
   val MaxPacketSize: Int = 1280
 
-  object Flag {
+  object Flag:
     val Message: Byte = 0
     val Whoareyou: Byte = 1
     val Handshake: Byte = 2
-  }
 
   /** Auth-data size for the [[Header.Message]] flag. */
   val MessageAuthSize: Int = 32 // srcId
@@ -84,42 +82,41 @@ object Packet {
 
   // ---- Header ADT ---------------------------------------------------------
 
-  sealed trait Header {
+  sealed trait Header:
     def iv: ByteVector
     def flag: Byte
     def nonce: ByteVector
     def authData: ByteVector
-  }
 
-  object Header {
+  object Header:
 
-    /** Ordinary message packet header. The message ciphertext (the AES-GCM
-      * encrypted payload) lives outside the masked region. */
+    /** Ordinary message packet header. The message ciphertext (the AES-GCM encrypted payload) lives outside the masked
+      * region.
+      */
     final case class Message(
         iv: ByteVector,
         nonce: ByteVector,
         srcId: ByteVector
-    ) extends Header {
+    ) extends Header:
       val flag: Byte = Flag.Message
       lazy val authData: ByteVector = srcId
-    }
 
-    /** WHOAREYOU challenge sent in response to an unknown-sender message.
-      * Has no message ciphertext — the auth-data is the entire payload. */
+    /** WHOAREYOU challenge sent in response to an unknown-sender message. Has no message ciphertext — the auth-data is
+      * the entire payload.
+      */
     final case class Whoareyou(
         iv: ByteVector,
         nonce: ByteVector,
         idNonce: ByteVector,
         recordSeq: Long
-    ) extends Header {
+    ) extends Header:
       val flag: Byte = Flag.Whoareyou
       lazy val authData: ByteVector =
         idNonce ++ ByteVector.fromLong(recordSeq, size = 8)
-    }
 
-    /** Handshake packet — first message after WHOAREYOU. Carries the ID-nonce
-      * signature and the ephemeral public key the recipient needs to derive
-      * the session keys. May optionally include an updated ENR record. */
+    /** Handshake packet — first message after WHOAREYOU. Carries the ID-nonce signature and the ephemeral public key
+      * the recipient needs to derive the session keys. May optionally include an updated ENR record.
+      */
     final case class Handshake(
         iv: ByteVector,
         nonce: ByteVector,
@@ -127,9 +124,9 @@ object Packet {
         idSignature: ByteVector,
         ephemeralPubkey: ByteVector,
         record: Option[ByteVector]
-    ) extends Header {
+    ) extends Header:
       val flag: Byte = Flag.Handshake
-      lazy val authData: ByteVector = {
+      lazy val authData: ByteVector =
         // Layout: srcId(32) + sigSize(1) + pubkeySize(1) + signature + pubkey + optional ENR
         val sigSize = idSignature.size.toByte
         val pubSize = ephemeralPubkey.size.toByte
@@ -138,9 +135,6 @@ object Packet {
           idSignature ++
           ephemeralPubkey ++
           record.getOrElse(ByteVector.empty)
-      }
-    }
-  }
 
   // ---- Concrete Packet types ---------------------------------------------
 
@@ -149,9 +143,8 @@ object Packet {
       messageCiphertext: ByteVector
   ) extends Packet
 
-  final case class WhoareyouPacket(header: Header.Whoareyou) extends Packet {
+  final case class WhoareyouPacket(header: Header.Whoareyou) extends Packet:
     val messageCiphertext: ByteVector = ByteVector.empty
-  }
 
   final case class HandshakePacket(
       header: Header.Handshake,
@@ -162,11 +155,14 @@ object Packet {
 
   /** Apply the AES-128-CTR mask. Symmetric: same operation encodes and decodes.
     *
-    * @param destNodeId the recipient's node ID (≥16 bytes; first 16 used as key)
-    * @param iv         the 16-byte IV from the front of the packet
-    * @param data       the bytes to mask/unmask
+    * @param destNodeId
+    *   the recipient's node ID (≥16 bytes; first 16 used as key)
+    * @param iv
+    *   the 16-byte IV from the front of the packet
+    * @param data
+    *   the bytes to mask/unmask
     */
-  def aesCtrMask(destNodeId: ByteVector, iv: ByteVector, data: ByteVector): ByteVector = {
+  def aesCtrMask(destNodeId: ByteVector, iv: ByteVector, data: ByteVector): ByteVector =
     require(destNodeId.size >= 16, s"destNodeId must be ≥16 bytes, got ${destNodeId.size}")
     require(iv.size == MaskingIVSize.toLong, s"iv must be $MaskingIVSize bytes, got ${iv.size}")
     val cipher = Cipher.getInstance("AES/CTR/NoPadding")
@@ -174,39 +170,33 @@ object Packet {
     val ivSpec = new IvParameterSpec(iv.toArray)
     cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
     ByteVector.view(cipher.doFinal(data.toArray))
-  }
 
   /** Generate a fresh random masking IV. */
-  def randomIv: ByteVector = {
+  def randomIv: ByteVector =
     val bytes = Array.ofDim[Byte](MaskingIVSize)
     new SecureRandom().nextBytes(bytes)
     ByteVector.view(bytes)
-  }
 
   /** Generate a fresh random GCM nonce. */
-  def randomNonce: ByteVector = {
+  def randomNonce: ByteVector =
     val bytes = Array.ofDim[Byte](NonceSize)
     new SecureRandom().nextBytes(bytes)
     ByteVector.view(bytes)
-  }
 
   // ---- Encode -------------------------------------------------------------
 
-  /** Encode a packet to wire bytes, applying the AES-CTR mask using the
-    * destination's node ID. Caller is responsible for setting `header.iv` and
-    * `header.nonce` as appropriate (use [[randomIv]] / [[randomNonce]] for
-    * fresh values).
+  /** Encode a packet to wire bytes, applying the AES-CTR mask using the destination's node ID. Caller is responsible
+    * for setting `header.iv` and `header.nonce` as appropriate (use [[randomIv]] / [[randomNonce]] for fresh values).
     *
-    * For Message/Handshake packets, `messageCiphertext` should already be the
-    * AES-GCM-encrypted payload — this function does NOT encrypt the message;
-    * it only handles the outer mask. */
-  def encode(packet: Packet, destNodeId: ByteVector): Attempt[ByteVector] = {
+    * For Message/Handshake packets, `messageCiphertext` should already be the AES-GCM-encrypted payload — this function
+    * does NOT encrypt the message; it only handles the outer mask.
+    */
+  def encode(packet: Packet, destNodeId: ByteVector): Attempt[ByteVector] =
     val h = packet.header
     val authData = h.authData
     val authSize = authData.size
 
-    if (authSize > 0xffff)
-      return Attempt.failure(Err(s"auth-data size $authSize overflows uint16"))
+    if authSize > 0xffff then return Attempt.failure(Err(s"auth-data size $authSize overflows uint16"))
 
     val staticHeader =
       ProtocolId ++
@@ -215,55 +205,52 @@ object Packet {
         h.nonce ++
         ByteVector.fromInt(authSize.toInt, size = AuthSizeSize)
 
-    if (staticHeader.size != StaticHeaderSize.toLong)
+    if staticHeader.size != StaticHeaderSize.toLong then
       return Attempt.failure(Err(s"BUG: static header size mismatch ${staticHeader.size}"))
 
     val masked = aesCtrMask(destNodeId, h.iv, staticHeader ++ authData)
     val full = h.iv ++ masked ++ packet.messageCiphertext
 
-    if (full.size > MaxPacketSize)
-      Attempt.failure(Err(s"packet exceeds max size: ${full.size} > $MaxPacketSize"))
-    else
-      Attempt.successful(full)
-  }
+    if full.size > MaxPacketSize then Attempt.failure(Err(s"packet exceeds max size: ${full.size} > $MaxPacketSize"))
+    else Attempt.successful(full)
 
   // ---- Decode -------------------------------------------------------------
 
   /** Decode a packet from wire bytes, unmasking using the local node ID.
     *
-    * Note: success here means the static header parsed cleanly under the
-    * mask. Validating the message ciphertext (AES-GCM auth-tag check) is the
-    * caller's responsibility — they hold the session key. */
-  def decode(bytes: ByteVector, localNodeId: ByteVector): Attempt[Packet] = {
-    if (bytes.size < MinPacketSize.toLong)
+    * Note: success here means the static header parsed cleanly under the mask. Validating the message ciphertext
+    * (AES-GCM auth-tag check) is the caller's responsibility — they hold the session key.
+    */
+  def decode(bytes: ByteVector, localNodeId: ByteVector): Attempt[Packet] =
+    if bytes.size < MinPacketSize.toLong then
       return Attempt.failure(Err(s"packet too short: ${bytes.size} < $MinPacketSize"))
-    if (bytes.size > MaxPacketSize.toLong)
+    if bytes.size > MaxPacketSize.toLong then
       return Attempt.failure(Err(s"packet too long: ${bytes.size} > $MaxPacketSize"))
 
     val iv = bytes.take(MaskingIVSize.toLong)
     val maskedRest = bytes.drop(MaskingIVSize.toLong)
 
-    if (maskedRest.size < StaticHeaderSize.toLong)
-      return Attempt.failure(Err(s"truncated before static header"))
+    if maskedRest.size < StaticHeaderSize.toLong then return Attempt.failure(Err(s"truncated before static header"))
 
     // First unmask just the static header (23 bytes) so we can read auth-size.
     val unmaskedStatic = aesCtrMask(localNodeId, iv, maskedRest.take(StaticHeaderSize.toLong))
 
-    if (unmaskedStatic.take(ProtocolIdSize.toLong) != ProtocolId)
+    if unmaskedStatic.take(ProtocolIdSize.toLong) != ProtocolId then
       return Attempt.failure(Err("invalid protocol id (mask mismatch or non-discv5 packet)"))
 
     val version =
       unmaskedStatic.slice(ProtocolIdEnd.toLong, VersionEnd.toLong).toInt(signed = false)
-    if (version != Version)
-      return Attempt.failure(Err(s"unsupported version: $version"))
+    if version != Version then return Attempt.failure(Err(s"unsupported version: $version"))
 
     val flag = unmaskedStatic(VersionEnd.toLong)
     val nonce = unmaskedStatic.slice(FlagEnd.toLong, NonceEnd.toLong)
     val authSize =
       unmaskedStatic.slice(NonceEnd.toLong, AuthSizeEnd.toLong).toInt(signed = false)
 
-    if (maskedRest.size < (StaticHeaderSize + authSize).toLong)
-      return Attempt.failure(Err(s"truncated before auth-data: have ${maskedRest.size}, need ${StaticHeaderSize + authSize}"))
+    if maskedRest.size < (StaticHeaderSize + authSize).toLong then
+      return Attempt.failure(
+        Err(s"truncated before auth-data: have ${maskedRest.size}, need ${StaticHeaderSize + authSize}")
+      )
 
     // Unmask the full (static header + auth-data) region in one shot. CTR
     // keystream is deterministic per (key, iv), so the first 23 bytes here
@@ -274,15 +261,14 @@ object Packet {
 
     val messageCiphertext = maskedRest.drop((StaticHeaderSize + authSize).toLong)
 
-    flag match {
+    flag match
       case Flag.Message =>
-        if (authSize != MessageAuthSize)
+        if authSize != MessageAuthSize then
           Attempt.failure(Err(s"message auth-size mismatch: $authSize != $MessageAuthSize"))
-        else
-          Attempt.successful(MessagePacket(Header.Message(iv, nonce, authData), messageCiphertext))
+        else Attempt.successful(MessagePacket(Header.Message(iv, nonce, authData), messageCiphertext))
 
       case Flag.Whoareyou =>
-        if (authSize != WhoareyouAuthSize)
+        if authSize != WhoareyouAuthSize then
           Attempt.failure(Err(s"whoareyou auth-size mismatch: $authSize != $WhoareyouAuthSize"))
         else
           Attempt.successful(
@@ -299,7 +285,7 @@ object Packet {
       case Flag.Handshake =>
         // Layout: srcId(32) + sigSize(1) + pubkeySize(1) + signature + pubkey + optional ENR
         val minHandshakeAuthSize = 32 + 1 + 1
-        if (authSize < minHandshakeAuthSize)
+        if authSize < minHandshakeAuthSize then
           return Attempt.failure(Err(s"handshake auth-size too small: $authSize < $minHandshakeAuthSize"))
 
         val srcId = authData.take(32)
@@ -309,13 +295,12 @@ object Packet {
         val pubStart = sigStart + sigSize
         val recordStart = pubStart + pubkeySize
 
-        if (authSize < recordStart)
-          Attempt.failure(Err(s"handshake auth-size $authSize < required ${recordStart}"))
+        if authSize < recordStart then Attempt.failure(Err(s"handshake auth-size $authSize < required ${recordStart}"))
         else {
           val signature = authData.slice(sigStart, pubStart)
           val pubkey = authData.slice(pubStart, recordStart)
           val record =
-            if (recordStart < authSize.toLong) Some(authData.drop(recordStart)) else None
+            if recordStart < authSize.toLong then Some(authData.drop(recordStart)) else None
           Attempt.successful(
             HandshakePacket(
               Header.Handshake(iv, nonce, srcId, signature, pubkey, record),
@@ -326,6 +311,3 @@ object Packet {
 
       case other =>
         Attempt.failure(Err(s"invalid flag: ${other & 0xff}"))
-    }
-  }
-}

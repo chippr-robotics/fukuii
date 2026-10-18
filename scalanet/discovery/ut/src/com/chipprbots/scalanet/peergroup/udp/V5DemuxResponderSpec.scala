@@ -9,9 +9,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.{BitVector, ByteVector}
 
-/** Tests for [[V5DemuxResponder]]: forwards results from the wrapped
-  * responder, side-channels v5-claimed bytes to a dispatch queue. */
-class V5DemuxResponderSpec extends AnyFlatSpec with Matchers {
+/** Tests for [[V5DemuxResponder]]: forwards results from the wrapped responder, side-channels v5-claimed bytes to a
+  * dispatch queue.
+  */
+class V5DemuxResponderSpec extends AnyFlatSpec with Matchers:
 
   private val sender = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 30303)
 
@@ -80,9 +81,7 @@ class V5DemuxResponderSpec extends AnyFlatSpec with Matchers {
     val q = runIO(CloseableQueue.unbounded[(InetSocketAddress, ByteVector)])
     val replyBits = BitVector.fromValidHex("11" * 16)
     val demux = V5DemuxResponder(replyResponder(replyBits), Some(q))
-    demux(sender, BitVector.fromValidHex("aa")) match {
+    demux(sender, BitVector.fromValidHex("aa")) match
       case StaticUDPPeerGroup.SyncResult.Reply(b) => b shouldBe replyBits
       case other                                  => fail(s"expected Reply, got $other")
-    }
   }
-}

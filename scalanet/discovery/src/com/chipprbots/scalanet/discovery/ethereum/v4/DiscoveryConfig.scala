@@ -33,7 +33,7 @@ case class DiscoveryConfig(
     subnetLimitForTable: Int
 )
 
-object DiscoveryConfig {
+object DiscoveryConfig:
   val default: DiscoveryConfig = DiscoveryConfig(
     messageExpiration = 60.seconds,
     maxClockDrift = Duration.Zero,
@@ -48,4 +48,3 @@ object DiscoveryConfig {
     subnetLimitForBucket = 2,
     subnetLimitForTable = 10
   )
-}
