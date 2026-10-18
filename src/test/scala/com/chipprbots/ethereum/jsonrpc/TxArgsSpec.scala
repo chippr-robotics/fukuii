@@ -83,13 +83,35 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     ok("""{"authorizationList":[]}""").authorizationList shouldBe Some(Nil)
   }
 
-  it should "match keys case-insensitively, exact case winning (Go encoding/json)" taggedAs (UnitTest) in {
+  it should "match keys case-insensitively, last key in document order winning (Go encoding/json)" taggedAs (
+    UnitTest
+  ) in {
     ok(s"""{"GAS":"0x5","MaxFeePerGas":"0x2","To":"$A1"}""") shouldBe
       TxArgs(gas = Some(GasAmount(5)), maxFeePerGas = Some(2), to = Some(Address(A1)))
     ok("""{"Gas":"0x1","gas":"0x2"}""").gas shouldBe Some(GasAmount(2))
-    ok("""{"gas":"0x2","Gas":"0x1"}""").gas shouldBe Some(GasAmount(2))
+    ok("""{"gas":"0x2","Gas":"0x1"}""").gas shouldBe Some(GasAmount(1))
+    ok("""{"gas":"0x2","GAS":"0x3","Gas":"0x4"}""").gas shouldBe Some(GasAmount(4))
+    // a later null resets the field; a later value after a null sets it again
+    ok("""{"gas":"0x2","GAS":null}""").gas shouldBe None
+    ok("""{"gas":null,"Gas":"0x7"}""").gas shouldBe Some(GasAmount(7))
+    // nested objects follow the same rule
     ok(s"""{"accessList":[{"Address":"$A1","STORAGEKEYS":[]}]}""").accessList shouldBe
       Some(List(AccessListItem(Address(A1), Nil)))
+    ok(s"""{"accessList":[{"address":"$A1","Address":"$A2","storageKeys":[]}]}""").accessList shouldBe
+      Some(List(AccessListItem(Address(A2), Nil)))
+    decErr(s"""{"accessList":[{"address":"$A1","storageKeys":[],"STORAGEKEYS":null}]}""") shouldBe
+      "invalid argument 0: missing required field 'storageKeys' for AccessTuple"
+  }
+
+  it should "accept only ASCII hex digits and never throw on Unicode digits" taggedAs (UnitTest) in {
+    for bad <- List("0x\u0663\u0663", "0x\uff21\uff22") do
+      decErr(s"""{"value":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "value", "hexutil.Big")
+      decErr(s"""{"nonce":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "nonce", "hexutil.Uint64")
+      decErr(s"""{"input":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "input", "hexutil.Bytes")
+      decErr(s"""{"type":"$bad"}""") should include("invalid transaction type")
+    decErr(s"""{"to":"0x${"\u0663" * 40}"}""") shouldBe gethTypeErr("invalid hex string", "to", "common.Address")
+    decErr(s"""{"blobVersionedHashes":["0x${"\uff21" * 64}"]}""") shouldBe
+      gethTypeErr("invalid hex string", "blobVersionedHashes", "common.Hash")
   }
 
   it should "ignore unknown fields (geth)" taggedAs (UnitTest) in {
@@ -295,7 +317,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
   }
 
   it should "reject an unsupported default type" taggedAs (UnitTest) in {
-    TxArgs().resolveType(5.toByte) shouldBe Left(TxArgsError.TxTypeNotSupported)
+    TxArgs().resolveType(5.toByte) shouldBe Left(TxArgsError.UnsupportedDefaultType(5))
   }
 
   it should "let an explicit type win and validate it against the fields present" taggedAs (UnitTest) in {
@@ -398,6 +420,53 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     TxArgsError.DataInputMismatch.toLogicError.code shouldBe -32000
     TxArgsError.DataInputMismatch.toInvalidParams.code shouldBe -32602
     TxArgsError.DataInputMismatch.toJsonRpcError.code shouldBe -32000
+  }
+
+  it should "pin the default code of every error" taggedAs (UnitTest) in {
+    import TxArgsError.*
+    val codes = Table(
+      ("error", "code"),
+      (DataInputMismatch, -32000),
+      (GasPriceAndDynamicFee, -32000),
+      (GasPriceAndAuthorizationList, -32000),
+      (ZeroMaxFeePerBlobGas, -32000),
+      (ZeroMaxFeePerGas, -32000),
+      (MaxFeeBelowTip(1, 2), -32000),
+      (EmptyBlobHashes, -32000),
+      (BlobTxMissingTo, -32000),
+      (CreateWithoutData, -32000),
+      (SetCodeCreate, -32000),
+      (ChainIdMismatch(5, 1), -32000),
+      (BlobTxCreate, -32000),
+      (SetCodeTxCreate, -32000),
+      (UnsupportedDefaultType(5), -32000),
+      (MissingField("nonce", 0), -32000), // caller skipped its defaults step
+      (TxTypeNotSupported, -32602),
+      (FieldNotValidForType("gasPrice", 2), -32602),
+      (GasPriceWithAccessListUntyped, -32602),
+      (GasPriceWithBlobFields, -32602)
+    )
+    forAll(codes)((e, code) => e.toJsonRpcError shouldBe JsonRpcError(code, e.message, None))
+  }
+
+  "TxArgsJson.decodeForSend / decodeForCall" should "decode, validate and map error codes" taggedAs (UnitTest) in {
+    TxArgsJson.decodeForSend(parse(s"""{"to":"$A1","input":"0x01"}""")).value.to shouldBe Some(Address(A1))
+    TxArgsJson.decodeForSend(parse("""{"value":"0x1"}""")).left.value shouldBe
+      JsonRpcError.LogicError("contract creation without any data provided")
+    TxArgsJson
+      .decodeForSend(parse(s"""{"to":"$A1","gasPrice":"0x1","accessList":[]}"""))
+      .left
+      .value
+      .code shouldBe -32602
+    TxArgsJson.decodeForSend(parse("""{"gas":"0x01"}""")).left.value.code shouldBe -32602
+    TxArgsJson.decodeForCall(parse("""{"value":"0x1"}""")).isRight shouldBe true
+    TxArgsJson.decodeForCall(parse(s"""{"blobVersionedHashes":["$H1"]}""")).left.value shouldBe
+      JsonRpcError.LogicError("blob transaction of type create")
+    TxArgsJson
+      .decodeForCall(parse(s"""{"type":"0x0","to":"$A1","maxFeePerGas":"0x1"}"""))
+      .left
+      .value
+      .code shouldBe -32602
   }
 
   // ----------------------------------------------------------------------------------------------

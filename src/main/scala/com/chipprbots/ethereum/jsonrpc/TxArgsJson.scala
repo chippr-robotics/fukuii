@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import java.util.Locale
+
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
@@ -28,9 +30,13 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
   *   - bytes: JSON string; `""` and `"0x"` are empty; otherwise prefix and an even number of hex digits
   *   - address / hash32 / blob / commitment / proof: exact length (`""` is length 0 and therefore rejected, so `"to":
   *     ""` is an error, not contract creation)
-  *   - keys match case-insensitively (Go encoding/json), exact case winning over case-folded duplicates
+  *   - keys match case-insensitively and, as in Go encoding/json, keys are applied in document order so the LAST
+  *     case-folded match wins; a later `null` resets the field to absent (`{"gas":"0x1","GAS":null}` has no gas)
   *   - `null` is absent, everywhere; unknown fields are ignored (geth), although the schema says additionalProperties:
   *     false
+  *   - known difference: Go decodes every occurrence of a key, so an invalid EARLIER duplicate is still an error there;
+  *     here only the surviving (last) value is decoded
+  *   - hex digits are ASCII only (`0-9a-fA-F`); nothing on this path throws on untrusted input
   *   - `type` (not decoded by geth): schema `byte`, 1-2 hex digits after `0x`
   */
 object TxArgsJson:
@@ -52,10 +58,20 @@ object TxArgsJson:
           )
         )
 
+  /** [[decode]] then [[TxArgs.validateForSend]], with errors mapped through [[TxArgsError.toJsonRpcError]]. Entry point
+    * for eth_sendTransaction / eth_signTransaction / eth_fillTransaction / personal_* (S2).
+    */
+  def decodeForSend(value: JValue, argIndex: Int = 0): Either[JsonRpcError, TxArgs] =
+    decode(value, argIndex).flatMap(_.validateForSend.left.map(_.toJsonRpcError))
+
+  /** [[decode]] then [[TxArgs.validateForCall]], with errors mapped through [[TxArgsError.toJsonRpcError]]. Entry point
+    * for eth_call / eth_estimateGas / eth_createAccessList / debug_traceCall / trace_call (S3) and simulate (S4).
+    */
+  def decodeForCall(value: JValue, argIndex: Int = 0): Either[JsonRpcError, TxArgs] =
+    decode(value, argIndex).flatMap(_.validateForCall.left.map(_.toJsonRpcError))
+
   def decodeObject(obj: JObject, argIndex: Int = 0): Either[JsonRpcError, TxArgs] =
-    // encoding/json: the last occurrence of a duplicated key wins; toMap keeps the last one too
-    val fields: Map[String, JValue] = obj.obj.toMap.filter { case (_, v) => v != JNull && v != JNothing }
-    val d = new FieldDecoder(fields, argIndex)
+    val d = new FieldDecoder(foldKeys(obj.obj), argIndex, StructName)
     for
       from <- d.opt("from")(d.address)
       to <- d.opt("to")(d.address)
@@ -102,8 +118,6 @@ object TxArgsJson:
     * ([[TxArgs.callData]]); `data` is never emitted.
     */
   def encode(args: TxArgs): JObject =
-    def q(v: BigInt): JValue = JString(s"0x${v.toString(16)}")
-    def b(bs: ByteString): JValue = JString(s"0x${Hex.toHexString(bs.toArray[Byte])}")
     val callData = if args.input.isDefined || args.data.isDefined then Some(args.callData) else None
     val fields: List[(String, Option[JValue])] = List(
       "type" -> args.txType.map(t => q(BigInt(t & 0xff))),
@@ -130,23 +144,32 @@ object TxArgsJson:
   def encodeAccessList(al: List[AccessListItem]): JArray =
     JArray(al.map { item =>
       JObject(
-        "address" -> JString(s"0x${Hex.toHexString(item.address.bytes.toArray[Byte])}"),
+        "address" -> b(item.address.bytes),
         "storageKeys" -> JArray(item.storageKeys.map(k => JString(hash32Hex(k.value))))
       )
     })
 
   def encodeAuthorizationList(auths: List[SetCodeAuthorization]): JArray =
-    def q(v: BigInt): JValue = JString(s"0x${v.toString(16)}")
     JArray(auths.map { a =>
       JObject(
         "chainId" -> q(a.chainId),
-        "address" -> JString(s"0x${Hex.toHexString(a.address.bytes.toArray[Byte])}"),
+        "address" -> b(a.address.bytes),
         "nonce" -> q(a.nonce),
         "yParity" -> q(a.v),
         "r" -> q(a.r),
         "s" -> q(a.s)
       )
     })
+
+  /** Minimal-digit hex quantity, `0x0` for zero. */
+  private def q(v: BigInt): JValue = JString(s"0x${v.toString(16)}")
+
+  /** 0x-prefixed hex bytes, `0x` for empty. */
+  private def b(bs: ByteString): JValue = JString(s"0x${Hex.toHexString(bs.toArray[Byte])}")
+
+  /** Go encoding/json key semantics: case-insensitive, document order, last match wins (a final null included). */
+  private def foldKeys(kvs: List[JField]): Map[String, JValue] =
+    kvs.foldLeft(Map.empty[String, JValue]) { case (m, (k, v)) => m.updated(k.toLowerCase(Locale.ROOT), v) }
 
   private def hash32Hex(v: BigInt): String =
     val raw = v.toString(16)
@@ -156,13 +179,19 @@ object TxArgsJson:
   // geth hexutil-compatible primitives
   // ---------------------------------------------------------------------------------------------
 
-  /** Decodes the fields of one object. `path` is the Go struct-field path used in messages. */
-  final private class FieldDecoder(fields: Map[String, JValue], argIndex: Int, structName: String = StructName):
+  /** Decodes the fields of one object.
+    *
+    * @param fields
+    *   output of [[foldKeys]]: lower-cased keys, nulls retained (a null is resolved to absent at lookup)
+    * @param structName
+    *   Go type named in gencodec "missing required field" messages (`TransactionArgs`, `AccessTuple`,
+    *   `SetCodeAuthorization`); type errors always name the top-level `TransactionArgs` struct, as Go does
+    */
+  final private class FieldDecoder(fields: Map[String, JValue], argIndex: Int, structName: String):
     type Dec[A] = (JValue, String) => Either[JsonRpcError, A]
 
-    /** Go encoding/json matches keys case-insensitively; an exact-case key wins over case-folded ones. */
     private def lookup(name: String): Option[JValue] =
-      fields.get(name).orElse(fields.collectFirst { case (k, v) if k.equalsIgnoreCase(name) => v })
+      fields.get(name.toLowerCase(Locale.ROOT)).filter(v => v != JNull && v != JNothing)
 
     def opt[A](name: String)(dec: Dec[A]): Either[JsonRpcError, Option[A]] =
       lookup(name) match
@@ -187,7 +216,10 @@ object TxArgsJson:
 
     private def has0x(s: String): Boolean =
       s.length >= 2 && s.charAt(0) == '0' && (s.charAt(1) == 'x' || s.charAt(1) == 'X')
-    private def isHex(s: String): Boolean = s.forall(c => Character.digit(c, 16) >= 0)
+    // ASCII only: Character.digit also accepts Unicode digits (e.g. Arabic-Indic, fullwidth), which geth rejects and
+    // on which Hex.decode throws
+    private def isHex(s: String): Boolean =
+      s.forall(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
 
     private def number(maxDigits: Int, rangeMsg: String, goType: String): Dec[BigInt] = (v, field) =>
       str(v, field, goType).flatMap { s =>
@@ -253,7 +285,7 @@ object TxArgsJson:
     private def objects(v: JValue, field: String): Either[JsonRpcError, List[Map[String, JValue]]] =
       list(v, field) { (item, f) =>
         item match
-          case JObject(kvs) => Right(kvs.toMap.filter { case (_, x) => x != JNull && x != JNothing })
+          case JObject(kvs) => Right(foldKeys(kvs))
           case _            => Left(err(s"json: cannot unmarshal non-object into Go struct field $StructName.$f"))
       }
 

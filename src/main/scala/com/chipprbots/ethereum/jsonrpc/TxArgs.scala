@@ -50,7 +50,11 @@ object TxArgsError:
   // go-ethereum core/error.go
   val BlobTxCreate: TxArgsError = TxArgsError("blob transaction of type create")
   val SetCodeTxCreate: TxArgsError = TxArgsError("EIP-7702 transaction cannot be used to create contract")
-  val TxTypeNotSupported: TxArgsError = TxArgsError("transaction type not supported")
+  // Explicit `type` outside 0x0-0x4: a request-shape error, so -32602 (geth's pool returns the same text as -32000).
+  val TxTypeNotSupported: TxArgsError = TxArgsError("transaction type not supported", invalidParams = true)
+  // fukuii-defined: an unsupported `defaultType` is a bug in the calling endpoint, not in the request, so -32000.
+  def UnsupportedDefaultType(t: Byte): TxArgsError =
+    TxArgsError(s"unsupported default transaction type ${hex(BigInt(t & 0xff))}")
 
   // fukuii-defined, deliberate deviation from geth (which silently builds a legacy tx and drops the list/blobs):
   // fail-loudly rule, user decision 2026-10-18 (#1629). Always -32602.
@@ -62,9 +66,11 @@ object TxArgsError:
     TxArgsError("blob fields require a blob transaction; gasPrice is not allowed", invalidParams = true)
 
   // fukuii-defined (geth's TransactionArgs has no `type` field, so it has no equivalent rule)
+  // request-shape error -> -32602
   def FieldNotValidForType(field: String, txType: Byte): TxArgsError =
-    TxArgsError(s"""field "$field" is not valid for transaction type ${hex(BigInt(txType))}""")
-  // fukuii-defined: geth dereferences nil here because ToTransaction assumes setDefaults ran.
+    TxArgsError(s"""field "$field" is not valid for transaction type ${hex(BigInt(txType))}""", invalidParams = true)
+  // fukuii-defined: geth dereferences nil here because ToTransaction assumes setDefaults ran. Stays -32000: a missing
+  // field at toTransaction time means the endpoint skipped its defaults step (caller bug), not a bad request.
   def MissingField(field: String, txType: Byte): TxArgsError =
     TxArgsError(s"""missing "$field" for transaction type ${hex(BigInt(txType))}""")
 
@@ -151,7 +157,7 @@ final case class TxArgs(
     else Right(())
 
   private def inferType(defaultType: Byte): Either[TxArgsError, Byte] =
-    if !SupportedTypes.contains(defaultType) then Left(TxTypeNotSupported)
+    if !SupportedTypes.contains(defaultType) then Left(UnsupportedDefaultType(defaultType))
     else
       val inferred: Byte =
         if authorizationList.isDefined || defaultType == SetCodeType then SetCodeType
@@ -234,7 +240,8 @@ final case class TxArgs(
     yield this
 
   /** Fill every absent field from `d`; present fields are never overwritten. Pure: the caller (S2 `setDefaults`
-    * equivalent) computes the values and decides which fee family to supply.
+    * equivalent) computes the values and decides which fee family to supply. `to`, `data`/`input` and `accessList` are
+    * intentionally not defaultable: they define what the transaction does, so only the request may set them.
     */
   def withDefaults(d: Defaults): TxArgs =
     copy(
