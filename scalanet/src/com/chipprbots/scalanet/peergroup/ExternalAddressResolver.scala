@@ -41,7 +41,7 @@ object ExternalAddressResolver:
       finally
         maybeReader.foreach { reader =>
           try reader.close()
-          catch case NonFatal(_) => // Ignore errors during cleanup
+          catch case NonFatal(_) => () // Ignore errors during cleanup
         }
       None
     }
