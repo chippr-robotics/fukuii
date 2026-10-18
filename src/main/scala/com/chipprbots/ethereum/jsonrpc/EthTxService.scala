@@ -15,17 +15,17 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
-import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
+import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -245,40 +245,15 @@ class EthTxService(
 
     Try(req.data.toArray.toSignedTransactionWithSidecar) match
       case Success((signedTransaction, rawBytesOpt)) =>
-        if SignedTransaction.getSender(signedTransaction).isEmpty then IO.pure(Left(JsonRpcError.InvalidRequest))
-        else
-          // EIP-3860 (Shanghai+): reject contract-creation txs whose initcode exceeds the
-          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state. Must
-          // use the timestamp-aware forBlock variant — Shanghai activates by timestamp on
-          // post-merge chains, not block number.
-          val tip = blockchainReader.getBestBlock.map(_.header)
-          val bestNum = tip.map(_.number.value).getOrElse(blockchainReader.getBestBlockNumber)
-          val ts = tip.map(_.unixTimestamp).getOrElse(Timestamp.Zero)
-          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
-          val tx = signedTransaction.tx
-          // A blob tx submitted without its sidecar cannot be served to peers or proposed: nothing shows the blobs
-          // exist. go-ethereum's pool rejects it with this message (core/txpool/validation.go, validateBlobSidecar).
-          val missingSidecar = tx.isInstanceOf[BlobTransaction] && rawBytesOpt.isEmpty
-          val initCodeTooLarge =
-            tx.isContractInit &&
-              evmConfig.eip3860Enabled &&
-              evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
-          if missingSidecar then IO.pure(Left(JsonRpcError.LogicError("missing sidecar in blob transaction")))
-          else if initCodeTooLarge then
-            IO.pure(
-              Left(
-                JsonRpcError.InvalidParams(
-                  s"INITCODE_SIZE_EXCEEDED: initcode size ${tx.payload.size} exceeds max " +
-                    s"${evmConfig.maxInitCodeSize.getOrElse(BigInt(0))}"
-                )
-              )
-            )
-          else
+        IO(admitLocal(signedTransaction, rawBytesOpt.isDefined)).map {
+          case Left(error) => Left(error)
+          case Right(_) =>
             pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
               signedTransaction,
               rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
             )
-            IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash.value)))
+            Right(SendRawTransactionResponse(signedTransaction.hash.value))
+        }
       case Failure(e) =>
         // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
         // a raw-tx decode failure previously surfaced as a bare "not a valid Request object",
@@ -286,6 +261,46 @@ class EthTxService(
         // time on the EIP-7594 blob wrapper. The decoder's message is the only signal here.
         log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
+
+  /** Pool admission for a locally submitted transaction, against the chain head: the rules a peer's transaction meets
+    * and go-ethereum's `txpool.ValidateTransaction` applies (type active at the head, chain ID, intrinsic gas and
+    * floor, initcode size, gas caps, tip, blob sidecar), then the sender's nonce and balance in the head's state
+    * ([[TxAdmission.validateLocal]]). A rejected transaction never reaches the pool, so it is never announced.
+    *
+    * Every rejection is -32000 with go-ethereum's message, except initcode over EIP-3860's limit, which keeps the
+    * -32602 INITCODE_SIZE_EXCEEDED that hive's withdrawals "Max Initcode Size" test was matched against (07f0bc608).
+    */
+  private def admitLocal(
+      stx: SignedTransaction,
+      hasSidecar: Boolean
+  ): Either[JsonRpcError, Unit] =
+    blockchainReader.getBestBlockHeader match
+      case None => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
+      case Some(head) =>
+        try
+          TxAdmission
+            .validateLocal(
+              stx,
+              hasSidecar,
+              head,
+              address => blockchainReader.getAccountAtStateRoot(head.stateRoot.value, address)
+            )
+            .left
+            .map {
+              case TxAdmission.Rejection.InitCodeTooLarge(size, max) =>
+                JsonRpcError.InvalidParams(s"INITCODE_SIZE_EXCEEDED: initcode size $size exceeds max $max")
+              case rejection =>
+                log.debug(s"eth_sendRawTransaction rejected ${stx.hash.toHex}: ${rejection.message}")
+                JsonRpcError.LogicError(rejection.message)
+            }
+            .map(_ => ())
+        catch
+          case e: MissingNodeException =>
+            Left(
+              JsonRpcError.LogicError(
+                s"cannot validate transaction: state at head ${head.number.value} is not available (${e.getMessage})"
+              )
+            )
 
   /** eth_getTransactionByBlockNumberAndIndex Returns the information about a transaction with the block number and
     * index of which it was mined.

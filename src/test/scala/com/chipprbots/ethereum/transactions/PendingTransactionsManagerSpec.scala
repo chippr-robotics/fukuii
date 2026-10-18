@@ -1010,6 +1010,156 @@ class PendingTransactionsManagerSpec
     response.pendingTransactions shouldBe empty
     response.blobTxNetworkBytes shouldBe empty
 
+  // #1629 S0: the pool admits a peer's tx only if its type is active at the head (TxAdmission.typeRejection, the gate
+  // eth_sendRawTransaction applies; go-ethereum / core-geth txpool.ValidateTransaction). A refused tx is not pooled and
+  // so never announced.
+
+  private lazy val shippedChains = ConfigFactory.load()
+  private def shippedChain(name: String): BlockchainConfig =
+    BlockchainConfig.fromRawConfig(shippedChains.getConfig(s"fukuii.blockchains.$name"))
+
+  it should "refuse a peer's 0x2 and 0x4 txs on Mordor before Olympia: not pooled, not announced" taggedAs (
+    UnitTest,
+    OlympiaTest
+  ) in new TestSetupAtHead(shippedChain("mordor"), headNumber = 10_000_000, baseFee = None):
+    val id: BigInt = chainConfig.chainId.value
+    val keyPair: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val legacyStx = SignedTransactionWithSender(
+      SignedTransaction.sign(
+        LegacyTransaction(
+          0,
+          GasPrice(BigInt(1_000_000_000)),
+          GasAmount(21_000),
+          Some(Address(42)),
+          1,
+          ByteString.empty
+        ),
+        keyPair,
+        Some(id)
+      ),
+      Address(keyPair)
+    )
+    val type2 = signedBy(dynamicFee(id), crypto.generateKeyPair(secureRandom))
+    val type4 = signedBy(
+      com.chipprbots.ethereum.domain.SetCodeTransaction(
+        id,
+        0,
+        1,
+        2,
+        GasAmount(100_000),
+        Some(Address(42)),
+        0,
+        ByteString.empty,
+        Nil,
+        List(com.chipprbots.ethereum.domain.SetCodeAuthorization(id, Address(44), 0, 0, 1, 1))
+      ),
+      crypto.generateKeyPair(secureRandom)
+    )
+    pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
+    pendingTransactionsManager ! ProperSignedTransactions(Set(legacyStx, type2, type4), peer2.id)
+
+    val announced: Seq[ByteString] = etcPeerManager
+      .receiveWhile(Timeouts.normalTimeout) { case NetworkPeerManagerActor.SendMessageCmd(enc, _) =>
+        enc.underlyingMsg match
+          case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
+          case SignedTransactions(txs)                             => txs.map(_.hash.value)
+          case _                                                   => Nil
+      }
+      .flatten
+    announced shouldBe Seq(legacyStx.tx.hash.value)
+    pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx) shouldBe Seq(legacyStx)
+
+  it should "admit a peer's 0x2 tx on ETH mainnet from London" taggedAs (UnitTest) in new TestSetupAtHead(
+    shippedChain("eth"),
+    headNumber = shippedChain("eth").forkBlockNumbers.olympiaBlockNumber,
+    baseFee = Some(BaseFeeCalculator.InitialBaseFee)
+  ):
+    val stx = signedBy(dynamicFee(chainConfig.chainId.value), crypto.generateKeyPair(secureRandom))
+    pendingTransactionsManager ! AddTransactions(stx)
+    eventually {
+      pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx) shouldBe Seq(stx)
+    }
+
+  it should "refuse a peer's 0x1 tx on ETH mainnet before Berlin" taggedAs (UnitTest) in new TestSetupAtHead(
+    shippedChain("eth"),
+    headNumber = shippedChain("eth").forkBlockNumbers.berlinBlockNumber - 1,
+    baseFee = None
+  ):
+    val id: BigInt = chainConfig.chainId.value
+    val accessList = com.chipprbots.ethereum.domain.TransactionWithAccessList(
+      id,
+      0,
+      GasPrice(BigInt(2_000_000_000)),
+      GasAmount(30_000),
+      Some(Address(42)),
+      1,
+      ByteString.empty,
+      Nil
+    )
+    val refused = signedBy(accessList, crypto.generateKeyPair(secureRandom))
+    val admitted = signedBy(
+      LegacyTransaction(0, GasPrice(BigInt(2_000_000_000)), GasAmount(21_000), Some(Address(42)), 1, ByteString.empty),
+      crypto.generateKeyPair(secureRandom)
+    )
+    // One message, one admission pass: once `admitted` is pooled, `refused` has been judged too.
+    pendingTransactionsManager ! ProperSignedTransactions(Set(refused, admitted), peer2.id)
+    eventually {
+      pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx) shouldBe Seq(admitted)
+    }
+
+  /** A pool whose best block is `headNumber` (with `baseFee`, if any) on `chainConfig`. No state storage, so admission
+    * ends at the tip and type checks.
+    */
+  class TestSetupAtHead(val chainConfig: BlockchainConfig, headNumber: BigInt, baseFee: Option[BigInt])
+      extends TestSetup:
+    private val head: Block = Block(
+      header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(
+        number = com.chipprbots.ethereum.domain.BlockNumber(headNumber),
+        extraFields = baseFee
+          .map(HefPostOlympia(_))
+          .getOrElse(com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty)
+      ),
+      body = BlockBody(transactionList = Nil, uncleNodesList = Nil)
+    )
+
+    private val readerAtHead: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[com.chipprbots.ethereum.domain.BlockHeader] = Some(head.header)
+        override def getBestBlock: Option[Block] = Some(head)
+
+    override val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
+      PendingTransactionsManager(
+        txPoolConfig,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        pendingTxTopic,
+        blockchainReader = readerAtHead,
+        stateStorage = null,
+        chainConfig = chainConfig
+      ),
+      s"ptm-test-at-head-${java.util.UUID.randomUUID()}"
+    )
+
+    def dynamicFee(chainId: BigInt): TransactionWithDynamicFee =
+      TransactionWithDynamicFee(
+        chainId = chainId,
+        nonce = BigInt(0),
+        maxPriorityFeePerGas = BigInt(1_000_000_000),
+        maxFeePerGas = BigInt(3_000_000_000L),
+        gasLimit = GasAmount(21_000),
+        receivingAddress = Some(Address(42)),
+        value = BigInt(1),
+        payload = ByteString.empty,
+        accessList = Nil
+      )
+
+    def signedBy(tx: Transaction, keyPair: AsymmetricCipherKeyPair): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(tx, keyPair, Some(chainConfig.chainId.value)),
+        Address(keyPair)
+      )
+
   /** A pool on an ETH chain with the Amsterdam fixture schedule (Prague 120, Osaka 180, Amsterdam 360), whose best
     * block header sits at `headTimestamp`. No state storage, so admission ends at the tip check.
     */
@@ -1090,8 +1240,12 @@ class PendingTransactionsManagerSpec
 
   /** TestSetup variant with a fake BlockchainReader that returns baseFee = 1 gwei. */
   trait TestSetupWithBaseFee extends TestSetup:
-    /** The chain the pool admits for. The default is the loaded config, which is ETC. */
+    /** The chain the pool admits for. The default is the loaded config, which is ETC, with Olympia active from genesis
+      * (a synthetic schedule: Olympia is not scheduled on any ETC chain): the head below carries a base fee, so it is
+      * an Olympia header, and 0x2 txs are only admissible from Olympia (TxTypeGate, #1629 S0).
+      */
     def chainConfig: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+      .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 0))
 
     private val blockWithBaseFee: Block = Block(
       header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header.copy(

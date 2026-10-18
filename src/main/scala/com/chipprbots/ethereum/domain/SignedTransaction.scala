@@ -354,6 +354,17 @@ object SignedTransaction:
       )
     )
 
+  /** The EIP-155 chain ID a legacy transaction's `v` encodes, whatever chain it names: `None` for an unprotected
+    * signature (v = 27/28), a typed transaction, or a `v` outside both ranges. Unlike [[extractChainId]] it does not
+    * compare the ID with the local chain's, so admission can say which chain a transaction was signed for.
+    */
+  private[ethereum] def legacyEip155ChainId(stx: SignedTransaction): Option[BigInt] =
+    stx.tx match
+      case _: LegacyTransaction =>
+        val normalizedV = if stx.signature.v < 0 then stx.signature.v + 256 else stx.signature.v
+        Option.when(normalizedV >= EIP155NegativePointSign)((normalizedV - EIP155NegativePointSign) / 2)
+      case _ => None
+
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
     *
     * @param stx
@@ -553,7 +564,26 @@ object SignedTransactionWithSender:
     * EIP-7623's `tx.gas >= floor` rule applies. `eip7623Floor` is consulted only before Amsterdam; an Amsterdam config
     * carries its own floor rule (see [[coversIntrinsicGas]]).
     */
-  final private[domain] case class StatelessRules(config: EvmConfig, eip7623Floor: Boolean)
+  final private[ethereum] case class StatelessRules(config: EvmConfig, eip7623Floor: Boolean)
+
+  /** Why the stateless filter drops a transaction: the per-transaction answer [[statelessValid]] reduces to a yes/no.
+    * Local submission (eth_sendRawTransaction) reports it; the peer path only filters on it.
+    */
+  enum StatelessRejection:
+    /** A typed transaction signed for another chain. */
+    case WrongChainId(have: BigInt, want: BigInt)
+
+    /** EIP-2681: a nonce of 2^64-1 or more. */
+    case NonceMax
+
+    /** The gas limit does not cover the intrinsic gas. */
+    case IntrinsicGasTooLow(gas: BigInt, required: BigInt)
+
+    /** The gas limit covers the intrinsic gas but not the calldata floor (EIP-7623; Amsterdam EIP-7976/7981). */
+    case FloorDataGasTooLow(gas: BigInt, required: BigInt)
+
+    /** Amsterdam: max(intrinsic, floor) exceeds TX_MAX_GAS_LIMIT. */
+    case IntrinsicCostExceedsCap(intrinsic: BigInt, floor: BigInt)
 
   /** Pool admission: validates and recovers senders for a batch of signed transactions a peer or a re-org hands the
     * pool. Performs stateless validation (chain ID, nonce cap, intrinsic gas and the calldata floor) before the
@@ -620,7 +650,7 @@ object SignedTransactionWithSender:
     * ETC: unchanged. Olympia's config by construction (built at `olympiaBlockNumber`), without EIP-7623's floor rule:
     * this filter does not read the ETC head, so it cannot tell whether Olympia is active. The head is not read on ETC.
     */
-  private[domain] def admissionRules(headTimestamp: => Timestamp)(implicit
+  private[ethereum] def admissionRules(headTimestamp: => Timestamp)(implicit
       blockchainConfig: BlockchainConfig
   ): StatelessRules =
     val olympiaBlock = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
@@ -683,26 +713,42 @@ object SignedTransactionWithSender:
       stxs: Seq[SignedTransaction],
       rules: StatelessRules
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] =
+    stxs.filter(stx => statelessRejection(stx, rules).isEmpty)
+
+  /** The stateless filter for one transaction: why it is dropped, or `None` if it passes. Checks, in order, the chain
+    * ID of a typed transaction (a legacy transaction's EIP-155 chain ID is checked by sender recovery), EIP-2681's
+    * nonce cap, and intrinsic gas with the calldata floor ([[coversIntrinsicGas]]).
+    */
+  private[ethereum] def statelessRejection(
+      stx: SignedTransaction,
+      rules: StatelessRules
+  )(implicit blockchainConfig: BlockchainConfig): Option[StatelessRejection] =
     val StatelessRules(config, eip7623Floor) = rules
     val eip2681NonceCap = BigInt(2).pow(64) - 2 // EIP-2681: nonces >= 2^64-1 rejected
-    stxs.filter { stx =>
-      val tx = stx.tx
-      // 1. Chain ID validation for typed transactions (EIP-2930+)
-      val chainIdValid = tx match
-        case twal: TransactionWithAccessList => twal.chainId == blockchainConfig.chainId.value
-        case twdf: TransactionWithDynamicFee => twdf.chainId == blockchainConfig.chainId.value
-        case btx: BlobTransaction            => btx.chainId == blockchainConfig.chainId.value
-        case sct: SetCodeTransaction         => sct.chainId == blockchainConfig.chainId.value
-        case _: LegacyTransaction            => true // validated in getSender
-      if !chainIdValid then false
-      else if tx.nonce > eip2681NonceCap then false // EIP-2681 nonce overflow
-      else
-        // 2. Intrinsic gas validation — reject txs with gas below minimum
+    val tx = stx.tx
+    val want = blockchainConfig.chainId.value
+    val typedChainId: Option[BigInt] = tx match
+      case twal: TransactionWithAccessList => Some(twal.chainId)
+      case twdf: TransactionWithDynamicFee => Some(twdf.chainId)
+      case btx: BlobTransaction            => Some(btx.chainId)
+      case sct: SetCodeTransaction         => Some(sct.chainId)
+      case _: LegacyTransaction            => None // validated in getSender
+    typedChainId.filter(_ != want) match
+      case Some(have)                         => Some(StatelessRejection.WrongChainId(have, want))
+      case None if tx.nonce > eip2681NonceCap => Some(StatelessRejection.NonceMax)
+      case None =>
         val authListSize = tx match
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
-        coversIntrinsicGas(config, stx, authListSize, eip7623Floor)
-    }
+        if coversIntrinsicGas(config, stx, authListSize, eip7623Floor) then None
+        else
+          // Only on rejection: price the shortfall with the real sender, for the message.
+          val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
+          val (intrinsic, floor) = gasRequirement(config, stx, authListSize, eip7623Floor, sender)
+          val gas = tx.gasLimit.value
+          if gas < intrinsic then Some(StatelessRejection.IntrinsicGasTooLow(gas, intrinsic))
+          else if gas < floor then Some(StatelessRejection.FloorDataGasTooLow(gas, floor))
+          else Some(StatelessRejection.IntrinsicCostExceedsCap(intrinsic, floor))
 
   /** Whether `stx`'s gas limit covers its intrinsic gas under `config` — and, under Amsterdam, the rest of
     * execution-specs `validate_transaction`'s gas rule: `tx.gas >= max(intrinsic, calldata floor)` with both at most
@@ -725,37 +771,52 @@ object SignedTransactionWithSender:
   )(implicit blockchainConfig: BlockchainConfig): Boolean =
     val tx = stx.tx
     def covers(sender: Address): Boolean =
-      val intrinsicGas = config.calcTransactionIntrinsicGas(
-        tx.payload,
-        tx.isContractInit,
-        Transaction.accessList(tx),
-        authListSize,
-        tx.receivingAddress,
-        UInt256(tx.value),
-        sender
-      )
+      val (intrinsicGas, floor) = gasRequirement(config, stx, authListSize, eip7623Floor, sender)
+      val required = intrinsicGas.max(floor)
+      if !config.amsterdamEnabled then tx.gasLimit.value >= required
+      else tx.gasLimit.value >= required && required <= com.chipprbots.ethereum.vm.AmsterdamGas.TxMaxGasLimit
+    val notTheRecipient = if tx.receivingAddress.contains(Address(0)) then Address(1) else Address(0)
+    covers(notTheRecipient) ||
+    (config.amsterdamEnabled && covers(SignedTransaction.getSender(stx).getOrElse(Address(0))))
+
+  /** `stx`'s intrinsic gas and calldata floor under `config`, for `sender`: the two figures [[coversIntrinsicGas]]
+    * compares the gas limit with. The floor is EIP-7976 / EIP-7981's under Amsterdam; before it, EIP-7623's where
+    * `eip7623Floor` holds, else zero.
+    */
+  private def gasRequirement(
+      config: com.chipprbots.ethereum.vm.EvmConfig,
+      stx: SignedTransaction,
+      authListSize: Int,
+      eip7623Floor: Boolean,
+      sender: Address
+  ): (BigInt, BigInt) =
+    val tx = stx.tx
+    val intrinsicGas = config.calcTransactionIntrinsicGas(
+      tx.payload,
+      tx.isContractInit,
+      Transaction.accessList(tx),
+      authListSize,
+      tx.receivingAddress,
+      UInt256(tx.value),
+      sender
+    )
+    val floor: BigInt =
       if !config.amsterdamEnabled then
-        val floor: BigInt =
-          if !eip7623Floor then BigInt(0)
-          else
-            com.chipprbots.ethereum.ledger.BlockPreparator.calcFloorDataGas(
-              tx.payload,
-              config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
-            )
-        tx.gasLimit.value >= intrinsicGas.max(floor)
+        if !eip7623Floor then BigInt(0)
+        else
+          com.chipprbots.ethereum.ledger.BlockPreparator.calcFloorDataGas(
+            tx.payload,
+            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+          )
       else
-        val floor = config.calcAmsterdamCalldataFloorGas(
+        config.calcAmsterdamCalldataFloorGas(
           tx.payload,
           Transaction.accessList(tx),
           tx.receivingAddress,
           UInt256(tx.value),
           sender
         )
-        val required = intrinsicGas.max(floor)
-        tx.gasLimit.value >= required && required <= com.chipprbots.ethereum.vm.AmsterdamGas.TxMaxGasLimit
-    val notTheRecipient = if tx.receivingAddress.contains(Address(0)) then Address(1) else Address(0)
-    covers(notTheRecipient) ||
-    (config.amsterdamEnabled && covers(SignedTransaction.getSender(stx).getOrElse(Address(0))))
+    (intrinsicGas, floor)
 
   private def recoverSenders(
       stxs: Seq[SignedTransaction]

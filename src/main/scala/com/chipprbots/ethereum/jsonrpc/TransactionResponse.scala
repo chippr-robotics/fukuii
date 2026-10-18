@@ -106,7 +106,13 @@ object TransactionResponse:
             Some(encodeAuthorizationList(tx.authorizationList))
           )
 
-    val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.flatMap(_.baseFee))
+    // A mined tx reports the price it paid: min(maxFeePerGas, baseFee + tip) for the fee-market types. A pending tx has
+    // paid nothing yet, so it reports its fee cap (maxFeePerGas; gasPrice for legacy and access-list txs), as
+    // go-ethereum's newRPCTransaction does. Before this, a pending typed tx reported min(maxFee, 0 + tip) = its tip.
+    // A block without a base fee (pre-London/pre-Olympia) cannot carry a fee-market tx; it falls back to the fee cap.
+    val effectiveGasPrice = blockHeader.flatMap(_.baseFee) match
+      case Some(baseFee) => Transaction.effectiveGasPrice(stx.tx, Some(baseFee))
+      case None          => stx.tx.gasPrice.value
 
     TransactionResponse(
       hash = stx.hash.value,
