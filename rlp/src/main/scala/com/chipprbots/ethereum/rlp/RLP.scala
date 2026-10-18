@@ -223,7 +223,7 @@ private[rlp] object RLP:
     */
   private[rlp] def getItemBounds(data: Array[Byte], pos: Int): ItemBounds =
     if data.isEmpty then throw RLPException("Empty Data")
-    else {
+    else
       val prefix: Int = data(pos) & 0xff
       if prefix == OffsetShortItem then ItemBounds(start = pos, end = pos, isList = false, isEmpty = true)
       else if prefix < OffsetShortItem then ItemBounds(start = pos, end = pos, isList = false)
@@ -238,13 +238,11 @@ private[rlp] object RLP:
       else if prefix <= OffsetLongList then
         val length = prefix - OffsetShortList
         ItemBounds(start = pos + 1, end = pos + length, isList = true)
-      else {
+      else
         val lengthOfLength = prefix - OffsetLongList
         val length = bigEndianMinLengthToInt(data, pos + 1, lengthOfLength)
         val beginPos = pos + 1 + lengthOfLength
         ItemBounds(start = beginPos, end = beginPos + length - 1, isList = true)
-      }
-    }
 
   private def decodeWithPos(data: Array[Byte], pos: Int, depth: Int): (RLPEncodeable, Int) =
     if data.isEmpty then throw RLPException("data is too short")
@@ -265,9 +263,8 @@ private[rlp] object RLP:
       depth: Int
   ): Queue[RLPEncodeable] =
     if length == 0 then acum
-    else {
+    else
       val (decoded, decodedEnd) = decodeWithPos(data, pos, depth)
       decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum :+ decoded, depth)
-    }
 
 private case class ItemBounds(start: Int, end: Int, isList: Boolean, isEmpty: Boolean = false)

@@ -296,7 +296,7 @@ object Packet:
         val recordStart = pubStart + pubkeySize
 
         if authSize < recordStart then Attempt.failure(Err(s"handshake auth-size $authSize < required ${recordStart}"))
-        else {
+        else
           val signature = authData.slice(sigStart, pubStart)
           val pubkey = authData.slice(pubStart, recordStart)
           val record =
@@ -307,7 +307,6 @@ object Packet:
               messageCiphertext
             )
           )
-        }
 
       case other =>
         Attempt.failure(Err(s"invalid flag: ${other & 0xff}"))

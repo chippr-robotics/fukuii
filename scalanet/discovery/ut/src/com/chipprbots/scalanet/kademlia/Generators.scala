@@ -37,10 +37,9 @@ object Generators:
   ): List[BitVector] =
     def loop(acc: ListBuffer[BitVector], b: BitVector, i: Int, n: Int): Unit =
       if i == n then acc.append(b)
-      else {
+      else
         loop(acc, b.clear(i), i + 1, n)
         loop(acc, b.set(i), i + 1, n)
-      }
 
     val l = ListBuffer[BitVector]()
     loop(l, BitVector.low(bitLength), 0, bitLength)

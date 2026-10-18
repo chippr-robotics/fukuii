@@ -44,7 +44,7 @@ object ByteStringUtils:
   implicit class Padding(val bs: ByteString) extends AnyVal:
     def padToByteString(length: Int, b: Byte): ByteString =
       if length <= bs.length then bs
-      else {
+      else
         val len = Math.max(bs.length, length)
         val result = new Array[Byte](len)
         bs.copyToArray(result, 0)
@@ -53,7 +53,6 @@ object ByteStringUtils:
           result.update(i, b)
           i += 1
         ByteString.fromArray(result)
-      }
 
   implicit class ByteStringOps(val bytes: ByteString) extends AnyVal:
     def toHex: String = Hex.toHexString(bytes.toArray[Byte])

@@ -229,10 +229,9 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
                           )
 
                           activation.success((ch, messageQueue))
-                        else {
+                        else
                           logger.debug("Handshake to peer {} failed due to {}", peerInfo, e: Any)
                           activation.failure(e.cause())
-                        }
 
                       case ev =>
                         logger.debug(
@@ -331,14 +330,13 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
                   val info = PeerInfo(peerId, InetMultiAddress(nettyChannel.remoteAddress()))
                   val channel = new DynamicTlsChannel[M](localId, info, nettyChannel, messageQueue, ServerChannel)
                   handleEvent(ChannelCreated(channel, channel.close()))
-                else {
+                else
                   logger.debug("Ssl handshake failed from peer with address {}", remoteAddress)
                   // Handshake failed we do not have id of remote peer
                   handleEvent(
                     PeerGroup.ServerEvent
                       .HandshakeFailed(new HandshakeException(PeerInfo(BitVector.empty, remoteAddress), e.cause()))
                   )
-                }
               case ev =>
                 logger.debug(
                   s"User Event $ev on server channel from ${ctx.channel().localAddress()} " +

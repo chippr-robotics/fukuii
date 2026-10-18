@@ -112,7 +112,7 @@ object Discv4SyncResponder extends LazyLogging:
     if !rateLimiter.tryAcquire() then
       logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
       StaticUDPPeerGroup.SyncResult.Pass
-    else {
+    else
       val maybeReply: Option[BitVector] =
         try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
         catch
@@ -127,7 +127,6 @@ object Discv4SyncResponder extends LazyLogging:
       maybeReply.fold[StaticUDPPeerGroup.SyncResult](StaticUDPPeerGroup.SyncResult.Pass)(bits =>
         StaticUDPPeerGroup.SyncResult.Reply(bits)
       )
-    }
 
   /** Token-bucket rate limiter for the sync-path responder.
     *
@@ -193,7 +192,7 @@ object Discv4SyncResponder extends LazyLogging:
         if ping.expiration < nowSeconds - maxClockDriftSeconds then
           // Expired — let the async path log and drop.
           None
-        else {
+        else
           // Pong.to per discv4.md is "the address from which the packet was
           // received" — i.e., the SENDER's address as seen by us, NOT a copy
           // of Ping.to (which is the address of US, the recipient). Hive's
@@ -218,7 +217,6 @@ object Discv4SyncResponder extends LazyLogging:
               pongBits
             }
           }
-        }
 
       case _ =>
         // FindNode, ENRRequest, Pong, etc. — let the async path handle.

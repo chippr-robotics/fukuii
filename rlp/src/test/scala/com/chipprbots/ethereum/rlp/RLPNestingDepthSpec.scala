@@ -19,13 +19,12 @@ class RLPNestingDepthSpec extends AnyFlatSpec with Matchers:
       val len = payload.length
       val prefix =
         if len <= 55 then Array[Byte]((0xc0 + len).toByte)
-        else {
+        else
           var v = len
           var lb = Array.empty[Byte]
           while v > 0 do
             lb = (v & 0xff).toByte +: lb; v >>= 8
           ((0xf7 + lb.length).toByte) +: lb
-        }
       payload = prefix ++ payload
       i += 1
     payload

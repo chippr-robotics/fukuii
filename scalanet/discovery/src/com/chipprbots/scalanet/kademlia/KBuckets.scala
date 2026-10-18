@@ -126,10 +126,9 @@ class KBuckets[T <: BitVector] private (
   def remove(nodeId: T): KBuckets[T] =
     if nodeId == baseId then throw new UnsupportedOperationException("Cannot remove the baseId")
     else if !contains(nodeId) then this
-    else {
+    else
       val (iBucket, bucket) = getBucket(nodeId)
       new KBuckets[T](baseId, clock, buckets.patch(iBucket, List(bucket - nodeId), 1))
-    }
 
   override def toString: String =
     s"KBuckets(baseId = ${baseId.toHex}):\n\t${buckets.indices.map(i => s"$i: ${bucketToString(buckets(i))}").mkString("\n\t")}"
@@ -153,10 +152,9 @@ class KBuckets[T <: BitVector] private (
         throw new IllegalArgumentException(
           s"Illegal node id '${nodeId.toHex}' has bit length ${nodeId.size} but requires length ${baseId.size}."
         )
-      else {
+      else
         val (iBucket, bucket) = getBucket(nodeId)
         op(iBucket, bucket)
-      }
     else this
 
 object KBuckets:

@@ -37,7 +37,7 @@ object PairingCheck:
 
   private def millerLoop(g1: BN128G1, g2: BN128G2): Fp12 =
     if g1.p.isZero || g2.p.isZero then FiniteField[Fp12].one
-    else {
+    else
       val g1Affine = BN128Fp.toAffineCoordinates(g1.p)
       val g2Affine = BN128Fp2.toAffineCoordinates(g2.p)
 
@@ -69,7 +69,6 @@ object PairingCheck:
       f = Fp12.mulBy024(f, c.ell0, Fp2.mulByConst(c.ellW, g1Affine.y), Fp2.mulByConst(c.ellV, g1Affine.x))
 
       f
-    }
 
   private def calcEllCoeffs(base: Point[Fp2]): Seq[EllCoeffs] =
     val coeffs = new ArrayBuffer[EllCoeffs]()

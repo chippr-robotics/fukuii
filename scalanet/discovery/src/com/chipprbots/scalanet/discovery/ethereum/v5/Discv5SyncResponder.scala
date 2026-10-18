@@ -111,11 +111,10 @@ object Discv5SyncResponder extends LazyLogging:
     var i = 0
     while i < 32 && xor(i.toLong) == 0 do i += 1
     if i == 32 then 0
-    else {
+    else
       val byte = xor(i.toLong) & 0xff
       val bitsInByte = (Integer.SIZE - 1) - Integer.numberOfLeadingZeros(byte)
       256 - (i * 8) - (8 - bitsInByte - 1)
-    }
 
   // ---- Rate limiter ------------------------------------------------------
 
@@ -201,7 +200,7 @@ object Discv5SyncResponder extends LazyLogging:
     if !rateLimiter.tryAcquire() then
       logger.debug(s"discv5 sync-fastpath: rate-limited request from $sender")
       StaticUDPPeerGroup.SyncResult.Pass
-    else {
+    else
       val maybeReply: Option[BitVector] =
         try
           respond(
@@ -235,7 +234,6 @@ object Discv5SyncResponder extends LazyLogging:
           val isV5 = isDiscv5Packet(incomingBits.toByteVector, localNodeId)
           if isV5 then StaticUDPPeerGroup.SyncResult.Stop
           else StaticUDPPeerGroup.SyncResult.Pass
-    }
 
   /** Cheap peek to decide whether a packet is a discv5 packet under our mask — used by [[apply]] to choose between
     * [[StaticUDPPeerGroup.SyncResult.Stop]] and `Pass` when there's no synchronous reply to send.

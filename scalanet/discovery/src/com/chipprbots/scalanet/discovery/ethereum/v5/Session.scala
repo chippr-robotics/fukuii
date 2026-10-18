@@ -239,11 +239,10 @@ object Session:
       val yIsOdd = pubPoint.getAffineYCoord.toBigInteger.testBit(0)
       val prefix: Byte = if yIsOdd then 0x03.toByte else 0x02.toByte
       ByteVector(prefix +: xBytes)
-    else {
+    else
       val xBytes = pubPoint.getAffineXCoord.getEncoded
       val yBytes = pubPoint.getAffineYCoord.getEncoded
       ByteVector.view(xBytes ++ yBytes)
-    }
 
   // ---- Session cache ------------------------------------------------------
 
