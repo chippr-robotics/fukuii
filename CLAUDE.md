@@ -235,22 +235,22 @@ Read it before planning or implementing. Highlights:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/009-amsterdam-fork-support/plan.md` (Amsterdam hard fork support for ETH-family
-chains, timestamp-gated, ETC byte-for-byte unchanged. Motivation is measured: hive's devp2p
-fixture declares `amsterdamTime: 360`, so block 36 is the first Amsterdam block and import
-dies there, stranding the node at head 35 of ~89 — which is why 27 of that suite's 34
-failures are `wrong head block in status`. Four slices. A: strict header field-count
-decoding — the `case n if n >= 21` catch-all truncates 23-field headers and emits a WRONG
-hash today; ships first, alone, and does NOT move devp2p. B (atomic): EIP-2780 + 8037 +
-8038 + 7778 + 7954 + 7708 — Phase 0 proved these are numerically inseparable. C: EIP-7928
-block-level access lists. D: EIP-8282 builder requests. THE load-bearing fact: under
-EIP-8037 the header's `gasUsed` is max(execution, state), NOT a total, while receipts sum
-both — block 41 carries header 183,600 and receipt 326,947 and a single-counter
-implementation fails one of them. Fixture-green is necessary but NOT sufficient: every
-fixture tx sits below TX_MAX_GAS_LIMIT so the state-gas reservoir is empty throughout and
-its seeding, cross-frame passing, LIFO refills and successful-child merge go untested.
-`beacon` owns ETH; `forge` signs off that ETC is untouched; rpc-compat (40) and graphql (2)
-are the inertness oracles and must not move in EITHER direction.)
-Prior plans: `specs/007-hotpath-alloc-reduction/plan.md`,
-`specs/004-decoupled-heal-serve-root/plan.md`.
+`specs/020-scala-3-9-lts-migration/plan.md` (Scala 3.3.8 → 3.9.0 LTS and sbt 1.10.7 → 1.13.0,
+NO behaviour change; between spec 016 (done) and spec 017. Build tool first, compiler second
+in one-commit-per-step `-source:3.4-migration` … `3.9-migration` rewrites run ON the 3.9
+compiler (3.3.8 rejects them), tooling third, libraries last (none forced). Final flag is
+`-source:3.9`, not `future` (future on 3.9 = new-syntax + 1,541 implicit errors); `import x.*`
+is kept by a CI grep step plus a scalafix `DisableSyntax.regex`. scalafmt STAYS 3.8.3 in 020
+(3.8.4–3.11.5 cannot parse the `taggedAs (…) in new Fixture:` test shape; DC-8 forbids the
+hand edit) — 3.11 is follow-up FU-1 before 017. scapegoat compiler plugin 3.3.6 → 3.4.1 MUST
+ride with the compiler. 8 hand fixes (E172 Ordering → `using`, E171 McpService) precede the
+3.4 step. Given prioritisation: 364 of 371 E205 sites are `RLPImplicits`' duplicate anonymous
+givens — fixed at the 9 definitions (forge + beacon), not at call sites. Warnings: 365 →
+605 (DC-4 ceiling) → 91 post-chain. Consensus oracle = `ChainImporter` against canonical
+headers on fixed Mordor and Platåberget ranges, 3.3 jar vs 3.9 jar on a frozen datadir copy;
+`[IMPORT-TIMING]` p50/p99 within 10%. Range files come from `debug_getRawBlock`, NOT
+`admin_exportChain` (length-prefixed, importer cannot read it). Five published modules
+(bytes, crypto, rlp, scalanet, scalanetDiscovery) break TASTy → MINOR bump to 0.10.0.)
+Prior plans: `specs/009-amsterdam-fork-support/plan.md`,
+`specs/016-snap-controller-split/plan.md`, `specs/007-hotpath-alloc-reduction/plan.md`.
 <!-- SPECKIT END -->
