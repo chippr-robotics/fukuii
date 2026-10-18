@@ -5502,7 +5502,7 @@ launcher config) loads them from a <code>custom-chains-dir</code>.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scripts/ephemery/fetch-genesis.sh<span class="w">                      </span><span class="c1"># latest release -&gt; ~/.fukuii/ephemery-network</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>scripts/ephemery/fetch-genesis.sh<span class="w"> </span>--release<span class="w"> </span>ephemery-164<span class="w"> </span>--out<span class="w"> </span>/chipprbots/blockchain/ephemery
 </span></code></pre></div>
-<p>Requires <code>curl</code>, <code>tar</code>, <code>jq</code>. It writes <code>OUT/ephemery-N/</code> and points <code>OUT/current</code> at it:</p>
+<p>Requires bash &gt;= 4, <code>curl</code>, <code>tar</code>, <code>jq</code>. It writes <code>OUT/ephemery-N/</code> and points <code>OUT/current</code> at it:</p>
 <table>
 <thead>
 <tr>
@@ -5601,10 +5601,12 @@ Engine API 8551, metrics 13798; the Lighthouse containers use 9000 / 5052 / 5054
 <p>Even with distinct ports, the host rule from the Platåberget soak still holds: do not run this next to
 another node or an sbt build on the 16 GB soak host.</p>
 <h2 id="3-run-lighthouse">3. Run Lighthouse<a class="headerlink" href="#3-run-lighthouse" title="Permanent link">&para;</a></h2>
-<p>Lighthouse has no built-in Ephemery network; use the release directory as <code>--testnet-dir</code>. Osaka/Fulu is
+<p>Lighthouse has no built-in Ephemery network; use the release directory as <code>--testnet-dir</code>. It reads the CL
+bootnodes from <code>boot_enr.yaml</code> in that directory, so no <code>--boot-nodes</code> flag is needed (<code>release.env</code> also
+carries them as <code>BOOTNODE_ENR_LIST</code>, from the release's <code>boot_enr.txt</code>, for other CL clients). Osaka/Fulu is
 active at genesis, so the CL must be Fulu-capable (the <code>sigp/lighthouse:v8.3.0-rc.0</code> image already on the
 host is).</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">source</span><span class="w"> </span>OUT/current/release.env<span class="w">      </span><span class="c1"># sets OUT_DIR (absolute), TESTNET_DIR, BOOTNODE_ENR_LIST</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">source</span><span class="w"> </span>OUT/current/release.env<span class="w">      </span><span class="c1"># sets OUT_DIR (absolute), TESTNET_DIR</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>ephemery-lighthouse<span class="w"> </span>--network<span class="w"> </span>host<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$OUT_DIR</span><span class="s2">/ephemery-lighthouse"</span>:/data<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$TESTNET_DIR</span><span class="s2">"</span>:/network:ro<span class="w"> </span><span class="se">\</span>
@@ -5613,10 +5615,9 @@ host is).</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>lighthouse<span class="w"> </span>bn<span class="w"> </span>--testnet-dir<span class="w"> </span>/network<span class="w"> </span>--datadir<span class="w"> </span>/data<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span>--execution-endpoint<span class="w"> </span>http://127.0.0.1:8561<span class="w"> </span>--execution-jwt<span class="w"> </span>/jwt.hex<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span>--checkpoint-sync-url<span class="w"> </span>https://checkpoint-sync.ephemery.ethpandaops.io<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>--boot-nodes<span class="w"> </span><span class="s2">"</span><span class="nv">$BOOTNODE_ENR_LIST</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span>--port<span class="w"> </span><span class="m">9010</span><span class="w"> </span>--quic-port<span class="w"> </span><span class="m">9011</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span>--http<span class="w"> </span>--http-address<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--http-port<span class="w"> </span><span class="m">5062</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span>--metrics<span class="w"> </span>--metrics-address<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--metrics-port<span class="w"> </span><span class="m">5064</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>--port<span class="w"> </span><span class="m">9010</span><span class="w"> </span>--quic-port<span class="w"> </span><span class="m">9011</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span>--http<span class="w"> </span>--http-address<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--http-port<span class="w"> </span><span class="m">5062</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span>--metrics<span class="w"> </span>--metrics-address<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--metrics-port<span class="w"> </span><span class="m">5064</span>
 </span></code></pre></div>
 <p>Other checkpoint endpoints (all served the 164 genesis on 2026-10-17): <code>https://checkpointz.bordel.wtf</code>,
 <code>https://ephemery.beaconstate.ethstaker.cc</code>, <code>https://beaconstate-ephemery.chainsafe.dev</code>.</p>
@@ -5662,6 +5663,8 @@ before and after the BPOs, but only per-chain blob-schedule configuration makes 
   (<code>values.env</code> on <code>master</code> announces the next iteration)</li>
 <li>Network overview, RPC, checkpoint endpoints: <a href="https://github.com/ephemery-testnet/ephemery-resources">https://github.com/ephemery-testnet/ephemery-resources</a></li>
 <li>Reset/retention tooling for other clients: <a href="https://github.com/ephemery-testnet/ephemery-scripts">https://github.com/ephemery-testnet/ephemery-scripts</a></li>
+<li>Fixture check: <code>scripts/ephemery/check-fixture.sh</code> regenerates <code>ephemery-164</code> with the current script
+  and diffs it against <code>src/test/resources/ephemery/ephemery-164/</code> (run after any script change).</li>
 <li>Test: <code>EphemeryGenesisSpec</code> builds the <code>ephemery-164</code> genesis from the script's output and checks the
   published hash and the live fork ids.</li>
 </ul>
