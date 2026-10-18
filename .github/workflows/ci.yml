@@ -71,6 +71,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install sbt
       
+      - name: Check Scala 3 import syntax
+        run: |
+          scripts/ci/test_check_scala_imports.sh
+          scripts/ci/check_scala_imports.sh
+
       - name: Check formatting
         run: sbt scalafmtCheckAll
         env:

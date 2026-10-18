@@ -1,0 +1,7 @@
+package f
+import scala.util.*
+import scala.util.{given, *}
+import scala.util.{Try as T}
+import scala.util.Try
+import scala.util.{Try, Success}
+val x = (a: Int) => a
