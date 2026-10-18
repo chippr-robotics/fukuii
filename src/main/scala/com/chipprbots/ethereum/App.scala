@@ -20,6 +20,7 @@ object App extends Logger:
     "mordor",
     "sepolia",
     "plataberget",
+    "ephemery",
     "hive",
     "bootnode",
     "gorgoroth"
@@ -158,6 +159,7 @@ object App extends Logger:
         |  eth                    Ethereum mainnet
         |  sepolia                Sepolia testnet (ETH)
         |  plataberget            Platåberget testnet (ETH, public Glamsterdam testnet)
+        |  ephemery               Ephemery testnet (ETH, resets every 28 days; run scripts/ephemery/fetch-genesis.sh first)
         |  mordor                 Mordor testnet
         |  gorgoroth              Fukuii battlenet
         |  bootnode               Bootnode configuration (advanced)
