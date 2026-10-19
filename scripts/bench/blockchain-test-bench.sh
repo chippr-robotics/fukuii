@@ -48,7 +48,9 @@ if [[ -n "${MAIN_CLASSES:-}" ]]; then
   cp="$(tr ':' '\n' <<<"$cp" | sed -E "s#^$root/target/scala-3[^/]*/classes\$#$MAIN_CLASSES#" | paste -sd:)"
 fi
 
-jvm=(-Xmx512m -Xms128m -Xss8M -XX:+UseG1GC)
+# JDK-8385993 workaround, as in hive/fukuii/fukuii.sh. Needed on both paths below: host
+# java and $JDK_IMAGE (a plain JDK image) get no JDK_JAVA_OPTIONS from ours.
+jvm=(-Xmx512m -Xms128m -Xss8M -XX:+UseG1GC -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges)
 if [[ "${INLINE_PROGRAM_STATE:-1}" != 0 ]]; then
   jvm+=(-XX:CompileCommand=quiet "-XX:CompileCommand=inline,com.chipprbots.ethereum.vm.ProgramState::<init>")
 fi

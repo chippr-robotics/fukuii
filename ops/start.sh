@@ -84,6 +84,9 @@ else
   INIT_ARG="-Xms${INIT_MB}m"
 fi
 
+# JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
+# JDK 23+ (fixed in JDK 28); the two diagnostic flags below disable it. Host java
+# gets nothing from the Docker images' JDK_JAVA_OPTIONS, so they are set here.
 exec java \
   "$HEAP_ARG" \
   "$INIT_ARG" \
@@ -94,6 +97,8 @@ exec java \
   -XX:+HeapDumpOnOutOfMemoryError \
   -XX:HeapDumpPath=/tmp/fukuii-heapdump.hprof \
   -XX:+ExitOnOutOfMemoryError \
+  -XX:+UnlockDiagnosticVMOptions \
+  -XX:-ReduceAllocationMerges \
   -Dconfig.file="$CONFIG_FILE" \
   -jar "$JAR" \
   "$NETWORK"

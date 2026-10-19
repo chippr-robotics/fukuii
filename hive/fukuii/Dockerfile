@@ -6,6 +6,14 @@ FROM chipprbots/fukuii:latest
 
 USER root
 
+# JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
+# JDK 23+ (fixed in JDK 28). JDK_JAVA_OPTIONS is read by every `java` launch in
+# this container, including the AOT training run. Set here as well as in the base
+# image so an older chipprbots/fukuii:latest cannot drop it. fukuii.sh passes the
+# same flags explicitly. Side effect: java prints
+# "NOTE: Picked up JDK_JAVA_OPTIONS: ..." on stderr at startup.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
