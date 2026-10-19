@@ -462,11 +462,14 @@ curl -X POST http://localhost:8546 \
 
 #### eth_pendingTransactions
 
-Returns a list of pending transactions.
+Returns the transactions in the pool that were sent from one of the node's own (keystore) accounts, as go-ethereum
+does. Transactions from other senders are not listed; `txpool_content` lists the whole pool.
 
 **Parameters**: None
 
-**Returns**: `Array` - Array of pending transaction objects
+**Returns**: `Array` - Array of transaction objects, as `eth_getTransactionByHash` returns for a pending transaction:
+`blockHash`, `blockNumber` and `transactionIndex` are `null`, and a fee-market (type 2, 3, 4) transaction reports its
+`maxFeePerGas` as `gasPrice`. An empty array when the node has no accounts.
 
 **Example**:
 ```bash
@@ -480,7 +483,7 @@ curl -X POST http://localhost:8546 \
   }'
 ```
 
-**MCP Context**: Useful for mempool monitoring and transaction prediction.
+**MCP Context**: Tracks the node's own unmined transactions. Use `txpool_content` for mempool monitoring.
 
 ---
 

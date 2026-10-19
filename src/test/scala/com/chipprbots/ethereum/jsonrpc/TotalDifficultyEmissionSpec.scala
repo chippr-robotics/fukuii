@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits.given
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.*
 import com.chipprbots.ethereum.utils.NetworkType
 
@@ -34,6 +36,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   * becomes unconditional.
   */
 class TotalDifficultyEmissionSpec extends AnyFlatSpec with Matchers:
+
+  // BlockResponse/TransactionResponse take the serving node's chain config; here, the test config's.
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
 
   private val header = BlockHeader(
     parentHash = BlockHash(ByteString(Hex.decode("00" * 32))),

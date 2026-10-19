@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 
 // scalastyle:off magic.number
 /** The block object `eth_getBlockByNumber` / `eth_getBlockByHash` return for an Amsterdam header.
@@ -26,6 +28,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * rebuilds). Everything else must match, and no key may be added or missing: hive's rpc-compat diff counts both.
   */
 class AmsterdamBlockResponseSpec extends AnyWordSpec with Matchers:
+
+  // BlockResponse/TransactionResponse take the serving node's chain config; here, the test config's.
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
 
   private val AmsterdamLatest =
     """{"baseFeePerGas":"0xbc78d4","blobGasUsed":"0x20000","blockAccessListHash":"0x54306fbc4e818446e59cbd69acd4075fe1be6ca64d968b11da6d1b410ed2a86b","difficulty":"0x0","excessBlobGas":"0x0","extraData":"0x","gasLimit":"0xbebc200","gasUsed":"0x37f84","hash":"0x52bccfc9c4d4874b1898c0fbd0ae3b598a0edc7b94d9b796857dbbe1093c32e0","logsBloom":"0x""" +

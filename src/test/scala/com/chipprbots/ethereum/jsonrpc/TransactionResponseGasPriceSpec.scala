@@ -11,6 +11,8 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 
 /** `gasPrice` in a transaction object (#1629 G6), as go-ethereum's `newRPCTransaction` reports it: a mined fee-market
   * tx reports what it paid, min(maxFeePerGas, baseFee + maxPriorityFeePerGas); a pending one has paid nothing and
@@ -18,6 +20,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * eth_getTransactionByHash on a pending tx and every txpool_* method go through this.
   */
 class TransactionResponseGasPriceSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder:
+
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
 
   private val keyPair = crypto.generateKeyPair(secureRandom)
   private val maxFee = BigInt(30)
@@ -52,4 +56,30 @@ class TransactionResponseGasPriceSpec extends AnyFlatSpec with Matchers with Sec
     TransactionResponse(legacy).gasPrice shouldBe 7
     TransactionResponse(legacy, Some(minedAt(5)), Some(0)).gasPrice shouldBe 7
     TransactionResponse(legacy, Some(Fixtures.Blocks.ValidBlock.header), Some(0)).gasPrice shouldBe 7
+  }
+
+  /** #1629 G10: the object is built with the serving node's chain config, not the JVM-global one. An EIP-155 legacy
+    * transaction's sender is recovered only under the chain id its `v` names, so a second chain instance rendering its
+    * own transactions under the global (first chain's) config would report `from: null`.
+    */
+  "TransactionResponse.from" should "recover an EIP-155 sender under the injected chain config" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val global = Config.blockchains.blockchainConfig
+    val otherChainId = global.chainId.value + 1000
+    val otherChain: BlockchainConfig = global.copy(chainId = ChainId(otherChainId))
+    def signedFor(nonce: Int) = SignedTransaction.sign(
+      LegacyTransaction(nonce, GasPrice(7), GasAmount(21_000), Some(Address(1)), 0, ByteString.empty),
+      keyPair,
+      Some(otherChainId)
+    )
+    val sender = Address(keyPair)
+
+    // Distinct transactions: SignedTransaction caches a recovered sender by hash, whatever config recovered it.
+    TransactionResponse(signedFor(0))(using otherChain).from shouldBe Some(sender.bytes)
+    TransactionResponse(signedFor(0))(using otherChain).chainId shouldBe Some(otherChainId)
+    // Under the global config (another chain id) the same signature does not give this sender: what the old global
+    // given rendered for a second chain's legacy transactions.
+    TransactionResponse(signedFor(1))(using global).from should not be Some(sender.bytes)
   }

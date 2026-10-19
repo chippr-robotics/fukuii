@@ -19,11 +19,16 @@ import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits.given
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 
 /** Test to verify that genesis block is serialized correctly:
   *   1. mixHash field should be present
   */
 class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers:
+
+  // BlockResponse/TransactionResponse take the serving node's chain config; here, the test config's.
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
 
   "BlockResponse for genesis block" should "include mixHash field" in {
     val genesisHeader = BlockHeader(
