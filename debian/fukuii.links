@@ -1,0 +1,4 @@
+# The sbt-native-packager launcher (/usr/share/fukuii/bin/fukuii) reads
+# ${app_home}/../conf/application.ini (JVM flags) and app.conf/logback.xml.
+# Point that conf dir at the operator-editable, conffile-managed /etc/fukuii.
+etc/fukuii usr/share/fukuii/conf

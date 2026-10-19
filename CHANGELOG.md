@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Debian package: the launcher now reads `/etc/fukuii/application.ini`.** Deb installs never applied it before, so
+  the JVM ran with its own defaults (a heap of about a quarter of RAM, no OOM exit). After upgrading, a deb install
+  runs with the shipped defaults: `-Xmx3g -Xms1g`, `MaxDirectMemorySize=512M`, G1, exit and heap dump
+  (`/var/lib/fukuii/heapdump.hprof`) on OutOfMemoryError. **Large mainnet nodes should raise `-J-Xmx` in
+  `/etc/fukuii/application.ini`** (a conffile; edits survive upgrades), and make `/var/lib/fukuii` writable by the user
+  running the node.
 - **Transaction submission over RPC follows go-ethereum's rules (#1629 S0b).** `eth_sendRawTransaction`,
   `eth_sendTransaction`, `personal_sendTransaction` and GraphQL `sendRawTransaction`:
   - refuse legacy transactions that are not replay-protected (no EIP-155 chain id) with "only replay-protected

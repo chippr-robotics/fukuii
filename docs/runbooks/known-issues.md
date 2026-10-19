@@ -455,11 +455,26 @@ sudo restorecon -R /var/tmp/fukuii
 
 Fukuii runs on the JVM and benefits from proper tuning for optimal performance. This section covers recommended JVM configurations.
 
+### Debian package: where the JVM flags live
+
+On a `.deb` install the launcher (`/usr/share/fukuii/bin/fukuii`) reads its default JVM
+flags (heap, G1, `MaxDirectMemorySize`, OOM-exit and heap-dump) from
+`/usr/share/fukuii/conf/application.ini`. That directory is a symlink to `/etc/fukuii`, so
+the file you edit is **`/etc/fukuii/application.ini`** (a dpkg conffile: your edits survive
+upgrades, dpkg asks before replacing a modified file). Defaults are `-Xmx3g -Xms1g` with the
+heap dump written to `/var/lib/fukuii/heapdump.hprof`; the directory must be writable by the
+user running the node. Packages before this fix did not install the symlink, so those
+installs ran with plain JVM defaults. Precedence (last wins): `JAVA_OPTS` environment, then
+`application.ini`, then flags passed on the command line (`-J-Xmx6g`, `-Dfoo=bar`).
+
 ### Issue 6: Heap Size Configuration
 
 **Severity**: High  
 **Frequency**: Common with default settings  
 **Impact**: Node crashes
+
+> Packaged (deb) installs set the heap in `/etc/fukuii/application.ini` (default `-Xmx3g`), not `.jvmopts` — see
+> [Debian package: where the JVM flags live](#debian-package-where-the-jvm-flags-live).
 
 #### Symptoms
 
