@@ -52,26 +52,12 @@ object EthSimulateService:
       movePrecompileToAddress: Option[Address] = None
   )
 
-  case class SimulateCall(
-      from: Option[Address] = None,
-      to: Option[Address] = None,
-      gas: Option[BigInt] = None,
-      value: Option[BigInt] = None,
-      input: Option[ByteString] = None,
-      nonce: Option[BigInt] = None,
-      maxFeePerGas: Option[BigInt] = None,
-      maxPriorityFeePerGas: Option[BigInt] = None,
-      gasPrice: Option[BigInt] = None,
-      maxFeePerBlobGas: Option[BigInt] = None,
-      blobVersionedHashes: Option[Seq[ByteString]] = None,
-      accessList: Option[List[AccessListItem]] = None,
-      `type`: Option[BigInt] = None
-  )
-
   case class BlockStateCall(
       blockOverrides: Option[BlockOverrides] = None,
       stateOverrides: Option[Map[Address, StateOverride]] = None,
-      calls: Option[Seq[SimulateCall]] = None
+      // Each call is a GenericTransaction, decoded strictly by TxArgsJson.decodeForCall (#1629 S4), as go-ethereum's
+      // simBlock decodes `Calls []TransactionArgs` (internal/ethapi/simulate.go).
+      calls: Option[Seq[TxArgs]] = None
   )
 
   case class EthSimulateRequest(
@@ -431,7 +417,7 @@ class EthSimulateService(
       parentHeader: BlockHeader,
       blockOverrides: Option[BlockOverrides],
       stateOverrides: Option[Map[Address, StateOverride]],
-      calls: Seq[SimulateCall],
+      calls: Seq[TxArgs],
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
@@ -775,8 +761,73 @@ class EthSimulateService(
   ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] =
     EthSimulateService.applyStateOverrides(world, overrides, existingRelocations, blockchainConfig.accountStartNonce)
 
+  /** The call as the transaction the simulated block carries. go-ethereum (internal/ethapi): `sanitizeCall` fills the
+    * nonce and gas (simulate.go:439-456), `CallDefaults` the rest (transaction_args.go:401-450), and the block gets
+    * `call.ToTransaction(types.DynamicFeeTxType)` (simulate.go:338, transaction_args.go:512-527). The transaction's
+    * type is therefore:
+    *   - authorizationList -> 0x4; blobVersionedHashes -> 0x3; otherwise 0x2 at a block with a base fee, so an
+    *     accessList alone rides in a 0x2 transaction, as in geth;
+    *   - gasPrice -> legacy, except that gasPrice with an accessList needs `"type": "0x1"` (S1 fail-loudly rule,
+    *     [[TxArgs.resolveType]]; geth would drop the list from the transaction), and gasPrice with blob fields or an
+    *     authorizationList is refused rather than dropping them;
+    *   - at a block without a base fee (ETH before London, ETC before Olympia) geth's CallDefaults sets gasPrice to 0,
+    *     so the default is legacy, and an accessList gives 0x1 (fukuii keeps the list; geth's gasPrice default drops
+    *     it);
+    *   - an explicit `type` (which geth does not read) is honoured and checked against the fields present.
+    *
+    * Absent fees are zero (CallDefaults). A type the simulated block's fork does not admit is refused ([[TxTypeGate]],
+    * through [[CallTxBuilder.checkActive]]), as are 1559 fields where there is no base fee, before any default can
+    * collide with them.
+    */
+  private def simulatedTransaction(
+      args: TxArgs,
+      header: BlockHeader,
+      nonce: BigInt,
+      gas: BigInt
+  ): Either[JsonRpcError, Transaction] =
+    val defaultType = if header.baseFee.isDefined then TxArgs.DynamicFeeType else TxArgs.LegacyType
+    for
+      _ <- CallTxBuilder.checkSetCodeWithBlobs(args)
+      _ <- CallTxBuilder.checkLondon(args, header)
+      txType <- args.resolveType(defaultType).left.map(_.toJsonRpcError)
+      _ <- CallTxBuilder.checkActive(args.copy(txType = Some(txType)), header)
+      legacyPriced = txType == TxArgs.LegacyType || txType == TxArgs.AccessListType
+      filled = args
+        .copy(
+          txType = Some(txType),
+          nonce = Some(nonce),
+          gas = Some(GasAmount(gas)),
+          // ToTransaction carries a blob fee cap only in a blob transaction; without blob hashes it prices nothing
+          maxFeePerBlobGas = if txType == TxArgs.BlobType then args.maxFeePerBlobGas.orElse(Some(BigInt(0))) else None
+        )
+        .withDefaults(
+          if legacyPriced then TxArgs.Defaults(gasPrice = Some(GasPrice(0)))
+          else TxArgs.Defaults(maxFeePerGas = Some(BigInt(0)), maxPriorityFeePerGas = Some(BigInt(0)))
+        )
+      // chainId: absent -> the node's; a different one -> -32000 "chainId does not match node's" (CallDefaults)
+      tx <- filled.toTransaction(blockchainConfig.chainId, defaultType).left.map(_.toJsonRpcError)
+      _ <- checkNonEmptyLists(args, gas)
+    yield tx
+
+  /** go-ethereum preCheck (core/state_transition.go:595-631): a present but empty blobVersionedHashes or
+    * authorizationList describes no transaction. geth's txValidationError maps both to -32603 (errors.go:148-151).
+    */
+  private def checkNonEmptyLists(args: TxArgs, gas: BigInt): Either[JsonRpcError, Unit] =
+    def internal(msg: String) =
+      Left(JsonRpcError(JsonRpcError.InternalError.code, s"err: $msg (supplied gas $gas)", None))
+    if args.blobVersionedHashes.exists(_.isEmpty) then internal("blob transaction missing blob hashes")
+    else if args.authorizationList.exists(_.isEmpty) then internal("EIP-7702 transaction with empty auth list")
+    else Right(())
+
+  /** go-ethereum core.ErrTipAboveFeeCap, -32602 in eth_simulateV1 (internal/ethapi/errors.go:135-136). */
+  private def tipAboveFeeCap(sender: Address, tip: BigInt, feeCap: BigInt, gas: BigInt): JsonRpcError =
+    JsonRpcError.InvalidParams(
+      s"err: max priority fee per gas higher than max fee per gas: address ${checksumAddress(sender)}, " +
+        s"maxPriorityFeePerGas: $tip, maxFeePerGas: $feeCap (supplied gas $gas)"
+    )
+
   private def executeCalls(
-      calls: Seq[SimulateCall],
+      calls: Seq[TxArgs],
       blockHeader: BlockHeader,
       initialWorld: InMemoryWorldStateProxy,
       validation: Boolean,
@@ -810,7 +861,7 @@ class EthSimulateService(
     for (call, callIdx) <- calls.zipWithIndex do
       val sender = call.from.getOrElse(Address(0))
 
-      // Resolve nonce
+      // Resolve nonce (go-ethereum sanitizeCall, simulate.go:439-443: the state nonce when absent)
       val senderNonce = call.nonce.getOrElse {
         nonceMap.getOrElseUpdate(sender, world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0)))
       }
@@ -828,13 +879,36 @@ class EthSimulateService(
           val remainingState = blockHeader.gasLimit.value - accumStateGas
           if validation && remainingExecution >= AmsterdamGas.TxMaxGasLimit then remainingState
           else remainingExecution.min(remainingState)
-      val gasLimit = call.gas.getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
+      val gasLimit = call.gas.map(_.value).getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
       val value = call.value.getOrElse(BigInt(0))
-      val payload = call.input.getOrElse(ByteString.empty)
+      val payload = call.callData
       val toAddr = call.to
 
-      val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
-      val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
+      // The call as a typed transaction: go-ethereum CallDefaults + ToTransaction(DynamicFeeTxType)
+      // (simulate.go:333-338). Its type is what the block, the receipt and returnFullTransactions report.
+      val tx: Transaction = simulatedTransaction(call, blockHeader, senderNonce, gasLimit) match
+        case Left(err) => break(Left(err))
+        case Right(t)  => t
+      val (feeCap, tipCap) = tx match
+        case t: TransactionWithDynamicFee => (t.maxFeePerGas, t.maxPriorityFeePerGas)
+        case t: BlobTransaction           => (t.maxFeePerGas, t.maxPriorityFeePerGas)
+        case t: SetCodeTransaction        => (t.maxFeePerGas, t.maxPriorityFeePerGas)
+        case t: TransactionWithAccessList => (t.gasPrice.value, t.gasPrice.value)
+        case t: LegacyTransaction         => (t.gasPrice.value, t.gasPrice.value)
+      // What the upfront balance is checked (and, without validation, topped up) against: gas * fee cap.
+      val gasPrice = feeCap
+      val blobGasCost = tx match
+        case b: BlobTransaction => BigInt(b.blobVersionedHashes.size) * BigInt(131072) * b.maxFeePerBlobGas
+        case _                  => BigInt(0)
+      val accessListItems = tx match
+        case t: TransactionWithAccessList => t.accessList
+        case t: TransactionWithDynamicFee => t.accessList
+        case t: BlobTransaction           => t.accessList
+        case t: SetCodeTransaction        => t.accessList
+        case _: LegacyTransaction         => Nil
+      val authorizationCount = tx match
+        case t: SetCodeTransaction => t.authorizationList.size
+        case _                     => 0
 
       // EIP-2681 "Nonce limit" (execution-apis #881, go-ethereum #35842): a sender whose account nonce is 2^64 - 1
       // ends the simulation whether or not validation is on; the nonce never wraps to zero.
@@ -855,12 +929,19 @@ class EthSimulateService(
       if senderNonce > MaxUint64 || (validation && senderNonce == MaxUint64) then
         break(Left(JsonRpcError.InternalError))
 
-      // Always check: intrinsic gas
-      val baseGas = if toAddr.isEmpty then BigInt(53000) else BigInt(21000)
-      val calldataGas = payload.foldLeft(BigInt(0)) { (acc, b) =>
-        acc + (if b == 0 then 4 else 16)
-      }
-      val intrinsicGas = baseGas + calldataGas
+      // Always check: intrinsic gas (go-ethereum core.IntrinsicGas: base, calldata, init code, and the access list and
+      // authorization entries of a typed call)
+      val intrinsicGas = EvmConfig
+        .forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
+        .calcTransactionIntrinsicGas(
+          payload,
+          toAddr.isEmpty,
+          accessListItems,
+          authorizationCount,
+          toAddr,
+          UInt256(value),
+          sender
+        )
       if call.gas.isDefined && gasLimit < intrinsicGas then
         break(
           Left(
@@ -883,49 +964,52 @@ class EthSimulateService(
           )
       }
 
-      // Validation mode checks
-      if validation then
-        // Check maxFeePerGas >= baseFee
-        if baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined then
-          // -38012, not the generic -32602. execution-apis gives eth_simulateV1 its own error
-          // range and rpc-compat compares the code, not just the message: all six of that
-          // suite's eth_simulateV1 failures were this one line answering InvalidParams with an
-          // otherwise-correct diagnosis.
-          //
-          // Four sibling constructors in JsonRpcError are likewise declared and never called
-          // (SimulateNonceTooLow/-High, SimulateBlockGasLimitExceeded, SimulateMoveToSelf).
-          // They are deliberately left alone: no fixture in the current suite exercises them,
-          // so changing them would be an unmeasured edit to tests that pass today.
-          break(
-            Left(
-              JsonRpcError.SimulateBaseFeeTooLow(
-                s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
-              )
-            )
-          )
+      // go-ethereum preCheck (core/state_transition.go:574-588): the fee-cap checks run unless base fees are disabled
+      // (no validation) AND both fee fields are zero. A tip above the fee cap is -32602 (internal/ethapi/errors.go:135).
+      // With validation it runs after the nonce checks, below.
+      if !validation && (feeCap > 0 || tipCap > 0) && tipCap > feeCap then
+        break(Left(tipAboveFeeCap(sender, tipCap, feeCap, gasLimit)))
 
-        // Check nonce
+      // Validation mode checks, in go-ethereum preCheck order (core/state_transition.go:544-588, then buyGas):
+      // nonce, fee cap against the base fee, balance.
+      if validation then
+        // Check nonce: -38010 / -38011 (internal/ethapi/errors.go:125-128)
         val expectedNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
-        if call.nonce.isDefined && senderNonce < expectedNonce then
-          break(
-            Left(
-              JsonRpcError.InvalidParams(
-                s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
-              )
-            )
-          )
         if call.nonce.isDefined && senderNonce > expectedNonce then
           break(
             Left(
-              JsonRpcError.InvalidParams(
-                s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+              JsonRpcError.SimulateNonceTooHigh(
+                s"err: nonce too high: address ${checksumAddress(sender)}, tx: $senderNonce state: $expectedNonce " +
+                  s"(supplied gas $gasLimit)"
+              )
+            )
+          )
+        if call.nonce.isDefined && senderNonce < expectedNonce then
+          break(
+            Left(
+              JsonRpcError.SimulateNonceTooLow(
+                s"err: nonce too low: address ${checksumAddress(sender)}, tx: $senderNonce state: $expectedNonce " +
+                  s"(supplied gas $gasLimit)"
               )
             )
           )
 
-        // Check balance for gas + value
+        if tipCap > feeCap then break(Left(tipAboveFeeCap(sender, tipCap, feeCap, gasLimit)))
+
+        // Check the fee cap (maxFeePerGas, or gasPrice for a legacy / EIP-2930 call) >= baseFee: -38012, the
+        // execution-apis eth_simulateV1 code that rpc-compat compares (internal/ethapi/errors.go:137-138).
+        if baseFee > 0 && feeCap < baseFee then
+          break(
+            Left(
+              JsonRpcError.SimulateBaseFeeTooLow(
+                s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $feeCap, baseFee: $baseFee"
+              )
+            )
+          )
+
+        // Check balance for gas * fee cap + value + blob gas * blob fee cap (go-ethereum buyGas)
         val senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        val upfrontCost = gasLimit * gasPrice + value
+        val upfrontCost = gasLimit * gasPrice + value + blobGasCost
         if senderAccount.balance.toBigInt < upfrontCost then
           break(
             Left(
@@ -933,48 +1017,6 @@ class EthSimulateService(
                 s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
               )
             )
-          )
-
-      // Determine transaction type: blob (3), legacy (0), or dynamic fee (2, default)
-      val isBlob = call.`type`.contains(BigInt(3)) || call.blobVersionedHashes.exists(_.nonEmpty)
-      val isLegacy = call.`type`.contains(
-        BigInt(0)
-      ) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)) && !isBlob)
-      val tx: Transaction =
-        if isBlob then
-          BlobTransaction(
-            chainId = blockchainConfig.chainId.value,
-            nonce = senderNonce,
-            maxPriorityFeePerGas = call.maxPriorityFeePerGas.getOrElse(BigInt(0)),
-            maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0)),
-            gasLimit = GasAmount(gasLimit),
-            receivingAddress = toAddr,
-            value = value,
-            payload = payload,
-            accessList = call.accessList.getOrElse(Nil),
-            maxFeePerBlobGas = call.maxFeePerBlobGas.getOrElse(BigInt(0)),
-            blobVersionedHashes = call.blobVersionedHashes.getOrElse(Nil).toList.map(BlobVersionedHash(_))
-          )
-        else if !isLegacy then
-          TransactionWithDynamicFee(
-            chainId = blockchainConfig.chainId.value,
-            nonce = senderNonce,
-            maxPriorityFeePerGas = call.maxPriorityFeePerGas.getOrElse(BigInt(0)),
-            maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0)),
-            gasLimit = GasAmount(gasLimit),
-            receivingAddress = toAddr,
-            value = value,
-            payload = payload,
-            accessList = call.accessList.getOrElse(Nil)
-          )
-        else
-          LegacyTransaction(
-            nonce = senderNonce,
-            gasPrice = GasPrice(gasPrice),
-            gasLimit = GasAmount(gasLimit),
-            receivingAddress = toAddr,
-            value = value,
-            payload = payload
           )
 
       val fakeSignature = com.chipprbots.ethereum.crypto.ECDSASignature(BigInt(0), BigInt(0), BigInt(0))
@@ -1043,11 +1085,14 @@ class EthSimulateService(
           com.chipprbots.ethereum.domain.BloomFilter(com.chipprbots.ethereum.ledger.BloomFilter.create(realLogs)),
         logs = realLogs
       )
+      // The receipt of the call's own type, as block execution builds it (BlockPreparator) and go-ethereum's
+      // core.MakeReceipt does (simulate.go): an EIP-2930 or EIP-7702 call no longer gets a legacy receipt.
       val receipt: Receipt = tx match
-        case _: BlobTransaction           => Type03Receipt(legacyReceipt)
-        case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
         case _: LegacyTransaction         => legacyReceipt
-        case _                            => legacyReceipt
+        case _: TransactionWithAccessList => Type01Receipt(legacyReceipt)
+        case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
+        case _: BlobTransaction           => Type03Receipt(legacyReceipt)
+        case _: SetCodeTransaction        => Type04Receipt(legacyReceipt)
 
       accumGas += gasUsed
       accumExecutionGas += txExecutionGas

@@ -21,10 +21,13 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, EthSimulateRequest] =
         params match
           case Some(JArray((payload: JObject) :: rest)) =>
+            // An absent or null block tag is "latest" (geth: nil blockNrOrHash); a malformed one is -32602, not
+            // silently "latest".
             val blockTag = rest match
-              case (bt: JValue) :: _ => extractBlockParam(bt).getOrElse(BlockParam.Latest)
-              case _                 => BlockParam.Latest
-            decodePayload(payload, blockTag)
+              case (JNull | JNothing) :: _ => Right(BlockParam.Latest)
+              case (bt: JValue) :: _       => extractBlockParam(bt)
+              case _                       => Right(BlockParam.Latest)
+            blockTag.flatMap(decodePayload(payload, _))
           case _ => Left(InvalidParams("expected [payload, blockTag]"))
 
       private def decodePayload(obj: JObject, blockTag: BlockParam): Either[JsonRpcError, EthSimulateRequest] =
@@ -77,12 +80,16 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
         val calls = (obj \ "calls") match
           case JArray(items) =>
             val parsed = items.map {
-              case c: JObject => decodeSimulateCall(c)
+              // execution-apis GenericTransaction, decoded as strictly as go-ethereum's TransactionArgs: a malformed
+              // address, quantity or blob hash is -32602, never a silently absent field (#1629 S4). The payload is
+              // params[0], so errors read "invalid argument 0: ...", as geth reports them.
+              case c: JObject => TxArgsJson.decodeForCall(c, argIndex = 0)
               case _          => Left(InvalidParams("call must be object"))
             }
             if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get
             Some(parsed.collect { case Right(v) => v })
-          case _ => None
+          case JNothing | JNull => None
+          case _                => return Left(InvalidParams("invalid argument 0: calls must be an array"))
 
         Right(BlockStateCall(blockOverrides, stateOverrides, calls))
 
@@ -144,32 +151,6 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
               (hexToBigInt(keyHex), hexToBigInt(valueHex))
             }.toMap)
           case _ => None
-
-      private def decodeSimulateCall(obj: JObject): Either[JsonRpcError, SimulateCall] =
-        Right(
-          SimulateCall(
-            from = (obj \ "from").extractOpt[String].flatMap(s => extractAddress(JString(s)).toOption),
-            to = (obj \ "to").extractOpt[String].flatMap(s => extractAddress(JString(s)).toOption),
-            gas = optQty(obj, "gas"),
-            value = optQty(obj, "value"),
-            input = optBytes(obj, "input").orElse(optBytes(obj, "data")),
-            nonce = optQty(obj, "nonce"),
-            maxFeePerGas = optQty(obj, "maxFeePerGas"),
-            maxPriorityFeePerGas = optQty(obj, "maxPriorityFeePerGas"),
-            gasPrice = optQty(obj, "gasPrice"),
-            maxFeePerBlobGas = optQty(obj, "maxFeePerBlobGas"),
-            blobVersionedHashes = (obj \ "blobVersionedHashes") match
-              case JArray(items) =>
-                Some(items.flatMap {
-                  case JString(s) =>
-                    scala.util.Try(ByteString(org.bouncycastle.util.encoders.Hex.decode(s.stripPrefix("0x")))).toOption
-                  case _ => None
-                })
-              case _ => None
-            ,
-            `type` = optQty(obj, "type")
-          )
-        )
 
       private def optQty(obj: JObject, field: String): Option[BigInt] =
         (obj \ field).extractOpt[String].flatMap { s =>
@@ -303,12 +284,26 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
               "maxFeePerGas" -> encodeAsHex(t.maxFeePerGas),
               "maxPriorityFeePerGas" -> encodeAsHex(t.maxPriorityFeePerGas)
             )
+          case t: com.chipprbots.ethereum.domain.SetCodeTransaction =>
+            List(
+              "maxFeePerGas" -> encodeAsHex(t.maxFeePerGas),
+              "maxPriorityFeePerGas" -> encodeAsHex(t.maxPriorityFeePerGas)
+            )
           case _ => Nil
+        // The call's own access list and authorizations, as go-ethereum's RPCTransaction reports them.
         val accessListField = tx match
-          case _: com.chipprbots.ethereum.domain.BlobTransaction           => List("accessList" -> JArray(Nil))
-          case _: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => List("accessList" -> JArray(Nil))
-          case _: com.chipprbots.ethereum.domain.TransactionWithAccessList => List("accessList" -> JArray(Nil))
-          case _                                                           => Nil
+          case t: com.chipprbots.ethereum.domain.BlobTransaction =>
+            List("accessList" -> TxArgsJson.encodeAccessList(t.accessList))
+          case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee =>
+            List("accessList" -> TxArgsJson.encodeAccessList(t.accessList))
+          case t: com.chipprbots.ethereum.domain.TransactionWithAccessList =>
+            List("accessList" -> TxArgsJson.encodeAccessList(t.accessList))
+          case t: com.chipprbots.ethereum.domain.SetCodeTransaction =>
+            List(
+              "accessList" -> TxArgsJson.encodeAccessList(t.accessList),
+              "authorizationList" -> TxArgsJson.encodeAuthorizationList(t.authorizationList)
+            )
+          case _ => Nil
         val blobFields = tx match
           case t: com.chipprbots.ethereum.domain.BlobTransaction =>
             List(
