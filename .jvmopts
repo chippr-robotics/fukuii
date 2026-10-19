@@ -3,3 +3,14 @@
 -XX:ReservedCodeCacheSize=1024m
 -XX:MaxMetaspaceSize=1g
 -Xss4M
+# WORKAROUND: a HotSpot C2 miscompile on JDK 23+ (incl. Temurin 25.0.4.1):
+# ReduceAllocationMerges can null a field read through a phi that merges a fresh
+# allocation with an existing object (JDK-8385993, fixed in JDK 28; dup JDK-8393049).
+# It intermittently crashed scaladoc 3.3.8 in `sbt dist` with an impossible NPE in
+# SignatureBuilder.signature (content() == null). Scaladoc and scalac run in this
+# sbt JVM, so the flag goes here. IgnoreUnrecognizedVMOptions keeps JDK 21 (which
+# lacks the flag) starting; note it also hides typos in this file.
+# Drop these three lines once the build JDK carries the JDK-8385993 fix.
+-XX:+IgnoreUnrecognizedVMOptions
+-XX:+UnlockDiagnosticVMOptions
+-XX:-ReduceAllocationMerges
