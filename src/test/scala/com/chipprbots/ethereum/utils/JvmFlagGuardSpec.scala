@@ -37,6 +37,27 @@ class JvmFlagGuardSpec extends AnyFlatSpec with Matchers:
     JvmFlagGuard.isAtRisk(28, None, Some("true")) shouldBe false
   }
 
-  "JvmFlagGuard.check" should "not throw on the running JVM" taggedAs UnitTest in {
-    noException should be thrownBy JvmFlagGuard.check()
+  "JvmFlagGuard.verdict" should "be Safe when not at risk, whether or not the escape hatch is set" taggedAs UnitTest in {
+    JvmFlagGuard.verdict(atRisk = false, allowed = false) shouldBe JvmFlagGuard.Verdict.Safe
+    JvmFlagGuard.verdict(atRisk = false, allowed = true) shouldBe JvmFlagGuard.Verdict.Safe
+  }
+
+  it should "refuse an at-risk JVM by default" taggedAs UnitTest in {
+    JvmFlagGuard.verdict(atRisk = true, allowed = false) shouldBe JvmFlagGuard.Verdict.Refuse
+  }
+
+  it should "start an at-risk JVM only with the escape hatch" taggedAs UnitTest in {
+    JvmFlagGuard.verdict(atRisk = true, allowed = true) shouldBe JvmFlagGuard.Verdict.AllowedAtRisk
+  }
+
+  "JvmFlagGuard.allowedBy" should "accept true from the property or the environment, property first" taggedAs UnitTest in {
+    JvmFlagGuard.allowedBy(Some("true"), None) shouldBe true
+    JvmFlagGuard.allowedBy(None, Some("TRUE")) shouldBe true
+    JvmFlagGuard.allowedBy(Some("false"), Some("true")) shouldBe false
+    JvmFlagGuard.allowedBy(None, None) shouldBe false
+    JvmFlagGuard.allowedBy(Some("yes"), None) shouldBe false
+  }
+
+  "JvmFlagGuard.evaluate" should "find the test JVM safe (build.sbt passes the workaround to forked tests)" taggedAs UnitTest in {
+    JvmFlagGuard.evaluate() shouldBe JvmFlagGuard.Verdict.Safe
   }

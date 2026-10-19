@@ -762,11 +762,15 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 #### Symptoms
 
-At startup the node logs:
+The node refuses to start (exit status 78) and logs:
 
 ```
-ERROR [c.c.ethereum.utils.JvmFlagGuard$] - Unsafe JVM: jdk=25.0.4.1+... runs C2 with ReduceAllocationMerges enabled, ...
+ERROR [c.c.ethereum.utils.JvmFlagGuard$] - Refusing to start: jdk=25.0.4.1+... runs C2 with ReduceAllocationMerges enabled, ...
 ```
+
+Fix it by adding the workaround flags (below). Only if you accept the risk — e.g. on a JDK build known to carry the
+fix — start anyway with `-Dfukuii.allow-c2-reduce-allocation-merges=true` or
+`FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true`; the node then starts and logs `Unsafe JVM: ...` as an ERROR.
 
 Without the workaround, the bug itself shows up as an impossible `NullPointerException` (a field that
 was just assigned reads back as `null`) or, worse, as a wrong value with no error at all.

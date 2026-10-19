@@ -47,11 +47,14 @@ anything is not acceptable on any path that computes state roots, hashes, gas or
    `JDK_JAVA_OPTIONS` was chosen over `JAVA_TOOL_OPTIONS` because ops compose files already use `JAVA_TOOL_OPTIONS` for
    heap tuning; a second variable cannot be clobbered by them. It is read only by the `java` launcher, which is the only
    way these images start a JVM.
-3. **A startup guard logs loudly.** `JvmFlagGuard` (called from `Fukuii.main` and the `runtime` launcher) reads the
-   live JVM through `HotSpotDiagnosticMXBean`. On JDK 23+ with the optimisation on, it logs an ERROR naming the bug and
-   the flags. Because the option is diagnostic, HotSpot hides it unless diagnostics are unlocked, so "option hidden and
-   `UnlockDiagnosticVMOptions=false`" counts as on. On a non-HotSpot JVM, or one without the flag, it stays quiet. It
-   does not refuse to start; making it fatal (with an explicit escape hatch property) is a separate decision.
+3. **A startup guard refuses unsafe JVMs.** `JvmFlagGuard` (called from `Fukuii.main`, the `runtime` launcher and the
+   checkpoint exporter) reads the live JVM through `HotSpotDiagnosticMXBean`. On JDK 23+ with the optimisation on, it
+   logs an ERROR naming the bug and the flags and exits with status 78 (EX_CONFIG). Because the option is diagnostic,
+   HotSpot hides it unless diagnostics are unlocked, so "option hidden and `UnlockDiagnosticVMOptions=false`" counts as
+   on. On a non-HotSpot JVM, or one without the flag, it stays quiet. Escape hatch (maintainer decision 2026-10-19), for
+   an operator who accepts the risk, e.g. on a JDK build known to carry the fix:
+   `-Dfukuii.allow-c2-reduce-allocation-merges=true` or `FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true`; the node then
+   starts and logs the same ERROR.
 4. **Test and sbt JVMs tolerate JDK 21** with `-XX:+IgnoreUnrecognizedVMOptions` in front, so a developer on 21 can
    still build. The production launchers do not: with this ADR, JDK 21 is unsupported at runtime, and a JVM that does
    not know the flag fails at startup with an explicit error.
