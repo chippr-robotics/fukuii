@@ -1,6 +1,6 @@
 # ADR-001: Migration to Scala 3 and JDK 21
 
-**Status**: Accepted
+**Status**: Accepted. JDK baseline superseded by [INF-007](INF-007-jdk-25-baseline.md) (JDK 25); the Scala 3 decision stands.
 
 **Date**: October 2025
 

@@ -57,8 +57,13 @@ Set the JWT path in `OUT/ephemery-local.conf` (`fukuii.network.engine-api.jwt-se
 the secret once: `openssl rand -hex 32 > OUT/jwt.hex`.
 
 ```bash
-FUKUII_CONF_DIR=OUT/current/conf java -jar fukuii-assembly.jar ephemery
+FUKUII_CONF_DIR=OUT/current/conf java -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges \
+  -jar fukuii-assembly.jar ephemery
 ```
+
+The two `-XX` flags are required on JDK 25 (a C2 miscompile; see
+[known-issues Issue 16](known-issues.md#issue-16-jdk-25-c2-reduceallocationmerges-workaround)) and belong
+in the systemd unit's `ExecStart` too.
 
 For a systemd unit, use `Environment=FUKUII_CONF_DIR=OUT/current/conf` and `... fukuii-assembly.jar ephemery`
 like `fukuii-sepolia.service`. The first start should log the generated chain and `Genesis data successfully
