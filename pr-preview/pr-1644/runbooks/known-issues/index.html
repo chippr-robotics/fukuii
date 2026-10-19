@@ -6465,6 +6465,10 @@ installs ran with plain JVM defaults. Precedence (last wins): <code>JAVA_OPTS</c
 <p><strong>Severity</strong>: High<br />
 <strong>Frequency</strong>: Common with default settings<br />
 <strong>Impact</strong>: Node crashes</p>
+<blockquote>
+<p>Packaged (deb) installs set the heap in <code>/etc/fukuii/application.ini</code> (default <code>-Xmx3g</code>), not <code>.jvmopts</code> — see
+<a href="#debian-package-where-the-jvm-flags-live">Debian package: where the JVM flags live</a>.</p>
+</blockquote>
 <h4 id="symptoms_5">Symptoms<a class="headerlink" href="#symptoms_5" title="Permanent link">&para;</a></h4>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>ERROR [JVM] - java.lang.OutOfMemoryError: Java heap space
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>ERROR [JVM] - java.lang.OutOfMemoryError: Metaspace
