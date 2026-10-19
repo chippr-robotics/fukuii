@@ -327,13 +327,36 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
 
   // ── per-chain gating ────────────────────────────────────────────────────────
 
-  "eth_simulateV1 on ETH before Prague" should "refuse an authorizationList (-32602)" taggedAs (UnitTest, RPCTest) in {
-    // Cancun base at 100: the simulated block lands on 112, before Prague (120)
-    val node = new Node(amsterdamConfig, baseTimestamp = 100)
-    val auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
-    val (code, message) = node.error(oneBlock(s"""{"from":"$From","to":"$To","authorizationList":[$auth]}"""))
-    code shouldBe -32602
-    message should include("transaction type not supported")
+  // Cancun base at 100: the simulated block lands on 112, before Prague (120)
+  private def cancunNode = new Node(amsterdamConfig, baseTimestamp = 100)
+  private val Auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
+
+  "eth_simulateV1 on ETH before Prague" should "refuse an authorizationList with preCheck's ErrTxTypeNotSupported (-32603)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val (code, message) = cancunNode.error(oneBlock(s"""{"from":"$From","to":"$To","authorizationList":[$Auth]}"""))
+    code shouldBe -32603
+    message should include(
+      "transaction type not supported: setcode tx (sender 0xC000000000000000000000000000000000000000)"
+    )
+  }
+
+  it should "report a tip above the fee cap before the unsupported type (London precedes it in preCheck)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val call =
+      s"""{"from":"$From","to":"$To","maxFeePerGas":"0x10","maxPriorityFeePerGas":"0x20","authorizationList":[$Auth]}"""
+    cancunNode.error(oneBlock(call))._1 shouldBe -32602
+  }
+
+  it should "still refuse an explicit type 0x4 up front (-32602, fukuii explicit-type rule)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    cancunNode.error(oneBlock(s"""{"from":"$From","to":"$To","type":"0x4","authorizationList":[$Auth]}""")) shouldBe
+      (-32602, "transaction type not supported: type 4 not active at block 30")
   }
 
   "eth_simulateV1 on ETC before Olympia" should "default to a legacy transaction, as geth's CallDefaults does without a base fee" taggedAs (
@@ -365,11 +388,22 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
       (-32602, "transaction type not supported: type 2 not active at block 30")
   }
 
-  it should "refuse an authorizationList (-32602)" taggedAs (UnitTest, RPCTest) in {
-    val auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
-    new Node(etcConfig, baseTimestamp = 1_000_000L)
-      .error(oneBlock(s"""{"from":"$From","to":"$To","authorizationList":[$auth]}""")) shouldBe
-      (-32602, "transaction type not supported: type 4 not active at block 30")
+  it should "refuse an authorizationList with ErrTxTypeNotSupported (-32603)" taggedAs (UnitTest, RPCTest) in {
+    val (code, message) = new Node(etcConfig, baseTimestamp = 1_000_000L)
+      .error(oneBlock(s"""{"from":"$From","to":"$To","authorizationList":[$Auth]}"""))
+    code shouldBe -32603
+    message should include("transaction type not supported: setcode tx")
+  }
+
+  it should "refuse blob hashes with ErrTxTypeNotSupported (-32603): no ETC fork admits blobs" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val hash = "0x01" + "00" * 31
+    val (code, message) = new Node(etcConfig, baseTimestamp = 1_000_000L)
+      .error(oneBlock(s"""{"from":"$From","to":"$To","blobVersionedHashes":["$hash"]}"""))
+    code shouldBe -32603
+    message should include("transaction type not supported: blob tx")
   }
 
   // ── geth's preCheck order: with several faults, the first geth finds wins ─────────────────────────────────────
@@ -416,32 +450,53 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     ethNode.error(oneBlock(s"""{"from":"$From","to":"$To","gas":"0x1","authorizationList":[]}"""))._1 shouldBe -32603
   }
 
-  it should "report the nonce before a blob transaction without to (-38011)" taggedAs (UnitTest, RPCTest) in {
+  it should "report a blob transaction without to before the nonce: CallDefaults precedes preCheck (-32000)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
     val call =
       s"""{"from":"$From","nonce":"0x3","maxFeePerGas":"0x3b9aca00","blobVersionedHashes":["$ValidBlobHash"]}"""
-    ethNode.error(validated(call))._1 shouldBe -38011
+    ethNode.error(validated(call)) shouldBe (-32000, "blob transaction of type create")
+  }
+
+  it should "report a set-code transaction without to before a chainId mismatch (CallDefaults order, -32000)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    ethNode.error(oneBlock(s"""{"from":"$From","chainId":"0x7a69","authorizationList":[$Auth]}""")) shouldBe
+      (-32000, "EIP-7702 transaction cannot be used to create contract")
+  }
+
+  it should "report gasPrice with maxFeePerGas before a blob transaction without to (-32000)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val call = s"""{"from":"$From","gasPrice":"0x1","maxFeePerGas":"0x1","blobVersionedHashes":["$ValidBlobHash"]}"""
+    ethNode.error(oneBlock(call)) shouldBe (
+      -32000,
+      "both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified"
+    )
   }
 
   // ── preCheck items ──────────────────────────────────────────────────────────
 
-  "eth_simulateV1 preCheck" should "refuse a blob transaction without to (-32603, ErrBlobTxCreate)" taggedAs (
+  "eth_simulateV1 CallDefaults" should "refuse a blob transaction without to, raw (-32000, ErrBlobTxCreate)" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val (code, message) =
-      ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","blobVersionedHashes":["$ValidBlobHash"]}"""))
-    code shouldBe -32603
-    message should include("blob transaction of type create")
+    ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","blobVersionedHashes":["$ValidBlobHash"]}""")) shouldBe
+      (-32000, "blob transaction of type create")
   }
 
-  it should "refuse a set-code transaction without to (-32603, ErrSetCodeTxCreate)" taggedAs (UnitTest, RPCTest) in {
-    val auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
-    val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","authorizationList":[$auth]}"""))
-    code shouldBe -32603
-    message should include("EIP-7702 transaction cannot be used to create contract")
+  it should "refuse a set-code transaction without to, raw (-32000, ErrSetCodeTxCreate)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","authorizationList":[$Auth]}""")) shouldBe
+      (-32000, "EIP-7702 transaction cannot be used to create contract")
   }
 
-  it should "refuse a blob hash of the wrong version (-32603)" taggedAs (UnitTest, RPCTest) in {
+  "eth_simulateV1 preCheck" should "refuse a blob hash of the wrong version (-32603)" taggedAs (UnitTest, RPCTest) in {
     val bad = "0x02" + "00" * 31
     val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","to":"$To","blobVersionedHashes":["$bad"]}"""))
     code shouldBe -32603
@@ -489,11 +544,11 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     message should include("max initcode size exceeded: code size 49153 limit 49152")
   }
 
-  it should "not apply the EIP-7825 gas cap: the simulate message skips transaction checks (transaction_args.go:506)" taggedAs (
+  it should "not apply the EIP-7825 gas cap: the simulate message skips the gas-limit cap check (transaction_args.go:523)" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    // Osaka, validation on, gas 2^24 + 1: geth's preCheck cap check is behind !SkipTransactionChecks
+    // Osaka, validation on, gas 2^24 + 1: geth's preCheck cap check is behind !skipGasLimitCapCheck
     val call = s"""{"from":"$From","to":"$To","gas":"0x1000001","maxFeePerGas":"0x3b9aca00"}"""
     val (block, _) = ethNode.ok(validated(call))
     block.calls.head.status shouldBe BigInt(1)

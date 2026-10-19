@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
@@ -776,14 +777,16 @@ class EthSimulateService(
     *   - an explicit `type` (which geth does not read) is honoured and checked against the fields present (S1 rule,
     *     kept deliberately).
     *
-    * Absent fees are zero (CallDefaults). A type the simulated block's fork does not admit is refused ([[TxTypeGate]],
-    * through [[CallTxBuilder.checkActive]]), as are 1559 fields where there is no base fee, before any default can
-    * collide with them.
+    * Absent fees are zero (CallDefaults). An explicit `type` the simulated block's fork does not admit is refused here
+    * ([[TxTypeGate]], through [[CallTxBuilder.checkActive]]; fukuii rule), as are 1559 fields where there is no base
+    * fee, before any default can collide with them. An access list, blob hashes or authorizations the fork does not
+    * admit are geth's preCheck `ErrTxTypeNotSupported`, reported by [[preCheck]] at geth's position.
     *
-    * Everything here is sanitizeCall / CallDefaults (or a fukuii request-shape rule) and so precedes geth's preCheck.
-    * The transaction-validity faults geth finds in preCheck — a blob or set-code transaction without `to`, empty blob
-    * hashes or authorizations — are NOT refused here: the transaction is built with them, and [[preCheck]] reports them
-    * at geth's position.
+    * Everything here is sanitizeCall / CallDefaults (go-ethereum master ffb9e230: simulate.go:417-420, 531-555;
+    * transaction_args.go:401-423), or a fukuii request-shape rule, and so precedes the nonce-limit check and preCheck.
+    * CallDefaults' errors surface raw (simulate.go:418-420: no txValidationError, no "err: ... (supplied gas)"), so the
+    * JSON-RPC code is go-ethereum rpc's default, -32000 (rpc/errors.go:61). Empty blob hashes or authorizations are
+    * preCheck faults: the transaction is built with them and [[preCheck]] reports them.
     */
   private def simulatedTransaction(
       args: TxArgs,
@@ -794,19 +797,26 @@ class EthSimulateService(
     val defaultType = if header.baseFee.isDefined then TxArgs.DynamicFeeType else TxArgs.LegacyType
     val chainId = blockchainConfig.chainId.value
     for
-      // CallDefaults (transaction_args.go:403-412): fee families, then chainId; -32000 as geth returns them
+      // CallDefaults (transaction_args.go:402-423): fee families, then a blob / set-code call without `to`, then
+      // chainId; raw errors, -32000
       _ <- Either.cond(
         !(args.gasPrice.isDefined && args.hasDynamicFee),
         (),
         TxArgsError.GasPriceAndDynamicFee.toLogicError
       )
+      _ <-
+        if args.to.isDefined then Right(())
+        else if args.blobVersionedHashes.isDefined then Left(TxArgsError.BlobTxCreate.toLogicError)
+        else if args.authorizationList.isDefined then Left(TxArgsError.SetCodeTxCreate.toLogicError)
+        else Right(())
       _ <- args.chainId match
         case Some(have) if have.value != chainId => Left(TxArgsError.ChainIdMismatch(have.value, chainId).toLogicError)
         case _                                   => Right(())
       _ <- CallTxBuilder.checkSetCodeWithBlobs(args)
       _ <- CallTxBuilder.checkLondon(args, header)
-      txType <- args.resolveType(defaultType, checkCreate = false).left.map(_.toJsonRpcError)
-      _ <- CallTxBuilder.checkActive(args.copy(txType = Some(txType)), header)
+      txType <- args.resolveType(defaultType).left.map(_.toJsonRpcError)
+      // only an explicit `type` is gated here; what geth gates is gated in preCheck
+      _ <- args.txType.fold(Right(()))(t => CallTxBuilder.checkActive(TxArgs(to = args.to, txType = Some(t)), header))
     yield
       val to = args.to
       val value = args.value.getOrElse(BigInt(0))
@@ -831,22 +841,25 @@ class EthSimulateService(
           val auths = args.authorizationList.getOrElse(Nil)
           SetCodeTransaction(chainId, nonce, tip, feeCap, gasLimit, to, value, data, accessList, auths)
 
-  /** go-ethereum's checks between building the message and running it, in geth's order: `preCheck`
-    * (core/state_transition.go:544-650) — nonce, London fee caps, blob hashes, blob fee cap, set-code, init code size,
-    * then `buyGas`'s balance check — and then `execute`'s intrinsic-gas check (state_transition.go:677-682).
+  /** go-ethereum's checks between building the message and running it, in geth's order (go-ethereum master ffb9e230):
+    * `preCheck` (core/state_transition.go:573-680) — nonce, London fee caps, access list / blob / set-code type support
+    * (`ErrTxTypeNotSupported`), blob hashes, blob fee cap, empty authorizations, init code size, then `buyGas`'s
+    * balance check — and then `execute`'s intrinsic-gas check (state_transition.go:720-730).
     *
-    * The simulate message sets `SkipTransactionChecks: true` (transaction_args.go:506), so preCheck's EIP-7825 gas
-    * limit cap and sender-is-EOA check do not run here, and `SkipNonceChecks` is `!validation` (simulate.go:347).
-    * Without validation the vm runs with `NoBaseFee` (simulate.go:304): the London checks are skipped when both fee
-    * caps are zero, the blob fee check when the blob fee cap is zero.
+    * The simulate message skips the EOA and gas-limit-cap checks (`ToMessage` ends with
+    * `msg.SkipEOACheck().SkipGasLimitCapCheck()`, transaction_args.go:520-523), so preCheck's EIP-7825 cap and
+    * sender-is-EOA check do not run here; the nonce check is skipped without validation (simulate.go:437). Without
+    * validation the vm runs with `NoBaseFee` (simulate.go:388): the London checks are skipped when both fee caps are
+    * zero, the blob fee check when the blob fee cap is zero.
     *
-    * Codes per internal/ethapi/errors.go:120-151 (`txValidationError`); messages are geth's, wrapped as
-    * applyMessageWithEVM wraps them (api.go:833).
+    * Codes per internal/ethapi/errors.go:120-151 (`txValidationError`; unmapped errors are -32603); messages are
+    * geth's, wrapped as applyMessageWithEVM wraps them (api.go:839).
     */
   private def preCheck(
       tx: Transaction,
       sender: Address,
       nonceGiven: Boolean,
+      accessListGiven: Boolean,
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
       validation: Boolean,
@@ -868,6 +881,8 @@ class EthSimulateService(
     val stateNonce = account.map(_.nonce.toBigInt).getOrElse(BigInt(0))
     val balance = account.map(_.balance.toBigInt).getOrElse(BigInt(0))
     val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    // which types the block admits, per chain (TxTypeGate: ETH Berlin / Cancun / Prague, ETC Magneto / Olympia)
+    val activeTypes = TxTypeGate.activeTypes(header)
     for
       // nonce (state_transition.go:547-559), only with validation; -38011 / -38010 / -32603 (errors.go:125-128)
       _ <-
@@ -908,14 +923,21 @@ class EthSimulateService(
             )
           else Right(())
         case _ => Right(())
-      // blob hashes (state_transition.go:591-609), -32603
+      // EIP-2930 not active (master state_transition.go:623-626): ErrTxTypeNotSupported, -32603 (errors.go default)
+      _ <-
+        if accessListGiven && !activeTypes.contains(TxArgs.AccessListType) then
+          internal(s"transaction type not supported: access list tx (sender $address)")
+        else Right(())
+      // blob hashes (master state_transition.go:627-648), -32603. A blob call without `to` never gets here: CallDefaults
+      // refuses it (simulatedTransaction).
       _ <- tx match
+        case _: BlobTransaction if !activeTypes.contains(TxArgs.BlobType) =>
+          internal(s"transaction type not supported: blob tx (sender $address)")
         case b: BlobTransaction =>
           val badVersion = b.blobVersionedHashes.zipWithIndex.collectFirst {
             case (h, i) if h.value.length != 32 || h.value(0) != StxLedger.BlobCommitmentVersionKzg => i
           }
-          if b.receivingAddress.isEmpty then internal("blob transaction of type create")
-          else if b.blobVersionedHashes.isEmpty then internal("blob transaction missing blob hashes")
+          if b.blobVersionedHashes.isEmpty then internal("blob transaction missing blob hashes")
           else if blockchainConfig.isOsakaTimestamp(header.unixTimestamp) &&
             b.blobVersionedHashes.size > StxLedger.BlobTxMaxBlobs
           then internal("blob transaction has too many blobs")
@@ -938,8 +960,8 @@ class EthSimulateService(
           else Right(())
       // set-code (state_transition.go:625-633), -32603
       _ <- tx match
-        case s: SetCodeTransaction if s.receivingAddress.isEmpty =>
-          internal(s"EIP-7702 transaction cannot be used to create contract (sender $address)")
+        case _: SetCodeTransaction if !activeTypes.contains(TxArgs.SetCodeType) =>
+          internal(s"transaction type not supported: setcode tx (sender $address)")
         case s: SetCodeTransaction if s.authorizationList.isEmpty =>
           internal(s"EIP-7702 transaction with empty auth list (sender $address)")
         case _ => Right(())
@@ -1059,7 +1081,16 @@ class EthSimulateService(
         )
 
       // go-ethereum preCheck, buyGas and the intrinsic-gas check, in geth's order (see preCheck)
-      preCheck(tx, sender, call.nonce.isDefined, blockHeader, world, validation, blobBaseFeeOverride) match
+      preCheck(
+        tx,
+        sender,
+        call.nonce.isDefined,
+        call.accessList.isDefined,
+        blockHeader,
+        world,
+        validation,
+        blobBaseFeeOverride
+      ) match
         case Left(err) => break(Left(err))
         case Right(_)  => ()
 

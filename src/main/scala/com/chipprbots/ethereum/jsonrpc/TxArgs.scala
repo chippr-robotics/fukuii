@@ -144,17 +144,10 @@ final case class TxArgs(
     * gasPrice together with maxFeePerGas/maxPriorityFeePerGas, or with authorizationList, is an error in either case.
     */
   def resolveType(defaultType: Byte = LegacyType): Either[TxArgsError, Byte] =
-    resolveType(defaultType, checkCreate = true)
-
-  /** [[resolveType]], optionally without the contract-creation checks of an explicit 0x3 / 0x4 `type`. eth_simulateV1
-    * defers those to go-ethereum's preCheck position (core/state_transition.go:595-631), after the nonce and fee
-    * checks, so a call with several faults reports geth's first one.
-    */
-  def resolveType(defaultType: Byte, checkCreate: Boolean): Either[TxArgsError, Byte] =
     for
       _ <- checkFeeFamilies
       t <- txType match
-        case Some(explicit) => checkExplicitType(explicit, checkCreate).map(_ => explicit)
+        case Some(explicit) => checkExplicitType(explicit).map(_ => explicit)
         case None           => inferType(defaultType)
     yield t
 
@@ -177,7 +170,7 @@ final case class TxArgs(
       else if accessList.isDefined then Left(GasPriceWithAccessListUntyped)
       else Right(LegacyType)
 
-  private def checkExplicitType(t: Byte, checkCreate: Boolean = true): Either[TxArgsError, Unit] =
+  private def checkExplicitType(t: Byte): Either[TxArgsError, Unit] =
     val present: List[(String, Boolean)] = List(
       "gasPrice" -> gasPrice.isDefined,
       "maxFeePerGas" -> maxFeePerGas.isDefined,
@@ -196,8 +189,8 @@ final case class TxArgs(
         present.collectFirst { case (name, true) if !allowed.contains(name) => name } match
           case Some(field) => Left(FieldNotValidForType(field, t))
           case None =>
-            if checkCreate && to.isEmpty && t == BlobType then Left(BlobTxCreate)
-            else if checkCreate && to.isEmpty && t == SetCodeType then Left(SetCodeTxCreate)
+            if to.isEmpty && t == BlobType then Left(BlobTxCreate)
+            else if to.isEmpty && t == SetCodeType then Left(SetCodeTxCreate)
             else Right(())
 
   /** State-free checks go-ethereum applies in `setDefaults` / `setFeeDefaults` for eth_sendTransaction,
@@ -243,7 +236,7 @@ final case class TxArgs(
         case None if blobVersionedHashes.isDefined => Left(BlobTxCreate)
         case None if authorizationList.isDefined   => Left(SetCodeTxCreate)
         case _                                     => Right(())
-      _ <- txType.fold(Right(()))(t => checkExplicitType(t))
+      _ <- txType.fold(Right(()))(checkExplicitType)
     yield this
 
   /** Fill every absent field from `d`; present fields are never overwritten. Pure: the caller (S2 `setDefaults`
