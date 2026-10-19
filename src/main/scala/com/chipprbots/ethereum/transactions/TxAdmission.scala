@@ -397,10 +397,9 @@ object TxAdmission:
     *
     * From Osaka, go-ethereum master's `validateBlobSidecar` then `ValidateCells` (core/txpool/validation.go:174-235):
     * commitments against the versioned hashes, at most `params.BlobTxMaxBlobs` blobs, a version-1 (cell proof) sidecar
-    * with `CELLS_PER_EXT_BLOB` proofs per blob, at least one blob, then the cell proofs verified. go-ethereum's
-    * `eth_sendRawTransaction` converts a version-0 sidecar to version 1 before submitting it (api.go:1745-1755, marked
-    * for removal); fukuii refuses it with the pool's error instead (the engine's payload builder reads only the
-    * version-0 form; converting would route these transactions there).
+    * with `CELLS_PER_EXT_BLOB` proofs per blob, at least one blob, then the cell proofs verified.
+    * eth_sendRawTransaction converts a version-0 sidecar to version 1 before this, as go-ethereum's does
+    * (api.go:1745-1755), so the version rule refuses only a sidecar that reaches admission otherwise.
     *
     * Before Osaka go-ethereum master has no admission path at all, so this follows v1.16's `validateBlobTx` and
     * `preCheck` (validation.go:158-207, blobpool.go:1647-1680): at least one blob, at most `params.BlobTxMaxBlobs`, the

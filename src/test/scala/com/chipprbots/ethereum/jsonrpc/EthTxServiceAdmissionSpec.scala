@@ -722,14 +722,31 @@ class EthTxServiceAdmissionSpec
     f.pool.expectMessageType[SubmitLocalTransaction].blobTxRawBytes.map(_.toSeq) shouldBe Some(raw.toSeq)
   }
 
-  it should "refuse a version-0 sidecar with the pool's error" taggedAs (UnitTest, RPCTest) in {
+  it should "convert a version-0 sidecar to version 1, as go-ethereum's eth_sendRawTransaction does" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
     val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
     val id = sepolia.chainId.value
     val k = newKey()
     f.fund(k)
+    val stx = sign(blobTxHashes(id, List(vhash(commitmentA))), k, Some(id))
+    val v0Form = v0(List(blobA), List(commitmentA), List(blobProofA)).networkEncoding(stx).toArray
+    f.submitRaw(v0Form) shouldBe Right(stx.hash.value)
+    // the pool gets (and peers are served) the version-1 form, with the cell proofs computed from the blobs
+    f.pool.expectMessageType[SubmitLocalTransaction].blobTxRawBytes shouldBe
+      Some(v1(List(blobA), List(commitmentA), cellProofsA).networkEncoding(stx))
+  }
+
+  it should "still refuse a converted sidecar whose commitments do not verify" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    // blobA with blobB's commitment (and matching versioned hash): the computed cell proofs do not open it
     f.refusedRaw(
-      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v0(List(blobA), List(commitmentA), List(blobProofA))),
-      "Wrong sidecar format: unexpected sidecar version, want: 1, got: 0"
+      wrapped(blobTxHashes(id, List(vhash(commitmentB))), k, v0(List(blobA), List(commitmentB), List(blobProofA))),
+      "KZG verification error: invalid proof"
     )
   }
 

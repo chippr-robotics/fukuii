@@ -14,6 +14,7 @@ import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Account
@@ -264,11 +265,15 @@ class EthTxService(
       (stx, rawBytesOpt, sidecar)
     } match
       case Success((signedTransaction, rawBytesOpt, sidecar)) =>
-        IO(admitLocal(signedTransaction, sidecar)).flatMap {
+        IO(sidecarForHead(signedTransaction, rawBytesOpt.map(ByteString(_)), sidecar)).flatMap {
           case Left(error) => IO.pure(Left(error))
-          case Right(admission) =>
-            submitToPool(pendingTransactionsManager, signedTransaction, admission, rawBytesOpt.map(ByteString(_)))
-              .map(_.map(SendRawTransactionResponse.apply))
+          case Right((networkForm, headSidecar)) =>
+            IO(admitLocal(signedTransaction, headSidecar)).flatMap {
+              case Left(error) => IO.pure(Left(error))
+              case Right(admission) =>
+                submitToPool(pendingTransactionsManager, signedTransaction, admission, networkForm)
+                  .map(_.map(SendRawTransactionResponse.apply))
+            }
         }
       case Failure(e) =>
         // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
@@ -277,6 +282,36 @@ class EthTxService(
         // time on the EIP-7594 blob wrapper. The decoder's message is the only signal here.
         log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
+
+  /** go-ethereum `SendRawTransaction` (internal/ethapi/api.go:1738-1756): once Osaka is active at the head, a blob
+    * transaction sent with a version-0 sidecar (one blob proof per blob) has it converted to version 1 (cell proofs
+    * computed from the blobs, `BlobTxSidecar.ToV1`) before submission; the pool then verifies the computed proofs
+    * against the commitments. Returns the network form and sidecar to submit.
+    */
+  private def sidecarForHead(
+      stx: SignedTransaction,
+      networkForm: Option[ByteString],
+      sidecar: Option[BlobSidecar]
+  ): Either[JsonRpcError, (Option[ByteString], Option[BlobSidecar])] =
+    sidecar match
+      case Some(sc)
+          if sc.version == BlobSidecar.Version0 &&
+            blockchainReader.getBestBlockHeader.exists(h => blockchainConfig.isOsakaTimestamp(h.unixTimestamp)) =>
+        try
+          val cellProofs =
+            sc.blobs.flatMap(b => KzgCellProofs.computeCellsAndKzgProofs(b.toArray)._2.map(ByteString(_)))
+          val converted = BlobSidecar(BlobSidecar.Version1, sc.blobs, sc.commitments, cellProofs)
+          val wrapper =
+            BlobTxSidecar(BlobTxSidecar.Version1, sc.blobs.toList, sc.commitments.toList, cellProofs.toList)
+          Right((Some(wrapper.networkEncoding(stx)), Some(converted)))
+        catch
+          case e @ (_: Exception | _: LinkageError) =>
+            Left(
+              JsonRpcError.LogicError(
+                s"blob sidecar conversion failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+              )
+            )
+      case _ => Right((networkForm, sidecar))
 
   /** Admission of a locally submitted transaction, in go-ethereum's `SubmitTransaction` order (api.go:1640-1651):
     *
