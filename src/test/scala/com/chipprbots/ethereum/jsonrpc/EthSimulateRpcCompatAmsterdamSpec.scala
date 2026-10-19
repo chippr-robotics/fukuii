@@ -92,9 +92,7 @@ class EthSimulateRpcCompatAmsterdamSpec extends AnyFlatSpec with Matchers with A
 
   /** The vector's request and expected response, as hive's rpc-compat reads them (`>>` and `<<` lines). */
   private def vector(name: String): (JValue, JValue) =
-    val lines = resource(name + ".io").linesIterator.toSeq
-    def line(prefix: String) = parse(lines.find(_.startsWith(prefix)).get.stripPrefix(prefix).trim)
-    (line(">>"), line("<<"))
+    conformance.RpcCompatVectors.read(resource(name + ".io")).exchanges.head
 
   /** hive's rpc-compat removes error messages before it compares; so does this. */
   private def withoutMessages(json: JValue): JValue = json.removeField {

@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.AccountTransaction
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.FukuiiServiceBuilder
@@ -107,7 +108,9 @@ class FukuiiServiceSpec extends ScalaTestWithActorTestKit with FreeSpecBase with
 
         fukuiiService
           .getAccountTransactions(GetAccountTransactionsRequest(fakeTransaction.senderAddress, BigInt(0) to BigInt(1)))
-          .map(result => assert(result === Right(GetAccountTransactionsResponse(expectedResponse))))
+          .map(result =>
+            assert(result === Right(GetAccountTransactionsResponse(expectedResponse.map(AccountTransaction(_)))))
+          )
       }
     }
 

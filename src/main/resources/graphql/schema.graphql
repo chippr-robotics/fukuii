@@ -91,6 +91,8 @@ type Transaction {
     maxFeePerGas: BigInt
     # MaxPriorityFeePerGas is the maximum miner tip per gas offered to include a transaction, in wei.
     maxPriorityFeePerGas: BigInt
+    # MaxFeePerBlobGas is the maximum blob gas fee cap per blob the sender is willing to pay for blob transaction, in wei.
+    maxFeePerBlobGas: BigInt
     # EffectiveTip is the actual amount of reward going to the miner after accounting
     # for the baseFee. Null until the transaction is mined.
     effectiveTip: BigInt
@@ -137,6 +139,9 @@ type Transaction {
     r: BigInt!
     s: BigInt!
     v: BigInt!
+    # YParity is the signature's y parity for a typed (EIP-2718) transaction,
+    # null for a legacy one.
+    yParity: BigInt
     # Envelope transaction support
     type: Long
     accessList: [AccessTuple!]

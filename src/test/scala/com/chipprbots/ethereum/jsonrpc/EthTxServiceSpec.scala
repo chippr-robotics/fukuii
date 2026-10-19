@@ -422,6 +422,78 @@ class EthTxServiceSpec
 
     res shouldBe PendingTransactionsResponse(Nil)
 
+  // eth_pendingTransactions (go-ethereum TransactionAPI.PendingTransactions): only the given accounts' pool
+  // transactions, in pool order, each rendered as a pending transaction object.
+  "EthTxService.pendingTransactionsFrom" should "keep only the transactions sent from the given accounts" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val otherKey = crypto.keyPairFromPrvKey(BigInt(0xb0b))
+    private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    private val pool = List(pending(ownKey, 0), pending(otherKey, 0), pending(ownKey, 1))
+
+    private val res = ethTxService.pendingTransactionsFrom(Set(Address(ownKey))).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(pool))
+
+    private val txs = res.futureValue.toOption.get.transactions
+    txs.map(_.hash) shouldBe Seq(pool(0), pool(2)).map(_.stx.tx.hash.value)
+    txs.flatMap(_.from) shouldBe Seq(Address(ownKey).bytes, Address(ownKey).bytes)
+    txs.map(_.gasPrice) shouldBe Seq(BigInt(10), BigInt(10)) // fee cap, as a pending tx reports
+    txs.flatMap(_.blockHash) shouldBe empty
+
+  // go-ethereum lists pool.Pending() only: per sender, the consecutive nonces from the state nonce. fukuii's pool also
+  // holds nonce-gapped transactions; they are left out until the gap closes.
+  it should "leave out nonce-gapped (queued) transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val gappedKey = crypto.keyPairFromPrvKey(BigInt(0xca401))
+    private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    // Both accounts are fresh (state nonce 0): own has 0, 1 and a gapped 3; the other account only a gapped 2.
+    private val pool = List(pending(ownKey, 3), pending(ownKey, 0), pending(gappedKey, 2), pending(ownKey, 1))
+
+    private val res =
+      ethTxService.pendingTransactionsFrom(Set(Address(ownKey), Address(gappedKey))).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(pool))
+
+    res.futureValue.toOption.get.transactions.map(_.nonce) shouldBe Seq(BigInt(0), BigInt(1))
+
+  it should "answer nothing for a node without accounts" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    private val res = ethTxService.pendingTransactionsFrom(Set.empty).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(Nil))
+    res.futureValue shouldBe Right(OwnPendingTransactionsResponse(Nil))
+
   // eth_sendRawTransaction and blob txs. The execution-apis send-blob-tx vector (an EIP-7594 wrapper) is the tx with
   // its sidecar; its first item, re-prefixed with the type byte, is the same tx without one.
   private lazy val blobTxWithSidecar: Array[Byte] =

@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPragu
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.*
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config
 
 // scalastyle:off magic.number
 /** `eth_getHeaderByNumber` / `eth_getHeaderByHash`.
@@ -26,6 +28,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * alike).
   */
 class EthHeaderMethodsSpec extends AnyWordSpec with Matchers:
+
+  // BlockResponse/TransactionResponse take the serving node's chain config; here, the test config's.
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
 
   private val Zero256Bloom = "0x" + "00" * 256
 
