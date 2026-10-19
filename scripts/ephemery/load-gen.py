@@ -31,10 +31,10 @@ How signing works (default: fukuii signs everything except 7702 authorizations)
       nonce])) locally and passes {chainId,address,nonce,yParity,r,s} in `authorizationList`. The
       set-code tx targets the authority itself, so its calldata runs the delegated store contract in
       the same tx; later ticks call known delegated EOAs again, re-delegate and clear delegations.
-    * Blob transactions (--blobs --allow-blobs): eth_signTransaction with `blobs` (fukuii computes
+    * Blob transactions (--blobs): eth_signTransaction with `blobs` (fukuii computes
       commitments, proofs and the sidecar), then eth_sendRawTransaction of the returned network-form
-      raw. 1 blob per tx, at most 1 blob tx per tick (per block). Refused unless BOTH flags are given:
-      per-chain blob schedules are not implemented yet (issue #1637).
+      raw. 1 blob per tx, at most 1 blob tx per tick (per block). fukuii follows the chain's own blob
+      schedule since #1637 (#1646), so no extra opt-in is needed; --allow-blobs is accepted and ignored.
     * --sign-locally (fallback): types 0x1/0x2/0x4 are signed by the small pure-Python secp256k1 +
       keccak signer in this file and submitted with eth_sendRawTransaction; legacy still goes through
       fukuii. No blobs in this mode. Same key, same nonce counter.
@@ -67,7 +67,7 @@ Defaults (all per tick = per new head; a fractional rate is a probability)
     --default-fee-frac 0.1  share (not 0x4) that omits fee fields (node defaults them)
     --probes                on (--no-probes to disable)
     --sign-locally          off (fallback signer for 0x1/0x2/0x4)
-    --blobs                 off; needs --allow-blobs too (#1637). --blob-rate 0.5 (<=1 blob tx, 1 blob, per tick)
+    --blobs                 off. --blob-rate 0.5 (<=1 blob tx, 1 blob, per tick)
     --send-method eth  --tip-gwei 0.01  --poll 1.0  --max-inflight 300  --max-errors 20
     --out load-gen-txs.jsonl   --errors-out load-gen-errors.jsonl
 
@@ -938,11 +938,6 @@ def load_key(path):
 
 
 def check_blob_flags(args):
-    if args.blobs and not args.allow_blobs:
-        raise SystemExit(
-            "--blobs refused without --allow-blobs: blob transactions can exceed the chain's blob target/max "
-            "until the per-chain blob schedule lands (fukuii issue #1637). Pass BOTH --blobs --allow-blobs to "
-            "opt in; defaults send at most 1 blob per tx and 1 blob tx per block.")
     if args.blobs and args.sign_locally:
         raise SystemExit("--blobs needs fukuii to build the sidecar (eth_signTransaction); not valid with --sign-locally")
 
@@ -1397,7 +1392,7 @@ def selftest():
           and recs[1]["params"] == "<redacted>" and "a" * 64 not in buf.getvalue() and erpc.error_count == 2)
     check("elide shortens blobs for the errors log", json.dumps(elide(rb)).count("<262146 chars>") == 1)
     ap_ = argparser()
-    for argv, ok in ((["--blobs"], False), (["--blobs", "--allow-blobs"], True), ([], True), (["--allow-blobs"], True)):
+    for argv, ok in ((["--blobs"], True), (["--blobs", "--allow-blobs"], True), ([], True), (["--allow-blobs"], True)):
         try:
             check_blob_flags(ap_.parse_args(argv))
             got = True
@@ -1405,10 +1400,6 @@ def selftest():
             got = False
             msg = str(e)
         check("blob guard %s -> %s" % (argv, "ok" if ok else "refused"), got == ok)
-    try:
-        check_blob_flags(ap_.parse_args(["--blobs"]))
-    except SystemExit as e:
-        check("blob refusal points to issue #1637", "#1637" in str(e) and "--allow-blobs" in str(e))
     try:
         check_blob_flags(ap_.parse_args(["--blobs", "--allow-blobs", "--sign-locally"]))
         check("blobs refused with --sign-locally", False)
@@ -1532,8 +1523,8 @@ def argparser():
     ap.add_argument("--probes", action=argparse.BooleanOptionalAction, default=True,
                     help="per tick: eth_fillTransaction / estimateGas / createAccessList / call+stateOverrides")
     ap.add_argument("--errors-out", default="load-gen-errors.jsonl", help="JSONL of every RPC error response (appended)")
-    ap.add_argument("--blobs", action="store_true", help="send EIP-4844 blob txs (also needs --allow-blobs; see #1637)")
-    ap.add_argument("--allow-blobs", action="store_true", help="acknowledge the per-chain blob schedule gap (issue #1637)")
+    ap.add_argument("--blobs", action="store_true", help="send EIP-4844 blob txs (fukuii builds the sidecar)")
+    ap.add_argument("--allow-blobs", action="store_true", help="no-op, kept for old command lines (the per-chain blob schedule landed in #1646)")
     ap.add_argument("--blob-rate", type=float, default=0.5, help="probability of one blob tx (1 blob) per tick")
     ap.add_argument("--blob-gas", type=int, default=30000)
     ap.add_argument("--setcodes", type=float, default=1.0, help="EIP-7702 set-code txs per tick")
