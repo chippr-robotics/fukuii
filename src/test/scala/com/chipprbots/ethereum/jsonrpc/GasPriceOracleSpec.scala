@@ -176,7 +176,7 @@ class GasPriceOracleSpec
       5.seconds,
       stub[TransactionMappingStorage],
       system.scheduler,
-      Some(o)
+      gasPriceOracleOpt = Some(o)
     )
 
   private def blocksService(o: GasPriceOracle, r: BlockchainReader, cfg: BlockchainConfig): EthBlocksService =

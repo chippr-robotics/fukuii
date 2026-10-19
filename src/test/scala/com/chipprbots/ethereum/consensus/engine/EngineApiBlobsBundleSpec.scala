@@ -74,6 +74,80 @@ class EngineApiBlobsBundleSpec extends AnyWordSpec with Matchers with BeforeAndA
     )
     Map(blobTx.hash.value -> ByteString(0x03.toByte +: body))
 
+  // An EIP-7594 (version 1) sidecar: [tx, 1, blobs, commitments, cell_proofs], with a real commitment and proofs.
+  private lazy val realCommitment: Array[Byte] = CKZG4844JNI.blobToKzgCommitment(zeroBlob)
+  private lazy val cellProofs: Seq[Array[Byte]] = KzgCellProofs.computeCellsAndKzgProofs(zeroBlob)._2.toSeq
+  private lazy val v1BlobTx: SignedTransaction =
+    val chainId = blockchainConfig.chainId.value
+    SignedTransaction.sign(
+      BlobTransaction(
+        chainId,
+        1,
+        BigInt(1),
+        BigInt(1000),
+        GasAmount(100000),
+        Some(Address(ByteString(Array.fill(20)(0x16.toByte)))),
+        0,
+        ByteString.empty,
+        Nil,
+        BigInt(1),
+        List(BlobVersionedHash(ByteString(0x01.toByte) ++ ByteString(crypto.sha256(realCommitment).drop(1))))
+      ),
+      crypto.generateKeyPair(new SecureRandom()),
+      Some(chainId)
+    )
+  private lazy val v1NetworkBytes: Map[ByteString, ByteString] =
+    val body = rlp.encode(
+      RLPList(
+        RLPValue(Array.empty[Byte]),
+        RLPValue(Array[Byte](1)),
+        RLPList(RLPValue(zeroBlob)),
+        RLPList(RLPValue(realCommitment)),
+        RLPList(cellProofs.map(RLPValue(_))*)
+      )
+    )
+    Map(v1BlobTx.hash.value -> ByteString(0x03.toByte +: body))
+
+  /** The bundle's commitments, as versioned hashes, against every versioned hash of the payload's blob txs. */
+  private def agrees(bundle: BlobsBundleData, txs: Seq[SignedTransaction]): Unit =
+    val payloadHashes = txs.flatMap(_.tx match
+      case bt: BlobTransaction => bt.blobVersionedHashes.map(_.value)
+      case _                   => Nil
+    )
+    bundle.blobs.size shouldBe payloadHashes.size
+    bundle.commitments.size shouldBe payloadHashes.size
+
+  "buildBlobsBundle on an EIP-7594 (version 1) sidecar (#1629 S0b)" should {
+
+    "carry its blobs and commitments, and per-blob (not cell) proofs for a pre-Osaka (getPayloadV3/V4) payload" taggedAs (
+      UnitTest,
+      CryptoTest
+    ) in {
+      val txs = Seq(blobTx, v1BlobTx)
+      val bundle = service.buildBlobsBundle(txs, networkBytes ++ v1NetworkBytes, withCellProofs = false)
+      agrees(bundle, txs)
+      bundle.commitments.last shouldBe ByteString(realCommitment)
+      bundle.commitments.map(c => ByteString(0x01.toByte) ++ ByteString(crypto.sha256(c.toArray).drop(1))).last shouldBe
+        v1BlobTx.tx.asInstanceOf[BlobTransaction].blobVersionedHashes.head.value
+      bundle.proofs shouldBe Seq(
+        ByteString(proof),
+        ByteString(CKZG4844JNI.computeBlobKzgProof(zeroBlob, realCommitment))
+      )
+      bundle.cellProofsPerBlob shouldBe empty
+    }
+
+    "carry CELLS_PER_EXT_BLOB cell proofs per blob for a getPayloadV5 payload, and no cell proofs as V1 proofs" taggedAs (
+      SlowTest,
+      CryptoTest
+    ) in {
+      val bundle = service.buildBlobsBundle(Seq(v1BlobTx), v1NetworkBytes, withCellProofs = true)
+      agrees(bundle, Seq(v1BlobTx))
+      bundle.blobs shouldBe Seq(ByteString(zeroBlob))
+      bundle.cellProofsPerBlob shouldBe Seq(cellProofs.map(ByteString(_)))
+      bundle.proofs shouldBe empty
+    }
+  }
+
   "buildBlobsBundle" should {
 
     "carry the pool's sidecar and compute no cell proofs for a pre-Osaka payload" taggedAs UnitTest in {

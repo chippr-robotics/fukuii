@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.TxPoolConfig
@@ -196,10 +195,11 @@ class PersonalService(
     }
 
   /** eth_signTransaction / personal_signTransaction: go-ethereum `TransactionAPI.SignTransaction`
-    * (internal/ethapi/api.go:1904-1949). `gas`, the fee fields and `nonce` must be given; the rest is defaulted as for
-    * a send (blobs allowed, sidecar version 1 iff Osaka is active at the head and blobs were passed); the signed
-    * transaction is returned, not submitted. personal_signTransaction (geth's former `PersonalAPI.SignTransaction`)
-    * first requires `from` ("sender not specified") and signs with the given passphrase instead of an unlocked account.
+    * (internal/ethapi/api.go:1890-1935). `gas`, the fee fields and `nonce` must be given; the rest is defaulted as for
+    * a send (blobs allowed, sidecar version 1 iff Osaka is active at the head and blobs were passed); the transaction's
+    * fee must be within the RPC fee cap (`checkTxFee`, api.go:1917; [[RpcTxSubmission]]); the signed transaction is
+    * returned, not submitted. personal_signTransaction (geth's former `PersonalAPI.SignTransaction`) first requires
+    * `from` ("sender not specified") and signs with the given passphrase instead of an unlocked account.
     */
   def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse] =
     val args = request.tx
@@ -213,14 +213,15 @@ class PersonalService(
       head <- EitherT(chainHead)
       version = if args.blobs.exists(_.nonEmpty) then BlobTxSidecar.versionAt(head) else BlobTxSidecar.Version0
       (filled, tx) <- prepare(args, head, TxDefaults.SidecarConfig(blobSidecarAllowed = true, version))
+      _ <- EitherT.fromEither[IO](ethTxService.rpcTxSubmission.feeCapRejection(tx).map(LogicError(_)).toLeft(()))
       wallet <- EitherT.fromEither[IO](signingWallet(args.from, request.passphrase))
       stx = signWith(wallet, tx, head)
     yield SignTransactionResponse(SignTransactionResult(stx, sidecarOf(filled)))).value
       .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
 
-  /** eth_fillTransaction: go-ethereum `TransactionAPI.FillTransaction` (internal/ethapi/api.go:1721-1740). Every
+  /** eth_fillTransaction: go-ethereum `TransactionAPI.FillTransaction` (internal/ethapi/api.go:1710-1727). Every
     * default a send would fill (blobs allowed, sidecar version by Osaka at the head), returned unsigned with its RLP.
-    * Needs no account.
+    * Needs no account, and, as in go-ethereum, meets no RPC fee cap.
     */
   def fillTransaction(request: FillTransactionRequest): ServiceResponse[FillTransactionResponse] =
     (for
@@ -274,19 +275,18 @@ class PersonalService(
   private def signWith(wallet: Wallet, tx: Transaction, head: BlockHeader): SignedTransaction =
     wallet.signTx(tx, TxDefaults.legacySigningChainId(head)).tx
 
-  /** Hand a locally signed transaction to the pool, through the same admission eth_sendRawTransaction applies (#1629
-    * S0: `EthTxService.admitLocal` → `TxAdmission.validateLocal`, go-ethereum's pool rules and messages: type active at
-    * the head, chain id, intrinsic gas, fee caps and minimum tip, nonce, balance). A refused transaction is never
-    * pooled or announced. geth's `SubmitTransaction` likewise sends eth_sendTransaction's signed transaction through
-    * the pool's validation (api.go:1654-1686). eth_sendTransaction never carries a blob sidecar.
+  /** Hand a locally signed transaction to the pool, through the same admission eth_sendRawTransaction applies, as
+    * go-ethereum's `SendTransaction` ends in `SubmitTransaction` (api.go:1640-1702): the RPC fee cap and replay
+    * protection (#1629 S0b), the pool's rules at the head (S0: `EthTxService.admitLocal` →
+    * `TxAdmission.validateLocal`), then the pool's rules against what it holds (`EthTxService.submitToPool`). A refused
+    * transaction is never pooled or announced. eth_sendTransaction never carries a blob sidecar.
     */
   private def submitLocal(stx: SignedTransaction): IO[Either[JsonRpcError, ByteString]] =
-    IO {
-      ethTxService.admitLocal(stx, hasSidecar = false).map { _ =>
+    IO(ethTxService.admitLocal(stx, sidecar = None)).flatMap {
+      case Left(error) => IO.pure(Left(error))
+      case Right(admission) =>
         log.debug("Trying to add personal transaction: {}", stx.hash.toHex)
-        txPool ! AddOrOverrideTransaction(stx)
-        stx.hash.value
-      }
+        ethTxService.submitToPool(txPool, stx, admission, None)
     }
 
   private def defaultsEnv(head: BlockHeader): TxDefaults.Env =

@@ -520,24 +520,28 @@ class EthTxServiceSpec
     UnitTest,
     RPCTest
   ) in new BlobAdmissibleSetup:
+    pendingTransactionsManager.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
     val res = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
 
     res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
       Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")
-    pendingTransactionsManager.expectMsgPF() { case AddOrOverrideTransaction(_, rawBytes) =>
-      rawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
+    pendingTransactionsManager.expectMsgPF() { case submit: SubmitLocalTransaction =>
+      submit.blobTxRawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
     }
 
   /** A chain on which the send-blob-tx vector is admissible (#1629 S0: eth_sendRawTransaction now applies pool
     * admission). The vector is signed for the rpc-compat genesis chain, 0x0c72dd9d5e883e, needs Cancun active at the
-    * head, and its sender must be able to pay. The test config is ETC-shaped with no head, under which admission
-    * refuses the tx before its sidecar is looked at.
+    * head, Osaka for its version-1 (cell proof) sidecar (#1629 S0b), and its sender must be able to pay. The test
+    * config is ETC-shaped with no head, under which admission refuses the tx before its sidecar is looked at.
     */
   class BlobAdmissibleSetup(implicit system: ActorSystem) extends TestSetup:
+    // admission verifies the vector's KZG cell proofs (#1629 S0b)
+    com.chipprbots.ethereum.crypto.KzgTestSetup.ensureLoaded()
     private val vectorChain: BlockchainConfig = blockchainConfig.copy(
       networkType = NetworkType.ETH,
       chainId = ChainId(BigInt("0c72dd9d5e883e", 16)),
-      forkTimestamps = ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L))
+      forkTimestamps =
+        ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L), osakaTimestamp = Some(0L))
     )
     private val head: BlockHeader = Fixtures.Blocks.ValidBlock.header.copy(
       unixTimestamp = Timestamp(1L),

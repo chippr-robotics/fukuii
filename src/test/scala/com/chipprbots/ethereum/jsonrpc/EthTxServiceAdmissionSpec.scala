@@ -16,6 +16,8 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.crypto.KzgCellProofs
+import com.chipprbots.ethereum.crypto.KzgTestSetup
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
@@ -26,9 +28,10 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager.SubmitLocalTransaction
 import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.transactions.TxTypeGate
+import com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Hex
 
@@ -47,6 +50,9 @@ class EthTxServiceAdmissionSpec
     with SecureRandomBuilder:
 
   implicit val runtime: IORuntime = IORuntime.global
+
+  // the blob sidecar rules verify KZG proofs (#1629 S0b)
+  KzgTestSetup.ensureLoaded()
 
   private val shipped = ConfigFactory.load()
   private def chain(name: String): BlockchainConfig =
@@ -77,7 +83,8 @@ class EthTxServiceAdmissionSpec
       baseFee: Option[BigInt] = Some(OneGwei),
       headGasLimit: BigInt = 30_000_000,
       noHead: Boolean = false,
-      stateMissing: Boolean = false
+      stateMissing: Boolean = false,
+      rpc: RpcTxSubmission = RpcTxSubmission.Default
   ):
     val pool: TestProbe[PendingTransactionsManager.Command] = createTestProbe[PendingTransactionsManager.Command]()
     var accounts: Map[Address, Account] = Map.empty
@@ -99,7 +106,18 @@ class EthTxServiceAdmissionSpec
         else accounts.get(address)
 
     val service: EthTxService =
-      new EthTxService(null, reader, null, pool.ref, 5.seconds, null, system.scheduler)(using cfg)
+      new EthTxService(
+        null,
+        reader,
+        null,
+        spawn(AcceptLocalSubmissions.forwardingTo(pool.ref)),
+        5.seconds,
+        null,
+        system.scheduler,
+        rpc
+      )(using
+        cfg
+      )
 
     def fund(keyPair: AsymmetricCipherKeyPair, balance: BigInt = Rich, nonce: BigInt = 0): Unit =
       accounts += Address(keyPair) -> Account(nonce = UInt256(nonce), balance = UInt256(balance))
@@ -112,7 +130,7 @@ class EthTxServiceAdmissionSpec
     /** Admitted: the hash comes back and the tx is handed to the pool. */
     def admitted(stx: SignedTransaction): Unit =
       submit(stx) shouldBe Right(stx.hash.value)
-      pool.expectMessageType[AddOrOverrideTransaction].signedTransaction shouldBe stx
+      pool.expectMessageType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
     /** Refused with go-ethereum's -32000 `message`, and never handed to the pool (so never gossiped). */
     def refused(stx: SignedTransaction, message: String): Unit =
@@ -215,7 +233,7 @@ class EthTxServiceAdmissionSpec
     f.accounts += SignedTransaction.getSender(stx)(using vectorChain).get -> Account(balance = UInt256(Rich))
     f.submitRaw(wrapper).map(h => Hex.toHexString(h.toArray)) shouldBe
       Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")
-    f.pool.expectMessageType[AddOrOverrideTransaction].blobTxRawBytes.map(_.toSeq) shouldBe Some(wrapper.toSeq)
+    f.pool.expectMessageType[SubmitLocalTransaction].blobTxRawBytes.map(_.toSeq) shouldBe Some(wrapper.toSeq)
 
     // The same tx without its sidecar (the wrapper's first item, re-prefixed): go-ethereum's validateBlobSidecar.
     val withoutSidecar = rlp.rawDecode(wrapper.tail) match
@@ -258,7 +276,7 @@ class EthTxServiceAdmissionSpec
       val sender = SignedTransaction.getSender(stx)(using vectorChain).getOrElse(fail(s"no sender for $expectedHash"))
       f.accounts += sender -> Account(nonce = UInt256(stx.tx.nonce), balance = UInt256(Rich))
       f.submitRaw(raw).map(h => Hex.toHexString(h.toArray)) shouldBe Right(expectedHash)
-      f.pool.expectMessageType[AddOrOverrideTransaction].signedTransaction shouldBe stx
+      f.pool.expectMessageType[SubmitLocalTransaction].signedTransaction shouldBe stx
     }
   }
 
@@ -584,6 +602,258 @@ class EthTxServiceAdmissionSpec
   it should "count the blob fee in the upfront cost" taggedAs (UnitTest) in {
     val tx = blobTx(sepolia.chainId.value)
     TxAdmission.upfrontCost(tx) shouldBe BigInt(21_000) * 2 * OneGwei + BigInt(131_072) * OneGwei
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // #1629 S0b: the RPC layer (go-ethereum SubmitTransaction / checkTxFee), per chain
+  // ---------------------------------------------------------------------------------------------------------------
+
+  private val Unprotected = "only replay-protected (EIP-155) transactions allowed over RPC"
+
+  "eth_sendRawTransaction (S0b)" should "refuse an unprotected legacy tx by default, on ETH and on Mordor" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    for (cfg, head, ts, baseFee) <- Seq(
+        (sepolia, BigInt(9_000_000), sepoliaPrague, Some(OneGwei)),
+        (mordor, mordorHead, 1_700_000_000L, None)
+      )
+    do
+      val f = new Fixture(cfg, head, ts, baseFee = baseFee)
+      val k = newKey()
+      f.fund(k)
+      f.refused(sign(legacy(), k, None), Unprotected)
+      f.admitted(sign(legacy(), k, Some(cfg.chainId.value)))
+  }
+
+  it should "admit an unprotected legacy tx when allow-unprotected-txs is set, on ETH and on Mordor" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val allow = RpcTxSubmission(allowUnprotectedTxs = true, txFeeCap = 1.0)
+    for (cfg, head, ts, baseFee) <- Seq(
+        (sepolia, BigInt(9_000_000), sepoliaPrague, Some(OneGwei)),
+        (mordor, mordorHead, 1_700_000_000L, None)
+      )
+    do
+      val f = new Fixture(cfg, head, ts, baseFee = baseFee, rpc = allow)
+      val k = newKey()
+      f.fund(k)
+      f.admitted(sign(legacy(), k, None))
+  }
+
+  it should "refuse a fee above the 1 ether cap before any other check, on ETH and on Mordor" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // 21000 gas at 100 000 gwei is 2.1 ether. Signed for the wrong chain and unfunded: the fee cap is checked first.
+    val price = BigInt(10).pow(14)
+    for (cfg, head, ts, baseFee) <- Seq(
+        (sepolia, BigInt(9_000_000), sepoliaPrague, Some(OneGwei)),
+        (mordor, mordorHead, 1_700_000_000L, None)
+      )
+    do
+      val f = new Fixture(cfg, head, ts, baseFee = baseFee)
+      val k = newKey()
+      f.refused(
+        sign(legacy(gasPrice = price), k, Some(12345)),
+        "tx fee (2.10 ether) exceeds the configured cap (1.00 ether)"
+      )
+      // with no cap, the same tx meets the pool's rules (here: signed for another chain)
+      val uncapped = new Fixture(cfg, head, ts, baseFee = baseFee, rpc = RpcTxSubmission.Default.copy(txFeeCap = 0))
+      uncapped.fund(k)
+      uncapped.admitted(sign(legacy(gasPrice = price), k, Some(cfg.chainId.value)))
+  }
+
+  it should "price a 0x2 tx at its fee cap against the cap" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaPrague)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refused(
+      sign(dynamicFeeTx(id, maxFee = BigInt(10).pow(14), tip = OneGwei), k, Some(id)),
+      "tx fee (2.10 ether) exceeds the configured cap (1.00 ether)"
+    )
+    f.admitted(sign(dynamicFeeTx(id, maxFee = BigInt(10).pow(13), tip = OneGwei), k, Some(id)))
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // #1629 S0b: blob sidecars (go-ethereum txpool validateBlobSidecar / ValidateCells; v1.16 validateBlobTx)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  private val BlobSize = 131_072
+  private lazy val blobA: ByteString = ByteString(new Array[Byte](BlobSize))
+  // a non-constant polynomial: a constant one (blobA is 0) has the same, trivial, opening proofs as blobA
+  private lazy val blobB: ByteString = ByteString(Array.tabulate[Byte](BlobSize)(i => if i == 31 then 1 else 0))
+  private def commitment(blob: ByteString): ByteString =
+    ByteString(ethereum.ckzg4844.CKZG4844JNI.blobToKzgCommitment(blob.toArray))
+  private lazy val commitmentA = commitment(blobA)
+  private lazy val commitmentB = commitment(blobB)
+  private lazy val blobProofA =
+    ByteString(ethereum.ckzg4844.CKZG4844JNI.computeBlobKzgProof(blobA.toArray, commitmentA.toArray))
+  private lazy val cellProofsA: List[ByteString] =
+    KzgCellProofs.computeCellsAndKzgProofs(blobA.toArray)._2.toList.map(ByteString(_))
+  private lazy val cellProofsB: List[ByteString] =
+    KzgCellProofs.computeCellsAndKzgProofs(blobB.toArray)._2.toList.map(ByteString(_))
+  private def vhash(c: ByteString): BlobVersionedHash = BlobTxSidecar.versionedHash(c)
+
+  private def blobTxHashes(chainId: BigInt, hashes: List[BlobVersionedHash]): BlobTransaction =
+    blobTx(chainId).copy(blobVersionedHashes = hashes)
+
+  /** `tx` signed and wrapped with `sidecar`, in network form. */
+  private def wrapped(tx: BlobTransaction, k: AsymmetricCipherKeyPair, sidecar: BlobTxSidecar): Array[Byte] =
+    sidecar.networkEncoding(sign(tx, k, Some(tx.chainId))).toArray
+
+  private def v1(blobs: List[ByteString], commitments: List[ByteString], proofs: List[ByteString]) =
+    BlobTxSidecar(BlobTxSidecar.Version1, blobs, commitments, proofs)
+  private def v0(blobs: List[ByteString], commitments: List[ByteString], proofs: List[ByteString]) =
+    BlobTxSidecar(BlobTxSidecar.Version0, blobs, commitments, proofs)
+
+  "a blob tx at an Osaka head (S0b)" should "be admitted with a valid version-1 sidecar" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    val raw = wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v1(List(blobA), List(commitmentA), cellProofsA))
+    f.submitRaw(raw) shouldBe a[Right[?, ?]]
+    f.pool.expectMessageType[SubmitLocalTransaction].blobTxRawBytes.map(_.toSeq) shouldBe Some(raw.toSeq)
+  }
+
+  it should "convert a version-0 sidecar to version 1, as go-ethereum's eth_sendRawTransaction does" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    val stx = sign(blobTxHashes(id, List(vhash(commitmentA))), k, Some(id))
+    val v0Form = v0(List(blobA), List(commitmentA), List(blobProofA)).networkEncoding(stx).toArray
+    f.submitRaw(v0Form) shouldBe Right(stx.hash.value)
+    // the pool gets (and peers are served) the version-1 form, with the cell proofs computed from the blobs
+    f.pool.expectMessageType[SubmitLocalTransaction].blobTxRawBytes shouldBe
+      Some(v1(List(blobA), List(commitmentA), cellProofsA).networkEncoding(stx))
+  }
+
+  it should "still refuse a converted sidecar whose commitments do not verify" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    // blobA with blobB's commitment (and matching versioned hash): the computed cell proofs do not open it
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentB))), k, v0(List(blobA), List(commitmentB), List(blobProofA))),
+      "KZG verification error: invalid proof"
+    )
+  }
+
+  it should "refuse versioned hashes that do not match the commitments" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    val sc = v1(List(blobA), List(commitmentA), cellProofsA)
+    def hex(h: BlobVersionedHash) = "0x" + Hex.toHexString(h.value.toArray)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentB))), k, sc),
+      s"blob 0: computed hash ${hex(vhash(commitmentA))} mismatches transaction one ${hex(vhash(commitmentB))}"
+    )
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA), vhash(commitmentB))), k, sc),
+      "invalid number of 1 blob commitments compared to 2 blob hashes"
+    )
+  }
+
+  it should "refuse more than 6 blobs" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    val seven = List.fill(7)(commitmentA)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, seven.map(vhash)), k, v1(List.fill(7)(blobA), seven, Nil)),
+      "transaction blob limit exceeded: blob count 7, limit 6"
+    )
+  }
+
+  it should "refuse a blob tx with no blobs, and a wrong cell-proof count" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refusedRaw(wrapped(blobTxHashes(id, Nil), k, v1(Nil, Nil, Nil)), "blobless blob transaction")
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v1(List(blobA), List(commitmentA), List(blobProofA))),
+      "Wrong sidecar format: invalid number of 1 blob proofs expected 128"
+    )
+  }
+
+  it should "refuse cell proofs that do not verify" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaOsaka, headGasLimit = 60_000_000)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v1(List(blobA), List(commitmentA), cellProofsB)),
+      "KZG verification error: invalid proof"
+    )
+  }
+
+  "a blob tx before Osaka (S0b)" should "be admitted with a valid version-0 sidecar" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaPrague)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    val raw =
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v0(List(blobA), List(commitmentA), List(blobProofA)))
+    f.submitRaw(raw) shouldBe a[Right[?, ?]]
+    f.pool.expectMessageType[SubmitLocalTransaction]
+  }
+
+  it should "refuse a version-1 (cell proof) sidecar, as go-ethereum v1.16 does" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaPrague)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v1(List(blobA), List(commitmentA), cellProofsA)),
+      "cell proof is not supported yet"
+    )
+  }
+
+  it should "refuse no blobs, more than 6, and a blob proof that does not verify" taggedAs (UnitTest, RPCTest) in {
+    val f = new Fixture(sepolia, 9_000_000, sepoliaPrague)
+    val id = sepolia.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refusedRaw(wrapped(blobTxHashes(id, Nil), k, v0(Nil, Nil, Nil)), "blobless blob transaction")
+    val seven = List.fill(7)(commitmentA)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, seven.map(vhash)), k, v0(List.fill(7)(blobA), seven, Nil)),
+      "too many blobs in transaction: have 7, permitted 6"
+    )
+    val wrongProof = ByteString(ethereum.ckzg4844.CKZG4844JNI.computeBlobKzgProof(blobB.toArray, commitmentB.toArray))
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v0(List(blobA), List(commitmentA), List(wrongProof))),
+      "invalid blob 0: invalid proof"
+    )
+  }
+
+  "a blob tx on Mordor (S0b)" should "meet the type gate before its sidecar is looked at" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val f = new Fixture(mordor, mordorHead, 1_700_000_000L, baseFee = None)
+    val id = mordor.chainId.value
+    val k = newKey()
+    f.fund(k)
+    f.refusedRaw(
+      wrapped(blobTxHashes(id, List(vhash(commitmentA))), k, v0(List(blobA), List(commitmentA), List(blobProofA))),
+      "transaction type not supported: type 3 rejected, pool not yet in Cancun"
+    )
   }
 
   private def readResource(path: String): Array[Byte] =

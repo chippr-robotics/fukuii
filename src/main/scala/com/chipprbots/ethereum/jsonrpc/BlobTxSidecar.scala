@@ -174,18 +174,14 @@ object BlobTxSidecar:
     val verified: Either[Throwable, Boolean] = kzg {
       if version == Version0 then
         blobs.indices.forall { i =>
-          CKZG4844JNI.verifyBlobKzgProof(blobs(i).toArray[Byte], commitments(i).toArray[Byte], proofs(i).toArray[Byte])
+          KzgCellProofs.verifyBlobProof(blobs(i).toArray[Byte], commitments(i).toArray[Byte], proofs(i).toArray[Byte])
         }
       else
-        // go-ethereum kzg4844.VerifyCellProofs: recompute every blob's cells, then batch-verify each cell against its
-        // blob's commitment and the caller's cell proof.
-        val cells = blobs.map(b => KzgCellProofs.computeCellsAndKzgProofs(b.toArray)._1)
-        val flatCommitments =
-          blobs.indices.flatMap(i => Seq.fill(CellProofsPerBlob)(commitments(i).toArray[Byte])).toArray.flatten
-        val indices = blobs.indices.flatMap(_ => (0 until CellProofsPerBlob).map(_.toLong)).toArray
-        val flatCells = cells.flatMap(_.toSeq).toArray.flatten
-        val flatProofs = proofs.map(_.toArray[Byte]).toArray.flatten
-        CKZG4844JNI.verifyCellKzgProofBatch(flatCommitments, indices, flatCells, flatProofs)
+        KzgCellProofs.verifyCellProofs(
+          blobs.map(_.toArray[Byte]),
+          commitments.map(_.toArray[Byte]),
+          proofs.map(_.toArray[Byte])
+        )
     }
     verified match
       case Right(true)  => Right(())

@@ -32,3 +32,26 @@ object KzgCellProofs:
     val cells = flatCells.grouped(BYTES_PER_CELL).toArray
     val proofs = flatProofs.grouped(BYTES_PER_PROOF).toArray
     (cells, proofs)
+
+  /** go-ethereum `kzg4844.VerifyBlobProof`: one EIP-4844 blob proof (sidecar version 0) against its blob and
+    * commitment.
+    *
+    * @throws ethereum.ckzg4844.CKZGException
+    *   if the trusted setup is not loaded or an input is malformed.
+    */
+  def verifyBlobProof(blob: Array[Byte], commitment: Array[Byte], proof: Array[Byte]): Boolean =
+    CKZG4844JNI.verifyBlobKzgProof(blob, commitment, proof)
+
+  /** go-ethereum `kzg4844.VerifyCellProofs` (sidecar version 1): recompute every blob's cells, then batch-verify each
+    * cell against its blob's commitment and the given cell proof (`CELLS_PER_EXT_BLOB` proofs per blob, in blob order).
+    *
+    * @throws ethereum.ckzg4844.CKZGException
+    *   if the trusted setup is not loaded or an input is malformed.
+    */
+  def verifyCellProofs(blobs: Seq[Array[Byte]], commitments: Seq[Array[Byte]], proofs: Seq[Array[Byte]]): Boolean =
+    val cells = blobs.map(b => computeCellsAndKzgProofs(b)._1)
+    val flatCommitments = blobs.indices.flatMap(i => Seq.fill(CELLS_PER_EXT_BLOB)(commitments(i))).toArray.flatten
+    val indices = blobs.indices.flatMap(_ => (0 until CELLS_PER_EXT_BLOB).map(_.toLong)).toArray
+    val flatCells = cells.flatMap(_.toSeq).toArray.flatten
+    val flatProofs = proofs.toArray.flatten
+    CKZG4844JNI.verifyCellKzgProofBatch(flatCommitments, indices, flatCells, flatProofs)

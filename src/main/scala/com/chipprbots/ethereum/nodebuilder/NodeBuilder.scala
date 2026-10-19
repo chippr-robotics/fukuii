@@ -670,7 +670,7 @@ trait GasPriceOracleBuilder:
 
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & GasPriceOracleBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -680,7 +680,8 @@ trait EthTxServiceBuilder:
     txPoolConfig.getTransactionFromPoolTimeout,
     storagesInstance.storages.transactionMappingStorage,
     classicSystem.toTyped.scheduler,
-    Some(gasPriceOracle)
+    com.chipprbots.ethereum.jsonrpc.RpcTxSubmission.fromConfig(instanceConfig.config),
+    gasPriceOracleOpt = Some(gasPriceOracle)
   )
 
 trait EthBlocksServiceBuilder:

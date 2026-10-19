@@ -1828,23 +1828,32 @@ class EngineApiService(
   def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData =
     Option(pendingPayloadBlobsBundle.get(payloadId)).getOrElse(BlobsBundleData(Nil, Nil, Nil, Nil))
 
-  /** Parse the EIP-4844 network-wrapped raw bytes (`0x03 || rlp([tx_payload, blobs, commitments, proofs])`) the pool
-    * captured for each blob tx, and return the concatenated sidecars for every blob tx actually included in the built
-    * payload, in payload order.
+  /** Parse the network-form sidecar the pool captured for each blob tx, and return the concatenated sidecars for every
+    * blob tx actually included in the built payload, in payload order. Both wrappers are read
+    * ([[com.chipprbots.ethereum.transactions.BlobSidecar.fromNetworkForm]]): EIP-4844's `[tx, blobs, commitments,
+    * proofs]` (version 0) and EIP-7594's `[tx, 1, blobs, commitments, cell_proofs]` (version 1), which a peer delivers
+    * and eth_sendRawTransaction admits from Osaka. Every blob of an included tx is in the bundle, so its blobs and
+    * commitments always match the payload's versioned hashes.
+    *
+    * `proofs` (BlobsBundleV1, engine_getPayloadV3/V4) are per-blob proofs: a version-0 sidecar's own; for a version-1
+    * sidecar, whose proofs are cell proofs, they are computed (c-kzg `computeBlobKzgProof`) when the payload is
+    * pre-Osaka, the only payloads a V1 reader is served. Cell proofs never go into `proofs`.
     *
     * @param withCellProofs
-    *   also compute the EIP-7594 cell proofs (`cellProofsPerBlob`), one c-kzg `computeCellsAndKzgProofs` per blob. Only
-    *   a BlobsBundleV2 reader needs them: engine_getPayloadV5 (Osaka onwards) and the testing_* namespace. They are the
-    *   dominant cost of a build that carries blobs: measured on hive `In-Order Consecutive Payload Execution (Cancun)`,
-    *   one 6-blob transaction made every build take ~4.3 s where the same test's Paris builds take 40-150 ms.
+    *   also compute the EIP-7594 cell proofs (`cellProofsPerBlob`), one c-kzg `computeCellsAndKzgProofs` per blob,
+    *   whatever the sidecar's version (a peer's version-1 proofs are not verified on the way in). Only a BlobsBundleV2
+    *   reader needs them: engine_getPayloadV5 (Osaka onwards) and the testing_* namespace. They are the dominant cost
+    *   of a build that carries blobs: measured on hive `In-Order Consecutive Payload Execution (Cancun)`, one 6-blob
+    *   transaction made every build take ~4.3 s where the same test's Paris builds take 40-150 ms.
     */
   private[engine] def buildBlobsBundle(
       txs: Seq[SignedTransaction],
       blobTxRawBytes: Map[ByteString, ByteString],
       withCellProofs: Boolean
   ): BlobsBundleData =
-    import com.chipprbots.ethereum.rlp.{rawDecode, RLPList, RLPValue}
     import com.chipprbots.ethereum.crypto.KzgCellProofs
+    import com.chipprbots.ethereum.transactions.BlobSidecar
+    def hex(h: ByteString): String = h.toArray.map("%02x".format(_)).mkString
     val blobTxHashes = txs.collect {
       case stx @ SignedTransaction(_: com.chipprbots.ethereum.domain.BlobTransaction, _) => stx.hash
     }
@@ -1855,42 +1864,46 @@ class EngineApiService(
     blobTxHashes.foreach { h =>
       blobTxRawBytes.get(h.value) match
         case Some(raw) if raw.length > 1 && raw(0) == 0x03 =>
-          try
-            rawDecode(raw.toArray.drop(1)) match
-              case RLPList(_, blobs: RLPList, commitments: RLPList, proofs: RLPList) =>
-                blobs.items.foreach {
-                  case RLPValue(b) =>
-                    allBlobs += ByteString(b)
-                    if withCellProofs then
-                      val cellProofs: Seq[ByteString] =
-                        try
-                          val (_, perCellProofs) = KzgCellProofs.computeCellsAndKzgProofs(b)
-                          perCellProofs.toSeq.map(ByteString(_))
-                        catch
-                          case e: Exception =>
-                            log.warn(
-                              "EIP-7594 cell-proof computation failed for blob in tx {}: {}",
-                              h.value.toArray.map("%02x".format(_)).mkString,
-                              e.getMessage
-                            )
-                            Seq.empty
-                      allCellProofsPerBlob += cellProofs
-                  case _ =>
+          val parsed =
+            try BlobSidecar.fromNetworkForm(raw.toArray)
+            catch case e: Exception => Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+          parsed match
+            case Left(problem) =>
+              log.warn("Failed to decode blob tx {} sidecar: {}", hex(h.value), problem)
+            case Right(sidecar) =>
+              allBlobs ++= sidecar.blobs
+              allCommitments ++= sidecar.commitments
+              if sidecar.version == BlobSidecar.Version0 then allProofs ++= sidecar.proofs
+              else if !withCellProofs then
+                sidecar.blobs.zip(sidecar.commitments).foreach { case (blob, commitment) =>
+                  try
+                    allProofs += ByteString(
+                      ethereum.ckzg4844.CKZG4844JNI.computeBlobKzgProof(blob.toArray, commitment.toArray)
+                    )
+                  catch
+                    case e: Exception =>
+                      log.warn(
+                        "EIP-4844 blob proof computation failed for blob in tx {}: {}",
+                        hex(h.value),
+                        e.getMessage
+                      )
                 }
-                commitments.items.foreach { case RLPValue(c) => allCommitments += ByteString(c); case _ => }
-                proofs.items.foreach { case RLPValue(p) => allProofs += ByteString(p); case _ => }
-              case _ =>
-                log.warn(
-                  "Blob tx {} sidecar RLP shape unexpected; skipping",
-                  h.value.toArray.map("%02x".format(_)).mkString
-                )
-          catch
-            case e: Exception =>
-              log.warn(
-                "Failed to decode blob tx {} sidecar: {}",
-                h.value.toArray.map("%02x".format(_)).mkString,
-                e.getMessage
-              )
+              if withCellProofs then
+                sidecar.blobs.foreach { blob =>
+                  val cellProofs: Seq[ByteString] =
+                    try
+                      val (_, perCellProofs) = KzgCellProofs.computeCellsAndKzgProofs(blob.toArray)
+                      perCellProofs.toSeq.map(ByteString(_))
+                    catch
+                      case e: Exception =>
+                        log.warn(
+                          "EIP-7594 cell-proof computation failed for blob in tx {}: {}",
+                          hex(h.value),
+                          e.getMessage
+                        )
+                        Seq.empty
+                  allCellProofsPerBlob += cellProofs
+                }
         case _ => // tx from network / historical — we didn't store a sidecar
     }
     BlobsBundleData(allBlobs.result(), allCommitments.result(), allProofs.result(), allCellProofsPerBlob.result())
