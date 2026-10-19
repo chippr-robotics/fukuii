@@ -239,7 +239,15 @@ trait TxPoolConfig:
     */
   val announcementFetchTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementFetchTimeout
 
+  /** Percentage by which a replacement must raise a pooled transaction's fee cap and tip cap (go-ethereum
+    * `--txpool.pricebump`, default 10; values below 1 are raised to the default, as go-ethereum's `sanitize` does).
+    */
+  val priceBump: Int = TxPoolConfig.DefaultPriceBump
+
 object TxPoolConfig:
+
+  /** go-ethereum legacypool DefaultConfig.PriceBump. */
+  val DefaultPriceBump: Int = 10
 
   /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
   val DefaultBlobSidecarBudgetBytes: Long = 256L * 1024 * 1024
@@ -254,6 +262,11 @@ object TxPoolConfig:
     val txPoolConfig = etcClientConfig.getConfig("txPool")
 
     new TxPoolConfig:
+      override val priceBump: Int =
+        if txPoolConfig.hasPath("price-bump") then
+          val configured = txPoolConfig.getInt("price-bump")
+          if configured < 1 then TxPoolConfig.DefaultPriceBump else configured
+        else TxPoolConfig.DefaultPriceBump
       override val blobSidecarBudgetBytes: Long =
         if txPoolConfig.hasPath("blob-sidecar-budget") then txPoolConfig.getBytes("blob-sidecar-budget").longValue
         else TxPoolConfig.DefaultBlobSidecarBudgetBytes

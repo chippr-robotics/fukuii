@@ -134,7 +134,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "send a transaction when having pending txs from the same sender" taggedAs (
     UnitTest,
@@ -156,7 +156,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(stxWithSender, 0))))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(newTx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(newTx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe newTx
 
   it should "fail to send a transaction given a wrong passphrase" taggedAs (UnitTest, RPCTest) in new TestSetup:
     keyStore.unlockAccount
@@ -188,7 +188,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "fail to send a transaction when account is locked" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val req: SendTransactionRequest = SendTransactionRequest(tx)
@@ -343,7 +343,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "produce chain specific transaction after eip155" taggedAs (UnitTest, RPCTest) in new TestSetup:
     keyStore.unlockAccount
@@ -362,7 +362,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(chainSpecificStx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(chainSpecificStx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe chainSpecificStx
 
   it should "return NodeNotFound when sending transaction during sync (state unavailable)" taggedAs (
     UnitTest,
@@ -495,6 +495,8 @@ class PersonalServiceSpec
     val keyStore: KeyStore = mock[KeyStore]
 
     val txPool: TestProbe = TestProbe()
+    // the services ask the pool to take each local submission; this one takes them all (the probe still sees them)
+    txPool.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     (() => blockchainReader.getBestBranch).expects().returning(EmptyBranch).anyNumberOfTimes()
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -519,9 +521,15 @@ class PersonalServiceSpec
       // state this fixture does not model; PersonalServiceTypedTxSpec runs sends through the real gate.
       override private[jsonrpc] def admitLocal(
           stx: SignedTransaction,
-          hasSidecar: Boolean
-      ): Either[JsonRpcError, Unit] =
-        Right(())
+          sidecar: Option[com.chipprbots.ethereum.transactions.BlobSidecar]
+      ): Either[JsonRpcError, EthTxService.LocalAdmission] =
+        Right(
+          EthTxService.LocalAdmission(
+            Address(1), // the pool is a probe here; the sender it would read is not looked at
+            Account.empty(),
+            Fixtures.Blocks.Block3125369.header
+          )
+        )
 
     val gasEstimator: TxGasEstimator = new TxGasEstimator:
       def estimateGas(args: TxArgs, head: BlockHeader): cats.effect.IO[Either[JsonRpcError, BigInt]] =

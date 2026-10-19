@@ -86,7 +86,7 @@ class PersonalServiceTypedTxSpec
       )
       .tx
     res.futureValue shouldBe Right(SendTransactionResponse(expected.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(expected))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe expected
 
   it should "build EIP-2930 and EIP-7702 transactions from their fields" taggedAs (UnitTest, RPCTest) in new TestSetup(
     TxDefaultsSpec.eth,
@@ -110,7 +110,7 @@ class PersonalServiceTypedTxSpec
         )
       )
       .unsafeRunSync()
-    val sent1 = txPool.expectMsgType[AddOrOverrideTransaction].signedTransaction
+    val sent1 = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     sent1.tx shouldBe TransactionWithAccessList(
       1,
       accountNonce,
@@ -135,7 +135,7 @@ class PersonalServiceTypedTxSpec
         )
       )
       .unsafeRunSync()
-    val sent4 = txPool.expectMsgType[AddOrOverrideTransaction].signedTransaction
+    val sent4 = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     sent4.tx shouldBe a[SetCodeTransaction]
     sent4.tx.gasLimit shouldBe GasAmount(gasEstimate + 25000)
     sent4.tx.asInstanceOf[SetCodeTransaction].authorizationList shouldBe List(auth)
@@ -178,7 +178,7 @@ class PersonalServiceTypedTxSpec
         )
         .tx
     res.futureValue shouldBe Right(SendTransactionResponse(expected.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(expected))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe expected
 
     for (args, t, fork) <- List(
         (TxArgs(maxFeePerGas = Some(10), maxPriorityFeePerGas = Some(1)), 2, "Olympia"),
@@ -219,11 +219,11 @@ class PersonalServiceTypedTxSpec
     val first = personal.sendTransaction(req).unsafeToFuture()
     val second = personal.sendTransaction(req).unsafeToFuture()
     // Only one nonce query is outstanding: whichever send holds the lock reaches the pool before the other asks. Without
-    // the lock the second GetPendingTransactionsReq would arrive where the AddOrOverrideTransaction is expected.
+    // the lock the second GetPendingTransactionsReq would arrive where the SubmitLocalTransaction is expected.
     replyPTM(PendingTransactionsResponse(Nil))
-    val firstTx = txPool.expectMsgType[AddOrOverrideTransaction].signedTransaction
+    val firstTx = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(SignedTransactionWithSender(firstTx, address), 0))))
-    val secondTx = txPool.expectMsgType[AddOrOverrideTransaction].signedTransaction
+    val secondTx = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     (firstTx.tx.nonce, secondTx.tx.nonce) shouldBe (accountNonce, accountNonce + 1)
     Set(first.futureValue, second.futureValue) shouldBe
       Set(Right(SendTransactionResponse(firstTx.hash.value)), Right(SendTransactionResponse(secondTx.hash.value)))
@@ -417,6 +417,8 @@ class PersonalServiceTypedTxSpec
 
     val keyStore: KeyStore = mock[KeyStore]
     val txPool: TestProbe = TestProbe()
+    // the services ask the pool to take each local submission; this one takes them all (the probe still sees them)
+    txPool.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     (() => blockchainReader.getBestBranch).expects().returning(EmptyBranch).anyNumberOfTimes()
     (() => blockchainReader.getBestBlock).expects().returning(Some(Block(head, BlockBody.empty))).anyNumberOfTimes()

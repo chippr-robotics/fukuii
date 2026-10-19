@@ -16,7 +16,9 @@ import com.google.common.cache.CacheBuilder
 import com.google.common.cache.RemovalCause
 import com.google.common.cache.RemovalNotification
 
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Timestamp
@@ -57,9 +59,30 @@ object PendingTransactionsManager:
 
   case class AnnounceTransactions(signedTransactions: Seq[SignedTransaction], peerId: PeerId) extends Command
 
+  /** Put a transaction in the pool, replacing any pooled transaction from the same sender with the same nonce, with no
+    * pool-state check. Local submission goes through [[SubmitLocalTransaction]] instead.
+    */
   case class AddOrOverrideTransaction(
       signedTransaction: SignedTransaction,
       blobTxRawBytes: Option[ByteString] = None
+  ) extends Command
+
+  /** A locally submitted transaction (eth_sendRawTransaction, eth_sendTransaction, personal_sendTransaction, GraphQL
+    * sendRawTransaction) that passed [[TxAdmission.validateLocal]] against `head`. The pool applies its own rules
+    * against what it holds ([[TxAdmission.poolRejection]]: already known, overdraft, delegation limit, replacement
+    * price bump) and, if they pass, adds it as [[AddOrOverrideTransaction]] does. The reply is the refusal, or `Right`
+    * once the transaction is pooled; go-ethereum holds the pool lock across the same check and insert.
+    *
+    * @param account
+    *   the sender's account in `head`'s state, as admission read it
+    */
+  case class SubmitLocalTransaction(
+      signedTransaction: SignedTransaction,
+      sender: Address,
+      account: Account,
+      head: BlockHeader,
+      blobTxRawBytes: Option[ByteString],
+      replyTo: ActorRef[Either[TxAdmission.Rejection, Unit]]
   ) extends Command
 
   private case class NotifyPeers(signedTransactions: Seq[SignedTransactionWithSender], peers: Seq[Peer]) extends Command
@@ -172,6 +195,12 @@ object PendingTransactionsManager:
     /** Peer tx messages dropped because the node is not synced (see [[TxGossipGate]]). Only for periodic logging. */
     var ignoredWhileUnsynced: Long = 0L
 
+    /** Pooled set-code transactions by hash, with the authorities their authorizations recover to: go-ethereum's
+      * `lookup.auths`, read by the delegation rule ([[TxAdmission.poolRejection]]). Dropped by the cache's removal
+      * listener, so declared ahead of it.
+      */
+    var authoritiesByTx: Map[ByteString, Seq[Address]] = Map.empty
+
     /** Forget the sidecar of `hash`, if there is one. Defined ahead of the cache because its removal listener calls it.
       */
     def dropSidecar(hash: ByteString): Unit =
@@ -197,8 +226,29 @@ object PendingTransactionsManager:
                   .debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
               knownTransactions.remove(notification.getKey)
               dropSidecar(notification.getKey)
+              authoritiesByTx -= notification.getKey
       )
       .build()
+
+    /** Put `ptx` in the pool, recording a set-code transaction's authorities. */
+    def putPooled(ptx: PendingTransaction): Unit =
+      val hash = ptx.stx.tx.hash.value
+      pendingTransactions.put(hash, ptx)
+      ptx.stx.tx.tx match
+        case sct: com.chipprbots.ethereum.domain.SetCodeTransaction if pendingTransactions.asMap().containsKey(hash) =>
+          authoritiesByTx = authoritiesByTx.updated(hash, TxAdmission.setCodeAuthorities(sct))
+        case _ => ()
+
+    /** What the pool holds that [[TxAdmission.poolRejection]] reads for a transaction from `sender` (hash `hash`). */
+    def poolView(sender: Address, hash: ByteString): TxAdmission.PoolView =
+      val pooled = pendingTransactions.asMap().values().asScala.toSeq
+      TxAdmission.PoolView(
+        senderTxs = pooled.collect {
+          case ptx if ptx.stx.senderAddress == sender && ptx.stx.tx.hash.value != hash => ptx.stx.tx.tx
+        },
+        hasPendingAuthorization = authoritiesByTx.valuesIterator.exists(_.contains(sender)),
+        pooledFrom = address => pooled.collect { case ptx if ptx.stx.senderAddress == address => ptx.stx.tx.tx }
+      )
 
     /** Keep `networkForm` for the pooled blob tx `hash`, evicting the oldest blob txs (sidecar and tx together) past
       * the byte budget. A sidecar larger than the whole budget cannot be kept, and a blob tx cannot be served without
@@ -351,10 +401,17 @@ object PendingTransactionsManager:
         if nextNonce > current then pendingNonces = pendingNonces.updated(stx.senderAddress, nextNonce)
       }
 
+    /** Peer transactions that passed [[validateAgainstState]], with what the pool-state rules read for them. */
+    case class StateChecked(
+        txs: Set[SignedTransactionWithSender],
+        accounts: Map[Address, Account] = Map.empty,
+        head: Option[BlockHeader] = None
+    )
+
     /** Validate transactions against the current chain state. Rejects: stale nonces, insufficient balance for value +
-      * gas. Returns only transactions that pass state validation.
+      * gas. Returns only transactions that pass state validation, with the senders' accounts and the head read.
       */
-    def validateAgainstState(txs: Set[SignedTransactionWithSender]): Set[SignedTransactionWithSender] =
+    def validateAgainstState(txs: Set[SignedTransactionWithSender]): StateChecked =
       // 1. Always apply pending nonce check first (no MPT state needed, immune to race conditions)
       val afterPendingNonceCheck = txs.filter { stx =>
         pendingNonces.get(stx.senderAddress) match
@@ -380,7 +437,7 @@ object PendingTransactionsManager:
           case None => true
       }
 
-      if blockchainReader == null || stateStorage == null then return afterTipAndTypeCheck
+      if blockchainReader == null || stateStorage == null then return StateChecked(afterTipAndTypeCheck)
       try
         import com.chipprbots.ethereum.domain.Account
         import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -403,7 +460,7 @@ object PendingTransactionsManager:
               }
               .toMap
 
-            afterTipAndTypeCheck.filter { stx =>
+            val passed = afterTipAndTypeCheck.filter { stx =>
               accountsBySender.get(stx.senderAddress).flatten.exists { account =>
                 val tx = stx.tx.tx
                 // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
@@ -411,14 +468,19 @@ object PendingTransactionsManager:
                 TxAdmission.stateRejection(tx, account).isEmpty && tx.nonce < account.nonce.toBigInt + 1024
               }
             }
+            StateChecked(
+              passed,
+              accountsBySender.collect { case (address, Some(account)) => address -> account },
+              Some(bestBlock.header)
+            )
           case None =>
             // No best block — only accept txs from senders we've already seen
-            afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+            StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
       catch
         case _: Exception =>
           // MPT failed — only accept txs from senders with established pending nonces
           // (unknown senders can't be validated without state)
-          afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
+          StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
 
     def isTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Boolean =
       knownTransactions.isKnown(signedTransaction.hash.value, peerId)
@@ -451,16 +513,19 @@ object PendingTransactionsManager:
         pool.size
       )
       // Validate against chain state (nonce, balance) before adding to pool
-      val transactionsToAdd = validateAgainstState(newTxs)
+      val checked = validateAgainstState(newTxs)
+      val transactionsToAdd = checked.txs
       if transactionsToAdd.isEmpty then Set.empty
       else
         val timestamp = System.currentTimeMillis()
         // One tx at a time, its sidecar right after its put: a later put can size-evict an earlier tx, and the removal
-        // listener must then find that tx's sidecar already stored to drop it.
-        transactionsToAdd.foreach { t =>
+        // listener must then find that tx's sidecar already stored to drop it. In nonce order per sender, so the
+        // pool-state rules see each sender's earlier txs from this batch as pooled.
+        transactionsToAdd.toSeq.sortBy(t => (t.senderAddress.toUnprefixedString, t.tx.tx.nonce)).foreach { t =>
           val hash = t.tx.hash.value
-          pendingTransactions.put(hash, PendingTransaction(t, timestamp))
-          blobSidecars.get(hash).foreach(storeSidecar(hash, _))
+          if poolAdmits(t, checked) then
+            putPooled(PendingTransaction(t, timestamp))
+            blobSidecars.get(hash).foreach(storeSidecar(hash, _))
         }
         val admitted = transactionsToAdd.filter(t => pool.containsKey(t.tx.hash.value))
         updatePendingNonces(admitted)
@@ -468,6 +533,52 @@ object PendingTransactionsManager:
         val peers = connectedPeers.values.toSeq
         if peers.nonEmpty && admitted.nonEmpty then context.self ! NotifyPeers(admitted.toSeq, peers)
         admitted
+
+    /** The pool-state rules ([[TxAdmission.poolRejection]]) for a peer's tx, as go-ethereum applies them to remote txs
+      * too. Only where they apply ([[TxAdmission.poolStateRulesApply]]) and the head's state was read; a peer's tx with
+      * a pooled nonce never reaches here (the pending-nonce check refuses it), so no replacement is decided here.
+      */
+    def poolAdmits(t: SignedTransactionWithSender, checked: StateChecked): Boolean =
+      if !TxAdmission.poolStateRulesApply then true
+      else
+        (checked.accounts.get(t.senderAddress), checked.head) match
+          case (Some(account), Some(head)) =>
+            TxAdmission.poolRejection(
+              t.tx.tx,
+              alreadyKnown = false,
+              account,
+              poolView(t.senderAddress, t.tx.hash.value),
+              head,
+              txPoolConfig.priceBump
+            ) match
+              case Some(r) =>
+                context.log.debug("Rejecting tx {} from {}: {}", t.tx.hash.toHex, t.senderAddress, r.message)
+                false
+              case None => true
+          case _ => true
+
+    /** Put a local tx in the pool, first dropping any pooled tx from the same sender with the same nonce. */
+    def addOrOverride(newStx: SignedTransaction, newStxSender: Address, blobRawBytesOpt: Option[ByteString]): Unit =
+      pendingTransactions.cleanUp()
+      context.log.debug("Overriding transaction: {}", newStx.hash.toHex)
+      // The same tx sent again is not obsolete: the put below replaces it in place and its state stays.
+      val obsoleteTxs = pendingTransactions
+        .asMap()
+        .asScala
+        .filter(ptx =>
+          ptx._1 != newStx.hash.value &&
+            ptx._2.stx.senderAddress == newStxSender && ptx._2.stx.tx.tx.nonce == newStx.tx.nonce
+        )
+      pendingTransactions.invalidateAll(obsoleteTxs.keys.asJava)
+
+      val timestamp = System.currentTimeMillis()
+      val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
+      putPooled(PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
+      blobRawBytesOpt.foreach(raw => storeSidecar(newStx.hash.value, raw))
+      updatePendingNonces(Seq(newPendingTx))
+      pendingTxTopic ! Topic.Publish(NewPendingTransaction(newPendingTx))
+      val peers = connectedPeers.values.toSeq
+      if peers.nonEmpty then context.self ! NotifyPeers(Seq(newPendingTx), peers)
 
     // scalastyle:off method.length
     val receive: Behavior[Command] = Behaviors.receiveMessage {
@@ -507,35 +618,36 @@ object PendingTransactionsManager:
         Behaviors.same
 
       case AddOrOverrideTransaction(newStx, blobRawBytesOpt) =>
-        pendingTransactions.cleanUp()
-        context.log.debug("Overriding transaction: {}", newStx.hash.toHex)
         // Only validated transactions are added this way, it is safe to call get
         val newStxSender = SignedTransaction
           .getSender(newStx)
           .getOrElse(
             throw new IllegalStateException("Unable to get sender from validated transaction")
           )
-        // The same tx sent again is not obsolete: the put below replaces it in place and its state stays.
-        val obsoleteTxs = pendingTransactions
-          .asMap()
-          .asScala
-          .filter(ptx =>
-            ptx._1 != newStx.hash.value &&
-              ptx._2.stx.senderAddress == newStxSender && ptx._2.stx.tx.tx.nonce == newStx.tx.nonce
-          )
-        pendingTransactions.invalidateAll(obsoleteTxs.keys.asJava)
+        addOrOverride(newStx, newStxSender, blobRawBytesOpt)
+        Behaviors.same
 
-        val timestamp = System.currentTimeMillis()
-        val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
-        pendingTransactions.put(
-          newStx.hash.value,
-          PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true)
-        )
-        blobRawBytesOpt.foreach(raw => storeSidecar(newStx.hash.value, raw))
-        updatePendingNonces(Seq(newPendingTx))
-        pendingTxTopic ! Topic.Publish(NewPendingTransaction(newPendingTx))
-        val peers = connectedPeers.values.toSeq
-        if peers.nonEmpty then context.self ! NotifyPeers(Seq(newPendingTx), peers)
+      case SubmitLocalTransaction(stx, sender, account, head, blobRawBytesOpt, replyTo) =>
+        pendingTransactions.cleanUp()
+        val hash = stx.hash.value
+        val rejection =
+          if !TxAdmission.poolStateRulesApply then None
+          else
+            TxAdmission.poolRejection(
+              stx.tx,
+              alreadyKnown = pendingTransactions.asMap().containsKey(hash),
+              account,
+              poolView(sender, hash),
+              head,
+              txPoolConfig.priceBump
+            )
+        rejection match
+          case Some(r) =>
+            context.log.debug("Refusing local tx {} from {}: {}", stx.hash.toHex, sender, r.message)
+            replyTo ! Left(r)
+          case None =>
+            addOrOverride(stx, sender, blobRawBytesOpt)
+            replyTo ! Right(())
         Behaviors.same
 
       case NotifyPeers(signedTransactions, peers) =>
@@ -654,6 +766,7 @@ object PendingTransactionsManager:
         context.log.debug("Dropping all cached transactions")
         pendingTransactions.invalidateAll()
         pendingNonces = Map.empty
+        authoritiesByTx = Map.empty
         knownTransactions.clear()
         pendingAnnouncements.clear()
         blobTxNetworkBytes = VectorMap.empty

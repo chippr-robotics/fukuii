@@ -87,6 +87,12 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
     */
   private val ConsensusSimHiveEnv: Set[String] = Set("HIVE_FORK_DAO_BLOCK", "HIVE_FORK_DAO_VOTE")
 
+  /** Keys only the ethereum/graphql simulator exports: `graphql.go` sets `HIVE_ALLOW_UNPROTECTED_TX: "1"` because its
+    * sendRawTransaction vectors are not replay-protected (go-ethereum's geth.sh maps it to --rpc.allow-unprotected-txs;
+    * fukuii.sh to fukuii.network.rpc.allow-unprotected-txs, #1629 S0b).
+    */
+  private val GraphqlSimHiveEnv: Set[String] = Set("HIVE_ALLOW_UNPROTECTED_TX")
+
   private val adapterPath = "hive/fukuii/fukuii.sh"
 
   /** sbt forks tests with the project base directory as cwd, but walk up anyway so the spec survives being run from a
@@ -112,7 +118,7 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
   "the hive adapter's fork environment" must {
 
     "reference only names hive actually exports" taggedAs (UnitTest, NetworkTest) in {
-      val invented = referenced -- CanonicalHiveForkEnv -- NonForkHiveEnv -- ConsensusSimHiveEnv
+      val invented = referenced -- CanonicalHiveForkEnv -- NonForkHiveEnv -- ConsensusSimHiveEnv -- GraphqlSimHiveEnv
       withClue(
         "fukuii.sh reads an environment variable hive never sets, so the value silently falls back to its default: "
       ) {

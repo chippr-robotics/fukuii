@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -15,15 +16,20 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
+import com.chipprbots.ethereum.transactions.BlobSidecar
 import com.chipprbots.ethereum.transactions.TransactionPicker
 import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -46,6 +52,11 @@ object EthTxService:
   case class GetTransactionReceiptResponse(txResponse: Option[TransactionReceiptResponse])
   case class RawTransactionResponse(transactionResponse: Option[SignedTransaction])
 
+  /** A local transaction that passed [[EthTxService.admitLocal]]: its sender, the sender's account at `head` and the
+    * head it was checked against, which the pool's own rules read.
+    */
+  case class LocalAdmission(sender: Address, account: Account, head: BlockHeader)
+
 class EthTxService(
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
@@ -53,7 +64,8 @@ class EthTxService(
     val pendingTransactionsManager: ActorRef[PendingTransactionsManager.Command],
     val getTransactionFromPoolTimeout: FiniteDuration,
     transactionMappingStorage: TransactionMappingStorage,
-    val scheduler: Scheduler
+    val scheduler: Scheduler,
+    val rpcTxSubmission: RpcTxSubmission = RpcTxSubmission.Default
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
     with ResolveBlock
@@ -243,16 +255,20 @@ class EthTxService(
   def sendRawTransaction(req: SendRawTransactionRequest): ServiceResponse[SendRawTransactionResponse] =
     import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 
-    Try(req.data.toArray.toSignedTransactionWithSidecar) match
-      case Success((signedTransaction, rawBytesOpt)) =>
-        IO(admitLocal(signedTransaction, rawBytesOpt.isDefined)).map {
-          case Left(error) => Left(error)
-          case Right(_) =>
-            pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
-              signedTransaction,
-              rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
-            )
-            Right(SendRawTransactionResponse(signedTransaction.hash.value))
+    // The sidecar of a network-form blob tx is parsed with the tx: a wrapper whose parts are not byte-string lists is
+    // as undecodable as a malformed tx.
+    Try {
+      val (stx, rawBytesOpt) = req.data.toArray.toSignedTransactionWithSidecar
+      val sidecar =
+        rawBytesOpt.map(raw => BlobSidecar.fromNetworkForm(raw).fold(e => throw new RuntimeException(e), identity))
+      (stx, rawBytesOpt, sidecar)
+    } match
+      case Success((signedTransaction, rawBytesOpt, sidecar)) =>
+        IO(admitLocal(signedTransaction, sidecar)).flatMap {
+          case Left(error) => IO.pure(Left(error))
+          case Right(admission) =>
+            submitToPool(pendingTransactionsManager, signedTransaction, admission, rawBytesOpt.map(ByteString(_)))
+              .map(_.map(SendRawTransactionResponse.apply))
         }
       case Failure(e) =>
         // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
@@ -262,10 +278,17 @@ class EthTxService(
         log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
 
-  /** Pool admission for a locally submitted transaction, against the chain head: the rules a peer's transaction meets
-    * and go-ethereum's `txpool.ValidateTransaction` applies (type active at the head, chain ID, intrinsic gas and
-    * floor, initcode size, gas caps, tip, blob sidecar), then the sender's nonce and balance in the head's state
-    * ([[TxAdmission.validateLocal]]). A rejected transaction never reaches the pool, so it is never announced.
+  /** Admission of a locally submitted transaction, in go-ethereum's `SubmitTransaction` order (api.go:1640-1651):
+    *
+    *   1. the RPC layer ([[RpcTxSubmission.submissionRejection]]): the transaction-fee cap, then replay protection
+    *      unless unprotected transactions are allowed;
+    *   1. the pool's rules against the chain head, the rules a peer's transaction meets and go-ethereum's
+    *      `txpool.ValidateTransaction` applies (type active at the head, chain ID, intrinsic gas and floor, initcode
+    *      size, gas caps, tip, blob sidecar), then the sender's nonce and balance in the head's state
+    *      ([[TxAdmission.validateLocal]]).
+    *
+    * The pool's rules against what it already holds follow in [[submitToPool]]. A rejected transaction never reaches
+    * the pool, so it is never announced.
     *
     * Every rejection is -32000 with go-ethereum's message, except initcode over EIP-3860's limit, which keeps the
     * -32602 INITCODE_SIZE_EXCEEDED that hive's withdrawals "Max Initcode Size" test was matched against (07f0bc608).
@@ -275,8 +298,15 @@ class EthTxService(
     */
   private[jsonrpc] def admitLocal(
       stx: SignedTransaction,
-      hasSidecar: Boolean
-  ): Either[JsonRpcError, Unit] =
+      sidecar: Option[BlobSidecar]
+  ): Either[JsonRpcError, LocalAdmission] =
+    rpcTxSubmission.submissionRejection(stx) match
+      case Some(message) =>
+        log.debug(s"eth_sendRawTransaction rejected ${stx.hash.toHex}: $message")
+        Left(JsonRpcError.LogicError(message))
+      case None => admitAtHead(stx, sidecar)
+
+  private def admitAtHead(stx: SignedTransaction, sidecar: Option[BlobSidecar]): Either[JsonRpcError, LocalAdmission] =
     blockchainReader.getBestBlockHeader match
       case None => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
       case Some(head) =>
@@ -284,7 +314,7 @@ class EthTxService(
           TxAdmission
             .validateLocal(
               stx,
-              hasSidecar,
+              sidecar,
               head,
               address => blockchainReader.getAccountAtStateRoot(head.stateRoot.value, address)
             )
@@ -296,7 +326,7 @@ class EthTxService(
                 log.debug(s"eth_sendRawTransaction rejected ${stx.hash.toHex}: ${rejection.message}")
                 JsonRpcError.LogicError(rejection.message)
             }
-            .map(_ => ())
+            .map { case (sender, account) => LocalAdmission(sender, account, head) }
         catch
           case e: MissingNodeException =>
             Left(
@@ -304,6 +334,37 @@ class EthTxService(
                 s"cannot validate transaction: state at head ${head.number.value} is not available (${e.getMessage})"
               )
             )
+
+  /** Hand an admitted local transaction to `pool` and wait for its decision: the pool applies its own rules against
+    * what it holds (already known, overdraft, delegation limit, replacement price bump; [[TxAdmission.poolRejection]])
+    * and pools it, under one message, as go-ethereum holds its pool lock across both. A refusal is -32000 with
+    * go-ethereum's message. Returns the transaction hash.
+    */
+  private[jsonrpc] def submitToPool(
+      pool: ActorRef[PendingTransactionsManager.Command],
+      stx: SignedTransaction,
+      admission: LocalAdmission,
+      blobTxRawBytes: Option[ByteString]
+  ): IO[Either[JsonRpcError, ByteString]] =
+    given timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
+    given sc: Scheduler = scheduler
+    pool
+      .askForTyped[Either[TxAdmission.Rejection, Unit]](
+        PendingTransactionsManager.SubmitLocalTransaction(
+          stx,
+          admission.sender,
+          admission.account,
+          admission.head,
+          blobTxRawBytes,
+          _
+        )
+      )
+      .map {
+        case Right(()) => Right(stx.hash.value)
+        case Left(rejection) =>
+          log.debug(s"Pool refused local tx ${stx.hash.toHex}: ${rejection.message}")
+          Left(JsonRpcError.LogicError(rejection.message))
+      }
 
   /** eth_getTransactionByBlockNumberAndIndex Returns the information about a transaction with the block number and
     * index of which it was mined.

@@ -657,7 +657,7 @@ trait EthMiningServiceBuilder:
   )
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -666,7 +666,8 @@ trait EthTxServiceBuilder:
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
     storagesInstance.storages.transactionMappingStorage,
-    classicSystem.toTyped.scheduler
+    classicSystem.toTyped.scheduler,
+    com.chipprbots.ethereum.jsonrpc.RpcTxSubmission.fromConfig(instanceConfig.config)
   )
 
 trait EthBlocksServiceBuilder:

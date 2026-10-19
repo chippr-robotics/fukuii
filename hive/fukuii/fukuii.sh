@@ -110,6 +110,13 @@ FLAGS="$FLAGS -Dfukuii.blockchains.network=hive"
 # sink node is probed on 8551). StdNode binds this port last. See Dockerfile.
 FLAGS="$FLAGS -Dfukuii.network.readiness-port=${HIVE_CHECK_LIVE_PORT:-8545}"
 
+# Unprotected (pre-EIP-155) transactions over RPC are refused by default, as in
+# go-ethereum; the graphql simulator sets HIVE_ALLOW_UNPROTECTED_TX because its
+# sendRawTransaction vectors are unprotected (geth.sh maps it the same way).
+if [ -n "$HIVE_ALLOW_UNPROTECTED_TX" ]; then
+    FLAGS="$FLAGS -Dfukuii.network.rpc.allow-unprotected-txs=true"
+fi
+
 # Chain/network identity
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.chain-id=$CHAIN_ID"
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.network-id=$NETWORK_ID"

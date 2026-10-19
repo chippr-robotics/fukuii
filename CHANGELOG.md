@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Changed
+- **Transaction submission over RPC follows go-ethereum's rules (#1629 S0b).** `eth_sendRawTransaction`,
+  `eth_sendTransaction`, `personal_sendTransaction` and GraphQL `sendRawTransaction`:
+  - refuse legacy transactions that are not replay-protected (no EIP-155 chain id) with "only replay-protected
+    (EIP-155) transactions allowed over RPC", on every chain, ETC included (core-geth does the same). Opt back in with
+    `fukuii.network.rpc.allow-unprotected-txs = true` (go-ethereum `--rpc.allow-unprotected-txs`);
+  - refuse a transaction whose fee (gas * fee cap) exceeds `fukuii.network.rpc.tx-fee-cap` (default 1 ether, 0 = no
+    cap; go-ethereum `--rpc.txfeecap`) with "tx fee (X ether) exceeds the configured cap (Y ether)".
+    `eth_signTransaction` and `personal_signTransaction` check the cap too; `eth_fillTransaction` does not;
+  - on ETH-family chains, apply the pool's rules against what it holds: "already known" for a transaction already
+    pooled, "replacement transaction underpriced" unless a replacement raises both fee caps by `txPool.price-bump`
+    (default 10%), "insufficient funds" when the sender's pending transactions together overdraw its balance, and
+    EIP-7702's one-in-flight-transaction limit for delegated senders. Peers' transactions meet the overdraft and
+    delegation rules too. ETC's pool is unchanged;
+  - check blob sidecars as go-ethereum's pool does: from Osaka a version-1 (cell proof) sidecar is required, before
+    Osaka a version-0 one; versioned hashes must match the commitments, at most 6 blobs, and the KZG proofs must
+    verify.
 - **Announced transactions are fetched from one peer at a time.** The pool requested an announced transaction from
   every peer that announced it, and when the peer it got it from was dropped for serving a bad copy, it asked nobody
   else. As in go-ethereum's tx fetcher, a hash is now requested from one announcer; the others are kept as
