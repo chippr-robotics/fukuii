@@ -6707,9 +6707,12 @@
 <strong>Frequency</strong>: Intermittent, unpredictable<br />
 <strong>Impact</strong>: Silently wrong results, or impossible <code>NullPointerException</code>s</p>
 <h4 id="symptoms_9">Symptoms<a class="headerlink" href="#symptoms_9" title="Permanent link">&para;</a></h4>
-<p>At startup the node logs:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>ERROR [c.c.ethereum.utils.JvmFlagGuard$] - Unsafe JVM: jdk=25.0.4.1+... runs C2 with ReduceAllocationMerges enabled, ...
+<p>The node refuses to start (exit status 78) and logs:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>ERROR [c.c.ethereum.utils.JvmFlagGuard$] - Refusing to start: jdk=25.0.4.1+... runs C2 with ReduceAllocationMerges enabled, ...
 </span></code></pre></div>
+<p>Fix it by adding the workaround flags (below). Only if you accept the risk — e.g. on a JDK build known to carry the
+fix — start anyway with <code>-Dfukuii.allow-c2-reduce-allocation-merges=true</code> or
+<code>FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true</code>; the node then starts and logs <code>Unsafe JVM: ...</code> as an ERROR.</p>
 <p>Without the workaround, the bug itself shows up as an impossible <code>NullPointerException</code> (a field that
 was just assigned reads back as <code>null</code>) or, worse, as a wrong value with no error at all.</p>
 <h4 id="root-cause_9">Root Cause<a class="headerlink" href="#root-cause_9" title="Permanent link">&para;</a></h4>
