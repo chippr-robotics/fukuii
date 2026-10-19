@@ -59,6 +59,8 @@ object CheckpointCli extends Logger:
   )
 
   def main(args: Array[String]): Unit =
+    // The exporter reads chain state into a consensus-relevant archive: same JVM check as a node.
+    com.chipprbots.ethereum.utils.JvmFlagGuard.check()
     val parsed = rootCommand.parse(ArraySeq.unsafeWrapArray(args), sys.env)
     parsed match
       case Left(help) =>
