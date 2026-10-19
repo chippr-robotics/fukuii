@@ -375,23 +375,38 @@ class EthTxService(
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
     }
 
-  /** The pool's transactions whose sender is one of `accounts`, as transaction objects, in pool order.
+  /** The pool's executable transactions whose sender is one of `accounts`, as transaction objects, in pool order.
     *
-    * go-ethereum's `TransactionAPI.PendingTransactions` answers `eth_pendingTransactions` this way: it keeps the pool
-    * transactions sent from an account of the node's wallets and renders each with `NewRPCPendingTransaction`, which
-    * has no block fields and reports a fee-market transaction's fee cap as its `gasPrice`. A `TransactionResponse`
-    * built without a block header is that object.
+    * go-ethereum's `TransactionAPI.PendingTransactions` answers `eth_pendingTransactions` this way: it walks
+    * `GetPoolTransactions` (the pool's `Pending()` set, i.e. per sender the run of consecutive nonces starting at the
+    * sender's state nonce; nonce-gapped "queued" transactions are not in it), keeps those sent from an account of the
+    * node's wallets and renders each with `NewRPCPendingTransaction`, which has no block fields and reports a
+    * fee-market transaction's fee cap as its `gasPrice`. A `TransactionResponse` built without a block header is that
+    * object. fukuii's pool holds gapped transactions alongside executable ones, so the run is cut here, against the
+    * head state.
     *
     * @param accounts
     *   the node's own accounts (the keystore's)
     */
   def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
+      val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
+      val stateRoot = blockchainReader.getBestBlockHeader.map(_.stateRoot.value)
+      def stateNonce(sender: Address): BigInt =
+        stateRoot
+          .flatMap(root => blockchainReader.getAccountAtStateRoot(root, sender))
+          .map(_.nonce.toBigInt)
+          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+      val executable: Set[ByteString] = own
+        .groupBy(_.stx.senderAddress)
+        .flatMap { case (sender, txs) =>
+          val byNonce = txs.map(pt => pt.stx.tx.tx.nonce -> pt.stx.tx.hash.value).toMap
+          Iterator.iterate(stateNonce(sender))(_ + 1).map(byNonce.get).takeWhile(_.isDefined).flatten
+        }
+        .toSet
       Right(
         OwnPendingTransactionsResponse(
-          resp.pendingTransactions
-            .filter(pt => accounts.contains(pt.stx.senderAddress))
-            .map(pt => TransactionResponse(pt.stx.tx))
+          own.filter(pt => executable.contains(pt.stx.tx.hash.value)).map(pt => TransactionResponse(pt.stx.tx))
         )
       )
     }

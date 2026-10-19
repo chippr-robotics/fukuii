@@ -37,6 +37,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * The GraphQL part reads the same mined transactions through GraphQL and holds every typed-transaction field to the
   * value go-ethereum's JSON-RPC vectors give for that transaction (geth's GraphQL resolvers compute each one the same
   * way, `graphql/graphql.go`).
+  *
+  * Tagged SlowTest: the in-process chain import and 90 vectors take 30 s to over 2 min depending on host load, so the
+  * suite runs in testStandard rather than the testEssential commit gate.
   */
 class TypedTxConformanceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
@@ -85,7 +88,8 @@ class TypedTxConformanceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
 
   "the execution-apis test chain" should "import, every block execution-validated, to the vectors' head" taggedAs (
     UnitTest,
-    RPCTest
+    RPCTest,
+    SlowTest
   ) in {
     head.header.number.value shouldBe BigInt(0x3c)
     node.blockchainReader.getBlockHeaderByNumber(0).map(_.hash) shouldBe Some(
@@ -96,7 +100,7 @@ class TypedTxConformanceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
   }
 
   for method <- methods; name <- vectorFiles(method) do
-    it should s"answer $name as go-ethereum does" taggedAs (UnitTest, RPCTest) in {
+    it should s"answer $name as go-ethereum does" taggedAs (UnitTest, RPCTest, SlowTest) in {
       head // the chain first
       val vector = RpcCompatVectors.read(RpcCompatNode.resource(name + ".io"))
       val mismatches = vector.exchanges.flatMap { case (request, expected) =>
@@ -147,7 +151,8 @@ class TypedTxConformanceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
   for (label, (txVector, receiptVector)) <- typedTransactions do
     "GraphQL Transaction" should s"report the mined $label transaction as go-ethereum's JSON-RPC does" taggedAs (
       UnitTest,
-      RPCTest
+      RPCTest,
+      SlowTest
     ) in {
       head
       val tx = expectedResult(s"eth_getTransactionByHash/$txVector")
@@ -204,7 +209,11 @@ class TypedTxConformanceSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         (rawReceipt.head & 0xff) should be >= 0xc0
     }
 
-  it should "give a legacy transaction's raw as debug_getRawTransaction does" taggedAs (UnitTest, RPCTest) in {
+  it should "give a legacy transaction's raw as debug_getRawTransaction does" taggedAs (
+    UnitTest,
+    RPCTest,
+    SlowTest
+  ) in {
     head
     val vector = RpcCompatVectors.read(RpcCompatNode.resource("debug_getRawTransaction/get-tx.io"))
     val (request, expected) = vector.exchanges.head

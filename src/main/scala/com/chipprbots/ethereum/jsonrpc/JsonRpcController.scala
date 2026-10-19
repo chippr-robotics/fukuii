@@ -133,8 +133,6 @@ case class JsonRpcController(
       handle[RemoveFromBlacklistRequest, RemoveFromBlacklistResponse](netService.removeFromBlacklist, req)
   }
 
-  // scalastyle:off cyclomatic.complexity
-  // scalastyle:off method.length
   /** `eth_pendingTransactions`: the pool's transactions sent from one of the node's own accounts, as go-ethereum
     * selects them (`TransactionAPI.PendingTransactions` keeps a transaction when its sender is an account of the node's
     * wallets). The accounts are the keystore's, which only the personal service reads, so the two services compose
@@ -148,6 +146,8 @@ case class JsonRpcController(
       case Left(error)                           => IO.pure(Left(error))
     }
 
+  // scalastyle:off cyclomatic.complexity
+  // scalastyle:off method.length
   private def handleEthRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "eth_protocolVersion", _, _) =>
       handle[ProtocolVersionRequest, ProtocolVersionResponse](ethInfoService.protocolVersion, req)

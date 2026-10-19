@@ -428,8 +428,8 @@ class EthTxServiceSpec
     UnitTest,
     RPCTest
   ) in new TestSetup:
-    private val ownKey = crypto.generateKeyPair(new java.security.SecureRandom)
-    private val otherKey = crypto.generateKeyPair(new java.security.SecureRandom)
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val otherKey = crypto.keyPairFromPrvKey(BigInt(0xb0b))
     private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
       val stx = SignedTransaction.sign(
         TransactionWithDynamicFee(
@@ -457,6 +457,37 @@ class EthTxServiceSpec
     txs.flatMap(_.from) shouldBe Seq(Address(ownKey).bytes, Address(ownKey).bytes)
     txs.map(_.gasPrice) shouldBe Seq(BigInt(10), BigInt(10)) // fee cap, as a pending tx reports
     txs.flatMap(_.blockHash) shouldBe empty
+
+  // go-ethereum lists pool.Pending() only: per sender, the consecutive nonces from the state nonce. fukuii's pool also
+  // holds nonce-gapped transactions; they are left out until the gap closes.
+  it should "leave out nonce-gapped (queued) transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val gappedKey = crypto.keyPairFromPrvKey(BigInt(0xca401))
+    private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    // Both accounts are fresh (state nonce 0): own has 0, 1 and a gapped 3; the other account only a gapped 2.
+    private val pool = List(pending(ownKey, 3), pending(ownKey, 0), pending(gappedKey, 2), pending(ownKey, 1))
+
+    private val res =
+      ethTxService.pendingTransactionsFrom(Set(Address(ownKey), Address(gappedKey))).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(pool))
+
+    res.futureValue.toOption.get.transactions.map(_.nonce) shouldBe Seq(BigInt(0), BigInt(1))
 
   it should "answer nothing for a node without accounts" taggedAs (UnitTest, RPCTest) in new TestSetup:
     private val res = ethTxService.pendingTransactionsFrom(Set.empty).unsafeToFuture()

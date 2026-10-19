@@ -575,7 +575,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
-    val key = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
+    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
     val own: Address = Address(key)
     val stx: SignedTransaction = SignedTransaction.sign(
       TransactionWithDynamicFee(

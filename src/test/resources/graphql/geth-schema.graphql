@@ -1,6 +1,7 @@
 # go-ethereum graphql/schema.go `schema` constant, verbatim (master f468c3a9a832, 2026-10-18; file last changed in
 # 3735c34ffe47, "graphql: add slotNumber and BALHash to block schema (#35469)"). GraphQLGethSchemaSpec compares
 # fukuii's Sangria schema against it.
+# Copyright 2019 The go-ethereum Authors; LGPL-3.0-or-later (go-ethereum COPYING.LESSER). Test-only reference, unmodified.
     # Bytes32 is a 32 byte binary string, represented as 0x-prefixed hexadecimal.
     scalar Bytes32
     # Address is a 20 byte Ethereum address, represented as 0x-prefixed hexadecimal.
