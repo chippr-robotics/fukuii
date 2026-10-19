@@ -24,7 +24,7 @@ object FukuiiService:
   case class AccountTransaction(data: ExtendedTransactionData, response: TransactionResponse)
 
   object AccountTransaction:
-    def apply(data: ExtendedTransactionData)(using BlockchainConfig): AccountTransaction =
+    def apply(data: ExtendedTransactionData)(using blockchainConfig: BlockchainConfig): AccountTransaction =
       AccountTransaction(
         data,
         TransactionResponse(
@@ -37,7 +37,7 @@ object FukuiiService:
 class FukuiiService(
     transactionHistoryService: TransactionHistoryService,
     jsonRpcConfig: JsonRpcConfig
-)(using BlockchainConfig):
+)(using blockchainConfig: BlockchainConfig):
 
   def getAccountTransactions(
       request: GetAccountTransactionsRequest

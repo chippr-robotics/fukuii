@@ -166,14 +166,14 @@ final case class EthTransactionResponse(
 
 object EthTransactionResponse:
 
-  def apply(tx: TransactionData)(using BlockchainConfig): EthTransactionResponse =
+  def apply(tx: TransactionData)(using blockchainConfig: BlockchainConfig): EthTransactionResponse =
     EthTransactionResponse(tx.stx, tx.blockHeader, tx.transactionIndex)
 
   def apply(
       stx: SignedTransaction,
       blockHeader: Option[BlockHeader] = None,
       transactionIndex: Option[Int] = None
-  )(using BlockchainConfig): EthTransactionResponse =
+  )(using blockchainConfig: BlockchainConfig): EthTransactionResponse =
     EthTransactionResponse(
       hash = stx.hash.value,
       nonce = stx.tx.nonce,

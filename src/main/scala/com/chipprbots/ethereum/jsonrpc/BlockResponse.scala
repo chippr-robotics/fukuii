@@ -91,7 +91,7 @@ object BlockResponse:
       fullTxs: Boolean = false,
       pendingBlock: Boolean = false,
       emitTotalDifficulty: Boolean = true
-  )(using BlockchainConfig): BlockResponse =
+  )(using blockchainConfig: BlockchainConfig): BlockResponse =
     val transactions =
       if fullTxs then
         Right(block.body.transactionList.zipWithIndex.map { case (stx, transactionIndex) =>

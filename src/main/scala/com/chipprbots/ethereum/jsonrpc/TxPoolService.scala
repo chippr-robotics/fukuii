@@ -96,7 +96,7 @@ class TxPoolService(
     override val getTransactionFromPoolTimeout: FiniteDuration,
     txPoolConfig: TxPoolConfig,
     override val scheduler: Scheduler
-)(using BlockchainConfig)
+)(using blockchainConfig: BlockchainConfig)
     extends TransactionPicker:
   import TxPoolService.*
 

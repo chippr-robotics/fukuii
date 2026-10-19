@@ -60,14 +60,14 @@ final case class TransactionData(
   */
 object TransactionResponse:
 
-  def apply(tx: TransactionData)(using BlockchainConfig): TransactionResponse =
+  def apply(tx: TransactionData)(using blockchainConfig: BlockchainConfig): TransactionResponse =
     TransactionResponse(tx.stx, tx.blockHeader, tx.transactionIndex)
 
   def apply(
       stx: SignedTransaction,
       blockHeader: Option[BlockHeader] = None,
       transactionIndex: Option[Int] = None
-  )(using BlockchainConfig): TransactionResponse =
+  )(using blockchainConfig: BlockchainConfig): TransactionResponse =
     val (txType, txChainId, txMaxFee, txMaxPriority, txAccessList, txMaxBlobFee, txBlobHashes, txAuthList) =
       stx.tx match
         case _: LegacyTransaction =>
