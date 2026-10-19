@@ -72,11 +72,21 @@ final case class BlobSchedule(
     * (and on every chain without one, ETC included).
     */
   def paramsAt(timestamp: Timestamp, forks: ForkTimestamps): Option[BlobParams] =
+    paramsAt(timestamp, forks.cancunTimestamp, forks.pragueTimestamp, forks.bpo1Timestamp, forks.bpo2Timestamp)
+
+  /** [[paramsAt]] over the four blob-fork activation timestamps directly, for the EVM's config subset. */
+  def paramsAt(
+      timestamp: Timestamp,
+      cancunTimestamp: Option[Long],
+      pragueTimestamp: Option[Long],
+      bpo1Timestamp: Option[Long],
+      bpo2Timestamp: Option[Long]
+  ): Option[BlobParams] =
     def active(fork: Option[Long]): Boolean = fork.exists(ts => timestamp.isAtOrAfter(ts))
-    if bpo2.isDefined && active(forks.bpo2Timestamp) then bpo2
-    else if bpo1.isDefined && active(forks.bpo1Timestamp) then bpo1
-    else if prague.isDefined && active(forks.pragueTimestamp) then prague
-    else if cancun.isDefined && active(forks.cancunTimestamp) then cancun
+    if bpo2.isDefined && active(bpo2Timestamp) then bpo2
+    else if bpo1.isDefined && active(bpo1Timestamp) then bpo1
+    else if prague.isDefined && active(pragueTimestamp) then prague
+    else if cancun.isDefined && active(cancunTimestamp) then cancun
     else None
 
   def isEmpty: Boolean = cancun.isEmpty && prague.isEmpty && bpo1.isEmpty && bpo2.isEmpty
