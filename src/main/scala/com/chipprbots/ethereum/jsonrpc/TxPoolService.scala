@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
 
 /** JSON-RPC txpool_* namespace.
@@ -95,7 +96,8 @@ class TxPoolService(
     override val getTransactionFromPoolTimeout: FiniteDuration,
     txPoolConfig: TxPoolConfig,
     override val scheduler: Scheduler
-) extends TransactionPicker:
+)(using BlockchainConfig)
+    extends TransactionPicker:
   import TxPoolService.*
 
   /** txpool_besuTransactions — returns all pending transactions.

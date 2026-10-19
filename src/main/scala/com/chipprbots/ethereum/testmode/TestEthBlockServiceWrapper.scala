@@ -20,15 +20,15 @@ import com.chipprbots.ethereum.jsonrpc.TransactionData
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
-import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 
 class TestEthBlockServiceWrapper(
     blockchain: Blockchain,
     blockchainReader: BlockchainReader,
     mining: Mining,
-    blockQueue: BlockQueue
-) extends EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
+    blockQueue: BlockQueue,
+    chainConfig: BlockchainConfig
+) extends EthBlocksService(blockchain, blockchainReader, mining, blockQueue, blockchainConfig = chainConfig)
     with Logger:
 
   /** Implements the eth_getBlockByHash method that fetches a requested block.
@@ -166,16 +166,14 @@ final case class EthTransactionResponse(
 
 object EthTransactionResponse:
 
-  given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
-
-  def apply(tx: TransactionData): EthTransactionResponse =
+  def apply(tx: TransactionData)(using BlockchainConfig): EthTransactionResponse =
     EthTransactionResponse(tx.stx, tx.blockHeader, tx.transactionIndex)
 
   def apply(
       stx: SignedTransaction,
       blockHeader: Option[BlockHeader] = None,
       transactionIndex: Option[Int] = None
-  ): EthTransactionResponse =
+  )(using BlockchainConfig): EthTransactionResponse =
     EthTransactionResponse(
       hash = stx.hash.value,
       nonce = stx.tx.nonce,

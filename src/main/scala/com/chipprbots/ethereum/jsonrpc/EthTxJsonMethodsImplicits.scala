@@ -160,14 +160,13 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits:
     new NoParamsMethodDecoder(GetGasPriceRequest()) with JsonEncoder[GetGasPriceResponse]:
       override def encodeJson(t: GetGasPriceResponse): JValue = encodeAsHex(t.price)
 
+  /** Transaction objects, as go-ethereum answers; fukuii used to return bare hashes here. */
   given eth_pendingTransactions
-      : (NoParamsMethodDecoder[EthPendingTransactionsRequest] & JsonEncoder[EthPendingTransactionsResponse]) =
-    new NoParamsMethodDecoder(EthPendingTransactionsRequest()) with JsonEncoder[EthPendingTransactionsResponse]:
+      : (NoParamsMethodDecoder[EthPendingTransactionsRequest] & JsonEncoder[OwnPendingTransactionsResponse]) =
+    new NoParamsMethodDecoder(EthPendingTransactionsRequest()) with JsonEncoder[OwnPendingTransactionsResponse]:
 
-      override def encodeJson(t: EthPendingTransactionsResponse): JValue =
-        JArray(t.pendingTransactions.toList.map { pendingTx =>
-          encodeAsHex(pendingTx.stx.tx.hash.value)
-        })
+      override def encodeJson(t: OwnPendingTransactionsResponse): JValue =
+        JArray(t.transactions.toList.map(transactionResponseJsonEncoder.encodeJson))
 
   given eth_getTransactionByHash
       : (JsonMethodDecoder[GetTransactionByHashRequest] & JsonEncoder[GetTransactionByHashResponse]) =

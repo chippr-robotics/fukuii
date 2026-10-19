@@ -135,6 +135,19 @@ case class JsonRpcController(
 
   // scalastyle:off cyclomatic.complexity
   // scalastyle:off method.length
+  /** `eth_pendingTransactions`: the pool's transactions sent from one of the node's own accounts, as go-ethereum
+    * selects them (`TransactionAPI.PendingTransactions` keeps a transaction when its sender is an account of the node's
+    * wallets). The accounts are the keystore's, which only the personal service reads, so the two services compose
+    * here. A keystore that cannot be listed fails the call instead of answering an empty list.
+    */
+  private def ownPendingTransactions(
+      @scala.annotation.unused req: EthPendingTransactionsRequest
+  ): ServiceResponse[OwnPendingTransactionsResponse] =
+    personalService.listAccounts(ListAccountsRequest()).flatMap {
+      case Right(ListAccountsResponse(accounts)) => ethTxService.pendingTransactionsFrom(accounts.toSet)
+      case Left(error)                           => IO.pure(Left(error))
+    }
+
   private def handleEthRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "eth_protocolVersion", _, _) =>
       handle[ProtocolVersionRequest, ProtocolVersionResponse](ethInfoService.protocolVersion, req)
@@ -283,7 +296,7 @@ case class JsonRpcController(
         req
       )
     case req @ JsonRpcRequest(_, "eth_pendingTransactions", _, _) =>
-      handle[EthPendingTransactionsRequest, EthPendingTransactionsResponse](ethTxService.ethPendingTransactions, req)
+      handle[EthPendingTransactionsRequest, OwnPendingTransactionsResponse](ownPendingTransactions, req)
     case req @ JsonRpcRequest(_, "eth_getProof", _, _) =>
       handle[GetProofRequest, GetProofResponse](proofService.getProof, req)
     case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>

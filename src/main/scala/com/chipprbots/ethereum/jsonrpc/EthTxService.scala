@@ -15,6 +15,7 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
@@ -42,6 +43,11 @@ object EthTxService:
   case class SendRawTransactionResponse(transactionHash: ByteString)
   case class EthPendingTransactionsRequest()
   case class EthPendingTransactionsResponse(pendingTransactions: Seq[PendingTransaction])
+
+  /** `eth_pendingTransactions`' answer: the pool's transactions sent by one of the node's own accounts, as transaction
+    * objects (go-ethereum `TransactionAPI.PendingTransactions`).
+    */
+  case class OwnPendingTransactionsResponse(transactions: Seq[TransactionResponse])
   case class GetTransactionReceiptRequest(txHash: ByteString)
   case class GetTransactionReceiptResponse(txResponse: Option[TransactionReceiptResponse])
   case class RawTransactionResponse(transactionResponse: Option[SignedTransaction])
@@ -354,8 +360,8 @@ class EthTxService(
       .left
       .flatMap(_ => Right(None))
 
-  /** Returns the transactions that are pending in the transaction pool and have a from address that is one of the
-    * accounts this node manages.
+  /** Every transaction in the pool, whoever sent it. GraphQL's `Pending` reads this; `eth_pendingTransactions` answers
+    * from [[pendingTransactionsFrom]] instead.
     *
     * @param req
     *   request
@@ -367,4 +373,25 @@ class EthTxService(
   ): ServiceResponse[EthPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
+    }
+
+  /** The pool's transactions whose sender is one of `accounts`, as transaction objects, in pool order.
+    *
+    * go-ethereum's `TransactionAPI.PendingTransactions` answers `eth_pendingTransactions` this way: it keeps the pool
+    * transactions sent from an account of the node's wallets and renders each with `NewRPCPendingTransaction`, which
+    * has no block fields and reports a fee-market transaction's fee cap as its `gasPrice`. A `TransactionResponse`
+    * built without a block header is that object.
+    *
+    * @param accounts
+    *   the node's own accounts (the keystore's)
+    */
+  def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
+    getTransactionsFromPool.map { resp =>
+      Right(
+        OwnPendingTransactionsResponse(
+          resp.pendingTransactions
+            .filter(pt => accounts.contains(pt.stx.senderAddress))
+            .map(pt => TransactionResponse(pt.stx.tx))
+        )
+      )
     }

@@ -37,7 +37,7 @@ class TestNode(
     )
 
   override lazy val ethBlocksService =
-    new TestEthBlockServiceWrapper(blockchain, blockchainReader, mining, blockQueue)
+    new TestEthBlockServiceWrapper(blockchain, blockchainReader, mining, blockQueue, blockchainConfig)
 
   override lazy val mining = new TestmodeMining(
     vm,

@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
 /*
@@ -90,7 +91,7 @@ object BlockResponse:
       fullTxs: Boolean = false,
       pendingBlock: Boolean = false,
       emitTotalDifficulty: Boolean = true
-  ): BlockResponse =
+  )(using BlockchainConfig): BlockResponse =
     val transactions =
       if fullTxs then
         Right(block.body.transactionList.zipWithIndex.map { case (stx, transactionIndex) =>
@@ -161,7 +162,9 @@ object BlockResponse:
     * two overloaded `apply`s that both carry default arguments, and the block-based overload above owns the defaults.
     * Callers that need the ETH-family gate use that one with an explicit empty body.
     */
-  def apply(blockHeader: BlockHeader, weight: Option[ChainWeight], pendingBlock: Boolean): BlockResponse =
+  def apply(blockHeader: BlockHeader, weight: Option[ChainWeight], pendingBlock: Boolean)(using
+      BlockchainConfig
+  ): BlockResponse =
     BlockResponse(
       block = Block(blockHeader, BlockBody(Nil, Nil)),
       weight = weight,
