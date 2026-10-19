@@ -6,7 +6,7 @@ import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.crypto.generateKeyPair
+import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
@@ -187,7 +187,12 @@ trait AmsterdamFixtureVectors:
 
   // ── Sender ──────────────────────────────────────────────────────────────────
 
-  val senderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(setup.secureRandom)
+  // A fixed key, not a random one: tests pin the bloom of logs naming the sender (AmsterdamTransferLogSpec's popcount
+  // 12), and a random address can set a bloom bit another log item already set (popcount 11). This is
+  // hive's well-known funded test key, address 0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b, whose transfer-log bloom
+  // has the measured popcount 12.
+  val senderKeyPair: AsymmetricCipherKeyPair =
+    keyPairFromPrvKey(Hex.decode("45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"))
   val senderAddress: Address = Address(senderKeyPair)
 
   // ── World ───────────────────────────────────────────────────────────────────

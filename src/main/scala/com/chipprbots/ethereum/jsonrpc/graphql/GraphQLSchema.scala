@@ -1026,7 +1026,7 @@ object GraphQLSchema:
       Field(
         "gasPrice",
         BigIntType,
-        // Shares EthTxService.suggestGasPrice() with eth_gasPrice (baseFee + tip, matches
+        // Shares EthTxService.suggestGasPrice() (GasPriceOracle) with eth_gasPrice (tip + baseFee, matches
         // go-ethereum's graphql.go Resolver.GasPrice). hive's graphql simulator fixture
         // 07_eth_gasPrice.json is a known-stale expectation predating that chain's EIP-1559
         // extension -- see .claude/agent-protocols/devp2p-hive-tool-interop-quirks.md before
