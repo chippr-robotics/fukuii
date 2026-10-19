@@ -319,7 +319,7 @@ class PendingTransactionsManagerPoolRulesSpec
       Left("authority already reserved")
   }
 
-  it should "report blobpool's replacement detail for a blob tx" taggedAs UnitTest in {
+  it should "report blobpool's replacement detail for a blob tx, at blobpool's 100% bump" taggedAs UnitTest in {
     val pool = new Pool(sepolia, pragueHead)
     import pool.given
     val k = newKey()
@@ -342,10 +342,14 @@ class PendingTransactionsManagerPoolRulesSpec
       Left(s"replacement transaction underpriced: new tx gas fee cap ${20 * Gwei} <= ${20 * Gwei} queued")
     refusal(blob(22 * Gwei, 11 * Gwei, 10 * Gwei)) shouldBe
       Left(s"replacement transaction underpriced: new tx blob gas fee cap ${10 * Gwei} <= ${10 * Gwei} queued")
-    refusal(blob(21 * Gwei, 11 * Gwei, 11 * Gwei)) shouldBe Left(
-      s"replacement transaction underpriced: new tx gas fee cap ${21 * Gwei} < ${20 * Gwei} queued + 10% replacement penalty"
+    // +10% is enough in the legacy pool, not here
+    refusal(blob(22 * Gwei, 11 * Gwei, 11 * Gwei)) shouldBe Left(
+      s"replacement transaction underpriced: new tx gas fee cap ${22 * Gwei} < ${20 * Gwei} queued + 100% replacement penalty"
     )
-    pool.submit(signed(blob(22 * Gwei, 11 * Gwei, 11 * Gwei), k), funded()) shouldBe Right(())
+    refusal(blob(40 * Gwei, 19 * Gwei, 20 * Gwei)) shouldBe Left(
+      s"replacement transaction underpriced: new tx gas tip cap ${19 * Gwei} < ${10 * Gwei} queued + 100% replacement penalty"
+    )
+    pool.submit(signed(blob(40 * Gwei, 20 * Gwei, 20 * Gwei), k), funded()) shouldBe Right(())
   }
 
   "a local submission on Mordor" should "keep the pool's behaviour from before: no pool-state rules" taggedAs UnitTest in {
@@ -388,7 +392,7 @@ class PendingTransactionsManagerPoolRulesSpec
     eventually(pool.pooled.toSet shouldBe txs.map(_.tx).toSet)
   }
 
-  "txPool.price-bump" should "default to go-ethereum's 10 and read values below 1 as 10" taggedAs UnitTest in {
+  "txPool.price-bump and blob-price-bump" should "default to go-ethereum's 10 and 100, below 1 read as default" taggedAs UnitTest in {
     TxPoolConfig(shipped.getConfig("fukuii")).priceBump shouldBe 10
     TxPoolConfig(
       ConfigFactory.parseString("txPool.price-bump = 25").withFallback(shipped.getConfig("fukuii"))
@@ -396,4 +400,8 @@ class PendingTransactionsManagerPoolRulesSpec
     TxPoolConfig(
       ConfigFactory.parseString("txPool.price-bump = 0").withFallback(shipped.getConfig("fukuii"))
     ).priceBump shouldBe 10
+    TxPoolConfig(shipped.getConfig("fukuii")).blobPriceBump shouldBe 100
+    TxPoolConfig(
+      ConfigFactory.parseString("txPool.blob-price-bump = 0").withFallback(shipped.getConfig("fukuii"))
+    ).blobPriceBump shouldBe 100
   }

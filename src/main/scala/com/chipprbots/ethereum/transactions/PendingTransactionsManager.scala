@@ -549,7 +549,8 @@ object PendingTransactionsManager:
               account,
               poolView(t.senderAddress, t.tx.hash.value),
               head,
-              txPoolConfig.priceBump
+              txPoolConfig.priceBump,
+              txPoolConfig.blobPriceBump
             ) match
               case Some(r) =>
                 context.log.debug("Rejecting tx {} from {}: {}", t.tx.hash.toHex, t.senderAddress, r.message)
@@ -639,7 +640,8 @@ object PendingTransactionsManager:
               account,
               poolView(sender, hash),
               head,
-              txPoolConfig.priceBump
+              txPoolConfig.priceBump,
+              txPoolConfig.blobPriceBump
             )
         rejection match
           case Some(r) =>

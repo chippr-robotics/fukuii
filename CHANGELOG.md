@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `eth_signTransaction` and `personal_signTransaction` check the cap too; `eth_fillTransaction` does not;
   - on ETH-family chains, apply the pool's rules against what it holds: "already known" for a transaction already
     pooled, "replacement transaction underpriced" unless a replacement raises both fee caps by `txPool.price-bump`
-    (default 10%), "insufficient funds" when the sender's pending transactions together overdraw its balance, and
+    (default 10%; `txPool.blob-price-bump`, default 100%, for blob transactions, as go-ethereum's blobpool), "insufficient funds" when the sender's pending transactions together overdraw its balance, and
     EIP-7702's one-in-flight-transaction limit for delegated senders. Peers' transactions meet the overdraft and
     delegation rules too. ETC's pool is unchanged;
   - check blob sidecars as go-ethereum's pool does: from Osaka a version-1 (cell proof) sidecar is required, before

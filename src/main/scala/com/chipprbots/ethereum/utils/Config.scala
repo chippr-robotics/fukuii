@@ -244,10 +244,18 @@ trait TxPoolConfig:
     */
   val priceBump: Int = TxPoolConfig.DefaultPriceBump
 
+  /** The same for a blob transaction replacing a pooled blob transaction (go-ethereum `--blobpool.pricebump`, default
+    * 100: twice the fee caps; values below 1 are raised to the default).
+    */
+  val blobPriceBump: Int = TxPoolConfig.DefaultBlobPriceBump
+
 object TxPoolConfig:
 
   /** go-ethereum legacypool DefaultConfig.PriceBump. */
   val DefaultPriceBump: Int = 10
+
+  /** go-ethereum blobpool DefaultConfig.PriceBump. */
+  val DefaultBlobPriceBump: Int = 100
 
   /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
   val DefaultBlobSidecarBudgetBytes: Long = 256L * 1024 * 1024
@@ -267,6 +275,11 @@ object TxPoolConfig:
           val configured = txPoolConfig.getInt("price-bump")
           if configured < 1 then TxPoolConfig.DefaultPriceBump else configured
         else TxPoolConfig.DefaultPriceBump
+      override val blobPriceBump: Int =
+        if txPoolConfig.hasPath("blob-price-bump") then
+          val configured = txPoolConfig.getInt("blob-price-bump")
+          if configured < 1 then TxPoolConfig.DefaultBlobPriceBump else configured
+        else TxPoolConfig.DefaultBlobPriceBump
       override val blobSidecarBudgetBytes: Long =
         if txPoolConfig.hasPath("blob-sidecar-budget") then txPoolConfig.getBytes("blob-sidecar-budget").longValue
         else TxPoolConfig.DefaultBlobSidecarBudgetBytes

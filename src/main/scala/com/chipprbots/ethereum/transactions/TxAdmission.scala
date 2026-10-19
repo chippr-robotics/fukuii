@@ -566,7 +566,8 @@ object TxAdmission:
       account: Account,
       pool: PoolView,
       head: BlockHeader,
-      priceBump: Int
+      priceBump: Int,
+      blobPriceBump: Int
   )(using cfg: BlockchainConfig): Option[Rejection] =
     val run = executableRun(pool.senderTxs, account.nonce.toBigInt)
     Option
@@ -575,7 +576,7 @@ object TxAdmission:
       .orElse(Option.when(TxTypeGate.activeTypes(head).contains(Transaction.Type04))(()).flatMap { _ =>
         delegationRejection(tx, account, pool, run).orElse(authorityRejection(tx, pool))
       })
-      .orElse(replacementRejection(tx, pool.senderTxs, priceBump))
+      .orElse(replacementRejection(tx, pool.senderTxs, priceBump, blobPriceBump))
 
   /** The sender's pooled transactions with consecutive nonces from `next`, in nonce order. */
   private def executableRun(senderTxs: Seq[Transaction], next: BigInt): Seq[Transaction] =
@@ -633,14 +634,23 @@ object TxAdmission:
       case _ => None
 
   /** Replacing a pooled transaction of the same nonce. legacypool `list.Add` (list.go:303-326): both the fee cap and
-    * the tip cap must rise, each to at least `(100 + priceBump)%` of the old. blobpool `validateTx`
-    * (blobpool.go:1659-1693): the same for the fee cap, tip cap and blob fee cap, with its detailed messages.
+    * the tip cap must rise, each to at least `(100 + legacyPriceBump)%` of the old (legacypool DefaultConfig.PriceBump
+    * 10). blobpool `validateTx` (blobpool.go:1659-1693): the same for the fee cap, tip cap and blob fee cap, with its
+    * detailed messages, at blobpool's own bump (blobpool/config.go DefaultConfig.PriceBump 100: "either have patience
+    * or be aggressive").
     */
-  private def replacementRejection(tx: Transaction, senderTxs: Seq[Transaction], priceBump: Int): Option[Rejection] =
+  private def replacementRejection(
+      tx: Transaction,
+      senderTxs: Seq[Transaction],
+      legacyPriceBump: Int,
+      blobPriceBump: Int
+  ): Option[Rejection] =
     senderTxs.find(_.nonce == tx.nonce).flatMap { old =>
-      def threshold(v: BigInt): BigInt = v * (100 + priceBump) / 100
+      def thresholdAt(bump: Int)(v: BigInt): BigInt = v * (100 + bump) / 100
       (tx, old) match
         case (b: BlobTransaction, o: BlobTransaction) =>
+          val priceBump = blobPriceBump
+          val threshold = thresholdAt(priceBump)
           val (feeCap0, tip0, blob0) = (feeCap(o), tipCap(o), o.maxFeePerBlobGas)
           val (feeCap1, tip1, blob1) = (feeCap(b), tipCap(b), b.maxFeePerBlobGas)
           def detail(s: String) = Some(Rejection.ReplaceUnderpricedDetail(s))
@@ -655,6 +665,7 @@ object TxAdmission:
             detail(s"new tx blob gas fee cap $blob1 < $blob0 queued + $priceBump% replacement penalty")
           else None
         case _ =>
+          val threshold = thresholdAt(legacyPriceBump)
           val raised = feeCap(tx) > feeCap(old) && tipCap(tx) > tipCap(old)
           val bumped = feeCap(tx) >= threshold(feeCap(old)) && tipCap(tx) >= threshold(tipCap(old))
           Option.unless(raised && bumped)(Rejection.ReplaceUnderpriced)
