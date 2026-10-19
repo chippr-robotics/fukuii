@@ -14,6 +14,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlobParams
+import com.chipprbots.ethereum.utils.BlobSchedule
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.BlockchainsConfig
 import com.chipprbots.ethereum.utils.NetworkType
@@ -112,6 +114,22 @@ class EphemeryGenesisSpec extends AnyFlatSpec with Matchers:
     ephemery.isBpo1Timestamp(Timestamp(Bpo1Timestamp)) shouldBe true
     ephemery.isBpo2Timestamp(Timestamp(Bpo2Timestamp)) shouldBe true
     ephemery.isAmsterdamTimestamp(Timestamp(Long.MaxValue)) shouldBe false
+  }
+
+  it should "carry the release's blobSchedule, not the mainnet one (#1637)" taggedAs (UnitTest) in {
+    // genesis.json config.blobSchedule of ephemery-164, verbatim. Its osaka entry equals Prague's and is accepted as
+    // inherited; bpo1/bpo2 are NOT mainnet's 10/15 and 14/21.
+    ephemery.blobSchedule shouldBe BlobSchedule(
+      cancun = Some(BlobParams(3, 6, BigInt(3338477))),
+      prague = Some(BlobParams(6, 9, BigInt(5007716))),
+      bpo1 = Some(BlobParams(8, 12, BigInt(6676955))),
+      bpo2 = Some(BlobParams(10, 15, BigInt(8346193)))
+    )
+    ephemery.blobParamsAt(Timestamp(GenesisTimestamp)) shouldBe Some(BlobParams(6, 9, BigInt(5007716)))
+    ephemery.blobParamsAt(Timestamp(Bpo1Timestamp - 1)) shouldBe Some(BlobParams(6, 9, BigInt(5007716)))
+    ephemery.blobParamsAt(Timestamp(Bpo1Timestamp)) shouldBe Some(BlobParams(8, 12, BigInt(6676955)))
+    ephemery.blobParamsAt(Timestamp(Bpo2Timestamp - 1)) shouldBe Some(BlobParams(8, 12, BigInt(6676955)))
+    ephemery.blobParamsAt(Timestamp(Bpo2Timestamp)) shouldBe Some(BlobParams(10, 15, BigInt(8346193)))
   }
 
   "GenesisDataLoader" should "build the published ephemery-164 genesis block from the generated genesis" taggedAs (

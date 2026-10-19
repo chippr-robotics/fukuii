@@ -320,7 +320,15 @@ object RpcCompatNode:
       "arrow-glacier-block-number" -> e("HIVE_FORK_ARROW_GLACIER"),
       "gray-glacier-block-number" -> e("HIVE_FORK_GRAY_GLACIER"),
       "merge-netsplit-block-number" -> e("HIVE_MERGE_BLOCK_ID")
-    )
+    ) ++ (for
+      (fork, prefix) <- Seq("cancun" -> "CANCUN", "prague" -> "PRAGUE", "bpo1" -> "BPO1", "bpo2" -> "BPO2")
+      (key, suffix) <- Seq(
+        "target" -> "TARGET",
+        "max" -> "MAX",
+        "base-fee-update-fraction" -> "BASE_FEE_UPDATE_FRACTION"
+      )
+      value <- env.get(s"HIVE_${prefix}_BLOB_$suffix")
+    yield s"blob-schedule.$fork.$key" -> value) // fukuii.sh's blob_param overrides (HIVE_OSAKA_BLOB_* unmapped)
     val raw = overrides
       .foldLeft(ConfigFactory.parseResources("conf/base/chains/hive-chain.conf")) { case (c, (k, v)) =>
         c.withValue(k, ConfigValueFactory.fromAnyRef(v))

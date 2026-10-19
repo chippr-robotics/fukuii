@@ -160,6 +160,30 @@ fi
 [ -n "$BPO2_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo2-timestamp=$BPO2_TS"
 [ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
 
+# EIP-7840 blob schedule (#1637): target/max blobs per block and the blob base-fee update fraction per
+# fork. hive exports these next to the timestamps (forkenv.json); hive-chain.conf carries the same
+# defaults go-ethereum's mapper.jq falls back to. HIVE_OSAKA_BLOB_* is deliberately NOT mapped:
+# go-ethereum master has no osaka entry (Osaka inherits Prague's), so it ignores those values, and
+# fukuii's loader refuses an osaka entry that differs from Prague's - mapping it could only turn a
+# hive-side mismatch into a client that does not start. Names are spelled out (no loop) so
+# HiveAdapterForkEnvSpec can check each against what hive exports.
+blob_param() { # $1 = fork, $2 = key, $3 = value
+    [ -n "$3" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.blob-schedule.$1.$2=$3"
+    return 0
+}
+blob_param cancun target "${HIVE_CANCUN_BLOB_TARGET:-}"
+blob_param cancun max "${HIVE_CANCUN_BLOB_MAX:-}"
+blob_param cancun base-fee-update-fraction "${HIVE_CANCUN_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
+blob_param prague target "${HIVE_PRAGUE_BLOB_TARGET:-}"
+blob_param prague max "${HIVE_PRAGUE_BLOB_MAX:-}"
+blob_param prague base-fee-update-fraction "${HIVE_PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
+blob_param bpo1 target "${HIVE_BPO1_BLOB_TARGET:-}"
+blob_param bpo1 max "${HIVE_BPO1_BLOB_MAX:-}"
+blob_param bpo1 base-fee-update-fraction "${HIVE_BPO1_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
+blob_param bpo2 target "${HIVE_BPO2_BLOB_TARGET:-}"
+blob_param bpo2 max "${HIVE_BPO2_BLOB_MAX:-}"
+blob_param bpo2 base-fee-update-fraction "${HIVE_BPO2_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
+
 # EIP-6110 deposit contract address, as declared by the fixture genesis (see above).
 [ -n "$DEPOSIT_CONTRACT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.deposit-contract-address=$DEPOSIT_CONTRACT"
 
