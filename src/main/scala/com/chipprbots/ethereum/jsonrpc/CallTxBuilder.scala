@@ -152,7 +152,7 @@ object CallTxBuilder:
     * is active" (-32000). Applies to every block without a base fee: ETH before London, ETC before Olympia (core-geth's
     * CallDefaults is the same). The base fee is the block context's, block overrides applied.
     */
-  private def checkLondon(args: TxArgs, header: BlockHeader): Either[JsonRpcError, Unit] =
+  private[jsonrpc] def checkLondon(args: TxArgs, header: BlockHeader): Either[JsonRpcError, Unit] =
     if header.baseFee.isEmpty && args.hasDynamicFee then
       Left(JsonRpcError.LogicError("maxFeePerGas and maxPriorityFeePerGas are not valid before London is active"))
     else Right(())
@@ -161,7 +161,7 @@ object CallTxBuilder:
     * transaction type, so they are refused (-32602) rather than one of them being dropped. go-ethereum's message would
     * carry both; fukuii refuses, by the fail-loudly rule (S1's precedent).
     */
-  private def checkSetCodeWithBlobs(args: TxArgs): Either[JsonRpcError, Unit] =
+  private[jsonrpc] def checkSetCodeWithBlobs(args: TxArgs): Either[JsonRpcError, Unit] =
     if args.authorizationList.isDefined && (args.blobVersionedHashes.isDefined || args.maxFeePerBlobGas.isDefined) then
       Left(
         JsonRpcError.InvalidParams(
@@ -203,7 +203,7 @@ object CallTxBuilder:
     *     error ([[checkLondon]], which runs first);
     *   - accessList: accepted everywhere, as geth accepts it (before Berlin warmth is not priced, so it is inert).
     */
-  private def checkActive(args: TxArgs, header: BlockHeader)(using
+  private[jsonrpc] def checkActive(args: TxArgs, header: BlockHeader)(using
       blockchainConfig: BlockchainConfig
   ): Either[JsonRpcError, Unit] =
     // the one per-chain source of truth for which types a block admits (S0, transactions/TxAdmission.scala)

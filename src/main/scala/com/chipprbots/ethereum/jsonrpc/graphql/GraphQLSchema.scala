@@ -67,12 +67,6 @@ object GraphQLSchema:
 
   implicit private val ioRuntime: IORuntime = IORuntime.global
 
-  // SignedTransaction.getSender needs an implicit BlockchainConfig (for EIP-155 chainId
-  // extraction from the v signature field). We inherit from the global Config — same pattern
-  // as EthTxService and TransactionResponse.
-  implicit private val blockchainConfigImplicit: com.chipprbots.ethereum.utils.BlockchainConfig =
-    com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
@@ -138,18 +132,32 @@ object GraphQLSchema:
     case t: BlobTransaction => Some(t.maxFeePerBlobGas)
     case _                  => None
 
+  /** geth `Transaction.EffectiveTip`: the gas price itself in a block without a base fee, otherwise
+    * `tx.EffectiveGasTip(baseFee)` = min(tip, feeCap - baseFee) for the fee-market types and gasPrice - baseFee for the
+    * others.
+    */
   private def effectiveTip(tx: Transaction, baseFee: Option[BigInt]): BigInt =
-    tx match
-      case t: TransactionWithDynamicFee =>
-        val bf = baseFee.getOrElse(BigInt(0))
-        t.maxPriorityFeePerGas.min(t.maxFeePerGas - bf).max(BigInt(0))
-      case t: BlobTransaction =>
-        val bf = baseFee.getOrElse(BigInt(0))
-        t.maxPriorityFeePerGas.min(t.maxFeePerGas - bf).max(BigInt(0))
-      case t: SetCodeTransaction =>
-        val bf = baseFee.getOrElse(BigInt(0))
-        t.maxPriorityFeePerGas.min(t.maxFeePerGas - bf).max(BigInt(0))
-      case other => other.gasPrice.value - baseFee.getOrElse(BigInt(0))
+    baseFee match
+      case None => tx.gasPrice.value
+      case Some(bf) =>
+        txMaxPriorityFeePerGas(tx) match
+          case Some(tip) => tip.min(tx.gasPrice.value - bf).max(BigInt(0))
+          case None      => tx.gasPrice.value - bf
+
+  /** The price a mined transaction paid per gas, as geth's `Transaction.EffectiveGasPrice` and `GasPrice` resolvers
+    * compute it for a block that has a base fee: min(feeCap, baseFee + tip) for the fee-market types, the gas price for
+    * the others. Without a base fee (pre-London/pre-Olympia block, or a pending transaction) it is the fee cap, which
+    * `tx.gasPrice` is for every type.
+    */
+  private def paidGasPrice(tx: Transaction, baseFee: Option[BigInt]): BigInt =
+    baseFee match
+      case Some(bf) => Transaction.effectiveGasPrice(tx, Some(bf))
+      case None     => tx.gasPrice.value
+
+  /** The yParity of a typed transaction's signature; geth's `Transaction.YParity` is null for a legacy one. */
+  private def txYParity(stx: SignedTransaction): Option[BigInt] = stx.tx match
+    case _: LegacyTransaction => None
+    case _                    => Some(stx.signature.v)
 
   /** `null` for pre-Byzantium receipts (which store a state root instead of a status byte — see EIP-658). Hive test 30
     * expects `status: null` for a Frontier-era transaction.
@@ -469,7 +477,7 @@ object GraphQLSchema:
               case Some(n) => BigInt(n)
               case None =>
                 c.value.blockInfo.map(_.block.header.number.value).getOrElse(c.ctx.blockchainReader.getBestBlockNumber)
-            val sender = SignedTransaction.getSender(c.value.stx).getOrElse(Address(0))
+            val sender = SignedTransaction.getSender(c.value.stx)(using c.ctx.blockchainConfig).getOrElse(Address(0))
             GAccount(sender.bytes, blockNum)
         ),
         Field(
@@ -488,7 +496,12 @@ object GraphQLSchema:
             }
         ),
         Field("value", BigIntType, resolve = _.value.stx.tx.value),
-        Field("gasPrice", BigIntType, resolve = _.value.stx.tx.gasPrice.value),
+        // geth: a mined fee-market tx reports what it paid, min(feeCap, baseFee + tip); a pending one its fee cap.
+        Field(
+          "gasPrice",
+          BigIntType,
+          resolve = c => paidGasPrice(c.value.stx.tx, c.value.blockInfo.flatMap(_.block.header.baseFee))
+        ),
         Field("maxFeePerGas", OptionType(BigIntType), resolve = c => txMaxFeePerGas(c.value.stx.tx)),
         Field("maxPriorityFeePerGas", OptionType(BigIntType), resolve = c => txMaxPriorityFeePerGas(c.value.stx.tx)),
         Field("maxFeePerBlobGas", OptionType(BigIntType), resolve = c => txMaxFeePerBlobGas(c.value.stx.tx)),
@@ -518,15 +531,15 @@ object GraphQLSchema:
         Field(
           "effectiveGasPrice",
           OptionType(BigIntType),
-          resolve =
-            c => c.value.blockInfo.map(bi => Transaction.effectiveGasPrice(c.value.stx.tx, bi.block.header.baseFee))
+          resolve = c => c.value.blockInfo.map(bi => paidGasPrice(c.value.stx.tx, bi.block.header.baseFee))
         ),
         Field(
           "blobGasUsed",
           OptionType(LongType),
+          // geth reads both blob fields from the receipt: null for a non-blob or not yet mined transaction.
           resolve = c =>
             c.value.stx.tx match
-              case bt: BlobTransaction =>
+              case bt: BlobTransaction if receiptBundle(c.ctx, c.value).isDefined =>
                 Some((BigInt(bt.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB).toLong)
               case _ => None
         ),
@@ -534,10 +547,13 @@ object GraphQLSchema:
           "blobGasPrice",
           OptionType(BigIntType),
           resolve = c =>
-            for
-              bi <- c.value.blockInfo
-              ebg <- bi.block.header.excessBlobGas
-            yield BlobGasUtils.getBlobGasPrice(ebg, bi.block.header.unixTimestamp, c.ctx.blockchainConfig)
+            c.value.stx.tx match
+              case _: BlobTransaction =>
+                for
+                  rb <- receiptBundle(c.ctx, c.value)
+                  ebg <- rb.block.header.excessBlobGas
+                yield BlobGasUtils.getBlobGasPrice(ebg, rb.block.header.unixTimestamp, c.ctx.blockchainConfig)
+              case _ => None
         ),
         Field(
           "createdContract",
@@ -546,7 +562,7 @@ object GraphQLSchema:
           resolve = c =>
             c.value.blockInfo.flatMap { bi =>
               if c.value.stx.tx.isContractInit then
-                SignedTransaction.getSender(c.value.stx).map { sender =>
+                SignedTransaction.getSender(c.value.stx)(using c.ctx.blockchainConfig).map { sender =>
                   val createdAddress = createContractAddress(sender, c.value.stx.tx.nonce)
                   val blockNum = c.arg(BlockNumberArg).map(BigInt(_)).getOrElse(bi.block.header.number.value)
                   GAccount(createdAddress.bytes, blockNum)
@@ -567,8 +583,14 @@ object GraphQLSchema:
         Field("r", BigIntType, resolve = _.value.stx.signature.r),
         Field("s", BigIntType, resolve = _.value.stx.signature.s),
         Field("v", BigIntType, resolve = _.value.stx.signature.v),
+        Field("yParity", OptionType(BigIntType), resolve = c => txYParity(c.value.stx)),
         Field("type", OptionType(LongType), resolve = c => Some(txType(c.value.stx.tx))),
-        Field("accessList", OptionType(ListType(AccessTupleType)), resolve = c => txAccessList(c.value.stx.tx)),
+        // geth builds the list from tx.AccessList(), which is empty (not null) for a legacy transaction.
+        Field(
+          "accessList",
+          OptionType(ListType(AccessTupleType)),
+          resolve = c => Some(txAccessList(c.value.stx.tx).getOrElse(Nil))
+        ),
         Field("raw", BytesType, resolve = c => rlpEncodeTransaction(c.value.stx)),
         Field(
           "rawReceipt",
@@ -1084,7 +1106,7 @@ object GraphQLSchema:
             case None =>
               throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
             case Some((stx, _)) =>
-              val senderOpt = SignedTransaction.getSender(stx)
+              val senderOpt = SignedTransaction.getSender(stx)(using c.ctx.blockchainConfig)
               if senderOpt.isEmpty then throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
 
               val sender = senderOpt.get

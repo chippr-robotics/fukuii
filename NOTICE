@@ -33,3 +33,20 @@ The derivative work continues to be licensed under the Apache License,
 Version 2.0, as required by the original license terms.
 
 For more information about Fukuii, visit: https://github.com/chippr-robotics/fukuii
+================================================================================
+
+THIRD-PARTY TEST FIXTURES
+
+These files are test data only. They are not compiled into or distributed with any fukuii artifact.
+
+- src/test/resources/rpc-compat/tests/ and src/test/resources/rpc-compat/amsterdam/*.io
+  Verbatim copies of test vectors and the test chain from ethereum/execution-apis
+  (https://github.com/ethereum/execution-apis, tests/, commit 62eefaa).
+  Licence: CC0 1.0 Universal (public domain dedication).
+  For provenance and how to refresh them, see src/test/resources/rpc-compat/README.md.
+
+- src/test/resources/graphql/geth-schema.graphql
+  The GraphQL schema string from go-ethereum graphql/schema.go
+  (https://github.com/ethereum/go-ethereum, master f468c3a9a832; file last changed in 3735c34ffe47).
+  Copyright 2019 The go-ethereum Authors. Licensed under the GNU Lesser General Public License v3.0 or later
+  (https://www.gnu.org/licenses/lgpl-3.0.html). It is used unmodified, as a reference the tests compare against.
