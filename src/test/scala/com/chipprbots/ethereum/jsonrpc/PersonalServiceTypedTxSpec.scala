@@ -68,7 +68,7 @@ class PersonalServiceTypedTxSpec
       .sendTransaction(SendTransactionRequest(TxArgs(from = Some(address), to = Some(to), value = Some(5))))
       .unsafeToFuture()
     replyPTM(PendingTransactionsResponse(Nil))
-    val tip = TxDefaultsSpec.eth.minTip
+    val tip = oracleTip
     val expected = wallet
       .signTx(
         TransactionWithDynamicFee(
@@ -346,7 +346,7 @@ class PersonalServiceTypedTxSpec
       .fillTransaction(FillTransactionRequest(TxArgs(from = Some(address), to = Some(to), value = Some(1))))
       .unsafeToFuture()
     replyPTM(PendingTransactionsResponse(Nil))
-    val tip = TxDefaultsSpec.eth.minTip
+    val tip = oracleTip
     val filled = res.futureValue.toOption.get.result
     filled.stx.tx shouldBe TransactionWithDynamicFee(
       1,
@@ -406,6 +406,8 @@ class PersonalServiceTypedTxSpec
     val accountNonce: BigInt = 7
     val gasEstimate: BigInt = 21000
     val gasPrice: BigInt = 2 * BigInt(10).pow(10)
+    // the gas price oracle's suggested tip (eth_maxPriorityFeePerGas), the default tip after London
+    val oracleTip: BigInt = 3
     val gwei: BigInt = BigInt(10).pow(9)
     val zeroBlob: ByteString = ByteString(new Array[Byte](TxArgsJson.BlobLength))
 
@@ -440,7 +442,11 @@ class PersonalServiceTypedTxSpec
       TestProbe().ref.toTyped[PendingTransactionsManager.Command],
       Timeouts.normalTimeout,
       stub[TransactionMappingStorage],
-      system.scheduler
+      system.scheduler,
+      Some(
+        new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig(using config)):
+          override def suggestTipCap(): BigInt = oracleTip
+      )
     ):
       override private[jsonrpc] def suggestGasPrice(): BigInt = gasPrice
 

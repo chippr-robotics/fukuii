@@ -64,7 +64,11 @@ case class BlockchainConfig(
     // `config.depositContractAddress`) and NOT a universal constant: hive's rpc-compat
     // fixture declares the zero address, Sepolia uses its own. `None` means "not declared",
     // and readers fall back to the mainnet contract. ETC/Mordor never declare it.
-    depositContractAddress: Option[Address] = None
+    depositContractAddress: Option[Address] = None,
+    // Start price of the RPC gas price oracle (chain conf `gpo-default-price`, wei). `None` takes the chain family's
+    // reference client: 1 mwei on ETH-family chains (geth), 1 gwei on ETC (core-geth). Not consensus: eth_gasPrice,
+    // eth_maxPriorityFeePerGas and the send/sign/fill fee defaults only. See jsonrpc.GasPriceOracle.
+    gasPriceOracleDefault: Option[BigInt] = None
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
@@ -321,6 +325,11 @@ object BlockchainConfig:
     val depositContractAddress: Option[Address] =
       Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption
 
+    val gasPriceOracleDefault: Option[BigInt] =
+      Option.when(blockchainConfig.hasPath("gpo-default-price"))(
+        BigInt(blockchainConfig.getString("gpo-default-price"))
+      )
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
@@ -396,7 +405,8 @@ object BlockchainConfig:
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
       depositContractAddress = depositContractAddress,
-      forkTimestamps = forkTimestamps
+      forkTimestamps = forkTimestamps,
+      gasPriceOracleDefault = gasPriceOracleDefault
     )
   // scalastyle:on method.length
   private def readPubKeySet(blockchainConfig: TypesafeConfig, path: String): Set[ByteString] =

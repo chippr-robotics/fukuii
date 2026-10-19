@@ -185,16 +185,16 @@ class EthTxServiceSpec
 
     response.futureValue shouldEqual Right(RawTransactionResponse(Some(txToRequest)))
 
-  it should "return minimum 1 wei gas price when there are no transactions" taggedAs (
+  it should "return the oracle's 1 gwei start price when there are no transactions" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
-    // Pre-EIP-1559 chain with empty block window: oracle falls back to minimumGasPrice().
-    // minimumGasPrice() returns max(0, 1) = 1 wei — never 0.
+    // No block to sample (genesis is never sampled) and no base fee: go-ethereum's oracle answers its start price,
+    // core-geth's 1 gwei miner gas price (GasPriceOracle.defaultPriceFor on this ETC-family test chain).
     val response: ServiceResponse[GetGasPriceResponse] = ethTxService.getGetGasPrice(GetGasPriceRequest())
-    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(1))
+    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(BigInt(10).pow(9)))
 
-  it should "return average gas price" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "return the sampled gas price percentile" taggedAs (UnitTest, RPCTest) in new TestSetup:
     private val block: Block =
       Block(Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(42)), Fixtures.Blocks.Block3125369.body)
     blockchainWriter

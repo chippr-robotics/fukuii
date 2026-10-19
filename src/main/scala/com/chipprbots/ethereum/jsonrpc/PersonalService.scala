@@ -293,9 +293,9 @@ class PersonalService(
     TxDefaults.Env(
       head = head,
       config = blockchainConfig,
+      // go-ethereum `b.SuggestGasTipCap`, the oracle eth_gasPrice and eth_maxPriorityFeePerGas answer from
       suggestGasPrice = () => ethTxService.suggestGasPrice(),
-      // eth_maxPriorityFeePerGas (EthBlocksService.maxPriorityFeePerGas) answers the configured minimum tip
-      suggestGasTipCap = () => blockchainConfig.minTip,
+      suggestGasTipCap = () => ethTxService.gasPriceOracle.suggestTipCap(),
       poolNonce = address => poolNonce(address, head),
       estimateGas = args => gasEstimator.estimateGas(args, head)
     )
