@@ -466,6 +466,44 @@ All fork parameters are strings (decimal numbers):
 | `petersburg-block-number` | varies | Petersburg fork |
 | `istanbul-block-number` | varies | Istanbul fork |
 
+### Timestamp Forks and Blob Schedule (ETH-family, post-merge)
+
+ETH-family chains (`network-type = "eth"`) activate post-merge forks by timestamp (Unix seconds, integers):
+`shanghai-timestamp`, `cancun-timestamp`, `prague-timestamp`, `osaka-timestamp`, `bpo1-timestamp`,
+`bpo2-timestamp`, `amsterdam-timestamp`. Each is go-ethereum's genesis `config.<fork>Time`. ETC-family chains
+declare none of them.
+
+Blob parameters (EIP-7840 `blobSchedule`, EIP-7892 BPO forks) are per chain, in `blob-schedule`, one entry per
+blob fork, mapped from genesis.json `config.blobSchedule` (`baseFeeUpdateFraction` becomes
+`base-fee-update-fraction`):
+
+```hocon
+  cancun-timestamp = 0
+  prague-timestamp = 0
+  osaka-timestamp = 0
+  bpo1-timestamp = 1791063432
+  blob-schedule {
+    cancun { target = 3, max = 6, base-fee-update-fraction = 3338477 }
+    prague { target = 6, max = 9, base-fee-update-fraction = 5007716 }
+    bpo1   { target = 8, max = 12, base-fee-update-fraction = 6676955 }
+  }
+```
+
+An entry applies from its fork's timestamp; Osaka and Amsterdam carry no entry and keep the latest one, as in
+go-ethereum. Every consumer reads it: excess blob gas and blob base fee, the per-block blob limit (header
+validation, block building), `BLOBBASEFEE`, `eth_blobBaseFee`, `eth_feeHistory`, `eth_config`. The per-transaction
+blob limit (6, EIP-7594) is a protocol constant, not part of the schedule.
+
+The node refuses to load a chain config that:
+- declares `cancun-`, `prague-`, `bpo1-` or `bpo2-timestamp` without a `blob-schedule` entry for that fork;
+- has an entry with `target` <= 0, `max` < `target`, or `base-fee-update-fraction` <= 0, or an unknown key;
+- orders the blob-fork timestamps other than cancun <= prague <= osaka <= bpo1 <= bpo2 <= amsterdam;
+- declares `bpo3-timestamp` or later (not supported yet), or an `osaka` / `amsterdam` entry that differs from the
+  entry it inherits (go-ethereum ignores such an entry, so honouring it would split from it).
+
+A custom chain config that fails to load is logged at ERROR and the node then reports the network as not
+configured.
+
 ### Monetary Policy Parameters
 
 | Parameter | Type | Description |

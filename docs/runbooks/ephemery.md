@@ -118,22 +118,30 @@ Lighthouse datadir (it holds the old chain's state), and start again. fukuii's d
 genesis is refused at startup ("Genesis data present in the database does not match"). Delete old
 `OUT/ephemery-N/` directories when done with them.
 
-## Known limitation: blob schedule
+## Blob schedule
 
-fukuii hard-codes the mainnet/Sepolia blob parameters per fork (`EngineApiService` blob-gas constants,
-`OpCode` `BLOBBASEFEE` update fraction, `BlobGasUtils`); a chain config cannot change them. Ephemery
-uses different BPO values, which `fetch-genesis.sh` reports as a WARNING:
+Ephemery's blob parameters differ from mainnet's at the BPO forks. `fetch-genesis.sh` copies
+genesis.json `config.blobSchedule` verbatim into the generated chain config's `blob-schedule` (#1637),
+and fukuii takes every blob parameter from there: excess blob gas and blob base fee, the per-block blob
+limit in header validation and block building, `BLOBBASEFEE`, `eth_blobBaseFee`, `eth_feeHistory` and
+`eth_config`.
 
-| Fork | Ephemery target/max/updateFraction | fukuii |
-|------|------------------------------------|--------|
+| Fork | Ephemery target/max/updateFraction | mainnet / Sepolia |
+|------|------------------------------------|-------------------|
+| Cancun | 3 / 6 / 3338477 | 3 / 6 / 3338477 |
+| Prague, Osaka | 6 / 9 / 5007716 | 6 / 9 / 5007716 |
 | BPO1 | 8 / 12 / 6676955 | 10 / 15 / 8346193 |
 | BPO2 | 10 / 15 / 8346193 | 14 / 21 / 11684671 |
 
-Cancun/Prague/Osaka match. From BPO1 on, the excess-blob-gas and blob-base-fee computations diverge as
-soon as a block's blob usage reaches the target, and fukuii accepts more blobs per block than Ephemery
-allows. The expected failure is loud — a header `excessBlobGas` mismatch stalls import — not silent.
-Ephemery's blob usage was zero in every block sampled on 2026-10-17, so import is expected to match
-before and after the BPOs, but only per-chain blob-schedule configuration makes it correct.
+The script refuses a schedule entry for a fork fukuii cannot schedule (bpo3 and later) or with a missing
+or non-integer field. fukuii itself refuses to load a chain config whose schedule lacks an entry for a
+declared blob fork, has max < target, target or update fraction 0, out-of-order blob-fork timestamps, or
+an `osaka` entry different from Prague's (go-ethereum ignores `osaka`, so a differing value would split
+from it). A refused custom chain config is logged at ERROR ("Failed to load chain config from
+ephemery-chain.conf") and startup then fails with "blockchain network 'ephemery' is not configured".
+
+A chain config generated before #1637 has no `blob-schedule` and is refused this way: re-run
+`fetch-genesis.sh` for the current release.
 
 ## Sources
 
