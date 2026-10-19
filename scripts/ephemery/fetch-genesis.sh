@@ -33,9 +33,10 @@
 #
 # Fails loudly (non-zero exit, nothing written for that iteration) if the release's genesis config
 # declares something fukuii cannot represent: a non-zero block fork, an unknown fork key, a fork after
-# Amsterdam (bpo3Time...), a non-zero terminal total difficulty, or a header quantity it cannot
-# re-encode. A blob schedule that differs from the values fukuii hard-codes is a WARNING (see the
-# runbook, docs/runbooks/ephemery.md, "Known limitation: blob schedule").
+# Amsterdam (bpo3Time...), a non-zero terminal total difficulty, a header quantity it cannot
+# re-encode, or a blobSchedule entry it cannot map (unknown fork, missing or non-integer field). The
+# blobSchedule itself is mapped verbatim into the chain config's `blob-schedule` (#1637); fukuii
+# validates it at startup (an entry for every declared blob fork, max >= target > 0, fraction > 0).
 #
 # Requires: bash >= 4, curl, tar, jq.
 
@@ -158,29 +159,22 @@ done
 DEPOSIT="$(jq -r '.config.depositContractAddress // "null"' "$G")"
 [[ "$DEPOSIT" =~ ^0x[0-9a-fA-F]{40}$ ]] || die "config.depositContractAddress missing or malformed: $DEPOSIT"
 
-# Blob schedule: fukuii hard-codes the mainnet/Sepolia BPO parameters (EngineApiService, OpCode.BLOBBASEFEE,
-# BlobGasUtils); it cannot take them from config. Report every difference.
-fukuii_blobs() {
-  case "$1" in
-    cancun) echo "3/6/3338477" ;;
-    prague | osaka) echo "6/9/5007716" ;;
-    bpo1) echo "10/15/8346193" ;;
-    bpo2) echo "14/21/11684671" ;;
-    *) echo "" ;;
-  esac
-}
-BLOB_MISMATCH=""
-while IFS=$'\t' read -r fork value; do
+# Blob schedule (EIP-7840 config.blobSchedule) -> HOCON `blob-schedule`, verbatim. fukuii's loader checks it
+# against the fork timestamps (every declared blob fork needs an entry; osaka/amsterdam entries must equal the entry
+# they inherit, since go-ethereum ignores them). Here: only forks fukuii can schedule, and integer fields.
+BLOB_FORKS='["cancun","prague","osaka","bpo1","bpo2","amsterdam"]'
+unknown_blob="$(jq -r --argjson f "$BLOB_FORKS" '.config.blobSchedule // {} | keys - $f | join(",")' "$G")"
+[[ -z "$unknown_blob" ]] || die "blobSchedule declares fork(s) fukuii has no blob fork for: $unknown_blob"
+BLOB_SCHEDULE=""
+while IFS=$'\t' read -r fork target max fraction; do
   [[ -n "$fork" ]] || continue
-  expected="$(fukuii_blobs "$fork")"
-  if [[ -z "$expected" ]]; then
-    die "blobSchedule declares fork '$fork', which fukuii has no blob parameters for"
-  elif [[ "$expected" != "$value" ]]; then
-    BLOB_MISMATCH="${BLOB_MISMATCH:+$BLOB_MISMATCH,}$fork"
-    warn "blobSchedule.$fork is target/max/updateFraction $value; fukuii hard-codes $expected." \
-      "Blocks from that fork on can diverge once blob usage exceeds the target (see docs/runbooks/ephemery.md)."
-  fi
-done < <(jq -r '.config.blobSchedule // {} | to_entries[] | "\(.key)\t\(.value.target)/\(.value.max)/\(.value.baseFeeUpdateFraction)"' "$G")
+  for v in "$target" "$max" "$fraction"; do
+    [[ "$v" =~ ^[0-9]+$ ]] || die "blobSchedule.$fork has a missing or non-integer field (target/max/baseFeeUpdateFraction = $target/$max/$fraction)"
+  done
+  BLOB_SCHEDULE+="    $fork { target = $target, max = $max, base-fee-update-fraction = $fraction }"$'\n'
+done < <(jq -r --argjson f "$BLOB_FORKS" '(.config.blobSchedule // {}) as $s
+  | $f[] | select($s[.] != null) as $k
+  | "\($k)\t\($s[$k].target // "null")\t\($s[$k].max // "null")\t\($s[$k].baseFeeUpdateFraction // "null")"' "$G")
 
 # ---------------------------------------------------------------------------------------------------
 # 3. Re-encode the genesis header for GenesisDataLoader
@@ -310,6 +304,11 @@ cat > "$STAGE/chains/ephemery-chain.conf" <<EOF
   bpo2-timestamp = $(hocon_ts "$BPO2")
   amsterdam-timestamp = $(hocon_ts "$AMSTERDAM")
 
+  # EIP-7840 blob schedule, verbatim from genesis.json config.blobSchedule (target and max blobs per
+  # block, blob base-fee update fraction), each entry in force from its fork's timestamp above.
+  blob-schedule {
+${BLOB_SCHEDULE}  }
+
   merge-netsplit-block-number = "0"
   deposit-contract-address = "$DEPOSIT"
 
@@ -399,7 +398,6 @@ RESET_TIME=$((GENESIS_TS + ${RESET_INTERVAL:-2419200}))
   echo "GENESIS_TIMESTAMP=\"$GENESIS_TS\""
   echo "RESET_TIME=\"$RESET_TIME\""
   echo "GENESIS_HASH=\"$EXPECTED_HASH\""
-  echo "BLOB_SCHEDULE_MISMATCH=\"$BLOB_MISMATCH\""
   echo "OUT_DIR=\"$OUT\""
   echo "TESTNET_DIR=\"$DEST/testnet\""
   echo "CHAINS_DIR=\"$DEST/chains\""
@@ -446,5 +444,4 @@ fi
 
 info "wrote $DEST (chain id $CHAIN_ID, genesis $GENESIS_TS, expected genesis hash ${EXPECTED_HASH:-unknown})"
 info "next reset: $(date -u -d "@$RESET_TIME" 2>/dev/null || echo "$RESET_TIME")"
-[[ -z "$BLOB_MISMATCH" ]] || warn "blob schedule differs from fukuii's for: $BLOB_MISMATCH"
 echo "$DEST"

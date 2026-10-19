@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Blob parameters are per chain (EIP-7840 `blobSchedule`, EIP-7892 BPO forks, #1637).** The blob target, max and
+  base-fee update fraction of each fork now come from the chain config's `blob-schedule` instead of constants fixed to
+  the mainnet/Sepolia schedule. Every consumer reads it: excess blob gas and blob base fee, the per-block blob limit in
+  header validation and block building, `BLOBBASEFEE`, `eth_blobBaseFee`, `eth_feeHistory`'s blob fields,
+  `eth_config.blobSchedule`, receipts' `blobGasPrice`, GraphQL, and the `maxFeePerBlobGas` the node fills in for a transaction it signs. mainnet, Sepolia, Platåberget and hive keep exactly today's values
+  (go-ethereum's default Cancun 3/6/3338477, Prague 6/9/5007716, BPO1 10/15/8346193, BPO2 14/21/11684671); ETC chains
+  have no blob forks and are unchanged. Ephemery now follows its own schedule (BPO1 8/12/6676955, BPO2 10/15/8346193):
+  before, its blocks at or above the blob target failed import with `INCORRECT_EXCESS_BLOB_GAS` and blocks with more
+  blobs than it allows were accepted. `scripts/ephemery/fetch-genesis.sh` maps genesis.json `config.blobSchedule`
+  instead of warning, and hive's adapter maps `HIVE_{CANCUN,PRAGUE,BPO1,BPO2}_BLOB_*`.
+
+  **Breaking for custom ETH-family chain configs:** a chain config that declares `cancun-`, `prague-`, `bpo1-` or
+  `bpo2-timestamp` must declare a `blob-schedule` entry for each, or the node refuses to load it (as it does a schedule
+  with max < target, a zero target or update fraction, out-of-order blob-fork timestamps, `bpo3-timestamp` or later,
+  or an `osaka`/`amsterdam` entry that differs from the one it inherits). An Ephemery chain config generated before
+  this change has no `blob-schedule`: re-run `fetch-genesis.sh`. See docs/runbooks/custom-networks.md.
 - **Debian package: the launcher now reads `/etc/fukuii/application.ini`.** Deb installs never applied it before, so
   the JVM ran with its own defaults (a heap of about a quarter of RAM, no OOM exit). After upgrading, a deb install
   runs with the shipped defaults: `-Xmx3g -Xms1g`, `MaxDirectMemorySize=512M`, G1, exit and heap dump

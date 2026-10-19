@@ -2160,71 +2160,60 @@ class EngineApiService(
       val root = txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
       ByteString(root)
 
-/** EIP-4844 / EIP-7691 / EIP-7892 blob gas computation utilities.
+/** EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 blob gas computation utilities.
   *
-  * Per-fork blob targets and maxes (EIP-7892 Blob Parameter Only forks):
-  *   - Cancun (EIP-4844): target=3, max=6 blobs
-  *   - Prague (EIP-7691): target=6, max=9 blobs
-  *   - Osaka: target=6, max=9 blobs (no blob change; inherits Prague)
-  *   - BPO1 (EIP-7892): target=10, max=15 blobs, update fraction 8,346,193
-  *   - BPO2 (EIP-7892): target=14, max=21 blobs, update fraction 11,684,671
-  *   - Amsterdam: no blob change; inherits BPO2 (no network declares an Amsterdam blob-schedule entry)
+  * Blob parameters (target, max, base-fee update fraction) are per chain since #1637: each comes from the chain conf's
+  * `blob-schedule` (EIP-7840), resolved at a timestamp by
+  * [[com.chipprbots.ethereum.utils.BlockchainConfig.blobParamsAt]] exactly as go-ethereum's `eip4844.latestBlobConfig`.
+  * mainnet and Sepolia declare go-ethereum's `Default{Cancun,Prague,BPO1,BPO2}BlobConfig` (3/6/3338477, 6/9/5007716,
+  * 10/15/8346193, 14/21/11684671); Ephemery, for one, declares BPO1 8/12/6676955 and BPO2 10/15/8346193. Osaka and
+  * Amsterdam inherit the latest entry.
   *
-  * These are go-ethereum's `params.DefaultBPO1BlobConfig` / `DefaultBPO2BlobConfig`, which
-  * `params.SepoliaChainConfig.BlobScheduleConfig` uses. Sepolia schedule (`sepolia-chain.conf`):
-  *   - osaka: 1760427360 = 2025-10-14 07:36:00 UTC
-  *   - bpo1: 1761017184 = 2025-10-21 03:26:24 UTC (target=10, max=15)
-  *   - bpo2: 1761607008 = 2025-10-27 23:16:48 UTC (target=14, max=21)
+  * Before a chain's first blob fork (and on ETC, which has none) the fork-aware functions answer the EIP-4844 Cancun
+  * constants, as they did when these were hard-coded; callers guard on Cancun, so no consensus path reaches that.
   *
-  * Use the fork-aware `targetBlobGasPerBlock(timestamp, config)` / `maxBlobGasPerBlock(timestamp, config)` for any
-  * blob-gas validation; the static `*_TARGET_BLOB_GAS` / `*_MAX_BLOB_GAS` values are kept only as the ladder rungs.
+  * The `CANCUN_*` .. `BPO2_*` constants are go-ethereum's default values, kept as named reference values (tests and the
+  * default schedule use them). Consensus code must use the fork-aware functions, never the constants.
   */
 object BlobGasUtils:
-  val GAS_PER_BLOB: BigInt = BigInt(131072)
+  import com.chipprbots.ethereum.utils.BlobParams
 
-  // Cancun (EIP-4844): 3 target, 6 max
-  val CANCUN_TARGET_BLOB_GAS: BigInt = BigInt(393216) // 3 * 131072
-  val CANCUN_MAX_BLOB_GAS: BigInt = BigInt(786432) // 6 * 131072
+  val GAS_PER_BLOB: BigInt = BlobParams.GasPerBlob
 
-  // Prague (EIP-7691): 6 target, 9 max
-  val PRAGUE_TARGET_BLOB_GAS: BigInt = BigInt(786432) // 6 * 131072
-  val PRAGUE_MAX_BLOB_GAS: BigInt = BigInt(1179648) // 9 * 131072
-
-  // EIP-7892 BPO1: 10 target, 15 max (Sepolia 2025-10-21).
-  // Empirically derived from Sepolia canonical chain (block pair 0x90FFFF → 0x910000):
-  //   parent: excess=655360 used=917504 (sum=1572864), child: excess=262144
-  //   ⇒ target = 1572864 - 262144 = 1310720 = 10 * 131072
-  // Max bound observed = 15 blobs (block 0x910002 used=1966080).
-  val BPO1_TARGET_BLOB_GAS: BigInt = BigInt(1310720) // 10 * 131072
-  val BPO1_MAX_BLOB_GAS: BigInt = BigInt(1966080) // 15 * 131072
-
-  // EIP-7892 BPO2: 14 target, 21 max (Sepolia 2025-10-28).
-  // Empirically derived from Sepolia canonical chain (block pair 10817144 → 10817145):
-  //   parent: excess=8912666 used=1310720 (sum=10223386), child: excess=8388378
-  //   ⇒ target = 10223386 - 8388378 = 1835008 = 14 * 131072
-  // Max bound = target * 1.5 = 21 blobs (matches Prague's 1.5x ratio).
-  val BPO2_TARGET_BLOB_GAS: BigInt = BigInt(1835008) // 14 * 131072
-  val BPO2_MAX_BLOB_GAS: BigInt = BigInt(2752512) // 21 * 131072
+  // go-ethereum params.Default*BlobConfig, in blob gas. Reference values only (see the object comment).
+  val CANCUN_TARGET_BLOB_GAS: BigInt = BlobParams.Cancun.targetBlobGas // 3 * 131072 = 393216
+  val CANCUN_MAX_BLOB_GAS: BigInt = BlobParams.Cancun.maxBlobGas // 6 * 131072 = 786432
+  val PRAGUE_TARGET_BLOB_GAS: BigInt = BlobParams.Prague.targetBlobGas // 6 * 131072 = 786432
+  val PRAGUE_MAX_BLOB_GAS: BigInt = BlobParams.Prague.maxBlobGas // 9 * 131072 = 1179648
+  // Sepolia BPO1 was confirmed on chain: parent 0x90FFFF excess=655360 used=917504, child 0x910000 excess=262144
+  // ⇒ target 1572864 - 262144 = 1310720 = 10 blobs; block 0x910002 used 1966080 = 15 blobs.
+  val BPO1_TARGET_BLOB_GAS: BigInt = BlobParams.Bpo1.targetBlobGas // 10 * 131072 = 1310720
+  val BPO1_MAX_BLOB_GAS: BigInt = BlobParams.Bpo1.maxBlobGas // 15 * 131072 = 1966080
+  // Sepolia BPO2: parent 10817144 excess=8912666 used=1310720, child excess=8388378 ⇒ target 1835008 = 14 blobs.
+  val BPO2_TARGET_BLOB_GAS: BigInt = BlobParams.Bpo2.targetBlobGas // 14 * 131072 = 1835008
+  val BPO2_MAX_BLOB_GAS: BigInt = BlobParams.Bpo2.maxBlobGas // 21 * 131072 = 2752512
 
   // Default (Cancun) values
   val TARGET_BLOB_GAS_PER_BLOCK: BigInt = CANCUN_TARGET_BLOB_GAS
-  val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(3338477)
-  // EIP-7691 (Prague): BLOB_BASE_FEE_UPDATE_FRACTION bumped to scale with 9-blob MAX.
-  val PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(5007716)
-  // EIP-7892 BPO1/BPO2 update fractions (geth `params.config.go`
-  // `DefaultBPO{1,2}BlobConfig.UpdateFraction`). These scale with each fork's MAX so the
-  // EIP-7918 reserve-price comparison and the `getBlobGasPrice` exponential give the
-  // right answer post-Osaka. Without them, fukuii uses Prague's smaller fraction →
-  // higher computed `blobPrice` → reservePrice ≤ blobPrice almost always → EIP-7918
-  // alternate branch never triggers and we fall back to EIP-4844, mismatching geth.
-  val BPO1_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(8346193)
-  val BPO2_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(11684671)
-  val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
+  val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BlobParams.Cancun.baseFeeUpdateFraction // 3338477
+  val PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BlobParams.Prague.baseFeeUpdateFraction // 5007716
+  val BPO1_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BlobParams.Bpo1.baseFeeUpdateFraction // 8346193
+  val BPO2_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BlobParams.Bpo2.baseFeeUpdateFraction // 11684671
+  val MIN_BLOB_BASE_FEE: BigInt = BlobParams.MinBlobBaseFee
 
   // EIP-7918: BLOB_BASE_COST = 2^13 — the per-blob execution gas cost used in the
   // reserve-price comparison. When `BLOB_BASE_COST * parent.baseFee > blobPrice(parent)`,
   // the alternate excess formula kicks in.
   val BLOB_BASE_COST: BigInt = BigInt(1) << 13
+
+  /** The blob parameters in force at `blockTimestamp` on this chain, or the EIP-4844 Cancun constants before its first
+    * blob fork (the pre-#1637 answer for such a timestamp). Returns a stored instance: no allocation.
+    */
+  def paramsAt(
+      blockTimestamp: Timestamp,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BlobParams =
+    blockchainConfig.blobParamsAt(blockTimestamp).getOrElse(BlobParams.Cancun)
 
   /** Calculate excess blob gas for a block from its parent's excess and used blob gas. Per EIP-4844: if parent_excess +
     * parent_used < target then 0 else parent_excess + parent_used - target
@@ -2287,30 +2276,24 @@ object BlobGasUtils:
   def getBlobGasPrice(excessBlobGas: BigInt): BigInt =
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
 
-  /** Fork-aware blob gas price. Prague (EIP-7691) raises the update fraction. */
+  /** Fork-aware blob gas price (go-ethereum `eip4844.CalcBlobFee`): the chain's update fraction at `blockTimestamp`. */
   def getBlobGasPrice(
       excessBlobGas: BigInt,
       blockTimestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    val fraction = updateFractionFor(blockTimestamp, blockchainConfig)
-    fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
+    fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, paramsAt(blockTimestamp, blockchainConfig).baseFeeUpdateFraction)
 
-  /** Fork-aware blob-base-fee update fraction. Each BPO bumps the fraction proportional to its MAX, matching geth's
-    * `params.config.go` `Default{Cancun,Prague,Osaka,BPO1,BPO2}BlobConfig.UpdateFraction`. Osaka itself reuses the
-    * Prague value (Osaka's blob params are unchanged from Prague).
-    */
+  /** Fork-aware blob-base-fee update fraction from the chain's `blob-schedule`. */
   def updateFractionFor(
       blockTimestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    if blockchainConfig.isBpo2Timestamp(blockTimestamp) then BPO2_BLOB_BASE_FEE_UPDATE_FRACTION
-    else if blockchainConfig.isBpo1Timestamp(blockTimestamp) then BPO1_BLOB_BASE_FEE_UPDATE_FRACTION
-    else if blockchainConfig.isPragueTimestamp(blockTimestamp) then PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
-    else BLOB_BASE_FEE_UPDATE_FRACTION
+    paramsAt(blockTimestamp, blockchainConfig).baseFeeUpdateFraction
 
-  /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp. Routes through the EIP-7918
-    * alternate formula post-Osaka. This is the single canonical entry point for Engine-API payload validation and
+  /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp (go-ethereum
+    * `eip4844.CalcExcessBlobGas`): the CHILD's blob parameters, and the EIP-7918 alternate formula once Osaka is active
+    * at the child. This is the single canonical entry point for Engine-API payload validation, payload building and
     * BlockHeaderValidator.
     *
     * `parentBaseFee` is required post-Osaka (used in the reserve-price comparison). Pass `BigInt(0)` for pre-Osaka
@@ -2323,37 +2306,35 @@ object BlobGasUtils:
       childTimestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    val target = targetBlobGasPerBlock(childTimestamp, blockchainConfig)
+    val params = paramsAt(childTimestamp, blockchainConfig)
     if blockchainConfig.isOsakaTimestamp(childTimestamp) then
-      val max = maxBlobGasPerBlock(childTimestamp, blockchainConfig)
-      val fraction = updateFractionFor(childTimestamp, blockchainConfig)
-      calcExcessBlobGasOsaka(parentExcessBlobGas, parentBlobGasUsed, parentBaseFee, target, max, fraction)
-    else calcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed, target)
+      calcExcessBlobGasOsaka(
+        parentExcessBlobGas,
+        parentBlobGasUsed,
+        parentBaseFee,
+        params.targetBlobGas,
+        params.maxBlobGas,
+        params.baseFeeUpdateFraction
+      )
+    else calcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed, params.targetBlobGas)
 
-  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. EIP-7892 BPOs raise the cap on Sepolia/mainnet post-Osaka; the latest active
-    * BPO wins.
+  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK (go-ethereum `eip4844.MaxBlobGasPerBlock`): the chain's `max` at
+    * `blockTimestamp`, in blob gas.
     */
   def maxBlobGasPerBlock(
       blockTimestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    if blockchainConfig.isBpo2Timestamp(blockTimestamp) then BPO2_MAX_BLOB_GAS
-    else if blockchainConfig.isBpo1Timestamp(blockTimestamp) then BPO1_MAX_BLOB_GAS
-    else if blockchainConfig.isPragueTimestamp(blockTimestamp) then PRAGUE_MAX_BLOB_GAS
-    else CANCUN_MAX_BLOB_GAS
+    paramsAt(blockTimestamp, blockchainConfig).maxBlobGas
 
-  /** Fork-aware TARGET_BLOB_GAS_PER_BLOCK used by `calcExcessBlobGas` and Engine API payload validation. Without BPO
-    * awareness, post-Osaka Sepolia blocks fail with `INCORRECT_EXCESS_BLOB_GAS` because we'd subtract the Prague target
-    * (6 blobs) instead of the active BPO target (8 or 12 blobs).
+  /** Fork-aware TARGET_BLOB_GAS_PER_BLOCK used by `calcExcessBlobGas` and Engine API payload validation: the chain's
+    * `target` at `blockTimestamp`, in blob gas. A wrong target is what surfaces as `INCORRECT_EXCESS_BLOB_GAS`.
     */
   def targetBlobGasPerBlock(
       blockTimestamp: Timestamp,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    if blockchainConfig.isBpo2Timestamp(blockTimestamp) then BPO2_TARGET_BLOB_GAS
-    else if blockchainConfig.isBpo1Timestamp(blockTimestamp) then BPO1_TARGET_BLOB_GAS
-    else if blockchainConfig.isPragueTimestamp(blockTimestamp) then PRAGUE_TARGET_BLOB_GAS
-    else CANCUN_TARGET_BLOB_GAS
+    paramsAt(blockTimestamp, blockchainConfig).targetBlobGas
 
   /** EIP-7918: Osaka blob base fee floored by execution gas cost. Prevents blob base fee from decoupling from execution
     * fee market. Formula (Osaka spec): blob_base_fee = max(current_blob_fee, (blob_base_fee_update_fraction *
@@ -2365,17 +2346,9 @@ object BlobGasUtils:
     val floor = blockBaseFee / BigInt(8) // conservative: blob_fee ≥ base_fee / 8
     base.max(floor).max(MIN_BLOB_BASE_FEE)
 
-  /** fake_exponential: approximates factor * e^(numerator / denominator) using Taylor expansion. Per EIP-4844 spec.
-    */
+  /** fake_exponential: approximates factor * e^(numerator / denominator) using Taylor expansion. Per EIP-4844 spec. */
   private def fakeExponential(factor: BigInt, numerator: BigInt, denominator: BigInt): BigInt =
-    var i = BigInt(1)
-    var output = BigInt(0)
-    var numeratorAccum = factor * denominator
-    while numeratorAccum > 0 do
-      output += numeratorAccum
-      numeratorAccum = (numeratorAccum * numerator) / (denominator * i)
-      i += 1
-    output / denominator
+    BlobParams.fakeExponential(factor, numerator, denominator)
 
 object EngineApiService:
 

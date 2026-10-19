@@ -18,7 +18,6 @@ import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.keystore.KeyStore
-import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
@@ -264,17 +263,14 @@ class EthInfoService(
       systemContracts = ethSystemContractsAt(ts)
     )
 
-  /** Blob parameters in BLOBS, not gas — EIP-7910 reports counts. Absent before Cancun, which is the first fork with
-    * blobs at all.
+  /** Blob parameters in BLOBS, not gas — EIP-7910 reports counts — straight from the chain's `blob-schedule` (#1637),
+    * the entry in force at the fork's own timestamp (go-ethereum `ChainConfig.BlobConfig(fork)`). Absent before the
+    * chain's first blob fork.
     */
   private def blobScheduleAt(ts: Timestamp): Option[BlobScheduleConfig] =
-    Option.when(blockchainConfig.isCancunTimestamp(ts))(
-      BlobScheduleConfig(
-        target = BlobGasUtils.targetBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
-        max = BlobGasUtils.maxBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
-        baseFeeUpdateFraction = BlobGasUtils.updateFractionFor(ts, blockchainConfig)
-      )
-    )
+    blockchainConfig
+      .blobParamsAt(ts)
+      .map(p => BlobScheduleConfig(target = p.target, max = p.max, baseFeeUpdateFraction = p.baseFeeUpdateFraction))
 
   /** Derived from the very sets `PrecompiledContracts` hands the EVM, so the advertised list is the implemented list.
     * BPO and Amsterdam forks add no precompiles, so they inherit the Osaka set.
