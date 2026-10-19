@@ -184,7 +184,7 @@ object GasPriceOracle:
   /** The oracle settings under `fukuii.network.rpc.gpo`; an absent key keeps its default ([[defaultConfig]]), so
     * `default-price` there overrides the chain's start price only when set.
     */
-  def configFrom(fukuiiConfig: com.typesafe.config.Config)(using BlockchainConfig): Config =
+  def configFrom(fukuiiConfig: com.typesafe.config.Config)(using blockchainConfig: BlockchainConfig): Config =
     def int(key: String, default: Int): Int =
       val path = s"$ConfigPath.$key"
       if fukuiiConfig.hasPath(path) then fukuiiConfig.getInt(path) else default
@@ -212,7 +212,7 @@ object GasPriceOracle:
   /** go-ethereum `getBlockValues`: the `limit` lowest effective tips of `block` at its base fee, without tips below
     * `ignoreUnder` and transactions whose sender is the block's coinbase (or cannot be recovered).
     */
-  def blockValues(block: Block, limit: Int, ignoreUnder: BigInt)(using BlockchainConfig): Seq[BigInt] =
+  def blockValues(block: Block, limit: Int, ignoreUnder: BigInt)(using blockchainConfig: BlockchainConfig): Seq[BigInt] =
     val baseFee = block.header.baseFee
     val coinbase = block.header.beneficiary
     block.body.transactionList.iterator
