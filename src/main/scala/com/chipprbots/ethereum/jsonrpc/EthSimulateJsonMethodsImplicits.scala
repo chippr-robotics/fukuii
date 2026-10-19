@@ -82,8 +82,10 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
             val parsed = items.map {
               // execution-apis GenericTransaction, decoded as strictly as go-ethereum's TransactionArgs: a malformed
               // address, quantity or blob hash is -32602, never a silently absent field (#1629 S4). The payload is
-              // params[0], so errors read "invalid argument 0: ...", as geth reports them.
-              case c: JObject => TxArgsJson.decodeForCall(c, argIndex = 0)
+              // params[0], so errors read "invalid argument 0: ...", as geth reports them. Only the shape is checked
+              // here: the field rules (CallDefaults, preCheck) run per call during the simulation, in geth's order,
+              // so a request with several faults reports the one geth reports.
+              case c: JObject => TxArgsJson.decode(c, argIndex = 0)
               case _          => Left(InvalidParams("call must be object"))
             }
             if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get

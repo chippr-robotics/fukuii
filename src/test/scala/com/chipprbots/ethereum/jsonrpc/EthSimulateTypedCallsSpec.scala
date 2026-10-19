@@ -10,12 +10,16 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
@@ -367,3 +371,190 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
       .error(oneBlock(s"""{"from":"$From","to":"$To","authorizationList":[$auth]}""")) shouldBe
       (-32602, "transaction type not supported: type 4 not active at block 30")
   }
+
+  // ── geth's preCheck order: with several faults, the first geth finds wins ─────────────────────────────────────
+
+  private val ValidBlobHash = "0x01" + "00" * 31
+
+  "eth_simulateV1 preCheck order" should "report the nonce before a tip above the fee cap (-38011)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val call = s"""{"from":"$From","to":"$To","nonce":"0x3","maxFeePerGas":"0x10","maxPriorityFeePerGas":"0x20"}"""
+    ethNode.error(validated(call))._1 shouldBe -38011
+  }
+
+  it should "report a fee cap below the base fee before insufficient funds (-38012)" taggedAs (UnitTest, RPCTest) in {
+    val payload =
+      s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"$To","value":"0x1000"}]}],"validation":true}"""
+    ethNode.error(payload)._1 shouldBe -38012
+  }
+
+  it should "report insufficient funds before intrinsic gas (-38014), as buyGas precedes the intrinsic check" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // unfunded sender, value 1 wei, gas 1: geth's buyGas fails before execute's intrinsic-gas check
+    val payload = s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"$To","value":"0x1","gas":"0x1"}]}]}"""
+    ethNode.error(payload)._1 shouldBe -38014
+  }
+
+  it should "report a tip above the fee cap before an empty authorizationList (-32602)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val call =
+      s"""{"from":"$From","to":"$To","maxFeePerGas":"0x10","maxPriorityFeePerGas":"0x20","authorizationList":[]}"""
+    ethNode.error(oneBlock(call))._1 shouldBe -32602
+  }
+
+  it should "report a fee cap below the base fee before empty blob hashes (-38012)" taggedAs (UnitTest, RPCTest) in {
+    ethNode.error(validated(s"""{"from":"$From","to":"$To","blobVersionedHashes":[]}"""))._1 shouldBe -38012
+  }
+
+  it should "report an empty authorizationList before intrinsic gas (-32603)" taggedAs (UnitTest, RPCTest) in {
+    ethNode.error(oneBlock(s"""{"from":"$From","to":"$To","gas":"0x1","authorizationList":[]}"""))._1 shouldBe -32603
+  }
+
+  it should "report the nonce before a blob transaction without to (-38011)" taggedAs (UnitTest, RPCTest) in {
+    val call =
+      s"""{"from":"$From","nonce":"0x3","maxFeePerGas":"0x3b9aca00","blobVersionedHashes":["$ValidBlobHash"]}"""
+    ethNode.error(validated(call))._1 shouldBe -38011
+  }
+
+  // ── preCheck items ──────────────────────────────────────────────────────────
+
+  "eth_simulateV1 preCheck" should "refuse a blob transaction without to (-32603, ErrBlobTxCreate)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val (code, message) =
+      ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","blobVersionedHashes":["$ValidBlobHash"]}"""))
+    code shouldBe -32603
+    message should include("blob transaction of type create")
+  }
+
+  it should "refuse a set-code transaction without to (-32603, ErrSetCodeTxCreate)" taggedAs (UnitTest, RPCTest) in {
+    val auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
+    val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","input":"0x00","authorizationList":[$auth]}"""))
+    code shouldBe -32603
+    message should include("EIP-7702 transaction cannot be used to create contract")
+  }
+
+  it should "refuse a blob hash of the wrong version (-32603)" taggedAs (UnitTest, RPCTest) in {
+    val bad = "0x02" + "00" * 31
+    val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","to":"$To","blobVersionedHashes":["$bad"]}"""))
+    code shouldBe -32603
+    message should include("blob 0 has invalid hash version")
+  }
+
+  it should "refuse more than six blobs from Osaka (-32603, ErrTooManyBlobs)" taggedAs (UnitTest, RPCTest) in {
+    val hashes = List.fill(7)(s""""$ValidBlobHash"""").mkString(",")
+    val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","to":"$To","blobVersionedHashes":[$hashes]}"""))
+    code shouldBe -32603
+    message should include("blob transaction has too many blobs")
+  }
+
+  it should "refuse a blob fee cap below the blob base fee with validation (-32603, ErrBlobFeeCapTooLow)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // excessBlobGas 0: the blob base fee is the 1 wei minimum, and validation checks even a zero cap
+    val call = s"""{"from":"$From","to":"$To","maxFeePerGas":"0x3b9aca00","maxFeePerBlobGas":"0x0",""" +
+      s""""blobVersionedHashes":["$ValidBlobHash"]}"""
+    val (code, message) = ethNode.error(validated(call))
+    code shouldBe -32603
+    message should include("max fee per blob gas less than block blob gas fee")
+  }
+
+  it should "skip the blob fee cap check without validation when the cap is zero" taggedAs (UnitTest, RPCTest) in {
+    val (block, _) = ethNode.ok(oneBlock(s"""{"from":"$From","to":"$To","blobVersionedHashes":["$ValidBlobHash"]}"""))
+    block.transactions.head.tx shouldBe a[BlobTransaction]
+  }
+
+  it should "check a non-zero blob fee cap against an overridden blob base fee without validation" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val payload = s"""{"blockStateCalls":[{"blockOverrides":{"blobBaseFee":"0x10"},$Funded,"calls":[""" +
+      s"""{"from":"$From","to":"$To","maxFeePerBlobGas":"0x5","blobVersionedHashes":["$ValidBlobHash"]}]}]}"""
+    ethNode.error(payload)._1 shouldBe -32603
+  }
+
+  it should "refuse init code above the EIP-3860 limit (-38025)" taggedAs (UnitTest, RPCTest) in {
+    // Osaka, maxCodeSize 24,576: the init code limit is 49,152 bytes
+    val initCode = "0x" + "00" * 49153
+    val (code, message) = ethNode.error(oneBlock(s"""{"from":"$From","input":"$initCode"}"""))
+    code shouldBe -38025
+    message should include("max initcode size exceeded: code size 49153 limit 49152")
+  }
+
+  it should "not apply the EIP-7825 gas cap: the simulate message skips transaction checks (transaction_args.go:506)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // Osaka, validation on, gas 2^24 + 1: geth's preCheck cap check is behind !SkipTransactionChecks
+    val call = s"""{"from":"$From","to":"$To","gas":"0x1000001","maxFeePerGas":"0x3b9aca00"}"""
+    val (block, _) = ethNode.ok(validated(call))
+    block.calls.head.status shouldBe BigInt(1)
+  }
+
+  it should "word the base fee error as geth: checksummed address and the supplied-gas wrapper" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    ethNode.error(validated(s"""{"from":"$From","to":"$To","gas":"0x5208","gasPrice":"0x1"}""")) shouldBe
+      (
+        -38012,
+        "err: max fee per gas less than block base fee: address 0xC000000000000000000000000000000000000000, " +
+          "maxFeePerGas: 1, baseFee: 7 (supplied gas 21000)"
+      )
+  }
+
+  // ── transaction hashes ──────────────────────────────────────────────────────
+
+  private def q(v: BigInt): RLPValue = RLPValue(
+    if v == 0 then Array.emptyByteArray else v.toByteArray.dropWhile(_ == 0)
+  )
+  private def b(hex: String): RLPValue = RLPValue(org.bouncycastle.util.encoders.Hex.decode(hex.stripPrefix("0x")))
+  private def hashHex(bytes: Array[Byte]): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bytes)
+
+  /** The unsigned-call transaction's hash, built field by field from the EIP-2718 envelope (`type || rlp(fields, 0, 0,
+    * 0)`), independently of SignedTransaction's encoder.
+    */
+  private def envelopeHash(txType: Int, fields: rlp.RLPEncodeable*): String =
+    hashHex(kec256(Array(txType.toByte) ++ rlp.encode(RLPList((fields ++ Seq(q(0), q(0), q(0)))*))))
+
+  private val chainId = amsterdamConfig.chainId.value
+  private val rlpAccessList = RLPList(RLPList(b(To), RLPList(b(Slot))))
+
+  "eth_simulateV1 transaction hashes" should "be the EIP-2930 envelope hash for a 0x1 call" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val (block, json) = ethNode.ok(
+      oneBlock(
+        s"""{"from":"$From","to":"$To","type":"0x1","gasPrice":"0x0","gas":"0x7530","value":"0x1",$accessList}"""
+      )
+    )
+    val expected = envelopeHash(1, q(chainId), q(0), q(0), q(30000), b(To), q(1), b("0x"), rlpAccessList)
+    expected shouldBe Type1Hash
+    hashHex(block.transactions.head.hash.value.toArray) shouldBe expected
+    (json \ "transactions")(0) \ "hash" shouldBe JString(expected)
+  }
+
+  it should "be the EIP-7702 envelope hash for a 0x4 call" taggedAs (UnitTest, RPCTest) in {
+    val auth = s"""{"chainId":"0x0","address":"$To","nonce":"0x0","yParity":"0x0","r":"0x1","s":"0x1"}"""
+    val (block, _) =
+      ethNode.ok(oneBlock(s"""{"from":"$From","to":"$To","gas":"0xc350","authorizationList":[$auth]}"""))
+    val rlpAuths = RLPList(RLPList(q(0), b(To), q(0), q(0), q(1), q(1)))
+    val expected = envelopeHash(4, q(chainId), q(0), q(0), q(0), q(50000), b(To), q(0), b("0x"), RLPList(), rlpAuths)
+    expected shouldBe Type4Hash
+    hashHex(block.transactions.head.hash.value.toArray) shouldBe expected
+  }
+
+  // Pinned: keccak256 of the envelopes above, built from fukuii's RLP primitives (no geth binary on this host). The
+  // same values are what SignedTransaction.hash gives, whose typed encoders TxSigningVectorsSpec proves byte-exact
+  // against go-ethereum-signed vectors.
+  private val Type1Hash = "0xea0d59aaa73afaec438c290d9e7ac43110fa39d05ad87eba9830e431a840d7e8"
+  private val Type4Hash = "0x8044adeb8cc716f594ceceb92dafadc4b7bd3a55264eb418ea301a1bc8770412"
