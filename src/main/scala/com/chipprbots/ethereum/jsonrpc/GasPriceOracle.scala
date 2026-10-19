@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.NetworkType
 
 /** go-ethereum's gas price oracle (`eth/gasprice/gasprice.go`, `Oracle.SuggestTipCap` and `getBlockValues`): the tip
   * eth_maxPriorityFeePerGas answers, the tip eth_gasPrice adds the head's base fee to, and the fee default
@@ -24,7 +25,8 @@ import com.chipprbots.ethereum.utils.Logger
   *   - a block that gives nothing (empty, or only ignored / coinbase transactions) gives the last suggestion instead;
   *   - `blocks` blocks are sampled; while blocks give a single value, more are sampled, up to `2 * blocks`;
   *   - the suggestion is the value at index `(n - 1) * percentile / 100` of the sorted samples, capped at `maxPrice`;
-  *   - it is cached by head hash, and is the starting "last suggestion" (`defaultPrice`) until a block gives a sample.
+  *   - it is cached by head hash, and is the starting "last suggestion" (`defaultPrice`) until a block gives a sample:
+  *     1 mwei on ETH-family chains (geth), 1 gwei on ETC (core-geth), see [[GasPriceOracle.defaultPriceFor]].
   *
   * Deviations from geth:
   *   - geth fetches the window's blocks concurrently, so which extra blocks it fetches depends on arrival order; here
@@ -150,28 +152,46 @@ object GasPriceOracle:
   val DefaultMaxPrice: BigInt = Gwei * 500
   val DefaultIgnorePrice: BigInt = BigInt(2)
 
-  /** go-ethereum `ethconfig.FullNodeGPO`; start price 1 gwei, core-geth's `Miner.GasPrice` default (geth master's is 1
-    * mwei, `params.GWei / 1000`).
+  /** Start price on ETH-family chains: go-ethereum's `Miner.GasPrice` default, `params.GWei / 1000` = 1 mwei
+    * (`miner/miner.go`, passed to `NewOracle` as `startPrice` by `eth/backend.go`).
     */
-  val DefaultConfig: Config = Config(
+  val EthDefaultPrice: BigInt = Gwei / 1000
+
+  /** Start price on ETC-family chains: core-geth's `Miner.GasPrice` default, 1 gwei (`miner/miner.go`, the oracle's
+    * `Default` in `eth/backend.go`).
+    */
+  val EtcDefaultPrice: BigInt = Gwei
+
+  /** The oracle's start price for the chain: its conf's `gpo-default-price` when set, else its family's reference
+    * client's.
+    */
+  def defaultPriceFor(blockchainConfig: BlockchainConfig): BigInt =
+    blockchainConfig.gasPriceOracleDefault.getOrElse(
+      if blockchainConfig.networkType == NetworkType.ETH then EthDefaultPrice else EtcDefaultPrice
+    )
+
+  /** go-ethereum `ethconfig.FullNodeGPO`, with the chain's start price ([[defaultPriceFor]]). */
+  def defaultConfig(using blockchainConfig: BlockchainConfig): Config = Config(
     blocks = 20,
     percentile = 60,
     maxHeaderHistory = 1024,
     maxBlockHistory = 1024,
     maxPrice = DefaultMaxPrice,
     ignorePrice = DefaultIgnorePrice,
-    defaultPrice = Gwei
+    defaultPrice = defaultPriceFor(blockchainConfig)
   )
 
-  /** The oracle settings under `fukuii.network.rpc.gpo`; an absent key keeps its geth default. */
-  def configFrom(fukuiiConfig: com.typesafe.config.Config): Config =
+  /** The oracle settings under `fukuii.network.rpc.gpo`; an absent key keeps its default ([[defaultConfig]]), so
+    * `default-price` there overrides the chain's start price only when set.
+    */
+  def configFrom(fukuiiConfig: com.typesafe.config.Config)(using BlockchainConfig): Config =
     def int(key: String, default: Int): Int =
       val path = s"$ConfigPath.$key"
       if fukuiiConfig.hasPath(path) then fukuiiConfig.getInt(path) else default
     def big(key: String, default: BigInt): BigInt =
       val path = s"$ConfigPath.$key"
       if fukuiiConfig.hasPath(path) then BigInt(fukuiiConfig.getString(path)) else default
-    val d = DefaultConfig
+    val d = defaultConfig
     Config(
       blocks = int("blocks", d.blocks),
       percentile = int("percentile", d.percentile),

@@ -665,7 +665,7 @@ trait GasPriceOracleBuilder:
   lazy val gasPriceOracle: com.chipprbots.ethereum.jsonrpc.GasPriceOracle =
     new com.chipprbots.ethereum.jsonrpc.GasPriceOracle(
       blockchainReader,
-      com.chipprbots.ethereum.jsonrpc.GasPriceOracle.configFrom(instanceConfig.config)
+      com.chipprbots.ethereum.jsonrpc.GasPriceOracle.configFrom(instanceConfig.config)(using blockchainConfig)
     )
 
 trait EthTxServiceBuilder:

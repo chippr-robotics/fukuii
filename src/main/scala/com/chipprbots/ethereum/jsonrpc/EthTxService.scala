@@ -191,7 +191,7 @@ class EthTxService(
     * mocked service (constructed with null arguments) does not build one.
     */
   lazy val gasPriceOracle: GasPriceOracle =
-    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.DefaultConfig))
+    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig))
 
   /** go-ethereum `EthereumAPI.GasPrice`: the oracle's tip plus the head's base fee, or the tip alone when the head has
     * no base fee (ETC/Mordor before Olympia, ETH before London), where it is the legacy gas price suggestion.

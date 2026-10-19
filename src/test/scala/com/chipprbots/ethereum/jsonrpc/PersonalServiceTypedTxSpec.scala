@@ -444,7 +444,7 @@ class PersonalServiceTypedTxSpec
       stub[TransactionMappingStorage],
       system.scheduler,
       Some(
-        new GasPriceOracle(blockchainReader, GasPriceOracle.DefaultConfig):
+        new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig(using config)):
           override def suggestTipCap(): BigInt = oracleTip
       )
     ):

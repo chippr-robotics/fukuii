@@ -17,9 +17,9 @@ Referenced by: none yet — promote references here as they accumulate.
 
 **Symptom:** `{ gasPrice }` against hive's `simulators/ethereum/graphql` chain
 returns a value near a billion wei (fukuii before #1629's geth oracle: `0x3437004b`
-= 876,019,787, i.e. baseFee + 1 wei; with the geth-equivalent oracle: `0x6fd1ca4a`
-= 1,876,019,786, i.e. baseFee + the 1 gwei start price, the chain's 1-wei
-Frontier tips being under geth's 2-wei ignore price);
+= 876,019,787, i.e. baseFee + 1 wei; with the geth-equivalent oracle: `0x3446428a`
+= 877,019,786, i.e. baseFee + geth's 1 mwei ETH-family start price, the chain's
+1-wei Frontier tips being under geth's 2-wei ignore price);
 `testcases/07_eth_gasPrice.json` accepts only `0x10` (16) or
 `0x1` (1) wei. This is the sole failure in an otherwise-clean run (51/52 as of
 2026-09).

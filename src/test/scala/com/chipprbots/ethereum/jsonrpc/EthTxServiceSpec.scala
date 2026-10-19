@@ -190,7 +190,7 @@ class EthTxServiceSpec
     RPCTest
   ) in new TestSetup:
     // No block to sample (genesis is never sampled) and no base fee: go-ethereum's oracle answers its start price,
-    // core-geth's 1 gwei miner gas price (GasPriceOracle.DefaultConfig.defaultPrice).
+    // core-geth's 1 gwei miner gas price (GasPriceOracle.defaultPriceFor on this ETC-family test chain).
     val response: ServiceResponse[GetGasPriceResponse] = ethTxService.getGetGasPrice(GetGasPriceRequest())
     response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(BigInt(10).pow(9)))
 

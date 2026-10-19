@@ -149,7 +149,7 @@ class EthBlocksService(
 
   /** The gas price oracle behind eth_maxPriorityFeePerGas; its settings also bound eth_feeHistory. */
   lazy val gasPriceOracle: GasPriceOracle =
-    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.DefaultConfig))
+    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig))
 
   /** ETH-family chains must not emit `totalDifficulty` — execution-apis dropped it from the Block schema after the
     * merge, and rpc-compat compares the object exactly. ETC is PoW and still reports it, so this is a gate rather than

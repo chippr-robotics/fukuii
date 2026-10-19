@@ -61,6 +61,9 @@ class GasPriceOracleSpec
   private val mordorCfg: BlockchainConfig = Config.blockchains.blockchains("mordor")
   private val sepoliaCfg: BlockchainConfig = Config.blockchains.blockchains("sepolia")
 
+  // geth FullNodeGPO with core-geth's 1 gwei start price: the settings on Mordor
+  private val etcGpo: GasPriceOracle.Config = GasPriceOracle.defaultConfig(using mordorCfg)
+
   private val fixtureHeader: BlockHeader = Fixtures.Blocks.Block3125369.header
 
   private val sender: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(0x5eed))
@@ -158,10 +161,10 @@ class GasPriceOracleSpec
 
   private def oracle(
       r: BlockchainReader,
-      config: GasPriceOracle.Config = GasPriceOracle.DefaultConfig,
+      config: Option[GasPriceOracle.Config] = None,
       cfg: BlockchainConfig = mordorCfg
   ): GasPriceOracle =
-    new GasPriceOracle(r, config)(using cfg)
+    new GasPriceOracle(r, config.getOrElse(GasPriceOracle.defaultConfig(using cfg)))(using cfg)
 
   private def txService(o: GasPriceOracle, r: BlockchainReader, cfg: BlockchainConfig): EthTxService =
     implicit val implCfg: BlockchainConfig = cfg
@@ -188,11 +191,11 @@ class GasPriceOracleSpec
 
   // ─── A. settings ────────────────────────────────────────────────────────────
 
-  "GasPriceOracle.DefaultConfig" should "carry go-ethereum's FullNodeGPO defaults and a 1 gwei start price" taggedAs (
+  "GasPriceOracle.defaultConfig" should "carry go-ethereum's FullNodeGPO defaults and core-geth's 1 gwei start price on ETC" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    GasPriceOracle.DefaultConfig shouldBe GasPriceOracle.Config(
+    etcGpo shouldBe GasPriceOracle.Config(
       blocks = 20,
       percentile = 60,
       maxHeaderHistory = 1024,
@@ -203,8 +206,27 @@ class GasPriceOracleSpec
     )
   }
 
-  it should "be what the shipped fukuii.network.rpc.gpo block configures" taggedAs (UnitTest, RPCTest) in {
-    GasPriceOracle.configFrom(Config.config) shouldBe GasPriceOracle.DefaultConfig
+  it should "start at geth's 1 mwei on ETH-family chains, the family's reference client" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    sepoliaCfg.networkType shouldBe com.chipprbots.ethereum.utils.NetworkType.ETH
+    GasPriceOracle.defaultConfig(using sepoliaCfg) shouldBe etcGpo.copy(defaultPrice = BigInt(1000000))
+    GasPriceOracle.defaultPriceFor(Config.blockchains.blockchains("eth")) shouldBe BigInt(1000000)
+    GasPriceOracle.defaultPriceFor(Config.blockchains.blockchains("etc")) shouldBe gwei
+  }
+
+  it should "take a chain conf's gpo-default-price over the family default" taggedAs (UnitTest, RPCTest) in {
+    GasPriceOracle.defaultPriceFor(sepoliaCfg.copy(gasPriceOracleDefault = Some(BigInt(7)))) shouldBe BigInt(7)
+    GasPriceOracle.defaultPriceFor(mordorCfg.copy(gasPriceOracleDefault = Some(BigInt(7)))) shouldBe BigInt(7)
+  }
+
+  it should "be what the shipped fukuii.network.rpc.gpo block configures, on either family" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    GasPriceOracle.configFrom(Config.config)(using mordorCfg) shouldBe etcGpo
+    GasPriceOracle.configFrom(Config.config)(using sepoliaCfg) shouldBe GasPriceOracle.defaultConfig(using sepoliaCfg)
   }
 
   it should "read every key under network.rpc.gpo, keeping geth defaults for absent ones" taggedAs (
@@ -215,8 +237,11 @@ class GasPriceOracleSpec
       """network.rpc.gpo { blocks = 7, percentile = 40, max-price = "1000", ignore-price = "5",
         |default-price = "9", max-header-history = 8, max-block-history = 4 }""".stripMargin
     )
-    GasPriceOracle.configFrom(c) shouldBe GasPriceOracle.Config(7, 40, 8, 4, BigInt(1000), BigInt(5), BigInt(9))
-    GasPriceOracle.configFrom(ConfigFactory.empty()) shouldBe GasPriceOracle.DefaultConfig
+    // an explicit default-price overrides the chain's start price on both families
+    GasPriceOracle.configFrom(c)(using mordorCfg) shouldBe
+      GasPriceOracle.Config(7, 40, 8, 4, BigInt(1000), BigInt(5), BigInt(9))
+    GasPriceOracle.configFrom(c)(using sepoliaCfg).defaultPrice shouldBe BigInt(9)
+    GasPriceOracle.configFrom(ConfigFactory.empty())(using mordorCfg) shouldBe etcGpo
   }
 
   it should "sanitize out-of-range settings as geth NewOracle does" taggedAs (UnitTest, RPCTest) in {
@@ -289,7 +314,7 @@ class GasPriceOracleSpec
   it should "take the sample at index (n - 1) * percentile / 100" taggedAs (UnitTest, RPCTest) in {
     // samples 1..5 gwei: geth index (5 - 1) * 60 / 100 = 2 -> 3 gwei (n * 60 / 100 = 3 would give 4 gwei)
     val blocks = Seq(blk(1, Seq(4, 5).map(p => legacy(p * gwei))), blk(2, Seq(1, 2, 3).map(p => legacy(p * gwei))))
-    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(blocks = 2)).suggestTipCap() shouldBe 3 * gwei
+    oracle(reader(blocks), Some(etcGpo.copy(blocks = 2))).suggestTipCap() shouldBe 3 * gwei
   }
 
   it should "sample 20 blocks by default, 3 transactions each" taggedAs (UnitTest, RPCTest) in {
@@ -302,13 +327,13 @@ class GasPriceOracleSpec
   it should "cap the tip at max-price" taggedAs (UnitTest, RPCTest) in {
     val blocks = chain(3)(_ => Seq(legacy(600 * gwei)))
     oracle(reader(blocks)).suggestTipCap() shouldBe 500 * gwei
-    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(maxPrice = 7 * gwei)).suggestTipCap() shouldBe 7 * gwei
+    oracle(reader(blocks), Some(etcGpo.copy(maxPrice = 7 * gwei))).suggestTipCap() shouldBe 7 * gwei
   }
 
   it should "answer the start price over a window of empty blocks" taggedAs (UnitTest, RPCTest) in {
     val blocks = chain(25)(_ => Nil)
     oracle(reader(blocks)).suggestTipCap() shouldBe gwei
-    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(defaultPrice = 1000000)).suggestTipCap() shouldBe 1000000
+    oracle(reader(blocks), Some(etcGpo.copy(defaultPrice = 1000000))).suggestTipCap() shouldBe 1000000
   }
 
   it should "count a block of only ignored or coinbase transactions as the last suggestion" taggedAs (
@@ -326,7 +351,7 @@ class GasPriceOracleSpec
     // window 2: blocks 6, 5 and 4 give one value each (empty -> last price), so 4 and 3 are added; 3 gives three
     // 100 gwei tips -> samples (1, 1, 1, 100, 100, 100) gwei, index 5 * 60 / 100 = 3 -> 100 gwei
     val blocks = Seq(blk(1, Nil), blk(2, Nil), blk(3, Seq.fill(3)(legacy(100 * gwei)))) ++ (4 to 6).map(blk(_, Nil))
-    val o = oracle(reader(blocks, neverFetched = Set(1, 2)), GasPriceOracle.DefaultConfig.copy(blocks = 2))
+    val o = oracle(reader(blocks, neverFetched = Set(1, 2)), Some(etcGpo.copy(blocks = 2)))
     o.suggestTipCap() shouldBe 100 * gwei
   }
 
@@ -337,7 +362,7 @@ class GasPriceOracleSpec
     // window 2 over empty blocks: 10 (head), 9, then 8 and 7 are added; 6 never is
     val blocks = chain(10)(_ => Nil)
     val r = reader(blocks, fetchedOnce = Set(9, 8, 7), neverFetched = (1 to 6).map(BigInt(_)).toSet)
-    oracle(r, GasPriceOracle.DefaultConfig.copy(blocks = 2)).suggestTipCap() shouldBe gwei
+    oracle(r, Some(etcGpo.copy(blocks = 2))).suggestTipCap() shouldBe gwei
   }
 
   it should "skip a block that is not stored, sampling only stored blocks" taggedAs (UnitTest, RPCTest) in {
@@ -424,13 +449,14 @@ class GasPriceOracleSpec
   }
 
   it should "no longer answer the configured min-tip for eth_maxPriorityFeePerGas" taggedAs (UnitTest, RPCTest) in {
-    // Sepolia sets no min-tip (1 wei); before the oracle eth_maxPriorityFeePerGas answered exactly that
+    // Sepolia sets no min-tip (1 wei); before the oracle eth_maxPriorityFeePerGas answered exactly that. Over empty
+    // blocks the oracle answers geth's 1 mwei start price.
     sepoliaCfg.minTip shouldBe BigInt(1)
     val blocks = chain(3, baseFee = Some(gwei))(_ => Nil)
     val r = reader(blocks)
     blocksService(oracle(r, cfg = sepoliaCfg), r, sepoliaCfg)
       .maxPriorityFeePerGas(MaxPriorityFeePerGasRequest())
-      .unsafeRunSync() shouldBe Right(MaxPriorityFeePerGasResponse(gwei))
+      .unsafeRunSync() shouldBe Right(MaxPriorityFeePerGasResponse(BigInt(1000000)))
   }
 
   // ─── E. TransactionRequest oracle injection ─────────────────────────────────
@@ -459,10 +485,11 @@ class GasPriceOracleSpec
     *
     * The chain below mirrors `simulators/ethereum/graphql/init/testBlockchain.blocks` (decoded): blocks 1-32 carry one
     * legacy transaction at 1 wei each, block 33 (London, base fee 1 gwei) a 0x2 transaction with a 1 gwei tip cap and 3
-    * gwei fee cap, block 34 (head, base fee 876019786) a 0x3 transaction with a 1 gwei tip cap. 1-wei tips fall under
-    * the 2 wei ignore price, so blocks 32 down to 15 each give the 1 gwei start price; the two London blocks give 1
-    * gwei tips. The suggested tip is 1 gwei and `{ gasPrice }` = 876019786 + 1 gwei = 0x6fd1ca4a, as geth's own
-    * resolver (`tipcap + head.BaseFee`) gives with core-geth's start price. No conforming answer can be 16 or 1 wei.
+    * gwei fee cap, block 34 (head, base fee 876019786) a 0x3 transaction with a 1 gwei tip cap. hive runs it on an
+    * ETH-family chain conf (hive.conf), so the start price is geth's 1 mwei. 1-wei tips fall under the 2 wei ignore
+    * price, so every Frontier block gives the start price: 32 samples of 1 mwei and two of 1 gwei, index 33 * 60 / 100
+    * \= 19 -> 1 mwei. `{ gasPrice }` = 876019786 + 1 mwei = 0x3446428a, as geth's own resolver (`tipcap +
+    * head.BaseFee`) gives. No conforming answer can be 16 or 1 wei.
     */
   "hive graphql 07_eth_gasPrice" should "stay unreachable: the head's base fee alone is ~876M wei" taggedAs (
     UnitTest,
@@ -474,7 +501,7 @@ class GasPriceOracleSpec
     val head34 = blk(34, Seq(dynamic(gwei, 4 * gwei, 1)), baseFee = Some(headBaseFee))
     val r = reader(frontier :+ london33 :+ head34)
     val result = txService(oracle(r, cfg = sepoliaCfg), r, sepoliaCfg).suggestGasPrice()
-    result shouldBe headBaseFee + gwei
-    result shouldBe BigInt("6fd1ca4a", 16)
+    result shouldBe headBaseFee + BigInt(1000000)
+    result shouldBe BigInt("3446428a", 16)
     result should be > BigInt(0x10)
   }
