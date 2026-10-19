@@ -138,12 +138,18 @@ class EthBlocksService(
     // final in Scala 3 and cannot be overridden by subclassing, so this can't be a `given` itself and
     // remain testable — instead it backs an anonymous `given` below for the implicit call sites in this
     // class (TransactionReceiptResponse, SignedTransaction.getSender) that require one in scope.
-    val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
+    // NodeBuilder passes the node's one oracle (shared with EthTxService); tests get their own
+    gasPriceOracleOpt: Option[GasPriceOracle] = None
 ) extends ResolveBlock:
   final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthBlocksService.*
 
   given BlockchainConfig = blockchainConfig
+
+  /** The gas price oracle behind eth_maxPriorityFeePerGas; its settings also bound eth_feeHistory. */
+  lazy val gasPriceOracle: GasPriceOracle =
+    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.DefaultConfig))
 
   /** ETH-family chains must not emit `totalDifficulty` — execution-apis dropped it from the Block schema after the
     * merge, and rpc-compat compares the object exactly. ETC is PoW and still reports it, so this is a gate rather than
@@ -378,7 +384,11 @@ class EthBlocksService(
   def feeHistory(req: FeeHistoryRequest): ServiceResponse[FeeHistoryResponse] = IO {
     val bestBlock = blockchainReader.getBestBlockNumber
     val newestBlockNum = resolveBlock(req.newestBlock).toOption.map(_.block.header.number.value).getOrElse(bestBlock)
-    val count = req.blockCount.min(1024).toInt
+    // go-ethereum `Oracle.FeeHistory`: at most MaxHeaderHistory blocks, MaxBlockHistory when rewards are requested
+    val maxHistory =
+      if req.rewardPercentiles.exists(_.nonEmpty) then gasPriceOracle.config.maxBlockHistory
+      else gasPriceOracle.config.maxHeaderHistory
+    val count = req.blockCount.min(maxHistory).toInt
     val oldestBlock = (newestBlockNum - count + 1).max(0)
 
     val baseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
@@ -458,12 +468,10 @@ class EthBlocksService(
   }
 
   def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
-    IO {
-      // Return the per-chain minimum tip from config rather than a hardcoded 1 gwei literal.
-      // On ETC/Mordor post-Olympia: blockchainConfig.minTip = 1 gwei (ECIP-1112).
-      // On ETH/Sepolia: minTip defaults to 1 gwei. Both match the reference client stub behaviour.
-      Right(MaxPriorityFeePerGasResponse(blockchainConfig.minTip))
-    }
+    // go-ethereum / core-geth `EthereumAPI.MaxPriorityFeePerGas`: the oracle's suggested tip, on every chain. Where
+    // no base fee exists yet (ETC/Mordor before Olympia) every sampled tip is a whole gas price, so this equals
+    // eth_gasPrice, as core-geth answers there.
+    IO(Right(MaxPriorityFeePerGasResponse(gasPriceOracle.suggestTipCap())))
 
   def blobBaseFee(@unused req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
     val fee = blockchainReader.getBestBlock

@@ -6,27 +6,26 @@ import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.DurationInt
 
-import org.scalactic.TypeCheckedTripleEquals
+import com.typesafe.config.ConfigFactory
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.OptionValues
-import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.*
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.branch.BestBranch
-import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.*
 import com.chipprbots.ethereum.jsonrpc.EthTxService.*
 import com.chipprbots.ethereum.ledger.BlockQueue
@@ -34,551 +33,448 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
-/** Comprehensive tests for the gas price oracle (eth_gasPrice / eth_maxPriorityFeePerGas).
+/** The gas price oracle (go-ethereum `eth/gasprice/gasprice.go`, same package in core-geth) behind eth_gasPrice,
+  * eth_maxPriorityFeePerGas and the send/sign/fill fee defaults.
   *
   * Coverage:
-  *   - A. minimumGasPrice() — floor formula for all network states
-  *   - B. suggestGasPrice() — algorithm correctness (percentile, coinbase exclusion, cap, per-block limit)
-  *   - C. eth_gasPrice RPC wrapper
-  *   - D. eth_maxPriorityFeePerGas stub
-  *   - E. TransactionRequest.toTransaction oracle injection
-  *   - F. Network-specific integration regression
+  *   - A. settings: geth `FullNodeGPO` defaults, `fukuii.network.rpc.gpo` keys, `NewOracle` sanitization
+  *   - B. `getBlockValues`: lowest 3 effective tips, ignore price, coinbase and unrecoverable senders, base fee
+  *   - C. `SuggestTipCap`: percentile index, max price, empty-block fallback, window extension, cache by head
+  *   - D. eth_gasPrice / eth_maxPriorityFeePerGas on ETH (Sepolia) and ETC (Mordor) configs
+  *   - E. TransactionRequest oracle injection
+  *   - F. hive graphql `07_eth_gasPrice` (stale fixture) pin
   */
 class GasPriceOracleSpec
     extends ScalaTestWithActorTestKit
     with AnyFlatSpecLike
     with Matchers
-    with ScalaFutures
     with OptionValues
-    with MockFactory
-    with TypeCheckedTripleEquals:
+    with MockFactory:
 
   implicit val runtime: IORuntime = IORuntime.global
   implicit private val classicActorSystem: ActorSystem = system.toClassic
 
-  // ─── Shared constants ──────────────────────────────────────────────────────
-
   private val gwei: BigInt = BigInt(10).pow(9)
-  private val cap500: BigInt = BigInt(500) * gwei
   private val zeroAddr: ByteString = ByteString(Array.fill(20)(0.toByte))
   private val zeroHash: ByteString = ByteString(Array.fill(32)(0.toByte))
 
-  // Test config: chain-id=61, eip155 at 3000000, baseFeeFloor=0, minTip=1 (1 wei)
-  private val defaultCfg: BlockchainConfig = Config.blockchains.blockchainConfig
+  private val mordorCfg: BlockchainConfig = Config.blockchains.blockchains("mordor")
+  private val sepoliaCfg: BlockchainConfig = Config.blockchains.blockchains("sepolia")
 
-  // ETC post-Olympia: baseFeeFloor = 1 gwei, minTip = 1 gwei
-  private val etcOlympiaCfg: BlockchainConfig =
-    defaultCfg.copy(baseFeeFloor = gwei, minTip = gwei)
-
-  // ETH post-London: baseFeeFloor = 0, minTip = 1 gwei
-  private val ethLondonCfg: BlockchainConfig =
-    defaultCfg.copy(baseFeeFloor = BigInt(0), minTip = gwei)
-
-  // Fixture data — real ETC block 3125369 with valid signed transactions
   private val fixtureHeader: BlockHeader = Fixtures.Blocks.Block3125369.header
-  private val fixtureTxs: Seq[SignedTransaction] = Fixtures.Blocks.Block3125369.body.transactionList
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  private val sender: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(0x5eed))
+  private val miner: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(0xc0b))
+  private def addressOf(kp: AsymmetricCipherKeyPair): ByteString =
+    ByteString(crypto.kec256(crypto.pubKeyFromKeyPair(kp)).drop(12))
+  private val minerAddr: ByteString = addressOf(miner)
 
-  /** Create a BlockHeader at the given number, with optional coinbase and baseFee. */
-  private def hdr(
-      number: BigInt,
-      coinbase: ByteString,
-      baseFeeOpt: Option[BigInt]
-  ): BlockHeader =
-    fixtureHeader.copy(
-      number = BlockNumber(number),
-      beneficiary = coinbase,
-      extraFields = baseFeeOpt.fold[HeaderExtraFields](HefEmpty)(HefPostOlympia.apply)
+  // a fresh nonce per transaction keeps hashes (the sender cache key) distinct
+  private val nonces = new java.util.concurrent.atomic.AtomicLong(0)
+
+  /** A pre-EIP-155 legacy transaction at `price`, signed by `by`. */
+  private def legacy(price: BigInt, by: AsymmetricCipherKeyPair = sender): SignedTransaction =
+    SignedTransaction.sign(
+      LegacyTransaction(
+        nonces.incrementAndGet(),
+        GasPrice(price),
+        GasAmount(21000),
+        Some(Address(1)),
+        0,
+        ByteString.empty
+      ),
+      by,
+      None
     )
 
-  /** Create a Block with the given transactions. */
+  /** An EIP-1559 transaction with tip cap `tip` and fee cap `maxFee`, signed for `chainId`. */
+  private def dynamic(tip: BigInt, maxFee: BigInt, chainId: BigInt): SignedTransaction =
+    SignedTransaction.sign(
+      TransactionWithDynamicFee(
+        chainId,
+        nonces.incrementAndGet(),
+        tip,
+        maxFee,
+        GasAmount(21000),
+        Some(Address(1)),
+        0,
+        ByteString.empty,
+        Nil
+      ),
+      sender,
+      Some(chainId)
+    )
+
+  /** A transaction whose signature recovers no sender. */
+  private def unsigned(price: BigInt): SignedTransaction = SignedTransaction(
+    LegacyTransaction(
+      nonces.incrementAndGet(),
+      GasPrice(price),
+      GasAmount(21000),
+      Some(Address(1)),
+      0,
+      ByteString.empty
+    ),
+    ECDSASignature(r = BigInt(0), s = BigInt(0), v = BigInt(27))
+  )
+
   private def blk(
       number: BigInt,
       txs: Seq[SignedTransaction],
       coinbase: ByteString = zeroAddr,
-      baseFeeOpt: Option[BigInt] = None
+      baseFee: Option[BigInt] = None
   ): Block =
-    Block(hdr(number, coinbase, baseFeeOpt), BlockBody(txs, Nil))
+    Block(
+      fixtureHeader.copy(
+        number = BlockNumber(number),
+        beneficiary = coinbase,
+        extraFields = baseFee.fold[HeaderExtraFields](HefEmpty)(HefPostOlympia.apply)
+      ),
+      BlockBody(txs, Nil)
+    )
 
-  /** Create a fake SignedTransaction with the given gasPrice.
-    *
-    * The signature is invalid, so getSender returns None. Because None.contains(coinbase) == false, the
-    * coinbase-exclusion filter does NOT exclude the tx — it contributes to the oracle sample. Use for
-    * price-distribution tests where coinbase exclusion is not the focus.
-    */
-  private def fakeTx(price: BigInt): SignedTransaction = SignedTransaction(
-    LegacyTransaction(
-      nonce = 0,
-      gasPrice = GasPrice(price),
-      gasLimit = GasAmount(21000),
-      receivingAddress = Some(Address(zeroAddr)),
-      value = 0,
-      payload = ByteString.empty
-    ),
-    // v=27 = pre-EIP-155; r/s=1 = non-zero but invalid sig → getSender returns None
-    ECDSASignature(r = BigInt(1), s = BigInt(1), v = BigInt(27))
-  )
-
-  /** Set up a mock BlockchainReader for oracle tests.
-    *
-    * @param bestNum
-    *   The best block number the oracle reports.
-    * @param window
-    *   Map of block-number → Option[Block] covering all numbers the oracle will query.
-    * @param bestBlock
-    *   What getBestBlock() returns (for minimumGasPrice floor calculation).
-    */
-  private def mockReader(
-      bestNum: BigInt,
-      window: Map[BigInt, Option[Block]],
-      bestBlock: Option[Block]
+  /** blocks(0) is block 1; the last block is the head. Blocks not in `fetchedOnce` may be read any number of times. */
+  private def reader(
+      blocks: Seq[Block],
+      fetchedOnce: Set[BigInt] = Set.empty,
+      neverFetched: Set[BigInt] = Set.empty
   ): BlockchainReader =
     val r = mock[BlockchainReader]
-    val branch = if bestNum > 0 then BestBranch(zeroHash, bestNum) else EmptyBranch
-    (() => r.getBestBlockNumber).expects().returning(bestNum).anyNumberOfTimes()
+    val head = blocks.last
+    val branch = BestBranch(zeroHash, head.header.number.value)
     (() => r.getBestBranch).expects().returning(branch).anyNumberOfTimes()
-    (() => r.getBestBlock).expects().returning(bestBlock).anyNumberOfTimes()
-    window.foreach { case (n, bOpt) =>
-      r.getBlockByNumber.expects(branch, n).returning(bOpt).anyNumberOfTimes()
+    (() => r.getBestBlock).expects().returning(Some(head)).anyNumberOfTimes()
+    blocks.foreach { b =>
+      val n = b.header.number.value
+      if fetchedOnce.contains(n) then r.getBlockByNumber.expects(branch, n).returning(Some(b)).once()
+      else if neverFetched.contains(n) then r.getBlockByNumber.expects(branch, n).never()
+      else r.getBlockByNumber.expects(branch, n).returning(Some(b)).anyNumberOfTimes()
     }
     r
 
-  /** Window covering bestNum-20..bestNum, all empty (no txs → oracle returns floor). */
-  private def emptyWindow(bestNum: BigInt): Map[BigInt, Option[Block]] =
-    (BigInt(0).max(bestNum - 20) to bestNum).map(n => n -> None).toMap
+  /** `n` blocks, numbered from 1, each from `txsAt`. */
+  private def chain(n: Int, baseFee: Option[BigInt] = None)(txsAt: Int => Seq[SignedTransaction]): Seq[Block] =
+    (1 to n).map(i => blk(i, txsAt(i), baseFee = baseFee))
 
-  /** Build EthTxService with a mocked reader and given config. */
-  private def svc(reader: BlockchainReader, cfg: BlockchainConfig = defaultCfg): EthTxService =
+  private def oracle(
+      r: BlockchainReader,
+      config: GasPriceOracle.Config = GasPriceOracle.DefaultConfig,
+      cfg: BlockchainConfig = mordorCfg
+  ): GasPriceOracle =
+    new GasPriceOracle(r, config)(using cfg)
+
+  private def txService(o: GasPriceOracle, r: BlockchainReader, cfg: BlockchainConfig): EthTxService =
     implicit val implCfg: BlockchainConfig = cfg
-    val probe = TestProbe()
     new EthTxService(
       stub[Blockchain],
-      reader,
+      r,
       stub[Mining],
-      probe.ref.toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+      TestProbe().ref.toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
       5.seconds,
       stub[TransactionMappingStorage],
-      system.scheduler
+      system.scheduler,
+      Some(o)
     )
 
-  /** Build EthBlocksService with stubbed dependencies (uses Config singleton for blockchainConfig). */
-  private def blocksSvc(): EthBlocksService =
+  private def blocksService(o: GasPriceOracle, r: BlockchainReader, cfg: BlockchainConfig): EthBlocksService =
     new EthBlocksService(
       stub[Blockchain],
-      stub[BlockchainReader],
+      r,
       stub[Mining],
-      stub[BlockQueue]
+      stub[BlockQueue],
+      blockchainConfig = cfg,
+      gasPriceOracleOpt = Some(o)
     )
 
-  // ─── A. minimumGasPrice() — floor formula ─────────────────────────────────
+  // ─── A. settings ────────────────────────────────────────────────────────────
 
-  "minimumGasPrice()" should "return 1 wei on a pre-EIP-1559 chain (baseFee absent)" taggedAs (UnitTest, RPCTest) in {
-    val r = mockReader(bestNum = 5, window = emptyWindow(5), bestBlock = Some(blk(5, Nil)))
-    // bestBlock has HefEmpty → baseFee = None → pre-EIP-1559 path → floor = 1 wei
-    svc(r).minimumGasPrice() shouldEqual BigInt(1)
-  }
-
-  it should "return 1 wei when baseFee=0, baseFeeFloor=0, minTip=0 (degenerate config guard)" taggedAs (
+  "GasPriceOracle.DefaultConfig" should "carry go-ethereum's FullNodeGPO defaults and a 1 gwei start price" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val zeroCfg = defaultCfg.copy(baseFeeFloor = BigInt(0), minTip = BigInt(0))
-    val bestB = blk(1, Nil, baseFeeOpt = Some(BigInt(0)))
-    val r = mockReader(bestNum = 1, window = emptyWindow(1), bestBlock = Some(bestB))
-    // baseFee = 0, floor = 0, tip = 0 → raw = 0 → .max(1) = 1 wei
-    svc(r, zeroCfg).minimumGasPrice() shouldEqual BigInt(1)
+    GasPriceOracle.DefaultConfig shouldBe GasPriceOracle.Config(
+      blocks = 20,
+      percentile = 60,
+      maxHeaderHistory = 1024,
+      maxBlockHistory = 1024,
+      maxPrice = 500 * gwei,
+      ignorePrice = BigInt(2),
+      defaultPrice = gwei
+    )
   }
 
-  it should "return 2 gwei on ETC post-Olympia canonical (baseFee=1gwei, floor=1gwei, tip=1gwei)" taggedAs (
+  it should "be what the shipped fukuii.network.rpc.gpo block configures" taggedAs (UnitTest, RPCTest) in {
+    GasPriceOracle.configFrom(Config.config) shouldBe GasPriceOracle.DefaultConfig
+  }
+
+  it should "read every key under network.rpc.gpo, keeping geth defaults for absent ones" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val bestB = blk(100, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    svc(r, etcOlympiaCfg).minimumGasPrice() shouldEqual 2 * gwei
+    val c = ConfigFactory.parseString(
+      """network.rpc.gpo { blocks = 7, percentile = 40, max-price = "1000", ignore-price = "5",
+        |default-price = "9", max-header-history = 8, max-block-history = 4 }""".stripMargin
+    )
+    GasPriceOracle.configFrom(c) shouldBe GasPriceOracle.Config(7, 40, 8, 4, BigInt(1000), BigInt(5), BigInt(9))
+    GasPriceOracle.configFrom(ConfigFactory.empty()) shouldBe GasPriceOracle.DefaultConfig
   }
 
-  it should "use currentBaseFee when it exceeds baseFeeFloor (baseFee=3gwei, floor=1gwei, tip=1gwei)" taggedAs (
+  it should "sanitize out-of-range settings as geth NewOracle does" taggedAs (UnitTest, RPCTest) in {
+    GasPriceOracle.Config(0, 150, 0, -1, BigInt(0), BigInt(-3), BigInt(-1)).sanitized shouldBe
+      GasPriceOracle.Config(1, 100, 1, 1, 500 * gwei, BigInt(2), BigInt(0))
+    GasPriceOracle.Config(5, -10, 2, 2, BigInt(7), BigInt(1), gwei).sanitized.percentile shouldBe 0
+  }
+
+  // ─── B. getBlockValues ──────────────────────────────────────────────────────
+
+  "GasPriceOracle.blockValues" should "give the 3 lowest effective tips, ascending, whatever the block order" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val bestB = blk(100, Nil, baseFeeOpt = Some(3 * gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    // floor = max(3g, 1g) + 1g = 3g + 1g = 4g
-    svc(r, etcOlympiaCfg).minimumGasPrice() shouldEqual 4 * gwei
+    given BlockchainConfig = mordorCfg
+    val b = blk(1, Seq(9, 1, 5, 7, 3).map(p => legacy(p * gwei)))
+    GasPriceOracle.blockValues(b, 3, BigInt(2)) shouldBe Seq(1, 3, 5).map(_ * gwei)
   }
 
-  it should "return baseFee + 1gwei on ETH post-London (baseFee=5gwei, floor=0, tip=1gwei)" taggedAs (
+  it should "skip tips below the ignore price" taggedAs (UnitTest, RPCTest) in {
+    given BlockchainConfig = mordorCfg
+    val b = blk(1, Seq(legacy(1), legacy(2), legacy(10)))
+    GasPriceOracle.blockValues(b, 3, BigInt(2)) shouldBe Seq(BigInt(2), BigInt(10))
+  }
+
+  it should "skip the coinbase's own transactions and transactions with no recoverable sender" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val bestB = blk(100, Nil, baseFeeOpt = Some(5 * gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    svc(r, ethLondonCfg).minimumGasPrice() shouldEqual 6 * gwei
+    given BlockchainConfig = mordorCfg
+    val noSender = unsigned(4 * gwei)
+    SignedTransaction.getSender(noSender) shouldBe None
+    val b = blk(1, Seq(legacy(3 * gwei, miner), noSender, legacy(5 * gwei)), coinbase = minerAddr)
+    GasPriceOracle.blockValues(b, 3, BigInt(2)) shouldBe Seq(5 * gwei)
   }
 
-  it should "handle a high baseFee (100gwei) on ETH correctly" taggedAs (UnitTest, RPCTest) in {
-    val bestB = blk(100, Nil, baseFeeOpt = Some(100 * gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    svc(r, ethLondonCfg).minimumGasPrice() shouldEqual 101 * gwei
-  }
-
-  it should "respect a custom minTip = 2 gwei with ETC floor" taggedAs (UnitTest, RPCTest) in {
-    val cfg = defaultCfg.copy(baseFeeFloor = gwei, minTip = 2 * gwei)
-    val bestB = blk(100, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    // max(1g, 1g) + 2g = 3g
-    svc(r, cfg).minimumGasPrice() shouldEqual 3 * gwei
-  }
-
-  it should "return baseFee+tip when baseFeeFloor=0 and baseFee dominates (1gwei+1gwei)" taggedAs (
+  it should "take the tip at the block's base fee: min(tipCap, feeCap - baseFee), or gasPrice - baseFee" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val cfg = defaultCfg.copy(baseFeeFloor = BigInt(0), minTip = gwei)
-    val bestB = blk(100, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 100, window = emptyWindow(100), bestBlock = Some(bestB))
-    svc(r, cfg).minimumGasPrice() shouldEqual 2 * gwei
+    given BlockchainConfig = sepoliaCfg
+    val chainId = sepoliaCfg.chainId.value
+    val b = blk(
+      1,
+      Seq(dynamic(3 * gwei, 100 * gwei, chainId), dynamic(5 * gwei, 12 * gwei, chainId), legacy(14 * gwei)),
+      baseFee = Some(10 * gwei)
+    )
+    GasPriceOracle.blockValues(b, 3, BigInt(2)) shouldBe Seq(2 * gwei, 3 * gwei, 4 * gwei)
   }
 
-  // ─── B. suggestGasPrice() — oracle algorithm ──────────────────────────────
-
-  "suggestGasPrice()" should "return the floor on genesis (bestBlock=0, no txs)" taggedAs (UnitTest, RPCTest) in {
-    val r = mockReader(bestNum = 0, window = Map(BigInt(0) -> None), bestBlock = None)
-    // Pre-EIP-1559 default config: floor = 1 wei
-    svc(r).suggestGasPrice() shouldEqual BigInt(1)
+  it should "take a fee-market transaction's tip cap as its tip where the block has no base fee" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    GasPriceOracle.effectiveTip(dynamic(3 * gwei, 100 * gwei, 1).tx, None) shouldBe 3 * gwei
+    GasPriceOracle.effectiveTip(legacy(7 * gwei).tx, None) shouldBe 7 * gwei
   }
 
-  it should "return the ETC floor (2 gwei) when all blocks in the window are empty" taggedAs (UnitTest, RPCTest) in {
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 20, window = emptyWindow(20), bestBlock = Some(bestB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() shouldEqual 2 * gwei
+  // ─── C. SuggestTipCap ───────────────────────────────────────────────────────
+
+  "GasPriceOracle.suggestTipCap" should "answer the start price at genesis (block 0 is never sampled)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val r = mock[BlockchainReader]
+    (() => r.getBestBlock).expects().returning(Some(blk(0, Seq(legacy(50 * gwei))))).anyNumberOfTimes()
+    oracle(r).suggestTipCap() shouldBe gwei
   }
 
-  it should "guard against negative block range on a fresh chain (bestBlock=5)" taggedAs (UnitTest, RPCTest) in {
-    // bestBlock=5 → oracle queries 0..5 (not -15..5)
-    val bestB = blk(5, Nil, baseFeeOpt = Some(gwei))
-    val window = (BigInt(0) to BigInt(5)).map(n => n -> None).toMap
-    val r = mockReader(bestNum = 5, window = window, bestBlock = Some(bestB))
-    // Should succeed without errors; no txs → returns floor
-    noException should be thrownBy svc(r, etcOlympiaCfg).suggestGasPrice()
-    svc(r, etcOlympiaCfg).suggestGasPrice() shouldEqual 2 * gwei
+  it should "take the sample at index (n - 1) * percentile / 100" taggedAs (UnitTest, RPCTest) in {
+    // samples 1..5 gwei: geth index (5 - 1) * 60 / 100 = 2 -> 3 gwei (n * 60 / 100 = 3 would give 4 gwei)
+    val blocks = Seq(blk(1, Seq(4, 5).map(p => legacy(p * gwei))), blk(2, Seq(1, 2, 3).map(p => legacy(p * gwei))))
+    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(blocks = 2)).suggestTipCap() shouldBe 3 * gwei
   }
 
-  it should "return exactly floor when the single tx's gasPrice equals the floor" taggedAs (UnitTest, RPCTest) in {
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val oneTxBlk = blk(20, Seq(fakeTx(2 * gwei)), baseFeeOpt = Some(gwei))
-    val window = emptyWindow(20) + (BigInt(20) -> Some(oneTxBlk))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(bestB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() shouldEqual 2 * gwei
+  it should "sample 20 blocks by default, 3 transactions each" taggedAs (UnitTest, RPCTest) in {
+    // blocks 1..30 each carry tips (n, n, n, 1000) gwei; blocks 11..30 are sampled -> 60 values, 3 of each n
+    val blocks = chain(30)(n => Seq(n, n, n, 1000).map(p => legacy(p * gwei)))
+    // sorted index (60 - 1) * 60 / 100 = 35 -> the 12th distinct value from 11 = 22 gwei
+    oracle(reader(blocks)).suggestTipCap() shouldBe 22 * gwei
   }
 
-  it should "clamp to floor when all sampled txs price below floor (post-Olympia)" taggedAs (UnitTest, RPCTest) in {
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val lowBlk = blk(20, Seq(fakeTx(BigInt(1))), baseFeeOpt = Some(gwei))
-    val window = emptyWindow(20) + (BigInt(20) -> Some(lowBlk))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(bestB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() shouldEqual 2 * gwei
+  it should "cap the tip at max-price" taggedAs (UnitTest, RPCTest) in {
+    val blocks = chain(3)(_ => Seq(legacy(600 * gwei)))
+    oracle(reader(blocks)).suggestTipCap() shouldBe 500 * gwei
+    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(maxPrice = 7 * gwei)).suggestTipCap() shouldBe 7 * gwei
   }
 
-  it should "compute the 60th percentile of uniform-price txs (5 gwei)" taggedAs (UnitTest, RPCTest) in {
-    // 20 blocks × 3 txs each at 5 gwei → 60 data points all = 5 gwei → 60th pct = 5 gwei
-    val txs3 = Seq.fill(3)(fakeTx(5 * gwei))
-    val window = (BigInt(0) to BigInt(20)).map { n =>
-      n -> Some(blk(n, txs3, baseFeeOpt = Some(gwei)))
-    }.toMap
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(bestB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() shouldEqual 5 * gwei
+  it should "answer the start price over a window of empty blocks" taggedAs (UnitTest, RPCTest) in {
+    val blocks = chain(25)(_ => Nil)
+    oracle(reader(blocks)).suggestTipCap() shouldBe gwei
+    oracle(reader(blocks), GasPriceOracle.DefaultConfig.copy(defaultPrice = 1000000)).suggestTipCap() shouldBe 1000000
   }
 
-  it should "take the 60th percentile of a spread of prices, not the median" taggedAs (UnitTest, RPCTest) in {
-    // 60 txs with prices 1*gwei..60*gwei.
-    // Sorted idx 0..59. 60th pct idx = min(60*60/100, 59) = min(36, 59) = 36 → price = 37*gwei.
-    // But clamped to floor (2 gwei) → 37 gwei > 2 gwei, so result = 37 gwei.
-    // 20 blocks × 3 txs = 60 data points covering prices 1g..60g.
-    // Strategy: block i gets txs at prices i, i+20, i+40 gwei (i in 1..20).
-    val txBlocks = (BigInt(1) to BigInt(20)).map { i =>
-      val blockTxs = Seq(fakeTx(i * gwei), fakeTx((i + 20) * gwei), fakeTx((i + 40) * gwei))
-      i -> Some(blk(i, blockTxs, baseFeeOpt = Some(gwei)))
-    }.toMap
-    val window = txBlocks + (BigInt(0) -> None) // oracle queries 0..20; block 0 is empty
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(bestB))
-    val result = svc(r, etcOlympiaCfg).suggestGasPrice()
-    // 60 sorted prices: 1g, 2g, ..., 60g. 60th pct idx = min(36, 59) = 36 → 37th price = 37g.
-    result shouldEqual 37 * gwei
+  it should "count a block of only ignored or coinbase transactions as the last suggestion" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val minerOnly = (1 to 5).map(n => blk(n, Seq(legacy(90 * gwei, miner), legacy(1)), coinbase = minerAddr))
+    oracle(reader(minerOnly)).suggestTipCap() shouldBe gwei
   }
 
-  it should "cap at 500 gwei when all sampled prices exceed the cap" taggedAs (UnitTest, RPCTest) in {
-    val txs = Seq.fill(3)(fakeTx(1000 * gwei))
-    val window = (BigInt(0) to BigInt(20)).map(n => n -> Some(blk(n, txs))).toMap
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    svc(r).suggestGasPrice() shouldEqual cap500
+  it should "sample further blocks while blocks give a single value, up to twice the window" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // window 2: blocks 6, 5 and 4 give one value each (empty -> last price), so 4 and 3 are added; 3 gives three
+    // 100 gwei tips -> samples (1, 1, 1, 100, 100, 100) gwei, index 5 * 60 / 100 = 3 -> 100 gwei
+    val blocks = Seq(blk(1, Nil), blk(2, Nil), blk(3, Seq.fill(3)(legacy(100 * gwei)))) ++ (4 to 6).map(blk(_, Nil))
+    val o = oracle(reader(blocks, neverFetched = Set(1, 2)), GasPriceOracle.DefaultConfig.copy(blocks = 2))
+    o.suggestTipCap() shouldBe 100 * gwei
   }
 
-  it should "exclude coinbase transactions from the sample" taggedAs (UnitTest, RPCTest) in {
-    // Use a real fixture tx (valid signature, recoverable sender).
-    // Set the block coinbase = tx sender → the tx must be excluded.
-    // Fill the rest of the window with blocks that have no txs.
-    val tx = fixtureTxs.head
-    val sender = SignedTransaction.getSender(tx)(defaultCfg).value
-
-    val coinbase = sender.bytes
-    val coinbaseBlk = blk(20, Seq(tx), coinbase = coinbase)
-    val window = emptyWindow(20) + (BigInt(20) -> Some(coinbaseBlk))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    // Only tx excluded → window is effectively empty → returns floor
-    svc(r).suggestGasPrice() shouldEqual BigInt(1)
+  it should "stop extending once the samples and outstanding blocks reach twice the window" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // window 2 over empty blocks: 10 (head), 9, then 8 and 7 are added; 6 never is
+    val blocks = chain(10)(_ => Nil)
+    val r = reader(blocks, fetchedOnce = Set(9, 8, 7), neverFetched = (1 to 6).map(BigInt(_)).toSet)
+    oracle(r, GasPriceOracle.DefaultConfig.copy(blocks = 2)).suggestTipCap() shouldBe gwei
   }
 
-  it should "include transactions that are NOT from the coinbase" taggedAs (UnitTest, RPCTest) in {
-    val tx = fixtureTxs.head
-    // Coinbase is some OTHER address (zeroAddr), not the tx sender
-    val normalBlk = blk(20, Seq(tx), coinbase = zeroAddr)
-    val window = emptyWindow(20) + (BigInt(20) -> Some(normalBlk))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    // Tx is included → oracle returns tx.gasPrice (20 gwei) as the only sample
-    val result = svc(r).suggestGasPrice()
-    result shouldEqual tx.tx.gasPrice.value
+  it should "skip a block that is not stored, sampling only stored blocks" taggedAs (UnitTest, RPCTest) in {
+    val head = blk(3, Seq(legacy(40 * gwei)))
+    val r = mock[BlockchainReader]
+    val branch = BestBranch(zeroHash, 3)
+    (() => r.getBestBranch).expects().returning(branch).anyNumberOfTimes()
+    (() => r.getBestBlock).expects().returning(Some(head)).anyNumberOfTimes()
+    r.getBlockByNumber.expects(branch, BigInt(2)).returning(None).anyNumberOfTimes()
+    r.getBlockByNumber.expects(branch, BigInt(1)).returning(None).anyNumberOfTimes()
+    // only the head is stored: samples (40) gwei, not (1, 1, 40) with the start price standing in for 1 and 2
+    oracle(r).suggestTipCap() shouldBe 40 * gwei
   }
 
-  it should "return the floor when an all-coinbase-tx block exhausts the window" taggedAs (UnitTest, RPCTest) in {
-    // Every block in the window has only coinbase txs → oracle sees no valid samples → returns floor
-    val tx = fixtureTxs.head
-    val sender = SignedTransaction.getSender(tx)(defaultCfg).value
-    val window = (BigInt(0) to BigInt(20)).map { n =>
-      n -> Some(blk(n, Seq(tx), coinbase = sender.bytes))
-    }.toMap
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    svc(r).suggestGasPrice() shouldEqual BigInt(1)
+  it should "compute once per head and reuse the answer until the head moves" taggedAs (UnitTest, RPCTest) in {
+    val blocks = chain(3)(n => Seq(legacy((10 * n) * gwei)))
+    val o = oracle(reader(blocks, fetchedOnce = Set(1, 2)))
+    o.suggestTipCap() shouldBe 20 * gwei
+    o.suggestTipCap() shouldBe 20 * gwei
   }
 
-  it should "sample at most 3 transactions per block (per-block limit)" taggedAs (UnitTest, RPCTest) in {
-    // One block with 100 txs — the oracle should only take the first 3
-    // All at price X; if it takes more it'd still be X, so we vary: first 3 at 5g, rest at 10g.
-    val first3 = Seq.fill(3)(fakeTx(5 * gwei))
-    val rest97 = Seq.fill(97)(fakeTx(10 * gwei))
-    val bigBlk = blk(20, first3 ++ rest97)
-    val window = emptyWindow(20) + (BigInt(20) -> Some(bigBlk))
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    // 3 samples at 5g → 60th pct = 5g (all equal)
-    svc(r).suggestGasPrice() shouldEqual 5 * gwei
+  it should "carry the last suggestion into empty blocks at a new head, as geth's lastPrice does" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val busy = chain(3)(_ => Seq(legacy(50 * gwei)))
+    var current: Seq[Block] = busy
+    val r = mock[BlockchainReader]
+    (() => r.getBestBranch)
+      .expects()
+      .onCall(() => BestBranch(zeroHash, current.last.header.number.value))
+      .anyNumberOfTimes()
+    (() => r.getBestBlock).expects().onCall(() => Some(current.last)).anyNumberOfTimes()
+    r.getBlockByNumber
+      .expects(*, *)
+      .onCall((_, n) => current.find(_.header.number.value == n))
+      .anyNumberOfTimes()
+    val o = oracle(r)
+    o.suggestTipCap() shouldBe 50 * gwei
+    // the chain moves on through empty blocks: still 50 gwei, not the 1 gwei start price
+    current = busy ++ (4 to 30).map(blk(_, Nil))
+    o.suggestTipCap() shouldBe 50 * gwei
   }
 
-  it should "sample consistently across multiple blocks (20 × 3 = 60 data points)" taggedAs (UnitTest, RPCTest) in {
-    // Each of 20 blocks contributes 3 txs at 4 gwei. Total 60 samples all equal → pct60 = 4g.
-    val txs3 = Seq.fill(3)(fakeTx(4 * gwei))
-    val window = (BigInt(1) to BigInt(20)).map(n => n -> Some(blk(n, txs3))).toMap +
-      (BigInt(0) -> None)
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    svc(r).suggestGasPrice() shouldEqual 4 * gwei
+  // ─── D. eth_gasPrice / eth_maxPriorityFeePerGas ─────────────────────────────
+
+  "eth_gasPrice and eth_maxPriorityFeePerGas" should "on ETH (Sepolia), answer tip + head base fee and the tip" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val chainId = sepoliaCfg.chainId.value
+    val blocks = chain(5, baseFee = Some(7 * gwei))(_ => Seq(dynamic(2 * gwei, 30 * gwei, chainId)))
+    val r = reader(blocks)
+    val o = oracle(r, cfg = sepoliaCfg)
+    txService(o, r, sepoliaCfg).getGetGasPrice(GetGasPriceRequest()).unsafeRunSync() shouldBe
+      Right(GetGasPriceResponse(9 * gwei))
+    blocksService(o, r, sepoliaCfg).maxPriorityFeePerGas(MaxPriorityFeePerGasRequest()).unsafeRunSync() shouldBe
+      Right(MaxPriorityFeePerGasResponse(2 * gwei))
   }
 
-  it should "never return 0 regardless of config (property: result ≥ 1)" taggedAs (UnitTest, RPCTest) in {
-    // Zero-config chain; oracle window is empty
-    val zeroCfg = defaultCfg.copy(baseFeeFloor = BigInt(0), minTip = BigInt(0))
-    val r = mockReader(bestNum = 5, window = emptyWindow(5), bestBlock = Some(blk(5, Nil)))
-    svc(r, zeroCfg).suggestGasPrice() should be >= BigInt(1)
+  it should "on ETH, add the base fee after the max-price cap, so eth_gasPrice can exceed it" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val chainId = sepoliaCfg.chainId.value
+    val blocks = chain(2, baseFee = Some(80 * gwei))(_ => Seq(dynamic(900 * gwei, 2000 * gwei, chainId)))
+    val r = reader(blocks)
+    val o = oracle(r, cfg = sepoliaCfg)
+    txService(o, r, sepoliaCfg).suggestGasPrice() shouldBe 580 * gwei
   }
 
-  it should "always stay at or below 500 gwei (property: result ≤ cap)" taggedAs (UnitTest, RPCTest) in {
-    val extremeTxs = Seq.fill(3)(fakeTx(BigInt(10000) * gwei))
-    val window = (BigInt(0) to BigInt(20)).map(n => n -> Some(blk(n, extremeTxs))).toMap
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    svc(r).suggestGasPrice() should be <= cap500
+  it should "on ETC (Mordor) without a base fee, both answer the legacy gas price suggestion" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val blocks = chain(5)(n => Seq(legacy((n + 1) * gwei)))
+    val r = reader(blocks)
+    val o = oracle(r, cfg = mordorCfg)
+    // samples 2..6 gwei, index 4 * 60 / 100 = 2 -> 4 gwei
+    txService(o, r, mordorCfg).getGetGasPrice(GetGasPriceRequest()).unsafeRunSync() shouldBe
+      Right(GetGasPriceResponse(4 * gwei))
+    blocksService(o, r, mordorCfg).maxPriorityFeePerGas(MaxPriorityFeePerGasRequest()).unsafeRunSync() shouldBe
+      Right(MaxPriorityFeePerGasResponse(4 * gwei))
   }
 
-  it should "always return at least the floor (property: result ≥ minimumGasPrice)" taggedAs (UnitTest, RPCTest) in {
-    val txs = Seq.fill(3)(fakeTx(1 * gwei)) // 1g < 2g floor for etcOlympiaCfg
-    val bestB = blk(20, Nil, baseFeeOpt = Some(gwei))
-    val window = (BigInt(0) to BigInt(20)).map(n => n -> Some(blk(n, txs, baseFeeOpt = Some(gwei)))).toMap
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(bestB))
-    val service = svc(r, etcOlympiaCfg)
-    service.suggestGasPrice() should be >= service.minimumGasPrice()
+  it should "no longer answer the configured min-tip for eth_maxPriorityFeePerGas" taggedAs (UnitTest, RPCTest) in {
+    // Sepolia sets no min-tip (1 wei); before the oracle eth_maxPriorityFeePerGas answered exactly that
+    sepoliaCfg.minTip shouldBe BigInt(1)
+    val blocks = chain(3, baseFee = Some(gwei))(_ => Nil)
+    val r = reader(blocks)
+    blocksService(oracle(r, cfg = sepoliaCfg), r, sepoliaCfg)
+      .maxPriorityFeePerGas(MaxPriorityFeePerGasRequest())
+      .unsafeRunSync() shouldBe Right(MaxPriorityFeePerGasResponse(gwei))
   }
 
-  // ─── C. eth_gasPrice RPC wrapper ──────────────────────────────────────────
-
-  "getGetGasPrice()" should "return Right(GetGasPriceResponse(v)) where v ≥ 1" taggedAs (UnitTest, RPCTest) in {
-    val r = mockReader(bestNum = 5, window = emptyWindow(5), bestBlock = None)
-    val response = svc(r).getGetGasPrice(GetGasPriceRequest()).unsafeRunSync()
-    response shouldBe a[Right[?, ?]]
-    response.toOption.value.price should be >= BigInt(1)
-  }
-
-  it should "always return a non-zero value (never 0x0 on any chain)" taggedAs (UnitTest, RPCTest) in {
-    val zeroCfg = defaultCfg.copy(baseFeeFloor = BigInt(0), minTip = BigInt(0))
-    val r = mockReader(bestNum = 0, window = Map(BigInt(0) -> None), bestBlock = None)
-    val response = svc(r, zeroCfg).getGetGasPrice(GetGasPriceRequest()).unsafeRunSync()
-    response.toOption.value.price should be >= BigInt(1)
-  }
-
-  it should "wrap suggestGasPrice() — RPC value equals oracle value" taggedAs (UnitTest, RPCTest) in {
-    val txs = Seq.fill(3)(fakeTx(7 * gwei))
-    val window = (BigInt(0) to BigInt(20)).map(n => n -> Some(blk(n, txs))).toMap
-    val r = mockReader(bestNum = 20, window = window, bestBlock = Some(blk(20, Nil)))
-    val service = svc(r)
-    val oracleVal = service.suggestGasPrice()
-    val rpcVal = service.getGetGasPrice(GetGasPriceRequest()).unsafeRunSync().toOption.value.price
-    rpcVal shouldEqual oracleVal
-  }
-
-  // ─── D. eth_maxPriorityFeePerGas ──────────────────────────────────────────
-
-  "maxPriorityFeePerGas()" should "return Right(MaxPriorityFeePerGasResponse(...))" taggedAs (UnitTest, RPCTest) in {
-    val response = blocksSvc().maxPriorityFeePerGas(MaxPriorityFeePerGasRequest()).unsafeRunSync()
-    response shouldBe a[Right[?, ?]]
-  }
-
-  it should "return the value from blockchainConfig.minTip (not a hardcoded literal)" taggedAs (UnitTest, RPCTest) in {
-    val response = blocksSvc().maxPriorityFeePerGas(MaxPriorityFeePerGasRequest()).unsafeRunSync()
-    // EthBlocksService uses Config.blockchains.blockchainConfig; test config has minTip = 1 (default)
-    response.toOption.value.maxPriorityFeePerGas shouldEqual Config.blockchains.blockchainConfig.minTip
-  }
-
-  it should "return a non-negative value on any network" taggedAs (UnitTest, RPCTest) in {
-    val response = blocksSvc().maxPriorityFeePerGas(MaxPriorityFeePerGasRequest()).unsafeRunSync()
-    response.toOption.value.maxPriorityFeePerGas should be >= BigInt(0)
-  }
-
-  // ─── E. TransactionRequest oracle injection ────────────────────────────────
+  // ─── E. TransactionRequest oracle injection ─────────────────────────────────
 
   "TransactionRequest.toTransaction(nonce, suggestedGasPrice)" should "use user-supplied gasPrice when provided" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val userPrice: BigInt = 5 * gwei
-    val req = TransactionRequest(from = Address(zeroAddr), gasPrice = Some(userPrice))
-    val oracle = 10 * gwei // oracle would have suggested 10g
-    val tx = req.toTransaction(BigInt(0), oracle)
-    tx.gasPrice.value shouldEqual userPrice
+    val req = TransactionRequest(from = Address(zeroAddr), gasPrice = Some(5 * gwei))
+    req.toTransaction(BigInt(0), 10 * gwei).gasPrice.value shouldEqual 5 * gwei
   }
 
   it should "use the oracle price when no gasPrice provided by the user" taggedAs (UnitTest, RPCTest) in {
-    val oracle = 4 * gwei
-    val req = TransactionRequest(from = Address(zeroAddr))
-    val tx = req.toTransaction(BigInt(0), oracle)
-    tx.gasPrice.value shouldEqual oracle
-  }
-
-  it should "use oracle price of 1 wei (minimum valid) when oracle returns 1 wei" taggedAs (UnitTest, RPCTest) in {
-    val req = TransactionRequest(from = Address(zeroAddr))
-    val tx = req.toTransaction(BigInt(0), BigInt(1))
-    tx.gasPrice.value shouldEqual BigInt(1)
+    TransactionRequest(from = Address(zeroAddr)).toTransaction(BigInt(0), 4 * gwei).gasPrice.value shouldEqual 4 * gwei
   }
 
   it should "respect user's explicit gasPrice = 0 over any oracle value" taggedAs (UnitTest, RPCTest) in {
     val req = TransactionRequest(from = Address(zeroAddr), gasPrice = Some(BigInt(0)))
-    val tx = req.toTransaction(BigInt(0), 5 * gwei)
-    tx.gasPrice.value shouldEqual BigInt(0)
+    req.toTransaction(BigInt(0), 5 * gwei).gasPrice.value shouldEqual BigInt(0)
   }
 
-  // ─── F. Network-specific integration regression ───────────────────────────
+  // ─── F. hive graphql 07_eth_gasPrice ────────────────────────────────────────
 
-  "Gas oracle network regression" should "return 1 wei on ETC pre-Olympia (legacy chain, no baseFee)" taggedAs (
-    UnitTest,
-    RPCTest
-  ) in {
-    val legacyBestB = blk(100, Nil) // HefEmpty → baseFee = None
-    val window = emptyWindow(100)
-    val r = mockReader(bestNum = 100, window = window, bestBlock = Some(legacyBestB))
-    // Test config baseFeeFloor=0, minTip=1 (1 wei). Pre-EIP-1559 path → 1 wei.
-    svc(r, defaultCfg).suggestGasPrice() shouldEqual BigInt(1)
-  }
-
-  it should "return ≥ 2 gwei on ETC post-Olympia (1g baseFee + 1g floor + 1g tip)" taggedAs (UnitTest, RPCTest) in {
-    val postB = blk(500, Nil, baseFeeOpt = Some(gwei))
-    val window = emptyWindow(500)
-    val r = mockReader(bestNum = 500, window = window, bestBlock = Some(postB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() should be >= 2 * gwei
-  }
-
-  it should "return ≥ 2 gwei on Mordor post-Olympia (same config as ETC mainnet)" taggedAs (UnitTest, RPCTest) in {
-    // Mordor uses identical baseFeeFloor=1g, minTip=1g — config is the same
-    val mordorB = blk(300, Nil, baseFeeOpt = Some(gwei))
-    val window = emptyWindow(300)
-    val r = mockReader(bestNum = 300, window = window, bestBlock = Some(mordorB))
-    svc(r, etcOlympiaCfg).suggestGasPrice() should be >= 2 * gwei
-  }
-
-  it should "return ≥ 3 gwei on ETH post-London with 2 gwei baseFee (baseFeeFloor=0, minTip=1g)" taggedAs (
-    UnitTest,
-    RPCTest
-  ) in {
-    val ethB = blk(1000, Nil, baseFeeOpt = Some(2 * gwei))
-    val window = emptyWindow(1000)
-    val r = mockReader(bestNum = 1000, window = window, bestBlock = Some(ethB))
-    // floor = max(2g, 0) + 1g = 3g
-    svc(r, ethLondonCfg).suggestGasPrice() should be >= 3 * gwei
-  }
-
-  it should "return ≥ 8 gwei on Sepolia with 7 gwei baseFee (floor=0, tip=1g)" taggedAs (UnitTest, RPCTest) in {
-    val sepoliaB = blk(200, Nil, baseFeeOpt = Some(7 * gwei))
-    val window = emptyWindow(200)
-    val r = mockReader(bestNum = 200, window = window, bestBlock = Some(sepoliaB))
-    svc(r, ethLondonCfg).suggestGasPrice() should be >= 8 * gwei
-  }
-
-  it should "track a rising baseFee — oracle floor increases proportionally" taggedAs (UnitTest, RPCTest) in {
-    val lowBaseFee = blk(5, Nil, baseFeeOpt = Some(gwei))
-    val highBaseFee = blk(5, Nil, baseFeeOpt = Some(50 * gwei))
-    val window = emptyWindow(5)
-    val rLow = mockReader(bestNum = 5, window = window, bestBlock = Some(lowBaseFee))
-    val rHigh = mockReader(bestNum = 5, window = window, bestBlock = Some(highBaseFee))
-    val lowResult = svc(rLow, ethLondonCfg).suggestGasPrice()
-    val highResult = svc(rHigh, ethLondonCfg).suggestGasPrice()
-    highResult should be > lowResult
-  }
-
-  /** Pins hive `graphql` simulator fixture `07_eth_gasPrice` (`{ gasPrice }`) as INERT, not a fukuii defect — proven
-    * self-contained, from the fixture set's OWN data, without needing to trust an external geth report.
+  /** Pins hive `graphql` fixture `07_eth_gasPrice` (`{ gasPrice }`, accepts only `0x10` or `0x1`) as a stale fixture,
+    * not a fukuii defect: see `.claude/agent-protocols/devp2p-hive-tool-interop-quirks.md`.
     *
-    * `simulators/ethereum/graphql/testcases/07_eth_gasPrice.json` (ethereum/hive, current as of 2026-08-31) accepts
-    * only `"0x10"` (16) or `"0x1"` (1) wei. Three independent facts in the SAME fixture set contradict that:
-    *
-    *   1. `01_eth_blockNumber.json` (`{ block { number } }`, i.e. head/latest) expects `"0x22"` = 34 — head is block
-    *      34, not the last pre-merge block (32). 2. `51_eth_getBlock_4844.json` (`block(number: 34) { baseFeePerGas ...
-    *      }`) expects `baseFeePerGas` = `"0x3437004a"` = 876019786 wei for that same head block — geth's OWN recorded
-    *      ground truth for this chain, not an inference. 3. Independently decoding `init/testBlockchain.blocks`'
-    *      block-34 header RLP directly gives the identical `876019786` for the baseFee field (index 15) — confirms (2)
-    *      is not a fixture typo.
-    *
-    * go-ethereum's OWN current GraphQL resolver (`Resolver.GasPrice`, `graphql/graphql.go`):
-    * {{{
-    *   tipcap, _ := r.backend.SuggestGasTipCap(ctx)
-    *   if head := r.backend.CurrentHeader(); head.BaseFee != nil {
-    *       tipcap.Add(tipcap, head.BaseFee)
-    *   }
-    *   return tipcap
-    * }}}
-    * is the exact algorithm shape fukuii's `minimumGasPrice()`/`suggestGasPrice()` already implements (and the rest of
-    * this spec exhaustively pins): `baseFee + tip`, never a bare small constant, once any block carries a baseFee.
-    * Given (1)-(3), ANY conforming implementation of that formula — fukuii's or geth's own, run fresh against this
-    * exact fixture set — is arithmetically forced to return >= 876019786 wei, contradicting `07`'s "16 or 1" outright.
-    * This isn't a difference in which client code path answers the query; the fixture's own sibling files already state
-    * the chain condition that makes 16/1 unreachable by the documented formula.
-    *
-    * fukuii measured `0x3437004b` = 876019787 against this exact fixture (hive artifact, commit 810d6d8): `876019787 -
-    * 876019786 = 1`, i.e. EXACTLY `baseFee + minTip` (minTip=1 wei is the production default when unconfigured — see
-    * `BlockchainConfig.fromRawConfig`'s `min-tip` fallback). Zero unexplained residual — this is the formula working
-    * exactly as designed, not a fukuii miscalculation.
+    * The chain below mirrors `simulators/ethereum/graphql/init/testBlockchain.blocks` (decoded): blocks 1-32 carry one
+    * legacy transaction at 1 wei each, block 33 (London, base fee 1 gwei) a 0x2 transaction with a 1 gwei tip cap and 3
+    * gwei fee cap, block 34 (head, base fee 876019786) a 0x3 transaction with a 1 gwei tip cap. 1-wei tips fall under
+    * the 2 wei ignore price, so blocks 32 down to 15 each give the 1 gwei start price; the two London blocks give 1
+    * gwei tips. The suggested tip is 1 gwei and `{ gasPrice }` = 876019786 + 1 gwei = 0x6fd1ca4a, as geth's own
+    * resolver (`tipcap + head.BaseFee`) gives with core-geth's start price. No conforming answer can be 16 or 1 wei.
     */
-  it should "exceed hive graphql's stale 07_eth_gasPrice expectations (16 or 1 wei) once baseFee is ~876M wei" taggedAs (
+  "hive graphql 07_eth_gasPrice" should "stay unreachable: the head's base fee alone is ~876M wei" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    val measuredFixtureBaseFee = BigInt(876019786) // block 34 of hive graphql's testBlockchain.blocks, measured
-    val headBlock = blk(34, Nil, baseFeeOpt = Some(measuredFixtureBaseFee))
-    val window = emptyWindow(34)
-    val r = mockReader(bestNum = 34, window = window, bestBlock = Some(headBlock))
-    val result = svc(r, defaultCfg).suggestGasPrice()
-
-    // THE pin: this is fukuii's exact measured answer (hive artifact, commit 810d6d8) — baseFee + 1 wei minTip,
-    // with zero unexplained residual.
-    result shouldEqual BigInt("3437004b", 16)
-    result shouldEqual (measuredFixtureBaseFee + 1)
+    val headBaseFee = BigInt(876019786)
+    val frontier = (1 to 32).map(n => blk(n, Seq(legacy(1))))
+    val london33 = blk(33, Seq(dynamic(gwei, 3 * gwei, 1)), baseFee = Some(gwei))
+    val head34 = blk(34, Seq(dynamic(gwei, 4 * gwei, 1)), baseFee = Some(headBaseFee))
+    val r = reader(frontier :+ london33 :+ head34)
+    val result = txService(oracle(r, cfg = sepoliaCfg), r, sepoliaCfg).suggestGasPrice()
+    result shouldBe headBaseFee + gwei
+    result shouldBe BigInt("6fd1ca4a", 16)
     result should be > BigInt(0x10)
-    result should be > BigInt(0x1)
   }

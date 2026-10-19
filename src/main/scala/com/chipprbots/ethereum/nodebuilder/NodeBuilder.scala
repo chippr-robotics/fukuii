@@ -655,9 +655,22 @@ trait EthMiningServiceBuilder:
     coinbaseProvider,
     classicSystem
   )
+
+/** The node's one gas price oracle (go-ethereum `eth/gasprice`), shared by eth_gasPrice, eth_maxPriorityFeePerGas,
+  * eth_feeHistory's limits and the send/sign/fill fee defaults, so they read a single per-head cache.
+  */
+trait GasPriceOracleBuilder:
+  self: BlockchainBuilder & BlockchainConfigBuilder & InstanceConfigProvider =>
+
+  lazy val gasPriceOracle: com.chipprbots.ethereum.jsonrpc.GasPriceOracle =
+    new com.chipprbots.ethereum.jsonrpc.GasPriceOracle(
+      blockchainReader,
+      com.chipprbots.ethereum.jsonrpc.GasPriceOracle.configFrom(instanceConfig.config)
+    )
+
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & GasPriceOracleBuilder =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -666,11 +679,12 @@ trait EthTxServiceBuilder:
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
     storagesInstance.storages.transactionMappingStorage,
-    classicSystem.toTyped.scheduler
+    classicSystem.toTyped.scheduler,
+    Some(gasPriceOracle)
   )
 
 trait EthBlocksServiceBuilder:
-  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder =>
+  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder & GasPriceOracleBuilder =>
 
   /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
   def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
@@ -682,7 +696,8 @@ trait EthBlocksServiceBuilder:
       mining,
       blockQueue,
       forkChoiceManagerForRpc,
-      storagesInstance.pruningMode
+      storagesInstance.pruningMode,
+      gasPriceOracleOpt = Some(gasPriceOracle)
     )
 
 trait EthUserServiceBuilder:
@@ -1264,6 +1279,7 @@ trait Node
     with EthProofServiceBuilder
     with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
+    with GasPriceOracleBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
     with EthUserServiceBuilder

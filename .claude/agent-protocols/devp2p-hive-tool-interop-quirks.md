@@ -16,8 +16,11 @@ Referenced by: none yet — promote references here as they accumulate.
 ## Pattern: hive `graphql` simulator `07_eth_gasPrice` fixture predates the chain's EIP-1559 extension
 
 **Symptom:** `{ gasPrice }` against hive's `simulators/ethereum/graphql` chain
-returns a value in the hundreds-of-millions-of-wei range (fukuii: `0x3437004b`
-= 876,019,787); `testcases/07_eth_gasPrice.json` accepts only `0x10` (16) or
+returns a value near a billion wei (fukuii before #1629's geth oracle: `0x3437004b`
+= 876,019,787, i.e. baseFee + 1 wei; with the geth-equivalent oracle: `0x6fd1ca4a`
+= 1,876,019,786, i.e. baseFee + the 1 gwei start price, the chain's 1-wei
+Frontier tips being under geth's 2-wei ignore price);
+`testcases/07_eth_gasPrice.json` accepts only `0x10` (16) or
 `0x1` (1) wei. This is the sole failure in an otherwise-clean run (51/52 as of
 2026-09).
 
@@ -63,9 +66,9 @@ commits):**
    and chains get extended later without regenerating every dependent case.
 
 **Do not "fix" this by changing fukuii's gas price oracle.**
-`EthTxService.minimumGasPrice()`/`suggestGasPrice()` (shared by
-`eth_gasPrice` and the GraphQL `gasPrice` field, `GraphQLSchema.scala`) already
-implement the same `baseFee + tip` shape as current go-ethereum; matching the
+`GasPriceOracle` (go-ethereum `eth/gasprice`; `EthTxService.suggestGasPrice()` is
+shared by `eth_gasPrice` and the GraphQL `gasPrice` field, `GraphQLSchema.scala`)
+implements the same `tip + baseFee` as current go-ethereum; matching the
 stale fixture would require literally ignoring `baseFee`, which would be a
 real EIP-1559 regression on every live ETH/Sepolia chain. Recorded as a
 known-permanent hive-side floor (`GasPriceOracleSpec`, the pin test tagged
