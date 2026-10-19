@@ -472,6 +472,9 @@ installs ran with plain JVM defaults. Precedence (last wins): `JAVA_OPTS` enviro
 **Frequency**: Common with default settings  
 **Impact**: Node crashes
 
+> Packaged (deb) installs set the heap in `/etc/fukuii/application.ini` (default `-Xmx3g`), not `.jvmopts` — see
+> [Debian package: where the JVM flags live](#debian-package-where-the-jvm-flags-live).
+
 #### Symptoms
 
 ```
