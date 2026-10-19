@@ -348,6 +348,12 @@ JVM_OPTS=(
     # handful of tiny stubs, and not caching them measured no slower (N=20).
     -XX:+UnlockDiagnosticVMOptions
     -XX:-AOTAdapterCaching
+    # JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on JDK
+    # 23+ (fixed in JDK 28). Also set via the image's JDK_JAVA_OPTIONS; repeated here so
+    # this script is safe on any base. Needs the Unlock above. aot-train.sh boots through
+    # this script, so training and every hive run see the same flags and the AOT cache's
+    # flag check cannot reject the cache over this one.
+    -XX:-ReduceAllocationMerges
     # Inline ProgramState's constructor wherever C2 compiles an allocation of it. The EVM
     # builds one ProgramState (a 26-field case class) per executed instruction. Compiled on
     # its own, the constructor is ~6 KB of machine code, because every reference store needs

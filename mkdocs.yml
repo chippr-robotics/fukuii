@@ -198,6 +198,7 @@ nav:
         - UPnP Transport: adr/infrastructure/INF-003-jupnp-apache-httpclient-transport.md
         - Actor IO Error Handling: adr/infrastructure/INF-004-actor-io-error-handling.md
         - Docker Strategy: adr/infrastructure/INF-005-docker-deployment-strategy.md
+        - JDK 25 Baseline: adr/infrastructure/INF-007-jdk-25-baseline.md
       - Consensus:
         - adr/consensus/README.md
         - RLPx Protocol: adr/consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md

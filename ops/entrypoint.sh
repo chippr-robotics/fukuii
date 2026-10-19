@@ -115,6 +115,8 @@ else
 fi
 
 exec java \
+  -XX:+UnlockDiagnosticVMOptions \
+  -XX:-ReduceAllocationMerges \
   "$HEAP_ARG" \
   "$INIT_ARG" \
   -Xss1M \

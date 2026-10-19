@@ -71,13 +71,13 @@ echo
 print_step "Step 1/6: Checking Java Installation"
 if ! command -v java &> /dev/null; then
     print_error "Java is not installed"
-    echo "Please install Java 11 or later (Java 21 LTS recommended)"
+    echo "Please install JDK 25 (LTS)"
     exit 1
 fi
 
 JAVA_VERSION=$(java -version 2>&1 | grep -oP 'version "\K[0-9]+' | head -1)
-if [ "$JAVA_VERSION" -lt 11 ]; then
-    print_error "Java version $JAVA_VERSION is too old (Java 11+ required, Java 21 LTS recommended)"
+if [ "$JAVA_VERSION" -lt 25 ]; then
+    print_error "Java version $JAVA_VERSION is too old (JDK 25 required)"
     exit 1
 fi
 

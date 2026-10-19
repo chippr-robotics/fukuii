@@ -119,6 +119,12 @@ WORKDIR /app
 # Set up environment
 ENV FUKUII_DATA_DIR=/app/data
 ENV FUKUII_CONF_DIR=/app/conf
+# JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
+# JDK 23+ (fixed in JDK 28). JDK_JAVA_OPTIONS is read by every `java` launch in
+# this container, including composes that override the entrypoint, and leaves
+# JAVA_TOOL_OPTIONS free for operators. Side effect: java prints
+# "NOTE: Picked up JDK_JAVA_OPTIONS: ..." on stderr at startup.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
 ENV FUKUII_NETWORK=etc
 
 # Expose default ports

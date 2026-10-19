@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.console.TuiConfig
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.Logger
 
 object Fukuii extends Logger:
@@ -40,6 +41,9 @@ object Fukuii extends Logger:
 
     log.info("Fukuii app {}", Config.clientVersion)
     log.info("Using network {}", Config.blockchains.network)
+
+    // JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on JDK 23+.
+    JvmFlagGuard.check()
 
     NodeStatusReporter.report()
     MilestoneLog.logMilestones(Config.blockchains.blockchainConfig.forkBlockNumbers)

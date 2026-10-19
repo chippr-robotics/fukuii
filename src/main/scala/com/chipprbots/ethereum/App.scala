@@ -9,6 +9,7 @@ import com.typesafe.config.ConfigFactory
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
+import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger:
@@ -250,6 +251,7 @@ object App extends Logger:
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some("runtime") =>
         log.info("Starting Fukuii multi-instance runtime")
+        JvmFlagGuard.check() // this path bypasses Fukuii.main, which runs the same check
         val rootConfig = com.typesafe.config.ConfigFactory.load()
         val runtime = com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(rootConfig)
         runtime.startAll()
