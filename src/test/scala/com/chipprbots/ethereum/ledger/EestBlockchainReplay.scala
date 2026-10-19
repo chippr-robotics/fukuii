@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.utils.BlobSchedule
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.NetworkType
@@ -25,8 +26,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   * `validateBlockBeforeExecution` → execute → `validateBlockAfterExecution` → `validateRequestsHash`, each block
   * accepted or rejected exactly as the fixture's `expectException` says, ending on the fixture's `lastblockhash`.
   *
-  * Only fields that are byte-for-byte the release's are replayed: `network`, `config.chainid`, `pre`, `genesisRLP`,
-  * `blocks[].rlp`, `blocks[].expectException` and `lastblockhash`. The JSON-rendered `blockHeader`, `transactions` and
+  * Only fields that are byte-for-byte the release's are replayed: `network`, `config.chainid`, `config.blobSchedule`
+  * (through the chain-conf loader, [[withFixtureBlobSchedule]]), `pre`, `genesisRLP`, `blocks[].rlp`,
+  * `blocks[].expectException` and `lastblockhash`. The JSON-rendered `blockHeader`, `transactions` and
   * `blockAccessList` are never used to rebuild a block, so a field fukuii does not model cannot be silently dropped on
   * the way in: the block hash that comes out is the hash of the release's own RLP.
   */
@@ -101,6 +103,30 @@ object EestBlockchainReplay:
         )
     }
 
+  /** The fixture's own `config.blobSchedule` (EIP-7840, fork names capitalised, values hex), put through the chain-conf
+    * loader exactly as a `blob-schedule` block (#1637): an Osaka or Amsterdam entry must equal the one it inherits, an
+    * entry is required for every scheduled blob fork, and BPO3+ is refused. A fixture without one keeps `config`'s.
+    */
+  def withFixtureBlobSchedule(config: BlockchainConfig, t: JValue): Either[String, BlockchainConfig] =
+    t \ "config" \ "blobSchedule" match
+      case JObject(entries) =>
+        import scala.jdk.CollectionConverters.*
+        val hocon: java.util.Map[String, AnyRef] = entries
+          .map { case (fork, params) =>
+            val fields =
+              Seq("target" -> "target", "max" -> "max", "baseFeeUpdateFraction" -> "base-fee-update-fraction")
+                .flatMap((json, key) => (params \ json).toOption.map(v => key -> (bi(str(v)).toString: AnyRef)))
+            s"blob-schedule.${fork.toLowerCase}" -> (fields.toMap.asJava: AnyRef)
+          }
+          .toMap
+          .asJava
+        Try(
+          BlobSchedule.fromConfig(com.typesafe.config.ConfigFactory.parseMap(hocon), config.forkTimestamps)
+        ).toEither.left
+          .map(e => s"fixture blobSchedule: ${e.getMessage}")
+          .map(schedule => config.copy(blobSchedule = schedule))
+      case _ => Right(config)
+
   private def hx(s: String): Array[Byte] = Hex.decode(s.stripPrefix("0x"))
   private def bi(s: String): BigInt = if s.stripPrefix("0x").isEmpty then 0 else BigInt(s.stripPrefix("0x"), 16)
   private def str(v: JValue): String = v.values.toString
@@ -169,7 +195,7 @@ object EestBlockchainReplay:
     val env = new Env
     import env.{blockQueue, blockchain, blockchainReader, blockchainWriter, mining, storagesInstance}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
-    configFor(env.blockchainConfig, str(t \ "network"), chainId) match
+    configFor(env.blockchainConfig, str(t \ "network"), chainId).flatMap(withFixtureBlobSchedule(_, t)) match
       case Left(unmodelled) => Seq(unmodelled)
       case Right(config) =>
         given BlockchainConfig = config
