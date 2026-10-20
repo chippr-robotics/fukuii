@@ -211,8 +211,7 @@ class ChainDownloader private (
       while i <= end && !stop do
         blockchainReader.getBlockHeaderByNumber(i) match
           case Some(header) =>
-            if i > bodyFloor && blockchainReader.getBlockBodyByHash(header.hash).isEmpty then
-              bodiesQueue :+= header.hash.value
+            if i > bodyFloor && !bodyStoredFor(header) then bodiesQueue :+= header.hash.value
             if i > receiptFloor && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
               receiptsQueue :+= header.hash.value
             i += 1
@@ -801,6 +800,14 @@ class ChainDownloader private (
         if ok then matchOrderedSubsequence(restHashes, restItems, validates, matched :+ (hash -> item))
         else matchOrderedSubsequence(restHashes, remainingItems, validates, matched) // skip hash; retry item vs next
 
+  /** A body counts as stored only when it is present AND its shape does not contradict its header
+    * (`BlockBody.shapeMismatch`, O(1): no trie work, so it costs nothing over the read the presence check already did).
+    * CQ-020-07: SNAP finalization once wrote an empty placeholder body for the pivot, and a presence-only check meant
+    * the backfill never replaced it. A body this check rejects is fetched again and validated like any other.
+    */
+  private def bodyStoredFor(header: BlockHeader): Boolean =
+    blockchainReader.getBlockBodyByHash(header.hash).exists(body => BlockBody.shapeMismatch(header, body).isEmpty)
+
   /** Advance the body backfill cursor only over the prefix that is actually contiguous on disk from `cursor+1` onward
     * (#33). Bodies are fetched by several concurrent peers and a failed batch is re-queued (7b7a61708), so batches
     * complete out of order: a batch that fills blocks far above the cursor can commit while a lower block's fetch is
@@ -826,7 +833,7 @@ class ChainDownloader private (
     var n = current + 1
     while n <= limit && blockchainReader
         .getBlockHeaderByNumber(n)
-        .exists(h => blockchainReader.getBlockBodyByHash(h.hash).isDefined)
+        .exists(bodyStoredFor)
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
 
@@ -1268,8 +1275,7 @@ class ChainDownloader private (
           case Some(header) =>
             val needsBodyCheck = i > bodyFloor
             val needsReceiptCheck = i > receiptFloor
-            if !bodiesReceiptsDeferred && needsBodyCheck &&
-              blockchainReader.getBlockBodyByHash(header.hash).isEmpty
+            if !bodiesReceiptsDeferred && needsBodyCheck && !bodyStoredFor(header)
             then bodiesQueue :+= header.hash.value
             if !bodiesReceiptsDeferred && needsReceiptCheck &&
               blockchainReader.getReceiptsByHash(header.hash).isEmpty

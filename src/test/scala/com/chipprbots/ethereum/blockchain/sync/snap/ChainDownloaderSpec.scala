@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -318,6 +319,26 @@ class ChainDownloaderSpec
     testKit.stop(ps.downloader)
   }
 
+  // CQ-020-07: SNAP finalization wrote `BlockBody.empty` under the pivot, and a presence-only check never replaced it.
+  it should "fetch again a stored body whose shape contradicts its header (the placeholder pivot body)" taggedAs UnitTest in {
+    val header = BlockHelpers.generateBlock(BlockHelpers.genesis).header // non-empty transactionsRoot / ommersHash
+    val ps = peerSetup(
+      deferBodiesAndReceipts = false,
+      st =>
+        st.blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(1)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(1))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4) // forces a synchronous dispatch
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(header.hash.value)
+      case other => fail(s"expected the placeholder body to be requested again, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
   // An excluded peer is never asked again, so nothing but the clock can end its exclusion. With a backoff set, one
   // transient empty reply must not exclude the peer for good (it would stall the header download on a small peer set).
   it should "ask a peer for headers again once its empty-reply exclusion has lapsed (and not before)" taggedAs UnitTest in {
@@ -508,13 +529,13 @@ class ChainDownloaderSpec
     // queue-rebuild pass (triggered by Start) then seeds only receiptsQueue — with a single peer and bodies
     // taking dispatch priority over receipts, an empty bodiesQueue is what guarantees the one available
     // request slot goes to a receipts fetch instead.
-    val header: BlockHeader = BlockHelpers
-      .generateBlock(BlockHelpers.genesis)
-      .header
-      .copy(receiptsRoot = receiptsRoot)
+    // The stored body has the generated block's shape (its lists are non-empty like its header's roots): a body that
+    // contradicts its header's shape counts as missing and would be fetched again (CQ-020-07), taking the slot.
+    val block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+    val header: BlockHeader = block.header.copy(receiptsRoot = receiptsRoot)
     storage.blockchainWriter
       .storeBlockHeader(header)
-      .and(storage.blockchainWriter.storeBlockBody(header.hash, BlockBody(Nil, Nil)))
+      .and(storage.blockchainWriter.storeBlockBody(header.hash, block.body))
       .commit()
     // Fast-skip cursor (#1169): tells findBestStoredHeader block 1 is our best header without needing genesis
     // itself in storage.
@@ -728,9 +749,9 @@ class ChainDownloaderSpec
 
     storage.blockchainWriter
       .storeBlockHeader(header1)
-      .and(storage.blockchainWriter.storeBlockBody(header1.hash, BlockBody(Nil, Nil)))
+      .and(storage.blockchainWriter.storeBlockBody(header1.hash, chain(0).body)) // shape matches: not re-fetched
       .and(storage.blockchainWriter.storeBlockHeader(header2))
-      .and(storage.blockchainWriter.storeBlockBody(header2.hash, BlockBody(Nil, Nil)))
+      .and(storage.blockchainWriter.storeBlockBody(header2.hash, chain(1).body))
       .commit()
     appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
 
