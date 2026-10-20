@@ -14,6 +14,18 @@ Node configuration needed (checked against src/main/resources/conf/base/network.
     fukuii.network.rpc.http.enabled = true, interface = "localhost" (default), port 8556 on Ephemery.
     Passphrase length must be >= fukuii.keystore.minimal-passphrase-length (7).
 
+Security (testnet only)
+    * The sender key is IMPORTED into the node's keystore and the account stays unlocked until the
+      node restarts. Use only throwaway testnet keys, never a key that holds real value.
+    * The default passphrase ("loadgen-passphrase") is public. --passphrase on the command line is
+      visible in process arguments (ps, /proc); prefer --passphrase-file or LOADGEN_PASSPHRASE.
+      Precedence: --passphrase-file > LOADGEN_PASSPHRASE > --passphrase > default.
+    * Chain-id guard: the script refuses any chain id that is not an Ephemery id
+      (39438000 <= id < 39439000) or a local devnet (1337, 31337), and always refuses known production
+      chains (1, 2, 61, 63, 17000, 560048, 11155111), unless --force-chain is given.
+    * Some EIP-7702 authorizations use chainId 0, which is valid on every chain and therefore
+      replayable across chains. Fine on a testnet; do not point this at anything else.
+
 How signing works (default: fukuii signs everything except 7702 authorizations)
     * The script calls personal_importRawKey once (an "account already exists" error is tolerated) and
       personal_unlockAccount (duration 0 = until lock/restart).
@@ -38,8 +50,10 @@ How signing works (default: fukuii signs everything except 7702 authorizations)
     * --sign-locally (fallback): types 0x1/0x2/0x4 are signed by the small pure-Python secp256k1 +
       keccak signer in this file and submitted with eth_sendRawTransaction; legacy still goes through
       fukuii. No blobs in this mode. Same key, same nonce counter.
-    * The private key is read from a file (--key-file) and never printed or logged. Authority keys are
-      derived from --seed and are also never printed or logged.
+    * The sender private key is read from a file (--key-file) and never printed or logged. Authority
+      keys are deterministically derived from --seed, which IS printed at start (and so is
+      reproducible by anyone who sees it); they are unfunded, nonce-0 throwaway keys and are not
+      otherwise printed or logged.
 
 Per-tick probes (--no-probes to disable): eth_fillTransaction, eth_estimateGas and eth_createAccessList
 on typed calls, and eth_call with stateOverrides (code + balance). Results are sanity-checked.
@@ -938,6 +952,54 @@ def load_key(path):
     return k, s
 
 
+PRODUCTION_CHAIN_IDS = {1: "ETH mainnet", 2: "Morden/Expanse", 61: "ETC mainnet", 63: "Mordor",
+                        17000: "Holesky", 560048: "Hoodi", 11155111: "Sepolia"}
+LOCAL_DEVNET_IDS = (1337, 31337)
+
+
+def chain_id_problem(chain_id):
+    """None if chain_id is an Ephemery or local devnet id, else a human-readable refusal reason."""
+    if chain_id in PRODUCTION_CHAIN_IDS:
+        return "chain id %d is %s, a production/public network" % (chain_id, PRODUCTION_CHAIN_IDS[chain_id])
+    if 39438000 <= chain_id < 39439000 or chain_id in LOCAL_DEVNET_IDS:
+        return None
+    return "chain id %d is not an Ephemery id (39438000-39438999) or a local devnet (1337, 31337)" % chain_id
+
+
+def check_chain_id(chain_id, force):
+    problem = chain_id_problem(chain_id)
+    if problem and not force:
+        raise SystemExit("refusing to run: %s. This tool sends junk load and imports a key into the node's "
+                         "keystore; pass --force-chain only if you are certain this is a throwaway testnet." % problem)
+    if problem:
+        print("WARNING: --force-chain given, %s" % problem, file=sys.stderr, flush=True)
+
+
+def warn_if_loose_mode(path, what):
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return
+    if mode & 0o077:
+        print("WARNING: %s %s is group/world accessible (mode %o); chmod 600 it" % (what, path, mode & 0o777),
+              file=sys.stderr, flush=True)
+
+
+def resolve_passphrase(args):
+    """--passphrase-file > LOADGEN_PASSPHRASE > --passphrase > default (argparse default)."""
+    if args.passphrase_file:
+        warn_if_loose_mode(args.passphrase_file, "--passphrase-file")
+        with open(args.passphrase_file) as f:
+            line = f.readline().strip()
+        if not line:
+            raise SystemExit("--passphrase-file is empty")
+        return line
+    env = os.environ.get("LOADGEN_PASSPHRASE")
+    if env:
+        return env
+    return args.passphrase
+
+
 def check_blob_flags(args):
     if args.blobs and args.sign_locally:
         raise SystemExit("--blobs needs fukuii to build the sidecar (eth_signTransaction); not valid with --sign-locally")
@@ -1084,6 +1146,7 @@ def run(args):
     rng = random.Random(seed)
     priv = hexkey = None
     if args.key_file:
+        warn_if_loose_mode(args.key_file, "--key-file")
         priv, hexkey = load_key(args.key_file)
         sender = address_of_key(priv)
     elif args.dry_run:
@@ -1092,8 +1155,10 @@ def run(args):
         raise SystemExit("--key-file is required unless --dry-run")
     tip = int(args.tip_gwei * GWEI)
 
+    args.passphrase = resolve_passphrase(args)
     if args.dry_run:
         chain_id = args.chain_id or 39438000
+        check_chain_id(chain_id, args.force_chain)
         st = State(sender, 0, seed, chain_id)
         fee = fees(args.dry_base_fee, tip)
         total = 0
@@ -1115,6 +1180,7 @@ def run(args):
     errors_file = open(args.errors_out, "a")
     rpc = Rpc(args.rpc, errors=errors_file)
     chain_id = args.chain_id or int(rpc.call("eth_chainId"), 16)
+    check_chain_id(chain_id, args.force_chain)
     try:
         got = rpc.call("personal_importRawKey", [hexkey, args.passphrase], expected=True)
         if got and got.lower() != hx(sender):
@@ -1135,6 +1201,8 @@ def run(args):
     out = open(args.out, "a")
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
+    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
+    send_failed = {"v": False}  # last send attempt failed: an idle successful poll must not mask it
     t0 = time.time()
     start_head = last_head = int(rpc.call("eth_blockNumber"), 16)
     total_sent, first = 0, True
@@ -1156,6 +1224,7 @@ def run(args):
                 h = send_tx(rpc, tx, st, priv, chain_id, fee, args)
             except (RpcError, urllib.error.URLError, OSError) as e:
                 consec_err += 1
+                send_failed["v"] = True
                 backoff = min(2 ** consec_err, 30)
                 print("send error (%d consecutive, backing off %ds): %s" % (consec_err, backoff, str(e)[:200]), file=sys.stderr, flush=True)
                 if consec_err >= args.max_errors:
@@ -1165,6 +1234,7 @@ def run(args):
                 time.sleep(backoff)
                 return
             consec_err = 0
+            send_failed["v"] = False
             sent_hashes.add(h.lower())
             sent_since += 1
             total_sent += 1
@@ -1190,6 +1260,8 @@ def run(args):
                 if args.blocks and head - start_head >= args.blocks:
                     break
                 send_batch()
+            if not send_failed["v"]:
+                consec_err = 0  # a clean poll iteration ends the streak, so sparse blips never accumulate
         except (RpcError, urllib.error.URLError, OSError) as e:
             consec_err += 1
             backoff = min(2 ** consec_err, 30)
@@ -1285,6 +1357,48 @@ def selftest():
     with tempfile.TemporaryDirectory() as td:
         py_compile.compile(os.path.abspath(__file__), cfile=os.path.join(td, "x.pyc"), doraise=True)
     check("py_compile", True)
+    # chain-id guard, passphrase precedence, file-mode warning
+    check("chain guard refuses production ids",
+          all(chain_id_problem(c) for c in (1, 2, 61, 63, 17000, 560048, 11155111)))
+    check("chain guard refuses unknown ids", chain_id_problem(39439000) and chain_id_problem(39437999)
+          and chain_id_problem(0) and chain_id_problem(12345))
+    check("chain guard allows Ephemery/devnet", not any(chain_id_problem(c) for c in (39438000, 39438999, 1337, 31337)))
+    try:
+        check_chain_id(61, False)
+        refused = False
+    except SystemExit as e:
+        refused = "refusing" in str(e)
+    check("check_chain_id exits on 61 without --force-chain", refused)
+    import contextlib
+    import io
+    with contextlib.redirect_stderr(io.StringIO()):
+        check_chain_id(61, True)
+    check("check_chain_id passes with --force-chain", True)
+    with tempfile.TemporaryDirectory() as td:
+        pf = os.path.join(td, "pp")
+        with open(pf, "w") as f:
+            f.write("file-pass\nsecond line\n")
+        os.chmod(pf, 0o600)
+        ns = types.SimpleNamespace(passphrase="cli-pass", passphrase_file=None)
+        old_env = os.environ.pop("LOADGEN_PASSPHRASE", None)
+        try:
+            ok = resolve_passphrase(ns) == "cli-pass"
+            os.environ["LOADGEN_PASSPHRASE"] = "env-pass"
+            ok = ok and resolve_passphrase(ns) == "env-pass"
+            ns.passphrase_file = pf
+            ok = ok and resolve_passphrase(ns) == "file-pass"
+        finally:
+            os.environ.pop("LOADGEN_PASSPHRASE", None)
+            if old_env is not None:
+                os.environ["LOADGEN_PASSPHRASE"] = old_env
+        check("passphrase precedence file > env > cli", ok)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            warn_if_loose_mode(pf, "t")
+            quiet = err.getvalue() == ""
+            os.chmod(pf, 0o644)
+            warn_if_loose_mode(pf, "t")
+        check("loose file mode warns, 0600 does not", quiet and "WARNING" in err.getvalue())
     # keccak / rlp
     check("keccak256('')", keccak256(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470")
     check("keccak256('abc')", keccak256(b"abc").hex() == "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45")
@@ -1502,7 +1616,12 @@ def argparser():
     ap = argparse.ArgumentParser(description="Ephemery transaction load generator (spec 020). Does not run unless invoked.")
     ap.add_argument("--rpc", default="http://127.0.0.1:8556")
     ap.add_argument("--key-file", help="file holding the funded sender's private key (hex); never printed")
-    ap.add_argument("--passphrase", default="loadgen-passphrase", help="keystore passphrase (>= 7 chars)")
+    ap.add_argument("--passphrase", default="loadgen-passphrase",
+                    help="keystore passphrase (>= 7 chars); visible in process args, prefer --passphrase-file")
+    ap.add_argument("--passphrase-file", help="file whose first line is the keystore passphrase "
+                    "(overrides LOADGEN_PASSPHRASE and --passphrase)")
+    ap.add_argument("--force-chain", action="store_true",
+                    help="allow a chain id that is not Ephemery/local devnet (production ids included); dangerous")
     ap.add_argument("--chain-id", type=int, help="default: read eth_chainId (dry-run: 39438000)")
     ap.add_argument("--blocks", type=int, default=0, help="stop after the head advanced N blocks (dry-run: N ticks, default 3)")
     ap.add_argument("--duration", type=float, default=0, help="stop after N seconds")
