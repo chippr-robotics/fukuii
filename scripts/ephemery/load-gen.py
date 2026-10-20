@@ -717,7 +717,8 @@ def plan_tick(rng, st, cfg, contracts):
     if not st.stores:
         for _ in range(cfg.initial_deploys):
             deploy("deploy_store", contracts["store_init"])
-    if not st.factories:
+    # the factory only serves CREATE2; a blob-only sender must not mix in a legacy-pool tx (geth "address already reserved")
+    if not st.factories and cfg.create2 > 0:
         deploy("deploy_factory", contracts["factory_init"])
 
     for _ in range(_count(rng, cfg.transfers_new)):
