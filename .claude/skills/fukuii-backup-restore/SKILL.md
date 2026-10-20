@@ -38,13 +38,21 @@ Network, datadir (`admin_datadir`), backup destination, available space.
    copy, **stop the node** (🔴 — it's a disruption) or use a filesystem/VM
    snapshot (preferred: minimal downtime). A hot file copy of `rocksdb/` while
    running can be inconsistent — avoid unless using a snapshot.
-3. **Portable chain export** (🟡) — `admin_exportChain` writes a portable chain
-   file (good for moving between hosts / sharing a known-good chain).
+3. **Portable chain export** (🟡) — a chain file in go-ethereum's format (bare
+   RLP blocks; `.gz` gzips), importable by fukuii and geth. Offline: stop the node,
+   `fukuii <network> export <file> [first [last]]`. Online: `admin_exportChain(file,
+   first?, last?)`. Fails on the first missing block (`export failed on #N`), never
+   overwrites, and the file appears only when complete. A SNAP-synced node has no
+   bodies below its pivot, so export from where it holds full blocks.
 4. **Restore** (🔴) — confirm the target datadir's current contents are
    expendable / already backed up, stop the node, replace `rocksdb/` + restore
    keys/config, fix permissions, restart, then run `fukuii-node-health-check`.
-5. **Import chain** (🔴) — `admin_importChain(<file>)` to load an exported chain.
-   Confirm intent; this mutates local chain state.
+5. **Import chain** (🔴) — offline (preferred): stop the node, `fukuii <network>
+   import <file> [...]`. Online: `admin_importChain(<file>)`, only with sync idle.
+   Every block is fully validated and executed; known blocks are skipped; the first
+   block must continue the local head; it stops at the first bad block, naming it.
+   Confirm intent; this mutates local chain state. `-Dfukuii.import-chain-file` is the
+   hive fixture loader (continues past invalid blocks) — not for restores.
 6. **Validate** (🟢) — after any restore, confirm version/network, `eth_syncing`
    resumes, peers connect, and the tip is sane.
 
@@ -53,7 +61,8 @@ Hybrid (recommended): hourly key/config backups + daily DB snapshot + on-demand
 snapshot before changes. RTO/RPO trade-offs are tabulated in the runbook.
 
 ## Deep reference
-- `docs/runbooks/backup-restore.md` (strategy matrix, DR planning, validation)
+- `docs/runbooks/backup-restore.md` (strategy matrix, DR planning, validation,
+  "Portable Chain Snapshots")
 
 ## Output
 CONVENTIONS §4 block. Evidence = what was backed up/restored, sizes, and the
