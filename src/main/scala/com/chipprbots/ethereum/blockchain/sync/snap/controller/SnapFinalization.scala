@@ -9,14 +9,14 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
-import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -238,11 +238,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
 
           val pivotHash = pivotHeader.hash
 
-          // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
-          // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
-          // the header, but storeBlock ensures the mapping is present even if the header was
-          // stored by a different code path during pivot refresh.
-          stateIngest.chainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+          // Write the pivot header with its number→hash mapping (PivotHeaderBootstrap stored the header, but a pivot
+          // refresh can have stored it by another path). The BODY is never invented here (CQ-020-07): this used to
+          // write `BlockBody.empty`, which overwrote the body a newPayload had already stored for a CL-chosen pivot
+          // (Ephemery 137,594 lost its 16 withdrawals) and, because ChainDownloader fetches only ABSENT bodies, was
+          // never replaced. Keep a stored body that validates; derive it only when the header commits to an empty one;
+          // otherwise leave it absent (the backfill target includes the pivot, so it is fetched and validated there).
+          // A body-less best block is a state the readers already handle (getBestBlockHeader, #1201).
+          stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
+          applyPivotBodyCheck(pivotHeader)
 
           // Store a ChainWeight so compareBranch() can evaluate new blocks.
           // Priority: (1) real cumulative TD from ChainDownloader — only accepted if it exceeds
@@ -352,6 +356,40 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         syncController ! Done
         completed()
     } // end boundary
+
+  /** CQ-020-07: settle the pivot's body without inventing one (see [[StoredBodyCheck]]). A body a newPayload stored is
+    * kept when it validates; a body that contradicts the header is replaced by the derived empty one or removed, so the
+    * backfill fetches the real one.
+    */
+  private def applyPivotBodyCheck(pivotHeader: BlockHeader): Unit =
+    val pivotHash = pivotHeader.hash
+    StoredBodyCheck.decide(pivotHeader, stateIngest.chainReader.getBlockBodyByHash(pivotHash)) match
+      case StoredBodyCheck.Action.Keep =>
+        ctx.log.info(
+          "SNAP finalize: keeping the stored body of pivot {} (validates against its header)",
+          pivotHeader.idTag
+        )
+      case StoredBodyCheck.Action.Write(body, replacing) =>
+        replacing.foreach(reason =>
+          ctx.log.warn(
+            "SNAP finalize: stored body of pivot {} contradicts its header ({}); replacing",
+            pivotHeader.idTag,
+            reason
+          )
+        )
+        stateIngest.chainWriter.storeCheckedBlockBody(pivotHeader, body).commit()
+      case StoredBodyCheck.Action.LeaveAbsent =>
+        ctx.log.info(
+          "SNAP finalize: pivot {} body not stored yet; the chain backfill fetches and validates it",
+          pivotHeader.idTag
+        )
+      case StoredBodyCheck.Action.Remove(reason) =>
+        ctx.log.warn(
+          "SNAP finalize: stored body of pivot {} contradicts its header ({}); removing it so the backfill refetches it",
+          pivotHeader.idTag,
+          reason
+        )
+        stateIngest.chainWriter.removeBlockBody(pivotHash).commit()
 
   /** Launch the Path-to-hash publish on the blocking dispatcher. The controller stays in its current behavior
     * (`syncing`): the `completeSnapSync()` call sites discard the Behavior this returns, so a behavior switch would be

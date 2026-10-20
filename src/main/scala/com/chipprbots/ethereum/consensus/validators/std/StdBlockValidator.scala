@@ -221,7 +221,7 @@ object StdBlockValidator extends BlockValidator:
         if computedRoot == expectedRoot then Right(BlockValid)
         else Left(BlockWithdrawalsRootError)
 
-  private def computeWithdrawalsRoot(withdrawals: Seq[Withdrawal]): ByteString =
+  private[ethereum] def computeWithdrawalsRoot(withdrawals: Seq[Withdrawal]): ByteString =
     if withdrawals.isEmpty then BlockHeader.EmptyMpt
     else
       val serializable = new ByteArraySerializable[Withdrawal]:
