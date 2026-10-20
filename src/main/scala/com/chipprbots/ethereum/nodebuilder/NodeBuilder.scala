@@ -54,6 +54,7 @@ import com.chipprbots.ethereum.network.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
+import com.chipprbots.ethereum.network.discovery.DiscoveryRuntime
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -205,6 +206,11 @@ trait PeerDiscoveryManagerBuilder:
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
+  /** Discovery's own bounded runtime (task #52): discv4 ECDSA must not compete with block import and the sync fetchers
+    * for `IORuntime.global`. Passed explicitly — the implicit `ioRuntime` above stays global for everyone else.
+    */
+  lazy val discoveryIoRuntime: IORuntime = DiscoveryRuntime(discoveryConfig.computeThreads)
+
   // Typed ref — for in-scope callers and direct Typed wiring.
   lazy val peerDiscoveryManagerTyped: org.apache.pekko.actor.typed.ActorRef[PeerDiscoveryManager.Command] =
     classicSystem.spawn(
@@ -233,9 +239,9 @@ trait PeerDiscoveryManagerBuilder:
                       .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
-            ),
+            )(discoveryIoRuntime),
             randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
-          )
+          )(using discoveryIoRuntime)
         )
         .onFailure[Throwable](SupervisorStrategy.restart),
       "peer-discovery-manager-typed"

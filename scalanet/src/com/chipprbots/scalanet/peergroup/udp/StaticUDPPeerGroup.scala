@@ -6,8 +6,8 @@ import java.net.InetSocketAddress
 import cats.effect.IO
 import cats.effect.Ref
 import cats.effect.Resource
+import cats.effect.std.Dispatcher
 import cats.effect.std.Semaphore
-import cats.effect.unsafe.implicits.global
 import cats.implicits.*
 
 import scala.concurrent.duration.*
@@ -63,7 +63,8 @@ class StaticUDPPeerGroup[M] private (
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
     serverChannelSemaphore: Semaphore[IO],
     serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ServerAlloc[M]]],
-    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
+    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]],
+    dispatcher: Dispatcher[IO]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
     with StrictLogging:
@@ -325,9 +326,11 @@ class StaticUDPPeerGroup[M] private (
       replicateToChannels(remoteAddress)(_.handleError(error))
     }
 
-  // Execute the task asynchronously. Has to be thread safe.
+  // Execute the task asynchronously. Has to be thread safe. Runs on the runtime that allocated this peer group (via its
+  // Dispatcher), not on `IORuntime.global`: discovery gives the group its own bounded runtime so per-datagram work
+  // cannot crowd out block import (task #52).
   private def executeAsync(task: IO[Unit]): Unit =
-    task.unsafeRunAndForget()
+    dispatcher.unsafeRunAndForget(task)
 
   private def tryDecodeDatagram(datagram: DatagramPacket): Attempt[M] =
     codec.decodeValue(BitVector(datagram.content.nioBuffer)) match
@@ -632,6 +635,8 @@ object StaticUDPPeerGroup extends StrictLogging:
         }
     }
 
+    // Allocated before the event loop so it is released after it: no datagram can be handed to a closed dispatcher.
+    Dispatcher.parallel[IO].flatMap { dispatcher =>
     eventLoopResource.flatMap { workerGroup =>
       // Create the peer group with all its dependencies
       val peerGroupResource = Resource.eval {
@@ -648,7 +653,8 @@ object StaticUDPPeerGroup extends StrictLogging:
           serverQueue,
           serverChannelSemaphore,
           serverChannelsRef,
-          clientChannelsRef
+          clientChannelsRef,
+          dispatcher
         )
       }
 
@@ -665,6 +671,7 @@ object StaticUDPPeerGroup extends StrictLogging:
           }
         }
       }
+    }
     }
 
   private class ChannelImpl[M](
