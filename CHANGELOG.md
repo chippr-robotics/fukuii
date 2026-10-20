@@ -76,35 +76,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delivery that contradicts its announcement. Each delivery is checked against its sender's own announcement. Fixes
   hive devp2p `TestBlobTxWithoutSidecar` / `TestBlobTxWithMismatchedSidecar`, which go-ethereum #35869 rewrote to
   have three peers announce the same blob transaction.
-- **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
-  the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
-  (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
-  OOM-killed every ~10 hours. Two changes. (1) As in go-ethereum (`AcceptTxs`), a node ignores
-  `NewPooledTransactionHashes`, `Transactions` and `PooledTransactions` from peers until it is synced: an Engine API
-  forkchoiceUpdated has set the head, regular sync has reached the best block peers announced, or block production
-  is enabled. It also ignores them while SNAP sync or state recovery runs. Transactions submitted over JSON-RPC are
-  not affected. This applies to ETC too: an ETC node stops taking peer transactions while it catches up. (2) The pool
-  keeps a blob sidecar only while its transaction is pooled, drops it on every removal path, and caps the total at
-  `txPool.blob-sidecar-budget` (default 256 MiB); past the cap the oldest blob transactions are evicted.
-- **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
-  forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
-  queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,
-  the sync controller (the same queries `net_peerCount` and `eth_syncing` answer), the best block and SNAP progress.
-  Further fixes: `D` no longer shuts down the node; `Q` exits through the normal shutdown hook instead of
-  interrupting its own shutdown; frames fit the terminal exactly (no scrolling or wrapping, footer pinned);
-  non-TTY/`dumb` terminals fall back to plain logging; the terminal mode and screen are restored on exit;
-  configuration errors are printed before the TUI suppresses console logging; sync speed/ETA is measured from
-  the first block observed rather than from genesis.
+- **Behaviour changes to check before upgrading (#1640, #1639).** A fresh ETC, Mordor or Gorgoroth node now answers
+  `eth_gasPrice` / `eth_maxPriorityFeePerGas` with 1 gwei (was 1 wei). `eth_pendingTransactions` now returns full
+  objects only for executable (not nonce-gapped) pool transactions sent from keystore accounts, as geth does.
+- **Internal.** The SNAP controller is split into modules (spec 016, #1401, no behaviour change intended); sbt is
+  1.13.0 (#1631); Scala 3 import syntax is enforced by a scalafix rule and a CI grep (#1632).
 
 ### Added
+- **`eth_getHeaderByNumber` and `eth_getHeaderByHash` (#1616).** New RPCs returning the `eth_getBlockByNumber` header
+  object without size, transactions, uncles, withdrawals and totalDifficulty; by-number resolves the same tags,
+  not found returns `null`.
 - **Typed transactions on every RPC interface (#1629, slices S0-S5).** Legacy, EIP-2930, EIP-1559, EIP-4844 and
   EIP-7702 transactions are handled with geth's rules, error strings and defaults on JSON-RPC and GraphQL:
   - S1 (#1633): one shared `TxArgs` model with strict, geth-style JSON decoding (`-32602` with geth's hexutil text).
     Type inference follows geth's `ToTransaction`; one deliberate deviation: `gasPrice` together with an access list
     or blob fields and no explicit `type` is rejected instead of silently building a legacy transaction.
-  - S0 (#1634): `eth_sendRawTransaction` and GraphQL `sendRawTransaction` pass one admission gate in geth's order
-    before the pool. Pending typed transactions report the fee cap as `gasPrice`. On ETC and Mordor, peer
-    transactions of a type not active at the head (0x2/0x4 before Olympia) are no longer pooled or gossiped.
+  - S0 (#1634): admission rules are #1641's (see the transaction submission entry above). Delta: pending typed
+    transactions report the fee cap as `gasPrice`; on ETC and Mordor, peer transactions of a type not active at the
+    head (0x2/0x4 before Olympia) are no longer pooled or gossiped.
   - S2 (#1635): `eth_sendTransaction` and `personal_sendTransaction` build all five types; new
     `eth_signTransaction`, `personal_signTransaction` (`{raw, tx}`) and `eth_fillTransaction`. Defaults follow geth's
     `setDefaults`; gas is estimated rather than fixed at 90000; blob sidecars are built and checked with KZG.
@@ -131,6 +120,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `eth_createAccessList` and `eth_call` probes, for import differentials. Nothing in the build depends on it.
 
 ### Fixed
+- **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
+  the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
+  (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
+  OOM-killed every ~10 hours. Two changes. (1) As in go-ethereum (`AcceptTxs`), a node ignores
+  `NewPooledTransactionHashes`, `Transactions` and `PooledTransactions` from peers until it is synced: an Engine API
+  forkchoiceUpdated has set the head, regular sync has reached the best block peers announced, or block production
+  is enabled. It also ignores them while SNAP sync or state recovery runs. Transactions submitted over JSON-RPC are
+  not affected. This applies to ETC too: an ETC node stops taking peer transactions while it catches up. (2) The pool
+  keeps a blob sidecar only while its transaction is pooled, drops it on every removal path, and caps the total at
+  `txPool.blob-sidecar-budget` (default 256 MiB); past the cap the oldest blob transactions are evicted.
+- **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
+  forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
+  queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,
+  the sync controller (the same queries `net_peerCount` and `eth_syncing` answer), the best block and SNAP progress.
+  Further fixes: `D` no longer shuts down the node; `Q` exits through the normal shutdown hook instead of
+  interrupting its own shutdown; frames fit the terminal exactly (no scrolling or wrapping, footer pinned);
+  non-TTY/`dumb` terminals fall back to plain logging; the terminal mode and screen are restored on exit;
+  configuration errors are printed before the TUI suppresses console logging; sync speed/ETA is measured from
+  the first block observed rather than from genesis.
 - **discv4 saturated the CPU and starved block import and the Engine API (#1648).** On an Ephemery node (4 cores)
   fukuii sat at about 286% CPU with 3 peers, Lighthouse's engine upcheck timed out and Engine requests queued for
   over a minute (`JWT expired`); thread dumps showed discv4 ECDSA signing and recovery. Causes: an unbounded full
@@ -139,10 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default 1, threads `discovery-compute-N`); one lookup runs at a time, feeding a bounded queue, with the pause
   doubling from 2 s to 64 s while lookups find nothing new; each packet is type-checked before any crypto and
   recovered keys are cached (4096 entries); inbound requests are limited to 10/s per address (burst 30) and 100/s
-  overall (burst 200). Measured on Ephemery: about 286% to about 15% CPU.
-- **`eth_getHeaderByNumber` / `eth_getHeaderByHash` added; `eth_simulateV1` override keys are strict (#1616).** An
-  unknown key in `blockOverrides` or a `stateOverrides` entry returns `-32602`; the `difficulty` block override works
-  pre-merge and returns `-32602` after.
+  overall (burst 200); these inbound limits are new behaviour on the public discovery UDP port and are fixed in code
+  (`DiscoveryNetwork.InboundRequestLimits.default`), not configurable. Measured on Ephemery: about 286% to about 15% CPU.
+- **`eth_simulateV1` override keys are strict (#1616).** An unknown key in `blockOverrides` or a `stateOverrides` entry
+  returns `-32602`; the `difficulty` block override works pre-merge and returns `-32602` after.
 - **`eth_feeHistory` returned 0 for every reward percentile (#1605).** It now computes them as geth does: transactions
   sorted by effective tip, first whose cumulative gas reaches `gasUsed * p / 100`.
 - **Amsterdam rpc-compat vectors (#1606).** `eth_getBlockByNumber` emits `blockAccessListHash` and `slotNumber` for
@@ -163,12 +171,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UnsupportedOperationException`); the codeHashes path was never saved, so a restart during the storage phase with
   bytecode incomplete restarted SNAP from the accounts phase. The coordinator now tells the controller both paths
   on completion.
-
-### Internal
-- SNAP controller split into modules (spec 016, #1401; R1 #1622 and the C-S/C-H/C-X series, #1608-#1620), with
-  golden and `snap-split-verify` guards. No behaviour change intended.
-- sbt 1.13.0 and sbt-1 plugin bumps (spec 020 PR 1, #1631).
-- Scala 3 import syntax enforced by a scalafix rule and a CI grep (spec 020 PR 2, #1632).
 
 ## [0.9.0] - 2026-10-05
 
