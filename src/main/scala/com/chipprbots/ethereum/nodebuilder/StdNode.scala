@@ -332,6 +332,9 @@ abstract class BaseNode extends Node:
           case _                                            => engineServer.stopSync()
       }
     )
+    // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
+    // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
+    tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))
     // Terminate the secondary ActorSystem hosting the periodic DB consistency check.
     tryAndLogFailure(() =>
       periodicConsistencyCheckSystem.foreach { s =>

@@ -13,6 +13,7 @@ import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import scodec.Attempt
 import scodec.Err
 import scodec.bits.BitVector
+import scodec.bits.ByteVector
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
@@ -23,6 +24,13 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder:
   // To save the time transforming it into a public-private key pair every time, store the results.
   // In the future we might want to not pass around the private key but have it as a constructor argument.
   private val signingKeyPairCache = TrieMap.empty[PrivateKey, AsymmetricCipherKeyPair]
+
+  // Recovered sender keys, keyed by (signature, message hash) — task #52. One inbound discv4 datagram used to be
+  // recovered up to three times: by the netty-thread Ping responder, by the server channel, and by every client channel
+  // the peer group replicates it to. Recovery is a pure function of the signature and the hash, so a hit is exactly the
+  // value a fresh recovery would return; only successes are stored.
+  private val recoveredKeys =
+    new Secp256k1SigAlg.BoundedLru[ByteVector, PublicKey](Secp256k1SigAlg.RecoveredKeyCacheSize)
 
   override val name = "secp256k1"
 
@@ -115,19 +123,26 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder:
 
   override def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey] =
     val message = crypto.kec256(data.toByteArray)
-
-    val maybePublicKey = toECDSASignatures(signature).flatMap { sig =>
-      sig.publicKey(message).map(toPublicKey)
-    }.headOption
-
-    Attempt.fromOption(maybePublicKey, Err("Failed to recover the public key from the signature."))
+    Attempt.fromOption(recoverCached(signature, message), Err("Failed to recover the public key from the signature."))
 
   override def recoverPublicKeyFromHash(signature: Signature, messageHash: BitVector): Attempt[PublicKey] =
-    val maybePublicKey = toECDSASignatures(signature).flatMap { sig =>
-      sig.publicKey(messageHash.toByteArray).map(toPublicKey)
-    }.headOption
+    Attempt.fromOption(
+      recoverCached(signature, messageHash.toByteArray),
+      Err("Failed to recover the public key from the signature hash.")
+    )
 
-    Attempt.fromOption(maybePublicKey, Err("Failed to recover the public key from the signature hash."))
+  private def recoverCached(signature: Signature, messageHash: Array[Byte]): Option[PublicKey] =
+    val key = signature.value.bytes ++ ByteVector.view(messageHash)
+    recoveredKeys.get(key).orElse {
+      val recovered = toECDSASignatures(signature).flatMap { sig =>
+        sig.publicKey(messageHash).map(toPublicKey)
+      }.headOption
+      recovered.foreach(recoveredKeys.put(key, _))
+      recovered
+    }
+
+  /** Test/diagnostic accessor: number of cached recoveries. */
+  private[discovery] def recoveredKeyCacheSize: Int = recoveredKeys.entryCount
 
   override def toPublicKey(privateKey: PrivateKey): PublicKey =
     val publicKeyBytes = crypto.pubKeyFromPrvKey(privateKey.value.toByteArray)
@@ -188,3 +203,25 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder:
     ECDSASignature.fromBytes(ByteString(signatureBytes)).getOrElse {
       throw new IllegalArgumentException(s"Could not convert to ECDSA signature.")
     }
+
+object Secp256k1SigAlg:
+
+  /** Enough for every packet in flight across a lookup and the replies to it, small enough to be negligible memory (an
+    * entry is ~97 key bytes plus a 64-byte public key).
+    */
+  val RecoveredKeyCacheSize: Int = 4096
+
+  /** Minimal thread-safe LRU. Accessed from the UDP event-loop thread and the discovery pool only, so a monitor is
+    * uncontended in practice and far cheaper than the recovery it saves.
+    */
+  final private[discovery] class BoundedLru[K, V](maxEntries: Int):
+    require(maxEntries > 0, "maxEntries must be positive")
+
+    private val underlying = new java.util.LinkedHashMap[K, V](16, 0.75f, true):
+      override def removeEldestEntry(eldest: java.util.Map.Entry[K, V]): Boolean = size() > maxEntries
+
+    def get(key: K): Option[V] = underlying.synchronized(Option(underlying.get(key)))
+
+    def put(key: K, value: V): Unit = underlying.synchronized { underlying.put(key, value); () }
+
+    def entryCount: Int = underlying.synchronized(underlying.size())

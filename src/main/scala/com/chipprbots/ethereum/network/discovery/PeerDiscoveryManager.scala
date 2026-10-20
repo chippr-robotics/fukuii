@@ -7,6 +7,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.std.Queue
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
@@ -15,14 +16,14 @@ import scala.util.Success
 
 import com.chipprbots.scalanet.discovery.ethereum.Node as ENode
 import com.chipprbots.scalanet.discovery.ethereum.v4
-import fs2.Stream
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 
 object PeerDiscoveryManager:
 
-  private type RandomNodes = Stream[IO, Node]
+  // Buffer of random candidates, filled by the single [[RandomNodeFeeder]] and drained by GetRandomNodeInfoReq.
+  private type RandomNodes = Queue[IO, Node]
   private type Discovery = (v4.DiscoveryService, RandomNodes)
 
   sealed trait Command
@@ -43,12 +44,17 @@ object PeerDiscoveryManager:
   final case class DiscoveredNodesInfo(nodes: Set[Node])
   final case class RandomNodeInfo(node: Node)
 
+  /** How long one GetRandomNodeInfoReq waits for the feeder before giving up without a reply. Below PeerManager's ask
+    * timeout (`update-nodes-interval`, 15 s) so an unanswered request does not keep a waiting fiber past its asker.
+    */
+  private[discovery] val RandomNodeWait: FiniteDuration = 10.seconds
+
   def apply(
       localNodeId: ByteString,
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage,
       discoveryServiceResource: Resource[IO, v4.DiscoveryService],
-      @annotation.unused randomNodeBufferSize: Int = 0
+      randomNodeBufferSize: Int = 0
   )(using runtime: IORuntime): Behavior[Command] =
     Behaviors.setup { ctx =>
       // Capture ctx.log on the actor thread once; use this `log` val (plain SLF4J) in
@@ -67,15 +73,16 @@ object PeerDiscoveryManager:
 
       val discoveryResources: Resource[IO, (v4.DiscoveryService, RandomNodes)] = for
         service <- discoveryServiceResource
-        // Derive a random-nodes stream: repeatedly pull random lookups, metered to avoid
-        // saturating the discv4 server when getRandomNodes returns empty (IO.defer ensures
-        // a fresh IO per iteration, not the same captured IO reused forever — see PR #1090).
-        randomNodes = Stream
-          .repeatEval(IO.defer(service.getRandomNodes))
-          .metered(2.seconds)
-          .flatMap(ns => Stream.emits(ns.toList))
-          .map(toNode)
-          .filter(n => n.id != localNodeId)
+        randomNodes <- Resource.eval(Queue.bounded[IO, Node](math.max(1, randomNodeBufferSize)))
+        // ONE feeder per running service, cancelled with it (task #52). It used to be a stream compiled afresh by every
+        // GetRandomNodeInfoReq, i.e. one full Kademlia lookup per request with no bound on how many ran at once.
+        // IO.defer: a fresh lookup per round, not one captured IO reused forever (PR #1090).
+        _ <- RandomNodeFeeder
+          .supervised(
+            lookup = IO.defer(service.getRandomNodes).map(_.map(toNode).filter(n => n.id != localNodeId)),
+            offer = randomNodes.offer
+          )
+          .background
       yield (service, randomNodes)
 
       def startDiscoveryService(): Unit =
@@ -123,17 +130,22 @@ object PeerDiscoveryManager:
           replyTo: ActorRef[RandomNodeInfo]
       ): Unit =
         given IORuntime = runtime
-        val task: IO[RandomNodeInfo] =
-          randomNodes.take(1).compile.lastOrError.flatMap { node =>
-            IO(log.debug("Random node candidate {} delivered", formatNodeForLogs(node)))
-              .as(RandomNodeInfo(node))
+        val task: IO[Option[RandomNodeInfo]] =
+          // Queue.take is cancel-safe: a request that times out loses no node.
+          randomNodes.take.map(Option(_)).timeoutTo(RandomNodeWait, IO.pure(None)).flatMap {
+            case None =>
+              IO(log.debug("No random node candidate within {}; the asker will retry", RandomNodeWait)).as(None)
+            case Some(node) =>
+              IO(log.debug("Random node candidate {} delivered", formatNodeForLogs(node)))
+                .as(Some(RandomNodeInfo(node)))
           }
         task.attempt
           .unsafeToFuture()
           .onComplete {
-            case Success(Right(result)) => replyTo ! result
-            case Success(Left(ex))      => log.error("Failed to get random node: {}", ex.getMessage)
-            case Failure(ex)            => log.error("Unexpected failure getting random node: {}", ex.getMessage)
+            case Success(Right(Some(result))) => replyTo ! result
+            case Success(Right(None))         => ()
+            case Success(Left(ex))            => log.error("Failed to get random node: {}", ex.getMessage)
+            case Failure(ex)                  => log.error("Unexpected failure getting random node: {}", ex.getMessage)
           }(runtime.compute)
 
       // The service hasn't been started yet; serves static known nodes only.

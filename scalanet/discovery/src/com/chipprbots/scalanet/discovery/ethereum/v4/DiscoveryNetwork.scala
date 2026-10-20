@@ -65,6 +65,24 @@ object DiscoveryNetwork:
   // Pause before restarting a failed server-event consumer, so a persistent failure cannot spin.
   private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
 
+  /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key recovery
+    * and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest node
+    * (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what many
+    * IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would be.
+    * At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
+    */
+  case class InboundRequestLimits(
+      perIpPerSecond: Int,
+      perIpBurst: Int,
+      globalPerSecond: Int,
+      globalBurst: Int,
+      maxTrackedIps: Int = InboundRequestLimits.DefaultMaxTrackedIps
+  )
+  object InboundRequestLimits:
+    val DefaultMaxTrackedIps: Int = 4096
+    val default: InboundRequestLimits =
+      InboundRequestLimits(perIpPerSecond = 10, perIpBurst = 30, globalPerSecond = 100, globalBurst = 200)
+
   // Errors that stop the processing of incoming messages on a channel.
   class PacketException(message: String) extends Exception(message) with NoStackTrace
 
@@ -80,7 +98,8 @@ object DiscoveryNetwork:
       // emitting a duplicate. Pass `Discv4SyncResponder.PingDedup` shared with
       // the responder, or a no-op `PingDedup` instance when the fast-path is
       // not in use (asynchronous pipeline becomes the sole Pong source).
-      pingDedup: Discv4SyncResponder.PingDedup = new Discv4SyncResponder.PingDedup
+      pingDedup: Discv4SyncResponder.PingDedup = new Discv4SyncResponder.PingDedup,
+      inboundRequestLimits: InboundRequestLimits = InboundRequestLimits.default
   )(implicit codec: Codec[Payload], sigalg: SigAlg, temporal: Temporal[IO]): IO[DiscoveryNetwork[A]] = IO {
     new DiscoveryNetwork[A] with LazyLogging:
 
@@ -92,6 +111,22 @@ object DiscoveryNetwork:
       private val currentTimeSeconds = temporal.realTime.map(_.toSeconds)
 
       private val maxNeighborsPerPacket = getMaxNeighborsPerPacket
+
+      private val globalRequestLimiter =
+        new Discv4SyncResponder.RateLimiter(inboundRequestLimits.globalPerSecond, inboundRequestLimits.globalBurst)
+
+      // Keyed by IP, not by channel: a server channel is per ip:port, so a host varying its source port would
+      // otherwise get a fresh burst on every port. Shared across all channels of this network.
+      private val ipRequestLimiter =
+        new Discv4SyncResponder.KeyedRateLimiter[InetAddress](
+          inboundRequestLimits.perIpPerSecond,
+          inboundRequestLimits.perIpBurst,
+          inboundRequestLimits.maxTrackedIps
+        )
+
+      /** Take a token from the sender IP's bucket and then from the global one; false means drop the request. */
+      private def admitRequest(from: A): Boolean =
+        ipRequestLimiter.tryAcquire(toNodeAddress(from).ip) && globalRequestLimiter.tryAcquire()
 
       /** Start a fiber that accepts incoming channels and starts a dedicated fiber to handle every channel separtely,
         * processing their messages one by one. This is fair: every remote connection can be throttled independently of
@@ -171,6 +206,15 @@ object DiscoveryNetwork:
           .unNoneTerminate
           .interruptWhen(cancelToken.get.attempt)
           .evalMap {
+            case MessageReceived(receivedPacket: Packet)
+                if Packet.peekType(receivedPacket).exists(Packet.PacketType.isResponse) =>
+              // The peer group replicates every datagram to the server channel as well as to the client channels
+              // open to that address; responses are consumed there. Discard before paying for key recovery.
+              IO.unit
+
+            case MessageReceived(_) if !admitRequest(channel.to) =>
+              IO(logger.debug(s"Dropping discovery request from ${channel.to}: inbound request budget exhausted"))
+
             case MessageReceived(receivedPacket: Packet) =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(receivedPacket).toEither match
@@ -386,8 +430,11 @@ object DiscoveryNetwork:
               channel.nextChannelEvent
                 .timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
             )
-            .collect { case Some(MessageReceived(pkt: Packet)) =>
-              pkt
+            .collect {
+              // Requests from this peer are replicated here too but only matter on the server channel; skip them
+              // before key recovery (task #52).
+              case Some(MessageReceived(pkt: Packet)) if !Packet.peekType(pkt).exists(Packet.PacketType.isRequest) =>
+                pkt
             }
             .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>

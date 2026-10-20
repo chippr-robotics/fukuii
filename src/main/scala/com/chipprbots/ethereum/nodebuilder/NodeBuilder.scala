@@ -54,6 +54,7 @@ import com.chipprbots.ethereum.network.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
+import com.chipprbots.ethereum.network.discovery.DiscoveryRuntime
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -205,6 +206,29 @@ trait PeerDiscoveryManagerBuilder:
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
+  // One runtime for the node's life: the supervised PeerDiscoveryManager reuses it across restarts. Only shut it down if
+  // something actually created it.
+  private lazy val discoveryIoRuntimeCreated = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /** Discovery's own bounded runtime (task #52): discv4 ECDSA must not compete with block import and the sync fetchers
+    * for `IORuntime.global`. Passed explicitly — the implicit `ioRuntime` above stays global for everyone else.
+    */
+  lazy val discoveryIoRuntime: IORuntime =
+    discoveryIoRuntimeCreated.set(true)
+    DiscoveryRuntime(discoveryConfig.computeThreads)
+
+  /** Shut the discovery runtime down after PeerDiscoveryManager has released the discovery service — signalled by the
+    * service resource's own finalizer setting the discovery status back to NotListening. Call after sending `Stop`.
+    */
+  def shutdownDiscoveryIoRuntime(timeout: scala.concurrent.duration.FiniteDuration): Unit =
+    if discoveryIoRuntimeCreated.get then
+      val released = DiscoveryRuntime.shutdownAfterRelease(
+        discoveryIoRuntime,
+        () => nodeStatusHolder.get.discoveryStatus == com.chipprbots.ethereum.utils.ServerStatus.NotListening,
+        timeout
+      )
+      if !released then log.warn(s"Discovery did not release within $timeout; shut its runtime down anyway")
+
   // Typed ref — for in-scope callers and direct Typed wiring.
   lazy val peerDiscoveryManagerTyped: org.apache.pekko.actor.typed.ActorRef[PeerDiscoveryManager.Command] =
     classicSystem.spawn(
@@ -233,9 +257,9 @@ trait PeerDiscoveryManagerBuilder:
                       .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
-            ),
+            )(discoveryIoRuntime),
             randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
-          )
+          )(using discoveryIoRuntime)
         )
         .onFailure[Throwable](SupervisorStrategy.restart),
       "peer-discovery-manager-typed"
