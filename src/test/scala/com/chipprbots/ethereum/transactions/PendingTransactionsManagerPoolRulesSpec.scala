@@ -352,6 +352,93 @@ class PendingTransactionsManagerPoolRulesSpec
     pool.submit(signed(blob(40 * Gwei, 20 * Gwei, 20 * Gwei), k), funded()) shouldBe Right(())
   }
 
+  private def blobTx(nonce: BigInt = 0, maxFee: BigInt = 20 * Gwei, tip: BigInt = 10 * Gwei)(using
+      cfg: BlockchainConfig
+  ): BlobTransaction =
+    BlobTransaction(
+      cfg.chainId.value,
+      nonce,
+      tip,
+      maxFee,
+      GasAmount(21_000),
+      Some(Address(0x42)),
+      0,
+      ByteString.empty,
+      Nil,
+      10 * Gwei,
+      List(BlobVersionedHash(ByteString(Array.fill[Byte](32)(1))))
+    )
+
+  // go-ethereum's subpool reservation (core/txpool/reserver.go, txpool.ErrAlreadyReserved): a sender's txs live in the
+  // blob subpool or the legacy one (every other type), never both.
+  it should "refuse a blob tx from a sender with a pooled non-blob tx: address already reserved" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    val first = signed(dynamic(sepolia, nonce = 0), k)
+    pool.submit(first, funded()) shouldBe Right(())
+    pool.submit(signed(blobTx(nonce = 1), k), funded()).left.map(_.message) shouldBe Left("address already reserved")
+    // a queued (gapped) legacy-pool tx holds the sender too (legacypool reserves on pending or queued)
+    val k2 = newKey()
+    pool.submit(signed(dynamic(sepolia, nonce = 4), k2), funded()) shouldBe Right(())
+    pool.submit(signed(blobTx(nonce = 0), k2), funded()).left.map(_.message) shouldBe Left("address already reserved")
+    pool.pooled.toSet shouldBe Set(first, signed(dynamic(sepolia, nonce = 4), k2))
+  }
+
+  it should "refuse a non-blob tx from a sender with a pooled blob tx, a same-nonce one included" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    val blob = signed(blobTx(nonce = 0), k)
+    pool.submit(blob, funded()) shouldBe Right(())
+    pool.submit(signed(dynamic(sepolia, nonce = 1), k), funded()).left.map(_.message) shouldBe
+      Left("address already reserved")
+    // not a replacement across subpools, whatever its price
+    pool
+      .submit(signed(dynamic(sepolia, nonce = 0, maxFee = 100 * Gwei, tip = 50 * Gwei), k), funded())
+      .left
+      .map(_.message) shouldBe Left("address already reserved")
+    pool.submit(signed(legacy(nonce = 1), k), funded()).left.map(_.message) shouldBe Left("address already reserved")
+    pool.pooled shouldBe Seq(blob)
+  }
+
+  it should "still replace within the sender's subpool under the price-bump rules" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val (legacyKey, blobKey) = (newKey(), newKey())
+    pool.submit(signed(dynamic(sepolia, maxFee = 20 * Gwei, tip = 10 * Gwei), legacyKey), funded()) shouldBe Right(())
+    pool.submit(signed(legacy(price = 30 * Gwei), legacyKey), funded()) shouldBe Right(())
+    pool.submit(signed(blobTx(maxFee = 20 * Gwei, tip = 10 * Gwei), blobKey), funded()) shouldBe Right(())
+    pool.submit(signed(blobTx(maxFee = 20 * Gwei, tip = 10 * Gwei, nonce = 1), blobKey), funded()) shouldBe Right(())
+    pool.submit(signed(blobTx(maxFee = 30 * Gwei, tip = 15 * Gwei), blobKey), funded()).left.map(_.message) shouldBe
+      Left(
+        s"replacement transaction underpriced: new tx blob gas fee cap ${10 * Gwei} <= ${10 * Gwei} queued"
+      )
+  }
+
+  it should "release the reservation once the sender's txs leave the pool" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    val blob = signed(blobTx(nonce = 0), k)
+    pool.submit(blob, funded()) shouldBe Right(())
+    pool.submit(signed(dynamic(sepolia, nonce = 0), k), funded()).left.map(_.message) shouldBe
+      Left("address already reserved")
+    pool.ref ! RemoveTransactions(Seq(blob))
+    eventually(pool.pooled shouldBe empty)
+    val next = signed(dynamic(sepolia, nonce = 0), k)
+    pool.submit(next, funded()) shouldBe Right(())
+    pool.pooled shouldBe Seq(next)
+  }
+
+  it should "not reserve the sender for a nonce-gapped blob tx (blobpool's gapped buffer holds no reservation)" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    pool.submit(signed(blobTx(nonce = 2), k), funded()) shouldBe Right(())
+    pool.submit(signed(dynamic(sepolia, nonce = 0), k), funded()) shouldBe Right(())
+  }
+
   "a local submission on Mordor" should "keep the pool's behaviour from before: no pool-state rules" taggedAs UnitTest in {
     val pool = new Pool(mordor, mordorHead)
     import pool.given
@@ -368,6 +455,15 @@ class PendingTransactionsManagerPoolRulesSpec
     pool.submit(signed(legacy(nonce = 1), k), funded(balance = cost)) shouldBe Right(())
   }
 
+  it should "not apply the subpool reservation on Mordor" taggedAs UnitTest in {
+    val pool = new Pool(mordor, mordorHead)
+    import pool.given
+    val k = newKey()
+    pool.submit(signed(legacy(nonce = 0), k), funded()) shouldBe Right(())
+    TxAdmission.poolStateRulesApply shouldBe false
+    pool.submit(signed(blobTx(nonce = 1), k), funded()) shouldBe Right(())
+  }
+
   // ---------------------------------------------------------------------------------------------------------------
 
   "a peer's txs on ETH" should "meet the overdraft rule against the sender's pooled txs" taggedAs UnitTest in {
@@ -379,6 +475,22 @@ class PendingTransactionsManagerPoolRulesSpec
     val txs = (0 to 1).map(n => SignedTransactionWithSender(signed(dynamic(sepolia, nonce = n), k), sender))
     pool.ref ! ProperSignedTransactions(txs.toSet, PeerId("peer"))
     eventually(pool.pooled shouldBe Seq(txs.head.tx))
+  }
+
+  it should "meet the subpool reservation: a non-blob tx from a sender with a pooled blob tx is dropped" taggedAs UnitTest in {
+    given BlockchainConfig = sepolia
+    val (k, other) = (newKey(), newKey())
+    val (sender, otherSender) = (Address(k), Address(other))
+    val pool = new Pool(sepolia, pragueHead, state = Map(sender -> funded(), otherSender -> funded()))
+    val blob = signed(blobTx(nonce = 0), k)
+    pool.submit(blob, funded()) shouldBe Right(())
+    val reserved = signed(dynamic(sepolia, nonce = 1), k)
+    val control = signed(dynamic(sepolia, nonce = 0), other) // admitted in the same batch, so the batch was decided
+    pool.ref ! ProperSignedTransactions(
+      Set(SignedTransactionWithSender(reserved, sender), SignedTransactionWithSender(control, otherSender)),
+      PeerId("peer")
+    )
+    eventually(pool.pooled.toSet shouldBe Set(blob, control))
   }
 
   "a peer's txs on Mordor" should "not meet it: the pool keeps its behaviour from before" taggedAs UnitTest in {
