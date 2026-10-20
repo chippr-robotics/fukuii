@@ -347,9 +347,12 @@ class AdminService(
     * Like geth, which holds its chain insert lock for each batch, every block is imported under
     * [[com.chipprbots.ethereum.ledger.ChainInsertLock]], so sync and the Engine API cannot execute or commit a block in
     * between. Refused while the node is syncing (SNAP or catching up): the file must continue the local head, and sync
-    * is moving it. Synchronous, as in geth: a long import outlives the HTTP request timeout
-    * (`pekko.http.server.request-timeout`), the import carries on, and its outcome is logged. The offline `import`
-    * command is the better route for large files.
+    * is moving it. Not covered by the lock: head writes outside block execution, such as a consensus client's
+    * `engine_forkchoiceUpdated`. A block whose parent stops being the head before its commit fails the import ("head
+    * moved during import") rather than overwriting the head — detach or stop the consensus client while running
+    * admin_importChain on a live node, or use the offline `import` command. Synchronous, as in geth: a long import
+    * outlives the HTTP request timeout (`pekko.http.server.request-timeout`), the import carries on, and its outcome is
+    * logged. The offline `import` command is the better route for large files.
     */
   def importChain(req: AdminImportChainRequest): ServiceResponse[AdminImportChainResponse] =
     syncStatus().attempt.flatMap {

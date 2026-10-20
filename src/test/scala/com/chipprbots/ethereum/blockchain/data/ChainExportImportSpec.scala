@@ -36,9 +36,12 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.jsonrpc.AdminService
 import com.chipprbots.ethereum.jsonrpc.conformance.RpcCompatNode
+import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
@@ -100,6 +103,9 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   private class ArmedDataSource extends EphemDataSource(Map()):
     /** Fail the next write that stores a block header — the block's commit — before any of it lands. */
     @volatile var failNextCommit = false
+
+    /** The namespaces of the write that was failed. */
+    @volatile var failedWrite: Set[Char] = Set.empty
     override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
       val storesHeader = dataSourceUpdates.exists {
         case DataSourceUpdate(ns, _, upserts) => ns == Namespaces.HeaderNamespace && upserts.nonEmpty
@@ -108,6 +114,10 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       }
       if failNextCommit && storesHeader then
         failNextCommit = false
+        failedWrite = dataSourceUpdates.map {
+          case DataSourceUpdate(ns, _, _)          => ns.head.toChar
+          case DataSourceUpdateOptimized(ns, _, _) => ns.head.toChar
+        }.toSet
         throw new java.io.IOException("simulated crash during the block commit")
       super.update(dataSourceUpdates)
 
@@ -152,6 +162,11 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       storagesInstance.storages.stateStorage
     ).loadGenesisData()
 
+    /** Run once, after the importer's extends-head check and before the block executes and commits: stands in for a
+      * head writer outside the chain insert lock (a consensus client's forkchoiceUpdated).
+      */
+    @volatile var beforeExecution: Option[() => Unit] = None
+
     lazy val importer: ChainImporter =
       val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
       new ChainImporter(
@@ -164,7 +179,17 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
           storagesInstance.storages.evmCodeStorage,
           mining.blockPreparator,
           blockValidation
-        ),
+        ):
+          override def executeAndAdoptBlockIf(
+              block: Block,
+              parentWeight: ChainWeight,
+              beforeCommit: () => Option[BlockExecutionError]
+          )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockData] =
+            val hook = beforeExecution
+            beforeExecution = None
+            hook.foreach(_())
+            super.executeAndAdoptBlockIf(block, parentWeight, beforeCommit)
+        ,
         blockValidation
       )
 
@@ -228,6 +253,8 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val summary = ChainExporter.exportChain(source.blockchainReader, file, 1, 60).toOption.get
     summary.blocks shouldBe 60
     Files.readAllBytes(file) shouldBe fixtureBytes
+    // The temporary file is gone once the export is published: only the target is left.
+    Files.list(file.getParent).toArray.toList shouldBe List(file)
   }
 
   it should "round-trip through a gzipped file into a fresh node: same hashes, roots, receipts and access lists" taggedAs (
@@ -353,6 +380,9 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val file = write(fixtureBytes)
     val failure = node.importStrict(file).left.toOption.get
     failure.reason should include("simulated crash")
+    // The write that failed is the block's single atomic commit: the block record, its receipts and weight, the head
+    // pointer and the block's trie nodes all in one batch — not some earlier write.
+    (node.armed.failedWrite should contain).allOf('h', 'b', 'r', 'w', 's', 'n')
     failure.progress.skipped shouldBe 20
     failure.progress.imported shouldBe 0
     val after = node.keys
@@ -364,6 +394,28 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     // Re-running the import picks up exactly where it stopped.
     node.importStrict(file).map(s => (s.imported, s.skipped)) shouldBe Right((40L, 20L))
     node.head.hash shouldBe fixtureBlocks.last.hash
+  }
+
+  it should "not overwrite a head that moved while the block executed" taggedAs UnitTest in {
+    val node = new Node(basicPruning = true) // archive mode writes trie nodes straight through, by design
+    node.importStrict(write(concat(fixtureBlocks.take(20)))).map(_.imported) shouldBe Right(20L)
+    // A consensus client re-points the head to block 19 after the importer checked that block 21 extends block 20.
+    val block19 = fixtureBlocks(18)
+    node.beforeExecution = Some(() =>
+      node.storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(BlockInfo(block19.hash.value, block19.number.value))
+        .commit()
+    )
+    val keysBefore = node.keys
+    val failure = node.importStrict(write(concat(fixtureBlocks.take(21)))).left.toOption.get
+    failure.reason should include("block #21")
+    failure.reason should include("head moved during import")
+    failure.progress.imported shouldBe 0
+    node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
+    node.head.hash shouldBe block19.hash
+    // Only the moved head pointer changed; block 21's staged state was discarded, not committed.
+    val changed = (node.keys -- keysBefore) ++ (keysBefore -- node.keys)
+    withClue(s"changed=$changed")(changed.forall(_.startsWith("73")) shouldBe true)
   }
 
   it should "refuse a file with a gap" taggedAs UnitTest in {

@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -328,12 +329,26 @@ class ChainImporter(
         )
       else
         val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
-        blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
-          case (List(_), None) => Right(false)
-          case (_, Some(error)) =>
+        // Head writers outside the chain insert lock (a consensus client's forkchoiceUpdated, a miner's or a branch
+        // import's head settle) can move the head while this block executes. Checked again immediately before the
+        // commit: a block whose parent is no longer the head must not be made the head.
+        var headMoved = false
+        val stillOnHead = () =>
+          if blockchainReader.getBestBlockHeader.exists(_.hash == header.parentHash) then None
+          else
+            headMoved = true
+            Some(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
+        blockExecution.executeAndAdoptBlockIf(block, parentWeight, stillOnHead) match
+          case Right(_) => Right(false)
+          case Left(_) if headMoved =>
+            val now = blockchainReader.getBestBlockHeader.map(h => s"#${h.number} (${h.hashAsHexString})")
+            Left(
+              s"block #$number (${header.hashAsHexString}): ${ChainImporter.HeadMoved} (head is now " +
+                s"${now.getOrElse("none")}) — a consensus client or miner is active; stop it or use the offline " +
+                "`import` command"
+            )
+          case Left(error) =>
             Left(s"block #$number (${header.hashAsHexString}) is invalid: ${error.describe}")
-          case (other, None) =>
-            Left(s"block #$number (${header.hashAsHexString}) was not imported (${other.size} blocks executed)")
 
   /** On the local canonical chain with everything a later block or an RPC needs: body and receipts, and — for the head,
     * the only block whose state an import builds on — its state root. A block left half-written by an older version
@@ -393,6 +408,8 @@ object ChainImporter:
         progress.head.map(h => s"; last imported #${h.number}").getOrElse("") + ")"
 
   private val ProgressIntervalNanos: Long = 8_000_000_000L
+
+  private[data] val HeadMoved = "head moved during import"
 
   /** One strict import at a time per JVM: two would race on the head. */
   private val strictImportRunning = new java.util.concurrent.atomic.AtomicBoolean(false)

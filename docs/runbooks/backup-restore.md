@@ -492,7 +492,10 @@ sudo systemctl start fukuii
 Online: `admin_importChain(file)`. Each block is imported under the chain insert lock that every other import path
 (sync, Engine API `newPayload`) also takes, as geth's `admin_importChain` holds its chain lock, so they cannot interleave
 with it. It is refused while the node is syncing (`the node is syncing`): the file must continue the local head, and
-sync is moving it. With a consensus client attached, the client's next `forkchoiceUpdated` decides the head as usual.
+sync is moving it. The lock does not cover head writes outside block execution, such as a consensus client's
+`engine_forkchoiceUpdated`: **detach or stop the consensus client (and any miner) while running `admin_importChain` on
+a live node**, or use the offline command. If the head moves anyway, the import stops at that block with "head moved
+during import" instead of overwriting the head.
 The call is synchronous, as in geth: a file that takes longer than the HTTP request timeout
 (`pekko.http.server.request-timeout`, 20 s by default) times out on the client side while the import carries on; its
 progress and result are in the node log. For anything large, use the offline command.
