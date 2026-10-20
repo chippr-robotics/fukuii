@@ -236,6 +236,9 @@ object TxAdmission:
     /** legacypool ErrAuthorityReserved. */
     case AuthorityReserved extends Rejection("authority already reserved")
 
+    /** txpool ErrAlreadyReserved: the sender is held by the other subpool (blob vs every other type). */
+    case AlreadyReserved extends Rejection("address already reserved")
+
   /** The tip cap a transaction offers: maxPriorityFeePerGas for the fee-market types, gasPrice otherwise. */
   def tipCap(tx: Transaction): BigInt =
     tx match
@@ -550,14 +553,19 @@ object TxAdmission:
   def poolStateRulesApply(using cfg: BlockchainConfig): Boolean = cfg.networkType == NetworkType.ETH
 
   /** The rules go-ethereum's pool applies against what it already holds, in its order (legacypool `add`: already known,
-    * then `validateTx`'s overdraft and `validateAuth`, then the replacement price bump; blobpool `validateTx` for a
-    * blob transaction). The sender's nonce and balance at the head ([[stateRejection]]) are checked before this.
+    * then `validateTx`'s overdraft and `validateAuth`, then the subpool reservation, then the replacement price bump;
+    * blobpool `addLocked`: `validateTx`, then the reservation). The sender's nonce and balance at the head
+    * ([[stateRejection]]) are checked before this.
     *
     * go-ethereum's "pending" list is the sender's executable run: pooled transactions with consecutive nonces from the
     * account's. Only those count toward the overdraft and the delegation limit; a gapped (queued) transaction does not.
     *
-    * Not modelled: go-ethereum's separate subpools reserve an address to one of them ("address already reserved") and
-    * evict by price when full; fukuii has one pool.
+    * go-ethereum keeps blob transactions and every other type in separate subpools, and each subpool reads only its own
+    * transactions; so do the overdraft, delegation and replacement rules here (the sender's transactions of the same
+    * subpool). A sender belongs to one subpool at a time ([[reservationRejection]]), so this narrows nothing except for
+    * a transaction the reservation refuses, which then meets the earlier rules as go-ethereum's subpool sees it.
+    *
+    * Not modelled: go-ethereum's subpools evict by price when full; fukuii has one pool.
     */
   def poolRejection(
       tx: Transaction,
@@ -568,19 +576,48 @@ object TxAdmission:
       priceBump: Int,
       blobPriceBump: Int
   )(using cfg: BlockchainConfig): Option[Rejection] =
-    val run = executableRun(pool.senderTxs, account.nonce.toBigInt)
+    val subpool = pool.copy(senderTxs = pool.senderTxs.filter(isBlob(_) == isBlob(tx)))
+    val run = executableRun(subpool.senderTxs, account.nonce.toBigInt)
     Option
       .when(alreadyKnown)(Rejection.AlreadyKnown)
       .orElse(overdraftRejection(tx, account, run))
       .orElse(Option.when(TxTypeGate.activeTypes(head).contains(Transaction.Type04))(()).flatMap { _ =>
-        delegationRejection(tx, account, pool, run).orElse(authorityRejection(tx, pool))
+        delegationRejection(tx, account, subpool, run).orElse(authorityRejection(tx, pool))
       })
-      .orElse(replacementRejection(tx, pool.senderTxs, priceBump, blobPriceBump))
+      .orElse(reservationRejection(tx, account, pool.senderTxs))
+      .orElse(replacementRejection(tx, subpool.senderTxs, priceBump, blobPriceBump))
 
-  /** The sender's pooled transactions with consecutive nonces from `next`, in nonce order. */
-  private def executableRun(senderTxs: Seq[Transaction], next: BigInt): Seq[Transaction] =
+  private def isBlob(tx: Transaction): Boolean = tx.isInstanceOf[BlobTransaction]
+
+  /** The sender's pooled transactions with consecutive nonces from `next`, in nonce order: go-ethereum's executable
+    * ("pending") run. Its length past `next` is the pool's next nonce for the sender (legacypool `pendingNonces`).
+    */
+  def executableRun(senderTxs: Seq[Transaction], next: BigInt): Seq[Transaction] =
     val byNonce = senderTxs.map(t => t.nonce -> t).toMap
     Iterator.iterate(next)(_ + 1).map(byNonce.get).takeWhile(_.isDefined).flatten.toSeq
+
+  /** go-ethereum's subpool reservation (core/txpool/reserver.go `ReservationHandle.Hold`, txpool.ErrAlreadyReserved): a
+    * sender's transactions live in one subpool, blob or legacy (every other type), and a transaction for the other
+    * subpool is refused until the sender has none left in the holding one. legacypool `add` holds the sender for any
+    * pooled transaction, pending or queued (legacypool.go:676-697); blobpool `addLocked` holds it for its indexed
+    * transactions, which are the sender's consecutive run from the account nonce (a nonce-gapped blob transaction waits
+    * in blobpool's `gapped` buffer, unreserved; blobpool.go:2100-2161).
+    *
+    * Nothing is held here: the rule reads what the pool holds now, so the reservation lifts as soon as the sender's
+    * last transaction of the holding subpool leaves the pool (go-ethereum `Release` on removal).
+    *
+    * Where fukuii's one pool differs: go-ethereum takes a nonce-gapped blob transaction into blobpool's gapped buffer
+    * even while legacypool holds the sender (it fails `Hold` only on promotion and is dropped then); here it is refused
+    * at once, a harmless over-refusal. And a non-blob transaction at the nonce of a pooled gapped blob transaction is
+    * not reserved against, so it takes that blob transaction's place (the local path's `addOrOverride` keeps one
+    * transaction per sender and nonce; a peer's transaction at a pooled nonce is refused before this rule); go-ethereum
+    * keeps both until the gapped one is dropped.
+    */
+  private def reservationRejection(tx: Transaction, account: Account, senderTxs: Seq[Transaction]): Option[Rejection] =
+    val held =
+      if isBlob(tx) then senderTxs.exists(!isBlob(_))
+      else executableRun(senderTxs.filter(isBlob), account.nonce.toBigInt).nonEmpty
+    Option.when(held)(Rejection.AlreadyReserved)
 
   /** `ValidateTransactionWithState` (validation.go:293-315): the balance covers the pending transactions plus this one,
     * or, for a replacement, plus its extra cost over the transaction it replaces.

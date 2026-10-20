@@ -146,6 +146,15 @@ case class JsonRpcController(
       case Left(error)                           => IO.pure(Left(error))
     }
 
+  /** `eth_getTransactionCount`: under `pending`, the pool's next nonce for the address (go-ethereum
+    * `TransactionAPI.GetTransactionCount` asks `GetPoolNonce`; core-geth the same), which only the transaction service
+    * reads; any other block, the account's nonce there.
+    */
+  private def transactionCount(req: GetTransactionCountRequest): ServiceResponse[GetTransactionCountResponse] =
+    req.block match
+      case BlockParam.Pending => ethTxService.poolNonceAtHead(req.address).map(_.map(GetTransactionCountResponse(_)))
+      case _                  => ethUserService.getTransactionCount(req)
+
   // scalastyle:off cyclomatic.complexity
   // scalastyle:off method.length
   private def handleEthRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
@@ -258,7 +267,7 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "eth_getStorageValues", _, _) =>
       handle[GetStorageValuesRequest, GetStorageValuesResponse](ethUserService.getStorageValues, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionCount", _, _) =>
-      handle[GetTransactionCountRequest, GetTransactionCountResponse](ethUserService.getTransactionCount, req)
+      handle[GetTransactionCountRequest, GetTransactionCountResponse](transactionCount, req)
     case req @ JsonRpcRequest(_, "eth_newFilter", _, _) =>
       handle[NewFilterRequest, NewFilterResponse](ethFilterService.newFilter, req)
     case req @ JsonRpcRequest(_, "eth_newBlockFilter", _, _) =>

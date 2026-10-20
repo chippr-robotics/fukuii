@@ -147,7 +147,8 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(1234)
-    // the pool's pending nonce answers on its own (geth GetPoolNonce); the account state is not read
+    // geth GetPoolNonce: the state nonce advanced over the sender's consecutive pooled txs
+    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -157,6 +158,28 @@ class PersonalServiceSpec
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(newTx.hash.value))
     txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe newTx
+
+  it should "fill the state nonce past a nonce-gapped pooled tx, which does not count" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val gapped: SignedTransactionWithSender = wallet.signTx(legacyTx(nonce + 2), None)
+
+    keyStore.unlockAccount
+      .expects(address, passphrase)
+      .returning(Right(wallet))
+
+    expectHead(1234)
+    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
+
+    replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(gapped, 0))))
+
+    res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "fail to send a transaction given a wrong passphrase" taggedAs (UnitTest, RPCTest) in new TestSetup:
     keyStore.unlockAccount

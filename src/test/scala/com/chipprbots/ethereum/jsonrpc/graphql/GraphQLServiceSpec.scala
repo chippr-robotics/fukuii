@@ -30,8 +30,15 @@ import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
+import com.chipprbots.ethereum.domain.LegacyTransaction
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService
 import com.chipprbots.ethereum.jsonrpc.EthFilterService
@@ -95,6 +102,43 @@ class GraphQLServiceSpec
       "{ block { parent { parent { parent { parent { number } } } } } }"
     val (status, _) = service.execute(deep, None, None).unsafeRunSync()
     status shouldBe 400
+
+  // go-ethereum graphql.go Account.TransactionCount: under the pending block number, the pool nonce (GetPoolNonce) —
+  // the state nonce advanced over the sender's consecutive pooled txs, a nonce-gapped one not counted.
+  it should "answer { pending { account { transactionCount } } } with the pool's next nonce" in new GraphQLTestSetup:
+    import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
+    // a head over the empty state: the sender's state nonce is the start nonce, 0
+    val emptyStateBlock: Block = block.copy(header =
+      block.header.copy(stateRoot = TrieRoot(ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)))
+    )
+    blockchainWriter
+      .storeBlock(emptyStateBlock)
+      .and(blockchainWriter.storeChainWeight(emptyStateBlock.header.hash, weight))
+      .commit()
+    blockchainWriter.saveBestKnownBlocks(emptyStateBlock.hash, emptyStateBlock.number.value)
+    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    def pooled(nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        LegacyTransaction(nonce, GasPrice(10), GasAmount(21_000), Some(Address(1)), 0, ByteString.empty),
+        key,
+        None
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+
+    val query = s"""{ pending { account(address: "${Address(key).toString}") { transactionCount } } }"""
+    val result = service.execute(query, None, None).unsafeToFuture()
+    pendingTxProbe.expectMsgPF() { case req: GetPendingTransactionsReq =>
+      req.replyTo ! PendingTransactionsResponse(Seq(pooled(1), pooled(3), pooled(0)))
+    }
+    val (status, body) = result.futureValue
+    status shouldBe 200
+    body.hcursor
+      .downField("data")
+      .downField("pending")
+      .downField("account")
+      .downField("transactionCount")
+      .as[String]
+      .toOption shouldBe Some("0x2")
 
   it should "serve an introspection query" in new GraphQLTestSetup:
     val introspection =

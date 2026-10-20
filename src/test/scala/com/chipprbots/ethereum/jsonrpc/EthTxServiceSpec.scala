@@ -494,6 +494,67 @@ class EthTxServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
     res.futureValue shouldBe Right(OwnPendingTransactionsResponse(Nil))
 
+  // The pool nonce (go-ethereum TxPool.PoolNonce / legacypool pendingNonces): eth_getTransactionCount(addr, "pending"),
+  // GraphQL's pending account and eth_sendTransaction's nonce filling answer from it.
+  /** A head whose state gives every account nonce `stateNonce`. */
+  class PoolNonceSetup(stateNonce: BigInt)(implicit system: ActorSystem) extends TestSetup:
+    private val head: BlockHeader = Fixtures.Blocks.ValidBlock.header
+    private val reader: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[BlockHeader] = Some(head)
+        override def getAccountAtStateRoot(
+            @scala.annotation.unused stateRoot: ByteString,
+            @scala.annotation.unused address: Address
+        ): Option[Account] = Some(Account(nonce = UInt256(stateNonce)))
+    override lazy val ethTxService: EthTxService = new EthTxService(
+      blockchain,
+      reader,
+      mining,
+      pendingTransactionsManager.ref.toTyped[PendingTransactionsManager.Command],
+      getTransactionFromPoolTimeout,
+      storagesInstance.storages.transactionMappingStorage,
+      system.toTyped.scheduler
+    )
+    val sender = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val other = crypto.keyPairFromPrvKey(BigInt(0xb0b))
+    def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    def poolNonce(pool: Seq[PendingTransaction]): Either[JsonRpcError, BigInt] =
+      val res = ethTxService.poolNonceAtHead(Address(sender)).unsafeToFuture()
+      replyPTM(PendingTransactionsResponse(pool))
+      res.futureValue
+
+  "EthTxService.poolNonceAtHead" should "advance the state nonce over the sender's consecutive pooled txs" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new PoolNonceSetup(5):
+    poolNonce(Seq(pending(sender, 6), pending(other, 7), pending(sender, 5))) shouldBe Right(BigInt(7))
+
+  it should "not count a nonce-gapped (queued) tx, nor one below the state nonce" taggedAs (UnitTest, RPCTest) in
+    new PoolNonceSetup(5):
+      poolNonce(Seq(pending(sender, 5), pending(sender, 7), pending(sender, 4))) shouldBe Right(BigInt(6))
+      poolNonce(Seq(pending(sender, 6))) shouldBe Right(BigInt(5))
+
+  it should "be the state nonce when the sender has nothing pooled" taggedAs (UnitTest, RPCTest) in
+    new PoolNonceSetup(5):
+      poolNonce(Seq(pending(other, 5))) shouldBe Right(BigInt(5))
+      poolNonce(Nil) shouldBe Right(BigInt(5))
+
   // eth_sendRawTransaction and blob txs. The execution-apis send-blob-tx vector (an EIP-7594 wrapper) is the tx with
   // its sidecar; its first item, re-prefixed with the type byte, is the same tx without one.
   private lazy val blobTxWithSidecar: Array[Byte] =
