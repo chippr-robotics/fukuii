@@ -168,6 +168,34 @@ object Discv4SyncResponder extends LazyLogging:
     /** Test/diag accessor — current available tokens. Volatile read, may be stale. */
     private[v4] def availableTokens: Int = tokens.get()
 
+  /** One [[RateLimiter]] per key (e.g. remote IP), with at most `maxKeys` buckets kept: the least recently used is
+    * dropped when a new key arrives at the cap. A dropped key starts again from a full burst, which bounds what an
+    * address can gain by cycling through more than `maxKeys` others — the global bucket still applies on top.
+    */
+  class KeyedRateLimiter[K](
+      tokensPerSecond: Int,
+      maxBurst: Int,
+      maxKeys: Int,
+      clock: () => Long = () => System.nanoTime()
+  ):
+    require(maxKeys > 0, "maxKeys must be positive")
+
+    private val buckets = new java.util.LinkedHashMap[K, RateLimiter](16, 0.75f, true):
+      override def removeEldestEntry(eldest: java.util.Map.Entry[K, RateLimiter]): Boolean = size() > maxKeys
+
+    def tryAcquire(key: K): Boolean =
+      val bucket = buckets.synchronized {
+        val existing = buckets.get(key)
+        if existing != null then existing
+        else
+          val fresh = new RateLimiter(tokensPerSecond, maxBurst, clock)
+          buckets.put(key, fresh)
+          fresh
+      }
+      bucket.tryAcquire()
+
+    def trackedKeys: Int = buckets.synchronized(buckets.size())
+
   private def respond(
       sender: InetSocketAddress,
       incomingBits: BitVector,

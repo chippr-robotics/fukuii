@@ -159,48 +159,67 @@ class DiscoveryCpuBudgetSpec extends AnyFlatSpec with Matchers:
 
   behavior.of("DiscoveryNetwork server channel")
 
-  private val remote = InetMultiAddress(new InetSocketAddress(loopback, 31999))
+  private def remoteAt(ip: String, port: Int) = InetMultiAddress(new InetSocketAddress(InetAddress.getByName(ip), port))
+  private val remote = remoteAt("127.0.0.1", 31999)
 
-  /** A server channel that delivers `packets` and then closes. */
-  private class ScriptedChannel(packets: List[Packet], position: Ref[IO, Int])
+  /** A server channel from `from` that delivers `packets` and then closes. */
+  private class ScriptedChannel(from0: InetMultiAddress, packets: List[Packet], position: Ref[IO, Int])
       extends Channel[InetMultiAddress, Packet]:
-    override def from: InetMultiAddress = remote
-    override def to: InetMultiAddress = remote
+    override def from: InetMultiAddress = from0
+    override def to: InetMultiAddress = from0
     override def sendMessage(message: Packet): IO[Unit] = IO.unit
     override def nextChannelEvent: IO[Option[Channel.ChannelEvent[Packet]]] =
       position.getAndUpdate(_ + 1).map(i => packets.lift(i).map(Channel.MessageReceived(_)))
 
   /** Handle one server channel carrying `packets`; return how many key recoveries that cost. */
   private def recoveriesToHandle(packets: List[Packet], limits: DiscoveryNetwork.InboundRequestLimits): Int =
+    recoveriesToHandleChannels(List(remote -> packets), limits)
+
+  /** Handle one server channel per (remote address, packets), one after another; return the key recoveries. */
+  private def recoveriesToHandleChannels(
+      channels: List[(InetMultiAddress, List[Packet])],
+      limits: DiscoveryNetwork.InboundRequestLimits
+  ): Int =
     val recording = new RecordingSigAlg
     given SigAlg = recording
     val (_, localKey) = realSigAlg.newKeyPair
     val local = ENode.Address(loopback, udpPort = 30303, tcpPort = 30303)
+    val toNodeAddress = (a: InetMultiAddress) =>
+      ENode.Address(a.inetSocketAddress.getAddress, a.inetSocketAddress.getPort, a.inetSocketAddress.getPort)
     val program =
       for
-        released <- Deferred[IO, Unit]
-        position <- Ref[IO].of(0)
-        served <- Ref[IO].of(false)
+        releases <- channels.traverse(_ => Deferred[IO, Unit])
+        positions <- channels.traverse(_ => Ref[IO].of(0))
+        next <- Ref[IO].of(0)
         peerGroup = new PeerGroup[InetMultiAddress, Packet]:
           override def processAddress: InetMultiAddress = remote
           override def client(to: InetMultiAddress): Resource[IO, Channel[InetMultiAddress, Packet]] =
             Resource.eval(IO.raiseError(new UnsupportedOperationException))
           override def nextServerEvent: IO[Option[ServerEvent[InetMultiAddress, Packet]]] =
-            served.getAndSet(true).flatMap {
-              case false =>
-                IO.pure(Some(ChannelCreated(new ScriptedChannel(packets, position), released.complete(()).void)))
-              case true => IO.never
+            next.getAndUpdate(_ + 1).flatMap { i =>
+              if i >= channels.size then IO.never
+              else
+                // Hand out the next channel only after the previous one is fully handled, so the order is fixed.
+                (if i == 0 then IO.unit else releases(i - 1).get) >>
+                  IO.pure(
+                    Some(
+                      ChannelCreated(
+                        new ScriptedChannel(channels(i)._1, channels(i)._2, positions(i)),
+                        releases(i).complete(()).void
+                      )
+                    )
+                  )
             }
         network <- DiscoveryNetwork[InetMultiAddress](
           peerGroup,
           localKey,
           local,
-          _ => local,
+          toNodeAddress,
           v4.DiscoveryConfig.default,
           inboundRequestLimits = limits
         )
         token <- network.startHandling(handler(onPing = None))
-        _ <- released.get.timeout(20.seconds)
+        _ <- releases.traverse_(_.get.timeout(20.seconds))
         _ <- token.complete(())
       yield recording.recoveries.get
     program.unsafeRunSync()(using IORuntime.global)
@@ -218,13 +237,13 @@ class DiscoveryCpuBudgetSpec extends AnyFlatSpec with Matchers:
     recoveriesToHandle(List.fill(3)(findNode()), unlimited) shouldBe 3
   }
 
-  it should "drop requests from one address beyond its budget before recovering their keys" taggedAs (
+  it should "drop requests from one IP beyond its budget before recovering their keys" taggedAs (
     UnitTest,
     NetworkTest
   ) in {
     val limits = DiscoveryNetwork.InboundRequestLimits(
-      perAddressPerSecond = 1,
-      perAddressBurst = 5,
+      perIpPerSecond = 1,
+      perIpBurst = 5,
       globalPerSecond = 10_000,
       globalBurst = 10_000
     )
@@ -234,12 +253,64 @@ class DiscoveryCpuBudgetSpec extends AnyFlatSpec with Matchers:
 
   it should "drop requests beyond the global budget" taggedAs (UnitTest, NetworkTest) in {
     val limits = DiscoveryNetwork.InboundRequestLimits(
-      perAddressPerSecond = 10_000,
-      perAddressBurst = 10_000,
+      perIpPerSecond = 10_000,
+      perIpBurst = 10_000,
       globalPerSecond = 1,
       globalBurst = 3
     )
     recoveriesToHandle(List.fill(40)(findNode()), limits) should ((be >= 3).and(be <= 4))
+  }
+
+  it should "share one budget across all source ports of an IP, but not across IPs" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val limits = DiscoveryNetwork.InboundRequestLimits(
+      perIpPerSecond = 1,
+      perIpBurst = 5,
+      globalPerSecond = 10_000,
+      globalBurst = 10_000
+    )
+    // Same host, three source ports: one bucket of 5 (+ at most one refill), not 5 per port.
+    val samePorts = List(31001, 31002, 31003).map(p => remoteAt("127.0.0.1", p) -> List.fill(10)(findNode()))
+    recoveriesToHandleChannels(samePorts, limits) should ((be >= 5).and(be <= 6))
+    // Two hosts: a bucket each.
+    val twoIps = List("127.0.0.1", "127.0.0.2").map(ip => remoteAt(ip, 31001) -> List.fill(10)(findNode()))
+    recoveriesToHandleChannels(twoIps, limits) should ((be >= 10).and(be <= 12))
+  }
+
+  behavior.of("Discv4SyncResponder.KeyedRateLimiter")
+
+  it should "give each key its own bucket and keep at most maxKeys of them" taggedAs (UnitTest, NetworkTest) in {
+    val fixedClock = () => 0L // no refill
+    val limiter = new v4.Discv4SyncResponder.KeyedRateLimiter[String](1, 2, maxKeys = 2, fixedClock)
+    limiter.tryAcquire("a") shouldBe true
+    limiter.tryAcquire("a") shouldBe true
+    limiter.tryAcquire("a") shouldBe false
+    limiter.tryAcquire("b") shouldBe true
+    limiter.trackedKeys shouldBe 2
+    limiter.tryAcquire("c") shouldBe true // evicts "a", the least recently used
+    limiter.trackedKeys shouldBe 2
+    limiter.tryAcquire("b") shouldBe true
+    limiter.tryAcquire("b") shouldBe false
+  }
+
+  behavior.of("DiscoveryRuntime.shutdownAfterRelease")
+
+  it should "wait for the release before shutting the runtime down" taggedAs (UnitTest, NetworkTest) in {
+    val runtime = DiscoveryRuntime(1)
+    val released = new java.util.concurrent.atomic.AtomicBoolean(false)
+    // The release itself runs on the runtime being shut down, as discovery's does.
+    IO.sleep(100.millis).flatMap(_ => IO(released.set(true))).unsafeRunAndForget()(using runtime)
+    DiscoveryRuntime.shutdownAfterRelease(runtime, () => released.get, 10.seconds) shouldBe true
+    released.get shouldBe true
+    a[java.util.concurrent.RejectedExecutionException] should be thrownBy runtime.compute.execute(() => ())
+  }
+
+  it should "give up after the timeout and shut down anyway" taggedAs (UnitTest, NetworkTest) in {
+    val runtime = DiscoveryRuntime(1)
+    DiscoveryRuntime.shutdownAfterRelease(runtime, () => false, 100.millis) shouldBe false
+    a[java.util.concurrent.RejectedExecutionException] should be thrownBy runtime.compute.execute(() => ())
   }
 
   behavior.of("PeerDiscoveryManager random nodes")

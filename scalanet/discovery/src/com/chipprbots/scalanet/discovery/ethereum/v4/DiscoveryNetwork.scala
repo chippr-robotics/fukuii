@@ -66,19 +66,22 @@ object DiscoveryNetwork:
   private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
 
   /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key recovery
-    * and usually a signed reply (task #52). Per remote address: generous for any honest node (go-ethereum sends a peer
-    * a handful of requests a minute) and for hive's bursts; the global bucket caps what many addresses can cost
-    * together. Requests over budget are dropped unanswered, as an unbonded or expired request would be.
+    * and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest node
+    * (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what many
+    * IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would be.
+    * At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
     */
   case class InboundRequestLimits(
-      perAddressPerSecond: Int,
-      perAddressBurst: Int,
+      perIpPerSecond: Int,
+      perIpBurst: Int,
       globalPerSecond: Int,
-      globalBurst: Int
+      globalBurst: Int,
+      maxTrackedIps: Int = InboundRequestLimits.DefaultMaxTrackedIps
   )
   object InboundRequestLimits:
+    val DefaultMaxTrackedIps: Int = 4096
     val default: InboundRequestLimits =
-      InboundRequestLimits(perAddressPerSecond = 10, perAddressBurst = 30, globalPerSecond = 100, globalBurst = 200)
+      InboundRequestLimits(perIpPerSecond = 10, perIpBurst = 30, globalPerSecond = 100, globalBurst = 200)
 
   // Errors that stop the processing of incoming messages on a channel.
   class PacketException(message: String) extends Exception(message) with NoStackTrace
@@ -111,6 +114,19 @@ object DiscoveryNetwork:
 
       private val globalRequestLimiter =
         new Discv4SyncResponder.RateLimiter(inboundRequestLimits.globalPerSecond, inboundRequestLimits.globalBurst)
+
+      // Keyed by IP, not by channel: a server channel is per ip:port, so a host varying its source port would
+      // otherwise get a fresh burst on every port. Shared across all channels of this network.
+      private val ipRequestLimiter =
+        new Discv4SyncResponder.KeyedRateLimiter[InetAddress](
+          inboundRequestLimits.perIpPerSecond,
+          inboundRequestLimits.perIpBurst,
+          inboundRequestLimits.maxTrackedIps
+        )
+
+      /** Take a token from the sender IP's bucket and then from the global one; false means drop the request. */
+      private def admitRequest(from: A): Boolean =
+        ipRequestLimiter.tryAcquire(toNodeAddress(from).ip) && globalRequestLimiter.tryAcquire()
 
       /** Start a fiber that accepts incoming channels and starts a dedicated fiber to handle every channel separtely,
         * processing their messages one by one. This is fair: every remote connection can be throttled independently of
@@ -185,12 +201,6 @@ object DiscoveryNetwork:
         // be dropped as expired anyway, and a later datagram from the same address simply creates a fresh channel. The
         // TimeoutException is swallowed by the caller's `recover`. `unNoneTerminate` ends the stream when the queue is
         // closed (`next` returns None forever after close; looping on it would spin).
-        // One server channel per remote address, so a bucket per channel is a bucket per address.
-        val addressRequestLimiter =
-          new Discv4SyncResponder.RateLimiter(
-            inboundRequestLimits.perAddressPerSecond,
-            inboundRequestLimits.perAddressBurst
-          )
         Stream
           .repeatEval(channel.nextChannelEvent.timeout(config.messageExpiration))
           .unNoneTerminate
@@ -202,7 +212,7 @@ object DiscoveryNetwork:
               // open to that address; responses are consumed there. Discard before paying for key recovery.
               IO.unit
 
-            case MessageReceived(_) if !(addressRequestLimiter.tryAcquire() && globalRequestLimiter.tryAcquire()) =>
+            case MessageReceived(_) if !admitRequest(channel.to) =>
               IO(logger.debug(s"Dropping discovery request from ${channel.to}: inbound request budget exhausted"))
 
             case MessageReceived(receivedPacket: Packet) =>

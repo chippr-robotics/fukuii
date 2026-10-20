@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.IORuntimeConfig
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration.*
 
 /** A small, bounded cats-effect runtime that all peer-discovery work runs on (task #52).
   *
@@ -47,6 +48,24 @@ object DiscoveryRuntime:
       ,
       config = IORuntimeConfig()
     )
+
+  /** Shut `runtime` down once the discovery resource it runs has been released, waiting at most `timeout`.
+    *
+    * The release (feeder cancel, UDP channel close, netty group shutdown) itself runs on this runtime, so shutting the
+    * pools first would cut it short. `released` is polled; on timeout the runtime is shut down anyway — node shutdown
+    * must not hang on discovery. Returns whether the release was observed.
+    */
+  def shutdownAfterRelease(
+      runtime: IORuntime,
+      released: () => Boolean,
+      timeout: FiniteDuration,
+      pollInterval: FiniteDuration = 25.millis
+  ): Boolean =
+    val deadline = timeout.fromNow
+    while !released() && deadline.hasTimeLeft() do Thread.sleep(pollInterval.toMillis)
+    val observed = released()
+    runtime.shutdown()
+    observed
 
   private def daemonThreadFactory(prefix: String): ThreadFactory =
     val counter = new AtomicInteger(0)

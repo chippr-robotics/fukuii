@@ -78,7 +78,7 @@ object PeerDiscoveryManager:
         // GetRandomNodeInfoReq, i.e. one full Kademlia lookup per request with no bound on how many ran at once.
         // IO.defer: a fresh lookup per round, not one captured IO reused forever (PR #1090).
         _ <- RandomNodeFeeder
-          .run(
+          .supervised(
             lookup = IO.defer(service.getRandomNodes).map(_.map(toNode).filter(n => n.id != localNodeId)),
             offer = randomNodes.offer
           )

@@ -9,6 +9,7 @@ import cats.effect.IO
 import cats.effect.Ref
 import cats.effect.std.Queue
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 
 import scala.concurrent.duration.*
 import scala.util.control.NoStackTrace
@@ -117,4 +118,26 @@ class RandomNodeFeederSpec extends AnyFlatSpec with Matchers:
     program.unsafeRunSync() shouldBe 1
     // The first lookup's second offer blocks on the full buffer, so no further lookup can begin.
     lookups.get shouldBe 1
+  }
+
+  it should "log and restart rather than end quietly when the loop itself fails" taggedAs (UnitTest, NetworkTest) in {
+    val offers = new AtomicInteger(0)
+    val lookups = new AtomicInteger(0)
+    val program =
+      for
+        pauses <- Ref[IO].of(0)
+        result <- RandomNodeFeeder
+          .supervised(
+            lookup = IO(lookups.incrementAndGet()).as(Set(node(1))),
+            // The first offer blows up (a bug, not a failed lookup); the loop must come back.
+            offer = _ =>
+              IO(offers.incrementAndGet()).flatMap(n => IO.raiseError(new IllegalStateException("bug")).whenA(n == 1)),
+            sleep = _ => pauses.updateAndGet(_ + 1).flatMap(n => IO.raiseError(Stop()).whenA(n >= 4))
+          )
+          .attempt
+      yield result
+    program.unsafeRunSync().left.toOption.exists(_.isInstanceOf[Stop]) shouldBe true
+    // Restarted after the failure and carried on looking up and offering.
+    lookups.get should be >= 2
+    offers.get should be >= 2
   }

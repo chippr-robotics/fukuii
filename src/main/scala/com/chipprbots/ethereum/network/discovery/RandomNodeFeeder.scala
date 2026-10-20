@@ -91,3 +91,22 @@ object RandomNodeFeeder extends Logger:
       round(delay, seen).flatMap { case (next, nextSeen) => sleep(next) >> loop(next, nextSeen) }
 
     loop(minDelay, Map.empty)
+
+  /** [[run]] that cannot die quietly. The loop is endless and already absorbs failed lookups, so any error reaching
+    * here is a bug (or a failing `offer`); left alone it would end the fiber and the node would silently stop receiving
+    * peer candidates. Log it loudly and start again after `minDelay`. Cancellation (service release) still stops it.
+    */
+  def supervised(
+      lookup: IO[Set[Node]],
+      offer: Node => IO[Unit],
+      minDelay: FiniteDuration = MinDelay,
+      maxDelay: FiniteDuration = MaxDelay,
+      sleep: FiniteDuration => IO[Unit] = IO.sleep
+  ): IO[Unit] =
+    def restartAfter(reason: String): IO[Unit] =
+      IO(log.error(s"Random-node feeder stopped unexpectedly ($reason); restarting in $minDelay")) >>
+        sleep(minDelay) >> supervised(lookup, offer, minDelay, maxDelay, sleep)
+    run(lookup, offer, minDelay, maxDelay, sleep).attempt.flatMap {
+      case Left(ex) => restartAfter(s"failed with $ex")
+      case Right(_) => restartAfter("finished")
+    }
