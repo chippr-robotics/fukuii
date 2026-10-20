@@ -146,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IORuntime.global` with block import. Now: discovery runs on its own pool (`network.discovery.compute-threads`,
   default 1, threads `discovery-compute-N`); one lookup runs at a time, feeding a bounded queue, with the pause
   doubling from 2 s to 64 s while lookups find nothing new; each packet is type-checked before any crypto and
-  recovered keys are cached (4096 entries); inbound requests are limited to 10/s per address (burst 30) and 100/s
+  recovered keys are cached (4096 entries); inbound requests are limited to 10/s per IP (burst 30, shared across source ports) and 100/s
   overall (burst 200); these inbound limits are new behaviour on the public discovery UDP port and are fixed in code
   (`DiscoveryNetwork.InboundRequestLimits.default`), not configurable. Measured on Ephemery: about 286% to about 15% CPU.
 - **`eth_simulateV1` override keys are strict (#1616).** An unknown key in `blockOverrides` or a `stateOverrides` entry
