@@ -12,6 +12,8 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -56,6 +58,7 @@ abstract class BaseNode extends Node:
     fixDatabase()
     repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
+    repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
@@ -384,6 +387,42 @@ abstract class BaseNode extends Node:
           bodyPresent,
           reason
         )
+
+  /** CQ-020-07: re-derive or refetch the SNAP pivot's and genesis's bodies when an earlier version stored them without
+    * their content (see [[StoredBodyRepair]]).
+    */
+  def repairStoredBodies(): Unit =
+    StoredBodyRepair
+      .run(blockchainReader, blockchainWriter, storagesInstance.storages.appStateStorage)
+      .foreach { o =>
+        o.action match
+          case StoredBodyCheck.Action.Write(_, replacing) =>
+            log.warn(
+              "Repaired {} body: block {} {} rewritten with the empty body its header commits to (was: {})",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              replacing.getOrElse("absent")
+            )
+          case StoredBodyCheck.Action.Remove(reason) =>
+            log.warn(
+              "Removed {} body of block {} {}: it contradicts its header ({}). Refetch from peers armed: {}",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              reason,
+              o.refetchArmed
+            )
+          case other =>
+            log.warn(
+              "{} body of block {} {} is missing although the backfill claimed it ({}). Refetch from peers armed: {}",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              other,
+              o.refetchArmed
+            )
+      }
 
   def fixDatabase(): Unit =
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()

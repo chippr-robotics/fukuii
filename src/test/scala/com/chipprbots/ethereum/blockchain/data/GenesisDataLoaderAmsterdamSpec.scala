@@ -21,6 +21,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.domain.Block.BlockEnc
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.ledger.EestBlockchainReplay
@@ -86,7 +87,10 @@ class GenesisDataLoaderAmsterdamSpec extends AnyFlatSpec with Matchers:
     )
 
   /** Loads the fixture's genesis into a fresh chain and returns the header the loader stored. */
-  private def loadedGenesis(t: JValue): Either[String, BlockHeader] =
+  private def loadedGenesis(t: JValue): Either[String, BlockHeader] = loadedGenesisBlock(t).map(_.header)
+
+  /** Loads the fixture's genesis into a fresh chain and returns the whole block (header + body) the loader stored. */
+  private def loadedGenesisBlock(t: JValue): Either[String, Block] =
     val env = new EphemBlockchainTestSetup {}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => quantity(str(v))).getOrElse(BigInt(1))
     EestBlockchainReplay.configFor(env.blockchainConfig, str(t \ "network"), chainId).flatMap { config =>
@@ -100,7 +104,12 @@ class GenesisDataLoaderAmsterdamSpec extends AnyFlatSpec with Matchers:
         .toEither
         .left
         .map(e => s"loader failed: $e")
-        .flatMap(_ => env.blockchainReader.getBlockHeaderByNumber(0).toRight("loader stored no genesis"))
+        .flatMap(_ =>
+          env.blockchainReader
+            .getBlockHeaderByNumber(0)
+            .flatMap(h => env.blockchainReader.getBlockByHash(h.hash))
+            .toRight("loader stored no genesis")
+        )
     }
 
   private lazy val vectors: List[(String, JValue)] =
@@ -123,6 +132,21 @@ class GenesisDataLoaderAmsterdamSpec extends AnyFlatSpec with Matchers:
         // The fixture's own RLP hashes to the same value, so the JSON header is the release's.
         hex(Hex.decode(str(t \ "genesisRLP").stripPrefix("0x")).toBlock.header.hash.value) shouldBe expected
         loadedGenesis(t).map(h => hex(h.hash.value)) shouldBe Right(expected)
+      }
+    }
+  }
+
+  // CQ-020-07: the body was stored as BlockBody(Nil, Nil) — withdrawals None — under a header with a withdrawalsRoot,
+  // so the stored genesis encoded as a 3-item block where the release (and go-ethereum, Erigon) has 4.
+  it should "store the genesis block byte-identical to the vector's genesisRLP, withdrawals list included" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    vectors.foreach { case (name, t) =>
+      withClue(s"$name: ") {
+        val Right(block) = loadedGenesisBlock(t): @unchecked
+        block.body.withdrawals shouldBe Some(Nil)
+        Hex.toHexString(block.toBytes) shouldBe str(t \ "genesisRLP").stripPrefix("0x").toLowerCase
       }
     }
   }
