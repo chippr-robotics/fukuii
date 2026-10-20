@@ -208,7 +208,7 @@ trait PeerDiscoveryManagerBuilder:
 
   // One runtime for the node's life: the supervised PeerDiscoveryManager reuses it across restarts. Only shut it down if
   // something actually created it.
-  private val discoveryIoRuntimeCreated = new java.util.concurrent.atomic.AtomicBoolean(false)
+  private lazy val discoveryIoRuntimeCreated = new java.util.concurrent.atomic.AtomicBoolean(false)
 
   /** Discovery's own bounded runtime (task #52): discv4 ECDSA must not compete with block import and the sync fetchers
     * for `IORuntime.global`. Passed explicitly — the implicit `ioRuntime` above stays global for everyone else.
