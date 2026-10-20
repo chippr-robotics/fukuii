@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.blockchain.data
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 
+import scala.util.Try
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
@@ -38,11 +38,11 @@ object ChainExporter extends Logger:
     else if Files.exists(file) then Left(s"export failed: $file already exists; refusing to overwrite it")
     else
       val target = file.toAbsolutePath
-      Option(target.getParent).foreach(Files.createDirectories(_))
       val tmp = target.resolveSibling(s".${target.getFileName}.${ProcessHandle.current().pid()}.partial")
       log.info(s"Exporting blocks $first..$last (${last - first + 1}) to $target")
       val result =
         try
+          Option(target.getParent).foreach(Files.createDirectories(_))
           val out = ChainFile.wrapOutput(
             target,
             Files.newOutputStream(tmp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
@@ -51,14 +51,30 @@ object ChainExporter extends Logger:
             try writeRange(reader, out, first, last)
             finally out.close()
           written.flatMap { blocks =>
-            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE)
-            Right(ExportSummary(first, last, blocks, Files.size(target)))
+            publish(tmp, target).map(_ => ExportSummary(first, last, blocks, Files.size(target)))
           }
         catch case NonFatal(e) => Left(s"export failed: ${e.getClass.getSimpleName}: ${e.getMessage}")
-      if result.isLeft then Files.deleteIfExists(tmp)
+      Try(Files.deleteIfExists(tmp))
       result.foreach(s => log.info(s"Exported ${s.blocks} blocks ($first..$last, ${s.bytes} bytes) to $target"))
       result.left.foreach(err => log.error(err))
       result
+
+  /** Puts the finished file in place without ever replacing one that appeared meanwhile: a hard link fails if the
+    * target exists (link(2)), atomically. Where links are unsupported, a plain move, which also refuses an existing
+    * target. The temporary file is removed by the caller.
+    */
+  private def publish(tmp: Path, target: Path): Either[String, Unit] =
+    val exists = Left(s"export failed: $target already exists; refusing to overwrite it")
+    try
+      Files.createLink(target, tmp)
+      Right(())
+    catch
+      case _: java.nio.file.FileAlreadyExistsException => exists
+      case _: UnsupportedOperationException | _: java.nio.file.FileSystemException =>
+        try
+          Files.move(tmp, target)
+          Right(())
+        catch case _: java.nio.file.FileAlreadyExistsException => exists
 
   private def writeRange(
       reader: BlockchainReader,

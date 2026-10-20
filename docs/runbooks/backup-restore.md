@@ -446,7 +446,10 @@ reads them (it logs a warning); re-export to get a file other clients can read.
 
 ### Export
 
-Offline, with the node stopped (RocksDB's lock makes the command fail if the node is running on the same datadir):
+Offline, with the node stopped. If a node is still running on the datadir, the command stops at once with
+`Cannot open the database in <datadir>: it is locked. Is a fukuii node running on <datadir>?`. The offline commands
+bind no port and open no connection: no P2P server, discovery, JSON-RPC, Engine API, sync or mining start, only the
+database and an idle actor system.
 
 ```bash
 sudo systemctl stop fukuii
@@ -486,8 +489,13 @@ sudo systemctl stop fukuii
 sudo systemctl start fukuii
 ```
 
-Online: `admin_importChain(file)`. Use it only on a node whose sync is idle (no peers, consensus client detached): it
-writes the head while sync could write it too. Prefer the offline command.
+Online: `admin_importChain(file)`. Each block is imported under the chain insert lock that every other import path
+(sync, Engine API `newPayload`) also takes, as geth's `admin_importChain` holds its chain lock, so they cannot interleave
+with it. It is refused while the node is syncing (`the node is syncing`): the file must continue the local head, and
+sync is moving it. With a consensus client attached, the client's next `forkchoiceUpdated` decides the head as usual.
+The call is synchronous, as in geth: a file that takes longer than the HTTP request timeout
+(`pekko.http.server.request-timeout`, 20 s by default) times out on the client side while the import carries on; its
+progress and result are in the node log. For anything large, use the offline command.
 
 Every block goes through the same checks as a synced block — header and body validation, execution, then gas used,
 receipts root, state root, logs bloom, requests hash and access-list hash. Nothing in the file is trusted. The import:
@@ -498,7 +506,8 @@ receipts root, state root, logs bloom, requests hash and access-list hash. Nothi
 - needs every other block to continue the local head: the first block of the file must be the child of the head (or
   already known), and the file must have no gaps. To restore onto a fresh datadir, export from genesis;
 - stops at the first invalid, undecodable or non-continuing block with an error naming it. Blocks before it stay
-  imported.
+  imported. Each block, with its state, receipts and the head pointer, is written in one atomic commit, so a failed
+  block — or a killed process — leaves nothing half-written, and re-running the same command resumes.
 
 The startup option `-Dfukuii.import-chain-file=<file>` reads the same format but is the **hive / test-fixture loader**:
 it continues past invalid blocks (consensus fixtures deliberately contain them) instead of stopping. Use the `import`

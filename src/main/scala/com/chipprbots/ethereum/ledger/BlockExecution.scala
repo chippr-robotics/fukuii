@@ -60,7 +60,7 @@ class BlockExecution(
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val hash = block.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
-    BlockImportGate.withBlock(hash) {
+    ChainInsertLock.shared(BlockImportGate.withBlock(hash) {
       val staged = blockchain.stageBlockState(block.header.number.value)
       BlockImportGate.alreadyExecuted(hash, staged) match
         case Some(done) => Right(done.asTuple)
@@ -83,7 +83,7 @@ class BlockExecution(
               BlockImportGate.record(hash, executed)
             case Left(_) => staged.discard()
           result
-    }
+    })
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -627,7 +627,7 @@ class BlockExecution(
         // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
         // path already executed and committed (and that is still applied) is not executed again: its recorded
         // result is used and only the block's own records are written.
-        val step: Either[BlockExecutionError, BlockData] = BlockImportGate.withBlock(blockHash) {
+        val step: Either[BlockExecutionError, BlockData] = ChainInsertLock.shared(BlockImportGate.withBlock(blockHash) {
           val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
           val outcome =
             try
@@ -671,7 +671,7 @@ class BlockExecution(
             case Left(executionError) =>
               staged.discard()
               Left(executionError)
-        }
+        })
         step match
           case Right(newBlockData) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
@@ -1138,6 +1138,29 @@ object BlockExecutionError:
 
   final case class MPTError(error: MPTException) extends BlockExecutionError:
     def describe: String = error.toString
+
+/** The chain insert lock: go-ethereum's `chainmu`, for the one writer that is not part of the node's own import paths.
+  *
+  * Every path that executes and commits a block (the Engine API's `newPayload`, regular sync, branch imports) holds it
+  * SHARED for that block, so they keep running concurrently with each other exactly as before. An operator chain import
+  * (`admin_importChain`, the offline `import` command) holds it EXCLUSIVE for each of its blocks — from the check that
+  * the block extends the head to the commit that makes it the head — so no other path can execute or commit a block in
+  * between. Reentrant: the exclusive holder takes the shared lock again inside [[BlockExecution]].
+  *
+  * Always taken outside [[BlockImportGate]], never inside it.
+  */
+object ChainInsertLock:
+  private val lock = new java.util.concurrent.locks.ReentrantReadWriteLock()
+
+  def shared[A](body: => A): A =
+    lock.readLock().lock()
+    try body
+    finally lock.readLock().unlock()
+
+  def exclusive[A](body: => A): A =
+    lock.writeLock().lock()
+    try body
+    finally lock.writeLock().unlock()
 
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).

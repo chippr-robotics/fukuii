@@ -101,6 +101,8 @@ object ChainFile extends Logger:
           Left(FormatError(index, offset, s"gzip stream is corrupt: ${e.getMessage}"))
         case _: EOFException =>
           Left(FormatError(index, offset, "file ends in the middle of a block (truncated)"))
+        case e: java.io.IOException =>
+          Left(FormatError(index, offset, s"read error: ${e.getClass.getSimpleName}: ${e.getMessage}"))
 
     private def detectFormat(): Unit =
       formatKnown = true

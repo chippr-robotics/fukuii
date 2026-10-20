@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -61,39 +62,46 @@ class ChainImporter(
       (0, 0, 0)
     else
       log.info(s"Chain import: reading ${file.length()} bytes from $filePath")
-      val in = ChainFile.openInput(file.toPath)
-      try
-        val reader = new ChainFile.Reader(in, filePath)
+      scala.util.Try(ChainFile.openInput(file.toPath)) match
+        case scala.util.Failure(e) =>
+          log.error(s"Chain import: cannot read $filePath — ${e.getClass.getSimpleName}: ${e.getMessage}")
+          (0, 0, 0)
+        case scala.util.Success(in) => importLenientStream(in, filePath)
 
-        var imported = 0
-        var skipped = 0
-        var failed = 0
-        var first = true
-        var done = false
+  private def importLenientStream(in: java.io.InputStream, filePath: String)(implicit
+      blockchainConfig: BlockchainConfig
+  ): (Int, Int, Int) =
+    try
+      val reader = new ChainFile.Reader(in, filePath)
 
-        while !done do
-          reader.next() match
-            case Left(err) =>
-              log.error(s"Chain import: RLP decode error — ${err.describe}; stopping")
-              done = true
-            case Right(None) =>
-              done = true
-            case Right(Some(block)) =>
-              if first then
-                first = false
-                logGenesisDiagnostics(block)
-              importLenient(block) match
-                case LenientOutcome.Imported(n) =>
-                  imported += n
-                  if imported % 10 == 0 then
-                    log.info(s"Chain import: block ${block.header.number} imported ($imported)")
-                case LenientOutcome.Skipped => skipped += 1
-                case LenientOutcome.Failed  => failed += 1
+      var imported = 0
+      var skipped = 0
+      var failed = 0
+      var first = true
+      var done = false
 
-        log.info(s"Chain import: decoded ${reader.blocksRead} blocks")
-        log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed")
-        (imported, skipped, failed)
-      finally in.close()
+      while !done do
+        reader.next() match
+          case Left(err) =>
+            log.error(s"Chain import: RLP decode error — ${err.describe}; stopping")
+            done = true
+          case Right(None) =>
+            done = true
+          case Right(Some(block)) =>
+            if first then
+              first = false
+              logGenesisDiagnostics(block)
+            importLenient(block) match
+              case LenientOutcome.Imported(n) =>
+                imported += n
+                if imported % 10 == 0 then log.info(s"Chain import: block ${block.header.number} imported ($imported)")
+              case LenientOutcome.Skipped => skipped += 1
+              case LenientOutcome.Failed  => failed += 1
+
+      log.info(s"Chain import: decoded ${reader.blocksRead} blocks")
+      log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed")
+      (imported, skipped, failed)
+    finally in.close()
 
   // Log genesis vs first block's expected parent for debugging genesis mismatches
   private def logGenesisDiagnostics(firstBlock: Block): Unit =
@@ -192,61 +200,63 @@ class ChainImporter(
 
   /** Import a chain file the way go-ethereum's `geth import` / `admin_importChain` does, stopping at the first problem.
     *
-    * Every block goes through the same checks as a synced block — header and body validation, execution, then gas used,
-    * receipts root, state root, logs bloom, EIP-7685 requests hash and EIP-7928 access-list hash — before it is stored
-    * as the new head. Nothing in the file is trusted.
+    * Every block goes through the node's own import path, [[BlockExecution.executeAndValidateBlocks]]: header and body
+    * validation, execution, then gas used, receipts root, state root, logs bloom, EIP-7685 requests hash and EIP-7928
+    * access-list hash. Its state writes are staged and committed in ONE atomic write with the block, its receipts,
+    * weight, access list and the best-block pointer, so a block that fails validation, or a process killed mid-block,
+    * leaves nothing behind; the pruning bookkeeping (`saveBlockState`) runs as for a synced block. Nothing in the file
+    * is trusted.
     *
     *   - A genesis block in the file (number 0) is not imported; it must be this chain's genesis.
-    *   - A block already on the local canonical chain is skipped (geth `missingBlocks`), so re-importing a file, or a
-    *     file overlapping the local chain, is safe.
+    *   - A block already on the local canonical chain, with its body and receipts, is skipped (geth `missingBlocks`),
+    *     so re-importing a file, or a file overlapping the local chain, is safe.
     *   - Every other block must be the child of the local head. A file that does not continue the local chain, skips a
     *     block, or forks from it is refused at that block, with nothing after it imported.
     *   - The first invalid or undecodable block ends the import with an error naming it. Blocks before it stay
     *     imported, as in geth.
     *
-    * Not safe to run while the node is importing blocks from peers or a consensus client: run it offline (the `import`
-    * launcher command) or on a node with sync idle.
+    * Each block is checked and imported under [[ChainInsertLock.exclusive]], which every other block-executing path
+    * takes shared, so a running node's sync or Engine API cannot execute or commit a block in between (geth holds its
+    * chain insert lock the same way).
     */
   def importChainFileStrict(
       filePath: String
   )(implicit blockchainConfig: BlockchainConfig): Either[ChainImporter.ImportFailure, ChainImporter.ImportSummary] =
+    import ChainImporter.*
     val path = java.nio.file.Paths.get(filePath)
+    val progress = new StrictProgress
     if !java.nio.file.Files.isRegularFile(path) then
-      Left(ChainImporter.ImportFailure(s"chain file not found: $filePath", ChainImporter.ImportSummary(0, 0, None)))
-    else if !ChainImporter.strictImportRunning.compareAndSet(false, true) then
-      Left(
-        ChainImporter.ImportFailure("another chain import is already running", ChainImporter.ImportSummary(0, 0, None))
-      )
+      Left(ImportFailure(s"chain file not found: $filePath", progress.summary))
+    else if !strictImportRunning.compareAndSet(false, true) then
+      Left(ImportFailure("another chain import is already running", progress.summary))
     else
       try
         val in = ChainFile.openInput(path)
-        try importStrict(new ChainFile.Reader(in, filePath), filePath)
+        try importStrict(new ChainFile.Reader(in, filePath), filePath, progress)
         finally in.close()
       catch
         case scala.util.control.NonFatal(e) =>
-          Left(
-            ChainImporter.ImportFailure(
+          val failure =
+            ImportFailure(
               s"chain import of $filePath failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
-              ChainImporter.ImportSummary(0, 0, None)
+              progress.summary
             )
-          )
-      finally ChainImporter.strictImportRunning.set(false)
+          log.error(s"Chain import (strict): ${failure.describe}")
+          Left(failure)
+      finally strictImportRunning.set(false)
 
-  private def importStrict(reader: ChainFile.Reader, source: String)(implicit
+  private def importStrict(reader: ChainFile.Reader, source: String, progress: ChainImporter.StrictProgress)(implicit
       blockchainConfig: BlockchainConfig
   ): Either[ChainImporter.ImportFailure, ChainImporter.ImportSummary] =
     import ChainImporter.*
     log.info(s"Chain import (strict): importing $source onto local head #${blockchainReader.getBestBlockNumber}")
     val startNanos = System.nanoTime()
     var reportedNanos = startNanos
-    var imported = 0L
-    var skipped = 0L
-    var lastHead: Option[BlockHeader] = None
     var previousInFile: Option[BlockHeader] = None
     var outcome: Option[Either[ImportFailure, ImportSummary]] = None
 
     def fail(message: String): Unit =
-      val failure = ImportFailure(message, ImportSummary(imported, skipped, lastHead))
+      val failure = ImportFailure(message, progress.summary)
       log.error(s"Chain import (strict): ${failure.describe}")
       outcome = Some(Left(failure))
 
@@ -254,7 +264,7 @@ class ChainImporter(
       reader.next() match
         case Left(err) => fail(err.describe)
         case Right(None) =>
-          outcome = Some(Right(ImportSummary(imported, skipped, lastHead)))
+          outcome = Some(Right(progress.summary))
         case Right(Some(block)) =>
           val header = block.header
           val number = header.number.value
@@ -272,39 +282,21 @@ class ChainImporter(
                     s"the file's genesis ${header.hashAsHexString} is not this chain's genesis " +
                       s"${blockchainReader.genesisHeader.hashAsHexString}: the file is for a different network"
                   )
-              else if blockchainReader.getBlockHeaderByNumber(number).exists(_.hash == header.hash) &&
-                blockchainReader.getBlockBodyByHash(header.hash).isDefined
-              then skipped += 1
               else
-                val best = blockchainReader.getBestBlockHeader
-                if !best.exists(_.hash == header.parentHash) then
-                  val headDesc = best.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
-                  val parentKnown = blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined
-                  val parentHex = ByteStringUtils.hash2string(header.parentHash.value)
-                  fail(
-                    if parentKnown then
-                      s"block #$number (${header.hashAsHexString}) builds on $parentHex, " +
-                        s"which is not the local head $headDesc: the file forks from the local chain"
-                    else
-                      s"block #$number (${header.hashAsHexString}) has parent $parentHex, " +
-                        s"which is not in the local chain (local head $headDesc): the file does not continue " +
-                        "this node's chain — import the blocks before it first"
-                  )
-                else
-                  importBlock(block) match
-                    case Left(error) =>
-                      fail(s"block #$number (${header.hashAsHexString}) is invalid: $error")
-                    case Right((receipts, blockAccessList)) =>
-                      saveImported(block, receipts, blockAccessList)
-                      imported += 1
-                      lastHead = Some(header)
-                      val now = System.nanoTime()
-                      if now - reportedNanos >= ProgressIntervalNanos then
-                        val rate = imported * 1e9 / (now - startNanos)
-                        log.info(
-                          f"Chain import (strict): imported=$imported skipped=$skipped head=#$number ($rate%.1f blocks/s)"
-                        )
-                        reportedNanos = now
+                ChainInsertLock.exclusive(importOneStrict(block)) match
+                  case Left(message) => fail(message)
+                  case Right(true)   => progress.skipped += 1
+                  case Right(false) =>
+                    progress.imported += 1
+                    progress.head = Some(header)
+                    val now = System.nanoTime()
+                    if now - reportedNanos >= ProgressIntervalNanos then
+                      val rate = progress.imported * 1e9 / (now - startNanos)
+                      log.info(
+                        f"Chain import (strict): imported=${progress.imported} skipped=${progress.skipped} " +
+                          f"head=#$number ($rate%.1f blocks/s)"
+                      )
+                      reportedNanos = now
 
     outcome.get.foreach { s =>
       log.info(
@@ -313,6 +305,46 @@ class ChainImporter(
       )
     }
     outcome.get
+
+  /** One block of a strict import, under the chain insert lock. `Right(true)`: already present, skipped;
+    * `Right(false)`: imported as the new head; `Left`: why it was refused.
+    */
+  private def importOneStrict(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[String, Boolean] =
+    val header = block.header
+    val number = header.number.value
+    if isPresent(header) then Right(true)
+    else
+      val best = blockchainReader.getBestBlockHeader
+      if !best.exists(_.hash == header.parentHash) then
+        val headDesc = best.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
+        val parentHex = ByteStringUtils.hash2string(header.parentHash.value)
+        Left(
+          if blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined then
+            s"block #$number (${header.hashAsHexString}) builds on $parentHex, which is not the local head " +
+              s"$headDesc: the file forks from the local chain"
+          else
+            s"block #$number (${header.hashAsHexString}) has parent $parentHex, which is not in the local chain " +
+              s"(local head $headDesc): the file does not continue this node's chain — import the blocks before it first"
+        )
+      else
+        val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
+        blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
+          case (List(_), None) => Right(false)
+          case (_, Some(error)) =>
+            Left(s"block #$number (${header.hashAsHexString}) is invalid: ${error.describe}")
+          case (other, None) =>
+            Left(s"block #$number (${header.hashAsHexString}) was not imported (${other.size} blocks executed)")
+
+  /** On the local canonical chain with everything a later block or an RPC needs: body and receipts, and — for the head,
+    * the only block whose state an import builds on — its state root. A block left half-written by an older version
+    * does not count as present.
+    */
+  private def isPresent(header: BlockHeader): Boolean =
+    blockchainReader.getBlockHeaderByNumber(header.number.value).exists(_.hash == header.hash) &&
+      blockchainReader.getBlockBodyByHash(header.hash).isDefined &&
+      blockchainReader.getReceiptsByHash(header.hash).isDefined &&
+      (blockchainReader.getBestBlockNumber != header.number.value ||
+        blockchainReader.getMptNodeByHash(header.stateRoot.value).isDefined)
 
   private def importBlock(
       block: Block
@@ -344,6 +376,13 @@ class ChainImporter(
         }
 
 object ChainImporter:
+
+  /** Counters a strict import keeps outside its `try`, so a failure part-way reports what was really imported. */
+  final private[data] class StrictProgress:
+    var imported = 0L
+    var skipped = 0L
+    var head: Option[BlockHeader] = None
+    def summary: ImportSummary = ImportSummary(imported, skipped, head)
 
   /** What a strict import did before it finished or stopped. `head` is the last block it imported. */
   final case class ImportSummary(imported: Long, skipped: Long, head: Option[BlockHeader])

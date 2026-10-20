@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.nodebuilder
 import java.nio.file.Paths
 
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.data.ChainExporter
 import com.chipprbots.ethereum.utils.InstanceConfig
@@ -16,9 +17,11 @@ import com.chipprbots.ethereum.utils.Logger
   *   fukuii <network> import <file> [<file> ...]         # stops at the first invalid block
   * }}}
   *
-  * The files are [[com.chipprbots.ethereum.blockchain.data.ChainFile]]s: interchangeable with geth's. No networking,
-  * RPC, Engine API or sync is started; the database is opened, used and closed. RocksDB's lock makes the commands fail
-  * fast if the node is still running on the same datadir.
+  * The files are [[com.chipprbots.ethereum.blockchain.data.ChainFile]]s: interchangeable with geth's. What runs: the
+  * database, genesis loading, validation and execution, and the actor system a [[StdNode]] builds on construction (with
+  * the idle blockchain-host, peer-manager-facade and pending-transaction actors it spawns). What does not: no port is
+  * bound and no connection made — no P2P server, discovery, peer dialling, JSON-RPC, Engine API, sync or mining. If a
+  * node is running on the same datadir, RocksDB's lock makes the command fail at once, saying so.
   */
 object ChainTool extends Logger:
 
@@ -80,9 +83,29 @@ object ChainTool extends Logger:
     2
 
   private def withNode(instanceConfig: InstanceConfig)(f: ChainToolNode => Int): Int =
-    val node = new ChainToolNode(instanceConfig)
-    try f(node)
-    finally node.shutdown()
+    val datadir = Try(instanceConfig.config.getString("datadir")).getOrElse("<datadir>")
+    var node: Option[ChainToolNode] = None
+    try
+      node = Some(new ChainToolNode(instanceConfig))
+      f(node.get)
+    catch
+      case NonFatal(e) if causes(e).exists(isLockError) =>
+        log.error(
+          s"Cannot open the database in $datadir: it is locked. Is a fukuii node running on $datadir? " +
+            "Stop it first; export and import need the node stopped."
+        )
+        1
+      case NonFatal(e) =>
+        log.error(s"Chain tool failed: ${e.getClass.getSimpleName}: ${e.getMessage}", e)
+        1
+    finally node.foreach(_.shutdown())
+
+  private def causes(e: Throwable): Iterator[Throwable] =
+    Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(16)
+
+  /** RocksDB's "While lock file: <dir>/LOCK: Resource temporarily unavailable" — another process holds the database. */
+  private[nodebuilder] def isLockError(t: Throwable): Boolean =
+    t.isInstanceOf[org.rocksdb.RocksDBException] && Option(t.getMessage).exists(_.contains("lock file"))
 
   /** A [[StdNode]] whose services are never started: only storage, genesis loading, validation and execution are
     * touched. Shutdown closes the database and nothing else, so the JVM hook cannot start (and then stop) the

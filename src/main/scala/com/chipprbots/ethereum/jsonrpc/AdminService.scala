@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.data.ChainExporter
 import com.chipprbots.ethereum.blockchain.data.ChainImporter
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
@@ -119,7 +120,9 @@ class AdminService(
     peerManagerTimeout: FiniteDuration,
     datadir: String,
     blockedIPRegistry: BlockedIPRegistry,
-    chainImporter: ChainImporter
+    chainImporter: ChainImporter,
+    // The node's sync status, read before admin_importChain: SyncController's GetStatus.
+    syncStatus: () => IO[SyncProtocol.Status]
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -337,18 +340,41 @@ class AdminService(
         .map(_ => AdminExportChainResponse(true))
   }
 
-  /** go-ethereum `admin_importChain(file)`: imports a [[ChainFile]] through full block validation and execution,
-    * skipping blocks already present and stopping with an error at the first block that is invalid or does not continue
-    * the local chain. Meant for a node whose sync is idle (no peers, consensus client detached); the offline `import`
-    * launcher command is the safer route.
+  /** go-ethereum `admin_importChain(file)`: imports a [[ChainFile]] through the node's own block import path (full
+    * validation and execution, atomic per-block commit), skipping blocks already present and stopping with an error at
+    * the first block that is invalid or does not continue the local chain.
+    *
+    * Like geth, which holds its chain insert lock for each batch, every block is imported under
+    * [[com.chipprbots.ethereum.ledger.ChainInsertLock]], so sync and the Engine API cannot execute or commit a block in
+    * between. Refused while the node is syncing (SNAP or catching up): the file must continue the local head, and sync
+    * is moving it. Synchronous, as in geth: a long import outlives the HTTP request timeout
+    * (`pekko.http.server.request-timeout`), the import carries on, and its outcome is logged. The offline `import`
+    * command is the better route for large files.
     */
-  def importChain(req: AdminImportChainRequest): ServiceResponse[AdminImportChainResponse] = IO.blocking {
-    chainImporter
-      .importChainFileStrict(req.file)(using blockchainConfig)
-      .left
-      .map(failure => JsonRpcError.LogicError(failure.describe))
-      .map(_ => AdminImportChainResponse(true))
-  }
+  def importChain(req: AdminImportChainRequest): ServiceResponse[AdminImportChainResponse] =
+    syncStatus().attempt.flatMap {
+      case Right(SyncProtocol.Status.Syncing(_, blocks, _)) =>
+        IO.pure(
+          Left(
+            JsonRpcError.LogicError(
+              s"admin_importChain refused: the node is syncing (block ${blocks.current} of ${blocks.target}); " +
+                "import once sync is done, or stop the node and use the offline `import` command"
+            )
+          )
+        )
+      case Left(e) =>
+        IO.pure(
+          Left(JsonRpcError.LogicError(s"admin_importChain refused: could not read the sync status (${e.getMessage})"))
+        )
+      case Right(_) =>
+        IO.blocking {
+          chainImporter
+            .importChainFileStrict(req.file)(using blockchainConfig)
+            .left
+            .map(failure => JsonRpcError.LogicError(failure.describe))
+            .map(_ => AdminImportChainResponse(true))
+        }
+    }
 
   def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] = IO {
     val added = blockedIPRegistry.block(req.ip)

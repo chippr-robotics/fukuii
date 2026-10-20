@@ -94,7 +94,8 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       5.seconds,
       "/tmp",
       new BlockedIPRegistry(Set.empty),
-      null // chainImporter — admin_importChain is covered by ChainExportImportSpec
+      null, // chainImporter — admin_importChain is covered by ChainExportImportSpec
+      () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing)
     )
     val result: Either[JsonRpcError, AdminNodeInfoResponse] =
       svc.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
@@ -171,5 +172,6 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       5.seconds,
       "/tmp/test-datadir",
       registry,
-      null // chainImporter — admin_importChain is covered by ChainExportImportSpec
+      null, // chainImporter — admin_importChain is covered by ChainExportImportSpec
+      () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing)
     )

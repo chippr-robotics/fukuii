@@ -824,7 +824,7 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder =>
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder =>
 
   lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
 
@@ -836,7 +836,17 @@ trait AdminServiceBuilder:
     instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
     instanceConfig.config.getString("datadir"),
     blockedIPRegistry,
-    chainImporter
+    chainImporter,
+    () =>
+      import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
+      syncController.askForTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status](replyTo =>
+        SyncController.WrappedSyncProtocol(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.GetStatus(replyTo))
+      )(
+        timeout = org.apache.pekko.util.Timeout(
+          instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
+        ),
+        scheduler = classicSystem.toTyped.scheduler
+      )
   )(classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:

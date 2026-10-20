@@ -16,6 +16,8 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.TestInstanceConfigProvider
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.pow.validators.MockedPowBlockHeaderValidator
@@ -24,12 +26,22 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.consensus.validators.Validators
+import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.AdminService
 import com.chipprbots.ethereum.jsonrpc.conformance.RpcCompatNode
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.network.BlockedIPRegistry
+import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -84,9 +96,54 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       if header.difficulty == Difficulty.Zero then PoSBlockHeaderValidator.validateHeaderOnly(header)
       else MockedPowBlockHeaderValidator.validateHeaderOnly(header)
 
-  /** A fresh in-memory node holding only the fixture's genesis. */
-  private class Node extends RpcCompatNode:
+  /** An in-memory data source that can be told to fail its next write, as a process killed mid-commit would. */
+  private class ArmedDataSource extends EphemDataSource(Map()):
+    /** Fail the next write that stores a block header — the block's commit — before any of it lands. */
+    @volatile var failNextCommit = false
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      val storesHeader = dataSourceUpdates.exists {
+        case DataSourceUpdate(ns, _, upserts) => ns == Namespaces.HeaderNamespace && upserts.nonEmpty
+        case DataSourceUpdateOptimized(ns, _, upserts) =>
+          ns.toIndexedSeq == Namespaces.HeaderNamespace && upserts.nonEmpty
+      }
+      if failNextCommit && storesHeader then
+        failNextCommit = false
+        throw new java.io.IOException("simulated crash during the block commit")
+      super.update(dataSourceUpdates)
+
+  private trait ArmedDataSourceComponent extends EphemDataSourceComponent:
+    override val dataSource: EphemDataSource = new ArmedDataSource
+
+  private trait BasicPruningConfig extends PruningConfigBuilder with TestInstanceConfigProvider:
+    override val pruningMode: PruningMode = BasicPruning(64)
+
+  /** A fresh in-memory node holding only the fixture's genesis; archive pruning unless `basicPruning`. */
+  private class Node(basicPruning: Boolean = false) extends RpcCompatNode:
     override lazy val validators: Validators = ValidatorsExecutor(MockedSealHeaderValidator)
+
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      if basicPruning then
+        new ArmedDataSourceComponent
+          with LocalPruningConfigBuilder
+          with BasicPruningConfig
+          with Storages.DefaultStorages
+          with TestInstanceConfigProvider
+      else
+        new ArmedDataSourceComponent
+          with LocalPruningConfigBuilder
+          with Storages.DefaultStorages
+          with TestInstanceConfigProvider
+
+    def armed: ArmedDataSource = storagesInstance.dataSource.asInstanceOf[ArmedDataSource]
+
+    /** Every key in the database, hex-encoded (ByteBuffers print as their position, not their bytes), except contract
+      * code: execution writes new bytecode straight to the code store, keyed by its hash, on every import path (sync
+      * and the Engine API as well) — an unreferenced code entry is inert, unlike a trie node with a reference count.
+      */
+    def keys: Set[String] = armed.storage.keySet
+      .filterNot(_.get(0) == Namespaces.CodeNamespace.head)
+      .map(b => org.bouncycastle.util.encoders.Hex.toHexString(b.array()))
 
     new GenesisDataLoader(
       blockchainReader,
@@ -264,6 +321,51 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     node.head.hash shouldBe fixtureBlocks(19).hash
   }
 
+  it should "leave nothing behind for a block that fails after execution (basic pruning)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val node = new Node(basicPruning = true)
+    node.storagesInstance.pruningMode shouldBe BasicPruning(64)
+    node.importStrict(write(concat(fixtureBlocks.take(20)))).map(_.imported) shouldBe Right(20L)
+    val before = node.keys
+    val bad = fixtureBlocks(20)
+    val tampered = bad.copy(header = bad.header.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x11)))))
+    val failure = node.importStrict(write(concat(fixtureBlocks.take(20) :+ tampered))).left.toOption.get
+    failure.reason should include("block #21")
+    // Not a trie node, reference count, receipt or block record more than before the attempt.
+    val after = node.keys
+    withClue(s"added=${after -- before} removed=${before -- after}") {
+      after shouldBe before
+    }
+    node.blockchainReader.getBlockHeaderByHash(tampered.hash) shouldBe None
+    node.head.hash shouldBe fixtureBlocks(19).hash
+    // And the valid block 21 then imports cleanly on top: no skewed reference counts in the way.
+    node.importStrict(write(fixtureBytes)).map(_.imported) shouldBe Right(40L)
+    node.head.hash shouldBe fixtureBlocks.last.hash
+  }
+
+  it should "leave nothing half-written when the commit itself fails, and resume afterwards" taggedAs UnitTest in {
+    val node = new Node(basicPruning = true)
+    node.importStrict(write(concat(fixtureBlocks.take(20)))).map(_.imported) shouldBe Right(20L)
+    val before = node.keys
+    node.armed.failNextCommit = true
+    val file = write(fixtureBytes)
+    val failure = node.importStrict(file).left.toOption.get
+    failure.reason should include("simulated crash")
+    failure.progress.skipped shouldBe 20
+    failure.progress.imported shouldBe 0
+    val after = node.keys
+    withClue(s"added=${after -- before} removed=${before -- after}") {
+      after shouldBe before
+    }
+    node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
+    node.head.hash shouldBe fixtureBlocks(19).hash
+    // Re-running the import picks up exactly where it stopped.
+    node.importStrict(file).map(s => (s.imported, s.skipped)) shouldBe Right((40L, 20L))
+    node.head.hash shouldBe fixtureBlocks.last.hash
+  }
+
   it should "refuse a file with a gap" taggedAs UnitTest in {
     val node = new Node
     val failure = node.importStrict(write(concat(fixtureBlocks.patch(4, Nil, 1)))).left.toOption.get
@@ -301,6 +403,7 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   }
 
   "admin_exportChain / admin_importChain" should "round-trip through the RPC service" taggedAs (UnitTest, RPCTest) in {
+    var syncStatus: SyncProtocol.Status = SyncProtocol.Status.NotSyncing
     val target = new Node
     def service(node: Node) = new AdminService(
       null,
@@ -310,7 +413,8 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       scala.concurrent.duration.DurationInt(5).seconds,
       "/tmp",
       new BlockedIPRegistry(Set.empty),
-      node.importer
+      node.importer,
+      () => cats.effect.IO.pure(syncStatus)
     )(using system.scheduler)
     val file = tempDir().resolve("rpc.rlp")
     import cats.effect.unsafe.implicits.global
@@ -318,6 +422,13 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       .exportChain(AdminService.AdminExportChainRequest(file.toString, Some(1), None))
       .unsafeRunSync() shouldBe Right(AdminService.AdminExportChainResponse(true))
     Files.readAllBytes(file) shouldBe fixtureBytes
+    // Refused while the node syncs: the file must continue a head that sync is moving.
+    syncStatus = SyncProtocol.Status.Syncing(0, SyncProtocol.Status.Progress(10, 100), None)
+    val refused = service(target).importChain(AdminService.AdminImportChainRequest(file.toString)).unsafeRunSync()
+    refused.left.toOption.get.message should include("the node is syncing")
+    target.head.number.value shouldBe 0
+
+    syncStatus = SyncProtocol.Status.SyncDone
     service(target)
       .importChain(AdminService.AdminImportChainRequest(file.toString))
       .unsafeRunSync() shouldBe Right(AdminService.AdminImportChainResponse(true))
