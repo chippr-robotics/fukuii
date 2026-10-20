@@ -14,8 +14,9 @@ This runbook covers backup strategies, restoration procedures, and disaster reco
 2. [What to Backup](#what-to-backup)
 3. [Backup Procedures](#backup-procedures)
 4. [Restore Procedures](#restore-procedures)
-5. [Disaster Recovery](#disaster-recovery)
-6. [Testing and Validation](#testing-and-validation)
+5. [Portable Chain Snapshots (Export / Import)](#portable-chain-snapshots-export--import)
+6. [Disaster Recovery](#disaster-recovery)
+7. [Testing and Validation](#testing-and-validation)
 
 ## Backup Strategies
 
@@ -426,6 +427,90 @@ tar -xzf fukuii-essentials-DATE.tar.gz \
   --strip-components=1 \
   -C ~/.fukuii/etc/ \
   fukuii-essentials-DATE/keystore/
+```
+
+## Portable Chain Snapshots (Export / Import)
+
+A database backup only restores into the same client. A **chain file** moves blocks between nodes and between
+clients: fukuii writes and reads go-ethereum's chain format, so a file from `geth export` / geth's
+`admin_exportChain` imports into fukuii, and a fukuii export imports into geth (`geth import`).
+
+**Format.** A chain file is RLP-encoded blocks back to back, with no header and no framing: each block is its
+consensus encoding (header, transactions, ommers, and withdrawals from Shanghai on), so its hash is unchanged. A file
+name ending in `.gz` is gzipped on export and gunzipped on import. A geth `export` file may carry a fifth item per
+Amsterdam block (the EIP-7928 access list); fukuii accepts it and recomputes the list from execution anyway. fukuii
+writes the four-item form, which every geth import path reads.
+
+Files written by fukuii's `admin_exportChain` before the chain-format fix (CQ-020-01) put a 4-byte length before every block. The importer still
+reads them (it logs a warning); re-export to get a file other clients can read.
+
+### Export
+
+Offline, with the node stopped (RocksDB's lock makes the command fail if the node is running on the same datadir):
+
+```bash
+sudo systemctl stop fukuii
+./bin/fukuii etc export /backups/etc-0-20000000.rlp.gz 0 20000000   # first and last are optional
+sudo systemctl start fukuii
+```
+
+Online, from a running node (geth-compatible `admin_exportChain(file, first?, last?)`; the `admin` API must be
+enabled):
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' localhost:8546 \
+  --data '{"jsonrpc":"2.0","id":1,"method":"admin_exportChain","params":["/backups/range.rlp.gz",135090,147609]}'
+```
+
+Both write the canonical blocks `first..last` (default: genesis to head) and:
+
+- **fail on the first missing block** — `export failed on #N: not found (...)` — instead of writing a file with a gap.
+  A block past the local head, or below a SNAP-sync pivot where the node holds no bodies, is missing. A SNAP-synced
+  node can only export from the point where it holds full blocks;
+- fail if a stored body does not match its header (`the stored body does not match its header`), because no client
+  could import such a block;
+- fail if the chain reorganises under the export (`chain reorg during export`);
+- never overwrite an existing file, and write through a temporary file that is renamed into place only when the whole
+  range is written, so the target either does not exist or is complete.
+
+Block numbers on the command line are decimal or `0x` hex. Check the range you ask for — `0x24039` is 147513, not
+147609.
+
+### Import
+
+Offline, with the node stopped, onto the datadir that should receive the blocks:
+
+```bash
+sudo systemctl stop fukuii
+./bin/fukuii etc import /backups/etc-0-20000000.rlp.gz     # several files may follow, imported in order
+sudo systemctl start fukuii
+```
+
+Online: `admin_importChain(file)`. Use it only on a node whose sync is idle (no peers, consensus client detached): it
+writes the head while sync could write it too. Prefer the offline command.
+
+Every block goes through the same checks as a synced block — header and body validation, execution, then gas used,
+receipts root, state root, logs bloom, requests hash and access-list hash. Nothing in the file is trusted. The import:
+
+- skips a genesis block in the file after checking it is this network's genesis (a file for another network fails);
+- skips blocks already on the local canonical chain, so re-running an import, or importing a file that overlaps the
+  local chain, is safe;
+- needs every other block to continue the local head: the first block of the file must be the child of the head (or
+  already known), and the file must have no gaps. To restore onto a fresh datadir, export from genesis;
+- stops at the first invalid, undecodable or non-continuing block with an error naming it. Blocks before it stay
+  imported.
+
+The startup option `-Dfukuii.import-chain-file=<file>` reads the same format but is the **hive / test-fixture loader**:
+it continues past invalid blocks (consensus fixtures deliberately contain them) instead of stopping. Use the `import`
+command or `admin_importChain` for operator restores.
+
+### Verify
+
+After an import, compare the head with a trusted source:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' localhost:8546 \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":["latest",false]}' | jq '.result | {number, hash, stateRoot}'
 ```
 
 ## Disaster Recovery

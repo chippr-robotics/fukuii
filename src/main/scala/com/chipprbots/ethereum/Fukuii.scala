@@ -10,6 +10,7 @@ import org.rocksdb
 
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.nodebuilder.ChainTool
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
@@ -27,13 +28,17 @@ object Fukuii extends Logger:
     Files.createDirectories(tmpDir)
     System.setProperty("java.io.tmpdir", tmpDir.toString)
 
+    // `export` / `import`: offline chain file tools (ChainTool). They run against the node's database with the node
+    // stopped, so they must not truncate the node's logs or take over the terminal.
+    val chainToolCommand = args.headOption.filter(ChainTool.isCommand)
+
     // Truncate log files so each process starts with a clean log (no stale output from prior runs).
     // Placed here — after tmpdir is set, before any log.info() call — so the truncation notice
     // is the first line in each file and nothing from the current process is missed.
-    truncateLogs()
+    if chainToolCommand.isEmpty then truncateLogs()
 
     // Check for --tui flag to enable console UI (disabled by default)
-    val enableConsoleUI = args.contains("--tui")
+    val enableConsoleUI = args.contains("--tui") && chainToolCommand.isEmpty
 
     if !enableConsoleUI then
       log.info("TUI disabled (use --tui flag to enable)")
@@ -93,6 +98,13 @@ object Fukuii extends Logger:
         tui.updateConnectionStatus("Starting node...")
         tui.render()
       else printBanner()
+
+    if chainToolCommand.isDefined then
+      // Test mode wipes the database on start; never let that meet a chain export or import.
+      if Config.testmode then
+        log.error("export / import are not available in test mode")
+        sys.exit(2)
+      sys.exit(ChainTool.run(args.toIndexedSeq, Config))
 
     val node =
       if Config.testmode then

@@ -1,10 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import java.io.BufferedOutputStream
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.net.URI
-import java.nio.ByteBuffer
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.typed
@@ -19,8 +16,8 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
 import org.slf4j.LoggerFactory
 
-import com.chipprbots.ethereum.domain.Block.BlockDec
-import com.chipprbots.ethereum.domain.Block.BlockEnc
+import com.chipprbots.ethereum.blockchain.data.ChainExporter
+import com.chipprbots.ethereum.blockchain.data.ChainImporter
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
@@ -121,7 +118,8 @@ class AdminService(
     blockchainConfig: BlockchainConfig,
     peerManagerTimeout: FiniteDuration,
     datadir: String,
-    blockedIPRegistry: BlockedIPRegistry
+    blockedIPRegistry: BlockedIPRegistry,
+    chainImporter: ChainImporter
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -321,57 +319,35 @@ class AdminService(
   def getDatadir(@unused req: AdminDatadirRequest): ServiceResponse[AdminDatadirResponse] =
     IO.pure(Right(AdminDatadirResponse(datadir)))
 
+  /** go-ethereum `admin_exportChain(file, first?, last?)` (eth/api_admin.go): writes the canonical blocks `first..last`
+    * (default: genesis to head) to `file` as a [[ChainFile]] — bare concatenated RLP blocks, gzipped when the name ends
+    * in `.gz`. Refuses to overwrite an existing file, and fails with the first missing block number rather than writing
+    * a file with a gap. The file appears only once complete.
+    */
   def exportChain(req: AdminExportChainRequest): ServiceResponse[AdminExportChainResponse] = IO.blocking {
-    try
+    if req.first.isEmpty && req.last.isDefined then
+      Left(JsonRpcError.InvalidParams("last cannot be specified without first"))
+    else
       val first = req.first.getOrElse(BigInt(0))
       val last = req.last.getOrElse(blockchainReader.getBestBlockNumber)
-      val out = new BufferedOutputStream(new FileOutputStream(req.file))
-      try
-        var i = first
-        while i <= last do
-          blockchainReader.getBlockHeaderByNumber(i).foreach { header =>
-            blockchainReader.getBlockByHash(header.hash).foreach { block =>
-              val bytes: Array[Byte] = block.toBytes
-              val lenBuf = ByteBuffer.allocate(4).putInt(bytes.length).array()
-              out.write(lenBuf)
-              out.write(bytes)
-            }
-          }
-          i += 1
-        out.flush()
-        log.info(s"Exported blocks $first to $last to ${req.file}")
-        Right(AdminExportChainResponse(true))
-      finally out.close()
-    catch
-      case ex: Exception =>
-        log.error(s"Failed to export chain to ${req.file}", ex)
-        Right(AdminExportChainResponse(false))
+      ChainExporter
+        .exportChain(blockchainReader, Paths.get(req.file), first, last)
+        .left
+        .map(JsonRpcError.LogicError(_))
+        .map(_ => AdminExportChainResponse(true))
   }
 
+  /** go-ethereum `admin_importChain(file)`: imports a [[ChainFile]] through full block validation and execution,
+    * skipping blocks already present and stopping with an error at the first block that is invalid or does not continue
+    * the local chain. Meant for a node whose sync is idle (no peers, consensus client detached); the offline `import`
+    * launcher command is the safer route.
+    */
   def importChain(req: AdminImportChainRequest): ServiceResponse[AdminImportChainResponse] = IO.blocking {
-    try
-      val in = new FileInputStream(req.file)
-      try
-        var count = 0
-        val lenBuf = new Array[Byte](4)
-        while in.read(lenBuf) == 4 do
-          val len = ByteBuffer.wrap(lenBuf).getInt
-          val blockBytes = new Array[Byte](len)
-          var read = 0
-          while read < len do
-            val n = in.read(blockBytes, read, len - read)
-            if n == -1 then throw new java.io.EOFException("Unexpected end of file")
-            read += n
-          val block = blockBytes.toBlock
-          log.debug(s"Imported block ${block.header.number}")
-          count += 1
-        log.info(s"Imported $count blocks from ${req.file}")
-        Right(AdminImportChainResponse(true))
-      finally in.close()
-    catch
-      case ex: Exception =>
-        log.error(s"Failed to import chain from ${req.file}", ex)
-        Right(AdminImportChainResponse(false))
+    chainImporter
+      .importChainFileStrict(req.file)(using blockchainConfig)
+      .left
+      .map(failure => JsonRpcError.LogicError(failure.describe))
+      .map(_ => AdminImportChainResponse(true))
   }
 
   def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] = IO {

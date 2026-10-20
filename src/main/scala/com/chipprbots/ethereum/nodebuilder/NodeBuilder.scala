@@ -824,7 +824,7 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder =>
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder =>
 
   lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
 
@@ -835,7 +835,8 @@ trait AdminServiceBuilder:
     blockchainConfig,
     instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
     instanceConfig.config.getString("datadir"),
-    blockedIPRegistry
+    blockedIPRegistry,
+    chainImporter
   )(classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:
