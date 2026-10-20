@@ -14,7 +14,8 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Direct coverage for EIP-4895 withdrawal-validation additions to `StdBlockValidator`:
-  *   - `validateWithdrawalsPresence` — reject body-only withdrawals with a pre-Shanghai header.
+  *   - `validateWithdrawalsPresence` — reject body-only withdrawals with a pre-Shanghai header, and a missing
+  *     withdrawals field under a Shanghai header.
   *   - `validateWithdrawalsRoot` — the body's withdrawals must hash to the header's declared root.
   *
   * Note: the EL does NOT enforce strict ordering of withdrawal `index` values. Indices are CL-side metadata; the EL
@@ -62,6 +63,17 @@ class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers with Pa
     val body = preShanghaiBody.copy(withdrawals = Some(Seq(withdrawal(0))))
     val result = StdBlockValidator.validateHeaderAndBody(preShanghaiHeader, body)
     result shouldBe Left(BlockWithdrawalsOrphanedError)
+  }
+
+  // go-ethereum ValidateBody: "missing withdrawals in block body". An absent list hashes like an empty one, so before
+  // this rule a 3-item body under the empty root passed (CQ-020-07: such a body, once stored, was re-fetched forever).
+  it should "reject a Shanghai header paired with no withdrawals field (a 3-item body), even under the EmptyMpt root" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val headerWithEmptyRoot = preShanghaiHeader.copy(extraFields = HefPostShanghai(BigInt(0), BlockHeader.EmptyMpt))
+    StdBlockValidator.validateHeaderAndBody(headerWithEmptyRoot, preShanghaiBody) shouldBe
+      Left(BlockWithdrawalsMissingError)
   }
 
   it should "accept a Shanghai block whose body declares explicitly-empty withdrawals matching the EmptyMpt root" taggedAs (

@@ -200,12 +200,17 @@ object StdBlockValidator extends BlockValidator:
     * even though no withdrawals are carried. A pre-Shanghai block must RLP-encode as a 3-item list, which means
     * `body.withdrawals = None`.
     *
-    * The reverse case (Shanghai header + no withdrawals field in body) is caught during RLP decoding in
-    * `Block.BlockDec.toBlock`.
+    * The reverse case (Shanghai header + no withdrawals field in body) is rejected too. `Block.BlockDec.toBlock`
+    * catches it for whole blocks, but a body that never went through that decoder (a `BlockBodies` reply, a body built
+    * locally) reaches this check with the field absent.
     */
   private def validateWithdrawalsPresence(block: Block): Either[BlockError, BlockValid] =
     (block.header.withdrawalsRoot, block.body.withdrawals) match
       case (None, Some(_)) => Left(BlockWithdrawalsOrphanedError)
+      // go-ethereum core/block_validator.go ValidateBody: "missing withdrawals in block body". A body built or decoded
+      // without the field (a 3-item body) passes validateWithdrawalsRoot under the empty root, because an absent list
+      // hashes like an empty one, but it is not the block the header names (CQ-020-07).
+      case (Some(_), None) => Left(BlockWithdrawalsMissingError)
       case _               => Right(BlockValid)
 
   /** EIP-4895: if the header declares a withdrawalsRoot, it must equal the trie root computed from
@@ -268,6 +273,9 @@ object StdBlockValidator extends BlockValidator:
 
   /** EIP-4895: body carries withdrawals but the header did not reserve a withdrawalsRoot (pre-Shanghai header). */
   case object BlockWithdrawalsOrphanedError extends BlockError
+
+  /** EIP-4895: header carries a withdrawalsRoot (Shanghai+) but the body has no withdrawals field. */
+  case object BlockWithdrawalsMissingError extends BlockError
 
   case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
 

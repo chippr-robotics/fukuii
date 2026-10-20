@@ -857,7 +857,11 @@ class ChainDownloader private (
       matchOrderedSubsequence[BlockBody](
         requestedHashes,
         bodies,
-        (header, body) => StdBlockValidator.validateHeaderAndBody(header, body).isRight
+        // The shape check is the same one bodyStoredFor applies on every scan: a body it would reject must never be
+        // stored, or the backfill re-fetches it forever (e.g. a 3-item body under a Shanghai header with the empty
+        // withdrawalsRoot, which the root check alone accepts because an absent list hashes like an empty one).
+        (header, body) =>
+          BlockBody.shapeMismatch(header, body).isEmpty && StdBlockValidator.validateHeaderAndBody(header, body).isRight
       )
     if matched.nonEmpty then
       matched
