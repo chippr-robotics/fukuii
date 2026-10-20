@@ -7042,7 +7042,10 @@ writes the four-item form, which every geth import path reads.</p>
 <p>Files written by fukuii's <code>admin_exportChain</code> before the chain-format fix (CQ-020-01) put a 4-byte length before every block. The importer still
 reads them (it logs a warning); re-export to get a file other clients can read.</p>
 <h3 id="export">Export<a class="headerlink" href="#export" title="Permanent link">&para;</a></h3>
-<p>Offline, with the node stopped (RocksDB's lock makes the command fail if the node is running on the same datadir):</p>
+<p>Offline, with the node stopped. If a node is still running on the datadir, the command stops at once with
+<code>Cannot open the database in &lt;datadir&gt;: it is locked. Is a fukuii node running on &lt;datadir&gt;?</code>. The offline commands
+bind no port and open no connection: no P2P server, discovery, JSON-RPC, Engine API, sync or mining start, only the
+database and an idle actor system.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span>stop<span class="w"> </span>fukuii
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>./bin/fukuii<span class="w"> </span>etc<span class="w"> </span><span class="nb">export</span><span class="w"> </span>/backups/etc-0-20000000.rlp.gz<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">20000000</span><span class="w">   </span><span class="c1"># first and last are optional</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span>start<span class="w"> </span>fukuii
@@ -7071,8 +7074,13 @@ enabled):</p>
 </span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>./bin/fukuii<span class="w"> </span>etc<span class="w"> </span>import<span class="w"> </span>/backups/etc-0-20000000.rlp.gz<span class="w">     </span><span class="c1"># several files may follow, imported in order</span>
 </span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span>start<span class="w"> </span>fukuii
 </span></code></pre></div>
-<p>Online: <code>admin_importChain(file)</code>. Use it only on a node whose sync is idle (no peers, consensus client detached): it
-writes the head while sync could write it too. Prefer the offline command.</p>
+<p>Online: <code>admin_importChain(file)</code>. Each block is imported under the chain insert lock that every other import path
+(sync, Engine API <code>newPayload</code>) also takes, as geth's <code>admin_importChain</code> holds its chain lock, so they cannot interleave
+with it. It is refused while the node is syncing (<code>the node is syncing</code>): the file must continue the local head, and
+sync is moving it. With a consensus client attached, the client's next <code>forkchoiceUpdated</code> decides the head as usual.
+The call is synchronous, as in geth: a file that takes longer than the HTTP request timeout
+(<code>pekko.http.server.request-timeout</code>, 20 s by default) times out on the client side while the import carries on; its
+progress and result are in the node log. For anything large, use the offline command.</p>
 <p>Every block goes through the same checks as a synced block — header and body validation, execution, then gas used,
 receipts root, state root, logs bloom, requests hash and access-list hash. Nothing in the file is trusted. The import:</p>
 <ul>
@@ -7082,7 +7090,8 @@ receipts root, state root, logs bloom, requests hash and access-list hash. Nothi
 <li>needs every other block to continue the local head: the first block of the file must be the child of the head (or
   already known), and the file must have no gaps. To restore onto a fresh datadir, export from genesis;</li>
 <li>stops at the first invalid, undecodable or non-continuing block with an error naming it. Blocks before it stay
-  imported.</li>
+  imported. Each block, with its state, receipts and the head pointer, is written in one atomic commit, so a failed
+  block — or a killed process — leaves nothing half-written, and re-running the same command resumes.</li>
 </ul>
 <p>The startup option <code>-Dfukuii.import-chain-file=&lt;file&gt;</code> reads the same format but is the <strong>hive / test-fixture loader</strong>:
 it continues past invalid blocks (consensus fixtures deliberately contain them) instead of stopping. Use the <code>import</code>
