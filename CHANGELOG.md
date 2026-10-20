@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **JDK 25 is the baseline, and the JVM must run with the C2 `ReduceAllocationMerges` workaround (#1642, #1643).
+  Breaking for hand-written launchers.** HotSpot C2 on JDK 23 and later miscompiles `ReduceAllocationMerges`
+  (JDK-8385993, fixed in JDK 28; JDK-8393049 reports silently wrong field values), a consensus-divergence risk for a
+  node. Every JVM fukuii runs in now carries `-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges`: sbt
+  (`.jvmopts`), forked test JVMs, `bin/fukuii` (`application.ini`), and every Docker image (`JDK_JAVA_OPTIONS`). The
+  node, the multi-instance runtime and the checkpoint exporter **refuse to start (exit status 78)** on JDK 23+
+  without the flag, unless you set `-Dfukuii.allow-c2-reduce-allocation-merges=true` or
+  `FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true` (the node then starts and logs the same message as an ERROR). A
+  hand-written `java -jar` line or systemd unit must add the two flags. Existing containers are protected only after
+  you pull the rebuilt images. The Debian package now depends on JDK 25. See docs/runbooks/known-issues.md Issue 16
+  and ADR INF-007 (supersedes INF-001's JDK 21 minimum).
 - **Blob parameters are per chain (EIP-7840 `blobSchedule`, EIP-7892 BPO forks, #1637).** The blob target, max and
   base-fee update fraction of each fork now come from the chain config's `blob-schedule` instead of constants fixed to
   the mainnet/Sepolia schedule. Every consumer reads it: excess blob gas and blob base fee, the per-block blob limit in
@@ -65,6 +76,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delivery that contradicts its announcement. Each delivery is checked against its sender's own announcement. Fixes
   hive devp2p `TestBlobTxWithoutSidecar` / `TestBlobTxWithMismatchedSidecar`, which go-ethereum #35869 rewrote to
   have three peers announce the same blob transaction.
+- **Behaviour changes to check before upgrading (#1640, #1639).** A fresh ETC, Mordor or Gorgoroth node now answers
+  `eth_gasPrice` / `eth_maxPriorityFeePerGas` with 1 gwei (was 1 wei). `eth_pendingTransactions` now returns full
+  objects only for executable (not nonce-gapped) pool transactions sent from keystore accounts, as geth does.
+- **Internal.** The SNAP controller is split into modules (spec 016, #1401, no behaviour change intended); sbt is
+  1.13.0 (#1631); Scala 3 import syntax is enforced by a scalafix rule and a CI grep (#1632).
+
+### Added
+- **`eth_getHeaderByNumber` and `eth_getHeaderByHash` (#1616).** New RPCs returning the `eth_getBlockByNumber` header
+  object without size, transactions, uncles, withdrawals and totalDifficulty; by-number resolves the same tags,
+  not found returns `null`.
+- **Typed transactions on every RPC interface (#1629, slices S0-S5).** Legacy, EIP-2930, EIP-1559, EIP-4844 and
+  EIP-7702 transactions are handled with geth's rules, error strings and defaults on JSON-RPC and GraphQL:
+  - S1 (#1633): one shared `TxArgs` model with strict, geth-style JSON decoding (`-32602` with geth's hexutil text).
+    Type inference follows geth's `ToTransaction`; one deliberate deviation: `gasPrice` together with an access list
+    or blob fields and no explicit `type` is rejected instead of silently building a legacy transaction.
+  - S0 (#1634): admission rules are #1641's (see the transaction submission entry above). Delta: pending typed
+    transactions report the fee cap as `gasPrice`; on ETC and Mordor, peer transactions of a type not active at the
+    head (0x2/0x4 before Olympia) are no longer pooled or gossiped.
+  - S2 (#1635): `eth_sendTransaction` and `personal_sendTransaction` build all five types; new
+    `eth_signTransaction`, `personal_signTransaction` (`{raw, tx}`) and `eth_fillTransaction`. Defaults follow geth's
+    `setDefaults`; gas is estimated rather than fixed at 90000; blob sidecars are built and checked with KZG.
+  - S3 (#1636): `eth_call`, `eth_estimateGas`, `eth_createAccessList`, `debug_traceCall(Many)`,
+    `trace_call(Many)` and GraphQL call/estimateGas share one message builder and accept state and block overrides.
+    `eth_createAccessList` now iterates the access-list tracer to a fixed point. RPC gas cap
+    `fukuii.network.rpc.gas-cap` (default 50M, as geth).
+  - S4 (#1638): `eth_simulateV1` calls use the strict decoder and geth's type selection and validation error codes.
+  - S5 (#1639): the GraphQL `Transaction` matches geth's schema (`yParity`, effective-price fields, blob fields);
+    `eth_pendingTransactions` returns executable pool transactions from keystore accounts, as geth does.
+- **Gas price oracle (#1640).** `eth_gasPrice`, `eth_maxPriorityFeePerGas`, GraphQL and the tip default of
+  send/sign/fill use a port of geth's `eth/gasprice` oracle, replacing the fixed `minTip` (1 wei on ETH, so locally
+  sent mainnet transactions could sit unincluded). Config under `fukuii.network.rpc.gpo` with geth's defaults
+  (`blocks` 20, `percentile` 60, `max-price` 500 gwei, `ignore-price` 2 wei, `max-header-history` and
+  `max-block-history` 1024, the last two now read by `eth_feeHistory`). Start price: 1 mwei on ETH-family chains,
+  1 gwei on ETC, Mordor and Gorgoroth (core-geth); override with `gpo-default-price` in the chain config or
+  `fukuii.network.rpc.gpo.default-price`. A fresh ETC node now answers 1 gwei instead of 1 wei.
+- **Ephemery testnet support (#1628).** `fukuii ephemery` is a known network.
+  `scripts/ephemery/fetch-genesis.sh` downloads the current `ephemery-N` genesis and generates the chain config,
+  genesis (timestamp re-encoded to hex, `mixhash` renamed `mixHash`), a Lighthouse `testnet/` directory and a
+  `current` symlink; it fails on genesis features fukuii cannot represent. See docs/runbooks/ephemery.md.
+- **Ephemery load generator (#1649, tooling).** `scripts/ephemery/load-gen.py` sends typed (0x0-0x4, including
+  blob and EIP-7702) transactions through fukuii's own RPC plus `eth_fillTransaction`, `eth_estimateGas`,
+  `eth_createAccessList` and `eth_call` probes, for import differentials. Nothing in the build depends on it.
+
+### Fixed
 - **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
   the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
   (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
@@ -84,6 +139,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-TTY/`dumb` terminals fall back to plain logging; the terminal mode and screen are restored on exit;
   configuration errors are printed before the TUI suppresses console logging; sync speed/ETA is measured from
   the first block observed rather than from genesis.
+- **discv4 saturated the CPU and starved block import and the Engine API (#1648).** On an Ephemery node (4 cores)
+  fukuii sat at about 286% CPU with 3 peers, Lighthouse's engine upcheck timed out and Engine requests queued for
+  over a minute (`JWT expired`); thread dumps showed discv4 ECDSA signing and recovery. Causes: an unbounded full
+  Kademlia lookup per peer request, 2-3 signature recoveries per datagram, and discovery sharing
+  `IORuntime.global` with block import. Now: discovery runs on its own pool (`network.discovery.compute-threads`,
+  default 1, threads `discovery-compute-N`); one lookup runs at a time, feeding a bounded queue, with the pause
+  doubling from 2 s to 64 s while lookups find nothing new; each packet is type-checked before any crypto and
+  recovered keys are cached (4096 entries); inbound requests are limited to 10/s per IP (burst 30, shared across source ports) and 100/s
+  overall (burst 200); these inbound limits are new behaviour on the public discovery UDP port and are fixed in code
+  (`DiscoveryNetwork.InboundRequestLimits.default`), not configurable. Measured on Ephemery: about 286% to about 15% CPU.
+- **`eth_simulateV1` override keys are strict (#1616).** An unknown key in `blockOverrides` or a `stateOverrides` entry
+  returns `-32602`; the `difficulty` block override works pre-merge and returns `-32602` after.
+- **`eth_feeHistory` returned 0 for every reward percentile (#1605).** It now computes them as geth does: transactions
+  sorted by effective tip, first whose cumulative gas reaches `gasUsed * p / 100`.
+- **Amsterdam rpc-compat vectors (#1606).** `eth_getBlockByNumber` emits `blockAccessListHash` and `slotNumber` for
+  Amsterdam headers; `testing_buildBlockV1` / `testing_commitBlockV1` handle PayloadAttributesV4 and the block access
+  list; `eth_simulateV1` builds Amsterdam block identity (slot number, EIP-7928 access list, header `gasUsed` =
+  max(execution, state)). Engine API block building and block import are unchanged.
+- **PoW rewind abandoned the canonical prefix (#1592, #1594). ETC/Mordor.** A branch-resolution rewind re-presented
+  the node's own canonical blocks, which took the reorg path and had their state abandoned; under basic pruning
+  live nodes were deleted 64 blocks later and a later import failed with `MissingAccountNodeException`. The importer
+  now drops the already-canonical prefix (as core-geth does) and `settleHead` never abandons a block it just
+  re-executed with the same hash.
+- **SNAP resume checkpoint lost completed ranges (#1597, #1599).** Ranges finished before a restart dropped out of
+  later checkpoints (16 cursors became 15), so the resume was rejected and the record and its task files destroyed.
+  Completed ranges are now kept, a recoverable keyset is filled (WARN lists the filled ranges), and a layout mismatch
+  holds the record instead of deleting it.
+- **Accounts-complete recovery paths were not persisted (#1603, #1604).** The controller asked the coordinator for
+  the storage and codeHashes task-file paths and handled the replies off the actor thread (Pekko Typed threw
+  `UnsupportedOperationException`); the codeHashes path was never saved, so a restart during the storage phase with
+  bytecode incomplete restarted SNAP from the accounts phase. The coordinator now tells the controller both paths
+  on completion.
 
 ## [0.9.0] - 2026-10-05
 
