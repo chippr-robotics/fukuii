@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-20
+
 ### Changed
 - **JDK 25 is the baseline, and the JVM must run with the C2 `ReduceAllocationMerges` workaround (#1642, #1643).
   Breaking for hand-written launchers.** HotSpot C2 on JDK 23 and later miscompiles `ReduceAllocationMerges`
@@ -83,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.13.0 (#1631); Scala 3 import syntax is enforced by a scalafix rule and a CI grep (#1632).
 
 ### Added
+- **Portable chain files: export and import in go-ethereum's format (#1651).** `fukuii <network> export <file>
+  [first [last]]` and `fukuii <network> import <file>` run offline against a stopped node's datadir, and
+  `admin_exportChain` / `admin_importChain` use the same code. The file is geth's format (consensus-encoded blocks
+  back to back, gzipped when the name ends in `.gz`), so files move between fukuii and geth in either direction.
+  Import executes and validates every block and adopts each one as it is imported; a block that fails stops the
+  import with the chain left at the last good block. Before, `admin_exportChain` wrote a 4-byte length before every
+  block, which no other client reads; the importer still accepts those files with a warning. Checked on Ephemery:
+  a 12,520-block file written by Erigon imports, and re-exports byte-identical, with hashes, state roots and receipt
+  roots matching the live chain. See docs/runbooks/backup-restore.md, "Portable Chain Snapshots".
 - **`eth_getHeaderByNumber` and `eth_getHeaderByHash` (#1616).** New RPCs returning the `eth_getBlockByNumber` header
   object without size, transactions, uncles, withdrawals and totalDifficulty; by-number resolves the same tags,
   not found returns `null`.
@@ -120,6 +131,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `eth_createAccessList` and `eth_call` probes, for import differentials. Nothing in the build depends on it.
 
 ### Fixed
+- **SNAP pivot block stored without its body (#1652). Every chain.** SNAP finalization stored the pivot block with
+  an empty body to record its number, overwriting the body `newPayload` had stored; backfill never refetched it. On
+  Ephemery the pivot served `withdrawals: null` under a non-empty `withdrawalsRoot`, over RPC and to peers. An ETC
+  pivot with transactions or ommers was affected the same way. Finalization now writes only the header and number
+  mapping; a body that does not match its header is refetched; a Shanghai genesis is stored with its empty
+  withdrawals list (matching geth's genesis RLP); a one-time startup repair removes a bad pivot body and rewrites a
+  bad genesis body; and a block whose header commits to withdrawals but whose body has none is rejected, as geth does.
+- **Checkpoint archives carried an estimated total difficulty (#1653). ETC/Mordor.** A node that SNAP-synced stores
+  a peer-interpolated total difficulty for its pivot, and `checkpoint export` copied it into the archive (on Mordor,
+  off by 114,098,267). A node that imported such an archive kept the error in the total difficulty it advertises to
+  peers and reports over RPC. Fork choice was not affected. The exporter now sums block difficulties from genesis and
+  refuses (writing nothing) when a header below the export block is missing or the chain does not reach this
+  network's genesis; `--allow-estimated-td` exports the stored value with a warning.
 - **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
   the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
   (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
@@ -171,6 +195,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UnsupportedOperationException`); the codeHashes path was never saved, so a restart during the storage phase with
   bytecode incomplete restarted SNAP from the accounts phase. The coordinator now tells the controller both paths
   on completion.
+
+### Known issues
+- **ETC/Mordor checkpoint archives from SNAP-synced nodes.** With the default ETC config, header backfill below the
+  SNAP pivot runs after state sync, so `checkpoint export` refuses until it has reached genesis. Do not publish
+  archives made with `--allow-estimated-td` from a SNAP-synced node, or archives made before 0.10.0.
+- **Total difficulty rewritten on restart (#1654, ETC/Mordor, since 0.7.0).** A calibration 30 s after regular sync
+  starts overwrites the head's stored total difficulty with an estimate, leaving a step in the stored values that can
+  bias fork choice between branches forking below that block. Fix in progress.
+- **`sbt formatCheck` fails (#1656).** Scalafix violations accumulated because CI does not run scalafix; tooling only,
+  no effect on the node.
 
 ## [0.9.0] - 2026-10-05
 
