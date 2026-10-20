@@ -332,6 +332,25 @@ class JsonRpcControllerEthLegacyTransactionSpec
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveStringResult("0x7b")
 
+  // go-ethereum TransactionAPI.GetTransactionCount: "pending" is the pool nonce (GetPoolNonce), not a block's state.
+  it should "eth_getTransactionCount under pending answer the pool's next nonce" taggedAs (UnitTest, RPCTest) in
+    new JsonRpcControllerFixture:
+      val mockEthUserService: EthUserService = mock[EthUserService]
+      val mockEthTxService: EthTxService = mock[EthTxService]
+      override val jsonRpcController: JsonRpcController =
+        super.jsonRpcController.copy(ethUserService = mockEthUserService, ethTxService = mockEthTxService)
+
+      val address = Address("0x7B9Bc474667Db2fFE5b08d000F1Acc285B2Ae47D")
+      (mockEthTxService.poolNonceAtHead).expects(address).returning(IO.pure(Right(BigInt(124))))
+
+      val request: JsonRpcRequest = newJsonRpcRequest(
+        "eth_getTransactionCount",
+        List(JString(address.toString), JString("pending"))
+      )
+
+      val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+      response should haveStringResult("0x7c")
+
   it should "eth_getBlockTransactionCountByNumber " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     // MIGRATION: Scala 3 scalamock macro drops Option[ForkChoiceManager] type arg — use concrete stub
     val mockEthBlocksService: EthBlocksService = new EthBlocksService(null, null, null, null):

@@ -63,6 +63,13 @@ object EthTxService:
     */
   case class LocalAdmission(sender: Address, account: Account, head: BlockHeader)
 
+  /** go-ethereum `TxPool.PoolNonce` over `pooled`: `stateNonce` advanced over `sender`'s pooled transactions with
+    * consecutive nonces from it ([[TxAdmission.executableRun]]).
+    */
+  def nextPoolNonce(pooled: Seq[PendingTransaction], sender: Address, stateNonce: BigInt): BigInt =
+    val senderTxs = pooled.collect { case pt if pt.stx.senderAddress == sender => pt.stx.tx.tx }
+    stateNonce + TxAdmission.executableRun(senderTxs, stateNonce).size
+
 class EthTxService(
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
@@ -337,9 +344,9 @@ class EthTxService(
             )
 
   /** Hand an admitted local transaction to `pool` and wait for its decision: the pool applies its own rules against
-    * what it holds (already known, overdraft, delegation limit, replacement price bump; [[TxAdmission.poolRejection]])
-    * and pools it, under one message, as go-ethereum holds its pool lock across both. A refusal is -32000 with
-    * go-ethereum's message. Returns the transaction hash.
+    * what it holds (already known, overdraft, delegation limit, subpool reservation, replacement price bump;
+    * [[TxAdmission.poolRejection]]) and pools it, under one message, as go-ethereum holds its pool lock across both. A
+    * refusal is -32000 with go-ethereum's message. Returns the transaction hash.
     */
   private[jsonrpc] def submitToPool(
       pool: ActorRef[PendingTransactionsManager.Command],
@@ -453,16 +460,51 @@ class EthTxService(
           .flatMap(root => blockchainReader.getAccountAtStateRoot(root, sender))
           .map(_.nonce.toBigInt)
           .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
-      val executable: Set[ByteString] = own
+      val executable: Map[Address, Set[BigInt]] = own
         .groupBy(_.stx.senderAddress)
-        .flatMap { case (sender, txs) =>
-          val byNonce = txs.map(pt => pt.stx.tx.tx.nonce -> pt.stx.tx.hash.value).toMap
-          Iterator.iterate(stateNonce(sender))(_ + 1).map(byNonce.get).takeWhile(_.isDefined).flatten
+        .map { case (sender, txs) =>
+          sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
         }
-        .toSet
       Right(
         OwnPendingTransactionsResponse(
-          own.filter(pt => executable.contains(pt.stx.tx.hash.value)).map(pt => TransactionResponse(pt.stx.tx))
+          own
+            .filter(pt => executable.get(pt.stx.senderAddress).exists(_.contains(pt.stx.tx.tx.nonce)))
+            .map(pt => TransactionResponse(pt.stx.tx))
         )
       )
+    }
+
+  /** The sender's next nonce with the pool's executable transactions applied: go-ethereum `TxPool.PoolNonce`
+    * (legacypool `pendingNonces`, blobpool `Nonce`), which `eth_getTransactionCount(addr, "pending")`, GraphQL's
+    * `pending { account { transactionCount } }` and `eth_sendTransaction`'s nonce filling answer from. The account's
+    * nonce at `head` advanced over its pooled transactions with consecutive nonces from it; a nonce-gapped (queued)
+    * transaction does not count. core-geth answers the same (its `TxPool.Nonce`).
+    *
+    * A pool that does not answer fails the call rather than falling back to the state nonce, which would hand out a
+    * nonce already pooled.
+    */
+  def poolNonce(address: Address, head: BlockHeader): IO[BigInt] =
+    given timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
+    given sc: Scheduler = scheduler
+    pendingTransactionsManager
+      .askForTyped[PendingTransactionsManager.PendingTransactionsResponse](
+        PendingTransactionsManager.GetPendingTransactionsReq(_)
+      )
+      .map { resp =>
+        val stateNonce = blockchainReader
+          .getAccountAtStateRoot(head.stateRoot.value, address)
+          .map(_.nonce.toBigInt)
+          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)
+      }
+
+  /** [[poolNonce]] at the best block. */
+  def poolNonceAtHead(address: Address): IO[Either[JsonRpcError, BigInt]] =
+    IO.defer {
+      blockchainReader.getBestBlockHeader match
+        case Some(head) =>
+          poolNonce(address, head).map(Right(_)).recover { case _: MissingNodeException =>
+            Left(JsonRpcError.NodeNotFound)
+          }
+        case None => IO.pure(Left(JsonRpcError.LogicError("chain head not available")))
     }

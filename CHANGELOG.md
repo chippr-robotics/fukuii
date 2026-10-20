@@ -43,9 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (default 10%; `txPool.blob-price-bump`, default 100%, for blob transactions, as go-ethereum's blobpool), "insufficient funds" when the sender's pending transactions together overdraw its balance, and
     EIP-7702's one-in-flight-transaction limit for delegated senders. Peers' transactions meet the overdraft and
     delegation rules too. ETC's pool is unchanged;
+  - on ETH-family chains, keep a sender's transactions to one of go-ethereum's subpools, blob or every other type:
+    a blob transaction from a sender with a pooled non-blob transaction, or a non-blob one from a sender with a pooled
+    blob transaction, is refused with "address already reserved" (-32000; go-ethereum `txpool.ErrAlreadyReserved`),
+    a same-nonce one included, until the sender's transactions of the other kind leave the pool. Peers' transactions
+    meet the rule too. Replacement within the same kind still follows the price-bump rules. ETC is unchanged;
   - check blob sidecars as go-ethereum's pool does: from Osaka a version-1 (cell proof) sidecar is required (a
     version-0 one sent to `eth_sendRawTransaction` is converted, as go-ethereum does), before Osaka a version-0 one; versioned hashes must match the commitments, at most 6 blobs, and the KZG proofs must
     verify.
+- **`eth_getTransactionCount(addr, "pending")` answers the pool's next nonce, as go-ethereum and core-geth do**
+  (`GetPoolNonce`): the account's nonce at the head advanced over its pooled transactions with consecutive nonces; a
+  nonce-gapped (queued) transaction does not count. Before, it did not read the pool.
+  GraphQL `pending { account { transactionCount } }` answers the same, and `eth_sendTransaction` /
+  `personal_sendTransaction` fill the same nonce (they took one past the sender's highest pooled nonce, a gapped one
+  included). All chains, ETC included.
 - **Announced transactions are fetched from one peer at a time.** The pool requested an announced transaction from
   every peer that announced it, and when the peer it got it from was dropped for serving a bad copy, it asked nobody
   else. As in go-ethereum's tx fetcher, a hash is now requested from one announcer; the others are kept as

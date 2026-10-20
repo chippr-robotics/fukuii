@@ -381,9 +381,21 @@ object GraphQLSchema:
           "transactionCount",
           LongType,
           resolve = c =>
-            resolveAccount(c.ctx, c.value.address, c.value.blockNumber)
-              .map(_.nonce.toBigInt.toLong)
-              .getOrElse(0L)
+            if c.value.pending then
+              // go-ethereum graphql.go Account.TransactionCount: the pool nonce (GetPoolNonce) under pending
+              c.ctx.ethTxService
+                .poolNonceAtHead(Address(c.value.address))
+                .flatMap {
+                  case Right(nonce) => cats.effect.IO.pure(nonce.toLong)
+                  case Left(error)  => cats.effect.IO.raiseError(new IllegalStateException(error.message))
+                }
+                .unsafeToFuture()
+            else
+              Future.successful(
+                resolveAccount(c.ctx, c.value.address, c.value.blockNumber)
+                  .map(_.nonce.toBigInt.toLong)
+                  .getOrElse(0L)
+              )
         ),
         Field(
           "code",
@@ -838,7 +850,7 @@ object GraphQLSchema:
           "account",
           AccountType,
           arguments = List(AddressArg),
-          resolve = c => GAccount(c.arg(AddressArg), c.ctx.blockchainReader.getBestBlockNumber)
+          resolve = c => GAccount(c.arg(AddressArg), c.ctx.blockchainReader.getBestBlockNumber, pending = true)
         ),
         Field(
           "call",

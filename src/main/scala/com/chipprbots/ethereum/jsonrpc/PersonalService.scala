@@ -14,8 +14,6 @@ import cats.effect.std.Semaphore
 
 import java.util.concurrent.ConcurrentHashMap
 
-import scala.util.Try
-
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.Account
@@ -303,18 +301,20 @@ class PersonalService(
   private def chainHead: IO[Either[JsonRpcError, BlockHeader]] =
     IO(blockchainReader.getBestBlock.map(_.header).toRight(LogicError("chain head not available")))
 
-  /** go-ethereum `GetPoolNonce`: one past the sender's highest pending nonce, else its nonce at the head. */
+  /** go-ethereum `GetPoolNonce` ([[EthTxService.nextPoolNonce]]): the sender's nonce at the head advanced over its
+    * pooled transactions with consecutive nonces from it, the nonce `eth_getTransactionCount(addr, "pending")` answers.
+    * A nonce-gapped pooled transaction does not count.
+    */
   private def poolNonce(address: Address, head: BlockHeader): IO[BigInt] =
     given timeout: Timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
     given sc: Scheduler = scheduler
     txPool
       .askForTyped[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactionsReq(_))
       .map { pendingTxs =>
-        val senderTxsNonces = pendingTxs.pendingTransactions
-          .collect { case ptx if ptx.stx.senderAddress == address => ptx.stx.tx.tx.nonce }
-        Try(senderTxsNonces.max).toOption.map(_ + 1)
+        val stateNonce =
+          getAccount(address, head).map(_.nonce.toBigInt).getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        EthTxService.nextPoolNonce(pendingTxs.pendingTransactions, address, stateNonce)
       }
-      .map(_.orElse(getAccount(address, head).map(_.nonce.toBigInt)).getOrElse(blockchainConfig.accountStartNonce))
 
   private val nonceLocks = new ConcurrentHashMap[Address, Semaphore[IO]]()
 
