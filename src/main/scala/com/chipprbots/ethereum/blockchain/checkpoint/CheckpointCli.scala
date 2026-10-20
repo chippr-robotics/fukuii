@@ -29,6 +29,9 @@ import com.chipprbots.ethereum.utils.Logger
   *   fukuii etc checkpoint export --block 21000000 --output /tmp/etc.checkpoint --gzip
   * }}}
   *
+  * The archive's total difficulty is summed from genesis over the stored headers; the export is refused when a header
+  * is missing unless `--allow-estimated-td` is given (see [[CheckpointExporter]]).
+  *
   * Without arguments or with `--block 0` the current best block is used. The chain is selected the same way the
   * launcher selects it for the node (positional argument, e.g. `etc` / `sepolia`).
   */
@@ -44,11 +47,20 @@ object CheckpointCli extends Logger:
 
   private val gzipOpt: Opts[Boolean] = Opts.flag("gzip", "Gzip-wrap the output.").orFalse
 
+  private val allowEstimatedTdOpt: Opts[Boolean] = Opts
+    .flag(
+      "allow-estimated-td",
+      "Export even when the block's total difficulty cannot be summed from genesis (headers missing, e.g. chain " +
+        "backfill unfinished after SNAP sync). The archive then carries the stored weight, which may be an estimate " +
+        "that every importing node inherits."
+    )
+    .orFalse
+
   private val exportCommand: Command[ExportArgs] = Command(
     name = "export",
     header = "Export the state at a block as a .checkpoint archive."
   )(
-    (blockOpt, outputOpt, gzipOpt).mapN(ExportArgs.apply)
+    (blockOpt, outputOpt, gzipOpt, allowEstimatedTdOpt).mapN(ExportArgs.apply)
   )
 
   private val rootCommand: Command[Action] = Command(
@@ -100,7 +112,7 @@ object CheckpointCli extends Logger:
         args.output.resolveSibling(args.output.getFileName.toString + ".gz")
       else args.output
     if output != args.output then log.info(s"--gzip set, appending .gz: writing to $output")
-    exporter.exportArchive(blockNumber, output, gzip = args.gzip)
+    exporter.exportArchive(blockNumber, output, gzip = args.gzip, allowEstimatedTd = args.allowEstimatedTd)
 
   /** Minimal cake mix for read-only state access. No actors, no validators, no sync — just storage and
     * BlockchainConfig.
@@ -115,7 +127,12 @@ object CheckpointCli extends Logger:
         with InstanceConfigProvider:
         override def instanceConfig: InstanceConfig = Config
 
-  final private case class ExportArgs(block: Option[BigInt], output: Path, gzip: Boolean)
+  final private case class ExportArgs(
+      block: Option[BigInt],
+      output: Path,
+      gzip: Boolean,
+      allowEstimatedTd: Boolean
+  )
 
   sealed private trait Action
   private object Action:
