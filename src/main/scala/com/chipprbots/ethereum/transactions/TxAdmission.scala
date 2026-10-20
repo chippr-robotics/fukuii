@@ -605,6 +605,13 @@ object TxAdmission:
     *
     * Nothing is held here: the rule reads what the pool holds now, so the reservation lifts as soon as the sender's
     * last transaction of the holding subpool leaves the pool (go-ethereum `Release` on removal).
+    *
+    * Where fukuii's one pool differs: go-ethereum takes a nonce-gapped blob transaction into blobpool's gapped buffer
+    * even while legacypool holds the sender (it fails `Hold` only on promotion and is dropped then); here it is refused
+    * at once, a harmless over-refusal. And a non-blob transaction at the nonce of a pooled gapped blob transaction is
+    * not reserved against, so it takes that blob transaction's place (the local path's `addOrOverride` keeps one
+    * transaction per sender and nonce; a peer's transaction at a pooled nonce is refused before this rule); go-ethereum
+    * keeps both until the gapped one is dropped.
     */
   private def reservationRejection(tx: Transaction, account: Account, senderTxs: Seq[Transaction]): Option[Rejection] =
     val held =

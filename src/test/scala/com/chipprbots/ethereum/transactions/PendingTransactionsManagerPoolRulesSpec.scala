@@ -439,6 +439,19 @@ class PendingTransactionsManagerPoolRulesSpec
     pool.submit(signed(dynamic(sepolia, nonce = 0), k), funded()) shouldBe Right(())
   }
 
+  // go-ethereum admits the legacy tx into legacypool while the gapped blob tx waits, unreserved, in blobpool's gapped
+  // buffer (dropped later when its Hold fails). fukuii's one pool keeps one tx per (sender, nonce): the local legacy tx
+  // takes the gapped blob tx's place (addOrOverride), with no price bump across subpools.
+  it should "let a non-blob tx take the place of a gapped blob tx of the same nonce" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    pool.submit(signed(blobTx(nonce = 2, maxFee = 40 * Gwei, tip = 20 * Gwei), k), funded()) shouldBe Right(())
+    val cheaper = signed(dynamic(sepolia, nonce = 2), k)
+    pool.submit(cheaper, funded()) shouldBe Right(())
+    pool.pooled shouldBe Seq(cheaper)
+  }
+
   "a local submission on Mordor" should "keep the pool's behaviour from before: no pool-state rules" taggedAs UnitTest in {
     val pool = new Pool(mordor, mordorHead)
     import pool.given
