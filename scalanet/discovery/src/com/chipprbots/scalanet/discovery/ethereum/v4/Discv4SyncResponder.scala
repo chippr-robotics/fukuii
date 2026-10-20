@@ -109,7 +109,11 @@ object Discv4SyncResponder extends LazyLogging:
       packetCodec: Codec[Packet],
       sigalg: SigAlg
   ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) =>
-    if !rateLimiter.tryAcquire() then
+    // Only Pings are answered here, so look at the type byte before any crypto. Every other datagram (the Pongs,
+    // Neighbors and ENR responses to our own requests, FindNode, ...) used to pay a full key recovery on this single
+    // event-loop thread just to be passed on, and to consume rate-limit tokens meant for Pings (task #52).
+    if !Packet.peekType(incomingBits).contains(Packet.PacketType.Ping) then StaticUDPPeerGroup.SyncResult.Pass
+    else if !rateLimiter.tryAcquire() then
       logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
       StaticUDPPeerGroup.SyncResult.Pass
     else

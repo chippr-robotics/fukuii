@@ -216,3 +216,48 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers:
     replyBitsOf(responder(sender, encodePacket(pingPacket)))
     dedup.isAlreadyResponded(pingPacket.hash) shouldBe true
   }
+
+  // Task #52: the responder used to recover the sender key of every datagram before checking it was a Ping, and every
+  // datagram took a rate-limit token. It now reads the type byte first.
+  it should "pass non-Ping packets without consuming the Ping budget" taggedAs (UnitTest, NetworkTest) in {
+    val (_, privateKey) = freshKeyPair
+    val (otherPub, _) = freshKeyPair
+    val responder = Discv4SyncResponder(
+      privateKey = privateKey,
+      expirationSeconds = expirationSeconds,
+      maxClockDriftSeconds = maxClockDriftSeconds,
+      localEnrSeqRef = new AtomicReference[Option[Long]](None),
+      dedup = new Discv4SyncResponder.PingDedup,
+      rateLimiter = new Discv4SyncResponder.RateLimiter(tokensPerSecond = 1, maxBurst = 1)
+    )
+    val now = System.currentTimeMillis() / 1000
+    val findNode = Packet.pack(Payload.FindNode(otherPub, now + expirationSeconds), privateKey).require
+    (1 to 5).foreach(_ => responder(sender, encodePacket(findNode)) shouldBe StaticUDPPeerGroup.SyncResult.Pass)
+
+    val ping = Payload.Ping(4, makeAddress(31000), makeAddress(31002), now + expirationSeconds, None)
+    replyBitsOf(responder(sender, encodePacket(Packet.pack(ping, privateKey).require)))
+  }
+
+  it should "read the packet type the codec wrote, from the packet and from the raw datagram" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val (pub, privateKey) = freshKeyPair
+    val exp = System.currentTimeMillis() / 1000 + expirationSeconds
+    val hash = Hash(BitVector.fill(256)(false))
+    val cases: List[(Payload, Byte)] = List(
+      Payload.Ping(4, makeAddress(1), makeAddress(2), exp, None) -> Packet.PacketType.Ping,
+      Payload.Pong(makeAddress(1), hash, exp, None) -> Packet.PacketType.Pong,
+      Payload.FindNode(pub, exp) -> Packet.PacketType.FindNode,
+      Payload.Neighbors(Nil, exp) -> Packet.PacketType.Neighbors,
+      Payload.ENRRequest(exp) -> Packet.PacketType.ENRRequest
+    )
+    cases.foreach { case (payload, expected) =>
+      val packet = Packet.pack(payload, privateKey).require
+      Packet.peekType(packet) shouldBe Some(expected)
+      Packet.peekType(encodePacket(packet)) shouldBe Some(expected)
+    }
+    Packet.PacketType.isResponse(Packet.PacketType.ENRResponse) shouldBe true
+    Packet.PacketType.isRequest(Packet.PacketType.ENRResponse) shouldBe false
+    Packet.peekType(BitVector(Array.ofDim[Byte](16))) shouldBe None
+  }

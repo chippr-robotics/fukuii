@@ -71,6 +71,33 @@ object Packet:
       yield bits
     }
 
+  /** discv4 packet-type bytes: the first byte of `data` (devp2p discv4.md, "Wire Protocol"). */
+  object PacketType:
+    val Ping: Byte = 0x01
+    val Pong: Byte = 0x02
+    val FindNode: Byte = 0x03
+    val Neighbors: Byte = 0x04
+    val ENRRequest: Byte = 0x05
+    val ENRResponse: Byte = 0x06
+
+    def isResponse(packetType: Byte): Boolean =
+      packetType == Pong || packetType == Neighbors || packetType == ENRResponse
+
+    def isRequest(packetType: Byte): Boolean =
+      packetType == Ping || packetType == FindNode || packetType == ENRRequest
+
+  /** The packet type, read without checking the hash or the signature. Only a pre-filter: it lets a receiver drop a
+    * packet it would discard anyway before paying for key recovery (task #52). Anything it lets through is still fully
+    * verified by [[unpack]].
+    */
+  def peekType(packet: Packet): Option[Byte] =
+    if packet.data.size >= 8 then Some(packet.data.take(8).toByte()) else None
+
+  /** [[peekType]] on the raw datagram (hash ‖ signature ‖ type ‖ RLP payload). */
+  def peekType(datagram: BitVector): Option[Byte] =
+    val offset = MacBitsSize.toLong + SigBitsSize
+    if datagram.size >= offset + 8 then Some(datagram.slice(offset, offset + 8).toByte()) else None
+
   /** Create a codec for packets. Some Ethereum clients don't respect the size limits; for compatibility with them the
     * check during decode can be turned off.
     */
