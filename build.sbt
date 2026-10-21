@@ -417,7 +417,12 @@ coverageMinimumStmtTotal := 70
 coverageFailOnMinimum := true
 coverageHighlighting := true
 coverageExcludedPackages := Seq(
-  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo" // BuildInfo generated code
+  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo", // BuildInfo generated code
+  // Ethash hashimoto/calcDatasetItem is a multi-million-iteration hot loop; scoverage's per-statement Invoker
+  // (TrieMap lookup) slows it so much that EthashNonceSearchSpec (SlowTest) ran >2 h without finishing under
+  // `sbt coverage`, stalling testStandard. Exclude only this object from instrumentation (its tests still run).
+  // Must be a class-like exclusion: Scala 3's -coverage-exclude-files did not match the file here.
+  "com\\.chipprbots\\.ethereum\\.consensus\\.pow\\.EthashUtils.*"
 ).mkString(";")
 coverageExcludedFiles := Seq(
   ".*/src_managed/.*", // All managed sources
