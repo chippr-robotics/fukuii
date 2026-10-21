@@ -118,6 +118,10 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-XX:+UnlockDiagnosticVMOptions",
     "-XX:-ReduceAllocationMerges"
   ),
+  // Scoverage's statement/branch instrumentation slows forked test JVMs several-fold; the 3 s TestKit expectMsg
+  // defaults in BlockFetcherSpec then time out (observed: 3 failures only when the root module is instrumented).
+  // Scale TestKit timeouts only while `sbt coverage` is active; normal runs are unchanged.
+  Test / javaOptions ++= (if (coverageEnabled.value) Seq("-Dpekko.test.timefactor=4") else Seq.empty),
   Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
   Test / logBuffered := false, // Stream forked JVM test output immediately rather than buffering per-suite
   (Test / testOptions) += Tests.Argument("-oDG"),
