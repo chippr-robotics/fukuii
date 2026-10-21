@@ -106,7 +106,7 @@ class SNAPResetCharacterizationSpec
   // ── enterDormantMode (critical failure) ────────────────────────────────────────────────────────
 
   "SNAPSyncController enterDormantMode via the validation critical-failure path" should
-    "stop the healing and bytecode children (not the ChainDownloader), keep the flags, and stay in `syncing`" taggedAs UnitTest in {
+    "stop the healing and bytecode children (not the ChainDownloader), keep the flags, enter dormantRetry, and wake on DormantWakeUp" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
       val missingRoot: MptStorage => StateValidator =
         storage => new FakeStateValidator(storage, Left("Missing root node: s0d"), Right(Seq.empty))
@@ -116,9 +116,6 @@ class SNAPResetCharacterizationSpec
       )
       f.factories.chainSpawns.get() shouldBe 1
       f.heapWatchdogStarts.get() shouldBe 1
-      val spawnsBefore =
-        () => (f.factories.accountSpawns.get(), f.factories.byteCodeSpawns.get(), f.factories.storageSpawns.get())
-
       Using.resource(new SnapLogCapture) { log =>
         // Hold StateValidation: a healed account's code is outstanding, so the clean walk's completion waits for it.
         snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
@@ -145,20 +142,21 @@ class SNAPResetCharacterizationSpec
         f.appStateStorage.isSnapSyncStorageComplete() shouldBe true
         f.appStateStorage.isSnapSyncBytecodeComplete() shouldBe true
 
-        // Today the dormant behaviour returned by enterDormantMode is discarded on this path: the controller stays in
-        // `syncing` with currentPhase = Dormant, so GetStatus reports it as syncing with no state progress ...
+        // #1515: the dormant behaviour is the actor's now: GetStatus reports it as syncing with no state progress ...
         f.status(snap) shouldBe SyncProtocol.Status.Syncing(
           startingBlockNumber = f.appStateStorage.getSyncStartingBlock(),
           blocksProgress = SyncProtocol.Status.Progress(SnapControllerFixture.Pivot, SnapControllerFixture.Pivot),
-          stateNodesProgress = Some(SyncProtocol.Status.Progress(BigInt(0), BigInt(0)))
+          stateNodesProgress = None
         )
-        // ... and the wake-up it schedules falls through to the `syncing` catch-all: nothing is re-spawned.
-        val before = spawnsBefore()
+        // ... and the wake-up it schedules is handled: with a snap peer at a newer head a fresh pivot is bootstrapped.
         log.clear()
+        f.pollWith(snap, f.peersAt(height = 2_000))
         snap ! SNAPSyncController.DormantWakeUp
+        val newPivot = BigInt(2_000) - SNAPSyncConfig().pivotBlockOffset
+        expectBootstrapRequest(f, newPivot)
         f.awaitProcessed(snap)
-        log.contains("Unhandled message in syncing state: DormantWakeUp") shouldBe true
-        spawnsBefore() shouldBe before
+        log.contains("Unhandled message in syncing state: DormantWakeUp") shouldBe false
+        f.status(snap) shouldBe bootstrappingStatus(f, newPivot)
       }
       f.heapWatchdogStops.get() shouldBe 0
     }

@@ -66,8 +66,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   private[snap] lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
     case AccountCoordinatorProgress(progress) =>
       if progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
-      then maybeRestartIfAccountStagnant(progress)
-      Behaviors.same
+      then maybeRestartIfAccountStagnant(progress).getOrElse(Behaviors.same)
+      else Behaviors.same
   }
 
   /** `syncing` arms guarded on `currentPhase == ByteCodeAndStorageSync` (P4b). */
@@ -276,7 +276,12 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   // private[snap] (not private) only so the reset-table pin test can read it.
   private[snap] var consecutiveAccountStallRefreshes: Int = 0
 
-  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit =
+  /** Check the account phase for a stall. `Some(<dormant behaviour>)` when the stall budget trips the critical-failure
+    * limit and dormant mode is entered (#1515: the caller must continue in that behaviour, the one that handles
+    * `DormantWakeUp`); `None` otherwise.
+    */
+  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Option[Behavior[Command]] =
+    var dormant: Option[Behavior[Command]] = None
     if currentPhase == AccountRangeSync then
       // Only consider it a stall if there is still work to do.
       val workRemaining = progress.tasksPending > 0 || progress.tasksActive > 0
@@ -339,7 +344,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                   consecutiveAccountStallRefreshes = 0
                   lastAccountProgressMs = System.currentTimeMillis()
                   if recordCriticalFailure(s"account stall refresh limit exceeded: $context") then
-                    enterDormantMode(s"account stall refresh limit exceeded: $context")
+                    dormant = Some(enterDormantMode(s"account stall refresh limit exceeded: $context"))
                     true
                   else false
                 else false
@@ -358,12 +363,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                 // / CheckDispatchStalled) cover this independently; this is the explicit controller hook.
                 accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.RecoverStalledAccountTasks)
                 refreshPivotInPlace(s"account stall: $context")
-              // end if !dormantTriggered
-            // end else (snapPeerCount > 0)
-          // end if stalledForMs >= threshold
-        // end else (no progress)
-      // end if workRemaining
-  // end if currentPhase == AccountRangeSync
+
+    dormant
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the

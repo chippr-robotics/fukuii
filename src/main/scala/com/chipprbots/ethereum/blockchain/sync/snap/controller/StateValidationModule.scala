@@ -93,7 +93,10 @@ private[snap] trait StateValidationModule extends ValidationApi:
           val retryMsg = s"root node missing after $validationRetryCount validation retries"
           if recordCriticalFailure(retryMsg) then
             ctx.log.error("Too many critical SNAP failures — entering dormant mode")
-            enterDormantMode(s"validation retry exhausted: $retryMsg")
+            // #1515: continue in the dormant behaviour (its DormantWakeUp handler), and give the round after the
+            // wake-up a fresh retry budget, as the restart branch below does.
+            validationRetryCount = 0
+            earlyBehavior = Some(enterDormantMode(s"validation retry exhausted: $retryMsg"))
           else
             ctx.log.warn(
               s"Root node missing after $validationRetryCount validation attempts. " +

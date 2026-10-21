@@ -168,8 +168,11 @@ private[snap] trait PivotRefresher
                 "Peers likely lack snapshot databases."
             )
             if recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes") then
-              enterDormantMode(
-                s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+              // #1515: continue in the dormant behaviour, which is the one that handles DormantWakeUp.
+              earlyBehavior = Some(
+                enterDormantMode(
+                  s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+                )
               )
             else
               val restartDelay = math.min(30 * criticalFailureCount, 120).seconds
