@@ -252,3 +252,36 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     val (_, bs) = new Node().blocks(payload)
     str((arr(bs.head \ "calls").head \ "error") \ "message") shouldBe "out of gas"
   }
+
+  // ── 2: blockOverrides.blobBaseFee reaches BLOBBASEFEE (simulate.go:364) ─────
+
+  /** 0x4a 6000 52 6020 6000 f3: BLOBBASEFEE; MSTORE(0); RETURN(0, 32). */
+  private def blobBaseFeeCall(blockOverrides: String): String =
+    s"""{"blockStateCalls":[{$blockOverrides"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x4a60005260206000f3"}},
+       |"calls":[{"from":"$From","to":"$To"}]}]}""".stripMargin
+
+  private def returnData(bs: List[JValue]): String = str((arr(bs.head \ "calls").head) \ "returnData")
+
+  it should "give BLOBBASEFEE the blockOverrides.blobBaseFee value" taggedAs (UnitTest, RPCTest) in {
+    val (_, bs) = new Node().blocks(blobBaseFeeCall("\"blockOverrides\":{\"blobBaseFee\":\"0x1234\"},"))
+    returnData(bs) shouldBe "0x" + "0" * 60 + "1234"
+  }
+
+  it should "give BLOBBASEFEE an override of zero (not the derived 1)" taggedAs (UnitTest, RPCTest) in {
+    val (_, bs) = new Node().blocks(blobBaseFeeCall("\"blockOverrides\":{\"blobBaseFee\":\"0x0\"},"))
+    returnData(bs) shouldBe "0x" + "0" * 64
+  }
+
+  it should "still derive BLOBBASEFEE from excessBlobGas without the override" taggedAs (UnitTest, RPCTest) in {
+    val (_, bs) = new Node().blocks(blobBaseFeeCall(""))
+    returnData(bs) shouldBe "0x" + "0" * 63 + "1"
+  }
+
+  it should "scope the override to its block" taggedAs (UnitTest, RPCTest) in {
+    val payload =
+      s"""{"blockStateCalls":[{"blockOverrides":{"blobBaseFee":"0x1234"},"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x4a60005260206000f3"}},"calls":[{"from":"$From","to":"$To"}]},
+         |{"calls":[{"from":"$From","to":"$To"}]}]}""".stripMargin
+    val (_, bs) = new Node().blocks(payload)
+    bs.map(b => str(arr(b \ "calls").head \ "returnData")) shouldBe
+      List("0x" + "0" * 60 + "1234", "0x" + "0" * 63 + "1")
+  }
