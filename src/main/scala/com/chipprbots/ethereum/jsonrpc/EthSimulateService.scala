@@ -280,6 +280,11 @@ class EthSimulateService(
     }
 
   private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
+    // go-ethereum SimulateV1 (internal/ethapi/api.go:886-887): no blocks to simulate is `invalidParamsError{"empty
+    // input"}`, -32602. (A missing or null `blockStateCalls` decodes to no blocks and is refused the same way, as
+    // geth's nil slice is.)
+    if req.blockStateCalls.isEmpty then break(Left(JsonRpcError.InvalidParams("empty input")))
+
     // Validate blockStateCalls count
     if req.blockStateCalls.size > MaxBlockStateCalls then
       break(
