@@ -50,4 +50,13 @@ trait InProgressState[T <: HandshakeResult] extends HandshakerState[T]:
 
 case class ConnectedState[T <: HandshakeResult](result: T) extends HandshakerState[T]
 
-case class DisconnectedState[T <: HandshakeResult](reason: Int) extends HandshakerState[T]
+/** The handshake ended without a connection.
+  *
+  * @param wrongNetwork
+  *   true only when the peer's STATUS names a different network (networkId) or a different genesis block: it can never
+  *   become a useful peer, so the dialer excludes its node ID for a long period. A ForkId rejection is NOT
+  *   wrong-network (on ETC, ETH-mainnet peers share networkId 1 and the genesis block and are told apart by ForkId
+  *   alone), and keeps the ordinary blacklist handling.
+  */
+case class DisconnectedState[T <: HandshakeResult](reason: Int, wrongNetwork: Boolean = false)
+    extends HandshakerState[T]

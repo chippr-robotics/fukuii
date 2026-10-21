@@ -55,6 +55,7 @@ object NetworkPeerManagerActor:
   private[network] case object LogNetworkSummaryTick extends Command
   private[network] case object RefreshPeerBestBlocksTick extends Command
   private[network] case object CheckLaggingPeersTick extends Command
+  private[network] case object CheckGenesisHeadPeersTick extends Command
 
   // Fire-and-forget registrations forwarded by the Classic shell:
   final case class RegisterSnapSyncControllerCmd(
@@ -64,6 +65,9 @@ object NetworkPeerManagerActor:
       target: typed.ActorRef[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.CalibrateChainWeightFromPeer]
   ) extends Command
   case object CalibrateChainWeightNowCmd extends Command
+
+  /** Periodic flush of the per-peer SNAP-served counters to the PeerManagerActor (spec 012). */
+  private[network] case object FlushSnapServedTick extends Command
 
   // Wire protocol messages forwarded by the Classic shell:
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
@@ -81,6 +85,11 @@ object NetworkPeerManagerActor:
 
   // PeerEvent wrapper delivered via messageAdapter from the event bus:
   final case class PeerEventCmd(event: PeerEvent) extends Command
+
+  /** Death-watch notification for a handshaked peer's actor. Keyed on the ref alone: Pekko rejects a second `watchWith`
+    * on the same ref with a different message, and two entries may share a ref transiently (inbound-wins swap).
+    */
+  final private[network] case class PeerActorTerminated(ref: typed.ActorRef[PeerActor.Command]) extends Command
 
   // Deferred blacklist request: re-enters the actor mailbox via a single-shot
   // Typed timer (P7) instead of a Classic scheduler.scheduleOnce callback, which
@@ -109,7 +118,8 @@ object NetworkPeerManagerActor:
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
-      isPoWChain: Boolean = false
+      isPoWChain: Boolean = false,
+      genesisHeadEvictionGrace: FiniteDuration = 60.seconds
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -143,6 +153,7 @@ object NetworkPeerManagerActor:
 
         // Replace the 3 Classic scheduleWithFixedDelay calls with Behaviors.withTimers.
         timers.startTimerWithFixedDelay(LogNetworkSummaryTick, LogNetworkSummaryTick, 60.seconds)
+        timers.startTimerWithFixedDelay(FlushSnapServedTick, FlushSnapServedTick, SnapServedFlushInterval)
         timers.startTimerWithFixedDelay(
           RefreshPeerBestBlocksTick,
           RefreshPeerBestBlocksTick,
@@ -153,6 +164,12 @@ object NetworkPeerManagerActor:
           CheckLaggingPeersTick,
           LaggingPeerCheckInterval
         )
+        if genesisHeadEvictionGrace > Duration.Zero then
+          timers.startTimerWithFixedDelay(
+            CheckGenesisHeadPeersTick,
+            CheckGenesisHeadPeersTick,
+            GenesisHeadCheckInterval
+          )
 
         new Impl(
           ctx,
@@ -166,7 +183,8 @@ object NetworkPeerManagerActor:
           evmCodeStorageOpt,
           mptStorageOpt,
           blockchainReader,
-          isPoWChain
+          isPoWChain,
+          genesisHeadEvictionGrace
         ).handleMessages(Map.empty)
       }
     }
@@ -184,10 +202,14 @@ object NetworkPeerManagerActor:
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage],
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage],
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader],
-      isPoWChain: Boolean
+      isPoWChain: Boolean,
+      genesisHeadEvictionGrace: FiniteDuration
   ):
 
     private val log = ctx.log
+
+    // First time each handshaked peer was seen with a genesis head (spec 011). Cleared when it advances.
+    private val genesisHeadSince = scala.collection.mutable.Map.empty[PeerId, Long]
 
     private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
@@ -199,6 +221,13 @@ object NetworkPeerManagerActor:
       )
 
     private var emptyHeaderResponses: Int = 0
+
+    // SNAP responses that carried data, per peer, since the last flush (spec 012).
+    private val snapServedAcc = scala.collection.mutable.Map.empty[PeerId, PeerManagerActor.SnapServed]
+
+    private def noteSnapServed(peerId: PeerId, bytes: Long): Unit =
+      val prev = snapServedAcc.getOrElse(peerId, PeerManagerActor.SnapServed(0, 0L))
+      snapServedAcc(peerId) = PeerManagerActor.SnapServed(prev.responses + 1, prev.bytes + bytes)
 
     // Tracks whether our chain tip has advanced past block 0 for the first time. Used to trigger
     // a one-shot chain weight refresh for ETH69 peers whose weight was stuck at COLD_START (TD=0)
@@ -244,6 +273,19 @@ object NetworkPeerManagerActor:
     // shortly publish PeerDisconnected. That event must NOT evict the peer from peersWithInfo.
     private val pendingInboundWinsDisconnects: scala.collection.mutable.Set[PeerId] =
       scala.collection.mutable.Set.empty
+
+    // A second live connection for a peer ID that is not the current entry: the outbound an inbound-wins swap displaced,
+    // or a duplicate handshake that was not taken (DUPLICATE_HANDSHAKE_DROPPED). Which one PeerManagerActor keeps is
+    // its call (inbound wins only for maintained peers; otherwise the newer duplicate gets AlreadyConnected), and the
+    // current entry's actor may already be dead when the duplicate arrives. So when the current entry's actor dies, a
+    // live standby takes its place instead of the peer being dropped. One standby per peer ID; each is death-watched
+    // and removed when its own actor dies, so the map holds only live connections.
+    private val standbyEntries = scala.collection.mutable.Map.empty[PeerId, PeerWithInfo]
+
+    private def setStandby(peerId: PeerId, standby: PeerWithInfo, currentRef: typed.ActorRef[PeerActor.Command]): Unit =
+      standbyEntries.put(peerId, standby).foreach { previous =>
+        if previous.peer.ref != currentRef && previous.peer.ref != standby.peer.ref then ctx.unwatch(previous.peer.ref)
+      }
 
     // Cache of recent canonical state roots, refreshed lazily when the chain advances.
     private var freshRootCache: scala.collection.mutable.Set[ByteString] = scala.collection.mutable.Set.empty
@@ -344,7 +386,7 @@ object NetworkPeerManagerActor:
 
         case ConnectToPeerForwardCmd(uri) =>
           log.info("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
-          peerManagerActor ! PeerManagerActor.ConnectToPeerCmd(uri)
+          peerManagerActor ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
           Behaviors.same
 
         case DeferredBlacklistCmd(request) =>
@@ -505,6 +547,32 @@ object NetworkPeerManagerActor:
                 }
           Behaviors.same
 
+        case CheckGenesisHeadPeersTick =>
+          // Only meaningful once our chain (or the network tip we have observed) is past genesis: on a private
+          // chain where we are at genesis too, genesis-head peers are normal.
+          val ownPastGenesis =
+            appStateStorage.getBestBlockNumber() > 0 || appStateStorage.getEstimatedHighestBlock() > 0
+          val now = System.currentTimeMillis()
+          val atGenesis = peersWithInfo.filter { case (_, PeerWithInfo(_, info)) =>
+            info.isAtGenesis && info.maxBlockNumber == 0
+          }
+          genesisHeadSince.keys.toList.foreach(id => if !atGenesis.contains(id) then genesisHeadSince.remove(id))
+          if ownPastGenesis then
+            atGenesis.foreach { case (peerId, PeerWithInfo(_, info)) =>
+              val first = genesisHeadSince.getOrElseUpdate(peerId, now)
+              if now - first >= genesisHeadEvictionGrace.toMillis then
+                genesisHeadSince.remove(peerId)
+                peerManagerActor ! PeerManagerActor.EvictGenesisHeadPeerCmd(peerId, info.remoteStatus.remoteClientId)
+            }
+          else genesisHeadSince.clear()
+          Behaviors.same
+
+        case FlushSnapServedTick =>
+          if snapServedAcc.nonEmpty then
+            peerManagerActor ! PeerManagerActor.SnapServedReportCmd(snapServedAcc.toMap)
+            snapServedAcc.clear()
+          Behaviors.same
+
         // ── SNAP server requests — matched BEFORE the general MessageFromPeer guard ──
         // The hive devp2p snap test client fires these right after the RLPx hello, before
         // ETH-status exchange completes, so the per-peer subscription isn't yet installed.
@@ -537,21 +605,31 @@ object NetworkPeerManagerActor:
           // Messages are wrapped in Command ADT so the Typed SSC mailbox accepts them.
           message match
             case msg: AccountRange =>
+              if msg.accounts.nonEmpty then
+                noteSnapServed(peerId, msg.accounts.size.toLong * 100L + msg.proof.map(_.size.toLong).sum)
               log.debug("Routing AccountRange to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.AccountRangeResponse(msg)
               )
             case msg: ByteCodes =>
+              if msg.codes.nonEmpty then noteSnapServed(peerId, msg.codes.map(_.size.toLong).sum)
               log.debug("Routing ByteCodes to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.ByteCodesResponse(msg)
               )
             case msg: StorageRanges =>
+              if msg.slots.exists(_.nonEmpty) then
+                noteSnapServed(
+                  peerId,
+                  msg.slots.map(_.map { case (k, v) => k.size.toLong + v.size.toLong }.sum).sum +
+                    msg.proof.map(_.size.toLong).sum
+                )
               log.debug("Routing StorageRanges to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StorageRangesResponse(msg)
               )
             case msg: TrieNodes =>
+              if msg.nodes.nonEmpty then noteSnapServed(peerId, msg.nodes.map(_.size.toLong).sum)
               log.debug("Routing TrieNodes to SNAPSyncController from peer {}", peerId)
               snapSyncControllerOpt.foreach(
                 _ ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.TrieNodesResponse(msg)
@@ -597,29 +675,64 @@ object NetworkPeerManagerActor:
               peerId
             )
             Behaviors.same
-          else
-            val pw = peersWithInfo(peerId)
-            log.info(
-              s"PEER_DISCONNECTED: ${peerId.value} " +
-                s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
-                s"inbound=${pw.peer.incomingConnection}"
-            )
-            peerEventBusActor ! UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)), eventAdapter)
-            peerEventBusActor ! UnsubscribeCmd(
-              MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)),
-              eventAdapter
-            )
-            NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
-            PeerTelemetry.deregisterPeer(peerId)
-            lastBlockSignalMs.remove(peerId)
-            laggingPeerSince.remove(peerId)
-            consecutiveUnchangedProbes.remove(peerId)
-            lastProbeMaxBlock.remove(peerId)
-            handleMessages(peersWithInfo - peerId)
+          else handleMessages(removePeer(peerId, peersWithInfo, "PeerDisconnected"))
+
+        // The peer's actor died. Normally PeerManagerActor follows up with PeerDisconnected, but that event can be lost:
+        // a crawler that closes TCP right after STATUS stops its PeerActor while PeerHandshakeSuccessful is still in
+        // flight, and PeerDisconnected is then published before (or instead of) this actor's per-peer subscription
+        // reaching the event bus. The entry stayed forever, so a genesis-head crawler was "evicted" every ~70 s while
+        // DisconnectPeer went to dead letters. Death watch fires even for an already-dead ref, so it cannot be lost.
+        case PeerActorTerminated(ref) =>
+          // A standby whose own actor died can never take over.
+          standbyEntries.filterInPlace { case (_, standby) => standby.peer.ref != ref }
+          val owned = peersWithInfo.collect { case (id, pw) if pw.peer.ref == ref => id }
+          val updated = owned.foldLeft(peersWithInfo) { (acc, peerId) =>
+            standbyEntries.remove(peerId) match
+              case Some(standby) =>
+                // The current connection died; the standby connection to the same node is still alive.
+                pendingInboundWinsDisconnects -= peerId
+                log.info(
+                  "STANDBY_CONNECTION_PROMOTED: {} {} terminated; continuing on {}",
+                  peerId,
+                  acc(peerId).peer.remoteAddress,
+                  standby.peer.remoteAddress
+                )
+                // Keep the dying entry's PeerInfo: it is the node's chain state (best block, max block number, fork
+                // acceptance) as updated by every message received under this peer ID since the standby's own
+                // handshake, which is newer than the snapshot the standby was stored with.
+                acc + (peerId -> standby.copy(peerInfo = acc(peerId).peerInfo))
+              case None => removePeer(peerId, acc, "actor terminated")
+          }
+          if owned.isEmpty then Behaviors.same else handleMessages(updated)
 
         case PeerEventCmd(_) =>
           Behaviors.same
       }
+
+    /** Drops a handshaked peer and its per-peer subscriptions and bookkeeping. */
+    private def removePeer(peerId: PeerId, peersWithInfo: PeersWithInfo, via: String): PeersWithInfo =
+      val pw = peersWithInfo(peerId)
+      log.info(
+        s"PEER_DISCONNECTED: ${peerId.value} " +
+          s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
+          s"inbound=${pw.peer.incomingConnection} via=$via"
+      )
+      peerEventBusActor ! UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)), eventAdapter)
+      peerEventBusActor ! UnsubscribeCmd(
+        MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)),
+        eventAdapter
+      )
+      ctx.unwatch(pw.peer.ref)
+      standbyEntries.remove(peerId).foreach(d => ctx.unwatch(d.peer.ref))
+      pendingInboundWinsDisconnects -= peerId
+      NetworkMetrics.registerRemoveHandshakedPeer(pw.peer)
+      PeerTelemetry.deregisterPeer(peerId)
+      lastBlockSignalMs.remove(peerId)
+      laggingPeerSince.remove(peerId)
+      genesisHeadSince.remove(peerId)
+      consecutiveUnchangedProbes.remove(peerId)
+      lastProbeMaxBlock.remove(peerId)
+      peersWithInfo - peerId
 
     private def handlePeerHandshakeSuccessful(
         peer: Peer,
@@ -730,6 +843,8 @@ object NetworkPeerManagerActor:
         if newIsInbound && existingIsOutbound then
           // Inbound-wins: swap peersWithInfo to the live inbound ref.
           pendingInboundWinsDisconnects += peer.id
+          setStandby(peer.id, old, peer.ref)
+          ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           log.info(
             "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
             peer.id,
@@ -745,8 +860,13 @@ object NetworkPeerManagerActor:
               s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
               s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
           )
+          // Remember the duplicate in case the existing entry's actor is the one that is already gone.
+          if peer.ref != old.peer.ref then
+            setStandby(peer.id, PeerWithInfo(peer, peerInfo), old.peer.ref)
+            ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
           Behaviors.same
       else
+        ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
         peerEventBusActor ! SubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)), eventAdapter)
         peerEventBusActor ! SubscribeCmd(
           MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)),
@@ -1332,6 +1452,12 @@ object NetworkPeerManagerActor:
 
   /** Window after which we re-probe an ETH/69 peer even though it has already had a `BlockRangeUpdate` opportunity. */
   private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
+
+  /** How often handshaked peers are scanned for a stuck genesis head (spec 011). */
+  private[network] val GenesisHeadCheckInterval: FiniteDuration = 10.seconds
+
+  /** How often SNAP-served counters are reported for the good-peer list (spec 012). */
+  private[network] val SnapServedFlushInterval: FiniteDuration = 60.seconds
 
   /** Lagging-peer eviction parameters. */
   private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes

@@ -14,7 +14,9 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
+import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -24,8 +26,9 @@ import com.chipprbots.ethereum.utils.Config
   *
   * The header cascade stopped at Prague, so a simulated block at an Amsterdam timestamp was 21 fields: its hash was not
   * an Amsterdam hash and SLOTNUM read a slot the header did not have. From Amsterdam it is the 23-field
-  * `HefPostAmsterdam`, with the empty access list's hash and slot 0 (see `EthSimulateService.buildBlockHeader`), and
-  * the response carries both new fields. Before Amsterdam, and on ETC, the shape and the response are what they were.
+  * `HefPostAmsterdam`, and the response carries both new fields. Since execution-apis #881 their values are computed:
+  * the block access list of the simulated execution, and the parent's slot + 1 (slot 0 on a parent with none). Before
+  * Amsterdam, and on ETC, the shape and the response are what they were.
   *
   * The chain is the Amsterdam fixture schedule (Osaka 180, Amsterdam 360) on an empty state; the simulated blocks carry
   * no calls, so the header shape is the only thing that varies.
@@ -34,6 +37,16 @@ import com.chipprbots.ethereum.utils.Config
 class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with AmsterdamFixtureVectors:
 
   private val emptyRoot: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
+
+  /** The access list of a call-less Amsterdam block on this empty state: the EIP-4788 and EIP-2935 system calls read
+    * their targets at index 0 even with no code there (EEST `bal_4788_absent_contract`), and change nothing; the
+    * request predeploys have no code, so the post-execution phase records nothing.
+    */
+  private val systemCallTargetsOnlyHash: ByteString = BlockAccessList(
+    Seq(BlockExecution.HistoryStorageAddress, BlockExecution.BeaconRootContractAddress).map(
+      AccountChanges(_, Nil, Nil, Nil, Nil, Nil)
+    )
+  ).hash
   private val zero32: ByteString = ByteString(Array.fill[Byte](32)(0))
 
   /** A node whose best block sits at `baseTimestamp`, in the shape its fork gives it. */
@@ -90,7 +103,8 @@ class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with Amst
 
     header.unixTimestamp shouldBe Timestamp(360)
     header.extraFields shouldBe a[HefPostAmsterdam]
-    header.blockAccessListHash shouldBe Some(BlockAccessList.EmptyHash)
+    header.blockAccessListHash shouldBe Some(systemCallTargetsOnlyHash)
+    // The Osaka parent has no slot, so the first Amsterdam block cannot continue one (see buildBlockHeader).
     header.slotNumber shouldBe Some(BigInt(0))
     header.requestsHash shouldBe Some(EmptyRequestsHash)
     // The shape the block validator requires of an Amsterdam header, and one its RLP decoder reads back whole.
@@ -106,8 +120,13 @@ class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with Amst
   it should "report blockAccessListHash and slotNumber for an Amsterdam block" taggedAs (UnitTest, RPCTest) in {
     val json = rendered(new Node(amsterdamConfig, baseTimestamp = 348).simulate(Some(360)))
     json \ "blockAccessListHash" shouldBe
-      JString("0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347")
+      JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(systemCallTargetsOnlyHash.toArray))
     json \ "slotNumber" shouldBe JString("0x0")
+  }
+
+  it should "continue the parent's slot number" taggedAs (UnitTest, RPCTest) in {
+    // execution-apis #881: "slotNumber | Previous block's `slotNumber` + 1". The base block sits at slot 29.
+    new Node(amsterdamConfig, baseTimestamp = 360).simulate().blocks.head.header.slotNumber shouldBe Some(BigInt(30))
   }
 
   it should "build the 21-field Prague header one block before Amsterdam, as before" taggedAs (UnitTest, RPCTest) in {

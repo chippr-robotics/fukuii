@@ -33,6 +33,13 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
 
         removeTransactions(obsoleteTxs).addTransactions(Set(SignedTransactionWithSender(newStx, newStxSender)))
 
+      case SubmitLocalTransaction(newStx, newStxSender, _, _, _, replyTo) =>
+        replyTo ! Right(())
+        val obsoleteTxs = pendingTransactions
+          .filter(ptx => ptx.stx.senderAddress == newStxSender && ptx.stx.tx.tx.nonce == newStx.tx.nonce)
+          .map(_.stx.tx.hash.value)
+        removeTransactions(obsoleteTxs).addTransactions(Set(SignedTransactionWithSender(newStx, newStxSender)))
+
       case GetPendingTransactions =>
         sender ! PendingTransactionsResponse(pendingTransactions.toSeq)
         this

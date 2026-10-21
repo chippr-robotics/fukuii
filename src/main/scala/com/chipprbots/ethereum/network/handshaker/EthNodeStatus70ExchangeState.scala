@@ -93,7 +93,7 @@ case class EthNodeStatus70ExchangeState(
         peerConfiguration.networkId,
         networkId
       )
-      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer, wrongNetwork = true)
     else if genesisHash != localGenesisHash then
       log.debug(
         "{}: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
@@ -101,7 +101,7 @@ case class EthNodeStatus70ExchangeState(
         localGenesisHash,
         genesisHash
       )
-      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer, wrongNetwork = true)
     else
       val localBestBlock = blockchainReader.getBestBlockNumber
       // A head timestamp of zero is DATA, not a missing value — see EthNodeStatus68ExchangeState's identical

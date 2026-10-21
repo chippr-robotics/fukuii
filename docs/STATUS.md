@@ -93,6 +93,7 @@ bypass — extending a waiver means editing the matrix in a reviewed PR.
 | Waiver | Gate | Excluded test | Owner | Issue | Expires |
 |---|---|---|---|---|---|
 | `graphql-gasprice-stale-fixture` | `hive-graphql` | `07_eth_gasPrice` | realcodywburns | #1407 | 2026-12-31 |
+| `graphql-sendraw-38-underpriced-replacement` | `hive-graphql` | `38_eth_sendRawTransaction_transferEther` | realcodywburns | #1629 | 2026-12-31 |
 | `devp2p-getcells-needs-sparse-blobpool` | `hive-devp2p` | `GetCells` | realcodywburns | #1409 | 2026-12-31 |
 | `devp2p-invalid-cells-needs-sparse-blobpool` | `hive-devp2p` | `BlobTxWithInvalidCells` | realcodywburns | #1409 | 2026-12-31 |
 

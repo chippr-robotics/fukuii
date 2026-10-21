@@ -140,6 +140,19 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
 
       val shortBlacklistDuration: FiniteDuration = peerConfig.getDuration("short-blacklist-duration").toMillis.millis
       val longBlacklistDuration: FiniteDuration = peerConfig.getDuration("long-blacklist-duration").toMillis.millis
+      override val wrongNetworkExclusionDuration: FiniteDuration =
+        if peerConfig.hasPath("wrong-network-exclusion-duration") then
+          peerConfig.getDuration("wrong-network-exclusion-duration").toMillis.millis
+        else PeerConfiguration.DefaultWrongNetworkExclusionDuration
+
+      override val genesisHeadEvictionGrace: FiniteDuration =
+        if peerConfig.hasPath("genesis-head-eviction-grace") then
+          peerConfig.getDuration("genesis-head-eviction-grace").toMillis.millis
+        else PeerConfiguration.DefaultGenesisHeadEvictionGrace
+      override val genesisHeadExclusionDuration: FiniteDuration =
+        if peerConfig.hasPath("genesis-head-exclusion-duration") then
+          peerConfig.getDuration("genesis-head-exclusion-duration").toMillis.millis
+        else PeerConfiguration.DefaultGenesisHeadExclusionDuration
 
       val statSlotDuration: FiniteDuration = peerConfig.getDuration("stat-slot-duration").toMillis.millis
       val statSlotCount: Int = peerConfig.getInt("stat-slot-count")
@@ -170,6 +183,18 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
       // spec 002 US2 (FR-005): off by default; enables block-cache hit/miss tickers at ~1-2% read overhead.
       override val enableStatistics: Boolean =
         rocksDbConfig.hasPath("enable-statistics") && rocksDbConfig.getBoolean("enable-statistics")
+      // spec 015: RocksDB memory budget (see base/db.conf for the formula). All optional with trait defaults.
+      override val memoryBudget: Option[Long] =
+        if rocksDbConfig.hasPath("memory-budget") then Some(rocksDbConfig.getBytes("memory-budget").longValue)
+        else None
+      // Both opt-in (default false); see base/db.conf.
+      override val writeBufferAllowStall: Boolean =
+        rocksDbConfig.hasPath("write-buffer-allow-stall") && rocksDbConfig.getBoolean("write-buffer-allow-stall")
+      override val partitionIndexAndFilters: Boolean =
+        rocksDbConfig.hasPath("partition-index-and-filters") &&
+          rocksDbConfig.getBoolean("partition-index-and-filters")
+      override val metadataBlockSize: Long =
+        if rocksDbConfig.hasPath("metadata-block-size") then rocksDbConfig.getLong("metadata-block-size") else 4096L
 
   lazy val nodeCacheConfig: NodeCacheConfig = new NodeCacheConfig:
     private val cacheConfig = config.getConfig("node-caching")

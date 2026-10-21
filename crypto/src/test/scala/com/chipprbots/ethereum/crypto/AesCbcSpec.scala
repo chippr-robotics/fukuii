@@ -11,7 +11,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class AesCbcSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
+class AesCbcSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks:
 
   "AES_CBC" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
@@ -74,4 +74,3 @@ class AesCbcSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks
       decrypted shouldEqual Some(plaintext)
     }
   }
-}

@@ -21,7 +21,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.utils.ByteUtils
 
-package object crypto {
+package object crypto:
 
   val curveParams: X9ECParameters = SECNamedCurves.getByName("secp256k1")
   val curve: ECDomainParameters =
@@ -48,14 +48,13 @@ package object crypto {
   private val kec256Digest: ThreadLocal[KeccakDigest] =
     ThreadLocal.withInitial(() => new KeccakDigest(256))
 
-  def kec256(input: Array[Byte], start: Int, length: Int): Array[Byte] = {
+  def kec256(input: Array[Byte], start: Int, length: Int): Array[Byte] =
     val d = kec256Digest.get()
     d.reset() // reset-on-entry (INV-1/FR-002): clears any state left by a prior aborted hash
     val output = Array.ofDim[Byte](d.getDigestSize)
     d.update(input, start, length)
     d.doFinal(output, 0)
     output
-  }
 
   // Spec 007 US3 / T019 (FR-010-gated): dedicated single-Array overload.
   //
@@ -74,58 +73,54 @@ package object crypto {
     * `kec256(prefix ++ new Array[Byte](zeroCount))`; exists so the EVM can hash a paid-for, never-written memory region
     * of gigabyte scale (SHA3) in constant heap.
     */
-  def kec256ZeroPadded(prefix: Array[Byte], zeroCount: Int): Array[Byte] = {
+  def kec256ZeroPadded(prefix: Array[Byte], zeroCount: Int): Array[Byte] =
     require(zeroCount >= 0, s"negative zero padding: $zeroCount")
     val d = kec256Digest.get()
     d.reset() // reset-on-entry (INV-1/FR-002)
     val output = Array.ofDim[Byte](d.getDigestSize)
     d.update(prefix, 0, prefix.length)
     var left = zeroCount
-    while (left > 0) {
+    while left > 0 do
       val n = math.min(left, ZeroChunk.length)
       d.update(ZeroChunk, 0, n)
       left -= n
-    }
     d.doFinal(output, 0)
     output
-  }
 
   // Read-only source of zero bytes for kec256ZeroPadded. Never written, never handed out.
   private val ZeroChunk: Array[Byte] = new Array[Byte](64 * 1024)
 
-  def kec256(input: Array[Byte]*): Array[Byte] = {
+  def kec256(input: Array[Byte]*): Array[Byte] =
     val d = kec256Digest.get()
     d.reset() // reset-on-entry (INV-1/FR-002): clears any state left by a prior aborted hash
     val output = Array.ofDim[Byte](d.getDigestSize)
     input.foreach(i => d.update(i, 0, i.length))
     d.doFinal(output, 0)
     output
-  }
 
   def kec256(input: ByteString): ByteString =
     ByteString(kec256(input.toArray))
 
-  /** Test-only hook for the spec-007 bounded-footprint invariant (FR-009/SC-006, INV-2): returns the
-    * identity hash of THIS thread's reused KeccakDigest WITHOUT exposing the digest reference itself,
-    * so a test can assert exactly one digest instance per thread and none shared across threads. Do not
-    * use in production code; it must never be widened to return the digest (that would violate INV-2).
+  /** Test-only hook for the spec-007 bounded-footprint invariant (FR-009/SC-006, INV-2): returns the identity hash of
+    * THIS thread's reused KeccakDigest WITHOUT exposing the digest reference itself, so a test can assert exactly one
+    * digest instance per thread and none shared across threads. Do not use in production code; it must never be widened
+    * to return the digest (that would violate INV-2).
     */
   private[crypto] def kec256DigestIdentityForCurrentThread(): Int =
     System.identityHashCode(kec256Digest.get())
 
-  /** Test-only hook for the spec-007 reset-after-abort parity check (INV-1/FR-002): dirties THIS
-    * thread's reused digest with `update(...)` and then throws BEFORE `doFinal` — exactly the
-    * aborted-mid-update window that `doFinal`'s success-path-only reset never covers. The digest
-    * reference never escapes (INV-2). The test calls this, catches the throw, then asserts the NEXT
-    * `kec256` on the SAME thread is correct (proving reset-on-entry discarded the stale bytes).
+  /** Test-only hook for the spec-007 reset-after-abort parity check (INV-1/FR-002): dirties THIS thread's reused digest
+    * with `update(...)` and then throws BEFORE `doFinal` — exactly the aborted-mid-update window that `doFinal`'s
+    * success-path-only reset never covers. The digest reference never escapes (INV-2). The test calls this, catches the
+    * throw, then asserts the NEXT `kec256` on the SAME thread is correct (proving reset-on-entry discarded the stale
+    * bytes).
     */
-  private[crypto] def dirtyThreadDigestThenThrow(): Unit = {
+  private[crypto] def dirtyThreadDigestThenThrow(): Unit =
     val d = kec256Digest.get()
     d.update(Array[Byte](1, 2, 3, 4, 5), 0, 5)
     throw new RuntimeException("aborted between update and doFinal (test hook)")
-  }
 
-  def kec256PoW(header: Array[Byte], nonce: Array[Byte]): Array[Byte] = {
+  def kec256PoW(header: Array[Byte], nonce: Array[Byte]): Array[Byte] =
     val d = kec256Digest.get()
     d.reset() // reset-on-entry (INV-1/FR-002): clears any state left by a prior aborted hash
     d.update(header, 0, header.length)
@@ -133,7 +128,6 @@ package object crypto {
     val output = Array.ofDim[Byte](32)
     d.doFinal(output, 0)
     output
-  }
 
   def kec512(input: Array[Byte]): Array[Byte] = kec512.synchronized {
     val out = Array.ofDim[Byte](kec512.getDigestSize)
@@ -142,63 +136,55 @@ package object crypto {
     out
   }
 
-  def generateKeyPair(secureRandom: SecureRandom): AsymmetricCipherKeyPair = {
+  def generateKeyPair(secureRandom: SecureRandom): AsymmetricCipherKeyPair =
     val generator = new ECKeyPairGenerator
     generator.init(new ECKeyGenerationParameters(curve, secureRandom))
     generator.generateKeyPair()
-  }
 
   def secureRandomByteString(secureRandom: SecureRandom, length: Int): ByteString =
     ByteString(secureRandomByteArray(secureRandom, length))
 
-  def secureRandomByteArray(secureRandom: SecureRandom, length: Int): Array[Byte] = {
+  def secureRandomByteArray(secureRandom: SecureRandom, length: Int): Array[Byte] =
     val bytes = Array.ofDim[Byte](length)
     secureRandom.nextBytes(bytes)
     bytes
-  }
 
   /** @return
     *   (privateKey, publicKey) pair. The public key will be uncompressed and have its prefix dropped.
     */
-  def keyPairToByteArrays(keyPair: AsymmetricCipherKeyPair): (Array[Byte], Array[Byte]) = {
+  def keyPairToByteArrays(keyPair: AsymmetricCipherKeyPair): (Array[Byte], Array[Byte]) =
     val prvKey = ByteUtils.bigIntegerToBytes(keyPair.getPrivate.asInstanceOf[ECPrivateKeyParameters].getD, 32)
     val pubKey = keyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail
     (prvKey, pubKey)
-  }
 
-  def keyPairToByteStrings(keyPair: AsymmetricCipherKeyPair): (ByteString, ByteString) = {
+  def keyPairToByteStrings(keyPair: AsymmetricCipherKeyPair): (ByteString, ByteString) =
     val (prv, pub) = keyPairToByteArrays(keyPair)
     (ByteString(prv), ByteString(pub))
-  }
 
   /** Decode an EC point from its encoded representation and validate it is on the curve. Defense-in-depth for
     * CVE-2025-24883 / CVE-2026-26314 / CVE-2026-26315. BouncyCastle's decodePoint already validates the curve equation,
     * but isValid() additionally checks point order (not a small subgroup point) and rejects the point at infinity.
     */
-  def decodeAndValidatePoint(encoded: Array[Byte]): ECPoint = {
+  def decodeAndValidatePoint(encoded: Array[Byte]): ECPoint =
     val point = curve.getCurve.decodePoint(encoded)
-    if (!point.isValid || point.isInfinity)
+    if !point.isValid || point.isInfinity then
       throw new IllegalArgumentException("Invalid EC point: not on curve or point at infinity")
     point
-  }
 
-  def keyPairFromPrvKey(prvKeyBytes: Array[Byte]): AsymmetricCipherKeyPair = {
+  def keyPairFromPrvKey(prvKeyBytes: Array[Byte]): AsymmetricCipherKeyPair =
     val privateKey = BigInt(1, prvKeyBytes)
     keyPairFromPrvKey(privateKey)
-  }
 
-  def keyPairFromPrvKey(prvKeyBytes: ByteString): AsymmetricCipherKeyPair = {
+  def keyPairFromPrvKey(prvKeyBytes: ByteString): AsymmetricCipherKeyPair =
     val privateKey = BigInt(1, prvKeyBytes.toArray)
     keyPairFromPrvKey(privateKey)
-  }
 
-  def keyPairFromPrvKey(prvKey: BigInt): AsymmetricCipherKeyPair = {
+  def keyPairFromPrvKey(prvKey: BigInt): AsymmetricCipherKeyPair =
     val publicKey = curve.getG.multiply(prvKey.bigInteger).normalize()
     new AsymmetricCipherKeyPair(
       new ECPublicKeyParameters(publicKey, curve),
       new ECPrivateKeyParameters(prvKey.bigInteger, curve)
     )
-  }
 
   def pubKeyFromKeyPair(keypair: AsymmetricCipherKeyPair): Array[Byte] =
     keyPairToByteArrays(keypair)._2
@@ -209,19 +195,17 @@ package object crypto {
   def pubKeyFromPrvKey(prvKey: ByteString): ByteString =
     ByteString(pubKeyFromPrvKey(prvKey.toArray))
 
-  def newRandomKeyPairAsStrings(secureRandom: SecureRandom = new SecureRandom): (String, String) = {
+  def newRandomKeyPairAsStrings(secureRandom: SecureRandom = new SecureRandom): (String, String) =
     val keyPair = generateKeyPair(secureRandom)
     val (prv, pub) = keyPairToByteArrays(keyPair)
     (Hex.toHexString(prv), Hex.toHexString(pub))
-  }
 
-  def ripemd160(input: Array[Byte]): Array[Byte] = {
+  def ripemd160(input: Array[Byte]): Array[Byte] =
     val digest = new RIPEMD160Digest
     digest.update(input, 0, input.length)
     val out = Array.ofDim[Byte](digest.getDigestSize)
     digest.doFinal(out, 0)
     out
-  }
 
   def ripemd160(input: ByteString): ByteString =
     ByteString(ripemd160(input.toArray))
@@ -245,15 +229,12 @@ package object crypto {
   def sha256(input: ByteString): ByteString =
     ByteString(sha256(input.toArray))
 
-  def pbkdf2HMacSha256(passphrase: String, salt: ByteString, c: Int, dklen: Int): ByteString = {
+  def pbkdf2HMacSha256(passphrase: String, salt: ByteString, c: Int, dklen: Int): ByteString =
     val generator = new PKCS5S2ParametersGenerator(new SHA256Digest())
     generator.init(passphrase.getBytes(StandardCharsets.UTF_8), salt.toArray, c)
     val key = generator.generateDerivedMacParameters(dklen * 8).asInstanceOf[KeyParameter]
     ByteString(key.getKey)
-  }
 
-  def scrypt(passphrase: String, salt: ByteString, n: Int, r: Int, p: Int, dklen: Int): ByteString = {
+  def scrypt(passphrase: String, salt: ByteString, n: Int, r: Int, p: Int, dklen: Int): ByteString =
     val key = SCrypt.generate(passphrase.getBytes(StandardCharsets.UTF_8), salt.toArray, n, r, p, dklen)
     ByteString(key)
-  }
-}

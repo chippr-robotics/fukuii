@@ -64,8 +64,8 @@ import scodec.Attempt.Successful
 import scodec.Codec
 import scodec.bits.BitVector
 
-private[peergroup] object DynamicTLSPeerGroupInternals {
-  def buildFramingCodecs(config: FramingConfig): (LengthFieldBasedFrameDecoder, LengthFieldPrepender) = {
+private[peergroup] object DynamicTLSPeerGroupInternals:
+  def buildFramingCodecs(config: FramingConfig): (LengthFieldBasedFrameDecoder, LengthFieldPrepender) =
     val encoder = new LengthFieldPrepender(
       config.byteOrder,
       config.lengthFieldLength.value,
@@ -84,39 +84,34 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     )
 
     (decoder, encoder)
-  }
 
-  def buildIdlePeerHandler(config: StalePeerDetectionConfig): IdleStateHandler = {
+  def buildIdlePeerHandler(config: StalePeerDetectionConfig): IdleStateHandler =
     new IdleStateHandler(
       config.readerIdleTime.toMillis,
       config.writerIdleTime.toMillis,
       config.allIdleTime.toMillis,
       TimeUnit.MILLISECONDS
     )
-  }
 
-  implicit class ChannelOps(val channel: io.netty.channel.Channel) {
+  implicit class ChannelOps(val channel: io.netty.channel.Channel):
     def sendMessage[M](m: M)(implicit codec: Codec[M]): IO[Unit] =
-      for {
+      for
         enc <- IO.fromTry(codec.encode(m).toTry)
         _ <- toTask(channel.writeAndFlush(Unpooled.wrappedBuffer(enc.toByteBuffer)))
-      } yield ()
-  }
+      yield ()
 
   class MessageNotifier[M](
       messageQueue: ChannelAwareQueue[ChannelEvent[M]],
       codec: Codec[M],
       @annotation.unused eventLoop: EventLoop
   ) extends ChannelInboundHandlerAdapter
-      with StrictLogging {
+      with StrictLogging:
 
-    private def idleEventToChannelEvent(idleStateEvent: IdleStateEvent): ChannelIdle = {
-      idleStateEvent.state() match {
+    private def idleEventToChannelEvent(idleStateEvent: IdleStateEvent): ChannelIdle =
+      idleStateEvent.state() match
         case IdleState.READER_IDLE => ChannelIdle(ReaderIdle, idleStateEvent.isFirst)
         case IdleState.WRITER_IDLE => ChannelIdle(WriterIdle, idleStateEvent.isFirst)
-        case IdleState.ALL_IDLE => ChannelIdle(AllIdle, idleStateEvent.isFirst)
-      }
-    }
+        case IdleState.ALL_IDLE    => ChannelIdle(AllIdle, idleStateEvent.isFirst)
 
     // Message ordering guarantee: Netty invokes handler methods sequentially on the same
     // event loop thread for a given channel. However, using unsafeRunAndForget with the
@@ -126,32 +121,28 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     // IO execution is required, a single-threaded execution context should be used instead.
     import cats.effect.unsafe.implicits.global
 
-    override def channelInactive(channelHandlerContext: ChannelHandlerContext): Unit = {
+    override def channelInactive(channelHandlerContext: ChannelHandlerContext): Unit =
       logger.debug("Channel to peer {} inactive", channelHandlerContext.channel().remoteAddress())
       executeAsync(messageQueue.close(discard = false))
-    }
 
-    override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
+    override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit =
       val byteBuf = msg.asInstanceOf[ByteBuf]
-      try {
-        codec.decodeValue(BitVector(byteBuf.nioBuffer())) match {
+      try
+        codec.decodeValue(BitVector(byteBuf.nioBuffer())) match
           case Successful(message) =>
             handleEvent(MessageReceived(message))
           case Failure(ex) =>
             logger.error("Unexpected decoding error {} from peer {}", ex.message, ctx.channel().remoteAddress(): Any)
             handleEvent(DecodingError)
-        }
-      } catch {
+      catch
         case NonFatal(e) =>
           handleEvent(UnexpectedError(e))
-      } finally {
+      finally
         byteBuf.release()
         ()
-      }
-    }
 
-    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-      cause match {
+    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit =
+      cause match
         case e: TooLongFrameException =>
           logger.error("Too long frame {} on channel to peer {}", e.getMessage, ctx.channel().remoteAddress())
           handleEvent(DecodingError)
@@ -163,17 +154,13 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
             ctx.channel().remoteAddress(): Any
           )
           handleEvent(UnexpectedError(cause))
-      }
-    }
 
-    override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit = {
-      evt match {
+    override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit =
+      evt match
         case idleStateEvent: IdleStateEvent =>
           val channelIdleEvent = idleEventToChannelEvent(idleStateEvent)
           logger.debug("Peer with address {} generated idle event {}", ctx.channel().remoteAddress(), channelIdleEvent)
           handleEvent(channelIdleEvent)
-      }
-    }
 
     private def handleEvent(event: ChannelEvent[M]): Unit =
       // Don't want to lose message, so `offer`, not `tryOffer`.
@@ -181,11 +168,9 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
 
     private def executeAsync(task: IO[Unit]): Unit =
       task.unsafeRunAndForget()(global)
-  }
 
-  object MessageNotifier {
+  object MessageNotifier:
     val MessageNotifiedHandlerName = "MessageNotifier"
-  }
 
   class ClientChannelBuilder[M](
       localId: BitVector,
@@ -197,90 +182,85 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       socks5Config: Option[Socks5Config],
       idlePeerConfig: Option[StalePeerDetectionConfig]
   )(implicit codec: Codec[M])
-      extends StrictLogging {
+      extends StrictLogging:
     val (decoder, encoder) = buildFramingCodecs(framingConfig)
     private val to = peerInfo
     private val activation = Promise[(SocketChannel, ChannelAwareQueue[ChannelEvent[M]])]()
     private val activationF = activation.future
     private val bootstrap: Bootstrap = clientBootstrap
       .clone()
-      .handler(new ChannelInitializer[SocketChannel]() {
-        def initChannel(ch: SocketChannel): Unit = {
-          logger.debug("Initiating connection to peer {}", peerInfo)
-          val pipeline = ch.pipeline()
-          val sslHandler = sslClientCtx.newHandler(ch.alloc())
-          val messageQueue = makeMessageQueue[M](maxIncomingQueueSize, ch.config())
+      .handler(
+        new ChannelInitializer[SocketChannel]():
+          def initChannel(ch: SocketChannel): Unit =
+            logger.debug("Initiating connection to peer {}", peerInfo)
+            val pipeline = ch.pipeline()
+            val sslHandler = sslClientCtx.newHandler(ch.alloc())
+            val messageQueue = makeMessageQueue[M](maxIncomingQueueSize, ch.config())
 
-          socks5Config.foreach { config =>
-            val sock5Proxy = config.authConfig.fold(new Socks5ProxyHandler(config.proxyAddress)) { authConfig =>
-              new Socks5ProxyHandler(config.proxyAddress, authConfig.user, authConfig.password)
-            }
-            pipeline.addLast(sock5Proxy)
-          }
-
-          pipeline
-            .addLast("ssl", sslHandler) //This needs to be first
-            .addLast(new ChannelInboundHandlerAdapter() {
-              override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit = {
-                evt match {
-                  case e: SslHandshakeCompletionEvent =>
-                    logger.info(
-                      s"Ssl Handshake client channel from ${ctx.channel().localAddress()} " +
-                        s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id} and ssl status ${e.isSuccess}"
-                    )
-                    if (e.isSuccess) {
-                      logger.debug("Handshake to peer {} succeeded", peerInfo)
-
-                      // idle peer handler is installed only after successful tls handshake so that only time after connection
-                      // is counted to idle time counter (not time of the handshake itself)
-                      idlePeerConfig.foreach(
-                        config =>
-                          pipeline.addBefore(
-                            MessageNotifier.MessageNotifiedHandlerName,
-                            "IdlePeerHandler",
-                            buildIdlePeerHandler(config)
-                          )
-                      )
-
-                      activation.success((ch, messageQueue))
-                    } else {
-                      logger.debug("Handshake to peer {} failed due to {}", peerInfo, e: Any)
-                      activation.failure(e.cause())
-                    }
-
-                  case ev =>
-                    logger.debug(
-                      s"User Event $ev on client channel from ${ctx.channel().localAddress()} " +
-                        s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id}"
-                    )
-                }
+            socks5Config.foreach { config =>
+              val sock5Proxy = config.authConfig.fold(new Socks5ProxyHandler(config.proxyAddress)) { authConfig =>
+                new Socks5ProxyHandler(config.proxyAddress, authConfig.user, authConfig.password)
               }
-            })
-            .addLast(encoder)
-            .addLast(decoder)
-            .addLast(
-              MessageNotifier.MessageNotifiedHandlerName,
-              new MessageNotifier[M](messageQueue, codec, ch.eventLoop)
-            )
-          ()
-        }
-      })
+              pipeline.addLast(sock5Proxy)
+            }
 
-    private[dynamictls] def initialize = {
-      val connectIO = for {
+            pipeline
+              .addLast("ssl", sslHandler) // This needs to be first
+              .addLast(
+                new ChannelInboundHandlerAdapter():
+                  override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit =
+                    evt match
+                      case e: SslHandshakeCompletionEvent =>
+                        logger.info(
+                          s"Ssl Handshake client channel from ${ctx.channel().localAddress()} " +
+                            s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id} and ssl status ${e.isSuccess}"
+                        )
+                        if e.isSuccess then
+                          logger.debug("Handshake to peer {} succeeded", peerInfo)
+
+                          // idle peer handler is installed only after successful tls handshake so that only time after connection
+                          // is counted to idle time counter (not time of the handshake itself)
+                          idlePeerConfig.foreach(config =>
+                            pipeline.addBefore(
+                              MessageNotifier.MessageNotifiedHandlerName,
+                              "IdlePeerHandler",
+                              buildIdlePeerHandler(config)
+                            )
+                          )
+
+                          activation.success((ch, messageQueue))
+                        else
+                          logger.debug("Handshake to peer {} failed due to {}", peerInfo, e: Any)
+                          activation.failure(e.cause())
+
+                      case ev =>
+                        logger.debug(
+                          s"User Event $ev on client channel from ${ctx.channel().localAddress()} " +
+                            s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id}"
+                        )
+              )
+              .addLast(encoder)
+              .addLast(decoder)
+              .addLast(
+                MessageNotifier.MessageNotifiedHandlerName,
+                new MessageNotifier[M](messageQueue, codec, ch.eventLoop)
+              )
+            ()
+      )
+
+    private[dynamictls] def initialize =
+      val connectIO = for
         _ <- IO(logger.debug("Initiating connection to peer {}", peerInfo))
         _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
         ch <- IO.fromFuture(IO.pure(activationF))
         _ <- IO(logger.debug("Connection to peer {} finished successfully", peerInfo))
-      } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
+      yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
 
-      connectIO.handleErrorWith {
-        case t: Throwable =>
-          IO.raiseError(mapException(t))
+      connectIO.handleErrorWith { case t: Throwable =>
+        IO.raiseError(mapException(t))
       }
-    }
 
-    private def mapException(t: Throwable): Throwable = t match {
+    private def mapException(t: Throwable): Throwable = t match
       case _: ClosedChannelException =>
         new PeerGroup.ChannelBrokenException(to, t)
       case _: ConnectException =>
@@ -293,8 +273,6 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
         new PeerGroup.HandshakeException(to, t)
       case _ =>
         t
-    }
-  }
 
   class ServerChannelBuilder[M](
       localId: BitVector,
@@ -306,10 +284,11 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       throttlingIpFilter: Option[ThrottlingIpFilter],
       idlePeerConfig: Option[StalePeerDetectionConfig]
   )(implicit codec: Codec[M])
-      extends StrictLogging {
+      extends StrictLogging:
     val sslHandler: SslHandler = sslServerCtx.newHandler(nettyChannel.alloc())
 
-    val messageQueue: ChannelAwareQueue[ChannelEvent[M]] = makeMessageQueue[M](maxIncomingQueueSize, nettyChannel.config())
+    val messageQueue: ChannelAwareQueue[ChannelEvent[M]] =
+      makeMessageQueue[M](maxIncomingQueueSize, nettyChannel.config())
     val sslEngine: SSLEngine = sslHandler.engine()
 
     val pipeline: ChannelPipeline = nettyChannel.pipeline()
@@ -320,53 +299,50 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     // it will be closed immediately without using more resources
     throttlingIpFilter.foreach(filter => pipeline.addLast(filter))
     pipeline
-      .addLast("ssl", sslHandler) //This needs to be first
-      .addLast(new ChannelInboundHandlerAdapter() {
-        override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit = {
-          evt match {
-            case e: SslHandshakeCompletionEvent =>
-              val localAddress = InetMultiAddress(ctx.channel().localAddress().asInstanceOf[InetSocketAddress])
-              val remoteAddress = InetMultiAddress(ctx.channel().remoteAddress().asInstanceOf[InetSocketAddress])
-              if (e.isSuccess) {
-                // after handshake handshake session becomes session, so during handshake sslEngine.getHandshakeSession needs
-                // to be called to put value in session, but after handshake sslEngine.getSession needs to be called
-                // get the same session with value
-                val peerId = sslEngine.getSession.getValue(DynamicTLSPeerGroupUtils.peerIdKey).asInstanceOf[BitVector]
-                logger.debug(
-                  s"Ssl Handshake server channel from $localAddress " +
-                    s"to $remoteAddress with channel id ${ctx.channel().id} and ssl status ${e.isSuccess}"
-                )
+      .addLast("ssl", sslHandler) // This needs to be first
+      .addLast(
+        new ChannelInboundHandlerAdapter():
+          override def userEventTriggered(ctx: ChannelHandlerContext, evt: Any): Unit =
+            evt match
+              case e: SslHandshakeCompletionEvent =>
+                val localAddress = InetMultiAddress(ctx.channel().localAddress().asInstanceOf[InetSocketAddress])
+                val remoteAddress = InetMultiAddress(ctx.channel().remoteAddress().asInstanceOf[InetSocketAddress])
+                if e.isSuccess then
+                  // after handshake handshake session becomes session, so during handshake sslEngine.getHandshakeSession needs
+                  // to be called to put value in session, but after handshake sslEngine.getSession needs to be called
+                  // get the same session with value
+                  val peerId = sslEngine.getSession.getValue(DynamicTLSPeerGroupUtils.peerIdKey).asInstanceOf[BitVector]
+                  logger.debug(
+                    s"Ssl Handshake server channel from $localAddress " +
+                      s"to $remoteAddress with channel id ${ctx.channel().id} and ssl status ${e.isSuccess}"
+                  )
 
-                // idle peer handler is installed only after successful tls handshake so that only time after connection
-                // is counted to idle time counter (not time of the handshake itself)
-                idlePeerConfig.foreach(
-                  config =>
+                  // idle peer handler is installed only after successful tls handshake so that only time after connection
+                  // is counted to idle time counter (not time of the handshake itself)
+                  idlePeerConfig.foreach(config =>
                     pipeline.addBefore(
                       MessageNotifier.MessageNotifiedHandlerName,
                       "IdlePeerHandler",
                       buildIdlePeerHandler(config)
                     )
-                )
+                  )
 
-                val info = PeerInfo(peerId, InetMultiAddress(nettyChannel.remoteAddress()))
-                val channel = new DynamicTlsChannel[M](localId, info, nettyChannel, messageQueue, ServerChannel)
-                handleEvent(ChannelCreated(channel, channel.close()))
-              } else {
-                logger.debug("Ssl handshake failed from peer with address {}", remoteAddress)
-                // Handshake failed we do not have id of remote peer
-                handleEvent(
-                  PeerGroup.ServerEvent
-                    .HandshakeFailed(new HandshakeException(PeerInfo(BitVector.empty, remoteAddress), e.cause()))
+                  val info = PeerInfo(peerId, InetMultiAddress(nettyChannel.remoteAddress()))
+                  val channel = new DynamicTlsChannel[M](localId, info, nettyChannel, messageQueue, ServerChannel)
+                  handleEvent(ChannelCreated(channel, channel.close()))
+                else
+                  logger.debug("Ssl handshake failed from peer with address {}", remoteAddress)
+                  // Handshake failed we do not have id of remote peer
+                  handleEvent(
+                    PeerGroup.ServerEvent
+                      .HandshakeFailed(new HandshakeException(PeerInfo(BitVector.empty, remoteAddress), e.cause()))
+                  )
+              case ev =>
+                logger.debug(
+                  s"User Event $ev on server channel from ${ctx.channel().localAddress()} " +
+                    s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id}"
                 )
-              }
-            case ev =>
-              logger.debug(
-                s"User Event $ev on server channel from ${ctx.channel().localAddress()} " +
-                  s"to ${ctx.channel().remoteAddress()} with channel id ${ctx.channel().id}"
-              )
-          }
-        }
-      })
+      )
       .addLast(encoder)
       .addLast(decoder)
       .addLast(
@@ -376,7 +352,6 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
       serverQueue.offer(event).void.unsafeRunAndForget()(global)
-  }
 
   class DynamicTlsChannel[M](
       localId: BitVector,
@@ -386,7 +361,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       channelType: TlsChannelType
   )(implicit codec: Codec[M])
       extends Channel[PeerInfo, M]
-      with StrictLogging {
+      with StrictLogging:
 
     logger.debug(
       s"Creating $channelType from ${nettyChannel.localAddress()} to ${nettyChannel.remoteAddress()} with channel id ${nettyChannel.id}"
@@ -394,43 +369,34 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
 
     override val from: PeerInfo = PeerInfo(localId, InetMultiAddress(nettyChannel.localAddress()))
 
-    override def sendMessage(message: M): IO[Unit] = {
+    override def sendMessage(message: M): IO[Unit] =
       logger.debug("Sending message to peer {} via {}", nettyChannel.localAddress(), channelType)
-      nettyChannel.sendMessage(message)(codec).handleErrorWith {
-        case e: IOException =>
-          logger.debug("Sending message to {} failed due to {}", message, e)
-          IO.raiseError(new ChannelBrokenException[PeerInfo](to, e))
+      nettyChannel.sendMessage(message)(codec).handleErrorWith { case e: IOException =>
+        logger.debug("Sending message to {} failed due to {}", message, e)
+        IO.raiseError(new ChannelBrokenException[PeerInfo](to, e))
       }
-    }
 
     override def nextChannelEvent: IO[Option[ChannelEvent[M]]] = incomingMessagesQueue.next
 
     private[peergroup] def incomingQueueSize: Long = incomingMessagesQueue.size
 
-    /**
-      * To be sure that `channelInactive` had run before returning from close, we are also waiting for nettyChannel.closeFuture() after
-      * nettyChannel.close()
+    /** To be sure that `channelInactive` had run before returning from close, we are also waiting for
+      * nettyChannel.closeFuture() after nettyChannel.close()
       */
     private[peergroup] def close(): IO[Unit] =
-      for {
+      for
         _ <- IO(logger.debug("Closing {} to peer {}", channelType, to))
         _ <- toTask(nettyChannel.close())
         _ <- toTask(nettyChannel.closeFuture())
         _ <- incomingMessagesQueue.close(discard = true).attempt
         _ <- IO(logger.debug("{} to peer {} closed", channelType, to))
-      } yield ()
-  }
+      yield ()
 
-  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig) = {
+  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig) =
     ChannelAwareQueue[ChannelEvent[M]](limit, channelConfig).unsafeRunSync()(global)
-  }
 
   sealed abstract class TlsChannelType
-  case object ClientChannel extends TlsChannelType {
+  case object ClientChannel extends TlsChannelType:
     override def toString: String = "tls client channel"
-  }
-  case object ServerChannel extends TlsChannelType {
+  case object ServerChannel extends TlsChannelType:
     override def toString: String = "tls server channel"
-  }
-
-}

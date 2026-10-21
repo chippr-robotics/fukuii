@@ -19,10 +19,16 @@ case class DiscoveryConfig(
     kademliaTimeout: FiniteDuration,
     kademliaBucketSize: Int,
     kademliaAlpha: Int,
-    channelCapacity: Int
+    channelCapacity: Int,
+    // Cap on live server-side UDP channels (one per remote address); 0 = unlimited (#1519).
+    maxServerChannels: Int,
+    // Size of the dedicated discovery compute pool, i.e. the most cores discovery may occupy (task #52).
+    computeThreads: Int
 )
 
 object DiscoveryConfig extends Logger:
+  val DefaultComputeThreads: Int = 1
+
   def apply(
       etcClientConfig: com.typesafe.config.Config,
       bootstrapNodes: Set[String],
@@ -85,5 +91,10 @@ object DiscoveryConfig extends Logger:
       kademliaTimeout = discoveryConfig.getDuration("kademlia-timeout").toMillis.millis,
       kademliaBucketSize = discoveryConfig.getInt("kademlia-bucket-size"),
       kademliaAlpha = discoveryConfig.getInt("kademlia-alpha"),
-      channelCapacity = discoveryConfig.getInt("channel-capacity")
+      channelCapacity = discoveryConfig.getInt("channel-capacity"),
+      maxServerChannels =
+        if discoveryConfig.hasPath("max-server-channels") then discoveryConfig.getInt("max-server-channels") else 2048,
+      computeThreads =
+        if discoveryConfig.hasPath("compute-threads") then discoveryConfig.getInt("compute-threads")
+        else DefaultComputeThreads
     )

@@ -53,7 +53,7 @@ class EthereumIESEngine(
     prvSrc: Either[ECPrivateKeyParameters, ECKeyPairGenerator],
     pubSrc: Either[ECPublicKeyParameters, ECIESPublicKeyParser],
     hashMacKey: Boolean = true
-) {
+):
 
   @throws[InvalidCipherTextException]
   private def encryptBlock(
@@ -63,19 +63,18 @@ class EthereumIESEngine(
       macData: Option[Array[Byte]],
       encodedPublicKey: Array[Byte],
       fillKDFunction: Int => ByteString
-  ): Array[Byte] = {
+  ): Array[Byte] =
 
-    val (derivedKeySecondPart, cryptogram) = cipher match {
+    val (derivedKeySecondPart, cryptogram) = cipher match
 
       case Some(cphr) =>
         // Block cipher mode.
         val derivedKey = fillKDFunction(ECIESCoder.KeySize / 8 + ECIESCoder.KeySize / 8)
         val (firstPart, secondPart) = derivedKey.splitAt(ECIESCoder.KeySize / 8)
 
-        IV match {
+        IV match
           case Some(iv) => cphr.init(true, new ParametersWithIV(new KeyParameter(firstPart.toArray), iv))
           case None     => cphr.init(true, new KeyParameter(firstPart.toArray))
-        }
 
         val encrypted = new Array[Byte](cphr.getOutputSize(inLen))
         val len = cphr.processBytes(plainText, inOff, inLen, encrypted, 0)
@@ -93,7 +92,6 @@ class EthereumIESEngine(
         }
 
         (secondPart, ByteString(encrypted*))
-    }
 
     // calculate mac
     mac.init(new KeyParameter(getKdfForMac(derivedKeySecondPart)))
@@ -106,7 +104,6 @@ class EthereumIESEngine(
     mac.doFinal(messageAuthenticationCode, 0)
 
     encodedPublicKey ++ cryptogram ++ messageAuthenticationCode
-  }
 
   // scalastyle:off method.length
   @throws[InvalidCipherTextException]
@@ -117,25 +114,24 @@ class EthereumIESEngine(
       macData: Option[Array[Byte]],
       encodedPublicKey: Array[Byte],
       fillKDFunction: Int => ByteString
-  ): Array[Byte] = {
+  ): Array[Byte] =
 
     // Security: ensure input contains at least MAC + encoded key + 1 byte of ciphertext
     // CVE-2026-22862: original check (inLen <= KeySize/8 = 16) was too weak; MAC is 32 bytes
-    if (inLen <= mac.getMacSize + encodedPublicKey.length)
+    if inLen <= mac.getMacSize + encodedPublicKey.length then
       throw new InvalidCipherTextException(
         s"Length of input must be greater than MAC (${mac.getMacSize}) + encoded key (${encodedPublicKey.length}), got $inLen"
       )
 
-    val (derivedKeySecondPart, plainText) = cipher match {
+    val (derivedKeySecondPart, plainText) = cipher match
       case Some(cphr) =>
         // Block cipher mode.
         val derivedKey: ByteString = fillKDFunction(ECIESCoder.KeySize / 8 + ECIESCoder.KeySize / 8)
         val (firstPart, secondPart) = derivedKey.splitAt(ECIESCoder.KeySize / 8)
 
-        IV match {
+        IV match
           case Some(iv) => cphr.init(false, new ParametersWithIV(new KeyParameter(firstPart.toArray), iv))
           case None     => cphr.init(false, new KeyParameter(firstPart.toArray))
-        }
 
         val decrypted = new Array[Byte](cphr.getOutputSize(inLen - encodedPublicKey.length - mac.getMacSize))
         val len = cphr.processBytes(
@@ -158,7 +154,6 @@ class EthereumIESEngine(
         }
 
         (secondPart, ByteString(decrypted*))
-    }
 
     val end = inOff + inLen
     val messageAuthenticationCode = Arrays.copyOfRange(cryptogram, end - mac.getMacSize, end)
@@ -175,21 +170,18 @@ class EthereumIESEngine(
     macData.foreach(data => mac.update(data, 0, data.length))
     mac.doFinal(messageAuthenticationCodeCalculated, 0)
 
-    if (!Arrays.constantTimeAreEqual(messageAuthenticationCode, messageAuthenticationCodeCalculated))
+    if !Arrays.constantTimeAreEqual(messageAuthenticationCode, messageAuthenticationCodeCalculated) then
       throw new InvalidCipherTextException("Invalid MAC.")
 
     plainText.toArray
-  }
 
-  private def getKdfForMac(derivedKeySecondPart: ByteString) = if (hashMacKey) {
+  private def getKdfForMac(derivedKeySecondPart: ByteString) = if hashMacKey then
     val hashBuff = new Array[Byte](hash.getDigestSize)
     hash.reset()
     hash.update(derivedKeySecondPart.toArray, 0, derivedKeySecondPart.length)
     hash.doFinal(hashBuff, 0)
     hashBuff
-  } else {
-    derivedKeySecondPart.toArray
-  }
+  else derivedKeySecondPart.toArray
 
   @throws[InvalidCipherTextException]
   def processBlock(
@@ -198,25 +190,23 @@ class EthereumIESEngine(
       inLen: Int,
       forEncryption: Boolean,
       macData: Option[Array[Byte]] = None
-  ): Array[Byte] = {
+  ): Array[Byte] =
     val (prv, encodedEphKeyPair) = prvSrc.fold(
       key => (key, None),
-      keyPairGenerator => {
+      keyPairGenerator =>
         val ephKeyPair = keyPairGenerator.generateKeyPair()
         val prvParam = ephKeyPair.getPrivate.asInstanceOf[ECPrivateKeyParameters]
         val pubEncodedParam = ephKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false)
         (prvParam, Some(pubEncodedParam))
-      }
     )
 
     val (pub, encodedPublicKey) = pubSrc.fold(
       key => (key, None),
-      keyParser => {
+      keyParser =>
         val bIn = new ByteArrayInputStream(in, inOff, inLen)
         val result = keyParser.readKey(bIn).asInstanceOf[ECPublicKeyParameters]
         val encLength = inLen - bIn.available
         (result, Some(Arrays.copyOfRange(in, inOff, inOff + encLength)))
-      }
     )
 
     val agree = new ECDHBasicAgreement
@@ -228,7 +218,5 @@ class EthereumIESEngine(
 
     val encodedKey = encodedPublicKey.orElse(encodedEphKeyPair).getOrElse(new Array[Byte](0))
 
-    if (forEncryption) encryptBlock(in, inOff, inLen, macData, encodedKey, fillKDFunction)
+    if forEncryption then encryptBlock(in, inOff, inLen, macData, encodedKey, fillKDFunction)
     else decryptBlock(in, inOff, inLen, macData, encodedKey, fillKDFunction)
-  }
-}

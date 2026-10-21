@@ -53,6 +53,7 @@ object JsonRpcError extends JsonMethodsImplicits:
   def SimulateNonceTooHigh(msg: String): JsonRpcError = JsonRpcError(-38011, msg, None)
   def SimulateBaseFeeTooLow(msg: String): JsonRpcError = JsonRpcError(-38012, msg, None)
   def SimulateIntrinsicGasTooLow(msg: String): JsonRpcError = JsonRpcError(-38013, msg, None)
+  def SimulateMaxInitCodeSizeExceeded(msg: String): JsonRpcError = JsonRpcError(-38025, msg, None)
   def SimulateInsufficientFunds(msg: String): JsonRpcError = JsonRpcError(-38014, msg, None)
   def SimulateBlockGasLimitExceeded(msg: String): JsonRpcError = JsonRpcError(-38015, msg, None)
   def SimulateBlockNumberNotIncreasing(msg: String): JsonRpcError = JsonRpcError(-38020, msg, None)

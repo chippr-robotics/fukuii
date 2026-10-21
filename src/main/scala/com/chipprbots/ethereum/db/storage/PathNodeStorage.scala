@@ -93,9 +93,17 @@ class PathNodeStorage(val dataSource: DataSource):
     *   RLP-encoded node bytes
     */
   def writeStorageNode(accountHash: ByteString, nibblePath: Array[Byte], rlp: Array[Byte]): Unit =
-    val key = storageKey(accountHash, nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = storageNs, toRemove = Nil, toUpsert = Seq(key -> rlp)))
+    dataSource.update(Seq(storageNodeUpsert(accountHash, nibblePath, rlp)))
+
+  /** The single-node update [[writeStorageNode]] commits, for a caller that groups many nodes into one write batch
+    * (`dataSource.update` applies the updates of one call in order, in one RocksDB WriteBatch). Same key and value
+    * bytes as [[writeStorageNode]].
+    */
+  def storageNodeUpsert(accountHash: ByteString, nibblePath: Array[Byte], rlp: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(
+      namespace = storageNs,
+      toRemove = Nil,
+      toUpsert = Seq(storageKey(accountHash, nibblePath) -> rlp)
     )
 
   /** Read a storage-trie node by account hash and nibble path. Returns `None` if absent. */
@@ -105,9 +113,14 @@ class PathNodeStorage(val dataSource: DataSource):
 
   /** Delete the single storage-trie node for `accountHash` at exactly `nibblePath`. No-op if absent. */
   def deleteStorageNode(accountHash: ByteString, nibblePath: Array[Byte]): Unit =
-    val key = storageKey(accountHash, nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = storageNs, toRemove = Seq(key), toUpsert = Nil))
+    dataSource.update(Seq(storageNodeRemoval(accountHash, nibblePath)))
+
+  /** The single-node update [[deleteStorageNode]] commits; see [[storageNodeUpsert]]. */
+  def storageNodeRemoval(accountHash: ByteString, nibblePath: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(
+      namespace = storageNs,
+      toRemove = Seq(storageKey(accountHash, nibblePath)),
+      toUpsert = Nil
     )
 
   /** Delete all storage-trie nodes for `accountHash` whose path starts with `nibblePrefix`. */

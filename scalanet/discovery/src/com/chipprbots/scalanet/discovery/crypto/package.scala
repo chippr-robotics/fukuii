@@ -2,7 +2,7 @@ package com.chipprbots.scalanet.discovery
 
 import scodec.bits.BitVector
 
-package object crypto {
+package object crypto:
 
   sealed trait PrivateKeyTag
   sealed trait PublicKeyTag
@@ -16,4 +16,3 @@ package object crypto {
 
   object Signature extends Tagger[BitVector, SignatureTag]
   type Signature = Signature.Tagged
-}

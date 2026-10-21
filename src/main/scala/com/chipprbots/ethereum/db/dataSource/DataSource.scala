@@ -81,6 +81,12 @@ trait DataSource:
     */
   def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit
 
+  /** Ask the store to compact `[fromKey, toKeyExclusive)` within `namespace` now, so space freed by a [[deleteRange]]
+    * is reclaimed instead of waiting for background compaction. BLOCKING (it rewrites the overlapping files): call it
+    * off actor threads. No-op for stores without compaction (the in-memory test store).
+    */
+  def compactRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit = ()
+
   /** This function updates the DataSource by deleting, updating and inserting new (key-value) pairs. Implementations
     * should guarantee that the whole operation is atomic.
     */

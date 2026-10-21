@@ -21,7 +21,6 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.DebugTracingService.*
-import com.chipprbots.ethereum.jsonrpc.EthInfoService.CallTx
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
@@ -163,24 +162,13 @@ class DebugTracingServiceSpec
         saveAsBestBlock = true
       )
 
-      (mockLedger
-        .simulateTransactionWithTracer(
-          _: SignedTransactionWithSender,
-          _: BlockHeader,
-          _: Option[InMemoryWorldStateProxy],
-          _: ExecutionTracer
-        ))
-        .expects(*, *, *, *)
-        .returning(null.asInstanceOf[TxResult])
+      // The call path is StxLedger.simulateCall (#1629 S3), which carries the typed message and its pre-checks
+      (mockLedger.simulateCall)
+        .expects(*, *, *, *, *)
+        .anyNumberOfTimes()
+        .returning(Right(null.asInstanceOf[TxResult]))
 
-      val callTx: CallTx = EthInfoService.CallTx(
-        from = None,
-        to = None,
-        gas = None,
-        gasPrice = 0,
-        value = 0,
-        data = ByteString.empty
-      )
+      val callTx: TxArgs = TxArgs()
       val result: Either[JsonRpcError, TraceCallResponse] = service
         .traceCall(TraceCallRequest(callTx, BlockParam.Latest))
         .unsafeRunSync()

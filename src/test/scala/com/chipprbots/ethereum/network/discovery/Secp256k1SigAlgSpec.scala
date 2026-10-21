@@ -80,3 +80,37 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers:
   it should "recover the public key from a full signature" taggedAs (UnitTest, NetworkTest) in new SignatureFixture:
     val signature: Signature.Tagged = sigalg.sign(privateKey, data)
     sigalg.recoverPublicKey(signature, data).require shouldBe publicKey
+
+  // Task #52: one inbound datagram was recovered up to three times (netty-thread responder, server channel, client
+  // channel). Recovery is a pure function of (signature, hash), so repeats are served from a bounded cache.
+  it should "serve a repeated recovery from its cache with the same key" taggedAs (UnitTest, NetworkTest) in
+    new SignatureFixture:
+      val fresh = new Secp256k1SigAlg
+      val signature: Signature.Tagged = fresh.sign(privateKey, data)
+      fresh.recoverPublicKey(signature, data).require shouldBe publicKey
+      fresh.recoveredKeyCacheSize shouldBe 1
+      fresh.recoverPublicKey(signature, data).require shouldBe publicKey
+      fresh
+        .recoverPublicKeyFromHash(signature, BitVector(com.chipprbots.ethereum.crypto.kec256(data.toByteArray)))
+        .require shouldBe publicKey
+      fresh.recoveredKeyCacheSize shouldBe 1
+
+  it should "not let a cached recovery answer for different data" taggedAs (UnitTest, NetworkTest) in
+    new SignatureFixture:
+      val fresh = new Secp256k1SigAlg
+      val signature: Signature.Tagged = fresh.sign(privateKey, data)
+      fresh.recoverPublicKey(signature, data).require shouldBe publicKey
+      val other = data ++ BitVector.fromByte(1)
+      fresh.recoverPublicKey(signature, other).toOption should not contain publicKey
+
+  it should "evict the least recently used entry once full" taggedAs (UnitTest, NetworkTest) in {
+    val lru = new Secp256k1SigAlg.BoundedLru[Int, String](2)
+    lru.put(1, "a")
+    lru.put(2, "b")
+    lru.get(1) shouldBe Some("a") // 1 is now the most recently used
+    lru.put(3, "c")
+    lru.get(2) shouldBe None
+    lru.get(1) shouldBe Some("a")
+    lru.get(3) shouldBe Some("c")
+    lru.entryCount shouldBe 2
+  }

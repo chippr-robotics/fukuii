@@ -9,10 +9,10 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** Unit tests for the heap-bounded `visited` set used by the post-SNAP frontier-rebuild DFS
+/** Unit tests for the heap-bounded `visited` set used by the post-SNAP frontier-rebuild BFS
   * (`TrieNodeHealingCoordinator.boundedVisitedSet`).
   *
-  * These pin the Layer-1 OOM fix (docs/design/healing-frontier-scale.md): the DFS `visited` set MUST stay bounded by
+  * These pin the Layer-1 OOM fix (docs/design/healing-frontier-scale.md): the BFS `visited` set MUST stay bounded by
   * its cap regardless of how many nodes the walk touches (INV-3), with insertion-order eviction (earliest-inserted /
   * earliest-completed subtries dropped first). Completeness of the rebuilt frontier (INV-1) is provided independently
   * by `pendingHashSet` de-duplication and is exercised by the coordinator-level healing tests.

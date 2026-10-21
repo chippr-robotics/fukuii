@@ -44,7 +44,7 @@ import org.scalatest.Tag
   * @see
   *   ADR-015 for ethereum/tests integration
   */
-object Tags {
+object Tags:
 
   // ===== Tier 1: Essential Tests (Target: < 5 minutes) =====
 
@@ -294,4 +294,3 @@ object Tags {
 
   /** Tests that require manual verification or are non-deterministic. */
   object ManualTest extends Tag("ManualTest")
-}

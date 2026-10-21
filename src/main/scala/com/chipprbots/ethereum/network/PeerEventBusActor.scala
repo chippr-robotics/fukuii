@@ -7,11 +7,13 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.stream.OverflowStrategy
 import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MaintainedPeersChanged
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerOnWrongNetwork
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.*
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.Message
@@ -61,6 +63,7 @@ object PeerEventBusActor:
     case class PeerDisconnectedClassifier(peerSelector: PeerSelector) extends SubscriptionClassifier
     case object PeerHandshaked extends SubscriptionClassifier
     case object MaintainedPeersClassifier extends SubscriptionClassifier
+    case object WrongNetworkPeersClassifier extends SubscriptionClassifier
 
   sealed trait PeerEvent
 
@@ -69,6 +72,11 @@ object PeerEventBusActor:
     case class PeerDisconnected(peerId: PeerId) extends PeerEvent
     case class PeerHandshakeSuccessful[R <: HandshakeResult](peer: Peer, handshakeResult: R) extends PeerEvent
     case class MaintainedPeersChanged(nodeIds: Set[String]) extends PeerEvent
+
+    /** The STATUS handshake showed the peer is on another network or genesis (never a ForkId rejection). Published by
+      * `PeerActor` so `PeerManagerActor` can stop re-dialling the node ID (#88).
+      */
+    case class PeerOnWrongNetwork(nodeId: ByteString, remoteHost: String) extends PeerEvent
 
   case class Subscription(subscriber: TypedActorRef[PeerEvent], classifier: SubscriptionClassifier)
 
@@ -134,6 +142,10 @@ object PeerEventBusActor:
           }
         case MaintainedPeersChanged(_) =>
           connectionSubscriptions.collect { case Subscription(subscriber, MaintainedPeersClassifier) =>
+            subscriber
+          }
+        case PeerOnWrongNetwork(_, _) =>
+          connectionSubscriptions.collect { case Subscription(subscriber, WrongNetworkPeersClassifier) =>
             subscriber
           }
       interestedSubscribers.foreach(_ ! event)

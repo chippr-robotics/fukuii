@@ -10,7 +10,6 @@ import org.json4s.JsonDSL.*
 import org.json4s.jvalue2monadic
 
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Address
@@ -18,12 +17,8 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.GasPrice
-import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.ledger.StxLedger
-import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -77,10 +72,10 @@ object TraceService:
   case class TraceReplayBlockTransactionsRequest(block: BlockParam, options: TraceOptions)
   case class TraceReplayBlockTransactionsResponse(results: Seq[JValue])
 
-  case class TraceCallRequest(call: EthInfoService.CallTx, options: TraceOptions, block: BlockParam)
+  case class TraceCallRequest(call: TxArgs, options: TraceOptions, block: BlockParam)
   case class TraceCallResponse(result: JValue)
 
-  case class TraceCallManyRequest(calls: Seq[(EthInfoService.CallTx, TraceOptions)], block: BlockParam)
+  case class TraceCallManyRequest(calls: Seq[(TxArgs, TraceOptions)], block: BlockParam)
   case class TraceCallManyResponse(results: Seq[JValue])
 
   /** trace_filter params — matches Besu FilterParameter + Parity/OpenEthereum filter spec.
@@ -109,7 +104,9 @@ class TraceService(
     val blockchainReader: BlockchainReader,
     val mining: Mining,
     stxLedger: StxLedger,
-    transactionMappingStorage: TransactionMappingStorage
+    transactionMappingStorage: TransactionMappingStorage,
+    // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap
 ) extends ResolveBlock:
 
   import TraceService.*
@@ -256,11 +253,7 @@ class TraceService(
     IO {
       for
         resolved <- resolveBlock(req.block)
-        stx <- buildCallTx(req.call, resolved.block)
-        world = resolved.pendingState
-        result = buildReplayResult(resolved.block, ByteString.empty, 0, req.options)(tracer =>
-          stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, world, tracer)
-        )
+        result <- traceCallResult(req.call, resolved, req.options)
       yield TraceCallResponse(result)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -277,12 +270,7 @@ class TraceService(
       for resolved <- resolveBlock(req.block)
       yield
         val results: Seq[JValue] = req.calls.map { case (callTx, options) =>
-          buildCallTx(callTx, resolved.block)
-            .map { stx =>
-              buildReplayResult(resolved.block, ByteString.empty, 0, options)(tracer =>
-                stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, resolved.pendingState, tracer)
-              )
-            }
+          traceCallResult(callTx, resolved, options)
             .getOrElse(JNull)
         }
         TraceCallManyResponse(results)
@@ -313,7 +301,7 @@ class TraceService(
       txHash: ByteString,
       txIndex: Int,
       options: TraceOptions
-  )(execute: ExecutionTracer => TxResult): JValue =
+  )(execute: ExecutionTracer => Any): JValue =
     // Always run CallTracer for the trace field (even if options.trace=false, needed for vmTrace sub selection)
     val callTracer = new CallTracer(onlyTopCall = false)
     execute(callTracer)
@@ -492,17 +480,41 @@ class TraceService(
         fromOk && toOk
       }
 
-  /** Builds a synthetic SignedTransactionWithSender from a CallTx (used in traceCall). */
-  private def buildCallTx(
-      callTx: EthInfoService.CallTx,
-      block: Block
-  ): Either[JsonRpcError, SignedTransactionWithSender] =
-    val gasLimit = callTx.gas.map(GasAmount(_)).getOrElse(block.header.gasLimit)
-    val fromAddress = callTx.from
-      .map(Address.apply)
-      .getOrElse(Address(0))
-    val toAddress = callTx.to.map(Address.apply)
+  /** trace_call's result for one call: every tracer `buildReplayResult` asks for runs the message on the same state. A
+    * pre-check failure (deterministic, so the first run reports it) is -32000.
+    */
+  private def traceCallResult(
+      callTx: TxArgs,
+      resolved: ResolvedBlock,
+      options: TraceOptions
+  ): Either[JsonRpcError, JValue] =
+    buildCallMessage(callTx, resolved.block).flatMap { msg =>
+      var failure: Option[JsonRpcError] = None
+      val json = buildReplayResult(resolved.block, ByteString.empty, 0, options)(tracer =>
+        if failure.isEmpty then
+          stxLedger
+            .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+            .left
+            .foreach(e => failure = Some(JsonRpcError.LogicError(e.message)))
+      )
+      failure.toLeft(json)
+    }
 
-    val tx = LegacyTransaction(0, GasPrice(callTx.gasPrice), gasLimit, toAddress, callTx.value, callTx.data)
-    val fakeSignature = ECDSASignature(0, 0, 0)
-    Right(SignedTransactionWithSender(tx, fakeSignature, fromAddress))
+  /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
+    * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.
+    * `from` defaults to the zero address, as in geth.
+    */
+  private def buildCallMessage(callTx: TxArgs, block: Block): Either[JsonRpcError, CallTxBuilder.CallMessage] =
+    for
+      _ <- callTx.validateForCall.left.map(_.toJsonRpcError)
+      msg <- CallTxBuilder.build(
+        callTx,
+        block.header,
+        None,
+        Address(0),
+        CallTxBuilder.callGas(callTx, gasCap),
+        Map.empty,
+        // geth TraceCall sets SkipExecutionGasCapCheck
+        skipExecutionGasCap = true
+      )
+    yield msg

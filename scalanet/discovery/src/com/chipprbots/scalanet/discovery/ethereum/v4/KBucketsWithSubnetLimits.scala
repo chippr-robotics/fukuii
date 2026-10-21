@@ -18,7 +18,7 @@ case class KBucketsWithSubnetLimits[A: Addressable](
     limits: KBucketsWithSubnetLimits.SubnetLimits,
     tableLevelCounts: KBucketsWithSubnetLimits.TableLevelCounts,
     bucketLevelCounts: KBucketsWithSubnetLimits.BucketLevelCounts
-) {
+):
   import DiscoveryNetwork.Peer
   import KBucketsWithSubnetLimits.*
 
@@ -28,12 +28,12 @@ case class KBucketsWithSubnetLimits[A: Addressable](
   def touch(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
     // Note that `KBuckets.touch` also adds, so if the the record
     // isn't in the table already then use `add` to maintain counts.
-    if (contains(peer)) copy(table = table.touch(peer.kademliaId.value)) else add(peer)
+    if contains(peer) then copy(table = table.touch(peer.kademliaId.value)) else add(peer)
 
   /** Add the peer to the underlying K-table unless doing so would violate some limit. */
   def add(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
-    if (contains(peer)) this
-    else {
+    if contains(peer) then this
+    else
       val ip = subnet(peer)
       val idx = getBucket(peer)._1
 
@@ -45,19 +45,17 @@ case class KBucketsWithSubnetLimits[A: Addressable](
         limits.isOverLimitForTable(tlc(ip)) ||
           limits.isOverLimitForBucket(blc(idx)(ip))
 
-      if (isOverAnyLimit) this
-      else {
+      if isOverAnyLimit then this
+      else
         copy(
           table = table.add(peer.kademliaId.value),
           tableLevelCounts = tlc,
           bucketLevelCounts = blc
         )
-      }
-    }
 
   def remove(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
-    if (!contains(peer)) this
-    else {
+    if !contains(peer) then this
+    else
       val ip = subnet(peer)
       val idx = getBucket(peer)._1
 
@@ -65,7 +63,6 @@ case class KBucketsWithSubnetLimits[A: Addressable](
       val blc = decrementForBucket(idx, ip)
 
       copy(table = table.remove(peer.kademliaId.value), tableLevelCounts = tlc, bucketLevelCounts = blc)
-    }
 
   def closestNodes(targetKademliaId: Hash, n: Int): List[BitVector] =
     table.closestNodes(targetKademliaId.value, n)
@@ -86,16 +83,15 @@ case class KBucketsWithSubnetLimits[A: Addressable](
 
   /** Decrement the table level count for the IP of a subnet and remove the entry if it's zero. */
   private def decrementForTable(ip: InetAddress): TableLevelCounts =
-    tableLevelCounts |+| Map(ip -> -1) match {
+    tableLevelCounts |+| Map(ip -> -1) match
       case counts if counts(ip) <= 0 => counts - ip
-      case counts => counts
-    }
+      case counts                    => counts
 
-  /** Decrement the bucket level count for the IP of a subnet and remove the entry if it's zero
-    * for the subnet itself, or the whole bucket.
+  /** Decrement the bucket level count for the IP of a subnet and remove the entry if it's zero for the subnet itself,
+    * or the whole bucket.
     */
   private def decrementForBucket(idx: Int, ip: InetAddress): BucketLevelCounts =
-    bucketLevelCounts |+| Map(idx -> Map(ip -> -1)) match {
+    bucketLevelCounts |+| Map(idx -> Map(ip -> -1)) match
       case counts if counts(idx)(ip) <= 0 && counts(idx).size > 1 =>
         // The subnet count in the bucket is zero, but there are other subnets in the bucket,
         // so keep the bucket level count and just remove the subnet from it.
@@ -105,10 +101,8 @@ case class KBucketsWithSubnetLimits[A: Addressable](
         counts - idx
       case counts =>
         counts
-    }
-}
 
-object KBucketsWithSubnetLimits {
+object KBucketsWithSubnetLimits:
   type SubnetCounts = Map[InetAddress, Int]
   type TableLevelCounts = SubnetCounts
   type BucketLevelCounts = Map[Int, SubnetCounts]
@@ -120,7 +114,7 @@ object KBucketsWithSubnetLimits {
       forBucket: Int,
       // Limit of nodes from the same subnet across all buckets in the K-table.
       forTable: Int
-  ) {
+  ):
 
     /** All limits can be disabled by setting the subnet prefix length to 0. */
     def isEnabled: Boolean = prefixLength > 0
@@ -136,9 +130,8 @@ object KBucketsWithSubnetLimits {
 
     def isOverLimitForTable(count: Int): Boolean =
       isEnabledForTable && count > forTable
-  }
 
-  object SubnetLimits {
+  object SubnetLimits:
     val Unlimited: SubnetLimits = SubnetLimits(0, 0, 0)
 
     def fromConfig(config: DiscoveryConfig): SubnetLimits =
@@ -147,17 +140,14 @@ object KBucketsWithSubnetLimits {
         forBucket = config.subnetLimitForBucket,
         forTable = config.subnetLimitForTable
       )
-  }
 
   def apply[A: Addressable](
       node: Node,
       limits: SubnetLimits
-  ): KBucketsWithSubnetLimits[A] = {
+  ): KBucketsWithSubnetLimits[A] =
     KBucketsWithSubnetLimits[A](
       new KBuckets[BitVector](node.kademliaId.value, clock = java.time.Clock.systemUTC()),
       limits,
       tableLevelCounts = Map.empty[InetAddress, Int],
       bucketLevelCounts = Map.empty[Int, Map[InetAddress, Int]]
     )
-  }
-}

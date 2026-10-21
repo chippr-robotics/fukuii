@@ -12,12 +12,16 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
@@ -54,6 +58,7 @@ abstract class BaseNode extends Node:
     fixDatabase()
     repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
+    repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
@@ -201,7 +206,11 @@ abstract class BaseNode extends Node:
   private def startSyncController(): Unit =
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
-  private def startMining(): Unit = mining.startProtocol(this)
+  private def startMining(): Unit =
+    // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
+    // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
+    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    mining.startProtocol(this)
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 
@@ -280,16 +289,32 @@ abstract class BaseNode extends Node:
     val tui = Tui.getInstance()
     if tui.isEnabled then
       log.info("Starting TUI updater")
-      val updater = TuiUpdater(
-        tui,
-        TuiConfig.default,
-        Some(peerManager),
-        Some(syncController),
-        Config.blockchains.network,
-        shutdown
-      )(using system.classicSystem)
+      tui.updateNodeSettings(tuiNodeSettings())
+      val probe = new TuiStatusProbe(
+        peerManager,
+        syncController,
+        () => blockchainReader.getBestBlockNumber,
+        peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
+        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis)
+      )(using system.scheduler)
+      // `q` exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(), which stops the updater.
+      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, () => sys.exit(0))
       tuiUpdater = Some(updater)
       updater.start()
+
+  private def tuiNodeSettings(): NodeSettings =
+    val c = instanceConfig.config
+    def opt[A](f: => A): Option[A] = Try(f).toOption
+    NodeSettings(
+      dataDir = opt(c.getString("datadir")).getOrElse(""),
+      network = Config.blockchains.network,
+      syncMode = if syncConfig.doSnapSync then "SNAP" else "Full",
+      pruningMode = storagesInstance.pruningMode.toString,
+      maxPeers = peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
+      rpcEnabled = opt(c.getBoolean("network.rpc.http.enabled")).getOrElse(false),
+      rpcPort = opt(c.getInt("network.rpc.http.port")).getOrElse(0),
+      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false)
+    )
 
   override def shutdown: () => Unit = () =>
     def tryAndLogFailure(f: () => Any): Unit = Try(f()) match // Any: accepts any thunk — return value discarded
@@ -310,6 +335,9 @@ abstract class BaseNode extends Node:
           case _                                            => engineServer.stopSync()
       }
     )
+    // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
+    // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
+    tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))
     // Terminate the secondary ActorSystem hosting the periodic DB consistency check.
     tryAndLogFailure(() =>
       periodicConsistencyCheckSystem.foreach { s =>
@@ -359,6 +387,42 @@ abstract class BaseNode extends Node:
           bodyPresent,
           reason
         )
+
+  /** CQ-020-07: re-derive or refetch the SNAP pivot's and genesis's bodies when an earlier version stored them without
+    * their content (see [[StoredBodyRepair]]).
+    */
+  def repairStoredBodies(): Unit =
+    StoredBodyRepair
+      .run(blockchainReader, blockchainWriter, storagesInstance.storages.appStateStorage)
+      .foreach { o =>
+        o.action match
+          case StoredBodyCheck.Action.Write(_, replacing) =>
+            log.warn(
+              "Repaired {} body: block {} {} rewritten with the empty body its header commits to (was: {})",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              replacing.getOrElse("absent")
+            )
+          case StoredBodyCheck.Action.Remove(reason) =>
+            log.warn(
+              "Removed {} body of block {} {}: it contradicts its header ({}). Refetch from peers armed: {}",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              reason,
+              o.refetchArmed
+            )
+          case other =>
+            log.warn(
+              "{} body of block {} {} is missing although the backfill claimed it ({}). Refetch from peers armed: {}",
+              o.label,
+              o.number,
+              o.hash.toHexString,
+              other,
+              o.refetchArmed
+            )
+      }
 
   def fixDatabase(): Unit =
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()

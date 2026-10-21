@@ -38,10 +38,11 @@ jobs:
       # Declared in .github/gates.yml (gate `hive-graphql`). A run emitting fewer
       # than this many results is a truncated run, not a pass.
       min_tests: 10
-      # Gate on fukuii's own tests only; one test is waived as a stale upstream fixture
-      # (waiver `graphql-gasprice-stale-fixture` in .github/gates.yml, with its evidence).
+      # Gate on fukuii's own tests only; two tests are waived, each with its evidence in
+      # .github/gates.yml: `graphql-gasprice-stale-fixture` (07, stale upstream fixture) and
+      # `graphql-sendraw-38-underpriced-replacement` (38, geth's replacement rule; geth fails it too).
       gate_pattern: 'fukuii'
-      gate_exclude: '07_eth_gasPrice'
+      gate_exclude: '07_eth_gasPrice|38_eth_sendRawTransaction_transferEther'
       # parallelism=1: the graphql suite's `pending` / `sendRawTransaction` tests are
       # order-sensitive. With parallelism>1, test 35 (graphql_pending) races tests 34 /
       # 36 / 38 at the mempool and flakes based on scheduling. Serial execution gives

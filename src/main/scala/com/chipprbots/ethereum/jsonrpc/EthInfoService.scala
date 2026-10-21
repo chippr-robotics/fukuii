@@ -15,11 +15,9 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.keystore.KeyStore
-import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
@@ -29,6 +27,8 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.NetworkType
+import com.chipprbots.ethereum.vm.AccessListTracer
+import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService:
@@ -102,26 +102,34 @@ object EthInfoService:
   )
   case class SyncingResponse(syncStatus: Option[SyncingStatus])
 
-  case class CallTx(
-      from: Option[ByteString],
-      to: Option[ByteString],
-      gas: Option[BigInt],
-      gasPrice: BigInt,
-      value: BigInt,
-      data: ByteString,
-      gasPriceExplicit: Boolean = false
+  /** A message call: eth_call / eth_estimateGas, with their optional state and block overrides (execution-apis; geth
+    * `BlockChainAPI.Call` / `EstimateGas`). Also what GraphQL `call` / `estimateGas` send, without overrides.
+    */
+  case class CallRequest(
+      tx: TxArgs,
+      block: BlockParam,
+      stateOverrides: Option[Map[Address, EthSimulateService.StateOverride]] = None,
+      blockOverrides: Option[EthSimulateService.BlockOverrides] = None
   )
-
-  case class CallRequest(tx: CallTx, block: BlockParam)
   case class CallResponse(returnData: ByteString)
   case class EstimateGasResponse(gas: BigInt)
-  case class CreateAccessListRequest(tx: CallTx, block: BlockParam):
-    def toCallRequest: CallRequest = CallRequest(tx, block)
+
+  /** eth_createAccessList: the call, its block and optional state overrides (go-ethereum `CreateAccessList(args,
+    * blockNrOrHash, stateOverrides)`).
+    */
+  case class CreateAccessListRequest(
+      tx: TxArgs,
+      block: BlockParam,
+      stateOverrides: Option[Map[Address, EthSimulateService.StateOverride]] = None
+  )
   case class CreateAccessListResponse(
-      accessList: Seq[Map[String, Any]],
+      accessList: List[AccessListItem],
       gasUsed: BigInt,
       error: Option[String]
   )
+
+  /** eth_createAccessList's bound on its runs (geth loops until the list is stable). */
+  val MaxAccessListIterations: Int = 64
 
 class EthInfoService(
     val blockchain: Blockchain,
@@ -133,7 +141,9 @@ class EthInfoService(
     syncingController: TypedActorRef[SyncController.Command],
     capability: Capability,
     askTimeout: Timeout,
-    scheduler: Scheduler
+    scheduler: Scheduler,
+    // go-ethereum --rpc.gascap: the gas of a call that names none, and the most any call or estimate may use. 0 = no cap
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap
 ) extends ResolveBlock:
 
   import EthInfoService.*
@@ -253,17 +263,14 @@ class EthInfoService(
       systemContracts = ethSystemContractsAt(ts)
     )
 
-  /** Blob parameters in BLOBS, not gas — EIP-7910 reports counts. Absent before Cancun, which is the first fork with
-    * blobs at all.
+  /** Blob parameters in BLOBS, not gas — EIP-7910 reports counts — straight from the chain's `blob-schedule` (#1637),
+    * the entry in force at the fork's own timestamp (go-ethereum `ChainConfig.BlobConfig(fork)`). Absent before the
+    * chain's first blob fork.
     */
   private def blobScheduleAt(ts: Timestamp): Option[BlobScheduleConfig] =
-    Option.when(blockchainConfig.isCancunTimestamp(ts))(
-      BlobScheduleConfig(
-        target = BlobGasUtils.targetBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
-        max = BlobGasUtils.maxBlobGasPerBlock(ts, blockchainConfig) / BlobGasUtils.GAS_PER_BLOB,
-        baseFeeUpdateFraction = BlobGasUtils.updateFractionFor(ts, blockchainConfig)
-      )
-    )
+    blockchainConfig
+      .blobParamsAt(ts)
+      .map(p => BlobScheduleConfig(target = p.target, max = p.max, baseFeeUpdateFraction = p.baseFeeUpdateFraction))
 
   /** Derived from the very sets `PrecompiledContracts` hands the EVM, so the advertised list is the implemented list.
     * BPO and Amsterdam forks add no precompiles, so they inherit the Osaka set.
@@ -381,100 +388,183 @@ class EthInfoService(
 
     ConfigResponse(current, next, if futureForks.nonEmpty then last else None)
 
+  /** eth_call (go-ethereum `internal/ethapi` `BlockChainAPI.Call` -> `DoCall` -> `doCall`). The message is built by
+    * [[CallTxBuilder]] (CallDefaults / ToMessage) and run by `StxLedger.simulateCall` (ApplyMessage). State overrides
+    * are applied to the block's state and block overrides to its header first, as `doCall` does.
+    */
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
-      doCall(req)(stxLedger.simulateTransaction).flatMap { r =>
-        r.vmError match
-          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
-            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
-            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
-          case Some(_) =>
-            // Other VM errors (out of gas, etc) — return empty result
-            Right(CallResponse(r.vmReturnData))
-          case None =>
-            Right(CallResponse(r.vmReturnData))
-      }
+      for
+        // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
+        prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
+        (msg, world) = prepared
+        r <- stxLedger.simulateCall(msg.stx, msg.header, world, msg.options, tracer = None).left.map(preCheckError)
+        response <- r.vmError match
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) => Left(revertError(r.vmReturnData))
+          // Other VM errors (out of gas, etc) — return the frame's output, as before
+          case _ => Right(CallResponse(r.vmReturnData))
+      yield response
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 
+  /** eth_estimateGas (go-ethereum `DoEstimateGas` -> `eth/gasestimator.Estimate`). */
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
-      // First check if the tx reverts at the max gas limit
-      val simCheck = doCall(req)(stxLedger.simulateTransaction)
-      simCheck.flatMap { r =>
-        r.vmError match
-          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
-            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
-            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
-          case _ =>
-            // Tx doesn't revert — find minimum gas via binary search
-            doCall(req)(stxLedger.binarySearchGasEstimation).map(gas => EstimateGasResponse(gas))
-      }
+      for
+        resolved <- resolveBlock(req.block)
+        hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
+        // the estimator does not skip the execution gas cap (gasestimator)
+        prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
+        (msg, world) = prepared
+        gas <- stxLedger.estimateCallGas(msg.stx, msg.header, world, msg.options).left.map {
+          case StxLedger.CallEstimateFailure.Reverted(data) => revertError(data)
+          case StxLedger.CallEstimateFailure.PreCheck(msg)  => JsonRpcError.LogicError(msg)
+          case StxLedger.CallEstimateFailure.Failed(error)  => JsonRpcError.LogicError(CallErrors.vmErrorMessage(error))
+        }
+      yield EstimateGasResponse(gas)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 
+  /** eth_createAccessList (go-ethereum `internal/ethapi` `AccessList`).
+    *
+    * Runs the message with an [[AccessListTracer]] and again with the list it collected, until a run collects exactly
+    * the list it ran with; returns that list, the gas the last run used and its VM error. The tracer leaves out the
+    * sender, the recipient (for a creation, the address `from` + nonce creates, nonce defaulting to the account's) and
+    * the precompiles active at the block, and starts from the caller's accessList when one is given.
+    *
+    * Differences from geth, both deliberate:
+    *   - no fee defaults: when the call names any fee field geth's `setFeeDefaults` fills the missing ones from its
+    *     oracle; fukuii runs with the caller's fees (absent ones 0). With no fee field both run at price 0, which
+    *     execution-apis `create-al-unfunded-sender` requires;
+    *   - the loop is bounded at [[MaxAccessListIterations]] runs (geth loops until it converges) and says so if it does
+    *     not converge.
+    */
   def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
     IO {
-      doCall(req.toCallRequest)(stxLedger.simulateTransaction).map { result =>
-        val gasUsed = result.gasUsed
-        val error = result.vmError.map(_.toString)
-        // Build access list from the VM's accessed addresses and storage keys
-        // For now, return empty access list with gas used (partial implementation)
-        CreateAccessListResponse(
-          accessList = Seq.empty,
-          gasUsed = gasUsed,
-          error = error
+      for
+        _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
+        resolved <- resolveBlock(req.block)
+        header = resolved.block.header
+        base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
+        // geth applies the overrides straight after loading the state, before reading the sender's nonce
+        overridden <- req.stateOverrides.fold[Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])]](
+          Right((base, Map.empty[Address, Address]))
+        )(
+          EthSimulateService.applyStateOverrides(base, _, Map.empty, blockchainConfig.accountStartNonce)
         )
-      }
+        (world, relocations) = overridden
+        gas = CallTxBuilder.callGas(req.tx, gasCap)
+        first <- CallTxBuilder.build(req.tx, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
+        sender = first.stx.senderAddress
+        excluded = accessListExclusions(req.tx, sender, first.header, world)
+        result <- accessListFixedPoint(req.tx, header, gas, world, relocations, excluded)
+      yield result
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 
-  private def doCall[A](req: CallRequest)(
-      f: (SignedTransactionWithSender, BlockHeader, Option[InMemoryWorldStateProxy]) => A
-  ): Either[JsonRpcError, A] = for
-    stx <- prepareTransaction(req)
-    block <- resolveBlock(req.block)
-  yield
-    // EIP-1559: When no gas price is explicitly specified, use baseFee=0 so calls
-    // don't need to worry about funding. Matches geth behavior for eth_call/eth_estimateGas.
-    val header = if !req.tx.gasPriceExplicit && block.block.header.baseFee.isDefined then
-      import BlockHeader.HeaderExtraFields.*
-      val zeroBaseFeeExtra = block.block.header.extraFields match
-        case HefPostOlympia(_)                    => HefPostOlympia(0)
-        case HefPostShanghai(_, wr)               => HefPostShanghai(0, wr)
-        case HefPostCancun(_, wr, bg, eb, pb)     => HefPostCancun(0, wr, bg, eb, pb)
-        case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
-        // Amsterdam (23 items). Without this case the `other` arm returns the header unchanged and
-        // eth_call / eth_estimateGas keep a non-zero base fee on every Amsterdam block — a silent
-        // degradation, not a crash, which is why it needs its own case rather than a catch-all.
-        case HefPostAmsterdam(_, wr, bg, eb, pb, rh, bal, slot) =>
-          HefPostAmsterdam(0, wr, bg, eb, pb, rh, bal, slot)
-        case other => other
-      block.block.header.copy(extraFields = zeroBaseFeeExtra)
-    else block.block.header
-    f(stx, header, block.pendingState)
+  private def accessListFixedPoint(
+      args: TxArgs,
+      header: BlockHeader,
+      gas: BigInt,
+      world: InMemoryWorldStateProxy,
+      relocations: Map[Address, Address],
+      excluded: Set[Address]
+  ): Either[JsonRpcError, CreateAccessListResponse] =
+    @annotation.tailrec
+    def loop(prev: AccessListTracer, iteration: Int): Either[JsonRpcError, CreateAccessListResponse] =
+      val accessList = prev.accessList
+      val withList = args.copy(accessList = Some(accessList))
+      val tracer = new AccessListTracer(accessList, excluded)
+      val step = for
+        // geth AccessList: no SkipExecutionGasCapCheck
+        msg <- CallTxBuilder.build(withList, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
+        r <- stxLedger
+          .simulateCall(msg.stx, msg.header, Some(world), msg.options, Some(tracer))
+          .left
+          .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${msg.stx.tx.hash.toHex} err: ${e.message}"))
+      yield (msg, r)
+      step match
+        case Left(e)                                                 => Left(e)
+        case Right((msg, r)) if tracer.touchedSet == prev.touchedSet =>
+          // geth reports res.UsedGas, which is never below the calldata floor (EIP-7623 / EIP-7976)
+          val gasUsed = stxLedger.callFloorGas(msg.stx, msg.header).fold(r.gasUsed)(r.gasUsed.max)
+          Right(CreateAccessListResponse(accessList, gasUsed, r.vmError.map(CallErrors.vmErrorMessage)))
+        case Right(_) if iteration + 1 >= MaxAccessListIterations =>
+          Left(JsonRpcError.LogicError(s"access list did not converge after $MaxAccessListIterations runs"))
+        case Right(_) => loop(tracer, iteration + 1)
+    loop(new AccessListTracer(args.accessList.getOrElse(Nil), excluded), 0)
 
-  private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
-    req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit.value))
-
-  private def prepareTransaction(req: CallRequest): Either[JsonRpcError, SignedTransactionWithSender] =
-    getGasLimit(req).map { gasLimit =>
-      val fromAddress = req.tx.from
-        .map(Address.apply) // `from` param, if specified
-        .getOrElse(
-          keyStore.listAccounts
-            .getOrElse(Nil)
-            .headOption // first account, if exists and `from` param not specified
-            .getOrElse(Address(0))
-        ) // 0x0 default
-
-      val toAddress = req.tx.to.map(Address.apply)
-
-      val tx =
-        LegacyTransaction(0, GasPrice(req.tx.gasPrice), GasAmount(gasLimit), toAddress, req.tx.value, req.tx.data)
-      val fakeSignature = ECDSASignature(0, 0, 0)
-      SignedTransactionWithSender(tx, fakeSignature, fromAddress)
+  /** geth `AccessList`: the sender, the recipient (or the created contract), the active precompiles and the authorities
+    * of the call's authorization list.
+    */
+  private def accessListExclusions(
+      args: TxArgs,
+      sender: Address,
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy
+  ): Set[Address] =
+    val recipient = args.to.getOrElse {
+      val nonce = args.nonce.getOrElse(
+        world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+      )
+      CallErrors.createAddress(sender, nonce)
     }
+    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    val authorities = args.authorizationList.getOrElse(Nil).flatMap(stxLedger.recoverAuthority)
+    Set(sender, recipient) ++ PrecompiledContracts.getContracts(evmConfig, header).keySet ++ authorities
+
+  /** Resolve the block, apply the overrides and build the message. The world is only built here when state overrides
+    * must be applied to it; otherwise the ledger builds its own (or uses the pending block's).
+    */
+  private def prepareCall(
+      req: CallRequest,
+      gas: BigInt,
+      skipExecutionGasCap: Boolean
+  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
+    resolveBlock(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
+
+  private def prepareCall(
+      req: CallRequest,
+      resolved: ResolvedBlock,
+      gas: BigInt,
+      skipExecutionGasCap: Boolean
+  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
+    val header = resolved.block.header
+    for
+      // GraphQL builds TxArgs itself; the JSON-RPC decoder has already run this (decodeForCall)
+      _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
+      overridden <- req.stateOverrides match
+        case None => Right((resolved.pendingState, Map.empty[Address, Address]))
+        case Some(overrides) =>
+          val base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
+          EthSimulateService
+            .applyStateOverrides(base, overrides, Map.empty, blockchainConfig.accountStartNonce)
+            .map { case (w, relocations) => (Some(w), relocations) }
+      (world, relocations) = overridden
+      msg <- CallTxBuilder.build(
+        req.tx,
+        header,
+        req.blockOverrides,
+        defaultFrom,
+        gas,
+        relocations,
+        skipExecutionGasCap
+      )(using
+        blockchainConfig
+      )
+    yield (msg, world)
+
+  /** `from` when the call names none: the node's first account, else the zero address (fukuii behaviour inherited from
+    * Mantis; go-ethereum always uses the zero address).
+    */
+  private def defaultFrom: Address =
+    keyStore.listAccounts.getOrElse(Nil).headOption.getOrElse(Address(0))
+
+  private def preCheckError(e: StxLedger.CallPreCheckError): JsonRpcError = JsonRpcError.LogicError(e.message)
+
+  private def revertError(data: ByteString): JsonRpcError =
+    val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(data.toArray[Byte])
+    JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex)))

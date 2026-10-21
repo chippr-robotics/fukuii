@@ -110,7 +110,13 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   Test / javaOptions ++= Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
     "-Dpekko.coordinated-shutdown.run-by-actor-system-terminate=on", // Ensure proper shutdown on ActorSystem.terminate
-    "-Dpekko.jvm-shutdown-hooks=off" // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
+    "-Dpekko.jvm-shutdown-hooks=off", // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
+    // JDK-8385993: C2 ReduceAllocationMerges miscompiles field reads on JDK 23+ (fixed in JDK 28). .jvmopts only
+    // reaches the sbt JVM, so forked test JVMs need it here. Order matters: Unlock must precede the diagnostic flag;
+    // Ignore keeps JDK 21 (no such flag) starting. Drop once the test JDK carries the fix.
+    "-XX:+IgnoreUnrecognizedVMOptions",
+    "-XX:+UnlockDiagnosticVMOptions",
+    "-XX:-ReduceAllocationMerges"
   ),
   Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
   Test / logBuffered := false, // Stream forked JVM test output immediately rather than buffering per-suite
@@ -329,7 +335,7 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Integration)
           :+ (parallelExecution := false)
           :+ (testGrouping := {
             val tests = (definedTests).value
@@ -453,6 +459,8 @@ addCommandAlias(
     |; crypto / scalafmtAll
     |; rlp / scalafixAll
     |; rlp / scalafmtAll
+    |; scalanet / scalafmtAll
+    |; scalanetDiscovery / scalafmtAll
     |; scalafixAll
     |; scalafmtAll
     |""".stripMargin
@@ -468,6 +476,8 @@ addCommandAlias(
     |; crypto / scalafmtCheckAll
     |; rlp / scalafixAll --check
     |; rlp / scalafmtCheckAll
+    |; scalanet / scalafmtCheckAll
+    |; scalanetDiscovery / scalafmtCheckAll
     |; scalafixAll --check
     |; scalafmtCheckAll
     |""".stripMargin

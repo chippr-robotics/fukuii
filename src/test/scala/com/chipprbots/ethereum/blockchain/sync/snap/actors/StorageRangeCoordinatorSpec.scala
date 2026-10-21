@@ -11,14 +11,29 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.Millis
+import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -27,7 +42,11 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
-class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+class StorageRangeCoordinatorSpec
+    extends ScalaTestWithActorTestKit()
+    with AnyFlatSpecLike
+    with Matchers
+    with Eventually:
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   private val statusProbe = testKit.createTestProbe[StorageRangeCoordinator.SyncStatistics]()
@@ -55,16 +74,38 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker,
         mptStorage = mptStorage,
-        flatSlotStorage = flatSlotStorage,
         maxAccountsPerBatch = maxAccountsPerBatch,
         maxInFlightRequests = maxInFlightRequests,
         requestTimeout = requestTimeout,
         snapSyncController = snapSyncController,
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         backpressureHighWatermark = backpressureHighWatermark,
-        backpressureLowWatermark = backpressureLowWatermark
+        backpressureLowWatermark = backpressureLowWatermark,
+        stateIngest = hashSchemeIngest(flatSlotStorage)
       )
     )
+
+  // The coordinator's StateIngest (spec 016 C-S2, C-S3): these tests run the Hash scheme, so the coordinator reads only
+  // `pathNodes` (None) and `flatSlots` (the test's flat-slot store) from it; every other member throws.
+  private def hashSchemeIngest(flatSlotStore: FlatSlotStorage): StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = notReached("appState")
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = flatSlotStore
+      def pathNodes: Option[PathNodeStorage] = None
+      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
+      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"StorageRangeCoordinator read StateIngest.$member")
 
   // Typed `StorageGetProgress` carries a `replyTo: ActorRef[SyncStatistics]`. In these Classic tests the reply target
   // is the test actor (ImplicitSender); adapt it to a typed ref so the coordinator can reply.
@@ -94,7 +135,9 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       // unchanged. Tests that need to inspect `pendingAccountTries` (the ordering-gate tests) must
       // pass `false` explicitly — with deferred merkleization on, applyReadyStorageChunk never
       // builds a trie at all (flat-slot writes only).
-      deferredMerkleization: Boolean = true
+      deferredMerkleization: Boolean = true,
+      recordStorageDone: Boolean = false,
+      requestTimeout: FiniteDuration = 30.seconds
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -106,16 +149,17 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
           networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
           requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
           mptStorage = new TestMptStorage(),
-          flatSlotStorage = flatSlotStorage,
           maxAccountsPerBatch = maxAccountsPerBatch,
           maxInFlightRequests = maxInFlightRequests,
-          requestTimeout = 30.seconds,
+          requestTimeout = requestTimeout,
           snapSyncController = snapSyncControllerRef,
           flatBatchEntryThreshold = flatBatchEntryThreshold,
           flatBatchEcOverride = flatBatchEcOverride,
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
-          deferredMerkleization = deferredMerkleization
+          deferredMerkleization = deferredMerkleization,
+          stateIngest = hashSchemeIngest(flatSlotStorage),
+          recordStorageDone = recordStorageDone
         )
         captured.start()
       }
@@ -1486,6 +1530,63 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
   }
 
+  // A re-queued task must re-request exactly the range that was served (the rejected response payload is not
+  // carried: StorageTask has no slots/proof fields).
+  it should "re-queue the same task range after a proof-verification failure" taggedAs UnitTest in {
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("requeue-payload-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true
+    )
+    val peer = PeerTestHelpers.createTestPeer("requeue-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val accountHash = kec256(ByteString("requeue-account"))
+    val task = StorageTask.createStorageTask(accountHash, kec256(ByteString("requeue-wrong-storage-root")))
+    val slots = Seq(slotKey(0x10) -> ByteString("v10"), slotKey(0x11) -> ByteString("v11"))
+    val proof = Seq(ByteString("proof-node-1"))
+
+    impl.processServedTasks(
+      peer,
+      Seq(task),
+      BigInt(1024),
+      StorageRanges(requestId = 1, slots = Seq(slots), proof = proof),
+      servedCount = 1
+    )
+
+    // dispatchIfPossible may already have moved the retry from `tasks` into `activeTasks`; check both.
+    val requeued = (impl.tasks.toSeq ++ impl.activeTasks.values.flatMap(_._2)).filter(_.accountHash == accountHash)
+    requeued should have size 1
+    requeued.foreach { t =>
+      t.copy(pending = false) shouldBe task
+    }
+  }
+
+  it should "re-queue the buffered chunk's task range on StoragePivotRefreshed" taggedAs UnitTest in {
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("prefresh-payload-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = false
+    )
+    val accountHash = kec256(ByteString("prefresh-payload-account"))
+    val storageRoot = kec256(ByteString("prefresh-payload-storage-root"))
+    val chunkLo = StorageTask(accountHash, storageRoot, next = slotKey(0x01), last = slotKey(0x1f))
+    val chunkHi = StorageTask(accountHash, storageRoot, next = slotKey(0x20), last = slotKey(0x3f))
+    val chunkHiSlots = Seq(slotKey(0x30) -> ByteString("value-30"))
+    val peer = PeerTestHelpers.createTestPeer("prefresh-payload-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    impl.accountSubtaskCounters(accountHash) = (2, 0)
+    impl.storageTrieCursor(accountHash) = chunkLo.next
+    impl.applyOrderedStorageChunk(peer, chunkHi, chunkHiSlots, Seq(ByteString("p")))
+    impl.pendingOrderedChunks(accountHash) should have size 1
+
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("new-pivot-root-2"))))
+
+    val requeued = impl.tasks.filter(_.accountHash == accountHash)
+    requeued should have size 1
+    requeued.head shouldBe chunkHi.copy(pending = false)
+  }
+
   it should "NOT drop an account that fails complete-range verification once and then succeeds" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("kcap-recovers-state-root"))
     val (impl, _) = newImpl(
@@ -1693,12 +1794,13 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
   // ── StorageRequestTimedOut mailbox path ───────────────────────────────────
 
-  private def implWithOneRequestInFlight() =
+  private def implWithOneRequestInFlight(requestTimeout: FiniteDuration = 30.seconds) =
     val (impl, kit) = newImpl(
       stateRoot = kec256(ByteString("timedout-root")),
       flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
       snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
-      maxAccountsPerBatch = 1
+      maxAccountsPerBatch = 1,
+      requestTimeout = requestTimeout
     )
     val peer = PeerTestHelpers.createTestPeer("timedout-peer", testKit.createTestProbe[Any]().ref.toClassic)
     val task = StorageTask.createStorageTask(kec256(ByteString("timedout-account")), kec256(ByteString("timedout-sr")))
@@ -1732,4 +1834,298 @@ class StorageRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     impl.consecutiveTaskFailures shouldBe failures
     impl.tasks.size shouldBe tasksBefore
     impl.activeTasks shouldBe empty
+  }
+
+  // ── A reply already in the mailbox beats its own timeout (Sepolia 2026-10-09) ──────────────────────────────
+  // The coordinator was busy 20-95 s inside single responses; the tracker's 30 s timer expired requests whose replies
+  // were already queued in the mailbox, so the replies were dropped as "No pending request" and the timeout messages
+  // queued behind them demoted every peer at once. The timer now only enqueues StorageRequestTimedOut; the coordinator
+  // decides in mailbox order. BehaviorTestKit queues the timer's self-send in `selfInbox` without running it, which
+  // reproduces "busy actor, timer already fired" deterministically.
+
+  // Waits until the tracker's timer has queued StorageRequestTimedOut(requestId) in the self-inbox. Other self-sends
+  // queued meanwhile are dropped: these tests only drive the reply/timeout ordering.
+  private def awaitTimerFired(kit: BehaviorTestKit[StorageRangeCoordinator.Command], requestId: BigInt): Unit =
+    val timedOut = StorageRangeCoordinator.StorageRequestTimedOut(requestId)
+    var seen = false
+    eventually(timeout(Span(5000, Millis)), interval(Span(10, Millis))) {
+      seen = seen || kit.selfInbox().receiveAll().contains(timedOut)
+      seen shouldBe true
+    }
+
+  it should "accept a reply that reached the mailbox before its timeout message, without blaming the peer" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight(requestTimeout = 50.millis)
+    val peerId = impl.activeTasks(requestId)._1.id.value
+    val failuresBefore = impl.consecutiveTaskFailures
+    // The timer fired while the actor was "busy": StorageRequestTimedOut is queued, not yet run.
+    awaitTimerFired(kit, requestId)
+
+    // The reply was enqueued first, so it is processed first — and is NOT discarded as "No pending request".
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    )
+    impl.activeTasks.contains(requestId) shouldBe false
+
+    // The queued timeout then finds the request answered: no timeout strike, no task failure.
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 0
+    impl.consecutiveTaskFailures shouldBe failuresBefore
+  }
+
+  it should "still time out a request whose timeout message is processed before any reply" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight(requestTimeout = 50.millis)
+    val peerId = impl.activeTasks(requestId)._1.id.value
+    val failuresBefore = impl.consecutiveTaskFailures
+    awaitTimerFired(kit, requestId)
+
+    kit.run(StorageRangeCoordinator.StorageRequestTimedOut(requestId))
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 1
+    impl.consecutiveTaskFailures shouldBe failuresBefore + 1
+
+    // A reply arriving after the timeout was decided is late: it is discarded and changes nothing.
+    val tasksBefore = impl.tasks.size
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(StorageRanges(requestId, slots = Seq.empty, proof = Seq.empty))
+    )
+    impl.peerHealth.consecutiveTimeouts(peerId) shouldBe 1
+    impl.consecutiveTaskFailures shouldBe failuresBefore + 1
+    impl.tasks.size shouldBe tasksBefore
+  }
+
+  it should "reset the consecutive task-failure count when a peer answers" taggedAs UnitTest in {
+    val (impl, kit, _, requestId) = implWithOneRequestInFlight()
+    impl.consecutiveTaskFailures = 99 // one short of force-complete
+    // Proof-of-absence: a complete, served answer for the chunk.
+    kit.run(
+      StorageRangeCoordinator.StorageRangesResponseMsg(
+        StorageRanges(requestId, slots = Seq.empty, proof = Seq(ByteString(Array.fill(32)(0xab.toByte))))
+      )
+    )
+    impl.consecutiveTaskFailures shouldBe 0
+  }
+
+  // ── Peer health: penalised peers are skipped; probation peers get one slot (Sepolia 2026-10-07) ─────────────
+
+  private def implWithTasks(n: Int) =
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("health-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      maxAccountsPerBatch = 1,
+      maxInFlightRequests = 16
+    )
+    val tasks = (1 to n).map { i =>
+      StorageTask.createStorageTask(kec256(ByteString("health-account-" + i)), kec256(ByteString("health-sr-" + i)))
+    }
+    kit.run(StorageRangeCoordinator.AddStorageTasks(tasks))
+    (impl, kit)
+
+  private def demote(impl: StorageRangeCoordinatorImpl, peerId: String): Unit =
+    val now = System.currentTimeMillis()
+    (1 to impl.peerHealth.timeoutThreshold).foreach(_ => impl.peerHealth.recordTimeout(peerId, now))
+    impl.peerHealth.isPenalised(peerId, now) shouldBe true
+
+  private def inFlightFor(impl: StorageRangeCoordinatorImpl, peerId: String): Int =
+    impl.activeTasks.values.count(_._1.id.value == peerId)
+
+  it should "not dispatch to a penalised peer on StoragePeerAvailable, but serve a healthy one with its full budget" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(8)
+    val dead = PeerTestHelpers.createTestPeer("health-dead", testKit.createTestProbe[Any]().ref.toClassic)
+    val live = PeerTestHelpers.createTestPeer("health-live", testKit.createTestProbe[Any]().ref.toClassic)
+    demote(impl, dead.id.value)
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(dead))
+    inFlightFor(impl, dead.id.value) shouldBe 0
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(live))
+    inFlightFor(impl, live.id.value) shouldBe 5 // initialMaxInFlightPerPeer default
+
+    // The redispatch path (eligible set + floor) also skips the penalised peer while a healthy one exists.
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    inFlightFor(impl, dead.id.value) shouldBe 0
+  }
+
+  it should "probe a penalised peer with a single slot only when it is the only servable peer" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(8)
+    val dead = PeerTestHelpers.createTestPeer("health-only", testKit.createTestProbe[Any]().ref.toClassic)
+    demote(impl, dead.id.value)
+
+    kit.run(StorageRangeCoordinator.StoragePeerAvailable(dead)) // registers the peer, no dispatch
+    inFlightFor(impl, dead.id.value) shouldBe 0
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // floor: last-resort probe
+    inFlightFor(impl, dead.id.value) shouldBe 1
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // still bounded to one slot, penalty kept
+    inFlightFor(impl, dead.id.value) shouldBe 1
+    impl.peerHealth.isPenalised(dead.id.value, System.currentTimeMillis()) shouldBe true
+  }
+
+  it should "lift timeout penalties on StoragePivotRefreshed but keep the level" taggedAs UnitTest in {
+    val (impl, kit) = implWithTasks(2)
+    demote(impl, "health-pivot")
+    val level = impl.peerHealth.level("health-pivot")
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("health-root-2"))))
+    impl.peerHealth.isPenalised("health-pivot", System.currentTimeMillis()) shouldBe false
+    impl.peerHealth.isOnProbation("health-pivot") shouldBe false
+    impl.peerHealth.level("health-pivot") shouldBe level
+  }
+
+  // ── Storage-task completion markers: a resume re-queues only unfinished storage tasks ──
+
+  private val doneRootArg = kec256(ByteString("done-marker-root"))
+  private val doneSlots = Seq(slotKey(0x10) -> ByteString("value-10"), slotKey(0x30) -> ByteString("value-30"))
+
+  private def doneMarkerFixture(
+      recordStorageDone: Boolean = true,
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
+      flatBatchEntryThreshold: Int = 1000,
+      dataSource: EphemDataSource = EphemDataSource()
+  ): (
+      StorageRangeCoordinatorImpl,
+      BehaviorTestKit[StorageRangeCoordinator.Command],
+      FlatSlotStorage,
+      SnapStorageDoneStorage
+  ) =
+    val flatSlots = new FlatSlotStorage(dataSource)
+    val (impl, kit) = newImpl(
+      stateRoot = doneRootArg,
+      flatSlotStorage = flatSlots,
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      flatBatchEntryThreshold = flatBatchEntryThreshold,
+      flatBatchEcOverride = Some(flatBatchEc),
+      deferredMerkleization = false, // production default: the storage trie is built and committed
+      recordStorageDone = recordStorageDone
+    )
+    (impl, kit, flatSlots, new SnapStorageDoneStorage(flatSlots.dataSource))
+
+  /** A flat-batch writer that runs nothing until told to: lets a test hold a batch "in flight". */
+  final private class ManualEc extends scala.concurrent.ExecutionContext:
+    private val queue = mutable.Queue.empty[Runnable]
+    def execute(runnable: Runnable): Unit = queue.enqueue(runnable)
+    def reportFailure(cause: Throwable): Unit = ()
+    def runAll(): Unit = while queue.nonEmpty do queue.dequeue().run()
+
+  private def storageRootOf(slots: Seq[(ByteString, ByteString)]): ByteString =
+    val reference = new SnapHashTrie(_ => ())
+    slots.foreach { case (k, v) => reference.update(k.toArray, v.toArray) }
+    reference.commit()
+
+  /** One whole-range response for a fresh account (empty proof ⇒ fully served): the account completes. */
+  private def completeAccount(impl: StorageRangeCoordinatorImpl, account: ByteString, claimedRoot: ByteString): Unit =
+    val peer = PeerTestHelpers.createTestPeer("done-marker-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, claimedRoot), doneSlots, Seq.empty)
+
+  it should "make a completion marker durable only together with the account's flat slots" taggedAs UnitTest in {
+    val (impl, kit, flatSlots, done) = doneMarkerFixture()
+    val account = kec256(ByteString("done-account"))
+    val root = storageRootOf(doneSlots)
+
+    completeAccount(impl, account, root)
+    impl.completedAccountCount shouldBe 1L
+    // Its last slots are still buffered, so the marker waits on batch 1, the batch that will carry them.
+    impl.pendingDoneMarkers.toSeq shouldBe Seq((account, root, 1L))
+    // A crash at this point loses the marker together with the slots: the task is re-queued on resume, never skipped.
+    done.isDone(account, root) shouldBe false
+    flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
+
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    impl.pendingDoneMarkers shouldBe empty
+    done.isDone(account, root) shouldBe true
+    doneSlots.foreach { case (k, v) => flatSlots.getSlot(account, k) shouldBe Some(v) }
+    done.isDone(account, kec256(ByteString("some-other-root"))) shouldBe false
+  }
+
+  it should "hold a completion marker back until the batch carrying the account's slots has committed" taggedAs UnitTest in {
+    val writer = new ManualEc
+    // Threshold 1: the account's slots go out in their own batch the moment they are staged, before the marker.
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(flatBatchEc = writer, flatBatchEntryThreshold = 1)
+    val account = kec256(ByteString("done-account-inflight"))
+    val root = storageRootOf(doneSlots)
+    completeAccount(impl, account, root)
+    impl.inFlightFlatBatches shouldBe 1 // batch 1 (the slots) submitted, not yet run
+
+    // Batch 1 has not committed: the marker must not ride in any batch yet (a crash now loses the slots).
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    impl.pendingDoneMarkers should have size 1
+    done.isDone(account, root) shouldBe false
+
+    writer.runAll() // batch 1 commits; its FlatBatchFlushComplete lands in the inbox
+    drainSelf(kit)
+    impl.flatBatchesDoneThrough shouldBe 1L
+    doneSlots.foreach { case (k, v) => flatSlots.getSlot(account, k) shouldBe Some(v) }
+    done.isDone(account, root) shouldBe false
+
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers) // the marker may ride now
+    impl.pendingDoneMarkers shouldBe empty
+    writer.runAll()
+    drainSelf(kit)
+    done.isDone(account, root) shouldBe true
+  }
+
+  /** An in-memory store whose writes can be made to fail, to drive a real flat-batch commit failure. */
+  final private class FailingWritesDataSource extends EphemDataSource(Map.empty):
+    @volatile var failWrites: Boolean = false
+    override def update(
+        dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]
+    ): Unit =
+      if failWrites then throw new java.io.IOException("synthetic write failure")
+      else super.update(dataSourceUpdates)
+
+  it should "never make a staged marker durable when the batch carrying it and the account's slots fails" taggedAs UnitTest in {
+    val ds = new FailingWritesDataSource
+    val (impl, kit, flatSlots, done) = doneMarkerFixture(dataSource = ds)
+    val root = storageRootOf(doneSlots)
+    val account = kec256(ByteString("done-account-failed-batch"))
+    completeAccount(impl, account, root)
+    impl.pendingDoneMarkers should have size 1 // staged; its slots are still buffered
+
+    // The write batch (slots + marker) fails to commit.
+    ds.failWrites = true
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit) // FlatBatchFlushFailed
+    impl.doneMarkersDisabled shouldBe true
+    impl.pendingDoneMarkers shouldBe empty
+    ds.failWrites = false
+    done.isDone(account, root) shouldBe false
+    flatSlots.getSlot(account, doneSlots.head._1) shouldBe None
+
+    // Later completions are not marked either: the failed batch's slots are gone for good.
+    val later = kec256(ByteString("done-account-after-failed-batch"))
+    completeAccount(impl, later, root)
+    impl.pendingDoneMarkers shouldBe empty
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    done.isDone(later, root) shouldBe false
+  }
+
+  it should "stop writing completion markers once a flat batch has failed" taggedAs UnitTest in {
+    val (impl, kit, _, done) = doneMarkerFixture()
+    val root = storageRootOf(doneSlots)
+    val first = kec256(ByteString("done-account-before-failure"))
+    completeAccount(impl, first, root)
+
+    impl.inFlightFlatBatches = 1
+    kit.run(StorageRangeCoordinator.FlatBatchFlushFailed(doneRootArg, entryCount = 2, error = "synthetic"))
+    impl.doneMarkersDisabled shouldBe true
+    impl.pendingDoneMarkers shouldBe empty
+
+    val second = kec256(ByteString("done-account-after-failure"))
+    completeAccount(impl, second, root)
+    impl.pendingDoneMarkers shouldBe empty
+    kit.run(StorageRangeCoordinator.FlushStorageDoneMarkers)
+    drainSelf(kit)
+    done.isDone(first, root) shouldBe false
+    done.isDone(second, root) shouldBe false
+  }
+
+  it should "not mark an account whose computed storage root differs from the claimed one, nor when markers are off" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    completeAccount(impl, kec256(ByteString("done-account-mismatch")), kec256(ByteString("not-the-real-root")))
+    impl.completedAccountCount shouldBe 1L
+    impl.pendingDoneMarkers shouldBe empty
+
+    val (off, _, _, _) = doneMarkerFixture(recordStorageDone = false)
+    completeAccount(off, kec256(ByteString("done-account-off")), storageRootOf(doneSlots))
+    off.completedAccountCount shouldBe 1L
+    off.pendingDoneMarkers shouldBe empty
   }

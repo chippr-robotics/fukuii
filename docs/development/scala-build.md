@@ -7,7 +7,7 @@ This document explains how the Fukuii build works after the Scala 3 migration a
 | Tool | Version | Purpose |
 | --- | --- | --- |
 | JDK | 25 (Temurin) | Runtime/toolchain for Scala 3 and Pekko |
-| sbt | 1.10.7 | Single build driver (no nested builds) |
+| sbt | 1.13.0 | Single build driver (no nested builds) |
 | Scala | 3.3.7 (LTS) | Only Scala version compiled in this repo |
 | scalafmt / scalafix | 2.5.2 / 0.13.0 | Formatting and linting (invoked via sbt) |
 | protobuf (protoc) | >= 3.21 | Generates sources via `sbt-protoc` |

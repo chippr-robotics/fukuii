@@ -146,6 +146,27 @@ class BlockchainWriter(
   def storeBlockBody(blockHash: BlockHash, blockBody: BlockBody): DataSourceBatchUpdate =
     blockBodiesStorage.put(blockHash.value, blockBody).and(saveTxsLocations(blockHash, blockBody))
 
+  /** `storeBlockBody` for a body built or chosen locally rather than one a validating path just accepted: refuses
+    * (throws `IllegalStateException`) a body whose shape contradicts `header` — empty lists under non-empty roots, or a
+    * withdrawals field whose presence disagrees with the header (`BlockBody.shapeMismatch`, O(1)). Fails loud because
+    * the alternative is serving a body that does not hash to its header, to RPC and to peers, forever (CQ-020-07).
+    */
+  def storeCheckedBlockBody(header: BlockHeader, blockBody: BlockBody): DataSourceBatchUpdate =
+    BlockBody.shapeMismatch(header, blockBody).foreach { reason =>
+      throw new IllegalStateException(
+        s"Refusing to store a body that contradicts its header: block ${header.number.value} " +
+          s"${header.hashAsHexString}: $reason"
+      )
+    }
+    storeBlockBody(header.hash, blockBody)
+
+  /** Removes the body stored under `blockHash`, leaving its header and number→hash mapping. Used to drop a body that
+    * does not belong to its header so the backfill fetches the real one (a body is fetched only when absent). Tx
+    * locations the wrong body wrote are left; the refetched body's own overwrite them.
+    */
+  def removeBlockBody(blockHash: BlockHash): DataSourceBatchUpdate =
+    blockBodiesStorage.remove(blockHash.value)
+
   def saveBestKnownBlocks(
       bestBlockHash: BlockHash,
       bestBlockNumber: BigInt

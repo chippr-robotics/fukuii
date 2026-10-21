@@ -19,7 +19,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
-import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -67,18 +67,14 @@ object BytecodeRecoveryActor:
 
   def apply(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      evmCodeStorage: EvmCodeStorage,
-      appStateStorage: AppStateStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[RecoveryComplete.type],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    evmCodeStorage,
-    appStateStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -92,9 +88,7 @@ object BytecodeRecoveryActor:
     */
   def applyPreloaded(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      evmCodeStorage: EvmCodeStorage,
-      appStateStorage: AppStateStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[RecoveryComplete.type],
       pivotBlockNumber: BigInt,
@@ -102,9 +96,7 @@ object BytecodeRecoveryActor:
       missing: Seq[ByteString]
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    evmCodeStorage,
-    appStateStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -116,9 +108,7 @@ object BytecodeRecoveryActor:
   /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   private[sync] def testApply(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      evmCodeStorage: EvmCodeStorage,
-      appStateStorage: AppStateStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[RecoveryComplete.type],
       pivotBlockNumber: BigInt,
@@ -127,9 +117,7 @@ object BytecodeRecoveryActor:
       coordinatorForTesting: Option[ActorRef] = None
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    evmCodeStorage,
-    appStateStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -140,9 +128,7 @@ object BytecodeRecoveryActor:
 
   private def scanning(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      evmCodeStorage: EvmCodeStorage,
-      appStateStorage: AppStateStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[RecoveryComplete.type],
       pivotBlockNumber: BigInt,
@@ -161,9 +147,15 @@ object BytecodeRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingBytecodes(stateRoot, stateStorage, evmCodeStorage, pivotBlockNumber, ctx.log))(
-              ctx.executionContext
-            )
+            Future(
+              scanForMissingBytecodes(
+                stateRoot,
+                stateIngest.stateTries,
+                stateIngest.bytecode,
+                pivotBlockNumber,
+                ctx.log
+              )
+            )(ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
@@ -175,7 +167,7 @@ object BytecodeRecoveryActor:
           if missing.isEmpty then
             ctx.log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
             RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
-            appStateStorage.bytecodeRecoveryDone().commit()
+            stateIngest.appState.bytecodeRecoveryDone().commit()
             syncController ! RecoveryComplete
             Behaviors.stopped
           else
@@ -198,7 +190,7 @@ object BytecodeRecoveryActor:
                     Behaviors
                       .supervise(
                         snap.actors.ByteCodeCoordinator(
-                          evmCodeStorage = evmCodeStorage,
+                          stateIngest = stateIngest,
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
                           batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,
@@ -217,7 +209,7 @@ object BytecodeRecoveryActor:
             // ("accumulating") and never announces completion, so recovery only ended when the no-progress abandon timer
             // fired, however quickly the bytecodes had arrived.
             coordinator ! snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks
-            downloading(ctx, coordinator, missing.size, syncController, appStateStorage, snapSyncConfig)
+            downloading(ctx, coordinator, missing.size, syncController, stateIngest, snapSyncConfig)
 
         case _ => Behaviors.unhandled
       }
@@ -228,7 +220,7 @@ object BytecodeRecoveryActor:
       coordinator: org.apache.pekko.actor.typed.ActorRef[snap.actors.ByteCodeCoordinator.Command],
       expectedCount: Int,
       syncController: TypedActorRef[RecoveryComplete.type],
-      appStateStorage: AppStateStorage,
+      stateIngest: StateIngest,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] =
     var progressSeq = 0L
@@ -248,7 +240,7 @@ object BytecodeRecoveryActor:
       def finishRecovery(): Behavior[Command] =
         timers.cancel("abandon")
         RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
-        appStateStorage.bytecodeRecoveryDone().commit()
+        stateIngest.appState.bytecodeRecoveryDone().commit()
         syncController ! RecoveryComplete
         Behaviors.stopped
 

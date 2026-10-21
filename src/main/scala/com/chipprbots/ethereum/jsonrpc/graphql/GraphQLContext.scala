@@ -41,8 +41,11 @@ case class GraphQLContext(
   */
 object GraphQLTypes:
 
-  /** An account at a specific block. Resolvers fetch `balance`/`code`/`nonce`/`storage` on demand. */
-  final case class GAccount(address: ByteString, blockNumber: BigInt)
+  /** An account at a specific block. Resolvers fetch `balance`/`code`/`nonce`/`storage` on demand. `pending` marks the
+    * account `Pending.account` returns, whose `transactionCount` is the pool's next nonce (go-ethereum
+    * `Account.TransactionCount` under the pending block number).
+    */
+  final case class GAccount(address: ByteString, blockNumber: BigInt, pending: Boolean = false)
 
   /** A block plus its canonical total difficulty (when available). */
   final case class GBlock(block: Block, totalDifficulty: Option[BigInt]):

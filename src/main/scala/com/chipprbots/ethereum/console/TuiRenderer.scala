@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.console
 
 import org.jline.utils.AttributedString
+import org.jline.utils.AttributedStringBuilder
 import org.jline.utils.AttributedStyle
 
 /** Rendering logic for terminal output.
@@ -10,18 +11,56 @@ import org.jline.utils.AttributedStyle
   */
 class TuiRenderer(config: TuiConfig):
 
-  /** Build the complete display content. */
+  /** Build the complete display content.
+    *
+    * The result is exactly `height` lines (for `height > 0`), each exactly `width` columns, so that drawing it from the
+    * home position never scrolls or wraps the terminal. When the content is taller than the terminal, the body is
+    * truncated and the footer with the keyboard commands is kept on the last line.
+    */
   def render(state: TuiState, width: Int, height: Int): Seq[AttributedString] =
+    val w = Math.max(width, 1)
+    val body = renderBody(state, w)
+    val footer = createFooter(w)
+    val header = Seq(createHeader(w), createSeparator(w))
+
+    // Logo only when it fits without pushing anything off screen.
+    val logo =
+      if config.showLogo && width > 80 && header.size + TuiRenderer.LogoLines + 1 + body.size + 1 <= height then
+        val buf = scala.collection.mutable.ArrayBuffer[AttributedString]()
+        addSmallLogo(buf, w)
+        buf += createSeparator(w)
+        buf.toSeq
+      else Seq.empty
+
+    val content = header ++ logo ++ body
+    val lines =
+      if height <= 0 then content :+ footer
+      else
+        val fitted = content.take(height - 1)
+        val padding = Seq.fill(height - 1 - fitted.size)(new AttributedString(" " * w))
+        (fitted ++ padding) :+ footer
+
+    lines.map(fitToWidth(_, w))
+
+  /** Concatenate styled fragments, keeping styles as attributes (not embedded escape codes). */
+  private def concat(parts: AttributedString*): AttributedString =
+    val sb = new AttributedStringBuilder()
+    parts.foreach(p => sb.append(p))
+    sb.toAttributedString
+
+  /** Truncate or pad a line to exactly `width` terminal columns. */
+  private def fitToWidth(line: AttributedString, width: Int): AttributedString =
+    val columns = line.columnLength()
+    if columns > width then line.columnSubSequence(0, width)
+    else if columns < width then
+      val sb = new AttributedStringBuilder()
+      sb.append(line)
+      sb.append(" " * (width - columns))
+      sb.toAttributedString
+    else line
+
+  private def renderBody(state: TuiState, width: Int): Seq[AttributedString] =
     val lines = scala.collection.mutable.ArrayBuffer[AttributedString]()
-
-    // Header
-    lines += createHeader(width)
-    lines += createSeparator(width)
-
-    // Add ASCII art logo if there's enough space and config allows
-    if config.showLogo && height > 30 && width > 80 then
-      addSmallLogo(lines, width)
-      lines += createSeparator(width)
 
     // Network & Connection section
     lines += createSectionHeader("NETWORK & CONNECTION", width)
@@ -33,7 +72,11 @@ class TuiRenderer(config: TuiConfig):
     // Blockchain section
     lines += createSectionHeader("BLOCKCHAIN", width)
     lines += createInfoLine("Current Block", formatNumber(state.currentBlock), width)
-    lines += createInfoLine("Best Block", formatNumber(state.bestBlock), width)
+    lines += createInfoLine(
+      "Best Block",
+      if state.bestBlock > 0 then formatNumber(state.bestBlock) else "unknown",
+      width
+    )
     lines += createInfoLine("Sync Status", state.syncStatus, width)
 
     if !state.isSynchronized && state.bestBlock > 0 then
@@ -120,12 +163,6 @@ class TuiRenderer(config: TuiConfig):
     lines += createInfoLine("Uptime", formatDuration(state.uptimeSeconds), width)
     lines += createSeparator(width)
 
-    // Footer with keyboard commands
-    lines += createFooter(width)
-
-    // Fill remaining space
-    while lines.length < height - 1 do lines += new AttributedString(" " * width)
-
     lines.toSeq
 
   /** Render the startup banner. */
@@ -138,7 +175,7 @@ class TuiRenderer(config: TuiConfig):
       " / __/ / /_/ / /_/ / /_/ /",
       "/_/    \\____/\\____/\\____/",
       "",
-      "   FUKUII ETHEREUM CLASSIC",
+      "     FUKUII EVM CLIENT",
       "",
       "    Initializing...",
       ""
@@ -147,14 +184,13 @@ class TuiRenderer(config: TuiConfig):
     val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
 
     banner.map { line =>
-      val centered = " " * ((width - line.length) / 2) + line
-      val padded = centered + " " * (width - centered.length)
-      new AttributedString(padded, greenStyle)
+      val centered = " " * Math.max(0, (width - line.length) / 2) + line
+      fitToWidth(new AttributedString(centered, greenStyle), Math.max(width, 1))
     }
 
   private def createHeader(width: Int): AttributedString =
     val title = " ◆ FUKUII ETHEREUM CLIENT ◆ "
-    val padding = (width - title.length) / 2
+    val padding = Math.max(0, (width - title.length) / 2)
     val paddedTitle = " " * padding + title + " " * (width - padding - title.length)
     new AttributedString(
       paddedTitle,
@@ -166,7 +202,7 @@ class TuiRenderer(config: TuiConfig):
 
   private def createSectionHeader(title: String, width: Int): AttributedString =
     val header = s" ● $title"
-    val paddedHeader = header + " " * (width - header.length)
+    val paddedHeader = header + " " * Math.max(0, width - header.length)
     new AttributedString(
       paddedHeader,
       AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
@@ -181,11 +217,11 @@ class TuiRenderer(config: TuiConfig):
 
     val combinedLength = labelPart.columnLength() + valuePart.columnLength()
     val padding = " " * Math.max(0, width - combinedLength)
-    new AttributedString(labelPart.toAnsi() + valuePart.toAnsi() + padding)
+    concat(labelPart, valuePart, new AttributedString(padding))
 
   private def createProgressBar(label: String, percentage: Double, width: Int): AttributedString =
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
-    val barWidth = Math.min(40, width - 30)
+    val barWidth = Math.max(0, Math.min(40, width - 30))
     // Clamp percentage to 0-100 range to prevent negative empty bar width
     val clampedPercentage = Math.max(0.0, Math.min(100.0, percentage))
     val filled = Math.min(((clampedPercentage / 100.0) * barWidth).toInt, barWidth)
@@ -203,7 +239,7 @@ class TuiRenderer(config: TuiConfig):
     val combinedLength =
       labelPart.columnLength() + filledBar.columnLength() + emptyBar.columnLength() + percentText.columnLength()
     val padding = " " * Math.max(0, width - combinedLength)
-    new AttributedString(labelPart.toAnsi() + filledBar.toAnsi() + emptyBar.toAnsi() + percentText.toAnsi() + padding)
+    concat(labelPart, filledBar, emptyBar, percentText, new AttributedString(padding))
 
   private def createStatusLine(label: String, status: String, width: Int): AttributedString =
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
@@ -222,7 +258,7 @@ class TuiRenderer(config: TuiConfig):
 
     val combinedLength = labelPart.columnLength() + statusPart.columnLength()
     val padding = " " * Math.max(0, width - combinedLength)
-    new AttributedString(labelPart.toAnsi() + statusPart.toAnsi() + padding)
+    concat(labelPart, statusPart, new AttributedString(padding))
 
   private def createPeerStatusLine(count: Int, max: Int, width: Int): AttributedString =
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
@@ -241,7 +277,7 @@ class TuiRenderer(config: TuiConfig):
 
     val combinedLength = labelPart.columnLength() + peerPart.columnLength() + indicatorPart.columnLength()
     val padding = " " * Math.max(0, width - combinedLength)
-    new AttributedString(labelPart.toAnsi() + peerPart.toAnsi() + indicatorPart.toAnsi() + padding)
+    concat(labelPart, peerPart, indicatorPart, new AttributedString(padding))
 
   private def createSeparator(width: Int): AttributedString =
     new AttributedString(
@@ -278,7 +314,7 @@ class TuiRenderer(config: TuiConfig):
     val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
 
     logo.foreach { line =>
-      val centered = " " * ((width - line.length) / 2) + line
+      val centered = " " * Math.max(0, (width - line.length) / 2) + line
       val padded = centered + " " * Math.max(0, width - centered.length)
       lines += new AttributedString(padded, greenStyle)
     }
@@ -300,6 +336,9 @@ class TuiRenderer(config: TuiConfig):
 object TuiRenderer:
   /** Create a renderer with default configuration. */
   def default: TuiRenderer = new TuiRenderer(TuiConfig.default)
+
+  /** Height of the ASCII-art logo block. */
+  private[console] val LogoLines: Int = 12
 
   /** Create a renderer with the specified configuration. */
   def apply(config: TuiConfig): TuiRenderer = new TuiRenderer(config)

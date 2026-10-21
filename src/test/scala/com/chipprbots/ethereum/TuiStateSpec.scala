@@ -147,6 +147,39 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     state.connectionStatus shouldBe "Initializing"
   }
 
+  it should "measure sync speed from the first observed block, not from genesis" taggedAs (UnitTest) in {
+    val start = java.time.Instant.now().minusSeconds(100)
+    // A node restarted at block 15M that imported 1,000 blocks in 100 s syncs at 10 blocks/s, not 150,000.
+    val state = TuiState.initial
+      .copy(syncBaseline = Some(SyncBaseline(15_000_000L, start)))
+      .withBlockInfo(15_001_000L, 15_002_000L)
+    state.syncSpeedBlocksPerSec.get shouldBe 10.0 +- 0.5
+    state.estimatedSyncTimeSeconds.get shouldBe 100L +- 5L
+  }
+
+  it should "record the first non-zero block as the speed baseline" taggedAs (UnitTest) in {
+    val s0 = TuiState.initial.withBlockInfo(0, 100)
+    s0.syncBaseline shouldBe None
+    val s1 = s0.withBlockInfo(10, 100)
+    s1.syncBaseline.map(_.block) shouldBe Some(10L)
+    s1.withBlockInfo(20, 100).syncBaseline.map(_.block) shouldBe Some(10L)
+    // A rewind resets the baseline rather than producing a negative speed.
+    s1.withBlockInfo(5, 100).syncBaseline.map(_.block) shouldBe Some(5L)
+  }
+
+  it should "not estimate before the minimum observation window" taggedAs (UnitTest) in {
+    val state = TuiState.initial.withBlockInfo(10, 100).withBlockInfo(50, 100)
+    state.syncSpeedBlocksPerSec shouldBe None
+    state.estimatedSyncTimeSeconds shouldBe None
+  }
+
+  it should "apply a node status snapshot" taggedAs (UnitTest) in {
+    val state = TuiState.initial.withStatus(NodeStatusSnapshot("Connected", 4, 25, 10, 20, "Syncing"))
+    (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 25))
+    (state.currentBlock, state.bestBlock, state.syncStatus) shouldBe ((10L, 20L, "Syncing"))
+    state.snapSyncState shouldBe None
+  }
+
 /** Tests for NodeSettings. */
 class NodeSettingsSpec extends AnyFlatSpec with Matchers:
 

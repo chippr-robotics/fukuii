@@ -17,15 +17,20 @@ import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.SpecFixtures
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.AccountTransaction
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
 class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory with JRCMatchers:
+
+  // BlockResponse/TransactionResponse take the serving node's chain config; here, the test config's.
+  private given BlockchainConfig = Config.blockchains.blockchainConfig
   import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.formats
 
   class Fixture extends ApisBuilder:
@@ -111,15 +116,19 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
             Right(
               GetAccountTransactionsResponse(
                 List(
-                  ExtendedTransactionData(
-                    sentTx,
-                    isOutgoing = true,
-                    Some(MinedTransactionData(block.header, 0, 42))
+                  AccountTransaction(
+                    ExtendedTransactionData(
+                      sentTx,
+                      isOutgoing = true,
+                      Some(MinedTransactionData(block.header, 0, 42))
+                    )
                   ),
-                  ExtendedTransactionData(
-                    receivedTx,
-                    isOutgoing = false,
-                    Some(MinedTransactionData(block.header, 1, 21))
+                  AccountTransaction(
+                    ExtendedTransactionData(
+                      receivedTx,
+                      isOutgoing = false,
+                      Some(MinedTransactionData(block.header, 1, 21))
+                    )
                   )
                 )
               )

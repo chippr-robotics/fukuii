@@ -13,6 +13,7 @@ This document provides practical solutions for common operational scenarios with
 1. [RocksDB Operations](#rocksdb-operations)
 2. [Temporary Directory Configuration](#temporary-directory-configuration)
 3. [JVM Optimization](#jvm-optimization)
+   - [Issue 16: JDK 25 C2 ReduceAllocationMerges Workaround](#issue-16-jdk-25-c2-reduceallocationmerges-workaround) ⚠️ Required on JDK 23+
 4. [Network Connectivity](#network-connectivity)
    - [Issue 13: Network Sync Zero-Length BigInteger](#issue-13-network-sync-zero-length-biginteger) ✅ Resolved
    - [Issue 14: ETH68 Peer Connections](#issue-14-eth68-peer-connections) ✅ Resolved
@@ -454,11 +455,26 @@ sudo restorecon -R /var/tmp/fukuii
 
 Fukuii runs on the JVM and benefits from proper tuning for optimal performance. This section covers recommended JVM configurations.
 
+### Debian package: where the JVM flags live
+
+On a `.deb` install the launcher (`/usr/share/fukuii/bin/fukuii`) reads its default JVM
+flags (heap, G1, `MaxDirectMemorySize`, OOM-exit and heap-dump) from
+`/usr/share/fukuii/conf/application.ini`. That directory is a symlink to `/etc/fukuii`, so
+the file you edit is **`/etc/fukuii/application.ini`** (a dpkg conffile: your edits survive
+upgrades, dpkg asks before replacing a modified file). Defaults are `-Xmx3g -Xms1g` with the
+heap dump written to `/var/lib/fukuii/heapdump.hprof`; the directory must be writable by the
+user running the node. Packages before this fix did not install the symlink, so those
+installs ran with plain JVM defaults. Precedence (last wins): `JAVA_OPTS` environment, then
+`application.ini`, then flags passed on the command line (`-J-Xmx6g`, `-Dfoo=bar`).
+
 ### Issue 6: Heap Size Configuration
 
 **Severity**: High  
 **Frequency**: Common with default settings  
 **Impact**: Node crashes
+
+> Packaged (deb) installs set the heap in `/etc/fukuii/application.ini` (default `-Xmx3g`), not `.jvmopts` — see
+> [Debian package: where the JVM flags live](#debian-package-where-the-jvm-flags-live).
 
 #### Symptoms
 
@@ -661,8 +677,11 @@ Default JVM settings not optimized for Fukuii's workload.
 -XX:+OptimizeStringConcat
 -XX:+UseCompressedOops
 
-# Monitoring (optional)
+# Required on JDK 23+ (Issue 16). Unlock must precede the diagnostic flag.
 -XX:+UnlockDiagnosticVMOptions
+-XX:-ReduceAllocationMerges
+
+# Monitoring (optional)
 -XX:+PrintFlagsFinal
 
 # GC logging (for troubleshooting)
@@ -747,6 +766,77 @@ export PATH=$JAVA_HOME/bin:$PATH
 #### Status
 
 **Fixed**: Ensure JDK 25 is installed and used.
+
+---
+
+### Issue 16: JDK 25 C2 ReduceAllocationMerges Workaround
+
+**Severity**: Critical  
+**Frequency**: Intermittent, unpredictable  
+**Impact**: Silently wrong results, or impossible `NullPointerException`s
+
+#### Symptoms
+
+The node refuses to start (exit status 78) and logs:
+
+```
+ERROR [c.c.ethereum.utils.JvmFlagGuard$] - Refusing to start: jdk=25.0.4.1+... runs C2 with ReduceAllocationMerges enabled, ...
+```
+
+Fix it by adding the workaround flags (below). Only if you accept the risk — e.g. on a JDK build known to carry the
+fix — start anyway with `-Dfukuii.allow-c2-reduce-allocation-merges=true` or
+`FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true`; the node then starts and logs `Unsafe JVM: ...` as an ERROR.
+
+Without the workaround, the bug itself shows up as an impossible `NullPointerException` (a field that
+was just assigned reads back as `null`) or, worse, as a wrong value with no error at all.
+
+#### Root Cause
+
+A HotSpot C2 JIT miscompile, [JDK-8385993](https://bugs.openjdk.org/browse/JDK-8385993) (duplicate
+JDK-8393049, which reports silent wrong field values). The `ReduceAllocationMerges` optimisation,
+on by default since JDK 23, can mis-read a field through a phi that merges a fresh allocation with an
+existing object. It is fixed only in JDK 28. We reproduced it on Temurin 25.0.4.1 and Ubuntu OpenJDK
+25.0.4.1 (it crashed scaladoc during `sbt dist`). A consensus client cannot tolerate either outcome.
+
+#### Fix
+
+Start every fukuii JVM on JDK 23 or later with:
+
+```
+-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges
+```
+
+The order matters: `ReduceAllocationMerges` is a diagnostic flag and is rejected unless
+`UnlockDiagnosticVMOptions` comes first.
+
+What already carries it:
+
+| Launch path | Where the flags come from |
+|-------------|---------------------------|
+| `bin/fukuii` (release zip, `sbt stage`, systemd `ExecStart=.../bin/fukuii`) | `conf/application.ini` |
+| Debian package (`/usr/bin/fukuii`) | `debian/fukuii-wrapper.sh` |
+| Docker images (`chipprbots/fukuii`, mainnet, mordor, bootnode, distroless, dev, hive) | `ENV JDK_JAVA_OPTIONS` (also covers composes that override the entrypoint to `java`) |
+| `ops/start.sh`, `hive/fukuii/fukuii.sh` | explicit flags |
+| sbt, and forked test JVMs | `.jvmopts`, `build.sbt` `Test / javaOptions` |
+
+What does **not**: a hand-written `java -jar fukuii-assembly.jar ...` (shell, systemd, your own
+image). Add the flags yourself:
+
+```bash
+java -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -jar fukuii-assembly.jar etc
+# or, for every java launch in the environment:
+export JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+```
+
+`JDK_JAVA_OPTIONS` makes `java` print `NOTE: Picked up JDK_JAVA_OPTIONS: ...` on stderr; that is
+expected. To confirm a running JVM: `jcmd <pid> VM.flags -all | grep ReduceAllocationMerges` should
+show `false`, and the startup ERROR above must be absent.
+
+#### Status
+
+**Workaround required** until the runtime JDK carries the JDK-8385993 fix (JDK 28, or a 25.0.x
+backport). Then remove the flags everywhere listed above. See
+[INF-007](../adr/infrastructure/INF-007-jdk-25-baseline.md).
 
 ---
 

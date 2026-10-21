@@ -8,7 +8,6 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 
-import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -33,7 +32,7 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * trie that is absent locally, and then the A2 walk completes. B's missing storage root must be discovered and no
   * completion declared. The walk executor is manual so the interleaving is deterministic (no sleeps).
   */
-class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
+class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   implicit private val actorTestKit: org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit = testKit
@@ -44,16 +43,41 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
     override def execute(r: Runnable): Unit = queue.add(r)
     override def reportFailure(t: Throwable): Unit = throw t
     def pending: Int = queue.size()
+
+    /** Runs exactly the tasks queued when called. A task's completion message makes the actor launch the next walk on
+      * this executor from its own thread while this loop is still running; draining "until empty" would pick that
+      * follow-up walk up and run it in the same call, nondeterministically skipping the interleaving under test. The
+      * follow-up stays queued for the next explicit `runPending()`.
+      */
     def runPending(): Unit =
-      var next = queue.poll()
-      while next != null do
-        next.run()
-        next = queue.poll()
+      var remaining = queue.size()
+      while remaining > 0 do
+        val next = queue.poll()
+        if next != null then next.run()
+        remaining -= 1
 
   private def pendingTasks(coordinator: ActorRef[TrieNodeHealingCoordinator.Command]): Int =
     val probe = testKit.createTestProbe[HealingStatistics]()
     coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
     probe.expectMessageType[HealingStatistics].pendingTasks
+
+  /** Deterministic replacement for a wall-clock `eventually` on "a verification walk is queued on the manual executor".
+    * The coordinator launches a walk either synchronously in the handler, or one self-sent message later (the
+    * `HealingCheckCompletion` gate). Each `pendingTasks` call is a full mailbox round trip, so every message already
+    * enqueued (including self-sends made while handling earlier ones) has been processed when it returns. We therefore
+    * barrier until the walk appears, bounded by a message-hop count, never by elapsed time.
+    */
+  private def awaitQueuedWalk(
+      coordinator: ActorRef[TrieNodeHealingCoordinator.Command],
+      executor: ManualExecutor
+  ): Unit =
+    var hops = 0
+    while executor.pending == 0 && hops < MaxMailboxHops do
+      pendingTasks(coordinator)
+      hops += 1
+    executor.pending shouldBe 1
+
+  private val MaxMailboxHops = 10
 
   private def accountLeaf(seed: Int, storageRoot: ByteString): LeafNode =
     LeafNode(
@@ -86,16 +110,15 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
       try
         // Re-peg to A2 (present): launches a verification walk of A2, held on the manual executor.
         coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(rootA2.hash))
-        eventually(timeout(5.seconds), interval(20.millis))(executor.pending shouldBe 1)
+        awaitQueuedWalk(coordinator, executor)
         // Re-peg again, to B (present), while the A2 walk is still in flight: verification of B is deferred.
         coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(rootB.hash))
         pendingTasks(coordinator) shouldBe 0 // mailbox barrier: the refresh to B has been processed
         // The A2 walk now completes clean. It must be discarded and B walked instead.
         executor.runPending()
-        eventually(timeout(5.seconds), interval(20.millis)) {
-          executor.runPending() // the fresh walk of B
-          pendingTasks(coordinator) shouldBe 1 // B's absent storage root is queued for healing
-        }
+        awaitQueuedWalk(coordinator, executor) // the stale completion was processed and the fresh walk of B queued
+        executor.runPending() // the fresh walk of B
+        pendingTasks(coordinator) shouldBe 1 // B's absent storage root is queued for healing (mailbox barrier)
         controller.expectNoMessage(1.second) // and no StateHealingComplete was declared
       finally testKit.stop(coordinator)
     }
@@ -119,14 +142,14 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
     try
       // First walk, on roots(1). Every later walk is the re-verification of the previous discard.
       coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(roots(1).hash))
-      eventually(timeout(5.seconds), interval(20.millis))(executor.pending shouldBe 1)
+      awaitQueuedWalk(coordinator, executor)
       // Each re-peg lands while a walk is in flight, so that walk's completion is stale. The first three are
       // re-verified; the fourth exceeds the cap.
       (2 to 5).foreach { i =>
         coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(ByteString(roots(i).hash))
         pendingTasks(coordinator) shouldBe 0 // mailbox barrier
         executor.runPending()
-        if i < 5 then eventually(timeout(5.seconds), interval(20.millis))(executor.pending shouldBe 1)
+        if i < 5 then awaitQueuedWalk(coordinator, executor)
       }
       controller.fishForMessage(5.seconds) {
         case SNAPSyncController.StateHealingAbandoned => FishingOutcomes.complete

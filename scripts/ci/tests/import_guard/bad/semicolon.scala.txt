@@ -1,0 +1,5 @@
+package fixture
+
+import scala.util._; import scala.collection.mutable
+
+object Semicolon

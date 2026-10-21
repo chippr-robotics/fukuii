@@ -150,14 +150,25 @@ trait JsonMethodsImplicits:
           .left
           .map(_ => JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
       case JObject(fields) =>
-        // Support {"blockHash": "0x..."} object form
-        fields.collectFirst { case ("blockHash", JString(hash)) => hash } match
-          case Some(hash) =>
+        // EIP-1898 object forms: {"blockNumber": "0x.."|tag} or {"blockHash": "0x.."[, "requireCanonical": bool]}
+        val hashOpt = fields.collectFirst { case ("blockHash", v) => v }
+        val numOpt = fields.collectFirst { case ("blockNumber", v) => v }
+        (numOpt, hashOpt) match
+          case (Some(_), Some(_)) =>
+            Left(JsonRpcError.InvalidParams("cannot specify both BlockHash and BlockNumber, choose one or the other"))
+          case (Some(num), None) =>
+            num match
+              // a number object must carry a block number or tag, never a 32-byte hash
+              case JString(s) if s.startsWith("0x") && s.length == 66 =>
+                Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+              case JString(_) | JInt(_) => extractBlockParam(num)
+              case _                    => Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+          case (None, Some(JString(hash))) =>
             extractBytes(JString(hash))
               .map(h => BlockParam.WithHash(h))
               .left
               .map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
-          case None =>
+          case _ =>
             Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
       case other =>
         extractQuantity(other)
@@ -167,6 +178,26 @@ trait JsonMethodsImplicits:
 
   def toEitherOpt[A, B](opt: Option[Either[A, B]]): Either[A, Option[B]] =
     opt.map(_.map(Some.apply)).getOrElse(Right(None))
+
+  /** Params of a method taking one `TransactionArgs` (eth_sendTransaction, eth_signTransaction, eth_fillTransaction),
+    * with go-ethereum's positional-argument errors (rpc/json.go parsePositionalArguments) and S1's strict decoder.
+    */
+  protected def txArgsParam(params: Option[JArray]): Either[JsonRpcError, TxArgs] =
+    params.map(_.arr).getOrElse(Nil) match
+      case Nil        => Left(InvalidParams("missing value for required argument 0"))
+      case obj :: Nil => TxArgsJson.decodeForSend(obj, 0)
+      case _          => Left(InvalidParams("too many arguments, want at most 1"))
+
+  /** Params of a method taking `TransactionArgs` and a passphrase (personal_sendTransaction, personal_signTransaction).
+    */
+  protected def txArgsAndPassphraseParams(params: Option[JArray]): Either[JsonRpcError, (TxArgs, String)] =
+    params.map(_.arr).getOrElse(Nil) match
+      case Nil                               => Left(InvalidParams("missing value for required argument 0"))
+      case _ :: Nil                          => Left(InvalidParams("missing value for required argument 1"))
+      case obj :: JString(passphrase) :: Nil => TxArgsJson.decodeForSend(obj, 0).map(_ -> passphrase)
+      case _ :: _ :: Nil =>
+        Left(InvalidParams("invalid argument 1: json: cannot unmarshal non-string into Go value of type string"))
+      case _ => Left(InvalidParams("too many arguments, want at most 2"))
 
 object JsonMethodsImplicits extends JsonMethodsImplicits:
 
@@ -328,14 +359,17 @@ object JsonMethodsImplicits extends JsonMethodsImplicits:
       : JsonMethodCodec[SendTransactionWithPassphraseRequest, SendTransactionWithPassphraseResponse] =
     new JsonMethodCodec[SendTransactionWithPassphraseRequest, SendTransactionWithPassphraseResponse]:
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendTransactionWithPassphraseRequest] =
-        params match
-          case Some(JArray(JObject(tx) :: JString(passphrase) :: _)) =>
-            extractTx(tx.toMap).map(SendTransactionWithPassphraseRequest(_, passphrase))
-          case _ =>
-            Left(InvalidParams())
+        txArgsAndPassphraseParams(params).map(SendTransactionWithPassphraseRequest.apply.tupled)
 
       def encodeJson(t: SendTransactionWithPassphraseResponse): JValue =
         encodeAsHex(t.txHash)
+
+  given personal_signTransaction: JsonMethodCodec[SignTransactionRequest, SignTransactionResponse] =
+    new JsonMethodCodec[SignTransactionRequest, SignTransactionResponse]:
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignTransactionRequest] =
+        txArgsAndPassphraseParams(params).map((args, passphrase) => SignTransactionRequest(args, Some(passphrase)))
+
+      def encodeJson(t: SignTransactionResponse): JValue = SignTransactionResult.encode(t.result)
 
   given personal_sign: JsonMethodCodec[SignRequest, SignResponse] =
     new JsonMethodCodec[SignRequest, SignResponse]:

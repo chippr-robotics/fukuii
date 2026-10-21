@@ -124,9 +124,8 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
     blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
-    (() => blockchainReader.getBestBlockNumber).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -135,21 +134,21 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "send a transaction when having pending txs from the same sender" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
-    val newTx: SignedTransaction = wallet.signTx(tx.toTransaction(nonce + 1), None).tx
+    val newTx: SignedTransaction = wallet.signTx(legacyTx(nonce + 1), None).tx
 
     keyStore.unlockAccount
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
+    // geth GetPoolNonce: the state nonce advanced over the sender's consecutive pooled txs
     blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
-    (() => blockchainReader.getBestBlockNumber).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -158,7 +157,29 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(stxWithSender, 0))))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(newTx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(newTx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe newTx
+
+  it should "fill the state nonce past a nonce-gapped pooled tx, which does not count" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val gapped: SignedTransactionWithSender = wallet.signTx(legacyTx(nonce + 2), None)
+
+    keyStore.unlockAccount
+      .expects(address, passphrase)
+      .returning(Right(wallet))
+
+    expectHead(1234)
+    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
+
+    replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(gapped, 0))))
+
+    res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "fail to send a transaction given a wrong passphrase" taggedAs (UnitTest, RPCTest) in new TestSetup:
     keyStore.unlockAccount
@@ -181,9 +202,8 @@ class PersonalServiceSpec
 
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
     blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
-    (() => blockchainReader.getBestBlockNumber).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionRequest = SendTransactionRequest(tx)
     val res: Future[Either[JsonRpcError, SendTransactionResponse]] = personal.sendTransaction(req).unsafeToFuture()
@@ -191,7 +211,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "fail to send a transaction when account is locked" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val req: SendTransactionRequest = SendTransactionRequest(tx)
@@ -336,9 +356,8 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
     blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
-    (() => blockchainReader.getBestBlockNumber).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -347,17 +366,17 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(stx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(stx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe stx
 
   it should "produce chain specific transaction after eip155" taggedAs (UnitTest, RPCTest) in new TestSetup:
     keyStore.unlockAccount
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
-    new Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
-    (() => blockchainReader.getBestBlockNumber).expects().returning(forkBlockNumbers.eip155BlockNumber)
+    expectHead(forkBlockNumbers.eip155BlockNumber)
+    blockchainReader.getAccount
+      .expects(*, address, forkBlockNumbers.eip155BlockNumber)
+      .returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -366,7 +385,7 @@ class PersonalServiceSpec
     replyPTM(PendingTransactionsResponse(Nil))
 
     res.futureValue shouldEqual Right(SendTransactionWithPassphraseResponse(chainSpecificStx.hash.value))
-    txPool.expectMsg(AddOrOverrideTransaction(chainSpecificStx))
+    txPool.expectMsgType[SubmitLocalTransaction].signedTransaction shouldBe chainSpecificStx
 
   it should "return NodeNotFound when sending transaction during sync (state unavailable)" taggedAs (
     UnitTest,
@@ -376,7 +395,7 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
     blockchainReader.getAccount
       .expects(*, address, BigInt(1234))
       .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
@@ -399,7 +418,7 @@ class PersonalServiceSpec
 
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
-    (() => blockchainReader.getBestBlockNumber).expects().returning(1234)
+    expectHead(1234)
     blockchainReader.getAccount
       .expects(*, address, BigInt(1234))
       .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
@@ -473,10 +492,22 @@ class PersonalServiceSpec
     )
 
     val wallet: Wallet = Wallet(address, prvKey)
-    val tx: TransactionRequest = TransactionRequest(from = address, to = Some(Address(42)), value = Some(txValue))
-    val stxWithSender: SignedTransactionWithSender = wallet.signTx(tx.toTransaction(nonce), None)
+    val tx: TxArgs = TxArgs(from = Some(address), to = Some(Address(42)), value = Some(txValue))
+    // The transaction eth_sendTransaction builds from `tx` before EIP-1559 (no London on this config): legacy, gas from
+    // the estimator stub below, gas price from the oracle stub (20 gwei).
+    val stubbedGasEstimate: BigInt = 90000
+    def legacyTx(n: BigInt): LegacyTransaction =
+      LegacyTransaction(
+        n,
+        GasPrice(2 * BigInt(10).pow(10)),
+        GasAmount(stubbedGasEstimate),
+        Some(Address(42)),
+        txValue,
+        ByteString.empty
+      )
+    val stxWithSender: SignedTransactionWithSender = wallet.signTx(legacyTx(nonce), None)
     val stx = stxWithSender.tx
-    val chainSpecificStx: SignedTransaction = wallet.signTx(tx.toTransaction(nonce), Some(chainId)).tx
+    val chainSpecificStx: SignedTransaction = wallet.signTx(legacyTx(nonce), Some(chainId)).tx
 
     val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 30
@@ -487,6 +518,8 @@ class PersonalServiceSpec
     val keyStore: KeyStore = mock[KeyStore]
 
     val txPool: TestProbe = TestProbe()
+    // the services ask the pool to take each local submission; this one takes them all (the probe still sees them)
+    txPool.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     (() => blockchainReader.getBestBranch).expects().returning(EmptyBranch).anyNumberOfTimes()
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -507,6 +540,23 @@ class PersonalServiceSpec
       // Return defaultGasPrice (20 gwei) so stx/chainSpecificStx fixture hashes match.
       // tx.toTransaction(nonce) uses 2 * 10^10 as the gas-price fallback.
       override private[jsonrpc] def suggestGasPrice(): BigInt = 2 * BigInt(10).pow(10)
+      // Pool admission (#1629 S0, EthTxService.admitLocal) has its own spec, EthTxServiceAdmissionSpec, and reads chain
+      // state this fixture does not model; PersonalServiceTypedTxSpec runs sends through the real gate.
+      override private[jsonrpc] def admitLocal(
+          stx: SignedTransaction,
+          sidecar: Option[com.chipprbots.ethereum.transactions.BlobSidecar]
+      ): Either[JsonRpcError, EthTxService.LocalAdmission] =
+        Right(
+          EthTxService.LocalAdmission(
+            Address(1), // the pool is a probe here; the sender it would read is not looked at
+            Account.empty(),
+            Fixtures.Blocks.Block3125369.header
+          )
+        )
+
+    val gasEstimator: TxGasEstimator = new TxGasEstimator:
+      def estimateGas(args: TxArgs, head: BlockHeader): cats.effect.IO[Either[JsonRpcError, BigInt]] =
+        cats.effect.IO.pure(Right(stubbedGasEstimate))
 
     val personal =
       new PersonalService(
@@ -532,8 +582,14 @@ class PersonalServiceSpec
           )
         ,
         ethTxService,
+        gasEstimator,
         system.scheduler
       )
+
+    /** The chain head every send/sign/fill reads once: an ETC-style header (no base fee) at `number`. */
+    def expectHead(number: BigInt): Unit =
+      val header = Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(number))
+      (() => blockchainReader.getBestBlock).expects().returning(Some(Block(header, BlockBody.empty)))
 
     def replyPTM(
         response: com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse

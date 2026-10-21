@@ -97,6 +97,8 @@ jobs:
           cp target/scala-3.*/fukuii-assembly-*.jar target/quick-docker/
           cat > target/quick-docker/Dockerfile <<'DOCKER'
           FROM eclipse-temurin:25-jre-noble
+          # JDK-8385993 workaround (C2 ReduceAllocationMerges); see docker/Dockerfile.
+          ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
           RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
           WORKDIR /app
           RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf

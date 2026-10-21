@@ -8,7 +8,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.Inspectors
 
-class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers {
+class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers:
   // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
   import DefaultCodecs.{given, *}
@@ -25,7 +25,7 @@ class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers {
 
     val enr = EthereumNodeRecord.fromNode(node, privateKey, seq = 1).require
     Inspectors.forAll(List(Keys.ip6, Keys.tcp6, Keys.udp6)) { k =>
-      enr.content.attrs should contain key (k)
+      (enr.content.attrs should contain).key(k)
     }
     Inspectors.forAll(List(Keys.ip, Keys.tcp, Keys.udp)) { k =>
       enr.content.attrs should not contain key(k)
@@ -44,10 +44,9 @@ class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers {
       enr.content.attrs should not contain key(k)
     }
     Inspectors.forAll(List(Keys.ip, Keys.tcp, Keys.udp)) { k =>
-      enr.content.attrs should contain key (k)
+      (enr.content.attrs should contain).key(k)
     }
 
     val nodeAddress = Node.Address.fromEnr(enr)
     nodeAddress shouldBe Some(node.address)
   }
-}

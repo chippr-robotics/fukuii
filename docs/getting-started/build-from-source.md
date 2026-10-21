@@ -9,7 +9,7 @@ This guide covers building Fukuii from source for development or custom builds.
 | Software | Version | Purpose |
 |----------|---------|---------|
 | JDK | 25 | Runtime and build |
-| sbt | 1.10.7+ | Scala build tool |
+| sbt | 1.13.0+ | Scala build tool |
 | Git | Any | Version control |
 
 ### Install JDK 25

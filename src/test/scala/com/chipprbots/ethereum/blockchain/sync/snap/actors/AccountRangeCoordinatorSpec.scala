@@ -12,7 +12,21 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
@@ -45,7 +59,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       concurrency: Int,
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
-      initialMaxInFlightPerPeer: Int = 5
+      initialMaxInFlightPerPeer: Int = 5,
+      intakeBudget: Option[SnapIntakeBudget] = None
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
     testKit.spawn(
       AccountRangeCoordinator(
@@ -57,9 +72,33 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         snapSyncController = snapSyncController,
         resumeProgress = resumeProgress,
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
-        accountTrieEcOverride = Some(classicSystem.dispatcher)
+        accountTrieEcOverride = Some(classicSystem.dispatcher),
+        stateIngest = hashSchemeIngest,
+        intakeBudget = intakeBudget
       )
     )
+
+  // The coordinators' StateIngest (spec 016 C-A3): these tests run the Hash scheme, so the coordinator reads only
+  // `pathNodes` (None) from it; every other member throws.
+  private def hashSchemeIngest: StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = notReached("appState")
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = None
+      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
+      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"AccountRangeCoordinator read StateIngest.$member")
 
   /** Resolve the coordinator's single (concurrency = 1) worker child via actorSelection; returns a Typed ref so sends
     * are compile-time checked. Replaces the former `coordinator.underlyingActor.activeTasks(reqId)._2`, which is
@@ -120,6 +159,40 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
   }
+
+  it should "resume dispatch on its own when the intake gate re-opens, with no PeerAvailable (spec 014)" taggedAs
+    UnitTest in {
+      val stateRoot = kec256(ByteString("test-state-root"))
+      val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+      val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+      val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+      val peerProbe = testKit.createTestProbe[Any]()
+      val peer = PeerTestHelpers.createTestPeer("gate-peer", peerProbe.ref.toClassic)
+
+      // Close the gate through the bytecode ceiling: that path has no *QueuePressure(false) release message.
+      val budget = new SnapIntakeBudget(maxPendingStorageTasks = 1000L, maxPendingByteCodeHashes = 10L)
+      budget.byteCodeQueueDepth(10L)
+      budget.intakeAllowed shouldBe false
+
+      val coordinator = arcProps(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        intakeBudget = Some(budget)
+      )
+      coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
+      coordinator ! AccountRangeCoordinator.PeerAvailable(peer)
+      networkPeerManager.expectNoMessage(500.millis)
+
+      // The bytecode queue drains. Nothing is sent to the coordinator: its own recheck must notice.
+      budget.byteCodeQueueDepth(0L)
+      networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](
+        AccountRangeCoordinator.IntakeGateRecheckInterval * 5
+      )
+    }
 
   it should "handle task completion and report progress" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -795,7 +868,9 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       resumeProgress: Map[ByteString, ByteString],
       carried: Option[ContractTaskFiles],
       dir: java.nio.file.Path,
-      generation: Long
+      generation: Long,
+      storageDone: Option[SnapStorageDoneStorage] = None,
+      concurrency: Int = 1
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command] =
     testKit.spawn(
       AccountRangeCoordinator(
@@ -803,13 +878,15 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         networkPeerManager = networkPeerManager,
         requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
         mptStorage = new TestMptStorage(),
-        concurrency = 1,
+        concurrency = concurrency,
         snapSyncController = controller,
         resumeProgress = resumeProgress,
         accountTrieEcOverride = Some(classicSystem.dispatcher),
+        stateIngest = hashSchemeIngest,
         taskFileDir = Some(dir),
         carriedTaskFiles = carried,
-        progressGeneration = generation
+        progressGeneration = generation,
+        storageDone = storageDone
       )
     )
 
@@ -924,6 +1001,93 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     testKit.stop(coord2)
   }
 
+  /** (accountHash, storageRoot) of carried storage-task entry `i` (see `entry`). */
+  private def carriedTask(i: Int): (ByteString, ByteString) =
+    val e = entry("s", i, 64)
+    (ByteString(e.take(32)), ByteString(e.drop(32)))
+
+  it should "replay only the carried storage tasks that have no completion marker (restart after finished work)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-")
+    val carried = previousTaskFiles(dir, counted = 4, codeCounted = 2)
+    val done = new SnapStorageDoneStorage(EphemDataSource())
+    // Tasks 0 and 2 finished before the restart. Task 1's account finished too, but under a DIFFERENT storage root
+    // (e.g. re-identified at another pivot) — that does not finish the carried (account, root) task.
+    done.markDone(Seq(carriedTask(0), carriedTask(2), carriedTask(1)._1 -> kec256(ByteString("other-root")))).commit()
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("done-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(done)
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.replayed shouldBe true
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe Seq(carriedTask(1), carriedTask(3))
+    // Bytecode is unaffected here (the controller drops codeHashes already in EvmCodeStorage).
+    replay.codeHashes.size shouldBe 2
+    testKit.stop(coord)
+  }
+
+  it should "not skip a task because of a marker a superseded coordinator wrote after the clear" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-race-")
+    val account = kec256(ByteString("race-account"))
+    val oldRoot = kec256(ByteString("race-root-old"))
+    val newRoot = kec256(ByteString("race-root-new"))
+    val other = carriedTask(7)
+    val storage = dir.resolve("race-storage.bin")
+    val code = dir.resolve("race-code.bin")
+    java.nio.file.Files.write(storage, (account ++ newRoot ++ other._1 ++ other._2).toArray)
+    java.nio.file.Files.write(code, Array.emptyByteArray)
+    val carried = ContractTaskFiles(storage.toString, 2L, code.toString, 0L)
+
+    val done = new SnapStorageDoneStorage(EphemDataSource())
+    done.markDone(Seq(account -> oldRoot, other)).commit() // previous cycle
+    done.clear() // the account phase starts without carried files
+    // A superseded storage coordinator, still flushing, then commits the marker of a task it really finished — for the
+    // root it downloaded (the old one). The account was re-identified at the new root afterwards.
+    done.markDone(Seq(account -> oldRoot)).commit()
+
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("race-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(done)
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    // Both carried tasks are replayed: the late marker matches neither (other root), and the cleared one is gone.
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe Seq(account -> newRoot, other)
+    testKit.stop(coord)
+  }
+
+  it should "replay every carried storage task when no completion markers exist (old checkpoint, first restart)" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-done-none-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = spawnResumed(
+      kec256(ByteString("done-none-root")),
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      controller.ref,
+      Map(AccountTask.MaxHash32 -> midCursor),
+      Some(carried),
+      dir,
+      1,
+      storageDone = Some(new SnapStorageDoneStorage(EphemDataSource()))
+    )
+    val replay = fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+    replay.storageTasks.map(t => (t.accountHash, t.storageRoot)) shouldBe (0 until 3).map(carriedTask)
+    testKit.stop(coord)
+  }
+
   it should "re-download a partial range from its start when no task files are carried (legacy record)" taggedAs UnitTest in {
     val dir = java.nio.file.Files.createTempDirectory("arc-legacy-")
     val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
@@ -967,6 +1131,102 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       true
   }
 
+  // ── #1597: a range completed before a restart must stay in every later checkpoint ──
+
+  "A resumed AccountRangeCoordinator (#1597)" should "keep a range that was complete before a restart in every later checkpoint, across two restarts" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-1597-")
+    val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val layout2 = AccountTask.createInitialTasks(ByteString.empty, 2).map(_.last)
+    val doneLast = layout2(0)
+    val partialLast = layout2(1)
+    val partialCursor = ByteString(Array.fill(32)(0xc0.toByte)) // inside the upper range [0x80.., 0xff..]
+    // The lower range finished before the first restart (cursor at its end); the upper one is mid-range.
+    val cursors = Map(doneLast -> doneLast, partialLast -> partialCursor)
+
+    def restart(resume: Map[ByteString, ByteString], files: ContractTaskFiles, generation: Long) =
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coord = spawnResumed(
+        kec256(ByteString(s"1597-root-$generation")),
+        testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+        controller.ref,
+        resume,
+        Some(files),
+        dir,
+        generation,
+        concurrency = 2
+      )
+      fish(controller) { case m: SNAPSyncController.IncrementalContractData => m }
+      testKit.stop(coord)
+      fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd if m.durable => m }
+
+    // Restart 1: the skipped (complete) range is still in the checkpoint. Before the fix it was missing: 1 cursor.
+    val snap1 = restart(cursors, carried, 1)
+    snap1.progress shouldBe cursors
+    SNAPSyncController.checkResumable(snap1.progress, snap1.taskFiles.get, concurrency = 2) shouldBe Right(())
+
+    // Restart 2, through the persisted checkpoint: the record has the full layout (nothing to fill) and is accepted.
+    val json = AccountResumeCheckpoint.encode(
+      AccountResumeCheckpoint(kec256(ByteString("1597-root-1")), BigInt(100), snap1.progress, snap1.taskFiles.get)
+    )
+    val reloaded = AccountResumeCheckpoint.decode(json).fold(e => fail(e), identity)
+    SNAPSyncController.fillResumeLayout(reloaded.cursors, concurrency = 2) shouldBe Right((reloaded.cursors, Seq.empty))
+    val snap2 = restart(reloaded.cursors, reloaded.taskFiles, 2)
+    snap2.progress shouldBe cursors
+    snap2.progress.size shouldBe 2
+    SNAPSyncController.checkResumable(snap2.progress, snap2.taskFiles.get, concurrency = 2) shouldBe Right(())
+  }
+
+  "SNAPSyncController.fillResumeLayout (#1597)" should "fill the missing ranges of a strict subset of the layout as complete" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-1597-fill-")
+    val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
+    val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
+    val full = layout16.map(t => t.last -> t.next).toMap
+    val missing = layout16(4)
+    // The live Sepolia shape: 15 cursors, the range finished before an earlier restart is gone.
+    val fifteen = full - missing.last
+
+    SNAPSyncController.checkResumable(fifteen, files, concurrency = 16).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteen, concurrency = 16) match
+      case Right((filled, added)) =>
+        added.map(_.last) shouldBe Seq(missing.last)
+        filled.size shouldBe 16
+        filled(missing.last) shouldBe missing.last // done: next == last
+        filled - missing.last shouldBe fifteen // every saved cursor unchanged
+        SNAPSyncController.checkResumable(filled, files, concurrency = 16) shouldBe Right(())
+      case Left(why) => fail(why)
+
+    // Any strict subset that is not another layout is filled the same way.
+    val two = Map(layout16(0).last -> layout16(0).next, layout16(15).last -> layout16(15).next)
+    SNAPSyncController.fillResumeLayout(two, concurrency = 16).map(_._2.size) shouldBe Right(14)
+
+    // A complete layout passes through untouched.
+    SNAPSyncController.fillResumeLayout(full, concurrency = 16) shouldBe Right((full, Seq.empty))
+  }
+
+  it should "reject another concurrency's layout, keys outside the layout and an empty record" taggedAs UnitTest in {
+    val layout16Keys = AccountTask.createInitialTasks(ByteString.empty, 16).map(_.last).toSet
+    val layout8 = AccountTask.createInitialTasks(ByteString.empty, 8).map(t => t.last -> t.next).toMap
+    // The trap: the 8-range keys are a strict subset of the 16-range keys. Filling would mark half the keyspace done.
+    layout8.keySet.subsetOf(layout16Keys) shouldBe true
+    SNAPSyncController.fillResumeLayout(layout8, concurrency = 16).isLeft shouldBe true
+    // The 1-range layout ({0xff..}) is also a subset of every layout.
+    SNAPSyncController.fillResumeLayout(Map(AccountTask.MaxHash32 -> midCursor), concurrency = 16).isLeft shouldBe true
+    // 16 -> 8: keys outside the 8-range layout.
+    val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16).map(t => t.last -> t.next).toMap
+    SNAPSyncController.fillResumeLayout(layout16, concurrency = 8).isLeft shouldBe true
+    // 15 of the 16-range keys at concurrency 32: they fit the 16-range layout, a strict subset of the 32-range one, so
+    // filling would mark 17 never-downloaded ranges done (#1597 F2). The same 15 at concurrency 16 are still filled.
+    val fifteenOf16 = layout16 - AccountTask.createInitialTasks(ByteString.empty, 16)(4).last
+    fifteenOf16.keySet.subsetOf(AccountTask.createInitialTasks(ByteString.empty, 32).map(_.last).toSet) shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 32).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(fifteenOf16, concurrency = 16).map(_._2.size) shouldBe Right(1)
+    SNAPSyncController.fillResumeLayout(layout16, concurrency = 32).isLeft shouldBe true
+    // One stray key next to otherwise valid cursors.
+    val stray = ByteString(Array.fill(32)(0x01.toByte))
+    SNAPSyncController.fillResumeLayout((layout16 - AccountTask.MaxHash32) + (stray -> stray), 16).isLeft shouldBe true
+    SNAPSyncController.fillResumeLayout(Map.empty, concurrency = 16).isLeft shouldBe true
+  }
+
   // ── Review nits N2 / N4 ──
 
   "A finalising AccountRangeCoordinator" should "never emit a durable checkpoint once trie finalisation has started (N2)" taggedAs UnitTest in {
@@ -985,6 +1245,33 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val snap = fish(controller) { case m: SNAPSyncController.AccountRangeProgressCmd => m }
     snap.durable shouldBe false
     testKit.stop(coord)
+  }
+
+  it should "send both task-file infos right after AccountRangeSyncComplete, before it can stop (#1603)" taggedAs UnitTest in {
+    // A fully-complete range completes and finalises right away, after which the controller stops the coordinator. The
+    // infos are sent from the completion handler itself, so stopping the coordinator at once cannot lose either.
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coord = arcProps(
+      stateRoot = kec256(ByteString("1603-root")),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      concurrency = 1,
+      snapSyncController = controller.ref,
+      resumeProgress = Map(AccountTask.MaxHash32 -> AccountTask.MaxHash32)
+    )
+    fish(controller) { case SNAPSyncController.AccountRangeSyncComplete => SNAPSyncController.AccountRangeSyncComplete }
+    testKit.stop(coord)
+
+    // The next two messages, in this order, with no ask from the controller.
+    val storage = controller.expectMessageType[SNAPSyncController.StorageFileInfoReply]
+    val codeHashes = controller.expectMessageType[SNAPSyncController.CodeHashesFileInfoReply]
+    storage.result.isSuccess shouldBe true
+    storage.result.get.filePath.getFileName.toString should startWith("fukuii-contract-storage-")
+    storage.result.get.count shouldBe 0L
+    codeHashes.result.isSuccess shouldBe true
+    codeHashes.result.get.filePath.getFileName.toString should startWith("fukuii-unique-codehashes-")
+    codeHashes.result.get.count shouldBe 0L
   }
 
   "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {

@@ -5,18 +5,15 @@ import scodec.bits.ByteVector
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** Tests for [[Payload]] data classes — request-id length validation and
-  * field shape. The actual RLP codec for these lives in fukuii main
-  * (`com.chipprbots.ethereum.network.discovery.codecs.V5RLPCodecs`) and is
-  * tested separately. */
-class PayloadSpec extends AnyFlatSpec with Matchers {
+/** Tests for [[Payload]] data classes — request-id length validation and field shape. The actual RLP codec for these
+  * lives in fukuii main (`com.chipprbots.ethereum.network.discovery.codecs.V5RLPCodecs`) and is tested separately.
+  */
+class PayloadSpec extends AnyFlatSpec with Matchers:
 
   behavior.of("Payload.Ping")
 
   it should "accept request-ids of 1 to 8 bytes" in {
-    for (size <- 1 to 8) {
-      noException should be thrownBy Payload.Ping(ByteVector.low(size), 1L)
-    }
+    for size <- 1 to 8 do noException should be thrownBy Payload.Ping(ByteVector.low(size), 1L)
   }
 
   it should "reject request-ids longer than 8 bytes" in {
@@ -92,4 +89,3 @@ class PayloadSpec extends AnyFlatSpec with Matchers {
     an[IllegalArgumentException] should be thrownBy Payload.randomRequestId(0)
     an[IllegalArgumentException] should be thrownBy Payload.randomRequestId(9)
   }
-}

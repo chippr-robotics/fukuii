@@ -2015,38 +2015,23 @@ case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas:
       else UInt256.Zero
     state.withStack(stack1.push(result)).step()
 
-/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee per EIP-4844 CalcBlobFee. Fork-aware update
-  * fraction matching BlobGasUtils.updateFractionFor: BPO2 (11684671) → BPO1 (8346193) → Prague (5007716) → Cancun
-  * (3338477). Formula inlined from BlobGasUtils.fakeExponential to avoid a vm→consensus.engine import cycle.
+/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee, go-ethereum `eip4844.CalcBlobFee`:
+  * fake_exponential(1, header.excessBlobGas, updateFraction), with the update fraction of the chain's blob schedule at
+  * the block's timestamp (#1637; EIP-7840 / EIP-7892). Resolved through `BlockchainConfigForEvm.blobParamsAt`, the same
+  * resolver `BlobGasUtils` uses, so the opcode and the block's blob base fee agree on every chain.
   */
 case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas:
-  private val MinBlobBaseFee: BigInt = BigInt(1)
-  private val CancunUpdateFraction: BigInt = BigInt(3338477)
-  private val PragueUpdateFraction: BigInt = BigInt(5007716)
-  private val Bpo1UpdateFraction: BigInt = BigInt(8346193)
-  private val Bpo2UpdateFraction: BigInt = BigInt(11684671)
-
-  // EIP-4844 fake_exponential: factor * e^(numerator/denominator) via Taylor series.
-  private def calcBlobFee(excessBlobGas: BigInt, updateFraction: BigInt): BigInt =
-    var i = BigInt(1)
-    var output = BigInt(0)
-    var accum = MinBlobBaseFee * updateFraction
-    while accum > 0 do
-      output += accum
-      accum = (accum * excessBlobGas) / (updateFraction * i)
-      i += 1
-    output / updateFraction
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     val timestamp = state.env.blockHeader.unixTimestamp
     val bcConfig = state.env.evmConfig.blockchainConfig
     val excessBlobGas = state.env.blockHeader.excessBlobGas.getOrElse(BigInt(0))
-    val fraction =
-      if bcConfig.isBpo2Timestamp(timestamp) then Bpo2UpdateFraction
-      else if bcConfig.isBpo1Timestamp(timestamp) then Bpo1UpdateFraction
-      else if bcConfig.isPragueTimestamp(timestamp) then PragueUpdateFraction
-      else CancunUpdateFraction
-    val fee = calcBlobFee(excessBlobGas, fraction)
+    val fraction = bcConfig.blobParamsAt(timestamp).baseFeeUpdateFraction
+    val fee = com.chipprbots.ethereum.utils.BlobParams.fakeExponential(
+      com.chipprbots.ethereum.utils.BlobParams.MinBlobBaseFee,
+      excessBlobGas,
+      fraction
+    )
     state.withStack(state.stack.push(UInt256(fee))).step()
 
 /** EIP-7843 (Amsterdam): SLOTNUM pushes the beacon-chain slot of the block being executed, the header's `slotNumber`

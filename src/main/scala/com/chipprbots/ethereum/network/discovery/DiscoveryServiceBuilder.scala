@@ -257,7 +257,9 @@ trait DiscoveryServiceBuilder extends Logger:
       processAddress = InetMultiAddress(new InetSocketAddress(host, discoveryConfig.port)),
       channelCapacity = discoveryConfig.channelCapacity,
       receiveBufferSizeBytes = v4.Packet.MaxPacketBitsSize / 8 * 2,
-      syncResponder = syncResponder
+      syncResponder = syncResponder,
+      maxServerChannels = discoveryConfig.maxServerChannels,
+      serverChannelIdleTimeout = StaticUDPPeerGroup.Config.DefaultServerChannelIdleTimeout
     )
 
   private def setDiscoveryStatus(nodeStatusHolder: AtomicReference[NodeStatus], status: ServerStatus): IO[Unit] =

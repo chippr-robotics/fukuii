@@ -5,19 +5,18 @@ import scodec.bits.ByteVector
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** Crypto tests for [[Session]] — gates wire-compat by including known-answer
-  * vectors lifted directly from go-ethereum v1.16.4's
-  * `p2p/discover/v5wire/crypto_test.go`:
+/** Crypto tests for [[Session]] — gates wire-compat by including known-answer vectors lifted directly from go-ethereum
+  * v1.16.4's `p2p/discover/v5wire/crypto_test.go`:
   *
-  *   - TestVector_ECDH        — expected 33-byte compressed shared secret
-  *   - TestVector_KDF         — expected initiator/recipient keys after HKDF
+  *   - TestVector_ECDH — expected 33-byte compressed shared secret
+  *   - TestVector_KDF — expected initiator/recipient keys after HKDF
   *
   * Plus structural round-trip tests:
   *   - HKDF derivation: initiator-side keys vs recipient-side keys (after flip) match
   *   - AES-GCM encrypt → decrypt round-trip
   *   - idNonceHash domain-separation tag is included
   */
-class SessionSpec extends AnyFlatSpec with Matchers {
+class SessionSpec extends AnyFlatSpec with Matchers:
 
   // ---- TestVector_ECDH (geth) --------------------------------------------
 
@@ -139,9 +138,9 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     val h3 = Session.idNonceHash(challenge, ephPubkey ++ ByteVector.fromByte(0), destId)
     val h4 = Session.idNonceHash(challenge, ephPubkey, ByteVector.fromValidHex("cc" * 32))
     h1 should have size 32L
-    h1 should not equal h2
-    h1 should not equal h3
-    h1 should not equal h4
+    (h1 should not).equal(h2)
+    (h1 should not).equal(h3)
+    (h1 should not).equal(h4)
   }
 
   // ---- AES-GCM ------------------------------------------------------------
@@ -178,4 +177,3 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     val tampered = ct.update(0, ((ct(0) ^ 0xff).toByte))
     Session.decrypt(key, nonce, tampered, ByteVector.empty).isFailure shouldBe true
   }
-}

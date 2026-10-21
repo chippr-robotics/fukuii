@@ -16,7 +16,7 @@ package com.chipprbots.ethereum.rlp
   *   given RLPCodec[MyData] = deriveLabelledGenericRLPCodec[MyData]
   * }}}
   */
-object RLPImplicitDerivations {
+object RLPImplicitDerivations:
   // Re-export core types and functions from RLPDerivation
   export RLPDerivation.{DerivationPolicy, FieldInfo, RLPListEncoder, RLPListDecoder}
 
@@ -59,4 +59,3 @@ object RLPImplicitDerivations {
       ct: scala.reflect.ClassTag[T]
   ): RLPDecoder[T] =
     RLPDerivation.derivedDecoder[T]
-}

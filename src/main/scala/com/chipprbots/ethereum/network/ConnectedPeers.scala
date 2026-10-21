@@ -51,6 +51,15 @@ case class ConnectedPeers(
 
   def getPeer(peerId: PeerId): Option[Peer] = peers.get(peerId)
 
+  /** True while `peerRef` is still tracked as a pending or handshaked peer, i.e. its termination has not been
+    * processed.
+    */
+  def isTracked(peerRef: typed.ActorRef[PeerActor.Command]): Boolean = allPeers.values.exists(_.ref == peerRef)
+
+  /** True if a tracked peer other than `excludingRef` is known under `nodeId`. */
+  def hasOtherWithNodeId(nodeId: ByteString, excludingRef: typed.ActorRef[PeerActor.Command]): Boolean =
+    allPeers.values.exists(p => p.ref != excludingRef && p.nodeId.contains(nodeId))
+
   def addNewPendingPeer(pendingPeer: Peer): ConnectedPeers =
     if pendingPeer.incomingConnection then
       copy(incomingPendingPeers = incomingPendingPeers + (pendingPeer.id -> pendingPeer))

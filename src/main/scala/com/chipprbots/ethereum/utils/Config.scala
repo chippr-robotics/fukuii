@@ -219,11 +219,87 @@ trait TxPoolConfig:
   val transactionTimeout: FiniteDuration
   val getTransactionFromPoolTimeout: FiniteDuration
 
+  /** Upper bound on the bytes of EIP-4844 network-form sidecars (blobs, commitments, proofs) the pool keeps for the
+    * blob transactions it holds. Admitting a sidecar past it evicts the oldest blob transactions, sidecar and
+    * transaction together. go-ethereum's blobpool works to a byte budget the same way (`--blobpool.datacap`). Concrete
+    * here so pool configs that predate it keep the default.
+    */
+  val blobSidecarBudgetBytes: Long = TxPoolConfig.DefaultBlobSidecarBudgetBytes
+
+  /** Most transaction hashes whose per-peer "known" sets are tracked, and how long an entry lives untouched. */
+  val knownTxMaxEntries: Int = TxPoolConfig.DefaultKnownTxMaxEntries
+  val knownTxTtl: FiniteDuration = TxPoolConfig.DefaultKnownTxTtl
+
+  /** Most outstanding announced-hash requests tracked, and how long to wait for the reply before forgetting one. */
+  val announcementMaxEntries: Int = TxPoolConfig.DefaultAnnouncementMaxEntries
+  val announcementTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementTimeout
+
+  /** How long one peer has to answer a GetPooledTransactions before the hashes are asked of another peer that announced
+    * them (go-ethereum's `txFetchTimeout`).
+    */
+  val announcementFetchTimeout: FiniteDuration = TxPoolConfig.DefaultAnnouncementFetchTimeout
+
+  /** Percentage by which a replacement must raise a pooled transaction's fee cap and tip cap (go-ethereum
+    * `--txpool.pricebump`, default 10; values below 1 are raised to the default, as go-ethereum's `sanitize` does).
+    */
+  val priceBump: Int = TxPoolConfig.DefaultPriceBump
+
+  /** The same for a blob transaction replacing a pooled blob transaction (go-ethereum `--blobpool.pricebump`, default
+    * 100: twice the fee caps; values below 1 are raised to the default).
+    */
+  val blobPriceBump: Int = TxPoolConfig.DefaultBlobPriceBump
+
 object TxPoolConfig:
+
+  /** go-ethereum legacypool DefaultConfig.PriceBump. */
+  val DefaultPriceBump: Int = 10
+
+  /** go-ethereum blobpool DefaultConfig.PriceBump. */
+  val DefaultBlobPriceBump: Int = 100
+
+  /** 256 MiB: ~2,000 single-blob or ~330 six-blob transactions in network form. */
+  val DefaultBlobSidecarBudgetBytes: Long = 256L * 1024 * 1024
+
+  val DefaultKnownTxMaxEntries: Int = 131072
+  val DefaultKnownTxTtl: FiniteDuration = 10.minutes
+  val DefaultAnnouncementMaxEntries: Int = 32768
+  val DefaultAnnouncementTimeout: FiniteDuration = 2.minutes
+  val DefaultAnnouncementFetchTimeout: FiniteDuration = 5.seconds
+
   def apply(etcClientConfig: com.typesafe.config.Config): TxPoolConfig =
     val txPoolConfig = etcClientConfig.getConfig("txPool")
 
     new TxPoolConfig:
+      override val priceBump: Int =
+        if txPoolConfig.hasPath("price-bump") then
+          val configured = txPoolConfig.getInt("price-bump")
+          if configured < 1 then TxPoolConfig.DefaultPriceBump else configured
+        else TxPoolConfig.DefaultPriceBump
+      override val blobPriceBump: Int =
+        if txPoolConfig.hasPath("blob-price-bump") then
+          val configured = txPoolConfig.getInt("blob-price-bump")
+          if configured < 1 then TxPoolConfig.DefaultBlobPriceBump else configured
+        else TxPoolConfig.DefaultBlobPriceBump
+      override val blobSidecarBudgetBytes: Long =
+        if txPoolConfig.hasPath("blob-sidecar-budget") then txPoolConfig.getBytes("blob-sidecar-budget").longValue
+        else TxPoolConfig.DefaultBlobSidecarBudgetBytes
+      override val knownTxMaxEntries: Int =
+        if txPoolConfig.hasPath("known-tx-max-entries") then txPoolConfig.getInt("known-tx-max-entries")
+        else TxPoolConfig.DefaultKnownTxMaxEntries
+      override val knownTxTtl: FiniteDuration =
+        if txPoolConfig.hasPath("known-tx-ttl") then txPoolConfig.getDuration("known-tx-ttl").toMillis.millis
+        else TxPoolConfig.DefaultKnownTxTtl
+      override val announcementMaxEntries: Int =
+        if txPoolConfig.hasPath("announcement-max-entries") then txPoolConfig.getInt("announcement-max-entries")
+        else TxPoolConfig.DefaultAnnouncementMaxEntries
+      override val announcementTimeout: FiniteDuration =
+        if txPoolConfig.hasPath("announcement-timeout") then
+          txPoolConfig.getDuration("announcement-timeout").toMillis.millis
+        else TxPoolConfig.DefaultAnnouncementTimeout
+      override val announcementFetchTimeout: FiniteDuration =
+        if txPoolConfig.hasPath("announcement-fetch-timeout") then
+          txPoolConfig.getDuration("announcement-fetch-timeout").toMillis.millis
+        else TxPoolConfig.DefaultAnnouncementFetchTimeout
       val txPoolSize: Int = txPoolConfig.getInt("tx-pool-size")
       val pendingTxManagerQueryTimeout: FiniteDuration =
         txPoolConfig.getDuration("pending-tx-manager-query-timeout").toMillis.millis
@@ -272,7 +348,16 @@ object DaoForkConfig:
       override val includeOnForkIdList: Boolean = daoConfig.getBoolean("include-on-fork-id-list")
 
 case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]):
-  val blockchainConfig: BlockchainConfig = blockchains(network)
+  // Same exception type as the plain `blockchains(network)` lookup this replaces; only the message is new. Generated
+  // networks (Ephemery) live in `custom-chains-dir`, so a missing or unprepared directory surfaces here.
+  val blockchainConfig: BlockchainConfig = blockchains.getOrElse(
+    network,
+    throw new NoSuchElementException(
+      s"blockchain network '$network' is not configured (known: ${blockchains.keys.toSeq.sorted.mkString(", ")}). " +
+        "Networks without a built-in chain config are loaded from <custom-chains-dir>/<network>-chain.conf " +
+        "(fukuii.blockchains.custom-chains-dir); for Ephemery run scripts/ephemery/fetch-genesis.sh first."
+    )
+  )
 object BlockchainsConfig extends Logger:
   private val networkKey = "network"
   private val customChainsDirKey = "custom-chains-dir"

@@ -60,7 +60,7 @@ class BlockExecution(
   ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
     val hash = block.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
-    BlockImportGate.withBlock(hash) {
+    ChainInsertLock.shared(BlockImportGate.withBlock(hash) {
       val staged = blockchain.stageBlockState(block.header.number.value)
       BlockImportGate.alreadyExecuted(hash, staged) match
         case Some(done) => Right(done.asTuple)
@@ -83,7 +83,7 @@ class BlockExecution(
               BlockImportGate.record(hash, executed)
             case Left(_) => staged.discard()
           result
-    }
+    })
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -623,55 +623,13 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        val blockHash = blockToExecute.header.hash.value
-        // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
-        // path already executed and committed (and that is still applied) is not executed again: its recorded
-        // result is used and only the block's own records are written.
-        val step: Either[BlockExecutionError, BlockData] = BlockImportGate.withBlock(blockHash) {
-          val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
-          val outcome =
-            try
-              BlockImportGate.alreadyExecuted(blockHash, staged) match
-                case Some(done) => Right(done.asTuple)
-                // EIP-7928: a list a peer served for this block (eth/71) is a prefetch hint, checked against the
-                // header before use; a block without one takes the unchanged path.
-                case None =>
-                  suppliedBlockAccessLists.get(blockToExecute.hash.value) match
-                    case None => executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
-                    case hint =>
-                      executeAndValidateStagedWithList(blockToExecute, alreadyValidated = false, staged, hint)
-            catch
-              case t: Throwable =>
-                staged.discard()
-                throw t
-          outcome match
-            case Right(executed @ (receipts, _, blockAccessList)) =>
-              val newWeight = parentWeight.increase(blockToExecute.header)
-              val newBlockData = BlockData(blockToExecute, receipts, newWeight)
-              // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie
-              // nodes, reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can
-              // no longer leave a block's state applied but the block not, and a block that failed above staged
-              // nothing at all.
-              val base = blockchainWriter.saveBatch(
-                newBlockData.block,
-                newBlockData.receipts,
-                newBlockData.weight,
-                saveAsBestBlock = adoptEachBlock
-              )
-              // EIP-7928: the list the block just validated against.
-              val withAccessList =
-                blockAccessList.fold(base)(bal =>
-                  base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
-                )
-              timedCommit(blockToExecute)(
-                staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
-              )
-              BlockImportGate.record(blockHash, executed)
-              Right(newBlockData)
-            case Left(executionError) =>
-              staged.discard()
-              Left(executionError)
-        }
+        val step = executeAndCommit(
+          blockToExecute,
+          parentWeight,
+          adoptEachBlock,
+          suppliedBlockAccessLists.get(blockToExecute.hash.value),
+          () => None
+        )
         step match
           case Right(newBlockData) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
@@ -681,6 +639,88 @@ class BlockExecution(
             (executedBlocksDecOrder.reverse, Some(executionError))
 
     go(List.empty[BlockData], blocks, parentChainWeight)
+
+  /** One block of [[executeAndValidateBlocksWithAccessLists]]: execute, validate and commit atomically. `beforeCommit`
+    * runs after validation, immediately before the commit; a `Some` error discards the staged state and is returned
+    * instead.
+    */
+  private def executeAndCommit(
+      blockToExecute: Block,
+      parentWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      suppliedBlockAccessList: Option[BlockAccessList],
+      beforeCommit: () => Option[BlockExecutionError]
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockData] =
+    val blockHash = blockToExecute.header.hash.value
+    // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
+    // path already executed and committed (and that is still applied) is not executed again: its recorded
+    // result is used and only the block's own records are written.
+    ChainInsertLock.shared(BlockImportGate.withBlock(blockHash) {
+      val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
+      val outcome =
+        try
+          BlockImportGate.alreadyExecuted(blockHash, staged) match
+            case Some(done) => Right(done.asTuple)
+            // EIP-7928: a list a peer served for this block (eth/71) is a prefetch hint, checked against the
+            // header before use; a block without one takes the unchanged path.
+            case None =>
+              suppliedBlockAccessList match
+                case None => executeAndValidateStaged(blockToExecute, alreadyValidated = false, staged)
+                case hint =>
+                  executeAndValidateStagedWithList(blockToExecute, alreadyValidated = false, staged, hint)
+        catch
+          case t: Throwable =>
+            staged.discard()
+            throw t
+      outcome.flatMap(executed =>
+        beforeCommit() match
+          case Some(refusal) => Left(refusal)
+          case None          => Right(executed)
+      ) match
+        case Right(executed @ (receipts, _, blockAccessList)) =>
+          val newWeight = parentWeight.increase(blockToExecute.header)
+          val newBlockData = BlockData(blockToExecute, receipts, newWeight)
+          // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie
+          // nodes, reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can
+          // no longer leave a block's state applied but the block not, and a block that failed above staged
+          // nothing at all.
+          val base = blockchainWriter.saveBatch(
+            newBlockData.block,
+            newBlockData.receipts,
+            newBlockData.weight,
+            saveAsBestBlock = adoptEachBlock
+          )
+          // EIP-7928: the list the block just validated against.
+          val withAccessList =
+            blockAccessList.fold(base)(bal =>
+              base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+            )
+          timedCommit(blockToExecute)(
+            staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+          )
+          BlockImportGate.record(blockHash, executed)
+          Right(newBlockData)
+        case Left(executionError) =>
+          staged.discard()
+          Left(executionError)
+    })
+
+  /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]]: the same execution,
+    * validation and atomic commit (with the head pointer) as [[executeAndValidateBlocks]], plus `beforeCommit`, checked
+    * after validation and immediately before the commit, so a head that moved meanwhile (a consensus client's
+    * forkchoiceUpdated is not under the lock) fails the block instead of being overwritten.
+    */
+  def executeAndAdoptBlockIf(
+      block: Block,
+      parentWeight: ChainWeight,
+      beforeCommit: () => Option[BlockExecutionError]
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockData] =
+    val result = executeAndCommit(block, parentWeight, adoptEachBlock = true, None, beforeCommit)
+    result.foreach { _ =>
+      blockchain.saveBlockState(block.header.number.value)
+      blockchainReader.recordBlockDifficulty(block.header.difficulty)
+    }
+    result
 
   /** EIP-4895: Process beacon chain withdrawals (Shanghai+). Each withdrawal credits `amount * 1 Gwei` to the target
     * address. No gas is charged. Creates the account if it doesn't exist.
@@ -772,45 +812,7 @@ class BlockExecution(
       world: InMemoryWorldStateProxy,
       accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
-    if !blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) then return Right((world, Nil))
-
-    val evmConfig = EvmConfig.forBlock(block.header.number.value, block.header.unixTimestamp, blockchainConfig)
-    var w = world
-    val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
-
-    // EIP-7685: Execute system calls to request contracts and collect output.
-    // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
-    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
-    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
-    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
-    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
-    //
-    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
-    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
-    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
-    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
-    // queue on both sides of the fork and requires byte-identical requests and storage.
-    var failure: Option[String] = None
-    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(block.header.unixTimestamp)
-    do
-      val code = w.getCode(queueAddr)
-      if failure.isEmpty && code.nonEmpty then
-        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
-        // makes the call, which reads the target as any call does. All four share block access index n + 1.
-        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
-        val context =
-          BlockExecution.systemCallContext(block.header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
-        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
-        val result = vm.run(context)
-        result.error match
-          case Some(err) =>
-            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
-          case None =>
-            w = InMemoryWorldStateProxy.persistState(result.world)
-            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
-            // Empty returndata (no queued requests) means no bytes are emitted for this type.
-            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
-    failure.toLeft((w, outputs.toSeq))
+    BlockExecution.requestSystemCalls(block.header, world, accessRecorder)
 
   /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the beacon deposit contract during
     * block execution and return one request entry: 0x00 || (pubkey || wc || amount || signature || index) per deposit,
@@ -830,7 +832,64 @@ class BlockExecution(
   def collectDepositRequests(receipts: Seq[Receipt])(implicit
       blockchainConfig: BlockchainConfig
   ): Either[String, Option[ByteString]] =
-    import BlockExecution.*
+    BlockExecution.depositRequests(receipts)
+
+object BlockExecution:
+
+  /** The body of `BlockExecution.processPragueSystemCallsChecked` (see there), on a header rather than a block, so that
+    * eth_simulateV1 runs the very same EIP-7002 / EIP-7251 / EIP-8282 system calls a real block does
+    * ([[SimulatedBlockSystemCalls]]). Moved here unchanged; block execution delegates to it.
+    */
+  private[ledger] def requestSystemCalls(
+      header: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      accessRecorder: Option[BlockAccessRecorder]
+  )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
+    if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then return Right((world, Nil))
+
+    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    var w = world
+    val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
+
+    // EIP-7685: Execute system calls to request contracts and collect output.
+    // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
+    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
+    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
+    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
+    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
+    //
+    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
+    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
+    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
+    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
+    // queue on both sides of the fork and requires byte-identical requests and storage.
+    var failure: Option[String] = None
+    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(header.unixTimestamp)
+    do
+      val code = w.getCode(queueAddr)
+      if failure.isEmpty && code.nonEmpty then
+        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
+        // makes the call, which reads the target as any call does. All four share block access index n + 1.
+        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
+        val context =
+          BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
+        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
+        val result = vm.run(context)
+        result.error match
+          case Some(err) =>
+            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
+          case None =>
+            w = InMemoryWorldStateProxy.persistState(result.world)
+            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
+            // Empty returndata (no queued requests) means no bytes are emitted for this type.
+            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+    failure.toLeft((w, outputs.toSeq))
+
+  /** The body of `BlockExecution.collectDepositRequests` (see there), shared with eth_simulateV1. Moved here unchanged.
+    */
+  private[ledger] def depositRequests(receipts: Seq[Receipt])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[String, Option[ByteString]] =
     val depositContract = depositContractFor(blockchainConfig)
     val deposits = for
       receipt <- receipts
@@ -846,8 +905,6 @@ class BlockExecution(
         if bodies.isEmpty then None
         else Some(bodies.foldLeft(ByteString(Array(DepositRequestType.toByte)))(_ ++ _))
       }
-
-object BlockExecution:
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
 
@@ -1121,6 +1178,29 @@ object BlockExecutionError:
 
   final case class MPTError(error: MPTException) extends BlockExecutionError:
     def describe: String = error.toString
+
+/** The chain insert lock: go-ethereum's `chainmu`, for the one writer that is not part of the node's own import paths.
+  *
+  * Every path that executes and commits a block (the Engine API's `newPayload`, regular sync, branch imports) holds it
+  * SHARED for that block, so they keep running concurrently with each other exactly as before. An operator chain import
+  * (`admin_importChain`, the offline `import` command) holds it EXCLUSIVE for each of its blocks — from the check that
+  * the block extends the head to the commit that makes it the head — so no other path can execute or commit a block in
+  * between. Reentrant: the exclusive holder takes the shared lock again inside [[BlockExecution]].
+  *
+  * Always taken outside [[BlockImportGate]], never inside it.
+  */
+object ChainInsertLock:
+  private val lock = new java.util.concurrent.locks.ReentrantReadWriteLock()
+
+  def shared[A](body: => A): A =
+    lock.readLock().lock()
+    try body
+    finally lock.readLock().unlock()
+
+  def exclusive[A](body: => A): A =
+    lock.writeLock().lock()
+    try body
+    finally lock.writeLock().unlock()
 
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).

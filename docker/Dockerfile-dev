@@ -13,6 +13,13 @@ LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
+# JDK 23+ (fixed in JDK 28). JDK_JAVA_OPTIONS is read by every `java` launch in
+# this container, including composes that override the entrypoint, and leaves
+# JAVA_TOOL_OPTIONS free for operators. Side effect: java prints
+# "NOTE: Picked up JDK_JAVA_OPTIONS: ..." on stderr at startup.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+
 # Install development tools
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \

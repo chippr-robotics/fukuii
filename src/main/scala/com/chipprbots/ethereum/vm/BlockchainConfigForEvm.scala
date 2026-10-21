@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.vm
 import com.chipprbots.ethereum.domain.ChainId
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.utils.BlobParams
+import com.chipprbots.ethereum.utils.BlobSchedule
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Agharta
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Atlantis
@@ -54,8 +56,21 @@ case class BlockchainConfigForEvm(
     // Network type — true for Ethereum chains, false for Ethereum Classic.
     // Needed to distinguish ECIP Olympia (enables EIP-7883 MODEXP gas) from ETH London
     // which hive also maps to olympiaBlockNumber but must NOT enable EIP-7883 before Osaka.
-    isEthereum: Boolean = false
+    isEthereum: Boolean = false,
+    // EIP-7840 blob schedule and the Cancun activation it starts at (#1637), for BLOBBASEFEE's update fraction.
+    // The default is BlockchainConfig's in-code default (go-ethereum's Default*BlobConfig).
+    cancunTimestamp: Option[Long] = None,
+    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
 ):
+
+  /** The chain's blob parameters at `timestamp` ([[BlobSchedule.paramsAt]]), or the EIP-4844 Cancun constants before
+    * its first blob fork — the same answer [[com.chipprbots.ethereum.consensus.engine.BlobGasUtils.paramsAt]] gives, so
+    * BLOBBASEFEE and the block's blob base fee cannot disagree.
+    */
+  def blobParamsAt(timestamp: Timestamp): BlobParams =
+    blobSchedule
+      .paramsAt(timestamp, cancunTimestamp, pragueTimestamp, bpo1Timestamp, bpo2Timestamp)
+      .getOrElse(BlobParams.Cancun)
 
   /** EIP-7623 calldata cost floor — activates at Prague on ETH chains. Note: EIP-7883/EIP-7823 MODEXP changes activate
     * at Osaka, not Prague (per execution-specs).
@@ -69,11 +84,11 @@ case class BlockchainConfigForEvm(
   def isOsakaTimestamp(timestamp: Timestamp): Boolean =
     osakaTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
-  /** BPO1 (Blob Parameter Override 1) — changes blob update fraction to 8346193. */
+  /** EIP-7892 BPO1 activation (blob parameters from [[blobSchedule]]). */
   def isBpo1Timestamp(timestamp: Timestamp): Boolean =
     bpo1Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
-  /** BPO2 (Blob Parameter Override 2) — changes blob update fraction to 11684671. */
+  /** EIP-7892 BPO2 activation (blob parameters from [[blobSchedule]]). */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
     bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
@@ -179,5 +194,7 @@ object BlockchainConfigForEvm:
       osakaTimestamp = forkTimestamps.osakaTimestamp,
       bpo1Timestamp = forkTimestamps.bpo1Timestamp,
       bpo2Timestamp = forkTimestamps.bpo2Timestamp,
-      isEthereum = isEth
+      isEthereum = isEth,
+      cancunTimestamp = forkTimestamps.cancunTimestamp,
+      blobSchedule = blockchainConfig.blobSchedule
     )

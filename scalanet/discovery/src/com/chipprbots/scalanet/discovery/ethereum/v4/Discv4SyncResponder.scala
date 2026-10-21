@@ -16,92 +16,86 @@ import com.typesafe.scalalogging.LazyLogging
 import scodec.Codec
 import scodec.bits.BitVector
 
-/** Synchronous discv4 fast-path responder, designed for the hive devp2p suite's
-  * 300 ms Ping/Pong deadline that the cats-effect IO scheduler can't hit under load.
+/** Synchronous discv4 fast-path responder, designed for the hive devp2p suite's 300 ms Ping/Pong deadline that the
+  * cats-effect IO scheduler can't hit under load.
   *
-  * Hooked into `StaticUDPPeerGroup.channelRead` via the `syncResponder` Config field.
-  * Runs on the netty event-loop thread for every inbound datagram. If the bytes
-  * decode as a non-expired Ping, the responder builds, signs, and returns the Pong
-  * bytes — netty then writes them back to the sender without a fiber hop.
+  * Hooked into `StaticUDPPeerGroup.channelRead` via the `syncResponder` Config field. Runs on the netty event-loop
+  * thread for every inbound datagram. If the bytes decode as a non-expired Ping, the responder builds, signs, and
+  * returns the Pong bytes — netty then writes them back to the sender without a fiber hop.
   *
-  * The async pipeline still receives the same Ping and runs `handler.ping(caller)`
-  * as before, so bonding and kademlia bookkeeping are unaffected. The async path's
-  * Pong is redundant but not wrong (idempotent at the protocol layer); accepting
-  * one extra Pong per Ping is the price we pay for not threading "already responded"
-  * state down through the layers. Worst case the simulator gets two valid Pongs.
+  * The async pipeline still receives the same Ping and runs `handler.ping(caller)` as before, so bonding and kademlia
+  * bookkeeping are unaffected. The async path's Pong is redundant but not wrong (idempotent at the protocol layer);
+  * accepting one extra Pong per Ping is the price we pay for not threading "already responded" state down through the
+  * layers. Worst case the simulator gets two valid Pongs.
   *
   * Design contract:
-  *   - Total work is dominated by two ECDSA ops (verify Ping sig, sign Pong),
-  *     ~3–5 ms each on a modern x86 — well under the 300 ms budget.
-  *   - The responder MUST NOT throw. Any exception is caught and swallowed; the
-  *     async path then handles the Ping normally.
-  *   - Reads no IO state. The local ENR seq comes from an `AtomicReference`
-  *     supplier that the discovery service updates whenever the ENR rotates.
+  *   - Total work is dominated by two ECDSA ops (verify Ping sig, sign Pong), ~3–5 ms each on a modern x86 — well under
+  *     the 300 ms budget.
+  *   - The responder MUST NOT throw. Any exception is caught and swallowed; the async path then handles the Ping
+  *     normally.
+  *   - Reads no IO state. The local ENR seq comes from an `AtomicReference` supplier that the discovery service updates
+  *     whenever the ENR rotates.
   */
-object Discv4SyncResponder extends LazyLogging {
+object Discv4SyncResponder extends LazyLogging:
 
   /** Default global rate: 200 sync responses/second, burst 100.
     *
-    * Tuned for legitimate hive-style bursts (≤16 Pings in ~22 ms intervals all
-    * served from the burst budget) while capping sustained ECDSA cost on the
-    * single netty event-loop thread. ECDSA sign/verify is ~3–5 ms each, so
-    * 200/sec × 10 ms ≈ 100% of one thread at the sustained rate. Above that
-    * the responder returns None and the async path handles the Ping (slowly,
-    * but on a different thread pool).
+    * Tuned for legitimate hive-style bursts (≤16 Pings in ~22 ms intervals all served from the burst budget) while
+    * capping sustained ECDSA cost on the single netty event-loop thread. ECDSA sign/verify is ~3–5 ms each, so 200/sec
+    * × 10 ms ≈ 100% of one thread at the sustained rate. Above that the responder returns None and the async path
+    * handles the Ping (slowly, but on a different thread pool).
     */
   private val DefaultTokensPerSecond = 200
   private val DefaultMaxBurst = 100
 
-  /** TTL after which a recently-responded Ping hash is considered stale and pruned
-    * from the dedup set. Set well above the round-trip time so the async path's
-    * Ping handler still sees the hash, but short enough that map memory stays bounded.
+  /** TTL after which a recently-responded Ping hash is considered stale and pruned from the dedup set. Set well above
+    * the round-trip time so the async path's Ping handler still sees the hash, but short enough that map memory stays
+    * bounded.
     */
   private val DedupTtlMillis = 10_000L
 
   /** Cache size cap before we sweep entries older than the TTL. */
   private val DedupSweepThreshold = 4_096
 
-  /** Tracks Ping hashes the sync responder has just answered, so the async path
-    * can skip its own Pong send and avoid the duplicate. The map is shared with
-    * `DiscoveryNetwork` (which calls `dedupMarkSent` after sending Pong via the
+  /** Tracks Ping hashes the sync responder has just answered, so the async path can skip its own Pong send and avoid
+    * the duplicate. The map is shared with `DiscoveryNetwork` (which calls `dedupMarkSent` after sending Pong via the
     * sync path, and `dedupCheckSent` before sending via the async path).
     *
     * Entries are pruned lazily on insert when the map exceeds DedupSweepThreshold.
     */
-  class PingDedup {
+  class PingDedup:
     private val responded = new ConcurrentHashMap[Hash, java.lang.Long](2048)
 
     /** Mark the given Ping hash as having been responded-to via the sync path. */
-    def markSent(pingHash: Hash): Unit = {
+    def markSent(pingHash: Hash): Unit =
       val now = System.currentTimeMillis()
       responded.put(pingHash, java.lang.Long.valueOf(now))
-      if (responded.size > DedupSweepThreshold) {
+      if responded.size > DedupSweepThreshold then
         val cutoff = now - DedupTtlMillis
         responded.entrySet.removeIf(e => e.getValue < cutoff)
-      }
-    }
 
     /** Returns true if the Ping hash was responded-to recently (within TTL). */
-    def isAlreadyResponded(pingHash: Hash): Boolean = {
+    def isAlreadyResponded(pingHash: Hash): Boolean =
       val ts = responded.get(pingHash)
       ts != null && (System.currentTimeMillis() - ts) < DedupTtlMillis
-    }
-  }
 
   /** Build a SyncResponder for discv4 Ping → Pong.
     *
-    * @param privateKey local node's secp256k1 private key, used to sign Pong
-    * @param expirationSeconds how far into the future to set the Pong's `expiration` field
-    * @param maxClockDriftSeconds incoming Pings older than `now - drift` are ignored
-    * @param localEnrSeqRef supplier of the local ENR seq number; pass an
-    *        `AtomicReference[Option[Long]]` so the discovery service can update it
-    *        as the ENR rotates without re-allocating the responder
-    * @param dedup shared dedup state — every Ping the sync path answers is
-    *        marked here so DiscoveryNetwork's async pipeline can skip the
-    *        duplicate Pong it would otherwise send. Must be the same instance
-    *        passed to DiscoveryNetwork.
-    * @param rateLimiter optional override of the default token-bucket. Pass a custom
-    *        instance to tune the global sync-path budget (e.g., disable for tests).
+    * @param privateKey
+    *   local node's secp256k1 private key, used to sign Pong
+    * @param expirationSeconds
+    *   how far into the future to set the Pong's `expiration` field
+    * @param maxClockDriftSeconds
+    *   incoming Pings older than `now - drift` are ignored
+    * @param localEnrSeqRef
+    *   supplier of the local ENR seq number; pass an `AtomicReference[Option[Long]]` so the discovery service can
+    *   update it as the ENR rotates without re-allocating the responder
+    * @param dedup
+    *   shared dedup state — every Ping the sync path answers is marked here so DiscoveryNetwork's async pipeline can
+    *   skip the duplicate Pong it would otherwise send. Must be the same instance passed to DiscoveryNetwork.
+    * @param rateLimiter
+    *   optional override of the default token-bucket. Pass a custom instance to tune the global sync-path budget (e.g.,
+    *   disable for tests).
     */
   def apply(
       privateKey: PrivateKey,
@@ -114,40 +108,39 @@ object Discv4SyncResponder extends LazyLogging {
       payloadCodec: Codec[Payload],
       packetCodec: Codec[Packet],
       sigalg: SigAlg
-  ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) => {
-    if (!rateLimiter.tryAcquire()) {
+  ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) =>
+    // Only Pings are answered here, so look at the type byte before any crypto. Every other datagram (the Pongs,
+    // Neighbors and ENR responses to our own requests, FindNode, ...) used to pay a full key recovery on this single
+    // event-loop thread just to be passed on, and to consume rate-limit tokens meant for Pings (task #52).
+    if !Packet.peekType(incomingBits).contains(Packet.PacketType.Ping) then StaticUDPPeerGroup.SyncResult.Pass
+    else if !rateLimiter.tryAcquire() then
       logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
       StaticUDPPeerGroup.SyncResult.Pass
-    } else {
+    else
       val maybeReply: Option[BitVector] =
         try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
-        catch {
+        catch
           case NonFatal(ex) =>
             logger.warn(
               s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
             )
             None
-        }
       // v4 sync responder always either replies (Pong) or passes back to the
       // async path (so async-path bookkeeping can run unchanged). It never
       // claims silently — that's a v5-demuxer pattern.
-      maybeReply.fold[StaticUDPPeerGroup.SyncResult](StaticUDPPeerGroup.SyncResult.Pass)(
-        bits => StaticUDPPeerGroup.SyncResult.Reply(bits)
+      maybeReply.fold[StaticUDPPeerGroup.SyncResult](StaticUDPPeerGroup.SyncResult.Pass)(bits =>
+        StaticUDPPeerGroup.SyncResult.Reply(bits)
       )
-    }
-  }
 
   /** Token-bucket rate limiter for the sync-path responder.
     *
-    * Bounds the netty event-loop thread cost under flood. Tokens are replenished
-    * lazily on each call (no scheduled task), so the cost of the limiter itself
-    * is just a few atomic CAS ops — well below the ECDSA cost it gates.
+    * Bounds the netty event-loop thread cost under flood. Tokens are replenished lazily on each call (no scheduled
+    * task), so the cost of the limiter itself is just a few atomic CAS ops — well below the ECDSA cost it gates.
     *
-    * `tryAcquire()` is wait-free and safe to call from any thread, but in this
-    * codebase it's only ever called from the single netty event-loop thread, so
-    * contention is effectively zero.
+    * `tryAcquire()` is wait-free and safe to call from any thread, but in this codebase it's only ever called from the
+    * single netty event-loop thread, so contention is effectively zero.
     */
-  class RateLimiter(tokensPerSecond: Int, maxBurst: Int, clock: () => Long = () => System.nanoTime()) {
+  class RateLimiter(tokensPerSecond: Int, maxBurst: Int, clock: () => Long = () => System.nanoTime()):
     require(tokensPerSecond > 0, "tokensPerSecond must be positive")
     require(maxBurst > 0, "maxBurst must be positive")
 
@@ -155,30 +148,53 @@ object Discv4SyncResponder extends LazyLogging {
     private val lastRefillNanos = new AtomicLong(clock())
     private val nanosPerToken: Long = 1_000_000_000L / tokensPerSecond.toLong
 
-    def tryAcquire(): Boolean = {
+    def tryAcquire(): Boolean =
       // Lazy refill — top up the bucket based on elapsed wall-clock time.
       val now = clock()
       val last = lastRefillNanos.get()
       val elapsed = now - last
-      if (elapsed >= nanosPerToken) {
+      if elapsed >= nanosPerToken then
         val toAdd = (elapsed / nanosPerToken).toInt
-        if (toAdd > 0 && lastRefillNanos.compareAndSet(last, now)) {
+        if toAdd > 0 && lastRefillNanos.compareAndSet(last, now) then
           tokens.updateAndGet(t => math.min(t + toAdd, maxBurst))
-        }
-      }
       // Try to consume a token. Loop on contention; in practice this runs on
       // a single netty thread so the CAS rarely fails.
       var t = tokens.get()
-      while (t > 0) {
-        if (tokens.compareAndSet(t, t - 1)) return true
+      while t > 0 do
+        if tokens.compareAndSet(t, t - 1) then return true
         t = tokens.get()
-      }
       false
-    }
 
     /** Test/diag accessor — current available tokens. Volatile read, may be stale. */
     private[v4] def availableTokens: Int = tokens.get()
-  }
+
+  /** One [[RateLimiter]] per key (e.g. remote IP), with at most `maxKeys` buckets kept: the least recently used is
+    * dropped when a new key arrives at the cap. A dropped key starts again from a full burst, which bounds what an
+    * address can gain by cycling through more than `maxKeys` others — the global bucket still applies on top.
+    */
+  class KeyedRateLimiter[K](
+      tokensPerSecond: Int,
+      maxBurst: Int,
+      maxKeys: Int,
+      clock: () => Long = () => System.nanoTime()
+  ):
+    require(maxKeys > 0, "maxKeys must be positive")
+
+    private val buckets = new java.util.LinkedHashMap[K, RateLimiter](16, 0.75f, true):
+      override def removeEldestEntry(eldest: java.util.Map.Entry[K, RateLimiter]): Boolean = size() > maxKeys
+
+    def tryAcquire(key: K): Boolean =
+      val bucket = buckets.synchronized {
+        val existing = buckets.get(key)
+        if existing != null then existing
+        else
+          val fresh = new RateLimiter(tokensPerSecond, maxBurst, clock)
+          buckets.put(key, fresh)
+          fresh
+      }
+      bucket.tryAcquire()
+
+    def trackedKeys: Int = buckets.synchronized(buckets.size())
 
   private def respond(
       sender: InetSocketAddress,
@@ -192,23 +208,23 @@ object Discv4SyncResponder extends LazyLogging {
       payloadCodec: Codec[Payload],
       packetCodec: Codec[Packet],
       sigalg: SigAlg
-  ): Option[BitVector] = {
+  ): Option[BitVector] =
     // Decode the wire-format Packet wrapper (hash + sig + payload bytes).
     val packet = packetCodec.decode(incomingBits).toOption.map(_.value).orNull
-    if (packet == null) return None
+    if packet == null then return None
 
     // Unpack: verify the Ping's hash and signature, decode the payload.
     val unpacked = Packet.unpack(packet).toOption.orNull
-    if (unpacked == null) return None
+    if unpacked == null then return None
     val (payload, _) = unpacked
 
-    payload match {
+    payload match
       case ping: Payload.Ping =>
         val nowSeconds = System.currentTimeMillis() / 1000
-        if (ping.expiration < nowSeconds - maxClockDriftSeconds) {
+        if ping.expiration < nowSeconds - maxClockDriftSeconds then
           // Expired — let the async path log and drop.
           None
-        } else {
+        else
           // Pong.to per discv4.md is "the address from which the packet was
           // received" — i.e., the SENDER's address as seen by us, NOT a copy
           // of Ping.to (which is the address of US, the recipient). Hive's
@@ -233,11 +249,7 @@ object Discv4SyncResponder extends LazyLogging {
               pongBits
             }
           }
-        }
 
       case _ =>
         // FindNode, ENRRequest, Pong, etc. — let the async path handle.
         None
-    }
-  }
-}

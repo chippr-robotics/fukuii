@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -13,19 +14,25 @@ import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
-import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
+import com.chipprbots.ethereum.transactions.BlobSidecar
 import com.chipprbots.ethereum.transactions.TransactionPicker
+import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -42,9 +49,26 @@ object EthTxService:
   case class SendRawTransactionResponse(transactionHash: ByteString)
   case class EthPendingTransactionsRequest()
   case class EthPendingTransactionsResponse(pendingTransactions: Seq[PendingTransaction])
+
+  /** `eth_pendingTransactions`' answer: the pool's transactions sent by one of the node's own accounts, as transaction
+    * objects (go-ethereum `TransactionAPI.PendingTransactions`).
+    */
+  case class OwnPendingTransactionsResponse(transactions: Seq[TransactionResponse])
   case class GetTransactionReceiptRequest(txHash: ByteString)
   case class GetTransactionReceiptResponse(txResponse: Option[TransactionReceiptResponse])
   case class RawTransactionResponse(transactionResponse: Option[SignedTransaction])
+
+  /** A local transaction that passed [[EthTxService.admitLocal]]: its sender, the sender's account at `head` and the
+    * head it was checked against, which the pool's own rules read.
+    */
+  case class LocalAdmission(sender: Address, account: Account, head: BlockHeader)
+
+  /** go-ethereum `TxPool.PoolNonce` over `pooled`: `stateNonce` advanced over `sender`'s pooled transactions with
+    * consecutive nonces from it ([[TxAdmission.executableRun]]).
+    */
+  def nextPoolNonce(pooled: Seq[PendingTransaction], sender: Address, stateNonce: BigInt): BigInt =
+    val senderTxs = pooled.collect { case pt if pt.stx.senderAddress == sender => pt.stx.tx.tx }
+    stateNonce + TxAdmission.executableRun(senderTxs, stateNonce).size
 
 class EthTxService(
     val blockchain: Blockchain,
@@ -53,7 +77,10 @@ class EthTxService(
     val pendingTransactionsManager: ActorRef[PendingTransactionsManager.Command],
     val getTransactionFromPoolTimeout: FiniteDuration,
     transactionMappingStorage: TransactionMappingStorage,
-    val scheduler: Scheduler
+    val scheduler: Scheduler,
+    val rpcTxSubmission: RpcTxSubmission = RpcTxSubmission.Default,
+    // NodeBuilder passes the node's one oracle (shared with EthBlocksService); tests get their own
+    gasPriceOracleOpt: Option[GasPriceOracle] = None
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
     with ResolveBlock
@@ -185,57 +212,16 @@ class EthTxService(
       yield TransactionData(transaction, Some(blockWithTx.header), Some(transactionIndex.toInt))
     }
 
-  private val GasPriceMaxCap: BigInt = BigInt(500) * BigInt(10).pow(9) // 500 gwei — matches go-ethereum
-  private val GasPriceCheckBlocks = 20 // matches go-ethereum default
-  private val GasPriceTxsPerBlock = 3 // matches go-ethereum default
+  /** The gas price oracle behind eth_gasPrice, eth_maxPriorityFeePerGas and the send/sign/fill fee defaults. Lazy so a
+    * mocked service (constructed with null arguments) does not build one.
+    */
+  lazy val gasPriceOracle: GasPriceOracle =
+    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig))
 
-  // Network-aware minimum viable gas price. Derives from current network state — works on all
-  // Fukuii-supported chains (ETC mainnet/Mordor and ETH/Sepolia) without any per-chain flag.
-  //
-  //   Pre-EIP-1559 (baseFee absent): 1 wei — smallest non-zero price on any legacy chain.
-  //   Post-EIP-1559: max(currentBaseFee, baseFeeFloor) + minTip, minimum 1 wei.
-  //     ETC/Mordor post-Olympia: max(≥1 gwei, 1 gwei) + 1 gwei = ≥ 2 gwei
-  //     ETH post-London:         baseFee (dynamic) + 1 gwei (minTip default)
-  private[jsonrpc] def minimumGasPrice(): BigInt =
-    val minViable = blockchainReader.getBestBlock
-      .flatMap(_.header.baseFee) match
-      case Some(baseFee) => baseFee.max(blockchainConfig.baseFeeFloor) + blockchainConfig.minTip
-      case None          => BigInt(0) // floor set by .max(1) below
-    minViable.max(BigInt(1)) // always non-zero on every network
-
-  // Synchronous gas price oracle — used by both eth_gasPrice RPC and PersonalService.sendTransaction.
-  //
-  // Algorithm matches go-ethereum and core-geth:
-  //   - Sample up to GasPriceCheckBlocks recent blocks, at most GasPriceTxsPerBlock txs each.
-  //   - Exclude transactions sent by the block's coinbase (miner self-txs drag the percentile down).
-  //   - Take the 60th percentile of effective gas prices (not median — geth uses 60th).
-  //   - Clamp to [minimumGasPrice(), GasPriceMaxCap].
-  //   - Fall back to minimumGasPrice() when no transactions are available (never returns 0).
-  private[jsonrpc] def suggestGasPrice(): BigInt =
-    val floor = minimumGasPrice()
-    val bestBlock = blockchainReader.getBestBlockNumber
-    val bestBranch = blockchainReader.getBestBranch
-
-    val gasPrices = ((bestBlock - GasPriceCheckBlocks + 1).max(BigInt(0)) to bestBlock)
-      .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
-      .flatMap { block =>
-        val coinbase = block.header.beneficiary
-        // Exclude miner self-transactions — matches go-ethereum, core-geth, erigon, Besu, Nethermind.
-        // A PoW miner can self-include 0-tip transactions; excluding them prevents the oracle
-        // from suggesting a price below the actual market clearing rate.
-        block.body.transactionList
-          .filterNot(stx => SignedTransaction.getSender(stx).exists(_.bytes == coinbase))
-          .take(GasPriceTxsPerBlock)
-          .map(_.tx.gasPrice)
-      }
-
-    if gasPrices.nonEmpty then
-      val sorted = gasPrices.sorted
-      // 60th percentile — matches go-ethereum/core-geth default (configurable there, fixed here).
-      // Biases slightly above the median to reduce stuck-transaction risk during fee spikes.
-      val idx = math.min((sorted.length * 60) / 100, sorted.length - 1)
-      sorted(idx).value.max(floor).min(GasPriceMaxCap)
-    else floor // no transactions in window: return floor, never 0
+  /** go-ethereum `EthereumAPI.GasPrice`: the oracle's tip plus the head's base fee, or the tip alone when the head has
+    * no base fee (ETC/Mordor before Olympia, ETH before London), where it is the legacy gas price suggestion.
+    */
+  private[jsonrpc] def suggestGasPrice(): BigInt = gasPriceOracle.suggestGasPrice()
 
   def getGetGasPrice(@unused req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] =
     IO(Right(GetGasPriceResponse(suggestGasPrice())))
@@ -243,42 +229,25 @@ class EthTxService(
   def sendRawTransaction(req: SendRawTransactionRequest): ServiceResponse[SendRawTransactionResponse] =
     import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 
-    Try(req.data.toArray.toSignedTransactionWithSidecar) match
-      case Success((signedTransaction, rawBytesOpt)) =>
-        if SignedTransaction.getSender(signedTransaction).isEmpty then IO.pure(Left(JsonRpcError.InvalidRequest))
-        else
-          // EIP-3860 (Shanghai+): reject contract-creation txs whose initcode exceeds the
-          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state. Must
-          // use the timestamp-aware forBlock variant — Shanghai activates by timestamp on
-          // post-merge chains, not block number.
-          val tip = blockchainReader.getBestBlock.map(_.header)
-          val bestNum = tip.map(_.number.value).getOrElse(blockchainReader.getBestBlockNumber)
-          val ts = tip.map(_.unixTimestamp).getOrElse(Timestamp.Zero)
-          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
-          val tx = signedTransaction.tx
-          // A blob tx submitted without its sidecar cannot be served to peers or proposed: nothing shows the blobs
-          // exist. go-ethereum's pool rejects it with this message (core/txpool/validation.go, validateBlobSidecar).
-          val missingSidecar = tx.isInstanceOf[BlobTransaction] && rawBytesOpt.isEmpty
-          val initCodeTooLarge =
-            tx.isContractInit &&
-              evmConfig.eip3860Enabled &&
-              evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
-          if missingSidecar then IO.pure(Left(JsonRpcError.LogicError("missing sidecar in blob transaction")))
-          else if initCodeTooLarge then
-            IO.pure(
-              Left(
-                JsonRpcError.InvalidParams(
-                  s"INITCODE_SIZE_EXCEEDED: initcode size ${tx.payload.size} exceeds max " +
-                    s"${evmConfig.maxInitCodeSize.getOrElse(BigInt(0))}"
-                )
-              )
-            )
-          else
-            pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
-              signedTransaction,
-              rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
-            )
-            IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash.value)))
+    // The sidecar of a network-form blob tx is parsed with the tx: a wrapper whose parts are not byte-string lists is
+    // as undecodable as a malformed tx.
+    Try {
+      val (stx, rawBytesOpt) = req.data.toArray.toSignedTransactionWithSidecar
+      val sidecar =
+        rawBytesOpt.map(raw => BlobSidecar.fromNetworkForm(raw).fold(e => throw new RuntimeException(e), identity))
+      (stx, rawBytesOpt, sidecar)
+    } match
+      case Success((signedTransaction, rawBytesOpt, sidecar)) =>
+        IO(sidecarForHead(signedTransaction, rawBytesOpt.map(ByteString(_)), sidecar)).flatMap {
+          case Left(error) => IO.pure(Left(error))
+          case Right((networkForm, headSidecar)) =>
+            IO(admitLocal(signedTransaction, headSidecar)).flatMap {
+              case Left(error) => IO.pure(Left(error))
+              case Right(admission) =>
+                submitToPool(pendingTransactionsManager, signedTransaction, admission, networkForm)
+                  .map(_.map(SendRawTransactionResponse.apply))
+            }
+        }
       case Failure(e) =>
         // Keep the wire response exactly as before (-32600), but do NOT swallow the cause:
         // a raw-tx decode failure previously surfaced as a bare "not a valid Request object",
@@ -286,6 +255,124 @@ class EthTxService(
         // time on the EIP-7594 blob wrapper. The decoder's message is the only signal here.
         log.debug(s"eth_sendRawTransaction could not decode the supplied raw transaction: ${e.getMessage}", e)
         IO.pure(Left(JsonRpcError.InvalidRequest))
+
+  /** go-ethereum `SendRawTransaction` (internal/ethapi/api.go:1738-1756): once Osaka is active at the head, a blob
+    * transaction sent with a version-0 sidecar (one blob proof per blob) has it converted to version 1 (cell proofs
+    * computed from the blobs, `BlobTxSidecar.ToV1`) before submission; the pool then verifies the computed proofs
+    * against the commitments. Returns the network form and sidecar to submit.
+    */
+  private def sidecarForHead(
+      stx: SignedTransaction,
+      networkForm: Option[ByteString],
+      sidecar: Option[BlobSidecar]
+  ): Either[JsonRpcError, (Option[ByteString], Option[BlobSidecar])] =
+    sidecar match
+      case Some(sc)
+          if sc.version == BlobSidecar.Version0 &&
+            blockchainReader.getBestBlockHeader.exists(h => blockchainConfig.isOsakaTimestamp(h.unixTimestamp)) =>
+        try
+          val cellProofs =
+            sc.blobs.flatMap(b => KzgCellProofs.computeCellsAndKzgProofs(b.toArray)._2.map(ByteString(_)))
+          val converted = BlobSidecar(BlobSidecar.Version1, sc.blobs, sc.commitments, cellProofs)
+          val wrapper =
+            BlobTxSidecar(BlobTxSidecar.Version1, sc.blobs.toList, sc.commitments.toList, cellProofs.toList)
+          Right((Some(wrapper.networkEncoding(stx)), Some(converted)))
+        catch
+          case e @ (_: Exception | _: LinkageError) =>
+            Left(
+              JsonRpcError.LogicError(
+                s"blob sidecar conversion failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+              )
+            )
+      case _ => Right((networkForm, sidecar))
+
+  /** Admission of a locally submitted transaction, in go-ethereum's `SubmitTransaction` order (api.go:1640-1651):
+    *
+    *   1. the RPC layer ([[RpcTxSubmission.submissionRejection]]): the transaction-fee cap, then replay protection
+    *      unless unprotected transactions are allowed;
+    *   1. the pool's rules against the chain head, the rules a peer's transaction meets and go-ethereum's
+    *      `txpool.ValidateTransaction` applies (type active at the head, chain ID, intrinsic gas and floor, initcode
+    *      size, gas caps, tip, blob sidecar), then the sender's nonce and balance in the head's state
+    *      ([[TxAdmission.validateLocal]]).
+    *
+    * The pool's rules against what it already holds follow in [[submitToPool]]. A rejected transaction never reaches
+    * the pool, so it is never announced.
+    *
+    * Every rejection is -32000 with go-ethereum's message, except initcode over EIP-3860's limit, which keeps the
+    * -32602 INITCODE_SIZE_EXCEEDED that hive's withdrawals "Max Initcode Size" test was matched against (07f0bc608).
+    *
+    * Shared with eth_sendTransaction / personal_sendTransaction (PersonalService.submitLocal, #1629 S2), so every local
+    * submission meets the same gate.
+    */
+  private[jsonrpc] def admitLocal(
+      stx: SignedTransaction,
+      sidecar: Option[BlobSidecar]
+  ): Either[JsonRpcError, LocalAdmission] =
+    rpcTxSubmission.submissionRejection(stx) match
+      case Some(message) =>
+        log.debug(s"eth_sendRawTransaction rejected ${stx.hash.toHex}: $message")
+        Left(JsonRpcError.LogicError(message))
+      case None => admitAtHead(stx, sidecar)
+
+  private def admitAtHead(stx: SignedTransaction, sidecar: Option[BlobSidecar]): Either[JsonRpcError, LocalAdmission] =
+    blockchainReader.getBestBlockHeader match
+      case None => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
+      case Some(head) =>
+        try
+          TxAdmission
+            .validateLocal(
+              stx,
+              sidecar,
+              head,
+              address => blockchainReader.getAccountAtStateRoot(head.stateRoot.value, address)
+            )
+            .left
+            .map {
+              case TxAdmission.Rejection.InitCodeTooLarge(size, max) =>
+                JsonRpcError.InvalidParams(s"INITCODE_SIZE_EXCEEDED: initcode size $size exceeds max $max")
+              case rejection =>
+                log.debug(s"eth_sendRawTransaction rejected ${stx.hash.toHex}: ${rejection.message}")
+                JsonRpcError.LogicError(rejection.message)
+            }
+            .map { case (sender, account) => LocalAdmission(sender, account, head) }
+        catch
+          case e: MissingNodeException =>
+            Left(
+              JsonRpcError.LogicError(
+                s"cannot validate transaction: state at head ${head.number.value} is not available (${e.getMessage})"
+              )
+            )
+
+  /** Hand an admitted local transaction to `pool` and wait for its decision: the pool applies its own rules against
+    * what it holds (already known, overdraft, delegation limit, subpool reservation, replacement price bump;
+    * [[TxAdmission.poolRejection]]) and pools it, under one message, as go-ethereum holds its pool lock across both. A
+    * refusal is -32000 with go-ethereum's message. Returns the transaction hash.
+    */
+  private[jsonrpc] def submitToPool(
+      pool: ActorRef[PendingTransactionsManager.Command],
+      stx: SignedTransaction,
+      admission: LocalAdmission,
+      blobTxRawBytes: Option[ByteString]
+  ): IO[Either[JsonRpcError, ByteString]] =
+    given timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
+    given sc: Scheduler = scheduler
+    pool
+      .askForTyped[Either[TxAdmission.Rejection, Unit]](
+        PendingTransactionsManager.SubmitLocalTransaction(
+          stx,
+          admission.sender,
+          admission.account,
+          admission.head,
+          blobTxRawBytes,
+          _
+        )
+      )
+      .map {
+        case Right(()) => Right(stx.hash.value)
+        case Left(rejection) =>
+          log.debug(s"Pool refused local tx ${stx.hash.toHex}: ${rejection.message}")
+          Left(JsonRpcError.LogicError(rejection.message))
+      }
 
   /** eth_getTransactionByBlockNumberAndIndex Returns the information about a transaction with the block number and
     * index of which it was mined.
@@ -336,8 +423,8 @@ class EthTxService(
       .left
       .flatMap(_ => Right(None))
 
-  /** Returns the transactions that are pending in the transaction pool and have a from address that is one of the
-    * accounts this node manages.
+  /** Every transaction in the pool, whoever sent it. GraphQL's `Pending` reads this; `eth_pendingTransactions` answers
+    * from [[pendingTransactionsFrom]] instead.
     *
     * @param req
     *   request
@@ -349,4 +436,75 @@ class EthTxService(
   ): ServiceResponse[EthPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
+    }
+
+  /** The pool's executable transactions whose sender is one of `accounts`, as transaction objects, in pool order.
+    *
+    * go-ethereum's `TransactionAPI.PendingTransactions` answers `eth_pendingTransactions` this way: it walks
+    * `GetPoolTransactions` (the pool's `Pending()` set, i.e. per sender the run of consecutive nonces starting at the
+    * sender's state nonce; nonce-gapped "queued" transactions are not in it), keeps those sent from an account of the
+    * node's wallets and renders each with `NewRPCPendingTransaction`, which has no block fields and reports a
+    * fee-market transaction's fee cap as its `gasPrice`. A `TransactionResponse` built without a block header is that
+    * object. fukuii's pool holds gapped transactions alongside executable ones, so the run is cut here, against the
+    * head state.
+    *
+    * @param accounts
+    *   the node's own accounts (the keystore's)
+    */
+  def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
+    getTransactionsFromPool.map { resp =>
+      val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
+      val stateRoot = blockchainReader.getBestBlockHeader.map(_.stateRoot.value)
+      def stateNonce(sender: Address): BigInt =
+        stateRoot
+          .flatMap(root => blockchainReader.getAccountAtStateRoot(root, sender))
+          .map(_.nonce.toBigInt)
+          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+      val executable: Map[Address, Set[BigInt]] = own
+        .groupBy(_.stx.senderAddress)
+        .map { case (sender, txs) =>
+          sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
+        }
+      Right(
+        OwnPendingTransactionsResponse(
+          own
+            .filter(pt => executable.get(pt.stx.senderAddress).exists(_.contains(pt.stx.tx.tx.nonce)))
+            .map(pt => TransactionResponse(pt.stx.tx))
+        )
+      )
+    }
+
+  /** The sender's next nonce with the pool's executable transactions applied: go-ethereum `TxPool.PoolNonce`
+    * (legacypool `pendingNonces`, blobpool `Nonce`), which `eth_getTransactionCount(addr, "pending")`, GraphQL's
+    * `pending { account { transactionCount } }` and `eth_sendTransaction`'s nonce filling answer from. The account's
+    * nonce at `head` advanced over its pooled transactions with consecutive nonces from it; a nonce-gapped (queued)
+    * transaction does not count. core-geth answers the same (its `TxPool.Nonce`).
+    *
+    * A pool that does not answer fails the call rather than falling back to the state nonce, which would hand out a
+    * nonce already pooled.
+    */
+  def poolNonce(address: Address, head: BlockHeader): IO[BigInt] =
+    given timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
+    given sc: Scheduler = scheduler
+    pendingTransactionsManager
+      .askForTyped[PendingTransactionsManager.PendingTransactionsResponse](
+        PendingTransactionsManager.GetPendingTransactionsReq(_)
+      )
+      .map { resp =>
+        val stateNonce = blockchainReader
+          .getAccountAtStateRoot(head.stateRoot.value, address)
+          .map(_.nonce.toBigInt)
+          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)
+      }
+
+  /** [[poolNonce]] at the best block. */
+  def poolNonceAtHead(address: Address): IO[Either[JsonRpcError, BigInt]] =
+    IO.defer {
+      blockchainReader.getBestBlockHeader match
+        case Some(head) =>
+          poolNonce(address, head).map(Right(_)).recover { case _: MissingNodeException =>
+            Left(JsonRpcError.NodeNotFound)
+          }
+        case None => IO.pure(Left(JsonRpcError.LogicError("chain head not available")))
     }

@@ -275,7 +275,7 @@ gates:
     promote_by: 2027-03-31
     min_tests: 10
     covers: GraphQL endpoint conformance.
-    waivers: [graphql-gasprice-stale-fixture]
+    waivers: [graphql-gasprice-stale-fixture, graphql-sendraw-38-underpriced-replacement]
 
   - id: hive-devp2p
     workflow: hive-devp2p.yml
@@ -429,6 +429,29 @@ waivers:
       The reference client fails the same test, so there is no conformant answer to
       match. fukuii passes every other graphql test (51/52). Lift this waiver when
       upstream updates the fixture.
+    expires: 2026-12-31
+
+  - id: graphql-sendraw-38-underpriced-replacement
+    gate: hive-graphql
+    pattern: 38_eth_sendRawTransaction_transferEther
+    owner: realcodywburns
+    issue: 1629
+    reason: >-
+      The fixture conflicts with geth's txpool replacement rule; this is not a fukuii
+      defect. Tests 36 and 38 send transactions from the same sender with the same
+      nonce, at gas prices 100 gwei and 100 gwei + 1 wei. Since #1629 S0b, fukuii applies
+      geth's legacypool rule that a same-nonce replacement must raise both fee caps by
+      at least txPool.price-bump, 10%. So the second submission, test 38 under hive's
+      serial order, is refused with "replacement transaction underpriced".
+
+      The reference client fails the same test. hive.ethpandaops.io graphql run
+      1789896154-0ea9b0641119ca1793c8f513c3a36652.json, with
+      Geth/v1.17.6-unstable-a5b90d2a-20260918, has 36_eth_sendRawTransaction_messageCall
+      PASS and 38_eth_sendRawTransaction_transferEther FAIL. fukuii on PR #1641 (CI
+      2026-10-19) has the same 36 PASS and 38 FAIL, and that is its only gated failure.
+
+      Waived by user decision (2026-10-19) to keep geth's replacement behaviour. Lift
+      this waiver when upstream gives test 38 its own nonce or a bumped price.
     expires: 2026-12-31
 
   - id: devp2p-getcells-needs-sparse-blobpool

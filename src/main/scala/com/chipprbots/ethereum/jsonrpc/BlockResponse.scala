@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
 /*
@@ -67,6 +68,11 @@ case class BlockResponse(
     excessBlobGas: Option[BigInt],
     parentBeaconBlockRoot: Option[ByteString],
     requestsHash: Option[ByteString],
+    // Amsterdam (23-field header): EIP-7928 `blockAccessListHash` and EIP-7843 `slotNumber`. None for every other
+    // header — ETC and pre-Amsterdam ETH — so the encoder emits neither key there. Read from the header itself rather
+    // than gated on the chain config: a header carries them iff it is an Amsterdam header (BlockHeader.scala).
+    blockAccessListHash: Option[ByteString],
+    slotNumber: Option[BigInt],
     /** Whether the JSON encoder should emit `totalDifficulty`. The factory methods below default it to true, so any
       * construction site not explicitly opting out keeps pre-existing behaviour; only the ETH-family eth_ read path
       * sets it false. No default here: the case class's synthetic apply and the explicit overloads below cannot both
@@ -85,7 +91,7 @@ object BlockResponse:
       fullTxs: Boolean = false,
       pendingBlock: Boolean = false,
       emitTotalDifficulty: Boolean = true
-  ): BlockResponse =
+  )(using blockchainConfig: BlockchainConfig): BlockResponse =
     val transactions =
       if fullTxs then
         Right(block.body.transactionList.zipWithIndex.map { case (stx, transactionIndex) =>
@@ -147,6 +153,8 @@ object BlockResponse:
       excessBlobGas = block.header.excessBlobGas,
       parentBeaconBlockRoot = block.header.parentBeaconBlockRoot.map(_.value),
       requestsHash = block.header.requestsHash,
+      blockAccessListHash = block.header.blockAccessListHash,
+      slotNumber = block.header.slotNumber,
       emitTotalDifficulty = emitTotalDifficulty
     )
 
@@ -154,7 +162,9 @@ object BlockResponse:
     * two overloaded `apply`s that both carry default arguments, and the block-based overload above owns the defaults.
     * Callers that need the ETH-family gate use that one with an explicit empty body.
     */
-  def apply(blockHeader: BlockHeader, weight: Option[ChainWeight], pendingBlock: Boolean): BlockResponse =
+  def apply(blockHeader: BlockHeader, weight: Option[ChainWeight], pendingBlock: Boolean)(using
+      BlockchainConfig
+  ): BlockResponse =
     BlockResponse(
       block = Block(blockHeader, BlockBody(Nil, Nil)),
       weight = weight,

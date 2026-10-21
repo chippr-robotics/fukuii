@@ -5,22 +5,20 @@ import scodec.bits.ByteVector
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** Wire-level tests for [[Packet]]. The acceptance gate is byte-for-byte
-  * compatibility with the four discv5 test vectors that ship with geth's
-  * `p2p/discover/v5wire` package. If those round-trip cleanly, our codec is
+/** Wire-level tests for [[Packet]]. The acceptance gate is byte-for-byte compatibility with the four discv5 test
+  * vectors that ship with geth's `p2p/discover/v5wire` package. If those round-trip cleanly, our codec is
   * wire-compatible with the reference implementation; the rest is plumbing.
   *
   * Vectors at `/home/dontpanic/go/pkg/mod/github.com/ethereum/go-ethereum@v1.16.4/p2p/discover/v5wire/testdata/`:
-  *   - v5.1-whoareyou.txt        — bare WHOAREYOU challenge
-  *   - v5.1-ping-message.txt     — ordinary message (encrypted PING)
-  *   - v5.1-ping-handshake.txt   — handshake-flagged PING
+  *   - v5.1-whoareyou.txt — bare WHOAREYOU challenge
+  *   - v5.1-ping-message.txt — ordinary message (encrypted PING)
+  *   - v5.1-ping-handshake.txt — handshake-flagged PING
   *   - v5.1-ping-handshake-enr.txt — handshake with embedded ENR
   *
-  * Each vector defines `src-node-id`, `dest-node-id`, etc. as `# key = 0xhex`
-  * comments followed by the encoded packet bytes. We hardcode them rather
-  * than read at runtime so the test stays self-contained.
+  * Each vector defines `src-node-id`, `dest-node-id`, etc. as `# key = 0xhex` comments followed by the encoded packet
+  * bytes. We hardcode them rather than read at runtime so the test stays self-contained.
   */
-class PacketSpec extends AnyFlatSpec with Matchers {
+class PacketSpec extends AnyFlatSpec with Matchers:
 
   // ---- Geth test vectors --------------------------------------------------
 
@@ -58,7 +56,9 @@ class PacketSpec extends AnyFlatSpec with Matchers {
     ),
     expectedFlag = Packet.Flag.Message,
     expectedNonce = ByteVector.fromValidHex("ffffffffffffffffffffffff"),
-    extra = MessageExtra(srcNodeId = ByteVector.fromValidHex("aaaa8419e9f49d0083561b48287df592939a8d19947d8c0ef88f2a4856a69fbb"))
+    extra = MessageExtra(srcNodeId =
+      ByteVector.fromValidHex("aaaa8419e9f49d0083561b48287df592939a8d19947d8c0ef88f2a4856a69fbb")
+    )
   )
 
   /** v5.1-ping-handshake.txt — has signature, ephemeralPubkey, no ENR. */
@@ -230,12 +230,12 @@ class PacketSpec extends AnyFlatSpec with Matchers {
 
   // ---- Cross-impl: geth test vectors --------------------------------------
 
-  for (v <- AllVectors) {
+  for v <- AllVectors do
     it should s"decode the geth ${v.description} test vector under destNodeId mask" in {
       val decoded = Packet.decode(v.encoded, v.destNodeId).require
       decoded.header.flag shouldBe v.expectedFlag
       decoded.header.nonce shouldBe v.expectedNonce
-      v.extra match {
+      v.extra match
         case WhoareyouExtra(idNonce, recordSeq) =>
           decoded shouldBe a[Packet.WhoareyouPacket]
           val w = decoded.asInstanceOf[Packet.WhoareyouPacket]
@@ -250,7 +250,6 @@ class PacketSpec extends AnyFlatSpec with Matchers {
           h.header.srcId shouldBe srcId
           h.header.ephemeralPubkey.size shouldBe pubkeyLen.toLong
           h.header.record.isDefined shouldBe hasRecord
-      }
     }
 
     it should s"re-encode the geth ${v.description} vector to identical bytes" in {
@@ -258,11 +257,10 @@ class PacketSpec extends AnyFlatSpec with Matchers {
       val reEncoded = Packet.encode(decoded, v.destNodeId).require
       reEncoded shouldBe v.encoded
     }
-  }
 
   // ---- Test data shapes --------------------------------------------------
 
-  private sealed trait VectorExtra
+  sealed private trait VectorExtra
   private case class WhoareyouExtra(idNonce: ByteVector, recordSeq: Long) extends VectorExtra
   private case class MessageExtra(srcNodeId: ByteVector) extends VectorExtra
   private case class HandshakeExtra(srcNodeId: ByteVector, ephemeralPubkeyLen: Int, hasRecord: Boolean)
@@ -277,4 +275,3 @@ class PacketSpec extends AnyFlatSpec with Matchers {
       expectedNonce: ByteVector,
       extra: VectorExtra
   )
-}

@@ -22,7 +22,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBoot
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
+import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -30,9 +32,15 @@ import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -201,7 +209,9 @@ object SyncController:
       messConfig: Option[MESSConfig] = None,
       forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
       externalSchedulerOpt: Option[Scheduler] = None,
-      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
+        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -229,7 +239,8 @@ object SyncController:
           messConfig,
           forkChoiceManagerOpt,
           externalSchedulerOpt,
-          reorgState
+          reorgState,
+          txGossipGate
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -267,7 +278,10 @@ object SyncController:
       messConfig: Option[MESSConfig],
       forkChoiceManagerOpt: Option[ForkChoiceManager],
       externalSchedulerOpt: Option[Scheduler],
-      reorgState: ReorgStateHandler
+      reorgState: ReorgStateHandler,
+      // Closed while SNAP or state recovery runs (no complete state to validate a peer tx against), opened when
+      // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate
   ):
     // scalastyle:on parameter.number
 
@@ -313,6 +327,11 @@ object SyncController:
     // configured AND a ForkChoiceManager was supplied — ETC mainnet leaves this `None` forever
     // and the existing TD-based pivot path is unaffected. Closes #1207.
     private var latestBeaconHead: Option[ForkChoiceManager.BeaconHead] = None
+
+    // #1555: the SNAP pivot whose finalization just failed (HealingImpossible), handed to every SNAP controller spawned
+    // until SNAP finalizes, so its accounts-complete recovery does not resume healing on that pivot. In memory only:
+    // after a process restart the recovery may resume on it once more, then the next failure records it again.
+    private var snapPivotFailedFinalization: Option[BigInt] = None
 
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
@@ -598,8 +617,13 @@ object SyncController:
           case SyncProtocol.HealingImpossible =>
             ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
             ctx.stop(snapSync)
+            // #1555: the pivot finalizeSnapSync just failed on is the persisted SNAP pivot (the lazy hand-offs anchor
+            // it first), which is exactly what the accounts-complete recovery would resume on.
+            snapPivotFailedFinalization = appStateStorage.getSnapSyncPivotBlock()
             log.warn(
-              "SNAP finalization aborted (state root mismatch). Clearing sync state and restarting SNAP with a fresh pivot."
+              s"SNAP finalization aborted at pivot ${snapPivotFailedFinalization.getOrElse("unknown")} (state root " +
+                "mismatch or Path publish failure). Clearing the SNAP done flags and restarting SNAP; on PoS chains a " +
+                "heal-only recovery takes a newer pivot than that one, otherwise recovery resumes on the saved pivot."
             )
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync. The new SNAP
             // actor started below gets a fresh latch, so the stale requester here must not linger.
@@ -619,6 +643,12 @@ object SyncController:
             // networkBest/maxPivotStalenessBlocks drift check, and normal operation's all-peers-stateless
             // escalation, both of which re-peg away from a stale/unservable root without discarding downloaded
             // progress. Revisit only if a residual HealingImpossible is ever observed looping on the same pivot.
+            //
+            // #1555 (Platåberget, 2026-10-10): it was observed looping on the same pivot. A frozen CL kept the heal
+            // pivot on a root no peer served; the lazy hand-off's Path publish then failed (root node absent) and this
+            // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
+            // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
+            // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
             appStateStorage.clearSnapSyncDone().commit()
             appStateStorage.clearFastSyncDone().commit()
             startSnapSync()
@@ -1322,6 +1352,7 @@ object SyncController:
     /** SNAP has finalized: whatever pivot floor it started with is spent. */
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
+      snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =
@@ -1540,6 +1571,7 @@ object SyncController:
       given scala.concurrent.ExecutionContext = ctx.executionContext
       log.info("Starting SNAP sync mode")
       syncGeneration += 1
+      txGossipGate.stateSyncStarted()
 
       val snapSyncConfig = loadSnapSyncConfig()
 
@@ -1558,7 +1590,8 @@ object SyncController:
             snapSyncConfig,
             scheduler,
             blacklist,
-            syncController = snapAdapter
+            syncController = snapAdapter,
+            failedFinalizationPivot = snapPivotFailedFinalization
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -1599,6 +1632,7 @@ object SyncController:
       */
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
       syncGeneration += 1
+      txGossipGate.stateSyncFinished()
 
       // Every route out of a bulk bytecode recovery ends here, so this is where its result is checked. The recovery
       // actor marks itself done on abandonment, a crashed coordinator, or a failed scan, so success is read from the
@@ -1714,7 +1748,8 @@ object SyncController:
             blockTopic,
             configBuilder,
             ctx.self,
-            reorgState
+            reorgState,
+            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced")
           ),
           s"regular-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -1860,6 +1895,7 @@ object SyncController:
         scanRoot: Option[(ByteString, BigInt)] = None
     ): Behavior[Command] =
       syncGeneration += 1
+      txGossipGate.stateSyncStarted()
       val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
       val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
@@ -1871,6 +1907,38 @@ object SyncController:
           )
 
           val snapSyncConfig = loadSnapSyncConfig()
+
+          // D-T060-2 (spec 016 T060c): the recovery actors reach the stores through one `StateIngest`, built here
+          // as SNAPSyncController builds its own: the same constructor stores, `pathNodeStorageOpt` derived as it
+          // derives it (`None` on the Hash scheme, i.e. ETC), `validatorFactory` as its `apply` default. Building it
+          // only stores the references; on the Path scheme it also wraps the flat-slot data source in a new
+          // `PathNodeStorage`, which holds no state of its own and which the recovery actors do not read.
+          val pathNodeStorageOpt: Option[PathNodeStorage] =
+            if snapSyncConfig.storageScheme == StorageScheme.Path then
+              Some(new PathNodeStorage(flatSlotStorage.dataSource))
+            else None
+          val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
+          val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
+          val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
+          // The healing stores (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
+          // out none (the core's are HealingOrchestrator's lazy vals, never built here).
+          val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None
+          val bfsQueueStorageOpt: Option[BfsQueueStorage] = None
+          val stateIngest: StateIngest = StateIngest(
+            appStateStorage,
+            stateStorage,
+            flatSlotStorage,
+            pathNodeStorageOpt,
+            evmCodeStorage,
+            blockchainReader,
+            blockchainWriter,
+            validatorFactory,
+            StateIngest.Durability.Default,
+            snapProgressStorage,
+            storageDoneStorage,
+            healingFrontierStorageOpt,
+            bfsQueueStorageOpt
+          )
 
           if snapSyncConfig.parallelRecoveryScan then
             // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
@@ -1902,7 +1970,7 @@ object SyncController:
               s"combined-recovery-scan-$syncGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")
             )
-            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig)
+            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
           else
             // Legacy path: each phase scans the full trie independently, then downloads.
             val bytecodeActor =
@@ -1914,9 +1982,7 @@ object SyncController:
                         .supervise(
                           BytecodeRecoveryActor(
                             stateRoot,
-                            stateStorage,
-                            evmCodeStorage,
-                            appStateStorage,
+                            stateIngest,
                             networkPeerManager,
                             bytecodeRecoveryAdapter,
                             pivotBlock,
@@ -1942,9 +2008,7 @@ object SyncController:
                         .supervise(
                           StorageRecoveryActor(
                             stateRoot,
-                            stateStorage,
-                            appStateStorage,
-                            flatSlotStorage,
+                            stateIngest,
                             networkPeerManager,
                             storageRecoveryAdapter,
                             pivotBlock,
@@ -1982,7 +2046,8 @@ object SyncController:
         needStorage: Boolean,
         stateRoot: ByteString,
         pivotBlock: BigInt,
-        snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+        snapSyncConfig: com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig,
+        stateIngest: StateIngest
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
@@ -2003,9 +2068,7 @@ object SyncController:
                       .supervise(
                         BytecodeRecoveryActor.applyPreloaded(
                           stateRoot,
-                          stateStorage,
-                          evmCodeStorage,
-                          appStateStorage,
+                          stateIngest,
                           networkPeerManager,
                           bytecodeRecoveryAdapter,
                           pivotBlock,
@@ -2032,9 +2095,7 @@ object SyncController:
                       .supervise(
                         StorageRecoveryActor.applyPreloaded(
                           stateRoot,
-                          stateStorage,
-                          appStateStorage,
-                          flatSlotStorage,
+                          stateIngest,
                           networkPeerManager,
                           storageRecoveryAdapter,
                           pivotBlock,

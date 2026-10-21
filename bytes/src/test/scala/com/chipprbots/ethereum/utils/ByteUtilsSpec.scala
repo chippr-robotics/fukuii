@@ -7,7 +7,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class ByteUtilsSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
+class ByteUtilsSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
   def byteArrayOfNItemsGen(n: Int): Gen[Array[Byte]] =
     Gen.listOfN(n, Arbitrary.arbitrary[Byte]).map(_.toArray)
 
@@ -47,4 +47,3 @@ class ByteUtilsSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
       assert(result == expected, s"Failed for bytes ${bytes.mkString("[", ", ", "]")}")
     }
   }
-}

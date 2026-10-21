@@ -334,7 +334,7 @@ See [Docker Documentation](docs/deployment/docker.md) for Compose examples, imag
 2. Extract: `unzip fukuii-<version>.zip && cd fukuii-<version>`
 3. Run: `./bin/fukuii etc` (or `mordor`, `gorgoroth`, `test`)
 
-Builds for Windows, Linux, and macOS are included in every release. Also available: `fukuii-assembly-<version>.jar` for `java -jar` execution (requires JDK 25+).
+Builds for Windows, Linux, and macOS are included in every release. Also available: `fukuii-assembly-<version>.jar` for `java -jar` execution (requires JDK 25+; add `-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges`, see [known issue 16](docs/runbooks/known-issues.md#issue-16-jdk-25-c2-reduceallocationmerges-workaround)).
 
 ### Option 3: Build from Source
 

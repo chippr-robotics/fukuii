@@ -7,6 +7,205 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-20
+
+### Changed
+- **JDK 25 is the baseline, and the JVM must run with the C2 `ReduceAllocationMerges` workaround (#1642, #1643).
+  Breaking for hand-written launchers.** HotSpot C2 on JDK 23 and later miscompiles `ReduceAllocationMerges`
+  (JDK-8385993, fixed in JDK 28; JDK-8393049 reports silently wrong field values), a consensus-divergence risk for a
+  node. Every JVM fukuii runs in now carries `-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges`: sbt
+  (`.jvmopts`), forked test JVMs, `bin/fukuii` (`application.ini`), and every Docker image (`JDK_JAVA_OPTIONS`). The
+  node, the multi-instance runtime and the checkpoint exporter **refuse to start (exit status 78)** on JDK 23+
+  without the flag, unless you set `-Dfukuii.allow-c2-reduce-allocation-merges=true` or
+  `FUKUII_ALLOW_C2_REDUCE_ALLOCATION_MERGES=true` (the node then starts and logs the same message as an ERROR). A
+  hand-written `java -jar` line or systemd unit must add the two flags. Existing containers are protected only after
+  you pull the rebuilt images. The Debian package now depends on JDK 25. See docs/runbooks/known-issues.md Issue 16
+  and ADR INF-007 (supersedes INF-001's JDK 21 minimum).
+- **Blob parameters are per chain (EIP-7840 `blobSchedule`, EIP-7892 BPO forks, #1637).** The blob target, max and
+  base-fee update fraction of each fork now come from the chain config's `blob-schedule` instead of constants fixed to
+  the mainnet/Sepolia schedule. Every consumer reads it: excess blob gas and blob base fee, the per-block blob limit in
+  header validation and block building, `BLOBBASEFEE`, `eth_blobBaseFee`, `eth_feeHistory`'s blob fields,
+  `eth_config.blobSchedule`, receipts' `blobGasPrice`, GraphQL, and the `maxFeePerBlobGas` the node fills in for a transaction it signs. mainnet, Sepolia, Platåberget and hive keep exactly today's values
+  (go-ethereum's default Cancun 3/6/3338477, Prague 6/9/5007716, BPO1 10/15/8346193, BPO2 14/21/11684671); ETC chains
+  have no blob forks and are unchanged. Ephemery now follows its own schedule (BPO1 8/12/6676955, BPO2 10/15/8346193):
+  before, its blocks at or above the blob target failed import with `INCORRECT_EXCESS_BLOB_GAS` and blocks with more
+  blobs than it allows were accepted. `scripts/ephemery/fetch-genesis.sh` maps genesis.json `config.blobSchedule`
+  instead of warning, and hive's adapter maps `HIVE_{CANCUN,PRAGUE,BPO1,BPO2}_BLOB_*`.
+
+  **Breaking for custom ETH-family chain configs:** a chain config that declares `cancun-`, `prague-`, `bpo1-` or
+  `bpo2-timestamp` must declare a `blob-schedule` entry for each, or the node refuses to load it (as it does a schedule
+  with max < target, a zero target or update fraction, out-of-order blob-fork timestamps, `bpo3-timestamp` or later,
+  or an `osaka`/`amsterdam` entry that differs from the one it inherits). An Ephemery chain config generated before
+  this change has no `blob-schedule`: re-run `fetch-genesis.sh`. See docs/runbooks/custom-networks.md.
+- **Debian package: the launcher now reads `/etc/fukuii/application.ini`.** Deb installs never applied it before, so
+  the JVM ran with its own defaults (a heap of about a quarter of RAM, no OOM exit). After upgrading, a deb install
+  runs with the shipped defaults: `-Xmx3g -Xms1g`, `MaxDirectMemorySize=512M`, G1, exit and heap dump
+  (`/var/lib/fukuii/heapdump.hprof`) on OutOfMemoryError. **Large mainnet nodes should raise `-J-Xmx` in
+  `/etc/fukuii/application.ini`** (a conffile; edits survive upgrades), and make `/var/lib/fukuii` writable by the user
+  running the node.
+- **Transaction submission over RPC follows go-ethereum's rules (#1629 S0b).** `eth_sendRawTransaction`,
+  `eth_sendTransaction`, `personal_sendTransaction` and GraphQL `sendRawTransaction`:
+  - refuse legacy transactions that are not replay-protected (no EIP-155 chain id) with "only replay-protected
+    (EIP-155) transactions allowed over RPC", on every chain, ETC included (core-geth does the same). Opt back in with
+    `fukuii.network.rpc.allow-unprotected-txs = true` (go-ethereum `--rpc.allow-unprotected-txs`);
+  - refuse a transaction whose fee (gas * fee cap) exceeds `fukuii.network.rpc.tx-fee-cap` (default 1 ether, 0 = no
+    cap; go-ethereum `--rpc.txfeecap`) with "tx fee (X ether) exceeds the configured cap (Y ether)".
+    `eth_signTransaction` and `personal_signTransaction` check the cap too; `eth_fillTransaction` does not;
+  - on ETH-family chains, apply the pool's rules against what it holds: "already known" for a transaction already
+    pooled, "replacement transaction underpriced" unless a replacement raises both fee caps by `txPool.price-bump`
+    (default 10%; `txPool.blob-price-bump`, default 100%, for blob transactions, as go-ethereum's blobpool), "insufficient funds" when the sender's pending transactions together overdraw its balance, and
+    EIP-7702's one-in-flight-transaction limit for delegated senders. Peers' transactions meet the overdraft and
+    delegation rules too. ETC's pool is unchanged;
+  - on ETH-family chains, keep a sender's transactions to one of go-ethereum's subpools, blob or every other type:
+    a blob transaction from a sender with a pooled non-blob transaction, or a non-blob one from a sender with a pooled
+    blob transaction, is refused with "address already reserved" (-32000; go-ethereum `txpool.ErrAlreadyReserved`),
+    a same-nonce one included, until the sender's transactions of the other kind leave the pool. Peers' transactions
+    meet the rule too. Replacement within the same kind still follows the price-bump rules. ETC is unchanged;
+  - check blob sidecars as go-ethereum's pool does: from Osaka a version-1 (cell proof) sidecar is required (a
+    version-0 one sent to `eth_sendRawTransaction` is converted, as go-ethereum does), before Osaka a version-0 one; versioned hashes must match the commitments, at most 6 blobs, and the KZG proofs must
+    verify.
+- **`eth_getTransactionCount(addr, "pending")` answers the pool's next nonce, as go-ethereum and core-geth do**
+  (`GetPoolNonce`): the account's nonce at the head advanced over its pooled transactions with consecutive nonces; a
+  nonce-gapped (queued) transaction does not count. Before, it did not read the pool.
+  GraphQL `pending { account { transactionCount } }` answers the same, and `eth_sendTransaction` /
+  `personal_sendTransaction` fill the same nonce (they took one past the sender's highest pooled nonce, a gapped one
+  included). All chains, ETC included.
+- **Announced transactions are fetched from one peer at a time.** The pool requested an announced transaction from
+  every peer that announced it, and when the peer it got it from was dropped for serving a bad copy, it asked nobody
+  else. As in go-ethereum's tx fetcher, a hash is now requested from one announcer; the others are kept as
+  alternates and asked in turn when the request goes unanswered for `txPool.announcement-fetch-timeout` (default
+  5 s, go-ethereum's `txFetchTimeout`), when the requesting peer disconnects, or at once when it is dropped for a
+  delivery that contradicts its announcement. Each delivery is checked against its sender's own announcement. Fixes
+  hive devp2p `TestBlobTxWithoutSidecar` / `TestBlobTxWithMismatchedSidecar`, which go-ethereum #35869 rewrote to
+  have three peers announce the same blob transaction.
+- **Behaviour changes to check before upgrading (#1640, #1639).** A fresh ETC, Mordor or Gorgoroth node now answers
+  `eth_gasPrice` / `eth_maxPriorityFeePerGas` with 1 gwei (was 1 wei). `eth_pendingTransactions` now returns full
+  objects only for executable (not nonce-gapped) pool transactions sent from keystore accounts, as geth does.
+- **Internal.** The SNAP controller is split into modules (spec 016, #1401, no behaviour change intended); sbt is
+  1.13.0 (#1631); Scala 3 import syntax is enforced by a scalafix rule and a CI grep (#1632).
+
+### Added
+- **Portable chain files: export and import in go-ethereum's format (#1651).** `fukuii <network> export <file>
+  [first [last]]` and `fukuii <network> import <file>` run offline against a stopped node's datadir, and
+  `admin_exportChain` / `admin_importChain` use the same code. The file is geth's format (consensus-encoded blocks
+  back to back, gzipped when the name ends in `.gz`), so files move between fukuii and geth in either direction.
+  Import executes and validates every block and adopts each one as it is imported; a block that fails stops the
+  import with the chain left at the last good block. Before, `admin_exportChain` wrote a 4-byte length before every
+  block, which no other client reads; the importer still accepts those files with a warning. Checked on Ephemery:
+  a 12,520-block file written by Erigon imports, and re-exports byte-identical, with hashes, state roots and receipt
+  roots matching the live chain. See docs/runbooks/backup-restore.md, "Portable Chain Snapshots".
+- **`eth_getHeaderByNumber` and `eth_getHeaderByHash` (#1616).** New RPCs returning the `eth_getBlockByNumber` header
+  object without size, transactions, uncles, withdrawals and totalDifficulty; by-number resolves the same tags,
+  not found returns `null`.
+- **Typed transactions on every RPC interface (#1629, slices S0-S5).** Legacy, EIP-2930, EIP-1559, EIP-4844 and
+  EIP-7702 transactions are handled with geth's rules, error strings and defaults on JSON-RPC and GraphQL:
+  - S1 (#1633): one shared `TxArgs` model with strict, geth-style JSON decoding (`-32602` with geth's hexutil text).
+    Type inference follows geth's `ToTransaction`; one deliberate deviation: `gasPrice` together with an access list
+    or blob fields and no explicit `type` is rejected instead of silently building a legacy transaction.
+  - S0 (#1634): admission rules are #1641's (see the transaction submission entry above). Delta: pending typed
+    transactions report the fee cap as `gasPrice`; on ETC and Mordor, peer transactions of a type not active at the
+    head (0x2/0x4 before Olympia) are no longer pooled or gossiped.
+  - S2 (#1635): `eth_sendTransaction` and `personal_sendTransaction` build all five types; new
+    `eth_signTransaction`, `personal_signTransaction` (`{raw, tx}`) and `eth_fillTransaction`. Defaults follow geth's
+    `setDefaults`; gas is estimated rather than fixed at 90000; blob sidecars are built and checked with KZG.
+  - S3 (#1636): `eth_call`, `eth_estimateGas`, `eth_createAccessList`, `debug_traceCall(Many)`,
+    `trace_call(Many)` and GraphQL call/estimateGas share one message builder and accept state and block overrides.
+    `eth_createAccessList` now iterates the access-list tracer to a fixed point. RPC gas cap
+    `fukuii.network.rpc.gas-cap` (default 50M, as geth).
+  - S4 (#1638): `eth_simulateV1` calls use the strict decoder and geth's type selection and validation error codes.
+  - S5 (#1639): the GraphQL `Transaction` matches geth's schema (`yParity`, effective-price fields, blob fields);
+    `eth_pendingTransactions` returns executable pool transactions from keystore accounts, as geth does.
+- **Gas price oracle (#1640).** `eth_gasPrice`, `eth_maxPriorityFeePerGas`, GraphQL and the tip default of
+  send/sign/fill use a port of geth's `eth/gasprice` oracle, replacing the fixed `minTip` (1 wei on ETH, so locally
+  sent mainnet transactions could sit unincluded). Config under `fukuii.network.rpc.gpo` with geth's defaults
+  (`blocks` 20, `percentile` 60, `max-price` 500 gwei, `ignore-price` 2 wei, `max-header-history` and
+  `max-block-history` 1024, the last two now read by `eth_feeHistory`). Start price: 1 mwei on ETH-family chains,
+  1 gwei on ETC, Mordor and Gorgoroth (core-geth); override with `gpo-default-price` in the chain config or
+  `fukuii.network.rpc.gpo.default-price`. A fresh ETC node now answers 1 gwei instead of 1 wei.
+- **Ephemery testnet support (#1628).** `fukuii ephemery` is a known network.
+  `scripts/ephemery/fetch-genesis.sh` downloads the current `ephemery-N` genesis and generates the chain config,
+  genesis (timestamp re-encoded to hex, `mixhash` renamed `mixHash`), a Lighthouse `testnet/` directory and a
+  `current` symlink; it fails on genesis features fukuii cannot represent. See docs/runbooks/ephemery.md.
+- **Ephemery load generator (#1649, tooling).** `scripts/ephemery/load-gen.py` sends typed (0x0-0x4, including
+  blob and EIP-7702) transactions through fukuii's own RPC plus `eth_fillTransaction`, `eth_estimateGas`,
+  `eth_createAccessList` and `eth_call` probes, for import differentials. Nothing in the build depends on it.
+
+### Fixed
+- **SNAP pivot block stored without its body (#1652). Every chain.** SNAP finalization stored the pivot block with
+  an empty body to record its number, overwriting the body `newPayload` had stored; backfill never refetched it. On
+  Ephemery the pivot served `withdrawals: null` under a non-empty `withdrawalsRoot`, over RPC and to peers. An ETC
+  pivot with transactions or ommers was affected the same way. Finalization now writes only the header and number
+  mapping; a body that does not match its header is refetched; a Shanghai genesis is stored with its empty
+  withdrawals list (matching geth's genesis RLP); a one-time startup repair removes a bad pivot body and rewrites a
+  bad genesis body; and a block whose header commits to withdrawals but whose body has none is rejected, as geth does.
+- **Checkpoint archives carried an estimated total difficulty (#1653). ETC/Mordor.** A node that SNAP-synced stores
+  a peer-interpolated total difficulty for its pivot, and `checkpoint export` copied it into the archive (on Mordor,
+  off by 114,098,267). A node that imported such an archive kept the error in the total difficulty it advertises to
+  peers and reports over RPC. Fork choice was not affected. The exporter now sums block difficulties from genesis and
+  refuses (writing nothing) when a header below the export block is missing or the chain does not reach this
+  network's genesis; `--allow-estimated-td` exports the stored value with a warning.
+- **Tx pool memory leak (OOM).** A node that was not synced kept taking transactions from peers. During SNAP sync
+  the pool rejected every one (no state to check them against), but the EIP-4844 blob sidecars that came with them
+  (130-830 KB each) were stored before admission and never removed. A Sepolia node held 2.6 GB of them and was
+  OOM-killed every ~10 hours. Two changes. (1) As in go-ethereum (`AcceptTxs`), a node ignores
+  `NewPooledTransactionHashes`, `Transactions` and `PooledTransactions` from peers until it is synced: an Engine API
+  forkchoiceUpdated has set the head, regular sync has reached the best block peers announced, or block production
+  is enabled. It also ignores them while SNAP sync or state recovery runs. Transactions submitted over JSON-RPC are
+  not affected. This applies to ETC too: an ETC node stops taking peer transactions while it catches up. (2) The pool
+  keeps a blob sidecar only while its transaction is pooled, drops it on every removal path, and caps the total at
+  `txPool.blob-sidecar-budget` (default 256 MiB); past the cap the oldest blob transactions are evicted.
+- **TUI (`--tui`).** The terminal UI froze after its first frame: key input used JLine's `peek(0)`, which waits
+  forever, so the update loop blocked until a key was pressed. It also never showed real data, because the status
+  queries were never wired in, so peers, blocks and sync status sat at their defaults. It now polls the peer manager,
+  the sync controller (the same queries `net_peerCount` and `eth_syncing` answer), the best block and SNAP progress.
+  Further fixes: `D` no longer shuts down the node; `Q` exits through the normal shutdown hook instead of
+  interrupting its own shutdown; frames fit the terminal exactly (no scrolling or wrapping, footer pinned);
+  non-TTY/`dumb` terminals fall back to plain logging; the terminal mode and screen are restored on exit;
+  configuration errors are printed before the TUI suppresses console logging; sync speed/ETA is measured from
+  the first block observed rather than from genesis.
+- **discv4 saturated the CPU and starved block import and the Engine API (#1648).** On an Ephemery node (4 cores)
+  fukuii sat at about 286% CPU with 3 peers, Lighthouse's engine upcheck timed out and Engine requests queued for
+  over a minute (`JWT expired`); thread dumps showed discv4 ECDSA signing and recovery. Causes: an unbounded full
+  Kademlia lookup per peer request, 2-3 signature recoveries per datagram, and discovery sharing
+  `IORuntime.global` with block import. Now: discovery runs on its own pool (`network.discovery.compute-threads`,
+  default 1, threads `discovery-compute-N`); one lookup runs at a time, feeding a bounded queue, with the pause
+  doubling from 2 s to 64 s while lookups find nothing new; each packet is type-checked before any crypto and
+  recovered keys are cached (4096 entries); inbound requests are limited to 10/s per IP (burst 30, shared across source ports) and 100/s
+  overall (burst 200); these inbound limits are new behaviour on the public discovery UDP port and are fixed in code
+  (`DiscoveryNetwork.InboundRequestLimits.default`), not configurable. Measured on Ephemery: about 286% to about 15% CPU.
+- **`eth_simulateV1` override keys are strict (#1616).** An unknown key in `blockOverrides` or a `stateOverrides` entry
+  returns `-32602`; the `difficulty` block override works pre-merge and returns `-32602` after.
+- **`eth_feeHistory` returned 0 for every reward percentile (#1605).** It now computes them as geth does: transactions
+  sorted by effective tip, first whose cumulative gas reaches `gasUsed * p / 100`.
+- **Amsterdam rpc-compat vectors (#1606).** `eth_getBlockByNumber` emits `blockAccessListHash` and `slotNumber` for
+  Amsterdam headers; `testing_buildBlockV1` / `testing_commitBlockV1` handle PayloadAttributesV4 and the block access
+  list; `eth_simulateV1` builds Amsterdam block identity (slot number, EIP-7928 access list, header `gasUsed` =
+  max(execution, state)). Engine API block building and block import are unchanged.
+- **PoW rewind abandoned the canonical prefix (#1592, #1594). ETC/Mordor.** A branch-resolution rewind re-presented
+  the node's own canonical blocks, which took the reorg path and had their state abandoned; under basic pruning
+  live nodes were deleted 64 blocks later and a later import failed with `MissingAccountNodeException`. The importer
+  now drops the already-canonical prefix (as core-geth does) and `settleHead` never abandons a block it just
+  re-executed with the same hash.
+- **SNAP resume checkpoint lost completed ranges (#1597, #1599).** Ranges finished before a restart dropped out of
+  later checkpoints (16 cursors became 15), so the resume was rejected and the record and its task files destroyed.
+  Completed ranges are now kept, a recoverable keyset is filled (WARN lists the filled ranges), and a layout mismatch
+  holds the record instead of deleting it.
+- **Accounts-complete recovery paths were not persisted (#1603, #1604).** The controller asked the coordinator for
+  the storage and codeHashes task-file paths and handled the replies off the actor thread (Pekko Typed threw
+  `UnsupportedOperationException`); the codeHashes path was never saved, so a restart during the storage phase with
+  bytecode incomplete restarted SNAP from the accounts phase. The coordinator now tells the controller both paths
+  on completion.
+
+### Known issues
+- **ETC/Mordor checkpoint archives from SNAP-synced nodes.** With the default ETC config, header backfill below the
+  SNAP pivot runs after state sync, so `checkpoint export` refuses until it has reached genesis. Do not publish
+  archives made with `--allow-estimated-td` from a SNAP-synced node, or archives made before 0.10.0.
+- **Total difficulty rewritten on restart (#1654, ETC/Mordor, since 0.7.0).** A calibration 30 s after regular sync
+  starts overwrites the head's stored total difficulty with an estimate, leaving a step in the stored values that can
+  bias fork choice between branches forking below that block. Fix in progress.
+- **`sbt formatCheck` fails (#1656).** Scalafix violations accumulated because CI does not run scalafix; tooling only,
+  no effect on the node.
+
 ## [0.9.0] - 2026-10-05
 
 The Glamsterdam release. Sepolia activates Amsterdam at timestamp 1791294816 (2026-10-06 13:53:36 UTC);
@@ -111,6 +310,10 @@ every Sepolia node must run 0.9.0 before then. Tracking issue: #1415 (spec: `spe
   Snap-serving peers are kept through a local stall (#1479).
 
 ### Fixed
+- **Engine API blobs bundle dropped EIP-7594 sidecars.** The payload builder read only the version-0 blob sidecar
+  wrapper; a pooled blob transaction carrying a version-1 (cell proof) wrapper, from a peer or from
+  `eth_sendRawTransaction`, went into the payload without its blobs in `blobsBundle`, so the bundle no longer matched
+  the payload's versioned hashes and a consensus client would reject it. Both wrappers are now read.
 - Sepolia's EIP-6110 deposits are read from the chain's own deposit contract; it was wrong for Sepolia since
   Prague (#1416).
 - A genesis that activates Amsterdam builds the 23-field header, and hive's genesis `slotNumber` is passed

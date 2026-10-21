@@ -270,7 +270,8 @@ class BlockPreparator(
         evmConfig,
         authExecutionGas,
         authStateGas,
-        extraWarmAddresses
+        extraWarmAddresses,
+        overrides.skipExecutionGasCap
       )
     // Apply the eth_simulateV1 overrides, if this call carries any
     var ctx = context
@@ -424,7 +425,9 @@ class BlockPreparator(
       .clearTouchedAccounts
 
   /** Public facade for eth_simulateV1: executes one transaction as block import does, under this call's overrides —
-    * precompile relocations for movePrecompileToAddress, traceTransfers, and the blobBaseFee block override.
+    * precompile relocations for movePrecompileToAddress, traceTransfers, the blobBaseFee block override and, with
+    * `validation` off, the lifted EIP-8037 execution-gas cap. On an Amsterdam block the simulator passes the call's
+    * EIP-7928 `accessRecorder`, exactly as block execution does for a transaction.
     *
     * The overrides are passed down this call's stack as an immutable [[SimulationOverrides]] and exist nowhere else:
     * block import, other eth_simulateV1 calls and StxLedger, which share this preparator and run concurrently, never
@@ -437,15 +440,17 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       precompileRelocations: Map[Address, Address] = Map.empty,
       traceTransfers: Boolean = false,
-      blobBaseFeeOverride: Option[BigInt] = None
+      blobBaseFeeOverride: Option[BigInt] = None,
+      skipExecutionGasCap: Boolean = false,
+      accessRecorder: Option[BlockAccessRecorder] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult =
     executeTransactionWithOverrides(
       stx,
       senderAddress,
       blockHeader,
       world,
-      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride),
-      accessRecorder = None,
+      SimulationOverrides(precompileRelocations, traceTransfers, blobBaseFeeOverride, skipExecutionGasCap),
+      accessRecorder = accessRecorder,
       tracer = None
     )
 
@@ -494,44 +499,16 @@ class BlockPreparator(
 
     val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world, blockHeader, overrides)
 
-    // EIP-7702: Process authorization list for Type-4 transactions before VM execution
-    // Track refund for existing accounts (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account)
-    var authExistingAccountRefund: BigInt = 0
-    // EIP-2780 replaces EIP-7702's flat PER_AUTH_BASE_COST of 25,000 with EXECUTION_PER_AUTH_BASE_COST
-    // of 7,816 plus runtime state charges. The 12,500 "existing authority" refund below exists solely to
-    // give back part of that 25,000 — with the charge gone, the refund would be a credit against nothing
-    // and would under-charge every Type-4 transaction after activation.
+    // EIP-7702: Process authorization list for Type-4 transactions before VM execution (applyAuthorizationPhase)
     val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
     val evmConfigForTx = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
-    var authExecutionGas: BigInt = 0
-    var authStateGas: BigInt = 0
-    var authorityWarmAddresses: Set[Address] = Set.empty
-    var authorizationsOutOfGas = false
-    val worldAfterAuths = stx.tx match
-      case sct: SetCodeTransaction if amsterdamActive =>
-        // EIP-2780: the authorizations are charged one by one as they are applied, against the top frame's meter —
-        // which is why they need the frame's gas split before the frame exists. The accounts whose first write the
-        // transaction already paid for: the sender (TX_BASE) and a value-bearing recipient (TX_VALUE_COST).
-        val (executionGrant, reservoir) = ProgramContext.evmGasAllocation(stx, senderAddress, evmConfigForTx)
-        val paidWrites = Set(senderAddress) ++ (if sct.value > 0 then sct.receivingAddress.toSet else Set.empty)
-        val applied = applyAmsterdamAuthorizations(
-          sct.authorizationList,
-          checkpointWorldState,
-          paidWrites,
-          executionGrant,
-          reservoir
-        )
-        authExecutionGas = applied.executionGas
-        authStateGas = applied.stateGas
-        authorityWarmAddresses = applied.warmAuthorities
-        authorizationsOutOfGas = applied.outOfGas
-        applied.world
-      case sct: SetCodeTransaction =>
-        val (world, refund, warm) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
-        authExistingAccountRefund = refund
-        authorityWarmAddresses = warm
-        world
-      case _ => checkpointWorldState
+    val authPhase = applyAuthorizationPhase(stx, senderAddress, blockHeader, checkpointWorldState, overrides)
+    val authExistingAccountRefund = authPhase.existingAccountRefund
+    val authExecutionGas = authPhase.executionGas
+    val authStateGas = authPhase.stateGas
+    val authorityWarmAddresses = authPhase.warmAuthorities
+    val authorizationsOutOfGas = authPhase.outOfGas
+    val worldAfterAuths = authPhase.world
 
     val context = topLevelContext(
       stx,
@@ -581,21 +558,13 @@ class BlockPreparator(
 
     // EIP-7702: Add auth refund to the VM's refund counter before capping
     val resultWithAuthRefund =
-      if authExistingAccountRefund > 0 then
-        resultWithErrorHandling.copy(gasRefund = resultWithErrorHandling.gasRefund + authExistingAccountRefund)
-      else resultWithErrorHandling
-
-    // go-ethereum applies the refund counter on EVERY exit path (`st.gasRemaining += st.calcRefund()` after the call,
-    // regardless of `vmerr`). A failed frame reverts the refunds it accrued itself, but the EIP-7702 existing-authority
-    // refund was accrued before the frame's snapshot and survives it. `calcTotalGasToRefund` drops `gasRefund` on
-    // error — correct for every refund the VM produced, wrong for this one — so it is capped (EIP-3529, /5) and
-    // added back here. Zero for every non-Type-4 transaction and for every Amsterdam one.
-    val totalGasToRefundVm = calcTotalGasToRefund(stx, resultWithAuthRefund, blockHeader.number.value)
-    val authRefundOnFailure: BigInt =
-      if result.error.isDefined && authExistingAccountRefund > 0 then
-        ((gasLimit.value - totalGasToRefundVm) / 5).min(authExistingAccountRefund)
-      else BigInt(0)
-    val totalGasToRefundBase = totalGasToRefundVm + authRefundOnFailure
+      BlockPreparator.addAuthorizationRefund(resultWithErrorHandling, authExistingAccountRefund)
+    val totalGasToRefundBase = totalGasToRefundWithAuthorizations(
+      stx,
+      resultWithAuthRefund,
+      authExistingAccountRefund,
+      blockHeader.number.value
+    )
     val executionGasBase = gasLimit - GasAmount(totalGasToRefundBase)
 
     if DebugTrace.enabledForBlock(blockHeader.number.value) then
@@ -768,6 +737,107 @@ class BlockPreparator(
       executionGasUsed = txExecutionGas,
       stateGasUsed = txStateGas
     )
+
+  /** The EIP-7702 authorization phase of one transaction, before its top-level frame (go-ethereum `execute` ->
+    * `applyAuthorization`; execution-specs `set_delegation`). Shared by block execution
+    * ([[executeTransactionWithOverrides]]) and the RPC message call ([[runCallFrame]]); for every transaction that is
+    * not a Type-4 it is the identity: the world unchanged, no gas, no refund, no warm authority.
+    *
+    *   - Amsterdam: EIP-2780 charges each authorization against the top frame's meter as it is applied, which is why
+    *     the frame's gas split is computed here before the frame exists. The accounts whose first write the transaction
+    *     already paid for: the sender (TX_BASE) and a value-bearing recipient (TX_VALUE_COST).
+    *   - Before Amsterdam: EIP-7702's flat charge is intrinsic gas, and an authority that already existed earns back
+    *     25,000 - 12,500 (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account). EIP-2780 replaces the
+    *     flat 25,000 with EXECUTION_PER_AUTH_BASE_COST of 7,816 plus runtime state charges, so from Amsterdam there is
+    *     no such refund: it would be a credit against nothing.
+    */
+  private[ledger] def applyAuthorizationPhase(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      checkpointWorldState: InMemoryWorldStateProxy,
+      overrides: SimulationOverrides
+  )(implicit blockchainConfig: BlockchainConfig): AuthorizationPhase =
+    val amsterdamActive = blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp)
+    stx.tx match
+      case sct: SetCodeTransaction if amsterdamActive =>
+        val evmConfigForTx = EvmConfig.forBlock(blockHeader.number.value, blockHeader.unixTimestamp, blockchainConfig)
+        val (executionGrant, reservoir) =
+          ProgramContext.evmGasAllocation(stx, senderAddress, evmConfigForTx, overrides.skipExecutionGasCap)
+        val paidWrites = Set(senderAddress) ++ (if sct.value > 0 then sct.receivingAddress.toSet else Set.empty)
+        val applied = applyAmsterdamAuthorizations(
+          sct.authorizationList,
+          checkpointWorldState,
+          paidWrites,
+          executionGrant,
+          reservoir
+        )
+        AuthorizationPhase(
+          world = applied.world,
+          existingAccountRefund = 0,
+          executionGas = applied.executionGas,
+          stateGas = applied.stateGas,
+          warmAuthorities = applied.warmAuthorities,
+          outOfGas = applied.outOfGas
+        )
+      case sct: SetCodeTransaction =>
+        val (world, refund, warm) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
+        AuthorizationPhase(world, refund, 0, 0, warm, outOfGas = false)
+      case _ => AuthorizationPhase(checkpointWorldState, 0, 0, 0, Set.empty, outOfGas = false)
+
+  /** go-ethereum applies the refund counter on EVERY exit path (`st.gasRemaining += st.calcRefund()` after the call,
+    * regardless of `vmerr`). A failed frame reverts the refunds it accrued itself, but the EIP-7702 existing-authority
+    * refund was accrued before the frame's snapshot and survives it. `calcTotalGasToRefund` drops `gasRefund` on error
+    * — correct for every refund the VM produced, wrong for this one — so it is capped (EIP-3529, /5) and added back
+    * here. Zero for every non-Type-4 transaction and for every Amsterdam one.
+    *
+    * @param resultWithAuthRefund
+    *   the frame's result with the refund already added ([[BlockPreparator.addAuthorizationRefund]])
+    */
+  private[ledger] def totalGasToRefundWithAuthorizations(
+      stx: SignedTransaction,
+      resultWithAuthRefund: PR,
+      authExistingAccountRefund: BigInt,
+      blockNumber: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): BigInt =
+    val totalGasToRefundVm = calcTotalGasToRefund(stx, resultWithAuthRefund, blockNumber)
+    val authRefundOnFailure: BigInt =
+      if resultWithAuthRefund.error.isDefined && authExistingAccountRefund > 0 then
+        ((stx.tx.gasLimit.value - totalGasToRefundVm) / 5).min(authExistingAccountRefund)
+      else BigInt(0)
+    totalGasToRefundVm + authRefundOnFailure
+
+  /** The top-level frame of an RPC message call (eth_call, eth_estimateGas, eth_createAccessList, debug_traceCall,
+    * trace_call; `StxLedger.simulateCall`): the authorization phase, then the frame, with the call's overrides and an
+    * optional tracer riding on a VM of its own (as [[runVMWithTracer]] and [[executeTransactionWithOverrides]] do).
+    * `world` is the world after the upfront charge. Returns the frame's result and the existing-authority refund.
+    *
+    * For a transaction with no authorization list and no overrides this is exactly [[runVM]] (untraced) or
+    * [[runVMWithTracer]] (traced): the same context, the same VM.
+    */
+  private[ledger] def runCallFrame(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      overrides: SimulationOverrides,
+      tracer: Option[ExecutionTracer]
+  )(implicit blockchainConfig: BlockchainConfig): (PR, BigInt) =
+    val auth = applyAuthorizationPhase(stx, senderAddress, blockHeader, world, overrides)
+    val context = topLevelContext(
+      stx,
+      senderAddress,
+      blockHeader,
+      auth.world,
+      auth.executionGas,
+      auth.stateGas,
+      tracer = None,
+      extraWarmAddresses = auth.warmAuthorities,
+      accessRecorder = None,
+      overrides = overrides
+    )
+    val result = tracer.fold(vm.run(context))(t => new VMImpl(Some(t)).run(context))
+    (result, auth.existingAccountRefund)
 
   /** EIP-7928: the reads execution-specs `create_evm` makes before the top-level frame exists, in its order.
     *
@@ -1139,7 +1209,7 @@ class BlockPreparator(
     *      < n`, `0 < s <= n/2` — and recover to a public key. go-ethereum: `crypto.ValidateSignatureValues(v, r, s,
     *      homestead = true)`.
     */
-  private def recoverAuthority(
+  private[ledger] def recoverAuthority(
       auth: SetCodeAuthorization
   )(implicit blockchainConfig: BlockchainConfig): Option[Address] =
     import com.chipprbots.ethereum.crypto.ECDSASignature
@@ -1199,6 +1269,19 @@ class BlockPreparator(
               else w1.saveCode(authorityAddr, SetCodeTransaction.addressToDelegation(auth.address))
             AuthorizationOutcome.Applied(authorityAddr, w2, authorityExisted = existing.isDefined)
 
+/** What [[BlockPreparator.applyAuthorizationPhase]] left: the world after the authorizations, the pre-Amsterdam
+  * existing-authority refund, EIP-2780's execution and state charges, the recovered authorities (warm for the whole
+  * transaction) and whether the charges ran out of gas.
+  */
+final private[ledger] case class AuthorizationPhase(
+    world: InMemoryWorldStateProxy,
+    existingAccountRefund: BigInt,
+    executionGas: BigInt,
+    stateGas: BigInt,
+    warmAuthorities: Set[Address],
+    outOfGas: Boolean
+)
+
 /** Outcome of one EIP-7702 authorization tuple (go-ethereum `validateAuthorization` / `applyAuthorization`). */
 private[ledger] enum AuthorizationOutcome:
   /** Rejected before the authority was recovered (chain id, nonce overflow, signature): nothing is warmed. */
@@ -1251,6 +1334,13 @@ private[ledger] enum AuthorizationCharge:
   case State(amount: BigInt)
 
 object BlockPreparator:
+
+  /** The EIP-7702 existing-authority refund added to a frame's refund counter, before the EIP-3529 cap. The identity
+    * when there is none.
+    */
+  private[ledger] def addAuthorizationRefund(result: PR, authExistingAccountRefund: BigInt): PR =
+    if authExistingAccountRefund > 0 then result.copy(gasRefund = result.gasRefund + authExistingAccountRefund)
+    else result
 
   /** EIP-7702 / EIP-2681: an authorization's nonce must be strictly below 2**64 - 1, because a successful authorization
     * bumps the authority's nonce and 2**64 - 1 has no successor.

@@ -12,7 +12,20 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
@@ -54,7 +67,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   ): org.apache.pekko.actor.typed.ActorRef[ByteCodeCoordinator.Command] =
     testKit.spawn(
       ByteCodeCoordinator(
-        evmCodeStorage = evmCodeStorage,
+        stateIngest = bytecodeIngest(evmCodeStorage),
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker,
         batchSize = batchSize,
@@ -64,6 +77,28 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         backpressureLowWatermark = backpressureLowWatermark
       )
     )
+
+  // ByteCodeCoordinator takes one `StateIngest` (spec 016 C-B1). It reads only `bytecode`; any other member fails
+  // loudly, so a test that reaches one is a change in what the coordinator reads.
+  private def bytecodeIngest(evmCodeStorage: EvmCodeStorage): StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = notReached("appState")
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = notReached("pathNodes")
+      def bytecode: EvmCodeStorage = evmCodeStorage
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
+      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"ByteCodeCoordinator read StateIngest.$member")
 
   // Resolve the coordinator's single worker child via actorSelection; returns a Typed ref so all
   // sends are compile-time checked. Replaces the former `coordinator.underlyingActor.workers.head`,

@@ -1,0 +1,1154 @@
+# Phase 0 Research: SNAPSyncController and Coordinator Characterization (spec 016, #1401)
+
+**Status**: Complete for the controller and, since T060, for the four coordinators: the matrices are in
+[coordinator-characterization.md](./coordinator-characterization.md), and the baselines are in R12 and R14b.
+
+**Source**: the static characterization report `/home/dontpanic/work/snap-characterization.md` (written 2026-10-08
+against `origin/staging`). This file copies the matrices and verdicts that the spec, plan and tasks depend on, so the
+spec still reads correctly if that working file goes away. Additions made while writing the spec are labelled
+**[016]**.
+
+## R0. Baseline, line anchors and method
+
+- **Baseline commit**: `staging@9a6681cc0` (`chore: bump version to 0.9.7`). All line numbers below (`L####`) refer to
+  `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala` at that commit, unless a path
+  is given.
+- **Line numbers will drift.** PR #1501 (spec 014) changes the controller by +229/−96. The file grows from 6,646 to
+  6,779 lines, and every line after L83 moves. Slices, pin tests and review checklists identify code by **symbol and
+  grep pattern**, never by line number alone. The line numbers here are only for reading this document against the
+  baseline commit.
+- **Method** (from the report): every result is from static inspection only. No test was run, no sbt or java was
+  started, and no source was edited. The matrices are derived with regular expressions: each occurrence is attributed
+  to its enclosing top-level `def` or behaviour, and closures inside a behaviour count towards that behaviour. `xN`
+  means N occurrences. High-traffic vars were spot-checked by hand.
+
+## R1. Measured size (the issue's "~2k lines" is stale)
+
+| File | staging@9a6681cc0 | #1501 branch snapshot (read 2026-10-08) | **post-#1501 staging (`d23932524`; #1501 merged as `dfa4a8836`, 2026-10-08 17:03Z)** |
+|---|---|---|---|
+| `snap/SNAPSyncController.scala` | 6,646 (impl class L53–5669 ≈ 5,600; companion and config ≈ 980) | 6,779 | **6,829** (impl L53–5794; companion from L5795) |
+| `snap/actors/TrieNodeHealingCoordinator.scala` | 2,900 | 2,900 | **2,900** |
+| `snap/actors/StorageRangeCoordinator.scala` | 2,273 | 2,288 | **2,288** |
+| `snap/actors/AccountRangeCoordinator.scala` | 2,193 | 2,195 | **2,220** |
+| `snap/actors/ByteCodeCoordinator.scala` | 842 | 870 | **870** |
+| **Total in scope** | 14,854 | 15,032 | **15,107** |
+
+#1501 also adds three files: `snap/SnapIntakeBudget.scala` (161), `snap/SnapHeapWatchdog.scala` (**230** as merged;
+the branch snapshot had 156) and `snap/GatedTaskFileReplay.scala` (59). All three are already separate files. This
+spec places them and does not split them (R11).
+
+**[016] T001 result (done 2026-10-08).** These symbol anchors were re-measured on post-#1501 staging:
+
+| Symbol | Line |
+|---|---|
+| `syncing` | starts at 1061 (`bootstrapping` starts at 2385; there are helper defs between them, as at baseline) |
+| `bootstrapping` | 2385 |
+| `handleCLPivotHint` | 2678 |
+| `startSnapSync` | 2701 |
+| `launchAccountRangeWorkers` | 3696 |
+| `healingFrontierStorageOpt` | 4084 |
+| `startStateHealing` | 4095 |
+| `startStateHealingWithInterleave` | 4183 |
+| `frontierPersistenceEnabled =` | 4127, 4207 |
+| `refreshPivotInPlace` | 4515 |
+| `completePivotRefreshWithStateRoot` | 4785 |
+| `restartSnapSync` | 4990 |
+| `wakeFromDormant` | 3507 |
+| `enterDormantMode` | 3459 |
+| `onStop` | 832 |
+| `stopSnapOnlySchedules` | 863 |
+| `stopStateSyncChildren` | 888 |
+| `idle` | 905 |
+| `.start() // #1378` | 6444 |
+| `prunedHealVerification` parse | 6658 |
+| TD-PROXY-GAP guard | `NetworkPeerManagerActor.scala:798` (unchanged) |
+
+There are still 38 `currentPhase ==` tests in the file, and 77 `private var`s (76 + `heapWatchdog`). The rest of this
+document keeps the baseline (`9a6681cc0`) line numbers. Search by symbol.
+
+## R2. Headline findings
+
+- **`syncing` (L953–2102, 1,150 lines) is one behaviour that serves five phases.** It touches 56 of the 82 mutable
+  items (68%) and writes 44 of them. It reads `currentPhase` 37 times, with 28 `currentPhase ==` tests and 17
+  `case … if currentPhase == X` guards. The phases are AccountRangeSync, ByteCodeAndStorageSync, StateHealing,
+  StateValidation and ChainDownloadCompletion. **[016]** The whole file has 38 `currentPhase ==` tests; the 28 cited
+  in this spec are the ones inside `syncing`.
+- **The real coupling hubs are the reset methods**:
+  - `restartSnapSync` (L4866, 85 lines) touches 29 vars and writes 28.
+  - `wakeFromDormant` (L3387) touches 18 and writes 17.
+  - `enterDormantMode` (L3339) touches 14 and writes 13.
+  - `startSnapSync` writes 17.
+
+  Each one hand-rolls a flag/cursor/validation/probe reset. They also repeat the same four `ctx.stop(...)` plus
+  `= None` lines (L3358–3361, L4897–4900, and `stopStateSyncChildren` L782–790).
+- **`startSnapSync` (L2585–3293, 709 lines) is the largest method.** `handleCLPivotHint` is only 23 lines
+  (L2562–2584). `startSnapSync` mixes several concerns:
+  - accounts-complete recovery (~305 lines);
+  - the CL-wait gate;
+  - CL, genesis, local and network pivot selection;
+  - bootstrap resume;
+  - an inline copy of the bytecode and storage coordinator spawns (L2719, L2743), which duplicates
+    `launchAccountRangeWorkers` (L3767, L3795).
+- **Shared state: 18 of the 82 mutable items belong to one module only, 19 more belong to one module plus `syncing`
+  arms, and 45 are shared across 2 or more modules.** If the reset trio is ignored, only 34 are shared. The shared
+  hubs are:
+  - `pivotBlock` (10 modules), `stateRoot` (9), `currentPhase` (8);
+  - `progressMonitor` (7), `requestTracker` (7);
+  - the five child refs.
+- **None of the five fixes restored by #1385 has a test that fails if the fix is dropped.** Fix #5 has only a weak,
+  partial test (R7).
+- **Two defects found while reading, now filed**: #1502 (`prunedHealVerification` is never forwarded to
+  `TrieNodeHealingCoordinator`) and #1503 (accounts-complete recovery reuses the saved pivot unchecked when
+  `networkBest == 0`). Both are **placed** by this spec (R10), not fixed.
+
+Per-method write fan-out (distinct vars touched / written): syncing 56/44, restartSnapSync 29/28,
+completePivotRefreshWithStateRoot 21/12, startSnapSync 20/17, launchAccountRangeWorkers 19/16, wakeFromDormant 18/17,
+enterDormantMode 14/13, startStateHealing 10/6, maybeRestartIfAccountStagnant 9/5, maybeRestartIfStorageStagnant 8/5,
+refreshPivotInPlace 8/4, finalizeSnapSync 8/3, startStateHealingWithInterleave 7/4, maybeRequestHealingServeRoot 7/2,
+bootstrapping 7/4, handleCLPivotHint 3/2. Everything else touches at most 6.
+
+## R3. Var × module matrix (verdicts)
+
+There are 82 items: 76 `private var`s and 6 mutable-holder `val`s (`requestTracker`, `progressMonitor`,
+`healedCodeHashes`, `failedPivotBlocks`, `healingWalkLocalOnly`, `snapServerPeerLastConnectAttemptMs`).
+**[016]** After #1501 there is an 83rd: `private var heapWatchdog: Option[SnapHeapWatchdog.Handle]`. It is written only
+by `ensureHeapWatchdog` (at the two coordinator-spawn sites) and `stopHeapWatchdog` (in `onStop` and
+`stopSnapOnlySchedules`), so it is exclusive to Lifecycle (§R12).
+
+Each var below is assigned to the modules that touch it. The module abbreviations mean:
+
+| Module | Code it covers |
+|---|---|
+| PEER | peer helpers: L139–240, 557–689, 716, 3471–3527, 4137, 4251–4301 |
+| PIVOT-SEL | `idle`, `bootstrapping`, `handleCLPivotHint`, `startSnapSync`, bootstrap-retry, `calibratePivotTD`/`updateBestBlockForPivot` |
+| PIVOT-REFRESH | `refreshPivotInPlace` + `completePivotRefreshWithStateRoot` |
+| DOWNLOAD | `launchAccountRangeWorkers`, `startAccountRangeSync`, `request*` ticks, `stopStateSyncChildren`, `checkAllDownloadsComplete`, `restartSnapSync`, `currentSyncStatus` |
+| STAGNATION | `scheduleStagnationChecks` + `maybeRestart*` / `maybeForce*` |
+| HEALING | L3915–4250 + `triggerHealing`, the `queueHealedCode` family, `anchorPivotBeforeLazyHandoff` |
+| VALIDATION | `validateState` + `spawn*Validation` |
+| FINALIZE | `completeSnapSync` … `launchChainDownloader`, `completed`, `completedWithBackfill` |
+| PERSIST | `clearStorageDoneMarkers`, `sweepSupersededTaskFiles`, `deserializeSnapProgress` |
+| DORMANT | `recordCriticalFailure`, `enterDormantMode`, `wakeFromDormant`, `dormantRetry` |
+
+This table counts the reset trio as part of DOWNLOAD and DORMANT, which is why 45 items show as shared.
+
+| var (decl line) | modules touching (W=writes) | verdict |
+|---|---|---|
+| lastSnapExclusions (146) | PEER(W) | exclusive: PEER |
+| lastSnapExclusionLogMs (147) | PEER(W) | exclusive: PEER |
+| mptStorage (209) | DORMANT(W), DOWNLOAD(W), HEALING(W), PIVOT-SEL(W) | SHARED(4) |
+| accountRangeCoordinator (260) | DORMANT(W), DOWNLOAD(W), PEER, PIVOT-REFRESH, STAGNATION, SYNCING | SHARED(6) |
+| bytecodeCoordinator (263) | DORMANT(W), DOWNLOAD(W), HEALING(W), PEER, PIVOT-REFRESH, PIVOT-SEL(W), STAGNATION, SYNCING | SHARED(8) |
+| storageRangeCoordinator (265) | DORMANT(W), DOWNLOAD(W), PEER, PIVOT-REFRESH, PIVOT-SEL(W), STAGNATION, SYNCING | SHARED(7) |
+| trieNodeHealingCoordinator (268) | DORMANT(W), DOWNLOAD(W), HEALING(W), PEER, PIVOT-REFRESH, SYNCING | SHARED(6) |
+| chainDownloader (272) | FINALIZE(W), PEER, PIVOT-REFRESH, SYNCING | SHARED(4) |
+| chainDownloadComplete (273) | FINALIZE(W), SYNCING(W) | FINALIZE + syncing-arms |
+| headerHold (276) | FINALIZE(W), SYNCING | FINALIZE + syncing-arms |
+| lastHeaderHoldWarnMs (277) | FINALIZE(W) | exclusive: FINALIZE |
+| holdLastCursor (279) | FINALIZE(W) | exclusive: FINALIZE |
+| holdLastAdvanceMs (280) | FINALIZE(W) | exclusive: FINALIZE |
+| coordinatorGeneration (284) | DORMANT(W), DOWNLOAD(W), FINALIZE(W), HEALING(W), PIVOT-SEL(W) | SHARED(5) |
+| clPivotHint (289) | FINALIZE, HEALING, PIVOT-REFRESH, PIVOT-SEL(W) | SHARED(4) |
+| minPivotHint (293) | PIVOT-SEL(W) | exclusive: PIVOT-SEL |
+| clHintArrivedAtMs (294) | PIVOT-SEL(W) | exclusive: PIVOT-SEL |
+| currentPhase (305) | DORMANT(W), DOWNLOAD(W), FINALIZE(W), HEALING(W), PIVOT-REFRESH, PIVOT-SEL(W), STAGNATION, SYNCING(W) | SHARED(8) |
+| pathPublish (308) | FINALIZE(W), SYNCING(W) | FINALIZE + syncing-arms |
+| pivotBlock (309) | DORMANT(W), DOWNLOAD(W), FINALIZE, HEALING, PERSIST, PIVOT-REFRESH(W), PIVOT-SEL(W), STAGNATION, SYNCING, VALIDATION | SHARED(10) |
+| stateRoot (310) | DORMANT(W), DOWNLOAD(W), FINALIZE(W), HEALING(W), PIVOT-REFRESH(W), PIVOT-SEL(W), STAGNATION, SYNCING(W), VALIDATION | SHARED(9) |
+| preservedRangeProgress (317) | DOWNLOAD(W), PIVOT-REFRESH, SYNCING(W) | SHARED(3) |
+| preservedAtPivotBlock (318) | DOWNLOAD(W), PIVOT-REFRESH(W), SYNCING(W) | SHARED(3) |
+| preservedTaskFiles (322) | DOWNLOAD(W), SYNCING(W) | DOWNLOAD + syncing-arms |
+| launchedAccountGeneration (324) | DOWNLOAD(W), SYNCING | DOWNLOAD + syncing-arms |
+| currentCarrySource (326) | DOWNLOAD(W), SYNCING | DOWNLOAD + syncing-arms |
+| lastSweptForRecord (328) | SYNCING(W) | exclusive: SYNCING |
+| resumedStaleCursors (354) | DOWNLOAD(W) | exclusive: DOWNLOAD |
+| accountsComplete (358) | DORMANT(W), DOWNLOAD(W), PIVOT-SEL(W), SYNCING(W) | SHARED(4) |
+| bytecodePhaseComplete (361) | DORMANT(W), DOWNLOAD(W), PIVOT-SEL(W), STAGNATION, SYNCING(W) | SHARED(5) |
+| storagePhaseComplete (362) | DORMANT(W), DOWNLOAD(W), PIVOT-SEL(W), STAGNATION, SYNCING(W) | SHARED(5) |
+| storagePhaseForceCompleted (363) | DORMANT(W), DOWNLOAD(W), PIVOT-SEL(W), SYNCING(W) | SHARED(4) |
+| awaitingHealedCode (372) | FINALIZE(W), HEALING(W), SYNCING(W) | SHARED(3) |
+| healedCodeWaitExhausted (373) | FINALIZE, HEALING(W), SYNCING(W) | SHARED(3) |
+| bytecodeForceCompleted (375) | FINALIZE, HEALING(W), STAGNATION(W) | SHARED(3) |
+| criticalFailureCount (380) | DORMANT(W), SYNCING(W) | DORMANT + syncing-arms |
+| accountsAtLastCriticalFailure (381) | DORMANT(W), SYNCING(W) | DORMANT + syncing-arms |
+| dormantRetryCount (386) | DORMANT(W), SYNCING(W) | DORMANT + syncing-arms |
+| validationRetryCount (391) | SYNCING(W) | exclusive: SYNCING |
+| validationInProgress (403) | DORMANT(W), DOWNLOAD(W), SYNCING(W), VALIDATION(W) | SHARED(4) |
+| validationGeneration (404) | DORMANT(W), DOWNLOAD(W), PIVOT-REFRESH(W), SYNCING(W), VALIDATION(W) | SHARED(5) |
+| healingValidatedRoot (414) | DORMANT(W), DOWNLOAD(W), HEALING(W), SYNCING(W), VALIDATION(W) | SHARED(5) |
+| bytecodesEstimatedTotal (421) | DORMANT(W), DOWNLOAD(W), SYNCING(W) | SHARED(3) |
+| bootstrapRetryCount (424) | DORMANT(W), PIVOT-SEL(W) | SHARED(2) |
+| lastPivotRestartMs (430) | STAGNATION(W), SYNCING(W) | STAGNATION + syncing-arms |
+| lastProactivePivotBlock (437) | PIVOT-REFRESH(W), SYNCING | PIVOT-REFRESH + syncing-arms |
+| pivotProbeRequestId (453) | DORMANT(W), DOWNLOAD(W), PIVOT-REFRESH(W), SYNCING(W) | SHARED(4) |
+| proactiveRollNeedsProbe (454) | DORMANT(W), DOWNLOAD(W), PIVOT-REFRESH(W), SYNCING(W) | SHARED(4) |
+| pendingProbeCommit (455) | DORMANT(W), DOWNLOAD(W), PIVOT-REFRESH(W), SYNCING(W) | SHARED(4) |
+| lastProbeAttemptMs (456) | DOWNLOAD(W), SYNCING(W) | DOWNLOAD + syncing-arms |
+| probeAttemptCount (458) | DORMANT(W), DOWNLOAD(W), SYNCING(W) | SHARED(3) |
+| consecutivePivotRefreshes (468) | DORMANT(W), PIVOT-REFRESH(W), SYNCING(W) | SHARED(3) |
+| pendingPivotRefresh (481) | DORMANT(W), DOWNLOAD(W), HEALING, PIVOT-REFRESH(W), SYNCING(W) | SHARED(5) |
+| pendingDisconnectedPeers (486) | PEER(W) | exclusive: PEER |
+| storageStagnationRefreshAttempted (488) | STAGNATION(W), SYNCING(W) | STAGNATION + syncing-arms |
+| forceCompleteStorageSent (493) | DORMANT(W), DOWNLOAD(W), PIVOT-SEL(W), STAGNATION(W) | SHARED(4) |
+| trieWalkInProgress (494) | HEALING(W), SYNCING(W) | HEALING + syncing-arms |
+| healingRoundCount (495) | HEALING(W), SYNCING(W) | HEALING + syncing-arms |
+| healingServeRootRequestInFlight (501) | DOWNLOAD(W), HEALING(W), SYNCING(W) | SHARED(3) |
+| lastHealingServeRootBlock (505) | DOWNLOAD(W), HEALING(W), SYNCING(W) | SHARED(3) |
+| healRepegNoRootAttempts (516) | HEALING(W), PIVOT-REFRESH(W) | SHARED(2) |
+| retryRefreshCounts (520) | PIVOT-REFRESH(W), SYNCING(W) | PIVOT-REFRESH + syncing-arms |
+| snapPeerEvictionStarted (528) | PEER(W) | exclusive: PEER |
+| snapServerPeersSchedulerStarted (531) | PEER(W) | exclusive: PEER |
+| fruitlessEvictionCycles (536) | PEER(W) | exclusive: PEER |
+| lastEvictionSnapCount (537) | PEER(W) | exclusive: PEER |
+| bestEth68PeerForCalibration (545) | PEER(W), PIVOT-SEL | SHARED(2) |
+| storageTailBaseline (674) | PIVOT-SEL(W), STAGNATION(W), SYNCING(W) | SHARED(3) |
+| lastStorageProgressMs (677) | PIVOT-SEL(W), STAGNATION(W), SYNCING(W) | SHARED(3) |
+| lastBytecodeProgressMs (678) | STAGNATION(W), SYNCING(W) | STAGNATION + syncing-arms |
+| lastBytecodeProgressCount (679) | STAGNATION(W), SYNCING(W) | STAGNATION + syncing-arms |
+| lastAccountProgressMs (680) | DOWNLOAD(W), PIVOT-REFRESH(W), STAGNATION(W), SYNCING(W) | SHARED(4) |
+| lastAccountTasksCompleted (681) | DOWNLOAD(W), STAGNATION(W) | SHARED(2) |
+| lastAccountsDownloaded (682) | DOWNLOAD(W), STAGNATION(W) | SHARED(2) |
+| storageContractProgressPct (685) | SYNCING(W) | exclusive: SYNCING |
+| consecutiveAccountStallRefreshes (5038) | STAGNATION(W) | exclusive: STAGNATION |
+| requestTracker (303) | DORMANT(W), DOWNLOAD(W), HEALING(W), PEER, PIVOT-REFRESH, PIVOT-SEL(W), SYNCING | SHARED(7) |
+| healedCodeHashes (371) | FINALIZE, HEALING(W), SYNCING | SHARED(3) |
+| progressMonitor (377) | DORMANT, DOWNLOAD, FINALIZE(W), HEALING, PEER, PIVOT-SEL, SYNCING(W) | SHARED(7) |
+| failedPivotBlocks (476) | PIVOT-REFRESH, SYNCING(W) | PIVOT-REFRESH + syncing-arms |
+| healingWalkLocalOnly (504) | DORMANT(W), DOWNLOAD(W), HEALING | SHARED(3) |
+| snapServerPeerLastConnectAttemptMs (525) | PEER(W) | exclusive: PEER |
+
+**[016] Note on `calibratePivotTD`.** The cluster mapping above (copied from the report) counts it under
+PIVOT-SEL, which is why `bestEth68PeerForCalibration` shows as `SHARED(2)`. Spec 016 assigns `calibratePivotTD` to
+the Peer pool (M3) instead, because the only state it touches is `bestEth68PeerForCalibration`, and that var is
+PEER-owned. Under the spec's module map the var is therefore **exclusive to M3**. R14 uses the spec's assignment.
+
+**Exclusive to one module (18)**:
+- PEER (8): `lastSnapExclusions`, `lastSnapExclusionLogMs`, `pendingDisconnectedPeers`, `snapPeerEvictionStarted`,
+  `snapServerPeersSchedulerStarted`, `fruitlessEvictionCycles`, `lastEvictionSnapCount`,
+  `snapServerPeerLastConnectAttemptMs`.
+- FINALIZE (3): `lastHeaderHoldWarnMs`, `holdLastCursor`, `holdLastAdvanceMs`.
+- PIVOT-SEL (2): `minPivotHint`, `clHintArrivedAtMs`.
+- DOWNLOAD (1): `resumedStaleCursors`.
+- STAGNATION (1): `consecutiveAccountStallRefreshes`.
+- `syncing` arms only (3): `lastSweptForRecord`, `validationRetryCount`, `storageContractProgressPct`.
+
+**One module plus `syncing` arms (19)**:
+- FINALIZE: `chainDownloadComplete`, `headerHold`, `pathPublish`.
+- DOWNLOAD: `preservedTaskFiles`, `launchedAccountGeneration`, `currentCarrySource`, `lastProbeAttemptMs`.
+- DORMANT: `criticalFailureCount`, `accountsAtLastCriticalFailure`, `dormantRetryCount`.
+- STAGNATION: `lastPivotRestartMs`, `storageStagnationRefreshAttempted`, `lastBytecodeProgressMs`,
+  `lastBytecodeProgressCount`.
+- PIVOT-REFRESH: `lastProactivePivotBlock`, `retryRefreshCounts`, `failedPivotBlocks`.
+- HEALING: `trieWalkInProgress`, `healingRoundCount`.
+
+**How the state is handed between modules.** The behaviour methods are cheap to separate, because their private state
+is clean. The state hand-off happens in three places:
+
+1. The reset trio.
+2. `syncing` arms that mutate cross-module state inline (44 writes).
+3. Pivot refresh. It resets the stagnation clocks (`lastAccountProgressMs`, `healRepegNoRootAttempts`,
+   `retryRefreshCounts`), the validation generation, `preserved*`, `pendingPivotRefresh` and the probe state. It also
+   messages all four coordinators and the ChainDownloader.
+
+### R3a. [016] Write sets of the reset paths (input to slice P2)
+
+The table lists every item written by at least one reset path, derived from the R3 writer lists. "W" means the method
+assigns the item somewhere in its body. Some of those writes reset to an initial value; others set a new value (for
+example `pivotBlock` in `wakeFromDormant`). P2 starts by classifying each W as **reset** or **set**, and only the
+**reset** writes go into `PhaseFlags.reset(kind)`.
+
+| item | startSnapSync | restartSnapSync | wakeFromDormant | enterDormantMode | stopStateSyncChildren | completePivotRefresh… | launchAccountRangeWorkers |
+|---|---|---|---|---|---|---|---|
+| mptStorage | W | W | W |  |  |  | W |
+| accountRangeCoordinator |  | W |  | W | W |  | W |
+| bytecodeCoordinator | W | W |  | W | W |  | W |
+| storageRangeCoordinator | W | W |  | W | W |  | W |
+| trieNodeHealingCoordinator |  | W |  | W | W |  |  |
+| coordinatorGeneration | W | W | W |  |  |  |  |
+| clHintArrivedAtMs | W |  |  |  |  |  |  |
+| currentPhase | W | W | W | W |  |  |  |
+| pivotBlock | W | W | W |  |  | W |  |
+| stateRoot | W | W | W |  |  | W | W |
+| accountsComplete | W | W | W |  |  |  |  |
+| bytecodePhaseComplete | W | W | W |  |  |  |  |
+| storagePhaseComplete | W | W | W |  |  |  |  |
+| storagePhaseForceCompleted | W | W | W |  |  |  |  |
+| criticalFailureCount |  |  | W |  |  |  |  |
+| dormantRetryCount |  |  |  | W |  |  |  |
+| validationInProgress |  | W | W |  |  |  |  |
+| validationGeneration |  | W | W |  |  | W |  |
+| healingValidatedRoot |  | W | W |  |  |  |  |
+| bytecodesEstimatedTotal |  | W | W |  |  |  |  |
+| bootstrapRetryCount | W |  | W |  |  |  |  |
+| pivotProbeRequestId |  | W |  | W |  | W |  |
+| proactiveRollNeedsProbe |  | W |  | W |  | W |  |
+| pendingProbeCommit |  | W |  | W |  | W |  |
+| lastProbeAttemptMs |  | W |  |  |  |  |  |
+| probeAttemptCount |  | W |  | W |  |  |  |
+| consecutivePivotRefreshes |  |  | W |  |  | W |  |
+| pendingPivotRefresh |  | W |  | W |  |  |  |
+| forceCompleteStorageSent | W | W | W |  | W |  | W |
+| healingServeRootRequestInFlight |  | W |  |  |  |  |  |
+| lastHealingServeRootBlock |  | W |  |  |  |  |  |
+| storageTailBaseline | W |  |  |  |  |  |  |
+| lastStorageProgressMs | W |  |  |  |  |  |  |
+| requestTracker | W | W |  | W |  |  | W |
+| healingWalkLocalOnly |  | W |  | W | W |  |  |
+
+**The paths do not reset the same sets.** For example:
+- `wakeFromDormant` does not touch the probe state or `pendingPivotRefresh`; `enterDormantMode` and `restartSnapSync`
+  do.
+- Only `restartSnapSync` clears `lastHealingServeRootBlock` and `healingServeRootRequestInFlight`.
+- `enterDormantMode` leaves the phase-complete flags alone.
+
+Some of these differences may be bugs, but **this spec preserves them**. The three that look most like bugs are
+logged as CHASE-QUEUE CQ-SNAP-016-2…4. `reset(kind)` takes a per-kind field set
+equal to today's. Any difference a reviewer thinks is a bug goes into CHASE-QUEUE as a follow-up and is not fixed in
+P2 (FR-012).
+
+The timer cancel lists are hand-copied in three places: `stopSnapOnlySchedules` L759–770 (12 cancels),
+`enterDormantMode` L3347–3356 and `restartSnapSync` L4887–4894. They differ in length (8 to 12 keys), and P2 must keep
+each list exactly as it is.
+
+### R3b. [016] T032: each R3a write classified as reset or set (input to P2's `reset(kind)`)
+
+Read site by site on staging `150e47447` (post-P1), not regex-derived. Codes:
+
+- **R**: reset to the declared initial value (`false`, `0`, `None`, `Idle`, an empty collection, `clear()`).
+- **R\***: a reset that is conditional, or paired with one spawn. It stays inline: it is not a reset of the whole kind.
+- **S**: set to a computed or new value (`true`, a value read from disk, `Dormant`, `now`, a new pivot).
+- **B**: a generation or counter bump (`+= 1`). It is a set, not a reset.
+- **A**: not a write. R3a's regex matched a named spawn argument (`stateRoot = …`, `requestTracker = …`,
+  `mptStorage = …`).
+- **L**: not a write. R3a's regex matched a log interpolation.
+
+| item | startSnapSync | restartSnapSync | wakeFromDormant | enterDormantMode | stopStateSyncChildren | completePivotRefresh… | launchAccountRangeWorkers |
+|---|---|---|---|---|---|---|---|
+| mptStorage | S (`getOrCreateMptStorage`) | R | R |  |  |  | S (`getOrCreateMptStorage`) |
+| accountRangeCoordinator |  | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| bytecodeCoordinator | S (recovery spawn) | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| storageRangeCoordinator | S (recovery spawn) | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  | S (spawn) |
+| trieNodeHealingCoordinator |  | R (`stopAll()`) |  | R (`stopAll()`) | R (`stopAll()`) |  |  |
+| coordinatorGeneration | B | B | B |  |  |  | (read only) |
+| clHintArrivedAtMs | S (first CL wait); R\* (`= None` on the cl-wait-timeout fall-through) |  |  |  |  |  |  |
+| currentPhase | S | R (`Idle`) | R (`Idle`) | S (`Dormant`) |  |  |  |
+| pivotBlock | S | R | R |  |  | S |  |
+| stateRoot | S; A | R | R |  |  | S | A |
+| **accountsComplete** | S (`true`, two recovery branches) | R | R |  |  |  |  |
+| **bytecodePhaseComplete** | S (`true` / from disk) | R | R |  |  |  |  |
+| **storagePhaseComplete** | S (`true` / from disk) | R | R |  |  |  |  |
+| **storagePhaseForceCompleted** | **R** (fresh-pivot recovery branch, unconditional there) | R | R |  |  |  |  |
+| criticalFailureCount |  |  | L |  |  |  |  |
+| dormantRetryCount |  |  |  | B |  |  |  |
+| validationInProgress |  | R | R |  |  |  |  |
+| validationGeneration |  | B | B |  |  | B |  |
+| healingValidatedRoot |  | R | R |  |  |  |  |
+| bytecodesEstimatedTotal |  | R | R |  |  |  |  |
+| bootstrapRetryCount | B (each retry); R\* (`= 0` on bootstrap success) |  | R |  |  |  |  |
+| pivotProbeRequestId |  | R |  | R |  | S |  |
+| proactiveRollNeedsProbe |  | R |  | R |  | R\* (consumed by the probe branch) |  |
+| pendingProbeCommit |  | R |  | R |  | S |  |
+| lastProbeAttemptMs |  | R |  |  |  |  |  |
+| probeAttemptCount |  | R |  | R |  |  |  |
+| consecutivePivotRefreshes |  |  | R |  |  | S (`= MaxConsecutivePivotRefreshes`) |  |
+| pendingPivotRefresh |  | R |  | R |  |  |  |
+| **forceCompleteStorageSent** | R\* (with the recovery storage spawn) | R | R |  | R | | R\* (with the storage spawn) |
+| healingServeRootRequestInFlight |  | R |  |  |  |  |  |
+| lastHealingServeRootBlock |  | R |  |  |  |  |  |
+| storageTailBaseline | S (fresh baseline at `now`) |  |  |  |  |  |  |
+| lastStorageProgressMs | S (`now`) |  |  |  |  |  |  |
+| requestTracker | A | R (`clear()`) |  | R (`clear()`) |  |  | A |
+| healingWalkLocalOnly |  | R |  | R | R |  |  |
+| **awaitingHealedCode** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **healedCodeWaitExhausted** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **bytecodeForceCompleted** (not in R3a) |  | R (`resetHealedCodeHold()`) | R (`resetHealedCodeHold()`) |  |  |  |  |
+| **resumedStaleCursors** (not in R3a) |  |  |  |  |  |  | S (`true` when a resume is non-empty) |
+
+Bold rows are the nine `PhaseFlags` (FR-011). R3a missed four of them because their writes sit in
+`resetHealedCodeHold()` (three) or in `launchAccountRangeWorkers` behind an `if` (`resumedStaleCursors`).
+
+**Corrections to R3a.** `criticalFailureCount` in `wakeFromDormant` is read in a log line, not written.
+`requestTracker`, `stateRoot` and `mptStorage` in `startSnapSync` and `launchAccountRangeWorkers` are named spawn
+arguments (the `mptStorage` var is set through `getOrCreateMptStorage`).
+
+**What `PhaseFlags.reset(kind)` takes (P2).** P2 replaces only the R writes of the nine flags. Every other R stays
+inline at its site until the module that owns it moves (probe and refresh state with M9/M10, validation with M2,
+the stagnation clocks with M7, spec FR-011). The per-kind sets:
+
+| kind | site | flags cleared by `reset(kind)` | flags cleared at the site but outside `reset(kind)` |
+|---|---|---|---|
+| `Start` | `startSnapSync`, fresh-pivot recovery branch | `storagePhaseForceCompleted` | `forceCompleteStorageSent` (R\*: only when the recovery spawns a storage coordinator) |
+| `Restart` | `restartSnapSync` | `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `forceCompleteStorageSent` | `awaitingHealedCode`, `healedCodeWaitExhausted`, `bytecodeForceCompleted` (in `resetHealedCodeHold()`, together with `healedCodeHashes.clear()` and the `HealedCodeWaitTimerKey` cancel) |
+| `Wake` | `wakeFromDormant` | the same five as `Restart` | the same three as `Restart`, through `resetHealedCodeHold()` |
+| `Dormant` | `enterDormantMode` | none | none: dormancy leaves every phase flag alone |
+
+`resumedStaleCursors` is in no reset set: once set, it stays `true` for the life of the controller (CHASE-QUEUE
+CQ-SNAP-016-11). `resetHealedCodeHold()` keeps its three flag writes so that P2 reorders nothing; the healed-code hold
+moves as a unit with M6.
+
+## R4. Command × behaviour matrix
+
+The six behaviours are `idle`, `syncing`, `bootstrapping`, `completed`, `dormantRetry` and `completedWithBackfill`.
+The cell values mean:
+
+| Mark | Meaning |
+|---|---|
+| H | handled (real work) |
+| D | explicit stale-drop (log and ignore) |
+| `*` | guarded, e.g. `if currentPhase == …`, `if pendingPivotRefresh.isDefined`, `if !storagePhaseComplete`, generation mismatch |
+| `-` | falls to the catch-all |
+
+The catch-all policy differs per behaviour:
+- `idle` has about 45 explicit drop arms and **no** catch-all.
+- `syncing` and `bootstrapping` log "Unhandled message in … state".
+- `completed`, `dormantRetry` and `completedWithBackfill` drop the message silently.
+
+The table covers 76 distinct command names: the 63-case ADT plus the Progress*, Backpressure and chain-downloader
+commands imported from Messages.scala.
+
+| Command | idle | syncing | bootstrapping | completed | dormantRetry | completedWithBackfill |
+|---|---|---|---|---|---|---|
+| AccountCoordinatorProgress | D | H* | - | - | - | - |
+| AccountRangeProgressCmd | D | H | - | - | - | - |
+| AccountRangeResponse | D | H | - | - | - | - |
+| AccountRangeSyncComplete | H | H | - | - | - | - |
+| AccountTrieFinalizationFailed | H | H | - | - | - | - |
+| AccountTrieFinalized | D | H | - | - | - | - |
+| BootstrapComplete | H | H* | H | - | - | - |
+| ByteCodeBackpressureChanged | D | H | - | - | - | - |
+| ByteCodeCoordinatorProgress | D | H* | - | - | - | - |
+| ByteCodeSyncComplete | H | H*+H* | - | - | - | - |
+| ByteCodesResponse | D | H | - | - | - | - |
+| CLPivotHint | H | H | H | - | H | - |
+| ChainDownloaderDone | D | H | - | - | - | H |
+| ChainDownloaderProgress | D | H | - | - | - | H |
+| CheckDownloadStagnation | D | H | - | - | - | - |
+| CheckSnapCapability | D | H | - | - | - | - |
+| DelayedRestart | D | H | - | - | - | - |
+| DormantWakeUp | D | - | - | - | H | - |
+| EnsureSnapServerPeersConnected | D | H | - | - | - | - |
+| EvictNonSnapPeers | D | H | H | - | - | - |
+| FlushPeerDisconnects | H | H | H | - | H | - |
+| GetProgress | H | H | H | H | H | H |
+| GetStatus | H | H | H | H | H | H |
+| HeaderHoldTick | - | H | - | - | - | - |
+| HealedCodeHashes | D | H | - | - | - | - |
+| HealedCodeWaitTimeout | D | H* | - | - | - | - |
+| HealingAllPeersStateless | D | H* | - | - | - | - |
+| HealingRootUnservable | D | H* | - | - | - | - |
+| HealingServeRoot | D | H | - | - | - | - |
+| HealingStagnated | D | H* | - | - | - | - |
+| IncrementalContractData | D | H | - | - | - | - |
+| MinPivotBlock | H | - | - | - | - | - |
+| PathPublishDone | - | H | - | - | - | - |
+| PathPublishFailed | - | H | - | - | - | - |
+| PathPublishProgress | - | H | - | - | - | - |
+| PivotBootstrapFailed | H | H* | H | - | - | - |
+| PivotProbeTimeout | D | H | - | - | - | - |
+| PivotStateUnservable | D | H | - | - | - | - |
+| PollHandshakedPeers | H | H | H | - | H | - |
+| ProgressAccountEstimate | D | H | - | - | - | - |
+| ProgressAccountsFinalizingTrie | D | H | - | - | - | - |
+| ProgressAccountsSynced | D | H | - | - | - | - |
+| ProgressAccountsTrieFinalized | D | H | - | - | - | - |
+| ProgressBytecodesDownloaded | D | H | - | - | - | - |
+| ProgressNodesHealed | D | H | - | - | - | - |
+| ProgressStorageContracts | D | H | - | - | - | - |
+| ProgressStorageSlotsSynced | D | H | - | - | - | - |
+| RequestAccountRanges | D | H | - | - | - | - |
+| RequestByteCodes | D | H | - | - | - | - |
+| RequestStorageRanges | D | H | - | - | - | - |
+| RequestTrieNodeHealing | D | H | - | - | - | - |
+| RetryBootstrapAtBlock | D | H | - | - | - | - |
+| RetryPivotRefresh | D | H | - | - | - | - |
+| RetrySnapSyncStart | D | - | H | - | - | - |
+| ScheduledTrieWalk | D | H* | - | - | - | - |
+| Start | H | - | - | - | - | - |
+| StateHealingAbandoned | D | H* | - | - | - | - |
+| StateHealingComplete | H | H | - | - | - | - |
+| StateValidationComplete | H | H | - | - | - | - |
+| StorageBackpressureChanged | D | H | - | - | - | - |
+| StorageCoordinatorProgress | D | H* | - | - | - | - |
+| StorageRangeSyncComplete | H | H* | - | - | - | - |
+| StorageRangeSyncForceCompleted | H | H* | - | - | - | - |
+| StorageRangesResponse | D | H | - | - | - | - |
+| TrieNodesResponse | D | H | - | - | - | - |
+| TrieWalkBatch | D | H* | - | - | - | - |
+| TrieWalkComplete | D | H* | - | - | - | - |
+| TrieWalkFailed | D | H* | - | - | - | - |
+| TrieWalkResult | D | H* | - | - | - | - |
+| TuneRateTracker | D | H | - | - | - | - |
+| ValidateAccountTrieResult | D | D*+H*+H* | - | - | - | - |
+| ValidateStorageTriesResult | D | D*+H*+H* | - | - | - | - |
+| ValidationRetry | D | D*+H* | - | - | - | - |
+| WrappedHandshakedPeers | H | H | H | - | H | - |
+| WrappedPeerDisconnected | H | H | H | - | H | - |
+
+**Duplicated handlers (candidates for one shared `commonArms` partial function)**
+* Peer-event quartet (`WrappedHandshakedPeers`->`handleHandshakedPeersRateTracking`, `WrappedPeerDisconnected`->`handlePeerDisconnectedDebounced`, `FlushPeerDisconnects`->`flushPeerDisconnects`, `PollHandshakedPeers`->`pollHandshakedPeers`): idle L802–809, syncing L979–986, bootstrapping L2273–2280 (Poll arm is longer, reactivity), dormantRetry L3420–3427. Four copies.
+* `GetProgress`: identical in all 6 behaviours (L828, 2091, 2463, 2541, 3453, 5581). `GetStatus`: 6 copies, 4 distinct bodies (NotSyncing / currentSyncStatus / bootstrapping variant / SyncDone x2 / Syncing(pivot,pivot) in dormant).
+* `CLPivotHint -> handleCLPivotHint(hint, isStarting = false)`: idle L824, syncing L987, bootstrapping L2282, dormantRetry L3438 (four identical calls; `isStarting` is never true).
+* **[016] P3 correction** (read on `staging@87a6b1319` while building T035): in `bootstrapping` the variant arm is `WrappedHandshakedPeers` (`handleHandshakedPeersBootstrapReactivity`), not `PollHandshakedPeers`, whose arm is identical to the other copies. `GetProgress` is identical in 5 of the 6 behaviours, not 6: `bootstrapping` builds a bootstrap `SyncProgress` (phase `Idle`, block-based `phaseProgress`) and logs `Bootstrap progress`. Both bootstrapping arms stay inline ahead of `peerEventArms`.
+* `EvictNonSnapPeers`: syncing L1001, bootstrapping L2522. `ChainDownloaderProgress`/`ChainDownloaderDone`: syncing L2078/2082 and completedWithBackfill L5565/5569 (two different Done semantics: syncing->finalize path vs backfill->`Done`+`completed()`).
+* `BootstrapComplete`/`PivotBootstrapFailed`: three different implementations — idle (warn+drop L833/836), bootstrapping (initial pivot, L2290/2509), syncing (refresh, L1396/1412, guarded by `pendingPivotRefresh.isDefined`).
+* Gaps: `MinPivotBlock` is handled ONLY in idle (L811) — dropped silently in syncing/bootstrapping/dormant (relevant to #1434 because `belowEscalationHint` reads `minPivotHint`, L2610). `Start` only in idle; `RetrySnapSyncStart` only in bootstrapping; `DormantWakeUp` only in dormantRetry. `completed` (L2534) ignores everything but status/progress and `PostStop`.
+* Stale-generation guards duplicated in syncing for validation (L1871–1883) and coordinators (`AccountRangeProgressCmd.generation`, L1175).
+
+### R4b. [016] T036: `syncing` arm order (input to P4a–e)
+
+Read on `staging@89a3b46b7` (after P3), before P4a. `syncing` has **75 arms**. Arms are numbered in source order
+(`#`), with the staging line, the pattern, the dispatch guard (the `if` in the `case`), and any `currentPhase` test
+inside the body. P4 moves only **dispatch** guards; a body-level test leaves the arm "Handled" in every phase, so it
+is not a dispatch decision.
+
+**The invariant each P4 slice proves.** For every Command and every value of `currentPhase`, the first arm that
+matches after the slice is the same arm as before. Order matters only between arms that can match the same message:
+the type-pattern arms of that Command, the two guarded wildcards (#4, #6), the `peerEventArms` delegation (#7) and the
+catch-all (#75).
+
+**Dispatch after P4a** (`SNAPSyncController.syncing`):
+
+1. `syncingGuardArms`: arms #1–#7, verbatim and in order (a local `val` in `syncing`).
+2. `phaseArms(currentPhase)`: one partial function per phase (class members). After P4a only `accountRangeArms`
+   exists; every other phase maps to `PartialFunction.empty`. **P4b** adds `byteCodeAndStorageArms` for
+   `ByteCodeAndStorageSync`: #70 `StorageCoordinatorProgress` and #71 `ByteCodeCoordinatorProgress`, in that order,
+   guards dropped, bodies unchanged. **P4c** adds `stateHealingArms` for `StateHealing`: #49, #50 and #52–#58, in
+   that order, guards dropped, bodies and comments unchanged. #51 `StateHealingComplete` (body-level test) stays in
+   common, between the two placeholder comments. **P4d** adds `stateValidationArms` for `StateValidation`:
+   `staleValidationDropArms` (#60–#62 verbatim, generation guards kept) **then** `stateValidationResultArms` (#63–#67,
+   phase guards dropped). Because #60–#62 have no phase guard, `commonSyncingArms` also keeps a delegation arm
+   (`case msg if staleValidationDropArms.isDefinedAt(msg)`) where #60–#62 stood, so the drops still run in every
+   other phase (note 1). **P4e** adds `chainDownloadCompletionArms` for `ChainDownloadCompletion`: an empty
+   function (note 3); `Idle`, `Completed` and `Dormant` keep the `PartialFunction.empty` default. P4e moves no arm:
+   it keeps the nine body-level arms in common, each with a reason in the "Planned" column (note 2). After P4e no
+   `syncing` arm carries a `currentPhase` dispatch guard. The "After P4a" column is not edited; the "Planned" column
+   marks each slice's arms done.
+3. `commonSyncingArms`: every other arm, in its original order (a local `val` in `syncing`); since P4d, #60–#62 are
+   reached there through the `staleValidationDropArms` delegation.
+4. The catch-all `unhandledInSyncing` ("Unhandled message in syncing state: $msg", DEBUG), unchanged text.
+
+The prefix (step 1) is needed because #4 and #6 match any message while a path publish or a header hold is active.
+A phase arm placed ahead of them would take messages the guards drop today. D3's formula
+`phaseArms orElse commonSyncingArms orElse catchAll` is therefore read as "guard arms, then phase arms, then common
+arms, then catch-all".
+
+| # | Line | Pattern | Dispatch guard | Body-level phase test | After P4a | Planned |
+|---|---|---|---|---|---|---|
+| 1 | L1056 | `PathPublishProgress` | — | — | guard arms | guard arms |
+| 2 | L1059 | `PathPublishDone` | — | — | guard arms | guard arms |
+| 3 | L1061 | `PathPublishFailed` | — | — | guard arms | guard arms |
+| 4 | L1066 | `msg` (any) | `pathPublish.isDefined`, not `GetStatus`/`GetProgress` | — | guard arms | guard arms |
+| 5 | L1069 | `HeaderHoldTick` | — | — | guard arms | guard arms |
+| 6 | L1073 | `msg` (any) | `headerHold.isDefined`, not `GetStatus`/`GetProgress`/`ChainDownloaderProgress`/`ChainDownloaderDone` | — | guard arms | guard arms |
+| 7 | L1082 | `msg` (delegation: `WrappedHandshakedPeers`, `WrappedPeerDisconnected`, `FlushPeerDisconnects`, `PollHandshakedPeers`, `CLPivotHint`, `GetProgress`) | `peerEventArms.isDefinedAt(msg)` | — | guard arms | guard arms |
+| 8 | L1086 | `TuneRateTracker` | — | — | common | common |
+| 9 | L1091 | `EvictNonSnapPeers` | — | — | common | common |
+| 10 | L1096 | `DelayedRestart` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` → restart, else same | common | common (body-level; **P4e: keep**: M9 moves the Command whole; lifting splits it over 3 PFs) |
+| 11 | L1101 | `CheckSnapCapability` | — | — | common | common |
+| 12 | L1115 | `RequestAccountRanges` | — | — | common | common |
+| 13 | L1119 | `RequestByteCodes` | — | — | common | common |
+| 14 | L1123 | `RequestStorageRanges` | — | — | common | common |
+| 15 | L1127 | `RequestTrieNodeHealing` | — | `StateHealing` → request + serve-root check | common | common (body-level; **P4e: keep**: needs a no-op arm in common + an unnamed oracle test; M6b moves it with the healing arms) |
+| 16 | L1146 | `HealingServeRoot` | — | — | common | common |
+| 17 | L1175 | `EnsureSnapServerPeersConnected` | — | — | common | common |
+| 18 | L1180 | `AccountRangeResponse` | — | — | common | common |
+| 19 | L1223 | `ByteCodesResponse` | — | — | common | common |
+| 20 | L1230 | `StorageRangesResponse` | — | — | common | common |
+| 21 | L1237 | `TrieNodesResponse` | — | `!= StateValidation` → forward | common | common (body-level; **P4e: keep**: the debug log runs before the test; T027 cannot tell drop from forward) |
+| 22 | L1247 | `ProgressAccountsSynced` | — | — | common | common |
+| 23 | L1264 | `AccountRangeProgressCmd` | — | — | common | common |
+| 24 | L1320 | `ProgressAccountsFinalizingTrie` | — | — | common | common |
+| 25 | L1327 | `AccountTrieFinalized` | — | — | common | common |
+| 26 | L1338 | `ProgressAccountsTrieFinalized` | — | — | common | common |
+| 27 | L1343 | `AccountTrieFinalizationFailed` | — | — | common | common |
+| 28 | L1351 | `ProgressBytecodesDownloaded` | — | — | common | common |
+| 29 | L1356 | `ProgressStorageSlotsSynced` | — | — | common | common |
+| 30 | L1366 | `ProgressNodesHealed` | — | — | common | common |
+| 31 | L1370 | `ProgressAccountEstimate` | — | — | common | common |
+| 32 | L1374 | `ProgressStorageContracts` | — | — | common | common |
+| 33 | L1383 | `StorageBackpressureChanged` | — | — | common | common |
+| 34 | L1389 | `ByteCodeBackpressureChanged` | — | — | common | common |
+| 35 | L1396 | `PivotStateUnservable` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync` (twice, interleaved with the debounce and cause tests), else log | common | common (body-level; **P4e: keep**: the test is interleaved with the debounce and cause tests) |
+| 36 | L1482 | `BootstrapComplete` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
+| 37 | L1498 | `PivotBootstrapFailed` | `pendingPivotRefresh.isDefined` (flag) | — | common | common |
+| 38 | L1518 | `PivotProbeTimeout` | — | — | common | common |
+| 39 | L1542 | `RetryPivotRefresh` | — | `AccountRangeSync \|\| ByteCodeAndStorageSync \|\| StateHealing` → refresh, else log | common | common (body-level; **P4e: keep**: one body in three phase PFs; M10 moves it whole) |
+| 40 | L1555 | `RetryBootstrapAtBlock` | — | same three phases → bootstrap, else log | common | common (body-level; **P4e: keep**: one body in three phase PFs; M10 moves it whole) |
+| 41 | L1572 | `IncrementalContractData` | — | — | common | common |
+| 42 | L1604 | `AccountRangeSyncComplete` | — | — (writes `currentPhase`) | common | common |
+| 43 | L1694 | `HealedCodeHashes` | — | — | common | common |
+| 44 | L1700 | `ByteCodeSyncComplete` | `bytecodePhaseComplete && awaitingHealedCode` (flag) | — | common | common |
+| 45 | L1708 | `HealedCodeWaitTimeout` | `awaitingHealedCode` (flag) | — | common | common |
+| 46 | L1719 | `ByteCodeSyncComplete` | `!bytecodePhaseComplete` (flag) | — | common | common |
+| 47 | L1739 | `StorageRangeSyncComplete` | `!storagePhaseComplete` (flag) | — | common | common |
+| 48 | L1750 | `StorageRangeSyncForceCompleted` | `!storagePhaseComplete` (flag) | `ByteCodeAndStorageSync \|\| StateHealing` → force-complete, else warn | common | common (body-level; **P4e: keep**: flag guard + two-phase test; lifting copies the guard into three PFs) |
+| 49 | L1767 | `HealingAllPeersStateless` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 50 | L1792 | `HealingStagnated` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 51 | L1810 | `StateHealingComplete` | — | `StateHealing` (Path scheme only) | common | common (body-level, Path scheme only; **P4e: keep**: the test is scheme-dependent and runs after shared lines) |
+| 52 | L1848 | `StateHealingAbandoned` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 53 | L1857 | `HealingRootUnservable` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 54 | L1880 | `TrieWalkBatch` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 55 | L1889 | `TrieWalkComplete` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c, done) |
+| 56 | L1916 | `TrieWalkResult` | `currentPhase == StateHealing` | — (writes `currentPhase`) | common | `stateHealingArms` (P4c, done) |
+| 57 | L1945 | `ScheduledTrieWalk` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 58 | L1949 | `TrieWalkFailed` | `currentPhase == StateHealing` | — | common | `stateHealingArms` (P4c, done) |
+| 59 | L1956 | `StateValidationComplete` | — | — | common | common |
+| 60 | L1965 | `ValidateAccountTrieResult` | `gen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 61 | L1969 | `ValidateStorageTriesResult` | `gen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 62 | L1973 | `ValidationRetry` | `retryGen != validationGeneration` (generation) | — | common | `staleValidationDropArms`: first in `stateValidationArms` and delegated from common (P4d, done; note 1) |
+| 63 | L1980 | `ValidateAccountTrieResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
+| 64 | L1995 | `ValidateAccountTrieResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d, done) |
+| 65 | L2033 | `ValidateStorageTriesResult(_, Right, _)` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
+| 66 | L2047 | `ValidateStorageTriesResult(_, Left, _)` | `currentPhase == StateValidation` | — (writes `currentPhase`) | common | `stateValidationArms` (P4d, done) |
+| 67 | L2055 | `ValidationRetry` | `currentPhase == StateValidation` | — | common | `stateValidationArms` (P4d, done) |
+| 68 | L2062 | `CheckDownloadStagnation` | — | three tests plus a `currentPhase match` choosing which coordinators to ask | common | common (body-level; **P4e: keep**: three tests + a `match`, interleaved; body oracle is T021; M7 moves it whole) |
+| 69 | L2149 | `AccountCoordinatorProgress` | `currentPhase == AccountRangeSync` | — | **`accountRangeArms`** | `accountRangeArms` (P4a, done) |
+| 70 | L2154 | `StorageCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
+| 71 | L2163 | `ByteCodeCoordinatorProgress` | `currentPhase == ByteCodeAndStorageSync` | — | common | `byteCodeAndStorageArms` (P4b, done) |
+| 72 | L2172 | `ChainDownloaderProgress` | — | — | common | common |
+| 73 | L2176 | `ChainDownloaderDone` | — | — | common | common |
+| 74 | L2181 | `GetStatus` | — | — | common | common |
+| 75 | L2185 | `msg` (catch-all) | — | — | `unhandledInSyncing` | `unhandledInSyncing` |
+
+**Commands with more than one arm** (the cases where order inside a Command matters): `ByteCodeSyncComplete` (#44
+then #46, flag guards, both common), `ValidateAccountTrieResult` (#60, #63, #64), `ValidateStorageTriesResult` (#61,
+#65, #66), `ValidationRetry` (#62, #67). Every Command can also be taken by #4 or #6 (except the ones they exempt) and
+by #75. The six `peerEventArms` types have no arm outside #7.
+
+**Notes for the later slices.**
+
+1. **P4d: the generation drops come first.** #60–#62 are unguarded by phase and sit **before** the
+   `StateValidation` arms #63–#67. With phase arms ahead of common arms, a stale-generation result in
+   `StateValidation` would reach #63/#64 instead of being dropped. P4d must place #60–#62 ahead of
+   `stateValidationArms`: either at the end of the guard arms, or first inside `stateValidationArms` **and** still in
+   common for the other phases. T027's "(stale gen)" samples in the `StateValidation` column are the oracle.
+   *P4d correction:* T027 records both #60 and #63 as `Handled`, so its `StateValidation` column cannot tell a drop from
+   a validation run; there the placement argument carries the proof. Its stale samples in the **other** phases do
+   catch a lost drop (the catch-all would run instead). P4d took the second option (drops first in
+   `stateValidationArms`, plus a delegation in common).
+2. **Body-level phase tests stay in their arm.** #10, #15, #21, #35, #39, #40, #48, #51 and #68 test `currentPhase`
+   inside the body; T027 sees all of them as `Handled` in every phase, so it cannot tell whether a lifted test still
+   picks the same branch. Splitting them into per-phase arms is a body change without an arm-order oracle. P4a leaves
+   them in common; P4e decides, with a body-level oracle (T021/T022 or a new test) if it lifts any.
+   *P4e decision: keep all nine in `commonSyncingArms`.* Reasons per arm are in the "Planned" column. The common
+   ones: each Command moves whole into its M module (M6b, M7, M9, M10, M11), and splitting it over phase functions
+   first would make that module gather it from several places; four of them (#21, #35, #51, #68) run shared lines
+   before or between their tests, so a lift would copy or reorder code; and T041 names no body-level oracle test, so
+   a lift would also need a prior `test/snap-016-*` PR. #15 (`RequestTrieNodeHealing`) is the only clean single-phase
+   split (`StateHealing` → request + serve-root check, else no-op), and M6b can still lift it with an oracle when it
+   moves the healing arms. T041's check "no `currentPhase ==` remains inside `syncing`" is therefore read as "no
+   dispatch guard on `currentPhase` remains": the `currentPhase` reads left in `syncing` are the dispatch read
+   (`phaseArms(currentPhase)`), #42's write, log interpolations, and the tests inside these nine arms.
+3. **P4e: `ChainDownloadCompletion` has no arms.** No `syncing` arm is guarded on it, and no code assigns it
+   (CQ-SNAP-016-9). Its function would be empty. *P4e:* `chainDownloadCompletionArms` is that empty function, named
+   in `phaseArms` so every phase in the plan has its function; CQ-SNAP-016-9 is not touched.
+4. **Three arms write `currentPhase` while running** (#42, #55/#56, #64/#66). The phase is read once per message,
+   before dispatch, as the old guards were, so a phase written by one message affects only the next.
+
+### R4c. [016] T070 (C-H0): TNHC `activeBehavior` arm order
+
+Read on `staging@1703820a7` (0.9.84), before C-H0. `TrieNodeHealingCoordinatorImpl.activeBehavior` (L713–1532) has
+**26 arms**: 25 Command arms and the catch-all. Arms are numbered in source order (`#`), with the staging line, the
+pattern, the dispatch guard, the C-H0 group and the line at the C-H0 head (after the move commit). The module column
+is the owning module of the arm's main calls (characterization Appendix A); every arm stays in the core through C-H5.
+
+**The invariant C-H0 proves.** For every Command, the first arm that matches after the split is the same arm as
+before. Order matters only between arms that can match the same message. In `activeBehavior` those are the three
+`VerificationBFSComplete` arms (#17–#19, the only Command with more than one arm) and the catch-all (#26, the only
+wildcard). No other pair of arms can match one message: each matches its own case class or case object. So the split
+preserves first-match iff #17–#19 stay together and in order in one partial function and #26 stays last. The two
+guards (#17 `walkRoot != stateRoot`, #18 `missingEmitted > 0`) are pure comparisons, so evaluating them inside the
+composed partial function changes nothing.
+
+**Dispatch after C-H0** (`activeBehavior` = `Behaviors.receiveMessage[Command]` over an `orElse` chain of seven
+`private[actors] lazy val` partial functions on the Impl, in the order of each group's first arm):
+
+1. `healLifecycleArms` (core): #1, #9, #10, #21, #22.
+2. `frontierRebuildArms` (C-H2): #2, #3, #4, #25.
+3. `healResponseArms` (C-H5): #5, #13, #15.
+4. `healDispatchArms` (C-H4): #6, #7, #8, #11, #12, #23.
+5. `frontierPersistenceArms` (C-H1): #14.
+6. `healVerificationArms` (C-H3): #16–#20, #24.
+7. `unhandledCommandArms`: #26 (DEBUG "received unhandled command", `Behaviors.unhandled`).
+
+Inside each group the arms keep their source order. `TrieNodeHealingDispatchTableSpec` pins the table: per Command
+sample, exactly the group below is defined (none for `HealingTaskFailed`); every sample except `HealingTaskFailed` is
+handled; each `VerificationBFSComplete` guard outcome runs the arm below.
+
+| # | Line (staging) | Pattern | Dispatch guard | Main calls (module) | C-H0 group | Line (C-H0) |
+|---|---|---|---|---|---|---|
+| 1 | L714 | `StartTrieNodeHealing` | — | H5 `isNodeInStorage`, H1 `persistFrontier`, H4 redispatch; the HEAL-RESTART Future | `healLifecycleArms` | L686 |
+| 2 | L846 | `FrontierRebuilt` | — | H5 `queueNodes`, H4 redispatch (the BFS's output) | `frontierRebuildArms` | L1085 |
+| 3 | L858 | `FrontierRebuildComplete` | — | rebuild completion, spec 006 early completion | `frontierRebuildArms` | L1097 |
+| 4 | L913 | `FrontierWalkFailed` (object) | — | resets the walk flags | `frontierRebuildArms` | L1152 |
+| 5 | L923 | `QueueMissingNodes` | — | H5 `queueNodes`, H4 redispatch | `healResponseArms` | L1178 |
+| 6 | L931 | `HealingPeerAvailable` | — | H4 `dispatchIfPossible` | `healDispatchArms` | L1207 |
+| 7 | L948 | `HealingPeerUnavailable` | — | re-queue in-flight, H4 redispatch | `healDispatchArms` | L1224 |
+| 8 | L970 | `UpdateMaxInFlightPerPeer` | — | H4 redispatch | `healDispatchArms` | L1246 |
+| 9 | L985 | `HealingForceComplete` (object) | — | H1 `clearPersistedFrontier`, H5 `clearHealedPathsSet`; returns `stopped` | `healLifecycleArms` | L818 |
+| 10 | L1021 | `HealingPivotRefreshed` | — | the walk-root re-peg: H1, H3, H5 | `healLifecycleArms` | L854 |
+| 11 | L1104 | `HealingServeRootRefresh` | — | H4 `shortRootLabel`, redispatch (the fetch root) | `healDispatchArms` | L1261 |
+| 12 | L1149 | `HealingResumeDispatch` (object) | — | H4 redispatch | `healDispatchArms` | L1306 |
+| 13 | L1172 | `TrieNodesResponseMsg` | — | H5 `handleResponse` | `healResponseArms` | L1186 |
+| 14 | L1177 | `FlushComplete` | — | H1 `flushRawNodesAsync` | `frontierPersistenceArms` | L1340 |
+| 15 | L1186 | `HealingTaskComplete` | — | `totalNodesHealed`, `self ! HealingCheckCompletion` | `healResponseArms` | L1191 |
+| 16 | L1197 | `HealingCheckCompletion` (object) | — | the completion gate: H3 verification launch, H1 flush | `healVerificationArms` | L1356 |
+| 17 | L1269 | `VerificationBFSComplete` | `walkRoot != stateRoot` (stale root) | H3 `reverifyCurrentRoot` | `healVerificationArms` | L1428 |
+| 18 | L1292 | `VerificationBFSComplete` | `missingEmitted > 0` (dirty pass) | H3 `reverifyCurrentRoot`, H4 redispatch | `healVerificationArms` | L1451 |
+| 19 | L1307 | `VerificationBFSComplete` | — (clean pass) | `verificationPassComplete`, H4 redispatch | `healVerificationArms` | L1466 |
+| 20 | L1352 | `WalkStateChanged` | — | `trieWalkInProgress` | `healVerificationArms` | L1511 |
+| 21 | L1357 | `HealingStagnationCheck` (object) | — | the 2-minute pulse: H1 gauges, H3, H4; `HealingStagnated` | `healLifecycleArms` | L937 |
+| 22 | L1484 | `HealingGetProgress` | — | core progress helpers | `healLifecycleArms` | L1064 |
+| 23 | L1500 | `HealingRequestTimeout` | — | H4 `handleTimeout` | `healDispatchArms` | L1329 |
+| 24 | L1508 | `RestartResumeVerification` | — | H3 `startVerificationBFS` | `healVerificationArms` | L1516 |
+| 25 | L1513 | `RestartFullRebuild` | — | H2 `startFrontierBFS` | `frontierRebuildArms` | L1162 |
+| 26 | L1529 | `other` (catch-all) | — | — | `unhandledCommandArms` | L1527 |
+
+`HealingTaskFailed` has no arm (Appendix A) and still reaches #26. The C-H0 group is the arm's concern, not its
+future home: the arms stay in the core, and a C-H* slice that wants an arm group in its module moves the whole
+`lazy val`, byte-identical.
+
+**Placements decided at C-H0.** `HealingStagnationCheck` (#21) is the coordinator's liveness pulse (it touches H1,
+H3 and H4 and sends `HealingStagnated`), so it is lifecycle, not dispatch. `HealingServeRootRefresh` (#11) moves the
+fetch root only, never the walk, so it is dispatch; `HealingPivotRefreshed` (#10) moves the walk root, so it is
+lifecycle. `FrontierRebuilt` (#2) is the BFS's output and goes with the rebuild, although its body calls H5's
+`queueNodes`; `QueueMissingNodes` (#5), the controller's intake, goes with the response arms. `HealingTaskComplete`
+(#15) is response bookkeeping. `RestartResumeVerification` (#24) launches a verification walk (H3);
+`RestartFullRebuild` (#25) launches a rebuild walk (H2).
+
+## R5. Child-actor and worker ownership
+
+Controller-owned typed refs (all `var Option[ActorRef]`): `accountRangeCoordinator` L260, `bytecodeCoordinator` L263, `storageRangeCoordinator` L265, `trieNodeHealingCoordinator` L268, `chainDownloader` L272. Workers (AccountRangeWorker, ByteCodeWorker, StorageRangeWorker, TrieNodeHealingWorker) are spawned by their coordinators, never by the controller. No `ctx.watch`; supervision via `Behaviors.supervise` at each spawn.
+
+| Child | Spawn (method:line) | Stop / clear | Messages sent (method:line, grouped) |
+|---|---|---|---|
+| AccountRangeCoordinator | `launchAccountRangeWorkers` L3720 | `stopStateSyncChildren` L783 (+`= None`); `enterDormantMode` L3358; `restartSnapSync` L4897 (inline copies); never on success (stopped by itself / `onStop`) | Start L3752; PeerAvailable L3869 (`requestAccountRanges`); PeerUnavailable L627 (`flushPeerDisconnects`); AccountRangeResponseMsg L1130; Storage/ByteCodeQueuePressure L1297/1304 (`syncing`); PivotRefreshed L1325, L4712, L4825; RecoverStalledAccountTasks L5125 (`maybeRestartIfAccountStagnant`) |
+| ByteCodeCoordinator | `startSnapSync` L2719 (recovery), `launchAccountRangeWorkers` L3767, `queueHealedCode` L5204 (re-spawn after healing, bumps `coordinatorGeneration`) | same three stop sites | StartByteCodeSync L2737/3786/5222; AddByteCodeTasks L1500/2853/5224; NoMoreByteCodeTasks L1567/2870/5226; UpdateMaxInFlightPerPeer L1580/2778/2883/3847; ByteCodePivotRefreshed L1583/2884/4831; ForceCompleteByteCodes L2231; ByteCodesResponseMsg L1137; ByteCodePeerAvailable L3881; ByteCodePeerUnavailable L629 |
+| StorageRangeCoordinator | `startSnapSync` L2743, `launchAccountRangeWorkers` L3795 | same three | StartStorageRangeSync L2774/3835; AddStorageTasks L1507/2805; NoMoreStorageTasks L1568/2826; UpdateMaxInFlightPerPeer L1576/1637/3849; StoragePivotRefreshed L1326/4713/4827; ForceCompleteStorage L2147/2204; StorageRangesResponseMsg L1144; StoragePeerAvailable L3907; StoragePeerUnavailable L628 |
+| TrieNodeHealingCoordinator | `startStateHealing` L3988, `startStateHealingWithInterleave` L4068 | same three; also `healingWalkLocalOnly.set(false)` | StartTrieNodeHealing L4031/4109; UpdateMaxInFlightPerPeer L4032/4110; HealingPeerAvailable L4039/4115/4150; QueueMissingNodes L1790/1846; WalkStateChanged L1797/1824/1857/3935; HealingResumeDispatch L1704; HealingServeRootRefresh L1076; HealingPivotRefreshed L4844; TrieNodesResponseMsg L1155; HealingPeerUnavailable L630 |
+| ChainDownloader | `launchChainDownloader` L5605–5640 (`sync-dispatcher`, `coordinatorGeneration += 1`); called from `startChainDownloader` L5596 and `finalizeSnapSync`/`enterHeaderHold` | `enterHeaderHold` L5314 (restart on stalled cursor), `finalizeSnapSync` L5493, `completedWithBackfill` L5572 (NOT stopped by `stopStateSyncChildren`/`restartSnapSync`/`enterDormantMode`: it survives restarts) | Start L5639; Pause L1477, L4556; UpdateTarget L4848, L5295, L5303; Resume L4850; ReleaseBodiesAndReceipts L5603 |
+| State validators (not actors) | `spawnAccountValidation` L4302, `spawnStorageValidation` L4318 — `Future` on `snapValidationEc` (single-thread, L99), result piped to `ValidateAccountTrieResult`/`ValidateStorageTriesResult` stamped with `validationGeneration` | cannot be cancelled; stale results dropped by generation (L1871–1883) | `validatorFactory(storage)` (test seam) |
+| Other async | `PathToHashExporter` via `ctx.pipeToSelf` L5525 (`startPathPublish`); progress `ask` of the coordinators via `pipeToSelf` L2015–2042 (CheckDownloadStagnation arm); `clearStorageDoneMarkers` compaction Future on `snapValidationEc` L245 | n/a | `PathPublishProgress/Done/Failed` |
+| Parent | `syncController ! Done / SnapSyncFinalized / StartRegularSyncBootstrap[ByHash] / RequestHealingServeRoot / HealingImpossible` (L965, 1479, 2918, 3001, 3194, 3210, 3270, 4241, 4558, 5474, 5495, 5574) | | |
+| NPMA / peer bus | `networkPeerManager ! UpdateClHeadCmd` L2575; `peerListHelper` messageAdapter (L105–135), `handshakedPeersAdapter` L708 | | |
+
+Observation: only 4 of 5 children are stopped by `stopStateSyncChildren`; stop/clear logic is copied into `enterDormantMode`/`restartSnapSync` (L3358–3361, L4897–4900) — drift risk if a 5th child is added.
+
+**[016]** PR #1501 adds three things here:
+- An `intakeBudget = Some(intakeBudget)` constructor argument at every coordinator spawn site: `startSnapSync` (bytecode
+  and storage), `launchAccountRangeWorkers` (account, bytecode and storage) and `queueHealedCode` (bytecode).
+- `ensureHeapWatchdog()` at the two spawn clusters.
+- `stopHeapWatchdog()` in `onStop` and `stopSnapOnlySchedules`.
+
+`stopStateSyncChildren`, `enterDormantMode` and `restartSnapSync` do **not** stop the watchdog. `CoordinatorHandles`
+(P1) carries the budget into its spawn helpers. The watchdog lifecycle moves with Lifecycle (M9) and keeps exactly
+these call sites.
+
+## R6. Proposed module boundaries (the hypothesis test)
+
+Line estimates are **before #1501** and come from the def spans. The class state and doc block (L146–690) is split
+across modules in proportion to their size.
+
+| Hypothesised module | Verdict | Contents (lines) | Est. lines | Notes from the matrix |
+|---|---|---|---|---|
+| Peer tracking / eviction | **Confirm** | `peerListHelper` L99–135, `snapServingPeers` L153, `getSnapPeerWithHighestBlock` L194, reactivity/rate-tracking/debounce L557–689, `pollHandshakedPeers`, `evictNonSnapPeers` L3471, `startSnapPeerEviction`, `startSnapServerPeersScheduler`, `bestSnapProbeTarget`, `ensureSnapServerPeersConnected` L4269, peer-tick arms (~45) | ~450–500 | 8 vars wholly private. Cross-links: `flushPeerDisconnects` fans out to all 4 child refs (needs `CoordinatorHandles`), `stopSnapOnlySchedules` resets 2 flags, `bestEth68PeerForCalibration` read by `calibratePivotTD`, `requestTracker` shared. Fed by `PollHandshakedPeers`; emits `PeerUnavailable`. |
+| Pivot selection + refresh | **Split in two** | (a) `PivotSelector`: `startSnapSync` selection part (~270 of 709), `bootstrapping` L2269 (265), `handleCLPivotHint` (23), bootstrap-retry (29), `currentNetworkBestFromSnapPeers`, `calibratePivotTD`, `updateBestBlockForPivot` (~108): **~700**. (b) `PivotRefresher`: `refreshPivotInPlace` (185), `completePivotRefreshWithStateRoot` (205), probe/unservable/RetryPivotRefresh arms (~180): **~570** | 1,270 | (b) writes 21 vars incl. stagnation clocks, validation generation, `preserved*`, probe state, and messages all 5 children: highest coupling after the reset trio. (a) is mostly a pure function of (local best, peer set, CL hint, saved anchors) -> `PivotPlan`. `startSnapSync` also contains recovery/resume (module PERSIST below) and a copy of coordinator spawns (DOWNLOAD). |
+| Download-phase supervision + stagnation | **Split in two** | `DownloadSupervisor`: `launchAccountRangeWorkers` non-resume (~150), `startAccountRangeSync` 48, `request*` ticks 78, `stopStateSyncChildren`, `checkAllDownloadsComplete` 32, `restartSnapSync` 85, phase-completion arms (~190), response routing arms (~70), progress arms (~150), `currentSyncStatus` 69: **~850**. `StagnationWatchdog`: `scheduleStagnationChecks`, `maybeRestartIfStorageStagnant` 101, `maybeForceCompleteIfBytecodeStagnant` 20, `maybeRestartIfAccountStagnant` 118, `CheckDownloadStagnation` arm 87, progress forwarding 23: **~370** | 1,220 | Watchdog clocks (`lastStorageProgressMs`, `lastBytecode*`, `lastAccount*`, `storageTailBaseline`, `consecutiveAccountStallRefreshes`, `storageStagnationRefreshAttempted`) are 9 of its 11 vars; only `lastPivotRestartMs`, `forceCompleteStorageSent` and the `last*` resets on pivot refresh/launch/startSnapSync cross over: replace by `watchdog.reset(reason)`. Pure state machine `evaluateStorageTail` already extracted (L6122). |
+| Healing orchestration | **Confirm** | `completeHealingWalkClean`, `startTrieWalk`, `startStateHealing`, `...WithInterleave`, scheduler, `requestTrieNodeHealing`, `maybeRequestHealingServeRoot` (90), `triggerHealingForMissingNodes`, healed-code hold family (`queueHealedCode` 48, `reset…`, `dropHealed…`, `anchorPivotBeforeLazyHandoff`), healing arms L1673–1861 (~190) | ~640 | The two `startStateHealing*` are ~85% duplicate (spawn args copied; the frontier/prune flags are exactly the pins). Shared vars: `healRepegNoRootAttempts`, `retryRefreshCounts`, `pendingPivotRefresh` with PivotRefresher; healed-code vars with FINALIZE. |
+| Validation | **Confirm** (lowest coupling) | `validateState`, `spawn{Account,Storage}Validation`, arms L1862–1967, `validatorFactory`/`snapValidationEc` | ~175 | Private: `validationRetryCount`, `validationInProgress`; `validationGeneration` bumped by refresh/restart/wake (3 outside writers) and `healingValidatedRoot` set by healing. Talks only via Commands + `getOrCreateMptStorage`. |
+| Finalization / header-hold / path-publish / backfill handoff | **Confirm; make it the terminal behaviour(s)** | `completeSnapSync` 39, `enterHeaderHold`/`leaveHeaderHold` 51, `finalizeSnapSync` 172, `startPathPublish`/`onPathPublishDone` 58, `completedWithBackfill` 34, `completed` 28, chain-downloader launch/release 54, gating arms ~45 | ~480 | Already effectively a state machine (pathPublish/headerHold gate every other message). 6 private vars. Reads `healedCodeHashes`/`bytecodeForceCompleted`, `chainDownloader` (also used by pivot refresh Pause/UpdateTarget/Resume). Natural candidate for its own `Behavior` or child actor. |
+| Persistence / resume | **Confirm, but merge a "StateStores" holder first** | `getOrCreateMptStorage` 80, `clearStorageDoneMarkers`, `sweepSupersededTaskFiles`/`accountsCompleteTaskFilePaths` (~25 effective), `deserializeSnapProgress` 20, resume selection in `launchAccountRangeWorkers` L3585–3715 (~130), accounts-complete recovery in `startSnapSync` L2595–2900 (~305), checkpoint/task-file arms L1175–1230, L1486–1599 (~170) | ~730 | Mostly decisions (inputs: AppStateStorage + progress stores + current pivot) => extract as a pure `ResumePlanner.plan(...)` returning an ADT (`FreshStart | ResumeAccounts(cursors, files) | ResumeBytecodeStorage(path,…) | DiscardAndRestart(reason)`); this is also where #1434 and the unchecked-reuse defect get fixed and unit-tested. `checkResumable` already exists in the companion (L6040). |
+| Dormant / critical-failure | **Merge into a `SyncLifecycle` (reset) module** | `recordCriticalFailure` 16, `enterDormantMode` 48, `wakeFromDormant` 29, `dormantRetry` 55, `restartSnapSync` 85, `PivotStateUnservable` arm ~90 | ~320 | Its three vars are private, but its writes are the reset trio: it cannot be separated from `restartSnapSync` without a shared `reset()`. Best as: `SyncState.reset(kind: Restart | Wake | Dormant)` + this module owns the "when to give up" policy (`MaxConsecutivePivotRefreshes`, `countsTowardRestart` L5995 already pure). |
+
+Shell that remains: constructor, `start`, `idle`, common-arms partial function (peer quartet, GetProgress, CLPivotHint), `onStop`, `CoordinatorHandles` — ~700 lines, vs a 5,600-line class today (L53–5669; companion + config another ~980).
+
+### Cross-cutting prerequisites (do these before moving any behaviour)
+1. `CoordinatorHandles` (4 coordinator refs + chainDownloader; `stopAll()`, `broadcastPeerUnavailable`, `pivotRefreshed(root)`, `fanOutResponse`) — removes 8 duplicated stop/clear lines (L3358–3361, L4897–4900) and the per-site `foreach` fan-outs, fixes the stop-set drift.
+2. `PhaseFlags` case class (`accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `bytecodeForceCompleted`, `forceCompleteStorageSent`, `awaitingHealedCode`, `healedCodeWaitExhausted`, `resumedStaleCursors`) with `reset()`; the reset trio and `startSnapSync` currently write these independently.
+3. One `cancelSyncTimers(keys)` (3 hand-copied lists: L759, L3347, L4887).
+4. Replace `syncing` + `currentPhase` guards with per-phase behaviours (`accountRangeSync`, `byteCodeAndStorage`, `stateHealing`, `stateValidation`, `chainDownloadCompletion`) sharing a `commonSyncingArms` PF — removes 28 phase tests/17 guards and turns the "Unhandled message in syncing state" into a typed-per-phase decision.
+
+### Lowest-coupling-first extraction order
+1. Pure/decision code with no state: more `ResumePlanner` / `PivotPlan` / `StagnationPolicy` into the companion (precedent: 15 already there, each with a unit test). Also delete `isStarting`, dead `else` log L2260, stale DFS names (zero risk).
+2. **Validation** (~175; 3 external writers fixed by `PhaseFlags.reset`).
+3. **Peer pool** (~480; 8 private vars; needs `CoordinatorHandles` only for `broadcastPeerUnavailable`).
+4. **Finalization/backfill** (~480; terminal, state private; needs `chainDownloader` handle shared with refresher — make `ChainDownloaderHandle` a small class both use).
+5. **Persistence/resume planner** (~730; decisions first, side effects remain in controller until step 7). Closes #1434 + unchecked-reuse with tests.
+6. **Healing orchestration** (~640; merge `startStateHealing*` first, then move; add coordinator-factory seam to pin fixes #3/#4).
+7. **Stagnation watchdog** (~370; needs `reset()` hook from refresh and launch).
+8. **Pivot selection** (~700; after ResumePlanner since both live inside `startSnapSync`).
+9. **Lifecycle (dormant + restart)** (~320; after PhaseFlags/Handles, because it is the reset hub).
+10. **Pivot refresher** (~570; last, it touches everything); what remains is the Download supervisor/shell.
+
+## R7. Fix-pin inventory (the five fixes restored by PR #1385, merge 9bdcf7955)
+
+| # | Fix | Current location | Test that fails if dropped? |
+|---|---|---|---|
+| 1 | #1367 `&& ourBest.header.number.value > 0` on TD-PROXY-GAP eviction | **`network/NetworkPeerManagerActor.scala:798`** (`if ratio > BigInt(10_000) && ourBest.header.number.value > 0 then`), rationale comment L790–797. Not in the snap package or the controller. | **None / comment only.** Greps of `src/test` + `src/it` for `TD-PROXY`, `10_000`, `number.value > 0`, `ratio` find only comments in `CalibratePivotTDSpec.scala:162,168`. `ChainWeightCalibrationSpec` tests `SyncController.CalibrateChainWeightFromPeer`; `NetworkPeerManagerSpec.scala:709` is the unrelated best-block-probe assertion. No test drives the handshake gap check with best block = 0. |
+| 2 | #1378 `apply()` calls `.start()` not `.startSnapSync()` (arms 5 s `PollHandshakedPeers`) | `SNAPSyncController.scala:6316` (`).start() // #1378 …`, comment L6316–6320); `start()` L690–715 starts the timer at L701 and self-sends an immediate poll L702. | **None (indirect at best).** Fixtures that use `SNAPSyncController(...)` (`SNAPDeferredBackfillSpec:111`, `SNAPHealedCodeFinalizeSpec:102`, `SNAPStorageRecoverySpec:240`, `SNAPDormantRecoverySpec:171`, `SNAPLazyHealAnchorSpec:792`) stub NPMA to answer `GetHandshakedPeersCmd` but none asserts a poll arrives or that the 5 s timer fires; the ones that need peers send `PollHandshakedPeers` by hand (`SNAPDormantRecoverySpec:195`, `SNAPLazyHealAnchorSpec:263,311,454,471,836`). By inspection (tests not run: no sbt on this host), replacing `.start()` with `.idle()` leaves all of them green. (The impl class is `private`, so a test cannot call `startSnapSync` directly.) |
+| 3 | #1319/spec-002 `frontierPersistenceEnabled = healingFrontierPersistence` at BOTH `TrieNodeHealingCoordinator` sites | `SNAPSyncController.scala:4003` (`startStateHealing`) and `:4083` (`startStateHealingWithInterleave`); store gate `:3964`. | **None at controller level.** Coordinator-level specs set the parameter directly (`HealingFrontierResumeSpec:119`, `CleanRebuildEarlyCompletionSpec:131`, `ScopedVerificationFallbackSpec:139`, `HealingTrieFixtures:83`, `PrunedHealFallbackSpec` "write NO frontier-mirror entries … when frontierPersistenceEnabled = false") so they pin the coordinator contract, not the controller wiring. By inspection (not run), deleting L4003/L4083 compiles (coordinator default `false`) and passes. No spec references `healing-frontier-persistence` or `healingFrontierPersistence` outside coordinator fixtures. |
+| 4 | spec-005 `prunedHealVerification` default true + parsing + `\|\| prunedHealVerification` term | default `:6346`; parse `:6503–6505` (`pruned-heal-verification`, default true; conf `sync.conf:201`); store term `:3964`. | **None.** No test touches `SNAPSyncConfig.prunedHealVerification` or the config key (`SNAPSyncControllerSpec` "have sensible defaults" does not assert it). `PrunedHealFallbackSpec/VerificationSpec` pass `prunedHealVerification` straight to the coordinator. `PrunedHealParitySpec:88,148` docstrings say the flag "was removed from the production API" (stale). **Plus a live gap**: the controller does NOT forward the flag to either coordinator spawn (see section 0). |
+| 5 | #1371 no `!storagePhaseForceCompleted` term in `shouldSkipHealingAfterDownloads` | def `:6087–6101` (2-arg: `snapSyncConfig`, `resumedStaleCursors`; body `deferredMerkleization && !resumedStaleCursors`); sole call site `:2241`. Orphan branch `:2260` still logs a "force-completed with deferred merkleization → starting healing" message that is now reachable only when a stale-cursor resume is true. | **Weak partial.** `SNAPSyncControllerSpec.scala:178–228` (4 tests, e.g. "skip healing … regardless of force-complete" at ~L189) call the 2-arg function, so re-adding the term as a *required* parameter breaks compilation; re-adding it with a default, or adding `&& !storagePhaseForceCompleted` at the call site (L2241, untestable: private class), passes. |
+
+Recommendation for #1401: gate with grep/ratchet tests (S11-style) or a controller-level behaviour test per pin: (1) NPMA handshake test with best block 0 and ratio >10k expects no disconnect; (2) `SNAPSyncController` spawn test asserting `GetHandshakedPeersCmd` repeats at 5 s (use `ManualTime`); (3)+(4) spawn controller with `healing-frontier-persistence=true` and assert the `TrieNodeHealingCoordinator` factory args (needs a coordinator-factory seam, like `validatorFactory`); (5) keep, add call-site test through `SNAPLazyHealAnchorSpec`-style fixture with force-completed storage.
+
+**[016] Locations re-checked on staging@9a6681cc0**: `NetworkPeerManagerActor.scala:798`, controller `:6316`, `:4003`,
+`:4083`, `:3964`, `:6087`, `:6346` and `:6503–6505` all still hold the pinned expressions.
+
+## R8. Resume ledger (the on-disk formats this spec freezes)
+
+| Mechanism | Where (file:line) | On-disk format owner | State |
+|---|---|---|---|
+| Legacy plain-text progress `AppStateStorage.getSnapSyncProgress` | read L3646–3668; parser `deserializeSnapProgress` L5650–5669; migrated into `SnapSyncProgressStorage.writeAccountCursors` L3656 | `db/storage/AppStateStorage.scala` (string), migration-only fallback | Closed (kept for upgrade). Tests: `SNAPSyncControllerResumeSpec` (3 tests, mostly helper-level) |
+| `SnapSyncProgressStorage` (namespace `p`, JSON account + storage cursors) | field L202; read L3623, `readProgress`; clear L1557, L3685; passed to Account coord L3821 and Storage coord L2761 | `db/storage/SnapSyncProgressStorage.scala:49` | Cursor key is the state root => pivot change = new root => legacy loss; mitigated by #1487 (below) and `MaxPreservedPivotDistance = 50_000` (L348, documented as heuristic not correctness; correctness = `resumedStaleCursors` L354/3693 forcing the full heal walk) |
+| `AccountResumeCheckpoint` (versioned, fixed AppState key; cursors + pivot + contract task files; written every 30 s, on range completion and stop, after trie flush + task-file fsync) | write L1200–1201 (`AccountRangeProgressCmd` arm, only `durable` snapshots, generation-filtered L1175); read L3597–3620; retire L1537, L1558, L3620, L3686 | `snap/AccountResumeCheckpoint.scala:64` (encode/decode, version); key owned by `AppStateStorage.putSnapAccountResumeCheckpoint` | **Closed by PR #1487** (classified `UnservableCause`, geth-style StackTrie resume at cursor, carried contract task-file prefix). Tests: `SnapResumeBoundarySpec` (6), `AccountRangeCoordinatorSpec` (34, carried replay) |
+| Contract task files (storage tasks + unique codeHashes) | paths/counts persisted L1535–1548; usability check L2630–2645; sweep of superseded files L331–352, companion `sweepTaskFiles` L6013, `taskFilePaths` L6008; accounts-complete recovery stream L2832, L2801 | `snap/StorageTaskFile.scala:17` (fixed-size entries, `isUsable`, `CodeHashEntrySize`); paths in AppStateStorage | **Closed by #1453** (files in datadir, never complete a phase without them) and #1449 (ordering, coordinator restart). Test: `SNAPStorageRecoverySpec` (15) |
+| Storage done-markers (skip finished tasks on replay/recovery) | field L221; `recordStorageDone` L227; filter L2801; clear+compact L241–250 (on account phase without carry L3713, on storage complete L1651); passed L2764, L3740 | `db/storage/SnapStorageDoneStorage.scala:38`: key `SnapStorageDone/ ++ accountHash ++ storageRoot` in the app-state CF; `DataSource.compactRange` | **Closed by PR #1498** (spec 010). Old checkpoints have no markers => first restart replays everything (documented). Tests: `SnapStorageDoneStorageSpec`, coordinator specs |
+| Phase flags and anchors (`accountsComplete`, `bytecodeComplete`, `storageComplete`, pivot, root, bootstrap target, storage/codeHash path+count, finalized root, `snapSyncDone`/`bytecodeRecoveryDone`/`storageRecoveryDone`) | writes L1518–1648, L1801–1831, L2386, L2980, L3137, L3209, L3920–3921, L5247–5448 | `AppStateStorage` (`putSnapSync*`) | Open: **#1434** (flag wipe at L2611–2620 by `belowEscalationHint` on a later `RegularSyncStuck`; the issue cites ~L2234, now drifted; `minPivotHint` is only set in idle L811) and the `networkBest == 0` unchecked-reuse (section 0; the "#93-ish stale pivot reuse" item could not be matched by number in repo or issues) |
+| Healing frontier + BFS queue | `healingFrontierStorageOpt` L3960 (lazy, store exists if persistence OR pruned verification), `bfsQueueStorage` L3968 (`Namespaces.BfsQueueNamespace`) | `db/storage/HealingFrontierStorage.scala:27` (CF `g`: frontier mirror + subtree-complete records), `db/storage/BfsQueueStorage.scala:25/87` | `healing-frontier-persistence` default OFF (`sync.conf:~115`) => after a restart heal resumes by a full BFS rebuild; pruned verification (spec 005) ON. Closed pieces: #1472 (never clean on dirty/superseded pass), #1448. Open: #1350, #1349 (RSS / pipeline, TNHC). |
+| `snap-good-peers.v1` | **not in the controller**; `network/SnapGoodPeers.scala` (owned by `PeerManagerActor`, written from `NetworkPeerManagerActor` `FlushSnapServedTick` -> `SnapServedReportCmd`), config `network.conf:107–118` | `network/SnapGoodPeers.scala`: text `fukuii-snap-good-peers v1` + TSV | **Closed by #1497** (spec 012); `SnapGoodPeersSpec` (9). Controller/peer-pool module must not own it; only consumes via NPMA. |
+| Finalization anchors | `finalizeSnapSync` L5332–5503: pivot header+best-block stored, `snapSyncDone` AFTER (D4, L5422–5448) | AppStateStorage / BlockchainWriter | Open: **#1435** (older finalizations stored `Block(pivotHeader, BlockBody.empty)`; startup repair of P-5..P bodies) |
+
+Related merged PRs (`gh pr list --state merged --search snap`): #1487 resume + classified escalation, #1498 done-markers, #1453 task files, #1449 storage ordering/restart, #1497 good peers, #1491 peer balance, #1479 scarce peers, #1478 never keep unservable pivot, #1472 dirty-pass guard, #1466 deferred backfill, #1455/#1454/#1480 Path scheme, #1457 best-header at startup, #1456/#1459 healed-code/bytecode recovery, #1385/#1378/#1371/#1367 (the five pins), #1357 hold healing pivot on stagnation.
+
+**[016] Correction to the ledger row "Healing frontier + BFS queue"**: the report says `healing-frontier-persistence`
+defaults OFF. In fact:
+- `base/sync.conf:118` ships `healing-frontier-persistence = true`.
+- The `SNAPSyncConfig` case-class default (`:6345`) is `false`.
+- The comment above the key in `sync.conf` ("Default false (ships dark)") is stale.
+
+So production nodes persist the frontier, and directly-built test configs do not. This is a note only; no fix is in
+scope here. It is logged as CHASE-QUEUE CQ-SNAP-016-1.
+
+**[016] Golden-bytes coverage**: a grep of `src/test` found no test that asserts the exact encoded bytes of any of
+these formats:
+- `AccountResumeCheckpoint` v1
+- `SnapSyncProgressStorage` namespace `p`
+- `SnapStorageDone/` keys
+- `HealingFrontierStorage` CF `g` (the frontier mirror and the subtree-complete records)
+- `BfsQueueStorage`
+- `StorageTaskFile` entries (64 B storage-task entries, 32 B codeHash entries)
+- the legacy `AppStateStorage` progress string
+
+The existing specs round-trip these formats through the same encoder they test, so a change made symmetrically to the
+encoder and decoder would pass them. Slice S0c adds a golden test for each format.
+
+`snap-good-peers.v1` is owned by the network layer (`network/SnapGoodPeers.scala`). No slice moves it, and it is
+listed only as an inertness oracle.
+
+## R9. Leftover DFS naming after the BFS heal change
+
+(`grep -niE 'dfs|depth.?first'` over the snap package + conf)
+* `SNAPSyncController.scala:407` comment "has just been DFS-walked end-to-end" (heal walk is BFS); `:3957` doc "always full DFS on restart"; `:4344` comment "visits every node … via DFS"; `:6339` "frontier-rebuild DFS `visited` LRU".
+* Related vestige names: `healingVisitedCap` (`:6342`, `:6498–6500`, `:3999`, `:4079`), `healing-visited-cap = 4000000` (`sync.conf:112`), TNHC `visitedCap`/`HealingVisitedCap` (TNHC L55, L263), `sync.conf:115` "full DFS is skipped".
+* `actors/TrieNodeHealingCoordinator.scala:2237` doc "Replaces startParallelFrontierDFS" (history, acceptable).
+* **Legit DFS (do not rename)**: `StateValidator.scala:223,253,266,273,303,304,342` (`walkAccountTrieDFS`, `walkStorageTrieDFS`, explicit stack) — the validator really is DFS.
+* Tests with stale wording: `SNAPSyncControllerSpec:482`, `FrontierRebuildSpec:12,15`, `HealingFrontierResumeSpec:32,52,53,101,141–166`, `HealingTrieFixtures:363` (all say "DFS" for the BFS rebuild; `RebuildFrontierBfsMultiSeedSpec` already uses BFS).
+* **[016] R1 (T080) correction:** the `SSC` #1188 note (`:407` above), `StateValidationModule.validateState`'s copy of it and `SNAPSyncControllerSpec:482` describe the controller's Hash-scheme healing walk (`startTrieWalk` → `StateValidator.findMissingNodesStreaming` → `walkAccountTrieDFS`), which is a real DFS, so they keep "DFS". What T080 renamed and what it left is in tasks.md T080.
+
+## R10. Open items placed on modules
+
+The report's issue table, extended **[016]** with #1502, #1503 and the project tasks named in the 016 brief:
+
+| Item | What | Module (target) | Also touches |
+|---|---|---|---|
+| #1434 | Regular-sync startup ignores an in-progress SNAP sync; a restart mid-heal can wipe SNAP progress (`belowEscalationHint` flag wipe at L2610–2620; `MinPivotBlock` handled only in idle, L811) | **ResumePlanner** (M5) | PivotSelector (M8); `SyncController` startup routing (outside snap) |
+| #1435 | Repair the empty pivot body that older SNAP finalization stored | **Finalization** (M4) | startup repair outside the controller |
+| #1502 | `prunedHealVerification` never forwarded to TNHC (spawn args L3996–4020, L4075–4100) | **HealingOrchestrator** (M6); the S0b factory seam makes it testable | TNHC constructor |
+| #1503 | Accounts-complete recovery reuses the saved pivot unchecked when `networkBest == 0` (L2669, `else if` L2696) | **ResumePlanner** (M5) | PivotSelector (M8) |
+| #1350 | heal-walk reader-dispatcher raises peak RSS | **TNHC FrontierRebuildBfs** (C-H2) | `visitedCap` spawn args move with M6 |
+| #1349 | read/decode pipeline in `processSubRange` | **TNHC FrontierRebuildBfs** (C-H2) | — |
+| #1431 | negotiated snap version (snap/2) | **SnapPeerPool** (M3): `snapServingPeers`/`servesSnapState` | network layer (herald) |
+| task: off-thread `ctx.log` + status `ask` timeouts | logging from Future callbacks; `GetStatus`/progress `ask` timeouts | **controller shell** (common arms, `currentSyncStatus`) and the `CheckDownloadStagnation` progress `ask` (L2015–2042) → **StagnationWatchdog** (M7) | `asyncLog` users in ResumePlanner |
+| task: heal convergence (latch bug; keep tasks across re-peg) | healing never converges; tasks dropped on re-peg | **HealingOrchestrator** (M6) × **TNHC HealResponseProcessing / `isComplete`** (C-H5) | PivotRefresher (M10) sends `HealingPivotRefreshed` |
+| task: stale-pivot empty ranges classified as scarcity | an empty AccountRange answer to a stale root is treated as peer scarcity | **ARC AccountTaskLifecycle** (C-A2: `completeEmptyTaskRange`, `handleTaskFailed`) × ARC peer stateless marking (C-A1) | StagnationWatchdog (M7) |
+| task: pivot refresh every ~10–13 min discards in-flight per-account storage tries | `StoragePivotRefreshed` → `resetAccountTrie` | **PivotRefresher** (M10) × **SRC StorageOrderedApply** (C-S2: `resetAccountTrie`, `clearStorageOrderingState`) | — |
+| dead `isStarting` param (L2562) | always false | **PivotSelector** (M8), removed in its own cleanup commit | — |
+| orphan "force-completed with deferred merkleization → starting healing" log (L2260) | wording is misleading; reachable only on a stale-cursor resume | **DownloadSupervisor** (M11), CHASE-QUEUE | — |
+| `MinPivotBlock` handled only in idle | dropped in other behaviours | **PivotSelector** (M8), relates to #1434 | — |
+
+## R11. [016] PR #1501 (spec 014) types in the module map, as merged
+
+**Re-checked against the merged commit `dfa4a8836` (T001).** The merged version adds, on top of the branch snapshot
+first read for this spec:
+- a watchdog **escape policy**: `HeapWatchdogEscapePolicy`, the `queuesEmpty` probe and `onHeapWatchdogEscape`,
+  which WARNs when a pause is ineffective and force-releases after `heap-watchdog-max-pause`;
+- two config keys;
+- 25 more lines in ARC.
+
+All the additions sit in elements this table already places.
+
+| #1501 element | Kind | Target module |
+|---|---|---|
+| `SnapIntakeBudget` (new file) | shared admission gate (atomics) | stays its own file. The controller-owned `intakeBudget` val is exposed to modules as an **abstract `def intakeBudget: SnapIntakeBudget` in `CoordinatorHandles`**, implemented by the core (P1), and carried into every spawn |
+| `SnapHeapWatchdog` (new file), `heapWatchdog` var, `ensureHeapWatchdog`, `stopHeapWatchdog`, `onHeapPressureChange`, **`onHeapWatchdogEscape`, `HeapWatchdogEscapePolicy`** | JVM-wide JMX listener + escape policy | **SyncLifecycle** (M9). Call sites unchanged: start at the two coordinator-spawn clusters (`startSnapSync`, `launchAccountRangeWorkers`), stop in `onStop` and `stopSnapOnlySchedules` only |
+| `GatedTaskFileReplay` (new file), `runGatedReplay`, `RecoveryReplayPausedRetry` (1 s) | chunked, gated recovery reader | **ResumePlanner** (M5), which owns the accounts-complete recovery streams |
+| `IncrementalContractData` release on drop (idle arm and `syncing` arm) | budget bookkeeping | the idle arm stays in the shell; the `syncing` arm moves with **DownloadSupervisor** (M11). Pinned in S0d (T025) |
+| `AddByteCodeTasks(skipPresent)` | the presence check for replayed codeHashes moved into `ByteCodeCoordinator` | **ByteCodeCoordinator** (C-B1) |
+| `StorageTaskFile.foreachEntry` (moved from ARC) | shared reader | stays in `StorageTaskFile`. The file format is unchanged; S0c's goldens are the evidence (T001b) |
+| `StorageTask` shared full-range boundaries | allocation | unchanged |
+| config `max-pending-storage-tasks`, `max-pending-bytecode-hashes`, `heap-watchdog-{enabled,pause-fraction,resume-fraction,poll-interval,ineffective-after,max-pause}` | `sync.snap-sync` keys | routing doc: Lifecycle (watchdog) and download/intake (budget) |
+| metrics `snapsync.memory.storage.pending.gauge`, `snapsync.memory.bytecode.pending.gauge`, `snapsync.memory.intake.paused.gauge`, `snapsync.memory.heap.pressure.gauge`, `snapsync.memory.oldgen.postgc.bytes.gauge`, `snapsync.memory.oldgen.postgc.ratio.gauge`, `snapsync.storage.inflight.requests.gauge`, `snapsync.bytecode.inflight.requests.gauge` | gauges | routing doc |
+| log tag `[SNAP-HEAP]` (pause, resume, ineffective, force-release); gate state in `[ACCOUNT-IDLE]` | logs | routing doc |
+
+## R12. [016] Coordinators — preliminary characterization (completed in T060)
+
+The report covered only the controller. The structure below comes from a top-level outline of each coordinator
+(`grep` of `def`/`case class` spans) and is enough to set slice boundaries. Before the first coordinator slice, T060
+builds the same var × method matrix for each coordinator and either confirms these boundaries or moves them.
+
+**[016] T060 result** (`staging@7d2edf157`; full matrices, Command × behaviour tables, storage-reference breakdown and
+tooling analysis in [coordinator-characterization.md](./coordinator-characterization.md)). The outline below is
+superseded where they differ. Measured sizes:
+
+| Coordinator | Lines | Mutable fields | `Command` cases | Behaviours | Storage refs |
+|---|---|---|---|---|---|
+| ByteCodeCoordinator | 870 | 20 | 15 | `active` | 10 |
+| AccountRangeCoordinator | 2,220 | 39 | 35 | `receive`, `finalizing` | 28 |
+| StorageRangeCoordinator | 2,806 | 56 | 19 | `active` → `handleCommand` | 88 |
+| TrieNodeHealingCoordinator | 2,900 | 49 | 24 (8 declared inside the Impl) | `activeBehavior` (821 lines) | 84 |
+
+The boundaries hold, with these amendments:
+- #1501's `skipPresent` check is an arm line of BCC's `active`, not a method;
+- #1533's off-actor pipeline goes to C-S4, and `writePrebuiltTrie` to C-S2;
+- SRC `handleTimeout` goes to C-S1;
+- ARC `maybeRequestPivotRefresh` goes to C-A1, and `drainActiveTasks` to C-A2;
+- TNHC `isNodeInStorage` goes to C-H5, and `readPathVerified*` to C-H3;
+- C-S4 reads no store, because proof verification is pure;
+- the Impl-nested message and helper types move to the companion before narrowing.
+
+Two user decisions are open:
+- **D-T060-1**: `StateIngest` has no member for the per-pivot `MptStorage` or the derived SNAP stores, which ARC, SRC
+  and TNHC take;
+- **D-T060-2**: `BytecodeRecoveryActor` and `StorageRecoveryActor` call the coordinators' `apply` with raw stores from
+  outside `snap/`.
+
+`verify.py` cannot verify the specified narrowing (`apply` + `ChildFactories` + call sites) without the T060b change.
+
+| Coordinator | Vars | Command cases | Largest units (staging lines) |
+|---|---|---|---|
+| AccountRangeCoordinator | 34 | 34 | `receive` L731–1097 (366); `finalizing` L1097–1189; `handleStoreAccountChunk` L1582–1691; `replayCarriedChunk` L1691–1764; task-file/contract I/O L1788–1914 |
+| StorageRangeCoordinator | 30 | 18 | `active` L947–1300 (353); `applyReadyStorageChunk` L1702–1860; done-markers + flat batches L718–869; `processServedTasks` L1529–1644 |
+| TrieNodeHealingCoordinator | 45 | 18 | **`activeBehavior` L713–1534 (821)**; `rebuildFrontierBFS` L1939–2240 (301); `discoverMissingChildren` L2411–2575; frontier persistence L278–449; verification L2301–2411 |
+| ByteCodeCoordinator | 16 | 19 | `active` L189–426; `handleByteCodesResponse` L498–614 |
+
+**Duplicated peer-dispatch helpers.** The per-peer adaptive response-size window (`responseBytesTargetFor`,
+`adjustResponseBytesOnSuccess`, `adjustResponseBytesOnFailure`) has the **same body in ARC, SRC and TNHC**; only the
+label in the debug log differs ("account"/"storage"/"healing"). ByteCodeCoordinator's copy is different in two ways:
+it is keyed by `PeerId` instead of `String`, and its success path adds an extra `.max(minResponseBytes)` clamp. The
+cooldown helpers differ per coordinator:
+- ARC takes a duration argument and logs at INFO under `[ACCOUNT-COOLDOWN]`.
+- SRC and TNHC use a fixed default and log at DEBUG.
+- ByteCode backs off exponentially.
+
+Verdict: extracting a shared `AdaptiveResponseBytes` for ARC, SRC and TNHC does not change behaviour, and is slice
+C-X. Unifying cooldowns, or pulling ByteCode into the shared window, would change behaviour, so both are **non-goals**
+(CHASE-QUEUE). `SnapPeerHealth` (#1491) is used only by SRC today, and no slice changes that.
+
+## R13. Test inventory relevant to the split (from the report §8, condensed)
+
+The SNAP suites are chain-agnostic by design. They split ETC from ETH by storage scheme:
+- Hash scheme = ETC/Mordor.
+- Path scheme, `isPoSChainOverride` and `CLPivotHint` = ETH/Sepolia.
+
+No `src/it` spec touches the snap package.
+
+**Controller-level suites (the regression set every controller slice must keep green unchanged):**
+
+| Suite | ~tests | Chain |
+|---|---|---|
+| `SNAPSyncControllerSpec` | 83 | both |
+| `SNAPSyncControllerResumeSpec` | 3 | ETC/Hash |
+| `SNAPDormantRecoverySpec` | 5 | ETC/Hash |
+| `SNAPLazyHealAnchorSpec` | 26 | ETH-leaning, with explicit ETC cases |
+| `SNAPDeferredBackfillSpec` | 6 | — |
+| `SNAPHealedCodeFinalizeSpec` | 5 | — |
+| `SNAPStorageRecoverySpec` | 15 | Hash + Path |
+| `SnapResumeBoundarySpec` | 6 | ETH + ETC |
+| `SNAPRangeBoundarySpec` | — | — |
+| `SNAPFakePeerSpec` | 6 | — |
+| `SnapStoragePeerEligibilitySpec` | 11 | — |
+| `SnapPeerHealthSpec` | 11 | — |
+| `SNAPRequestTrackerSpec` | 20 | — |
+| `SNAPSyncMetricsSpec` | 2 | — |
+| `SyncProgressMonitorSpec` | 5 | — |
+
+**Coordinator-level suites:**
+
+| Suite | ~tests | Notes |
+|---|---|---|
+| `AccountRangeCoordinatorSpec` | 34 | |
+| `AccountRangeWorkerSpec` | 9 | |
+| `ByteCodeCoordinatorSpec` | 22 | |
+| `ByteCodeWorkerSpec` | 7 | |
+| `StorageRangeCoordinatorSpec` | 55 | |
+| `StorageRangeWorkerSpec` | 5 | |
+| `StorageFloorSelectionSpec` | 4 | |
+| `TrieNodeHealingCoordinatorSpec` | 44 | |
+| `TrieNodeHealingWorkerSpec` | 5 | |
+| `TrieNodeHealingScopeCaptureSpec` | 3 | |
+| `TrieNodeHealingScopedVerificationSpec` | 2 | |
+| `GcPressureSamplerSpec` | 4 | |
+| heal-verification family | — | Pruned*, Scoped*, Decoupled*, FrontierRebuild, RebuildFrontierBfsMultiSeed, HealingFrontierResume, CleanRebuildEarlyCompletion, ForceCompletedStorageVerification, StaleVerificationWalk, SubtreeCompleteSeeding, HealedAccountCode, `PathHealPresenceSpec` (Path/ETH) |
+| #1501 additions | — | `SnapIntakeBudgetSpec`, `SnapHeapWatchdogSpec`, `GatedTaskFileReplaySpec` |
+
+**Adjacent suites:**
+- `SyncControllerSpec`.
+- `ChainDownloaderSpec` (26), `PivotHeaderBootstrapSpec` (16).
+- the storage specs: `SnapSyncProgressStorageSpec`, `SnapStorageDoneStorageSpec`, `HealingFrontierStorageSpec`,
+  `BfsQueueStorageSpec`.
+- `network/SnapGoodPeersSpec`, `NetworkPeerManagerSpec`.
+
+**Gaps the split moves code through without coverage:**
+- No controller-level test of the stagnation watchdog. The `maybeRestartIf*` methods are private; only
+  `evaluateStorageTail` is unit-tested.
+- No test of how complete the resets in `restartSnapSync`, `wakeFromDormant` and `enterDormantMode` are.
+- No test of pivot refresh (`refreshPivotInPlace`, `completePivotRefreshWithStateRoot`) beyond the
+  `SNAPLazyHealAnchorSpec` anchors.
+- No test of `handleHandshakedPeersBootstrapReactivity`.
+- Each of the six `SNAP*Spec` controller fixtures builds its own stubbed NPMA. Fixture work comes first (S0d).
+
+### R13a. [016] What CI actually runs (corrects the earlier "Tier 1/2" wording)
+
+- **`testEssential` (Tier 1)** is `testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest`
+  (`build.sbt` ~L527–534). It runs in the CI job **"Test and Build (JDK 25, Scala 3.3.8)"** (`ci.yml` ~L90). This is
+  the **only test gate on PRs to `staging`**.
+- **`testStandard` (Tier 2)** also passes `-l SyncTest` (`build.sbt` ~L544). Its coverage job is **skipped** for PRs
+  to `staging` and for pushes to `staging` (`ci.yml` ~L110: `if: github.base_ref != 'staging' && …`). It runs only
+  on PRs to `main`.
+- **No workflow runs `SyncTest`-tagged tests.**
+
+Applied to the R13 suites (grep of tags, post-#1501 staging):
+
+| Suite | Tag | Runs in the staging PR gate? |
+|---|---|---|
+| `SyncControllerSpec` (~35 tests, incl. task #68 at `:762`) | `SyncTest` | **no** |
+| `PivotHeaderBootstrapSpec` (~9) | `SyncTest` | **no** |
+| `SnapServingActorSpec` (~5) | `SyncTest` | **no** |
+| every other R13 suite: all `SNAP*Spec` controller suites, all coordinator, worker and heal-verification suites, the storage specs, `NetworkPeerManagerSpec`, the #1501 specs | untagged (no excluding tag) | yes (Tier 1) |
+
+So until S0e adds a job, `SyncControllerSpec` (including the task #68 test) is not run by any PR check. This explains
+why the docs-only CI runs on this branch never showed #68: run `c311169f9` had 5,258 passed and 1 failed; run
+`cfb1d9eb6` had 5,287 passed and 0 failed. **S0e** adds a SNAP-scoped `SyncTest` job (T007), and the slice checklist
+requires it.
+
+**Known flake.** `StaleVerificationWalkSpec` (TNHC, Tier 1) has 4 wall-clock `eventually(timeout(5.seconds))` blocks
+at `:89`, `:95`, `:122` and `:129` (project task #85). It failed once on a docs-only commit (run for `c311169f9`:
+"should hand off to lazy healing, never declare clean, once re-pegs keep superseding the verification walk",
+`:129`, `0 was not equal to 1`). S0g stabilises it, test-only, before C-H0. Until then the flake policy (spec
+FR-039) applies.
+
+**[016] Test baseline, task #68 (user, 2026-10-08)**: the one known pre-existing failure on staging is
+`SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node"
+(`src/test/scala/com/chipprbots/ethereum/blockchain/sync/SyncControllerSpec.scala:762`). It is the only failure a
+slice may show (spec FR-033), and only in the S0e `SyncTest` job, because Tier 1 does not run it (R13a). An earlier draft guessed it was a fast-sync timing test from
+`Main-Glamsterdam-Soak.md`; that guess was wrong. T002 confirms it in the first S0e job run and records the per-suite counts (total/passed/ignored)
+for every R13 suite, from both the Tier 1 job and the S0e job.
+
+## R14. [016] Module state interfaces: baseline sizes (input to FR-016 (c))
+
+The interfaces below are derived from the R3 matrix. Each module (plan.md module map) is given the methods it owns.
+For every item one of those methods reads or writes, the item is:
+- **private** if no other module's method touches it (`syncing` arms excluded);
+- otherwise **shared**, and placed in one of four groups: hubs (`SnapSharedState`), child refs
+  (`CoordinatorHandles`, P1), phase flags (`PhaseFlags`, P2), or other (the module's own `<Module>State`).
+
+`(W)` means the module writes the item.
+
+The last column is the `<Module>State` member count **before** P1/P2, when every shared item would be a member, and
+**after**, when the child refs and flags are capability traits and only "other shared" items are members.
+
+**Caveats:**
+1. Attribution is per method, by regex, with `syncing` arms excluded. The arms join their module in P4, so expect
+   some interfaces to grow by the arms' fields; the P4 arm-order table (T036) lists them.
+2. Some "private" items are written only by reset paths or by `syncing`. Examples are `bytecodesEstimatedTotal`,
+   `lastProbeAttemptMs` and `probeAttemptCount` under M9; after P2/P4 they may belong to another module.
+3. M5's resume code sits today inside `launchAccountRangeWorkers` and `startSnapSync`, so its row here is nearly
+   empty. Its real interface is set when M5 moves.
+
+The compiler-confirmed count recorded in each module PR replaces the number here. From then on that number may not
+grow without a justification line in the PR.
+
+| Module | Private (exclusive) | Hubs → `SnapSharedState` | Child refs → `CoordinatorHandles` | Flags → `PhaseFlags` | Other shared → `<Module>State` | `<Module>State` size (pre-P1/P2 → post) |
+|---|---|---|---|---|---|---|
+| M2 StateValidationModule | — | `pivotBlock`, `stateRoot` | — | — | `validationInProgress`(W), `validationGeneration`(W), `healingValidatedRoot`(W) | 5 → **3** |
+| M3 SnapPeerPool | `lastSnapExclusions`, `lastSnapExclusionLogMs`, `pendingDisconnectedPeers`, `fruitlessEvictionCycles`, `lastEvictionSnapCount`, `bestEth68PeerForCalibration`, `snapServerPeerLastConnectAttemptMs` | `stateRoot`, `requestTracker` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`, `trieNodeHealingCoordinator` | — | `snapPeerEvictionStarted`(W), `snapServerPeersSchedulerStarted`(W) | 8 → **2** |
+| M4 SnapFinalization | `chainDownloadComplete`, `headerHold`, `lastHeaderHoldWarnMs`, `holdLastCursor`, `holdLastAdvanceMs`, `pathPublish` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `progressMonitor`(W) | `chainDownloader`(W) | `awaitingHealedCode`(W), `healedCodeWaitExhausted`, `bytecodeForceCompleted` | `coordinatorGeneration`(W), `clPivotHint`, `healedCodeHashes` | 11 → **3** |
+| M5 SnapResumePlanner | — | `pivotBlock` | — | — | `mptStorage`(W) | 2 → **1** |
+| M6 HealingOrchestrator | `trieWalkInProgress`, `healingRoundCount` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `bytecodeCoordinator`(W), `trieNodeHealingCoordinator`(W) | `awaitingHealedCode`(W), `healedCodeWaitExhausted`(W), `bytecodeForceCompleted`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `clPivotHint`, `healingValidatedRoot`(W), `pendingPivotRefresh`, `healingServeRootRequestInFlight`(W), `lastHealingServeRootBlock`(W), `healRepegNoRootAttempts`(W), `healedCodeHashes`(W), `healingWalkLocalOnly` | 20 → **10** |
+| M7 StagnationWatchdog | `lastPivotRestartMs`, `storageStagnationRefreshAttempted`, `lastBytecodeProgressMs`, `lastBytecodeProgressCount`, `consecutiveAccountStallRefreshes` | `currentPhase`, `pivotBlock`, `stateRoot` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator` | `bytecodePhaseComplete`, `storagePhaseComplete`, `bytecodeForceCompleted`(W), `forceCompleteStorageSent`(W) | `storageTailBaseline`(W), `lastStorageProgressMs`(W), `lastAccountProgressMs`(W), `lastAccountTasksCompleted`(W), `lastAccountsDownloaded`(W) | 15 → **5** |
+| M8 PivotSelector | `minPivotHint`, `clHintArrivedAtMs` | `currentPhase`(W), `pivotBlock`(W), `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `bytecodeCoordinator`(W), `storageRangeCoordinator`(W) | `accountsComplete`(W), `bytecodePhaseComplete`(W), `storagePhaseComplete`(W), `storagePhaseForceCompleted`(W), `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `clPivotHint`(W), `bootstrapRetryCount`(W), `storageTailBaseline`(W), `lastStorageProgressMs`(W) | 18 → **6** |
+| M9 SyncLifecycle | `criticalFailureCount`, `accountsAtLastCriticalFailure`, `dormantRetryCount`, `bytecodesEstimatedTotal`, `lastProbeAttemptMs`, `probeAttemptCount` | `currentPhase`(W), `pivotBlock`(W), `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `accountRangeCoordinator`(W), `bytecodeCoordinator`(W), `storageRangeCoordinator`(W), `trieNodeHealingCoordinator`(W), `chainDownloader` | `accountsComplete`(W), `bytecodePhaseComplete`(W), `storagePhaseComplete`(W), `storagePhaseForceCompleted`(W), `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`(W), `validationInProgress`(W), `validationGeneration`(W), `healingValidatedRoot`(W), `bootstrapRetryCount`(W), `pivotProbeRequestId`(W), `proactiveRollNeedsProbe`(W), `pendingProbeCommit`(W), `consecutivePivotRefreshes`(W), `pendingPivotRefresh`(W), `healingServeRootRequestInFlight`(W), `lastHealingServeRootBlock`(W), `snapPeerEvictionStarted`(W), `snapServerPeersSchedulerStarted`(W), `healingWalkLocalOnly`(W) | 31 → **16** |
+| M10 PivotRefresher | `lastProactivePivotBlock`, `retryRefreshCounts`, `failedPivotBlocks` | `currentPhase`, `pivotBlock`(W), `stateRoot`(W), `requestTracker` | `accountRangeCoordinator`, `bytecodeCoordinator`, `storageRangeCoordinator`, `trieNodeHealingCoordinator`, `chainDownloader` | — | `clPivotHint`, `preservedRangeProgress`, `preservedAtPivotBlock`(W), `validationGeneration`(W), `pivotProbeRequestId`(W), `proactiveRollNeedsProbe`(W), `pendingProbeCommit`(W), `consecutivePivotRefreshes`(W), `pendingPivotRefresh`(W), `healRepegNoRootAttempts`(W), `lastAccountProgressMs`(W) | 20 → **11** |
+| M11 DownloadSupervisor | `preservedTaskFiles`, `launchedAccountGeneration`, `currentCarrySource` | `currentPhase`(W), `pivotBlock`, `stateRoot`(W), `requestTracker`(W), `progressMonitor` | `accountRangeCoordinator`(W), `bytecodeCoordinator`(W), `storageRangeCoordinator`(W) | `resumedStaleCursors`(W), `accountsComplete`, `bytecodePhaseComplete`, `storagePhaseComplete`, `storagePhaseForceCompleted`, `forceCompleteStorageSent`(W) | `mptStorage`(W), `coordinatorGeneration`, `preservedRangeProgress`(W), `preservedAtPivotBlock`(W), `healingValidatedRoot`, `lastAccountProgressMs`(W), `lastAccountTasksCompleted`(W), `lastAccountsDownloaded`(W) | 22 → **8** |
+
+M1 (pure policy objects) has no state interface. The coordinator modules' interfaces are derived in T060.
+
+### R14a. [016] Callee coupling: `<Callee>Api` baseline (input to FR-016 (c), prism C5)
+
+A module that calls a method of another module, or of code not yet extracted, must name that callee's
+`<Callee>Api` trait in its self-type. The callee is then reachable only through declared members, and each member
+counts towards the caller's coupling.
+
+The table below was derived on post-#1501 staging, using the same regex method as R3:
+- Every top-level `def` span in the impl class (from one `def` to the next at the same indent) is scanned for calls
+  to defs that the module map assigns to other modules.
+- The scan over-attributes: class-level vals and closures between two defs are counted in the preceding def's span.
+- So these counts are an **upper-bound baseline**. Each module PR records the compiler-confirmed set, which replaces
+  the number here.
+
+Calls into code that has not been extracted yet are declared against the **future** owner's Api trait, and the
+current core implements it. For example, M7 names `PivotRefreshApi` (`refreshPivotInPlace`,
+`completePivotRefreshWithStateRoot`) and `LifecycleApi` (`enterDormantMode`, `recordCriticalFailure`) long before
+M9/M10 move.
+
+| Module | Calls into other modules (→ `<Callee>Api` members) | Count | Calls into core / unassigned (incl. `syncing`, `idle`, …) |
+|---|---|---|---|
+| M2 | M5: `getOrCreateMptStorage` | 1 | `start` |
+| M3 | M4: `completed`; M9: `restartSnapSync`, `wakeFromDormant` | 3 | `handshakedPeers`, `idle`, `peersToDownloadFrom` |
+| M4 | M3: `calibratePivotTD`; M5: `accountsCompleteTaskFilePaths`, `getOrCreateMptStorage`, `sweepSupersededTaskFiles`; M6: `dropHealedCodeNowPresent`, `queueHealedCode`; M8: `startSnapSync`, `updateBestBlockForPivot`; M9: `restartSnapSync`, `stopSnapOnlySchedules`, `stopStateSyncChildren` | 11 | `onStop`, `peersToDownloadFrom`, `start`, `syncing` |
+| M5 | M2: `validateState`; M3: `calibratePivotTD`, `handleHandshakedPeersRateTracking`, `startSnapPeerEviction`; M4: `completeSnapSync`, `completed`, `startPathPublish`; M6: `maybeRequestHealingServeRoot`; M8: `bootstrapping`, `startSnapSync`; M9: `restartSnapSync`, `stopSnapOnlySchedules`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace` | 14 | `handshakedPeers`, `start`, `syncing` |
+| M6 | M2: `validateState`; M3: `currentNetworkBestFromSnapPeers`, `snapServingPeers`, `startSnapServerPeersScheduler`; M4: `completedWithBackfill`, `finalizeSnapSync`; M5: `getOrCreateMptStorage`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace`; M11: `checkAllDownloadsComplete`, `requestByteCodes` | 11 | `peersToDownloadFrom`, `start`, `syncing` |
+| M7 | M2: `validateState`; M4: `completeSnapSync`, `finalizeSnapSync`; M9: `enterDormantMode`, `recordCriticalFailure`; M10: `completePivotRefreshWithStateRoot`, `refreshPivotInPlace` | 7 | `handshakedPeers`, `start` |
+| M8 | M3: `calibratePivotTD`, `currentNetworkBestFromSnapPeers`, `evictNonSnapPeers`, `flushPeerDisconnects`, `handleHandshakedPeersBootstrapReactivity`, `handlePeerDisconnectedDebounced`, `pollHandshakedPeers`, `startSnapPeerEviction`, `startSnapServerPeersScheduler`; M4: `completed`, `startChainDownloader`; M5: `getOrCreateMptStorage`, `runGatedReplay`; M6: `startStateHealing`; M7: `scheduleStagnationChecks`; M9: `ensureHeapWatchdog`, `enterDormantMode`; M11: `checkAllDownloadsComplete`, `requestByteCodes`, `startAccountRangeSync` | 20 | `handshakedPeers`, `idle`, `onStop`, `peersToDownloadFrom`, `start`, `syncing` |
+| M9 | M2: `validateState`; M3: `flushPeerDisconnects`, `handleHandshakedPeersRateTracking`, `handlePeerDisconnectedDebounced`, `pollHandshakedPeers`; M4: `completed`, `completedWithBackfill`, `finalizeSnapSync`; M6: `resetHealedCodeHold`; M8: `handleCLPivotHint`, `startSnapSync`; M10: `refreshPivotInPlace` | 12 | `handshakedPeers`, `onStop`, `syncing` |
+| M10 | M2: `validateState`; M3: `bestSnapProbeTarget`, `currentNetworkBestFromSnapPeers`; M4: `completeSnapSync`, `completed`, `finalizeSnapSync`, `startChainDownloader`; M6: `anchorPivotBeforeLazyHandoff`, `maybeRequestHealingServeRoot`; M8: `startSnapSync`, `updateBestBlockForPivot`; M9: `restartSnapSync` | 12 | `peersToDownloadFrom`, `syncing` |
+| M11 | M3: `snapServingPeers`, `startSnapPeerEviction`, `startSnapServerPeersScheduler`; M4: `completeSnapSync`, `completed`, `startChainDownloader`; M5: `clearStorageDoneMarkers`, `deserializeSnapProgress`, `getOrCreateMptStorage`; M6: `startStateHealing`; M7: `maybeRestartIfAccountStagnant`, `scheduleStagnationChecks`; M9: `ensureHeapWatchdog` | 13 | `idle`, `peersToDownloadFrom`, `start` |
+
+**Shared capability traits are capped too.** Each one starts at the member count it has when it is created:
+- `SnapSharedState`: 5 hubs (getters, plus setters where written);
+- `CoordinatorHandles`: set in P1, including the abstract `def intakeBudget`;
+- `PhaseFlags`: 9 flags + `reset(kind)`;
+- `SnapControllerEnv`: set in T041a.
+
+A PR that adds a member to any of them states the new count and a justification line, and the routing doc's cap is
+updated in the same PR (FR-016 (c)).
+
+### R14b. [016] Coordinator module state interfaces (T060; input to FR-016 (c) for C-*)
+
+The same derivation as R14/R14a, with one difference. A coordinator's behaviour arms stay in its core (no C-* row moves
+an arm), so they count as "other code": a field a module shares with an arm is a State member. **State** = shared
+mutable fields + the module's own fields that rule (d) keeps in the core. **Api** = distinct `def`s of other modules or
+the core that the module calls. It is an upper bound by name match, like R14a; sibling modules of the same coordinator
+count. Constructor parameters and immutable `val`s are not in either count. A coordinator has no
+`SnapControllerEnv`, so the compiler will demand them unless a per-coordinator env exists (T060b item 5). Each C-* PR
+records the compiler-confirmed counts, which replace these. Members and field lists: coordinator-characterization.md
+§3.
+
+| Module | Lines | State | Api | Storage refs moved (genuine) | `StateIngest` members / other stores |
+|---|---|---|---|---|---|
+| C-B1 `ByteCodeDispatch` | 128 | 9 | 1 | 0 | — |
+| C-B1 `ByteCodeResponseHandling` | 192 | 7 | 9 | 3 (3) | `bytecode` |
+| C-A1 `AccountPeerDispatch` | 301 | 17 | 1 | 0 | — |
+| C-A2 `AccountTaskLifecycle` | 320 | 18 | 15 | 0 | — |
+| C-A3 `AccountTrieAssembly` | 171 | 12 | 3 | 5 (3) | `pathNodes`; `MptStorage` |
+| C-A4 `ContractWorkCarry` | 192 | 4 (about 15 with the task-file I/O vals) | 2 | 6 (1, + `storageDone`, uncounted) | `MptStorage`, `SnapStorageDoneStorage` |
+| C-S1 `StoragePeerDispatch` | 481 | 23 | 1 | 2 (0) | — |
+| C-S2 `StorageOrderedApply` | 359 | 11 | 7 | 16 (12) | `pathNodes`; `MptStorage`, `SnapSyncProgressStorage` |
+| C-S3 `StorageDoneMarkers` | 112 | 9 | 1 | 8 (8) | `flatSlots`; `SnapStorageDoneStorage` |
+| C-S4 `StorageResponseProcessing` (+ #1533 pipeline) | 476 | 19 | 14 | 3 (0) | — |
+| C-H1 `FrontierPersistence` | 133 | 9 | 0 | 11 (11) | `MptStorage`, `HealingFrontierStorage` |
+| C-H2 `FrontierRebuildBfs` | 437 | 2 | 2 | 10 (4) | `MptStorage`, `HealingFrontierStorage`, `BfsQueueStorage` |
+| C-H3 `HealVerification` | 122 | 11 | 2 | 4 (4) | `pathNodes`; `HealingFrontierStorage` |
+| C-H4 `HealDispatch` | 241 | 18 | 1 | 0 | — |
+| C-H5 `HealResponseProcessing` | 440 | 23 | 11 | 12 (7) | `bytecode` (`Option`), `pathNodes`; `MptStorage`, `HealingFrontierStorage` |

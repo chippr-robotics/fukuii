@@ -31,6 +31,25 @@ object StorageTaskFile:
         Files.createTempFile(d, prefix, suffix)
       case None => Files.createTempFile(prefix, suffix)
 
+  /** Read entries `[fromEntry, untilEntry)` of fixed size `entrySize` from `path`. The callback's array is reused, so a
+    * caller that keeps an entry must copy it. A file shorter than `untilEntry` entries is an error, never a silent
+    * stop.
+    */
+  def foreachEntry(path: Path, entrySize: Int, fromEntry: Long, untilEntry: Long)(f: Array[Byte] => Unit): Unit =
+    if untilEntry > fromEntry then
+      val in = new java.io.BufferedInputStream(Files.newInputStream(path), 1 << 16)
+      try
+        in.skipNBytes(fromEntry * entrySize)
+        val buf = new Array[Byte](entrySize)
+        var i = fromEntry
+        while i < untilEntry do
+          in.readNBytes(buf, 0, entrySize) match
+            case n if n == entrySize => f(buf)
+            case n =>
+              throw new java.io.IOException(s"$path: short read at entry $i ($n of $entrySize bytes)")
+          i += 1
+      finally in.close()
+
   /** Whether a persisted task file can be trusted.
     *
     * With a persisted `expectedCount` the file must exist and be exactly `expectedCount * entrySize` bytes; count 0

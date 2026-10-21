@@ -10,7 +10,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers {
+class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers:
 
   // these examples were taken from http://homes.esat.kuleuven.be/~bosselae/ripemd160.html#Outline
   val examples: TableFor2[String, String] = Table[String, String](
@@ -35,5 +35,3 @@ class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Match
       encodedHash shouldEqual result
     }
   }
-
-}

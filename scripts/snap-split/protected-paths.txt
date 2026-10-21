@@ -1,0 +1,16 @@
+# fnmatch patterns (repo-relative). On refactor/snap-016-* branches no commit may touch a matching file
+# (plan.md Move verification step 4: S0c golden vectors and S0a/S0b pin tests stay byte-unchanged).
+#
+# STEP 4 IS ONLY AS STRONG AS THIS LIST. S0b and S0c MUST add their pin and golden paths in their own PRs
+# (or the first refactor PR after them), for example:
+#   src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncControllerSpec.scala  (S0b pins)
+#   src/test/resources/snap-golden/*                                                          (S0c goldens)
+# Until then the check covers only the entries below.
+#
+# S0a (#1508): the #1367 TD-PROXY-GAP pin.
+src/test/scala/com/chipprbots/ethereum/network/NetworkPeerManagerSpec.scala
+#
+# S0b (#1512): controller pins and the ChildFactories seam test. S0c: frozen-format goldens.
+src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncControllerPinSpec.scala
+src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/ChildFactoriesSpec.scala
+src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SnapFrozenFormatsGoldenSpec.scala

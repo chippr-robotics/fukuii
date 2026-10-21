@@ -217,6 +217,20 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     SNAPSyncController.unservablePivotTarget(BigInt(1000), BigInt(980), None, BigInt(50)) shouldBe None
   }
 
+  // #1555, Platåberget 2026-10-10: the CL head froze at 358944, so every heal pivot was 358944 - 64 = 358880, which no
+  // peer served; the best snap peer advertised 359034. The fallback the healing path never asked for is 358984.
+  it should "pick 358984 for the #1555 stalled-CL heal pivot (clHead 358944, pivot 358880, peer tip 359034)" taggedAs UnitTest in {
+    SNAPSyncController.unservablePivotTarget(
+      clHead = BigInt(358944),
+      currentPivot = BigInt(358880),
+      peerBest = Some(BigInt(359034)),
+      margin = BigInt(50)
+    ) shouldBe Some(BigInt(358984))
+    // No snap peer polled yet: the CL side alone still moves the pivot off the dead root.
+    SNAPSyncController.unservablePivotTarget(BigInt(358944), BigInt(358880), None, BigInt(50)) shouldBe
+      Some(BigInt(358894))
+  }
+
   it should "give None when nothing is newer than the unservable pivot, so a stale CL cannot make it flap" taggedAs UnitTest in {
     SNAPSyncController.unservablePivotTarget(BigInt(328440), BigInt(328440), Some(BigInt(328440)), BigInt(50)) shouldBe
       None
@@ -524,18 +538,90 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       }
 
   // forge review of f2583dc42 (BUG-BC3 3rd follow-up). isPoSChainOverride makes the PoS/CL-anchored paths drivable
-  // live. A CL hint whose head - pivotBlockOffset == the current pivot is a STALLED CL (target not strictly newer),
-  // the Platåberget state: EL SYNCING keeps Lighthouse from advancing.
-  private def stalledClHint(f: Fixture, snap: TypedActorRef[SNAPSyncController.Command], pivot: BigInt): Unit =
-    val header = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + PivotOffset))
+  // live. A CL hint whose head - pivotBlockOffset is not newer than the current pivot is a STALLED CL (target not
+  // strictly newer), the Platåberget state: EL SYNCING keeps Lighthouse from advancing.
+  //
+  // #1555: since HealingAllPeersStateless reports the root as unservable, a CL head at pivot + offset (64) no longer
+  // leaves the heal without a target: the #1478 fallback moves to clHead - margin (50) = pivot + 14. The budget tests
+  // below need "genuinely no servable target", so their stalled CL sits at pivot + margin, where neither the offset
+  // target (pivot - 14) nor the fallback (pivot) is newer, and no snap peer is connected.
+  private val ServeWindowMargin = BigInt(50) // SNAPSyncController's SnapServeWindowMargin
+  private def stalledClHint(
+      f: Fixture,
+      snap: TypedActorRef[SNAPSyncController.Command],
+      pivot: BigInt,
+      lead: BigInt = ServeWindowMargin
+  ): Unit =
+    val header = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + lead))
     snap ! SNAPSyncController.CLPivotHint(header.hash.value, Some(header))
     f.awaitProcessed(snap)
+
+  // #1555 fix (a): the Platåberget shape. The CL head is frozen at pivot + offset, so the CL target equals the pivot,
+  // and every healing peer is stateless for its root. The heal must re-peg to clHead - margin (a header bootstrap for
+  // that block) instead of logging "not strictly newer ... Skipping refresh" and spending the budget.
+  "SNAPSyncController on a PoS chain with a stalled CL" should
+    "re-peg a stateless heal root to clHead - margin instead of skipping the refresh (#1555)" taggedAs UnitTest in new Fixture:
+      val pivot0 = BigInt(2_000)
+      storeGenesis()
+      storeHeaderAt(pivot0, fakeRoot(0xe6))
+      seedResumeState(pivot0, fakeRoot(0xe6))
+      peers.set(Map.empty)
+      val snap =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+      awaitFirstPoll()
+      snap ! SNAPSyncController.Start
+      stalledClHint(this, snap, pivot0, lead = BigInt(PivotOffset))
+
+      snap ! SNAPSyncController.HealingAllPeersStateless
+      awaitProcessed(snap)
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.StartRegularSyncBootstrap(n) if n == pivot0 + PivotOffset - ServeWindowMargin =>
+          FishingOutcomes.complete
+        case SNAPSyncController.StartRegularSyncBootstrap(n) => FishingOutcomes.fail(s"unexpected re-peg target $n")
+        case SNAPSyncController.SnapSyncFinalized(_)         => FishingOutcomes.fail("lazy handoff instead of a re-peg")
+        case SyncProtocol.HealingImpossible                  => FishingOutcomes.fail("unexpected HealingImpossible")
+        case _                                               => FishingOutcomes.continueAndIgnore
+      }
+
+  // #1555 fix (a), the counted replay: a "stateless" attempt that found no target arms a counted RetryPivotRefresh;
+  // its replay must keep the unservable fallback, so once a snap peer advertises a newer tip it re-pegs to the capped
+  // peer tip - margin.
+  it should "keep the unservable-pivot fallback on the counted RetryPivotRefresh replay (#1555)" taggedAs UnitTest in new Fixture:
+    val pivot0 = BigInt(2_000)
+    storeGenesis()
+    storeHeaderAt(pivot0, fakeRoot(0xe7))
+    seedResumeState(pivot0, fakeRoot(0xe7))
+    peers.set(Map.empty)
+    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    awaitFirstPoll()
+    snap ! SNAPSyncController.Start
+    stalledClHint(this, snap, pivot0)
+
+    // No target yet (CL at pivot + margin, no snap peer): counted, arms the replay.
+    snap ! SNAPSyncController.HealingAllPeersStateless
+    awaitProcessed(snap)
+    // A snap peer now advertises 2_100: capped at clHead + 128 = 2_178, minus margin = 2_050. The peer-poll reply
+    // crosses a classic-actor messageAdapter hop, so retry until it has landed (a replay that still sees no peer is
+    // counted and re-armed with the same unservable provenance, well inside the 10-attempt budget).
+    peers.set(peersAt(height = 2_100, snap = true))
+    eventually {
+      snap ! SNAPSyncController.PollHandshakedPeers
+      awaitProcessed(snap)
+      awaitProcessed(snap)
+      snap ! SNAPSyncController.RetryPivotRefresh
+      awaitProcessed(snap)
+      parent.fishForMessage(1.second) {
+        case SNAPSyncController.StartRegularSyncBootstrap(n) if n == BigInt(2_050) => FishingOutcomes.complete
+        case SNAPSyncController.SnapSyncFinalized(_) => FishingOutcomes.fail("lazy handoff instead of a re-peg")
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+    }
 
   // (a) A GENUINE HealingAllPeersStateless with a stalled CL must count and reach the handoff after 10. With a live
   // CL hint newPivotOpt is empty ONLY via the CL-stalled branch, so any exemption keyed on "CL has not advanced"
   // makes the budget unreachable and wedges the node (the coordinator latches pivotRefreshRequested; only a
   // 15-minute watchdog retries).
-  "SNAPSyncController on a PoS chain with a stalled CL" should
+  it should
     "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in new Fixture:
       val pivot0 = BigInt(2_000)
       storeGenesis()

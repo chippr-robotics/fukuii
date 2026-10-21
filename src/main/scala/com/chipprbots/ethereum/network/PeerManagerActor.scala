@@ -74,11 +74,34 @@ object PeerManagerActor:
   // Fire-and-forget wire messages forwarded by the shell:
   case object StartConnectingCmd extends Command
   final case class HandlePeerConnectionCmd(connection: ActorRef, remoteAddress: InetSocketAddress) extends Command
-  final case class ConnectToPeerCmd(uri: URI) extends Command
+
+  /** Dial `uri`. `explicit` marks an operator request (net_connectToPeer, configured snap-server peers): it bypasses
+    * the wrong-network dial exclusion (#88), logged at INFO. Internal dial paths (known nodes, discovery) leave it
+    * false.
+    */
+  final case class ConnectToPeerCmd(uri: URI, explicit: Boolean = false) extends Command
   final case class RemoveMaintainedPeerCmd(nodeId: String) extends Command
   final case class DisconnectPeerFireAndForgetCmd(peerId: PeerId) extends Command
   final case class SendMessageCmd(message: MessageSerializable, peerId: PeerId) extends Command
+
+  /** Outgoing slots above `maxOutgoingPeers` that remembered good snap peers may use (spec 012). */
+  val SnapGoodPeersReservedSlots: Int = 2
+
+  /** SNAP data served by one peer since the last report (spec 012). */
+  final case class SnapServed(responses: Int, bytes: Long)
+
+  /** Periodic report from NetworkPeerManagerActor of peers that answered SNAP requests with data. */
+  final case class SnapServedReportCmd(served: Map[PeerId, SnapServed]) extends Command
+
+  /** Self-scheduled: (re-)dial the remembered good snap peers that are not connected. */
+  private case object RedialSnapGoodPeers extends Command
   final case class PeerClosedConnectionCmd(peerHostAddress: String, reason: Long) extends Command
+
+  /** Sent by NetworkPeerManagerActor for a handshaked peer whose head is still genesis after the grace period while our
+    * own chain is past genesis (spec 011). Policy (maintained/trusted exemption, disconnect, dial exclusion) is applied
+    * here, next to the wrong-network exclusion it reuses.
+    */
+  final case class EvictGenesisHeadPeerCmd(peerId: PeerId, clientId: String) extends Command
 
   /** A [[PeerEventBusActor.PeerEvent]] delivered to the shell (the subscriber) and forwarded to the core. */
   final case class PeerEventReceived(ev: PeerEvent) extends Command
@@ -131,7 +154,8 @@ object PeerManagerActor:
       peerFactory: (TypedActorContext[Command], InetSocketAddress, Boolean) => typed.ActorRef[PeerActor.Command],
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
-      externalSchedulerOpt: Option[Scheduler] = None
+      externalSchedulerOpt: Option[Scheduler] = None,
+      snapGoodPeers: Option[SnapGoodPeers] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       new Impl(
@@ -144,6 +168,7 @@ object PeerManagerActor:
         discoveryConfig,
         blacklist,
         externalSchedulerOpt,
+        snapGoodPeers,
         context
       ).waitingForStart()
     }
@@ -160,6 +185,7 @@ object PeerManagerActor:
       discoveryConfig: DiscoveryConfig,
       val blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler],
+      snapGoodPeers: Option[SnapGoodPeers],
       context: TypedActorContext[Command]
   ):
 
@@ -217,6 +243,8 @@ object PeerManagerActor:
 
     // Subscribe the core to the handshake event of any peer.
     peerEventBus ! SubscribeCmd(SubscriptionClassifier.PeerHandshaked, peerEventAdapter)
+    // ...and to wrong-network handshake failures, so their node IDs stop being re-dialled (#88).
+    peerEventBus ! SubscribeCmd(SubscriptionClassifier.WrongNetworkPeersClassifier, peerEventAdapter)
 
     /** Maximum number of blacklisted nodes will never be larger than number of peers provided by discovery Discovery
       * provides remote nodes from all networks (ETC,ETH, Mordor etc.) only during handshake we learn that some of the
@@ -228,6 +256,36 @@ object PeerManagerActor:
     private val maxBlacklistedNodes: Int = 32 * 8 * discoveryConfig.kademliaBucketSize
 
     private val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
+
+    /** Node IDs whose STATUS named another network or genesis (#88). On Sepolia 94 of 133 handshakes were such peers
+      * (networkIds 9745, 137, 100, 1, ...), and the same node IDs were re-dialled within minutes: the soft-tier IP
+      * blacklist for `UselessPeer` is minutes long by design (it must not exile peers that merely rejected us). A node
+      * on another network will not change networks, so it is excluded by node ID for
+      * `peerConfiguration.wrongNetworkExclusionDuration` (24 h default). Node ID, not IP, so a good node behind the
+      * same NAT is unaffected. ForkId rejections never land here.
+      */
+    private val wrongNetworkNodes = new WrongNetworkExclusions(maxBlacklistedNodes)
+
+    /** Every live PeerActor whose PeerHandshakeSuccessful we processed: its handshake peer ID and node ID. Subscribers
+      * (NetworkPeerManagerActor, PendingTransactionsManager, ...) register a peer under that ID on the handshake event
+      * whether or not we promote it, so a rejected handshake (excluded node, TooManyPeers, AlreadyConnected) must still
+      * end with PeerDisconnected under that ID, or each crawler redial leaves a permanent entry behind. An entry lives
+      * until the ref terminates, so the map is bounded by the number of live peer actors.
+      */
+    private val handshakeIdsByRef =
+      mutable.Map.empty[typed.ActorRef[PeerActor.Command], (PeerId, ByteString)]
+
+    /** True if a live connection other than `ref` is known under `nodeId`, promoted or not. */
+    private def nodeIdOwnedElsewhere(
+        nodeId: ByteString,
+        ref: typed.ActorRef[PeerActor.Command],
+        connectedPeers: ConnectedPeers
+    ): Boolean =
+      connectedPeers.hasOtherWithNodeId(nodeId, ref) ||
+        handshakeIdsByRef.exists { case (r, (_, nid)) => r != ref && nid == nodeId && connectedPeers.isTracked(r) }
+
+    private def isExcludedWrongNetwork(nodeId: ByteString): Boolean =
+      wrongNetworkNodes.isExcluded(nodeId, System.currentTimeMillis())
 
     /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
       * immediately without querying individual peer actors.
@@ -296,7 +354,8 @@ object PeerManagerActor:
           connectedPeers.isConnectionHandled(socketAddress) ||
             connectedPeers.hasHandshakedWith(node.id)
 
-        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString))
+        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
+        !isExcludedWrongNetwork(node.id)
 
     // -----------------------------------------------------------------------
     // State 1: waitingForStart (stash everything until StartConnecting)
@@ -314,6 +373,12 @@ object PeerManagerActor:
             // Without this, the first connection attempt waits for updateNodesInitialDelay.
             // Core-geth dials bootstrap nodes at t+0; we should too.
             requestDiscoveredNodes()
+            // Spec 012: remembered snap servers are dialled first, ahead of the discovery scan.
+            snapGoodPeers.foreach { store =>
+              store.load(System.currentTimeMillis())
+              log.info("SNAP_GOOD_PEERS: loaded {} remembered snap peers from {}", store.size, store.config.file)
+            }
+            context.self ! RedialSnapGoodPeers
             stash.unstashAll(listening(ConnectedPeers.empty))
           case other =>
             stash.stash(other)
@@ -369,6 +434,10 @@ object PeerManagerActor:
           requestDiscoveredNodes()
           Some(Behaviors.same)
 
+        case RedialSnapGoodPeers =>
+          snapGoodPeers.foreach(store => redialSnapGoodPeers(store, connectedPeers))
+          Some(Behaviors.same)
+
         case KnownNodesFailed =>
           log.debug("KnownNodesManager ask timed out or failed; starting with empty known-nodes list")
           Some(Behaviors.same)
@@ -378,6 +447,40 @@ object PeerManagerActor:
           Some(Behaviors.same)
 
         case _ => None
+
+    /** Dial remembered good snap peers that are not connected, best first. An attempt without a later handshake counts
+      * against the entry (it is dropped past `maxFailedDials`); wrong-network exclusions and IP blacklists are
+      * respected (skipped without counting). Re-arms itself while any candidate is still unconnected.
+      */
+    /** `uri.getHost` keeps the brackets of an IPv6 literal; InetSocketAddress and the blacklist want it bare. */
+    private def bareHost(uri: URI): String = uri.getHost.stripPrefix("[").stripSuffix("]")
+
+    private def redialSnapGoodPeers(store: SnapGoodPeers, connectedPeers: ConnectedPeers): Unit =
+      val now = System.currentTimeMillis()
+      val pruned = store.prune(now)
+      val pending = store.candidates(now).filterNot { case (id, _) =>
+        connectedPeers.hasHandshakedWith(ByteString(Hex.decode(id)))
+      }
+      var dialled = 0
+      pending.foreach { case (id, uri) =>
+        val nodeId = ByteString(Hex.decode(id))
+        val host = bareHost(uri)
+        // A strike is counted only when connectWith will really dial: not excluded, not blacklisted, not already
+        // handled/pending, and within the (reserved-budget-extended) outgoing limit. Otherwise a full table would
+        // strike every remembered peer without any dial and delete the best servers.
+        val handled = connectedPeers.isConnectionHandled(new InetSocketAddress(host, uri.getPort)) ||
+          connectedPeers.hasIncomingPendingFromHost(host)
+        val hasCapacity = connectedPeers.outgoingPeersCount < effectiveMaxOutgoing + SnapGoodPeersReservedSlots
+        if !isExcludedWrongNetwork(nodeId) && !blacklist.isBlacklisted(PeerAddress(host)) && !handled && hasCapacity
+        then
+          store.recordDialAttempt(id)
+          dialled += 1
+          log.info("SNAP_GOOD_PEERS: dialling remembered snap peer {}@{}", id.take(16), host)
+          context.self ! ConnectToPeerCmd(uri)
+      }
+      if pruned > 0 || dialled > 0 then store.save()
+      if pending.nonEmpty then
+        scheduler.scheduleOnce(store.config.redialInterval)(context.self ! RedialSnapGoodPeers)(ec)
 
     private def maybeConnectToRandomNode(connectedPeers: ConnectedPeers, node: Node): Unit =
       if connectedPeers.outgoingConnectionDemand > 0 then
@@ -462,8 +565,8 @@ object PeerManagerActor:
         case HandlePeerConnectionCmd(connection, remoteAddress) =>
           Some(handleConnection(connection, remoteAddress, connectedPeers))
 
-        case ConnectToPeerCmd(uri) =>
-          Some(connectWith(uri, connectedPeers))
+        case ConnectToPeerCmd(uri, explicit) =>
+          Some(connectWith(uri, connectedPeers, explicit))
 
         case AddMaintainedPeerCmd(uri, replyTo) =>
           // Key by lowercase hex: every lookup (handshake, terminate, prune) uses the lowercase form, so a mixed-case
@@ -582,21 +685,27 @@ object PeerManagerActor:
           handleConnectionErrors(error)
           Behaviors.same
 
-    private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Behavior[Command] =
+    private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
-      val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
+      val host = bareHost(uri)
+      val remoteAddress = new InetSocketAddress(host, uri.getPort)
 
       val alreadyConnectedToPeer =
         connectedPeers.hasHandshakedWith(nodeId) ||
           connectedPeers.isConnectionHandled(remoteAddress) ||
-          connectedPeers.hasIncomingPendingFromHost(uri.getHost)
+          connectedPeers.hasIncomingPendingFromHost(host)
       // Trusted + maintained peers bypass the max outgoing limit.
       // Besu: DefaultPeerPrivileges.canExceedConnectionLimits checks maintainedPeers set.
       // go-ethereum: trustedConn flag skips maxPeers for trusted only; Fukuii extends this to maintained peers.
       val isMaintainedOrTrusted =
         trustedPeersByNodeId.contains(nodeIdHex) || maintainedPeersByNodeId.contains(nodeIdHex)
-      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
+      // Remembered good snap peers (spec 012) may use a small reserved budget above the normal limit, so that slots
+      // full of crawlers/useless peers cannot keep the proven snap servers out.
+      val isRememberedGood = snapGoodPeers.exists(_.contains(nodeIdHex))
+      val outgoingLimit =
+        effectiveMaxOutgoing + (if isRememberedGood then PeerManagerActor.SnapGoodPeersReservedSlots else 0)
+      val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < outgoingLimit
 
       val validConnection = for
         validHandler <- validateConnection(
@@ -607,8 +716,24 @@ object PeerManagerActor:
         validNumber <- validateConnection(validHandler, MaxOutgoingConnections, isOutgoingPeersNotMaxValue)
       yield validNumber
 
+      val excludedWrongNetwork = isExcludedWrongNetwork(nodeId)
+      // An operator's explicit request (admin_addPeer via maintained/trusted, net_connectToPeer, snap-server-peers)
+      // overrides the exclusion; internal dial paths do not.
+      val operatorRequested = isMaintainedOrTrusted || explicit
+
       validConnection match
+        case Right(_) if excludedWrongNetwork && !operatorRequested =>
+          // Known-nodes and other internal paths funnel here; discovery is also filtered in canConnectTo.
+          log.debug("Not dialling {}: node is excluded as wrong-network", uri)
+          Behaviors.same
+
         case Right(address) =>
+          if excludedWrongNetwork then
+            log.info(
+              "WRONG_NETWORK: dialling excluded node={} on explicit operator request; its last STATUS named another " +
+                "network or genesis, so the handshake will likely fail again",
+              nodeIdHex.take(16)
+            )
           val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
           peer.ref.toClassic.tell(PeerActor.ConnectTo(uri), peerEventAdapter.toClassic)
           if maintainedPeersByNodeId.values.exists(_ == uri) then pendingMaintainedConnections(peer.ref) = uri
@@ -651,9 +776,57 @@ object PeerManagerActor:
               replyTo ! DisconnectPeerResponse(disconnected = false)
           Some(Behaviors.same)
 
+        case EvictGenesisHeadPeerCmd(peerId, clientId) =>
+          if connectedPeers.getPeer(peerId).isEmpty then
+            log.debug("GENESIS_HEAD_EVICT: {} is no longer connected; nothing to evict", peerId.value.take(16))
+          connectedPeers.getPeer(peerId).foreach { peer =>
+            val nodeIdOpt = peer.nodeId
+            val nodeIdHex = nodeIdOpt.map(n => Hex.toHexString(n.toArray)).getOrElse("")
+            if maintainedPeersByNodeId.contains(nodeIdHex) || trustedPeersByNodeId.contains(nodeIdHex) then
+              log.debug("GENESIS_HEAD_EVICT: skipping maintained/trusted peer {}", nodeIdHex.take(16))
+            else
+              val duration = peerConfiguration.genesisHeadExclusionDuration
+              nodeIdOpt.foreach(n => wrongNetworkNodes.add(n, System.currentTimeMillis() + duration.toMillis))
+              log.info(
+                "GENESIS_HEAD_EVICT: disconnecting node={} host={} client={}; head still genesis after {}; " +
+                  "excluded from dialling for {}",
+                nodeIdHex.take(16),
+                peer.remoteAddress.getHostString,
+                clientId,
+                peerConfiguration.genesisHeadEvictionGrace,
+                duration
+              )
+              peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+          }
+          Some(Behaviors.same)
+
         case DisconnectPeerFireAndForgetCmd(peerId) =>
           connectedPeers.getPeer(peerId).foreach { peer =>
             peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.DisconnectRequested)
+          }
+          Some(Behaviors.same)
+
+        case SnapServedReportCmd(served) =>
+          snapGoodPeers.foreach { store =>
+            val now = System.currentTimeMillis()
+            var changed = false
+            served.foreach { case (peerId, s) =>
+              connectedPeers.getPeer(peerId).foreach { peer =>
+                peer.nodeId.filterNot(_ => peer.incomingConnection).foreach { nid =>
+                  // 1 per answered request + 1 per 64 KiB: rewards both frequency and volume.
+                  val weight = s.responses.toDouble + s.bytes.toDouble / 65536.0
+                  store.recordServed(
+                    Hex.toHexString(nid.toArray),
+                    peer.remoteAddress.getHostString,
+                    peer.remoteAddress.getPort,
+                    weight,
+                    now
+                  )
+                  changed = true
+                }
+              }
+            }
+            if changed then store.save()
           }
           Some(Behaviors.same)
 
@@ -684,6 +857,26 @@ object PeerManagerActor:
 
         case PeerEventReceived(PeerEvent.PeerHandshakeSuccessful(handshakedPeer, handshakeResult)) =>
           Some(handlePeerHandshakeSuccessful(handshakedPeer, handshakeResult, connectedPeers))
+
+        case PeerEventReceived(PeerEvent.PeerOnWrongNetwork(nodeId, remoteHost)) =>
+          val nodeIdHex = Hex.toHexString(nodeId.toArray)
+          // An operator-configured maintained/trusted peer is the operator's call, not ours.
+          if maintainedPeersByNodeId.contains(nodeIdHex) || trustedPeersByNodeId.contains(nodeIdHex) then
+            log.warn("Maintained/trusted peer {} ({}) is on a different network or genesis", nodeIdHex, remoteHost)
+          else
+            val duration = peerConfiguration.wrongNetworkExclusionDuration
+            val isNew = wrongNetworkNodes.add(nodeId, System.currentTimeMillis() + duration.toMillis)
+            // INFO once per newly excluded node; a still-excluded node can only reappear by dialling us, so DEBUG.
+            if isNew then
+              log.info(
+                "WRONG_NETWORK: excluding node={} host={} from dialling for {} (excluded={})",
+                nodeIdHex.take(16),
+                remoteHost,
+                duration,
+                wrongNetworkNodes.size
+              )
+            else log.debug("WRONG_NETWORK: node={} host={} still excluded", nodeIdHex.take(16), remoteHost)
+          Some(Behaviors.same)
 
         case PeerEventReceived(_) =>
           Some(Behaviors.same)
@@ -731,6 +924,13 @@ object PeerManagerActor:
             consecutiveTcpFailures.remove(ip)
       }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
+      // A handshake we saw but did not promote: subscribers know it only under its handshake ID, which
+      // removeTerminatedPeer (keyed on the pending path ID) never reports.
+      handshakeIdsByRef.remove(ref).foreach { case (handshakeId, nodeId) =>
+        if !terminatedPeersIds.exists(_ == handshakeId) && !nodeIdOwnedElsewhere(nodeId, ref, newConnectedPeers) then
+          log.debug("REJECTED_HANDSHAKE_GONE: publishing PeerDisconnected for {} ref={}", handshakeId, ref)
+          peerEventBus ! PublishCmd(PeerEvent.PeerDisconnected(handshakeId))
+      }
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         // Pending peers have path-based IDs (non-hex). Only handshaked peers have real hex node
@@ -782,6 +982,60 @@ object PeerManagerActor:
         case _ =>
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      val isTrusted =
+        handshakedPeer.nodeId.exists(nid => trustedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      if !connectedPeers.isTracked(handshakedPeer.ref) then
+        // The PeerActor published PeerHandshakeSuccessful and then stopped (TCP closed right after STATUS, as the
+        // enrscout crawler does) and its termination was processed first: the death-watch notification comes straight
+        // here, while the handshake event takes an extra hop through the event bus. Promoting it now would leave a
+        // handshaked entry whose actor is gone and whose termination will never arrive again: it held a slot, blocked
+        // re-dials of the node ID, and was "evicted" every ~70 s by the genesis-head check with DisconnectPeer going to
+        // dead letters (Sepolia v0.9.6).
+        log.info(
+          "STALE_HANDSHAKE: ignoring handshake of {} from {}: its peer actor has already terminated",
+          handshakedPeer.id.value.take(16),
+          handshakedPeer.remoteAddress
+        )
+        // Subscribers that registered the handshake must drop it again, unless another live connection to the same
+        // node ID (handshaked, or pending with its handshake seen) owns that peer ID.
+        if !handshakedPeer.nodeId.exists(nodeIdOwnedElsewhere(_, handshakedPeer.ref, connectedPeers)) then
+          peerEventBus ! PublishCmd(PeerEvent.PeerDisconnected(handshakedPeer.id))
+        listening(connectedPeers)
+      else
+        handshakedPeer.nodeId.foreach(nid => handshakeIdsByRef.update(handshakedPeer.ref, (handshakedPeer.id, nid)))
+        handleLiveHandshake(handshakedPeer, isMaintained, isTrusted, host, connectedPeers)
+
+    private def handleLiveHandshake(
+        handshakedPeer: Peer,
+        isMaintained: Boolean,
+        isTrusted: Boolean,
+        host: String,
+        connectedPeers: ConnectedPeers
+    ): Behavior[Command] =
+      if handshakedPeer.incomingConnection && !isMaintained && !isTrusted &&
+        handshakedPeer.nodeId.exists(isExcludedWrongNetwork)
+      then
+        // Dial exclusion only stops OUR dials. A node excluded by node ID (wrong network #88, or a genesis-head crawler
+        // evicted under spec 011) must not take an inbound slot back for the rest of its exclusion either: reject it
+        // as soon as the handshake names it, with no new grace period. Outbound handshakes are already gated in
+        // connectWith, where an explicit operator dial may bypass the exclusion.
+        log.info(
+          "EXCLUDED_PEER_REJECTED: inbound node={} host={} is excluded; disconnecting",
+          handshakedPeer.id.value.take(16),
+          host
+        )
+        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+        listening(connectedPeers)
+      else handleTrackedPeerHandshake(handshakedPeer, isMaintained, connectedPeers)
+
+    private def handleTrackedPeerHandshake(
+        handshakedPeer: Peer,
+        isMaintained: Boolean,
+        connectedPeers: ConnectedPeers
+    ): Behavior[Command] =
+      snapGoodPeers.foreach { store =>
+        if handshakedPeer.nodeId.exists(nid => store.markConnected(Hex.toHexString(nid.toArray))) then store.save()
+      }
       if handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers && !isMaintained
       then
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)
@@ -1038,7 +1292,25 @@ object PeerManagerActor:
     val longBlacklistDuration: FiniteDuration
     val statSlotDuration: FiniteDuration
     val statSlotCount: Int
+
+    /** How long a node whose STATUS named another network or genesis is kept off the dial list (#88). Concrete so the
+      * many test configurations keep compiling; overridden from `network.peer.wrong-network-exclusion-duration`.
+      */
+    val wrongNetworkExclusionDuration: FiniteDuration = PeerConfiguration.DefaultWrongNetworkExclusionDuration
+
+    /** Spec 011: how long a handshaked peer may keep a genesis head, while our chain is past genesis, before it is
+      * evicted. Zero disables. Overridden from `network.peer.genesis-head-eviction-grace`.
+      */
+    val genesisHeadEvictionGrace: FiniteDuration = PeerConfiguration.DefaultGenesisHeadEvictionGrace
+
+    /** How long an evicted genesis-head peer stays off the dial list (`network.peer.genesis-head-exclusion-duration`).
+      */
+    val genesisHeadExclusionDuration: FiniteDuration = PeerConfiguration.DefaultGenesisHeadExclusionDuration
   object PeerConfiguration:
+    val DefaultGenesisHeadEvictionGrace: FiniteDuration = 60.seconds
+    val DefaultGenesisHeadExclusionDuration: FiniteDuration = 1.hour
+    val DefaultWrongNetworkExclusionDuration: FiniteDuration = 24.hours
+
     trait ConnectionLimits:
       val minOutgoingPeers: Int
       val maxOutgoingPeers: Int
@@ -1197,6 +1469,32 @@ object PeerManagerActor:
         maybeAgeSeconds.map(age => stat.responsesReceived.toDouble / age)
       }
       .getOrElse(0.0)
+
+  /** Bounded node-ID exclusion list with per-entry expiry (wrong-network peers, #88). Insertion-ordered: past
+    * `maxEntries` the oldest entry is dropped. Not thread-safe; owned by the PeerManagerActor.
+    */
+  final class WrongNetworkExclusions(maxEntries: Int):
+    require(maxEntries >= 1, s"maxEntries must be >= 1, got $maxEntries")
+    private val untilMs = mutable.LinkedHashMap.empty[ByteString, Long]
+
+    /** Exclude `nodeId` until `expiresAtMs`. Returns true if the node was not already listed. */
+    def add(nodeId: ByteString, expiresAtMs: Long): Boolean =
+      val wasExcluded = untilMs.contains(nodeId)
+      untilMs.remove(nodeId)
+      untilMs.update(nodeId, expiresAtMs)
+      while untilMs.size > maxEntries do untilMs.remove(untilMs.head._1)
+      !wasExcluded
+
+    /** True while the exclusion has not expired. An expired entry is dropped on lookup. */
+    def isExcluded(nodeId: ByteString, nowMs: Long): Boolean =
+      untilMs.get(nodeId) match
+        case Some(until) if until > nowMs => true
+        case Some(_) =>
+          untilMs.remove(nodeId)
+          false
+        case None => false
+
+    def size: Int = untilMs.size
 
   def lruSet[A](maxEntries: Int): mutable.Set[A] =
     newSetFromMap[A](

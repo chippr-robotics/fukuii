@@ -20,12 +20,11 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
-import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
@@ -91,18 +90,14 @@ object StorageRecoveryActor:
 
   def apply(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      appStateStorage: AppStateStorage,
-      flatSlotStorage: FlatSlotStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    appStateStorage,
-    flatSlotStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -116,9 +111,7 @@ object StorageRecoveryActor:
     */
   def applyPreloaded(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      appStateStorage: AppStateStorage,
-      flatSlotStorage: FlatSlotStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
@@ -126,9 +119,7 @@ object StorageRecoveryActor:
       missing: Seq[(ByteString, ByteString)]
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    appStateStorage,
-    flatSlotStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -140,9 +131,7 @@ object StorageRecoveryActor:
   /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   private[sync] def testApply(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      appStateStorage: AppStateStorage,
-      flatSlotStorage: FlatSlotStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
@@ -151,9 +140,7 @@ object StorageRecoveryActor:
       coordinatorForTesting: Option[ActorRef] = None
   ): Behavior[Command] = scanning(
     stateRoot,
-    stateStorage,
-    appStateStorage,
-    flatSlotStorage,
+    stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
@@ -164,9 +151,7 @@ object StorageRecoveryActor:
 
   private def scanning(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      appStateStorage: AppStateStorage,
-      flatSlotStorage: FlatSlotStorage,
+      stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
@@ -185,7 +170,9 @@ object StorageRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingStorage(stateRoot, stateStorage, pivotBlockNumber, ctx.log))(ctx.executionContext)
+            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(
+              ctx.executionContext
+            )
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
@@ -197,7 +184,7 @@ object StorageRecoveryActor:
           if missing.isEmpty then
             ctx.log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
             RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
-            appStateStorage.storageRecoveryDone().commit()
+            stateIngest.appState.storageRecoveryDone().commit()
             syncController ! RecoveryComplete
             Behaviors.stopped
           else
@@ -218,7 +205,7 @@ object StorageRecoveryActor:
                 case Some(testRef) => testRef.toTyped[actors.StorageRangeCoordinator.Command]
                 case None =>
                   val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
-                  val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
+                  val mptStorage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
                   ctx.spawn(
                     Behaviors
                       .supervise(
@@ -227,13 +214,13 @@ object StorageRecoveryActor:
                           networkPeerManager = networkPeerManager,
                           requestTracker = requestTracker,
                           mptStorage = mptStorage,
-                          flatSlotStorage = flatSlotStorage,
                           maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                           maxInFlightRequests = snapSyncConfig.storageConcurrency,
                           requestTimeout = snapSyncConfig.timeout,
                           snapSyncController = srcAdapter,
                           initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                          minResponseBytes = snapSyncConfig.storageMinResponseBytes
+                          minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                          stateIngest = stateIngest
                         )
                       )
                       .onFailure[Throwable](
@@ -263,10 +250,9 @@ object StorageRecoveryActor:
               coordinator,
               missing,
               stateRoot,
-              stateStorage,
+              stateIngest,
               pivotBlockNumber,
               syncController,
-              appStateStorage,
               snapSyncConfig
             )
 
@@ -279,10 +265,9 @@ object StorageRecoveryActor:
       coordinator: org.apache.pekko.actor.typed.ActorRef[actors.StorageRangeCoordinator.Command],
       missing: Seq[(ByteString, ByteString)],
       stateRoot: ByteString,
-      stateStorage: StateStorage,
+      stateIngest: StateIngest,
       pivotBlockNumber: BigInt,
       syncController: TypedActorRef[SyncControllerMsg],
-      appStateStorage: AppStateStorage,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] =
     val expectedCount = missing.size
@@ -317,9 +302,9 @@ object StorageRecoveryActor:
 
       def finishRecovery(reason: String): Behavior[Command] =
         timers.cancel("abandon")
-        logResidualGaps(missing, stateStorage, pivotBlockNumber, ctx.log)
+        logResidualGaps(missing, stateIngest.stateTries, pivotBlockNumber, ctx.log)
         RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
-        appStateStorage.storageRecoveryDone().commit()
+        stateIngest.appState.storageRecoveryDone().commit()
         ctx.log.info(s"Storage recovery finished ($reason).")
         syncController ! RecoveryComplete
         Behaviors.stopped

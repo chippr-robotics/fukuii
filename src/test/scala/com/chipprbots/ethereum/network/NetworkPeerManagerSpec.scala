@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshake
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.*
+import com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeCmd
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
@@ -520,6 +521,28 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     snapSyncController.expectMsg(SNAPSyncController.TrieNodesResponse(trieNodes))
     snapSyncController.expectMsg(SNAPSyncController.ByteCodesResponse(byteCodes))
 
+  it should "report only data-bearing SNAP responses to the peer manager on flush (spec 012)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
+
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(AccountRange(BigInt(1), Seq.empty, Seq.empty), peer1.id))
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(ByteCodes(BigInt(2), Seq(ByteString(1, 2, 3), ByteString(4, 5))), peer1.id)
+    )
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(TrieNodes(BigInt(3), Seq(ByteString(9))), peer1.id))
+    peersInfoHolder ! FlushSnapServedTick
+
+    peerManager.expectMsg(
+      PeerManagerActor.SnapServedReportCmd(Map(peer1.id -> PeerManagerActor.SnapServed(responses = 2, bytes = 6L)))
+    )
+    // Counters were cleared: a second flush with no new data reports nothing.
+    peersInfoHolder ! FlushSnapServedTick
+    peerManager.expectNoMessage(200.millis)
+
   it should "handle SNAP messages gracefully when SNAPSyncController is not registered" taggedAs (
     UnitTest,
     NetworkTest
@@ -688,6 +711,161 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
         val probe = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
         probe.peerId shouldBe peer.id
         probe.message.code shouldBe Codes.GetBlockHeadersCode
+
+  // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
+
+  trait GenesisHeadSetup extends TestSetupWithReader:
+    // grace = 0 disables the periodic timer; the tick is driven by hand so the test is deterministic.
+    def newGenesisHeadHolder(grace: FiniteDuration): org.apache.pekko.actor.ActorRef = classicSystem
+      .spawn(
+        NetworkPeerManagerActor.behavior(
+          peerManager.ref.toTyped[PeerManagerActor.Command],
+          peerEventBus.ref.toTyped[PeerEventBusActor.Command],
+          storagesInstance.storages.appStateStorage,
+          Some(forkResolver),
+          blockchainReader = Some(blockchainReader),
+          isPoWChain = true,
+          genesisHeadEvictionGrace = grace
+        ),
+        s"npma-genesis-head-${java.util.UUID.randomUUID()}"
+      )
+      .toClassic
+
+    val crawlerInfo: PeerInfo =
+      val g = createGenesisPeerInfo()
+      g.copy(remoteStatus = g.remoteStatus.copy(capability = Capability.ETH69, remoteClientId = "enrscout"))
+
+  it should "ask the peer manager to evict a genesis-head peer once past the grace, when our chain is past genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectMsg(PeerManagerActor.EvictGenesisHeadPeerCmd(peer1.id, "enrscout"))
+
+  it should "not evict a genesis-head peer before the grace period elapses" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(1.hour)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  it should "not evict genesis-head peers on a chain where we are at genesis too" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  it should "not evict a peer whose head is past genesis" taggedAs (UnitTest, NetworkTest) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, eth69PeerInfo)
+
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  // Sepolia v0.9.6: PeerDisconnected for an enrscout crawler was published before this actor's per-peer subscription
+  // reached the event bus, so its entry was never removed and the crawler was "evicted" every ~70 s for good.
+  it should "drop a peer whose actor terminated even when PeerDisconnected never arrives" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new GenesisHeadSetup:
+    expectInitialSubscriptions()
+    val holder = newGenesisHeadHolder(0.millis)
+    expectInitialSubscriptions()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
+    setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
+
+    // The PeerActor dies; no PeerDisconnected is delivered.
+    peer1Probe.ref ! org.apache.pekko.actor.PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for the per-peer unsubscribe") {
+      case UnsubscribeCmd(PeerDisconnectedClassifier(PeerSelector.WithId(id)), _) => id == peer1.id
+      case _                                                                      => false
+    }
+
+    holder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsg(PeerInfoResponse(None))
+    holder ! CheckGenesisHeadPeersTick
+    peerManager.expectNoMessage(300.millis)
+
+  // ── #1367 TD-PROXY-GAP pin (spec 016 S0a) ──────────────────────────────────
+
+  /** Drives the handshake-time TD-ratio check in NetworkPeerManagerActor against a real BlockchainReader. Our chain
+    * weight is 1 and the peer advertises 20,000, so the ratio is 20,000x (> the 10,000 threshold) in every case; only
+    * our best block number varies.
+    */
+  trait TdProxyGapSetup extends TestSetupWithReader:
+    val ourWeight: BigInt = BigInt(1)
+    val peerTD: BigInt = BigInt(20000)
+    val highTdPeerInfo: PeerInfo = initialPeerInfo.copy(
+      remoteStatus = peerStatus.copy(chainWeight = ChainWeight.totalDifficultyOnly(peerTD)),
+      chainWeight = ChainWeight.totalDifficultyOnly(peerTD)
+    )
+
+    /** Make `block` our best block (header + body + stored weight + best-block info). */
+    def setBestBlock(block: Block): Unit =
+      blockchainWriter.storeBlock(block).commit()
+      blockchainWriter.storeChainWeight(block.header.hash, ChainWeight.totalDifficultyOnly(ourWeight)).commit()
+      storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(block.header.hash.value, block.header.number.value)
+        )
+        .commit()
+
+    /** Handshake the peer and drain the two per-peer subscriptions plus the best-block probe (ETH63, non-genesis). The
+      * TD check runs synchronously inside the handshake handler, so any DisconnectPeer is already in the peer probe by
+      * the time the probe on `peerManager` is observed.
+      */
+    def handshakeHighTdPeer(holder: org.apache.pekko.actor.ActorRef): Unit =
+      holder ! PeerEventCmd(PeerHandshakeSuccessful(peer1, highTdPeerInfo))
+      peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))
+      peerEventBus.expectMsgType[SubscribeCmd]
+      peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).peerId shouldBe peer1.id
+
+  it should "#1367 TD-PROXY-GAP: no disconnect while our best block is 0" taggedAs (UnitTest, NetworkTest) in
+    new TdProxyGapSetup:
+      expectInitialSubscriptions()
+      val holder = newReaderHolder()
+      expectInitialSubscriptions()
+      setBestBlock(Block(Genesis.header, BlockBody(Nil, Nil)))
+      blockchainReader.getBestBlock.map(_.header.number.value) shouldBe Some(BigInt(0))
+
+      handshakeHighTdPeer(holder)
+
+      peer1Probe.expectNoMessage(200.millis)
+
+  it should "#1367 TD-PROXY-GAP: disconnect a peer with TD ratio above 10,000 once our best block is past genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TdProxyGapSetup:
+    expectInitialSubscriptions()
+    val holder = newReaderHolder()
+    expectInitialSubscriptions()
+    setBestBlock(baseBlock)
+    blockchainReader.getBestBlock.map(_.header.number.value).exists(_ > 0) shouldBe true
+
+    handshakeHighTdPeer(holder)
+
+    peer1Probe.expectMsg(DisconnectPeer(Disconnect.Reasons.UselessPeer))
 
   trait TestSetupWithSnapSync extends TestSetup:
     val snapSyncController: TestProbe = TestProbe()

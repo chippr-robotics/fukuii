@@ -185,16 +185,16 @@ class EthTxServiceSpec
 
     response.futureValue shouldEqual Right(RawTransactionResponse(Some(txToRequest)))
 
-  it should "return minimum 1 wei gas price when there are no transactions" taggedAs (
+  it should "return the oracle's 1 gwei start price when there are no transactions" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
-    // Pre-EIP-1559 chain with empty block window: oracle falls back to minimumGasPrice().
-    // minimumGasPrice() returns max(0, 1) = 1 wei — never 0.
+    // No block to sample (genesis is never sampled) and no base fee: go-ethereum's oracle answers its start price,
+    // core-geth's 1 gwei miner gas price (GasPriceOracle.defaultPriceFor on this ETC-family test chain).
     val response: ServiceResponse[GetGasPriceResponse] = ethTxService.getGetGasPrice(GetGasPriceRequest())
-    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(1))
+    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(BigInt(10).pow(9)))
 
-  it should "return average gas price" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "return the sampled gas price percentile" taggedAs (UnitTest, RPCTest) in new TestSetup:
     private val block: Block =
       Block(Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(42)), Fixtures.Blocks.Block3125369.body)
     blockchainWriter
@@ -422,6 +422,139 @@ class EthTxServiceSpec
 
     res shouldBe PendingTransactionsResponse(Nil)
 
+  // eth_pendingTransactions (go-ethereum TransactionAPI.PendingTransactions): only the given accounts' pool
+  // transactions, in pool order, each rendered as a pending transaction object.
+  "EthTxService.pendingTransactionsFrom" should "keep only the transactions sent from the given accounts" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val otherKey = crypto.keyPairFromPrvKey(BigInt(0xb0b))
+    private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    private val pool = List(pending(ownKey, 0), pending(otherKey, 0), pending(ownKey, 1))
+
+    private val res = ethTxService.pendingTransactionsFrom(Set(Address(ownKey))).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(pool))
+
+    private val txs = res.futureValue.toOption.get.transactions
+    txs.map(_.hash) shouldBe Seq(pool(0), pool(2)).map(_.stx.tx.hash.value)
+    txs.flatMap(_.from) shouldBe Seq(Address(ownKey).bytes, Address(ownKey).bytes)
+    txs.map(_.gasPrice) shouldBe Seq(BigInt(10), BigInt(10)) // fee cap, as a pending tx reports
+    txs.flatMap(_.blockHash) shouldBe empty
+
+  // go-ethereum lists pool.Pending() only: per sender, the consecutive nonces from the state nonce. fukuii's pool also
+  // holds nonce-gapped transactions; they are left out until the gap closes.
+  it should "leave out nonce-gapped (queued) transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    private val ownKey = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    private val gappedKey = crypto.keyPairFromPrvKey(BigInt(0xca401))
+    private def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    // Both accounts are fresh (state nonce 0): own has 0, 1 and a gapped 3; the other account only a gapped 2.
+    private val pool = List(pending(ownKey, 3), pending(ownKey, 0), pending(gappedKey, 2), pending(ownKey, 1))
+
+    private val res =
+      ethTxService.pendingTransactionsFrom(Set(Address(ownKey), Address(gappedKey))).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(pool))
+
+    res.futureValue.toOption.get.transactions.map(_.nonce) shouldBe Seq(BigInt(0), BigInt(1))
+
+  it should "answer nothing for a node without accounts" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    private val res = ethTxService.pendingTransactionsFrom(Set.empty).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(Nil))
+    res.futureValue shouldBe Right(OwnPendingTransactionsResponse(Nil))
+
+  // The pool nonce (go-ethereum TxPool.PoolNonce / legacypool pendingNonces): eth_getTransactionCount(addr, "pending"),
+  // GraphQL's pending account and eth_sendTransaction's nonce filling answer from it.
+  /** A head whose state gives every account nonce `stateNonce`. */
+  class PoolNonceSetup(stateNonce: BigInt)(implicit system: ActorSystem) extends TestSetup:
+    private val head: BlockHeader = Fixtures.Blocks.ValidBlock.header
+    private val reader: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[BlockHeader] = Some(head)
+        override def getAccountAtStateRoot(
+            @scala.annotation.unused stateRoot: ByteString,
+            @scala.annotation.unused address: Address
+        ): Option[Account] = Some(Account(nonce = UInt256(stateNonce)))
+    override lazy val ethTxService: EthTxService = new EthTxService(
+      blockchain,
+      reader,
+      mining,
+      pendingTransactionsManager.ref.toTyped[PendingTransactionsManager.Command],
+      getTransactionFromPoolTimeout,
+      storagesInstance.storages.transactionMappingStorage,
+      system.toTyped.scheduler
+    )
+    val sender = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val other = crypto.keyPairFromPrvKey(BigInt(0xb0b))
+    def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
+      val stx = SignedTransaction.sign(
+        TransactionWithDynamicFee(
+          blockchainConfig.chainId.value,
+          nonce,
+          BigInt(1),
+          BigInt(10),
+          GasAmount(21_000),
+          Some(Address(1)),
+          0,
+          ByteString.empty,
+          Nil
+        ),
+        key,
+        Some(blockchainConfig.chainId.value)
+      )
+      PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
+    def poolNonce(pool: Seq[PendingTransaction]): Either[JsonRpcError, BigInt] =
+      val res = ethTxService.poolNonceAtHead(Address(sender)).unsafeToFuture()
+      replyPTM(PendingTransactionsResponse(pool))
+      res.futureValue
+
+  "EthTxService.poolNonceAtHead" should "advance the state nonce over the sender's consecutive pooled txs" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new PoolNonceSetup(5):
+    poolNonce(Seq(pending(sender, 6), pending(other, 7), pending(sender, 5))) shouldBe Right(BigInt(7))
+
+  it should "not count a nonce-gapped (queued) tx, nor one below the state nonce" taggedAs (UnitTest, RPCTest) in
+    new PoolNonceSetup(5):
+      poolNonce(Seq(pending(sender, 5), pending(sender, 7), pending(sender, 4))) shouldBe Right(BigInt(6))
+      poolNonce(Seq(pending(sender, 6))) shouldBe Right(BigInt(5))
+
+  it should "be the state nonce when the sender has nothing pooled" taggedAs (UnitTest, RPCTest) in
+    new PoolNonceSetup(5):
+      poolNonce(Seq(pending(other, 5))) shouldBe Right(BigInt(5))
+      poolNonce(Nil) shouldBe Right(BigInt(5))
+
   // eth_sendRawTransaction and blob txs. The execution-apis send-blob-tx vector (an EIP-7594 wrapper) is the tx with
   // its sidecar; its first item, re-prefixed with the type byte, is the same tx without one.
   private lazy val blobTxWithSidecar: Array[Byte] =
@@ -437,7 +570,7 @@ class EthTxServiceSpec
   it should "reject a blob tx sent without its sidecar, as go-ethereum's pool does" taggedAs (
     UnitTest,
     RPCTest
-  ) in new TestSetup:
+  ) in new BlobAdmissibleSetup:
     val res =
       ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithoutSidecar))).unsafeRunSync()
 
@@ -447,14 +580,52 @@ class EthTxServiceSpec
   it should "hand a blob tx sent with its sidecar to the pool, sidecar included" taggedAs (
     UnitTest,
     RPCTest
-  ) in new TestSetup:
+  ) in new BlobAdmissibleSetup:
+    pendingTransactionsManager.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
     val res = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
 
     res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
       Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")
-    pendingTransactionsManager.expectMsgPF() { case AddOrOverrideTransaction(_, rawBytes) =>
-      rawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
+    pendingTransactionsManager.expectMsgPF() { case submit: SubmitLocalTransaction =>
+      submit.blobTxRawBytes.map(_.toArray.toSeq) shouldBe Some(blobTxWithSidecar.toSeq)
     }
+
+  /** A chain on which the send-blob-tx vector is admissible (#1629 S0: eth_sendRawTransaction now applies pool
+    * admission). The vector is signed for the rpc-compat genesis chain, 0x0c72dd9d5e883e, needs Cancun active at the
+    * head, Osaka for its version-1 (cell proof) sidecar (#1629 S0b), and its sender must be able to pay. The test
+    * config is ETC-shaped with no head, under which admission refuses the tx before its sidecar is looked at.
+    */
+  class BlobAdmissibleSetup(implicit system: ActorSystem) extends TestSetup:
+    // admission verifies the vector's KZG cell proofs (#1629 S0b)
+    com.chipprbots.ethereum.crypto.KzgTestSetup.ensureLoaded()
+    private val vectorChain: BlockchainConfig = blockchainConfig.copy(
+      networkType = NetworkType.ETH,
+      chainId = ChainId(BigInt("0c72dd9d5e883e", 16)),
+      forkTimestamps =
+        ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L), osakaTimestamp = Some(0L))
+    )
+    private val head: BlockHeader = Fixtures.Blocks.ValidBlock.header.copy(
+      unixTimestamp = Timestamp(1L),
+      gasLimit = GasAmount(30_000_000)
+    )
+    private val readerWithFundedSender: BlockchainReader =
+      new BlockchainReader(null, null, null, null, null, null, null, null):
+        override def getBestBlockHeader: Option[BlockHeader] = Some(head)
+        override def getAccountAtStateRoot(
+            @scala.annotation.unused stateRoot: ByteString,
+            @scala.annotation.unused address: Address
+        ): Option[Account] =
+          Some(Account(balance = UInt256(BigInt(10).pow(24))))
+
+    override lazy val ethTxService: EthTxService = new EthTxService(
+      blockchain,
+      readerWithFundedSender,
+      mining,
+      pendingTransactionsManager.ref.toTyped[PendingTransactionsManager.Command],
+      getTransactionFromPoolTimeout,
+      storagesInstance.storages.transactionMappingStorage,
+      system.toTyped.scheduler
+    )(using vectorChain)
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup:

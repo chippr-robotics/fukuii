@@ -9,6 +9,7 @@ import com.typesafe.config.ConfigFactory
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
+import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger:
@@ -20,6 +21,7 @@ object App extends Logger:
     "mordor",
     "sepolia",
     "plataberget",
+    "ephemery",
     "hive",
     "bootnode",
     "gorgoroth"
@@ -158,6 +160,7 @@ object App extends Logger:
         |  eth                    Ethereum mainnet
         |  sepolia                Sepolia testnet (ETH)
         |  plataberget            Platåberget testnet (ETH, public Glamsterdam testnet)
+        |  ephemery               Ephemery testnet (ETH, resets every 28 days; run scripts/ephemery/fetch-genesis.sh first)
         |  mordor                 Mordor testnet
         |  gorgoroth              Fukuii battlenet
         |  bootnode               Bootnode configuration (advanced)
@@ -176,6 +179,16 @@ object App extends Logger:
         |
         |  signature-validator <pubkey> <sig> <hash>
         |                         Validate ECDSA signature against public key and message hash
+        |
+        |  [network] export <file> [<first> [<last>]]
+        |                         Write blocks first..last (default: genesis to head) to <file> in
+        |                         go-ethereum's chain format (bare RLP blocks; .gz is gzipped).
+        |                         Run with the node stopped.
+        |
+        |  [network] import <file> [<file> ...]
+        |                         Import a chain file (geth export / admin_exportChain format),
+        |                         validating and executing every block; stops at the first error.
+        |                         Run with the node stopped.
         |
         |MCP (Model Context Protocol) Support:
         |  MCP methods are available via the JSON-RPC API on port 8545
@@ -210,6 +223,8 @@ object App extends Logger:
         |  fukuii cli generate-key-pairs 5       # Generate 5 key pairs
         |  fukuii faucet                         # Start faucet server (testnet)
         |  fukuii signature-validator <pk> <sig> <hash>  # Validate a signature
+        |  fukuii mordor export mordor.rlp.gz 0 100000   # Export Mordor blocks 0..100000 (node stopped)
+        |  fukuii mordor import mordor.rlp.gz            # Import them into this datadir (node stopped)
         |
         |For more information, visit: https://github.com/chippr-robotics/fukuii
         |""".stripMargin
@@ -248,6 +263,7 @@ object App extends Logger:
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some("runtime") =>
         log.info("Starting Fukuii multi-instance runtime")
+        JvmFlagGuard.check() // this path bypasses Fukuii.main, which runs the same check
         val rootConfig = com.typesafe.config.ConfigFactory.load()
         val runtime = com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(rootConfig)
         runtime.startAll()
@@ -261,6 +277,9 @@ object App extends Logger:
         // applied by setNetworkConfig; strip it from the args we forward so decline only sees
         // `checkpoint export ...`.
         com.chipprbots.ethereum.blockchain.checkpoint.CheckpointCli.main(argsWithoutModifiers.tail)
+      // `fukuii import|export ...` without a network: the default (or -Dconfig.file) chain.
+      case Some(cmd) if com.chipprbots.ethereum.nodebuilder.ChainTool.isCommand(cmd) =>
+        Fukuii.main(argsWithoutModifiers)
       case Some(network) if isNetwork(network) =>
         val tail = argsWithoutModifiers.tail
         tail.headOption match

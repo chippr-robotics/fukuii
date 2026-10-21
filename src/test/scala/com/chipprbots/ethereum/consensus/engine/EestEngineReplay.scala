@@ -79,7 +79,9 @@ object EestEngineReplay:
     val env = new Env
     import env.{blockQueue, blockchain, blockchainReader, blockchainWriter, mining, storagesInstance}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
-    EestBlockchainReplay.configFor(env.blockchainConfig, str(t \ "network"), chainId) match
+    EestBlockchainReplay
+      .configFor(env.blockchainConfig, str(t \ "network"), chainId)
+      .flatMap(EestBlockchainReplay.withFixtureBlobSchedule(_, t)) match
       case Left(unmodelled) => Seq(unmodelled)
       case Right(config) =>
         given BlockchainConfig = config

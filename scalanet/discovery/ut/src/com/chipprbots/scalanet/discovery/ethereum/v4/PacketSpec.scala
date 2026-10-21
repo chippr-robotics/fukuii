@@ -10,7 +10,7 @@ import scodec.{Attempt, Codec, Err}
 import scodec.bits.BitVector
 import scala.util.Random
 
-class PacketSpec extends AnyFlatSpec with Matchers {
+class PacketSpec extends AnyFlatSpec with Matchers:
 
   // Bring DefaultCodecs' given instances (like Codec[Payload]) into scope. In
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
@@ -24,11 +24,10 @@ class PacketSpec extends AnyFlatSpec with Matchers {
   val SigBytesSize = Packet.SigBitsSize / 8
   val MaxDataBytesSize = MaxPacketBytesSize - MacBytesSize - SigBytesSize
 
-  def nBytesAsBits(n: Int): BitVector = {
+  def nBytesAsBits(n: Int): BitVector =
     val bytes = Array.ofDim[Byte](n)
     Random.nextBytes(bytes)
     BitVector(bytes)
-  }
 
   def randomPacket(
       hashBytesSize: Int = MacBytesSize,
@@ -41,12 +40,10 @@ class PacketSpec extends AnyFlatSpec with Matchers {
       data = nBytesAsBits(dataBytesSize)
     )
 
-  def expectFailure(msg: String)(attempt: Attempt[?]): org.scalatest.Assertion = {
-    attempt match {
+  def expectFailure(msg: String)(attempt: Attempt[?]): org.scalatest.Assertion =
+    attempt match
       case Attempt.Successful(_) => fail(s"Expected to fail with $msg; got success.")
-      case Attempt.Failure(err) => err.messageWithContext shouldBe msg
-    }
-  }
+      case Attempt.Failure(err)  => err.messageWithContext shouldBe msg
 
   behavior of "encode"
 
@@ -105,7 +102,7 @@ class PacketSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  trait PackFixture {
+  trait PackFixture:
     val payload = Payload.FindNode(
       target = PublicKey(nBytesAsBits(sigalg.PublicKeyBytesSize)),
       expiration = System.currentTimeMillis
@@ -114,51 +111,41 @@ class PacketSpec extends AnyFlatSpec with Matchers {
     // Mock recovery: PublicKey == PrivateKey raw bits, so we can compare them.
     val publicKey = PublicKey(privateKey.value)
     val packet = Packet.pack(payload, privateKey).require
-  }
 
   behavior of "pack"
 
-  it should "serialize the payload into the data" in new PackFixture {
+  it should "serialize the payload into the data" in new PackFixture:
     packet.data shouldBe Codec[Payload].encode(payload).require
     Codec[Payload].decodeValue(packet.data).require shouldBe payload
-  }
 
-  it should "calculate the signature based on the data" in new PackFixture {
+  it should "calculate the signature based on the data" in new PackFixture:
     packet.signature shouldBe sigalg.sign(privateKey, packet.data)
-  }
 
-  it should "calculate the hash based on the signature and the data" in new PackFixture {
+  it should "calculate the hash based on the signature and the data" in new PackFixture:
     packet.hash shouldBe Keccak256(packet.signature.value ++ packet.data)
-  }
 
   behavior of "unpack"
 
-  it should "deserialize the data into the payload" in new PackFixture {
+  it should "deserialize the data into the payload" in new PackFixture:
     Packet.unpack(packet).require._1 shouldBe payload
-  }
 
-  it should "recover the public key" in new PackFixture {
+  it should "recover the public key" in new PackFixture:
     Packet.unpack(packet).require._2 shouldBe publicKey
-  }
 
-  it should "fail if the hash is incorrect" in new PackFixture {
+  it should "fail if the hash is incorrect" in new PackFixture:
     val corrupt = packet.copy(hash = Hash(nBytesAsBits(32)))
 
     expectFailure("Invalid hash.") {
       Packet.unpack(corrupt)
     }
-  }
 
-  it should "fail if the signature is incorrect" in new PackFixture {
-    implicit val sigalg: SigAlg = new MockSigAlg {
+  it should "fail if the signature is incorrect" in new PackFixture:
+    implicit val sigalg: SigAlg = new MockSigAlg:
       override def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey] =
         Attempt.failure(Err("Invalid signature."))
-    }
     val randomSig = Signature(nBytesAsBits(32))
     val corrupt = packet.copy(signature = randomSig, hash = Keccak256(randomSig.value ++ packet.data))
 
     expectFailure("Invalid signature.") {
       Packet.unpack(corrupt)
     }
-  }
-}

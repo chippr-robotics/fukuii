@@ -4,7 +4,6 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.Config
 
 trait BaseTransactionResponse:
   def hash: ByteString
@@ -52,18 +51,23 @@ final case class TransactionData(
     transactionIndex: Option[Int] = None
 )
 
+/** Builds the JSON-RPC transaction object.
+  *
+  * The chain config is the serving node's, taken as a `using` parameter. It decides the sender of an EIP-155 legacy
+  * transaction: `SignedTransaction.getSender` recovers a sender only when the `v` value names this chain's id. This
+  * object used to supply the global `Config.blockchains.blockchainConfig` itself, which is the first configured
+  * chain's, so a second chain instance in the same JVM rendered its own legacy transactions with `from: null`.
+  */
 object TransactionResponse:
 
-  given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
-
-  def apply(tx: TransactionData): TransactionResponse =
+  def apply(tx: TransactionData)(using blockchainConfig: BlockchainConfig): TransactionResponse =
     TransactionResponse(tx.stx, tx.blockHeader, tx.transactionIndex)
 
   def apply(
       stx: SignedTransaction,
       blockHeader: Option[BlockHeader] = None,
       transactionIndex: Option[Int] = None
-  ): TransactionResponse =
+  )(using blockchainConfig: BlockchainConfig): TransactionResponse =
     val (txType, txChainId, txMaxFee, txMaxPriority, txAccessList, txMaxBlobFee, txBlobHashes, txAuthList) =
       stx.tx match
         case _: LegacyTransaction =>
@@ -106,7 +110,13 @@ object TransactionResponse:
             Some(encodeAuthorizationList(tx.authorizationList))
           )
 
-    val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.flatMap(_.baseFee))
+    // A mined tx reports the price it paid: min(maxFeePerGas, baseFee + tip) for the fee-market types. A pending tx has
+    // paid nothing yet, so it reports its fee cap (maxFeePerGas; gasPrice for legacy and access-list txs), as
+    // go-ethereum's newRPCTransaction does. Before this, a pending typed tx reported min(maxFee, 0 + tip) = its tip.
+    // A block without a base fee (pre-London/pre-Olympia) cannot carry a fee-market tx; it falls back to the fee cap.
+    val effectiveGasPrice = blockHeader.flatMap(_.baseFee) match
+      case Some(baseFee) => Transaction.effectiveGasPrice(stx.tx, Some(baseFee))
+      case None          => stx.tx.gasPrice.value
 
     TransactionResponse(
       hash = stx.hash.value,

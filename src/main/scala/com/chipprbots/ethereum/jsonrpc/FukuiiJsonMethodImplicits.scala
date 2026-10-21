@@ -4,6 +4,7 @@ import org.json4s.JsonAST.*
 import org.json4s.Merge
 
 import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.AccountTransaction
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
@@ -11,19 +12,13 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.Ops.*
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
-import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 
 import JsonEncoder.OptionToNull.*
 
 object FukuiiJsonMethodImplicits extends JsonMethodsImplicits:
-  given extendedTransactionDataJsonEncoder: JsonEncoder[ExtendedTransactionData] = extendedTxData =>
-    val asTxResponse = TransactionResponse(
-      extendedTxData.stx,
-      extendedTxData.minedTransactionData.map(_.header),
-      extendedTxData.minedTransactionData.map(_.transactionIndex)
-    )
-
-    val encodedTxResponse = JsonEncoder.encode(asTxResponse)
+  given accountTransactionJsonEncoder: JsonEncoder[AccountTransaction] = accountTx =>
+    val extendedTxData = accountTx.data
+    val encodedTxResponse = JsonEncoder.encode(accountTx.response)
     val encodedExtension = JObject(
       "isOutgoing" -> extendedTxData.isOutgoing.jsonEncoded,
       "isPending" -> extendedTxData.isPending.jsonEncoded,

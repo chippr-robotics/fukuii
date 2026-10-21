@@ -8,7 +8,6 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
-import org.bouncycastle.util.encoders.Hex
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.OptionValues
@@ -109,15 +108,15 @@ class EthServiceSpec
     )
 
     val txResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
-    stxLedger.simulateTransaction.expects(*, *, *).returning(txResult)
+    stxLedger.simulateCall.expects(*, *, *, *, *).returning(Right(txResult))
 
-    val tx: CallTx = CallTx(
-      Some(ByteString(Hex.decode("da714fe079751fa7a1ad80b76571ea6ec52a446c"))),
-      Some(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477"))),
-      Some(1),
-      2,
-      3,
-      ByteString("")
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      gas = Some(GasAmount(1)),
+      gasPrice = Some(GasPrice(2)),
+      value = Some(3),
+      data = Some(ByteString(""))
     )
     val response: ServiceResponse[CallResponse] = ethService.call(CallRequest(tx, BlockParam.Latest))
 
@@ -127,30 +126,18 @@ class EthServiceSpec
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
 
-    // `estimateGas` now runs a revert-check simulateTransaction FIRST, then a
-    // binarySearchGasEstimation if the tx doesn't revert. Stub both halves.
-    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
-      storagesInstance.storages.evmCodeStorage,
-      blockchain.getBackingMptStorage(-1),
-      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-      UInt256.Zero,
-      ByteString.empty,
-      noEmptyAccounts = false,
-      ethCompatibleStorage = true
-    )
-    val nonRevertResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString.empty, None)
-    stxLedger.simulateTransaction.expects(*, *, *).returning(nonRevertResult)
-
+    // eth_estimateGas runs StxLedger.estimateCallGas (#1629 S3), which does the revert check at the ceiling and the
+    // binary search itself.
     val estimatedGas: BigInt = BigInt(123)
-    stxLedger.binarySearchGasEstimation.expects(*, *, *).returning(estimatedGas)
+    stxLedger.estimateCallGas.expects(*, *, *, *).returning(Right(estimatedGas))
 
-    val tx: CallTx = CallTx(
-      Some(ByteString(Hex.decode("da714fe079751fa7a1ad80b76571ea6ec52a446c"))),
-      Some(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477"))),
-      Some(1),
-      2,
-      3,
-      ByteString("")
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      gas = Some(GasAmount(1)),
+      gasPrice = Some(GasPrice(2)),
+      value = Some(3),
+      data = Some(ByteString(""))
     )
     val response: ServiceResponse[EstimateGasResponse] = ethService.estimateGas(CallRequest(tx, BlockParam.Latest))
 

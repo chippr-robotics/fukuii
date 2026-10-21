@@ -3,7 +3,7 @@ package com.chipprbots.scalanet.discovery.crypto
 import scodec.Attempt
 import scodec.bits.BitVector
 
-trait SigAlg {
+trait SigAlg:
   def name: String
 
   def PrivateKeyBytesSize: Int
@@ -12,8 +12,8 @@ trait SigAlg {
 
   def newKeyPair: (PublicKey, PrivateKey)
 
-  /** In the context of Secp256k1, produce a 65 byte signature
-    * as the concatenation of `r`, `s` and the recovery ID `v`. */
+  /** In the context of Secp256k1, produce a 65 byte signature as the concatenation of `r`, `s` and the recovery ID `v`.
+    */
   def sign(privateKey: PrivateKey, data: BitVector): Signature
 
   /** In the context of Secp256k1, remove the `v` recovery ID. */
@@ -22,26 +22,23 @@ trait SigAlg {
   /** Verify that a signature is correct. It may or may not have a recovery ID. */
   def verify(publicKey: PublicKey, signature: Signature, data: BitVector): Boolean
 
-  /** Reverse engineer the public key from a signature, given the data that was signed.
-    * It can fail if the signature is incorrect.
+  /** Reverse engineer the public key from a signature, given the data that was signed. It can fail if the signature is
+    * incorrect.
     */
   def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey]
 
-  /** Recover the public key from a signature when the message hash has already
-    * been computed by the caller. Discv5 specifies the signature is over a
-    * pre-computed `sha256(...)` hash, so callers must skip the implicit
-    * keccak step that [[recoverPublicKey]] applies to its `data` argument.
+  /** Recover the public key from a signature when the message hash has already been computed by the caller. Discv5
+    * specifies the signature is over a pre-computed `sha256(...)` hash, so callers must skip the implicit keccak step
+    * that [[recoverPublicKey]] applies to its `data` argument.
     */
   def recoverPublicKeyFromHash(signature: Signature, messageHash: BitVector): Attempt[PublicKey]
 
   /** Produce the public key based on the private key. */
   def toPublicKey(privateKey: PrivateKey): PublicKey
 
-  /** In the context of Secp256k1, the signature consists of a prefix byte
-    * followed by an `x` and `y` coordinate. Remove `y` and adjust the prefix
-    * to compress.
+  /** In the context of Secp256k1, the signature consists of a prefix byte followed by an `x` and `y` coordinate. Remove
+    * `y` and adjust the prefix to compress.
     *
     * See https://davidederosa.com/basic-blockchain-programming/elliptic-curve-keys
     */
   def compressPublicKey(publicKey: PublicKey): PublicKey
-}

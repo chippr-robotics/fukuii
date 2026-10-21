@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 import ByteStringUtils.*
 
-class ByteStringUtilsTest extends AnyWordSpec with Matchers {
+class ByteStringUtilsTest extends AnyWordSpec with Matchers:
 
   "ByteStringUtilsTest" should {
 
@@ -88,4 +88,3 @@ class ByteStringUtilsTest extends AnyWordSpec with Matchers {
     }
 
   }
-}

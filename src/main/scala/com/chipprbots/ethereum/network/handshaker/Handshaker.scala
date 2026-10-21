@@ -24,8 +24,13 @@ trait Handshaker[T <: HandshakeResult]:
       Right(inProgressState.nextMessage)
     case ConnectedState(peerInfo) =>
       Left(HandshakeSuccess(peerInfo))
-    case DisconnectedState(reason: Int) =>
+    case DisconnectedState(reason: Int, _) =>
       Left(HandshakeFailure(reason))
+
+  /** The handshake failed because the peer is on a different network or genesis (see [[DisconnectedState]]). */
+  def failedOnWrongNetwork: Boolean = handshakerState match
+    case DisconnectedState(_, wrongNetwork) => wrongNetwork
+    case _                                  => false
 
   /** Processes a received message and obtains a new Handshaker if the handshaker handles the received message
     *

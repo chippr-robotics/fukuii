@@ -18,47 +18,44 @@ import org.scalatest.matchers.should.Matchers
 import scodec.{Attempt, Codec, DecodeResult, Err}
 import scodec.bits.{BitVector, ByteVector}
 
-/** Tests for [[DiscoveryNetwork]] focused on the request/response correlation
-  * and the inbound dispatch loop.
+/** Tests for [[DiscoveryNetwork]] focused on the request/response correlation and the inbound dispatch loop.
   *
-  * The full Codec[Payload] for v5 lives in fukuii main; these tests use a
-  * stub codec that round-trips a few message types so the dispatch logic
-  * can be exercised without the production RLP machinery. End-to-end
-  * codec coverage is in fukuii main's `Discv5IntegrationSpec`.
+  * The full Codec[Payload] for v5 lives in fukuii main; these tests use a stub codec that round-trips a few message
+  * types so the dispatch logic can be exercised without the production RLP machinery. End-to-end codec coverage is in
+  * fukuii main's `Discv5IntegrationSpec`.
   */
-class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
+class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
 
   import DefaultCodecs.given
   given sigalg: SigAlg = new MockSigAlg
 
-  /** Stub Codec[Payload]. Tag byte = message-type discriminator; body holds
-    * the payload's request id followed by a small marker for the type.
+  /** Stub Codec[Payload]. Tag byte = message-type discriminator; body holds the payload's request id followed by a
+    * small marker for the type.
     *
-    * The stub round-trips Pong/Nodes/TalkResponse and accepts Ping/FindNode/
-    * TalkRequest as inputs (uses stubbed reqId on decode) — sufficient for
-    * exercising request-response correlation. */
+    * The stub round-trips Pong/Nodes/TalkResponse and accepts Ping/FindNode/ TalkRequest as inputs (uses stubbed reqId
+    * on decode) — sufficient for exercising request-response correlation.
+    */
   given stubCodec: Codec[Payload] = Codec[Payload](
-    (p: Payload) => {
+    (p: Payload) =>
       val tag = p.messageType
-      val body = p match {
+      val body = p match
         case x: Payload.Ping         => ByteVector(x.requestId.toArray)
         case x: Payload.Pong         => ByteVector(x.requestId.toArray)
         case x: Payload.FindNode     => ByteVector(x.requestId.toArray)
         case x: Payload.Nodes        => ByteVector(x.requestId.toArray)
         case x: Payload.TalkRequest  => ByteVector(x.requestId.toArray)
         case x: Payload.TalkResponse => ByteVector(x.requestId.toArray)
-      }
       Attempt.successful((ByteVector(tag) ++ body).bits)
-    },
-    (bits: BitVector) => {
+    ,
+    (bits: BitVector) =>
       val bytes = bits.toByteVector
-      if (bytes.isEmpty) Attempt.failure(Err("empty"))
-      else {
+      if bytes.isEmpty then Attempt.failure(Err("empty"))
+      else
         val tag = bytes(0)
         val rest = bytes.drop(1)
-        val payloadOpt: Option[Payload] = tag match {
-          case Payload.MessageType.Ping  => Some(Payload.Ping(rest, enrSeq = 1L))
-          case Payload.MessageType.Pong  =>
+        val payloadOpt: Option[Payload] = tag match
+          case Payload.MessageType.Ping => Some(Payload.Ping(rest, enrSeq = 1L))
+          case Payload.MessageType.Pong =>
             Some(
               Payload.Pong(
                 requestId = rest,
@@ -76,36 +73,29 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
           case Payload.MessageType.TalkResp =>
             Some(Payload.TalkResponse(rest, ByteVector.empty))
           case _ => None
-        }
-        payloadOpt match {
+        payloadOpt match
           case Some(p) => Attempt.successful(DecodeResult(p, BitVector.empty))
           case None    => Attempt.failure(Err(s"unknown tag $tag"))
-        }
-      }
-    }
   )
 
-  /** In-memory PeerGroupSender for tests. Records every send so assertions
-    * can inspect the wire bytes. */
-  final class RecordingSender extends DiscoveryNetwork.PeerGroupSender[InetSocketAddress] {
+  /** In-memory PeerGroupSender for tests. Records every send so assertions can inspect the wire bytes.
+    */
+  final class RecordingSender extends DiscoveryNetwork.PeerGroupSender[InetSocketAddress]:
     private val sent = new ConcurrentLinkedQueue[(InetSocketAddress, ByteVector)]()
     override def sendRaw(remoteAddress: InetSocketAddress, bytes: ByteVector): IO[Unit] =
       IO { val _ = sent.add((remoteAddress, bytes)) }
-    def all: List[(InetSocketAddress, ByteVector)] = {
+    def all: List[(InetSocketAddress, ByteVector)] =
       val out = List.newBuilder[(InetSocketAddress, ByteVector)]
       val it = sent.iterator()
-      while (it.hasNext) out += it.next()
+      while it.hasNext do out += it.next()
       out.result()
-    }
-  }
 
   /** Stub DiscoveryRPC handler — records calls; replies with safe defaults. */
-  final class RecordingHandler extends DiscoveryRPC[DiscoveryNetwork.Peer[InetSocketAddress]] {
+  final class RecordingHandler extends DiscoveryRPC[DiscoveryNetwork.Peer[InetSocketAddress]]:
     val pings = new ConcurrentLinkedQueue[(DiscoveryNetwork.Peer[InetSocketAddress], Long)]()
-    override def ping(peer: DiscoveryNetwork.Peer[InetSocketAddress], localEnrSeq: Long) = {
+    override def ping(peer: DiscoveryNetwork.Peer[InetSocketAddress], localEnrSeq: Long) =
       pings.add((peer, localEnrSeq))
       IO.pure(None)
-    }
     override def findNode(
         peer: DiscoveryNetwork.Peer[InetSocketAddress],
         distances: List[Int]
@@ -115,7 +105,6 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
         protocol: ByteVector,
         message: ByteVector
     ): IO[Option[ByteVector]] = IO.pure(None)
-  }
 
   // ---- Test fixtures ------------------------------------------------------
 
@@ -127,11 +116,11 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
   )
   private val localEnr = EthereumNodeRecord.fromNode(localNode, localPriv, seq = 1).require
 
-  private def buildNetwork(sender: DiscoveryNetwork.PeerGroupSender[InetSocketAddress]) = {
+  private def buildNetwork(sender: DiscoveryNetwork.PeerGroupSender[InetSocketAddress]) =
     val sessions = new Session.SessionCache()
     val challenges = new Discv5SyncResponder.ChallengeCache()
     val bystanders = new Discv5SyncResponder.BystanderEnrTable()
-    for {
+    for
       queue <- CloseableQueue.unbounded[(InetSocketAddress, ByteVector)]
       network <- DiscoveryNetwork[InetSocketAddress](
         peerGroup = sender,
@@ -145,8 +134,7 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
         dispatchQueue = queue,
         config = DiscoveryConfig.default.copy(requestTimeout = 200.millis)
       )
-    } yield (network, sessions, queue)
-  }
+    yield (network, sessions, queue)
 
   // ---- Tests --------------------------------------------------------------
 
@@ -273,13 +261,11 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
     // returned a result (Some, not None) — proves the dispatch loop pulled
     // from the queue, decrypted, decoded, and matched the requestId.
     val result = pingFiber.join.unsafeRunSync()
-    result match {
+    result match
       case cats.effect.kernel.Outcome.Succeeded(io) =>
         val r = io.unsafeRunSync()
         r should not be empty // request was correlated to a Pong via requestId
       case other => fail(s"expected Succeeded, got $other")
-    }
 
     cancel.complete(()).unsafeRunSync()
   }
-}

@@ -13,16 +13,27 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -59,6 +70,32 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
     )
     (stateStorage, appStateStorage, evmCodeStorage)
 
+  // The recovery actors take one `StateIngest` (spec 016 T060c, D-T060-2). They read only the stores below; any other
+  // member fails loudly, so a test that reaches one is a change in what recovery reads.
+  private def recoveryIngest(
+      stateStorage: StateStorage,
+      appStateStorage: AppStateStorage,
+      evmCodeStorage: EvmCodeStorage
+  ): StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = appStateStorage
+      def stateTries: StateStorage = stateStorage
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = notReached("pathNodes")
+      def bytecode: EvmCodeStorage = evmCodeStorage
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
+      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+
+  private def notReached(member: String): Nothing =
+    throw new UnsupportedOperationException(s"recovery actor read StateIngest.$member")
+
   "BytecodeRecoveryActor" should
     "emit RecoveryComplete immediately and commit flag when no bytecodes are missing" taggedAs (
       UnitTest,
@@ -72,9 +109,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         .spawn(
           BytecodeRecoveryActor.testApply(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
-            evmCodeStorage = evmCodeStorage,
-            appStateStorage = appStateStorage,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
             pivotBlockNumber = BigInt(100),
@@ -104,9 +139,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         .spawn(
           BytecodeRecoveryActor.testApply(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
-            evmCodeStorage = evmCodeStorage,
-            appStateStorage = appStateStorage,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
             pivotBlockNumber = BigInt(100),
@@ -143,9 +176,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         .spawn(
           BytecodeRecoveryActor.testApply(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
-            evmCodeStorage = evmCodeStorage,
-            appStateStorage = appStateStorage,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
             pivotBlockNumber = BigInt(100),
@@ -176,9 +207,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         .spawn(
           BytecodeRecoveryActor.testApply(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
-            evmCodeStorage = evmCodeStorage,
-            appStateStorage = appStateStorage,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
             pivotBlockNumber = BigInt(100),
@@ -216,9 +245,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
         .spawn(
           BytecodeRecoveryActor.testApply(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
-            evmCodeStorage = evmCodeStorage,
-            appStateStorage = appStateStorage,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
             pivotBlockNumber = BigInt(100),

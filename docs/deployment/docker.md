@@ -471,6 +471,26 @@ docker run -d \
 
 **⚠️ IMPORTANT:** Always specify a valid coinbase address to receive mining rewards. Without it, rewards will be lost.
 
+## JVM Flags: JDK 25 C2 Workaround
+
+Every runtime image sets
+
+```dockerfile
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+```
+
+to disable a HotSpot C2 optimisation that can silently miscompile field reads on JDK 23+
+(JDK-8385993, fixed in JDK 28). The `java` launcher reads `JDK_JAVA_OPTIONS` on every start, so it also
+covers composes that override the entrypoint to `java -jar ...`, and it leaves `JAVA_TOOL_OPTIONS` free
+for your own tuning. Two things to know:
+
+- `java` prints `NOTE: Picked up JDK_JAVA_OPTIONS: ...` on stderr at startup. That is expected.
+- If you set `JDK_JAVA_OPTIONS` yourself (`-e` or compose `environment:`), you replace the image's value:
+  include both flags in yours.
+
+Details and other launch paths:
+[known-issues Issue 16](../runbooks/known-issues.md#issue-16-jdk-25-c2-reduceallocationmerges-workaround).
+
 ## Health Checks
 
 The production image includes a built-in healthcheck script that:

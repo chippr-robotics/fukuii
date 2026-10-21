@@ -8,7 +8,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks.*
 import scodec.bits.BitVector
 
-class XorSpec extends AnyFlatSpec with Matchers {
+class XorSpec extends AnyFlatSpec with Matchers:
 
   it should "satisfy d(x,x) = 0" in {
     forAll(genBitVector(8)) { x =>
@@ -17,24 +17,20 @@ class XorSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "satisfy d(x,y) > 0 when x != y" in {
-    forAll(genBitVectorPairs(8)) {
-      case (x, y) =>
-        if (x != y)
-          d(x, y) > 0 shouldBe true
+    forAll(genBitVectorPairs(8)) { case (x, y) =>
+      if x != y then d(x, y) > 0 shouldBe true
     }
   }
 
   it should "satisfy the symmetry condition" in {
-    forAll(genBitVectorPairs(8)) {
-      case (x, y) =>
-        d(x, y) shouldBe d(y, x)
+    forAll(genBitVectorPairs(8)) { case (x, y) =>
+      d(x, y) shouldBe d(y, x)
     }
   }
 
   it should "satisfy the triangle equality" in {
-    forAll(genBitVectorTrips(8)) {
-      case (x, y, z) =>
-        d(x, z) <= d(x, y) + d(y, z) shouldBe true
+    forAll(genBitVectorTrips(8)) { case (x, y, z) =>
+      d(x, z) <= d(x, y) + d(y, z) shouldBe true
     }
   }
 
@@ -45,9 +41,6 @@ class XorSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "satisfy the unidirectional property (from the last para of section 2.1)" in
-    genBitVectorTripsExhaustive(4).foreach {
-      case (x, y, z) =>
-        if (y != z)
-          d(x, y) should not be d(x, z)
+    genBitVectorTripsExhaustive(4).foreach { case (x, y, z) =>
+      if y != z then d(x, y) should not be d(x, z)
     }
-}

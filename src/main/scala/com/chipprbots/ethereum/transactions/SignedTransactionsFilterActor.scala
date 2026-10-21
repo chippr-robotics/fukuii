@@ -54,11 +54,16 @@ object SignedTransactionsFilterActor:
   /** @param headTimestamp
     *   the chain head's timestamp: the stateless filter admits a transaction under the rules of the fork active there.
     *   Read only on ETH-family chains, and at most once per inbound message.
+    * @param acceptTxs
+    *   whether the node takes peer transactions at all ([[TxGossipGate.acceptTxs]]). When it does not, a Transactions
+    *   message is dropped before any sender recovery, as go-ethereum's handleTransactions returns at once while
+    *   `AcceptTxs()` is false.
     */
   def apply(
       pendingTransactionsManager: ActorRef[PendingTransactionsManager.Command],
       peerEventBus: ActorRef[PeerEventBusCommand],
-      headTimestamp: () => Timestamp
+      headTimestamp: () => Timestamp,
+      acceptTxs: () => Boolean = () => true
   ): Behavior[Command] = Behaviors.setup { context =>
 
     given blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -156,6 +161,9 @@ object SignedTransactionsFilterActor:
       }
 
     Behaviors.receiveMessage {
+      case PeerSignedTransactions(_, _) if !acceptTxs() =>
+        Behaviors.same
+
       case PeerSignedTransactions(SignedTransactions(newTransactions), peerId) =>
         if newTransactions.size >= chunkedRecoveryThreshold then
           // One head for the whole message, so every chunk is filtered under the same fork. Lazy: ETC never reads it.

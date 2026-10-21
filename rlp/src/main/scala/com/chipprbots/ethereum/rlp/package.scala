@@ -7,7 +7,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.utils.Hex
 
-package object rlp {
+package object rlp:
 
   /** An exception capturing a deserialization error.
     *
@@ -15,20 +15,18 @@ package object rlp {
     * wrong. The last element is what caused the problem but it may be easier to recognise if we look at the head.
     */
   case class RLPException(message: String, encodeables: List[RLPEncodeable] = Nil) extends RuntimeException(message)
-  object RLPException {
+  object RLPException:
     def apply(message: String, encodeable: RLPEncodeable): RLPException =
       RLPException(message, List(encodeable))
 
     def decodeError[T](subject: String, error: String, encodeables: List[RLPEncodeable] = Nil): T =
       throw RLPException(s"Cannot decode $subject: $error", encodeables)
-  }
 
-  sealed trait RLPEncodeable {
+  sealed trait RLPEncodeable:
     def decodeAs[T: RLPDecoder](subject: => String): T =
       tryDecode[T](subject, this)(RLPDecoder[T].decode)
-  }
 
-  case class RLPList(items: RLPEncodeable*) extends RLPEncodeable {
+  case class RLPList(items: RLPEncodeable*) extends RLPEncodeable:
     def +:(item: RLPEncodeable): RLPList =
       RLPList((item +: items)*)
 
@@ -37,11 +35,9 @@ package object rlp {
 
     def ++(other: RLPList): RLPList =
       RLPList((items ++ other.items)*)
-  }
 
-  case class RLPValue(bytes: Array[Byte]) extends RLPEncodeable {
+  case class RLPValue(bytes: Array[Byte]) extends RLPEncodeable:
     override def toString: String = s"RLPValue(${Hex.toHexString(bytes)})"
-  }
 
   /** Modelise a RLPEncodable that should be binary prefixed by a raw byte.
     *
@@ -57,40 +53,32 @@ package object rlp {
     * @param prefixedRLPEncodeable
     *   the RLPEncodable to prefix with
     */
-  case class PrefixedRLPEncodable(prefix: Byte, prefixedRLPEncodeable: RLPEncodeable) extends RLPEncodeable {
-    if (prefix < 0)
-      throw new IllegalArgumentException("prefix should be in the range [0; 0x7f]")
-  }
+  case class PrefixedRLPEncodable(prefix: Byte, prefixedRLPEncodeable: RLPEncodeable) extends RLPEncodeable:
+    if prefix < 0 then throw new IllegalArgumentException("prefix should be in the range [0; 0x7f]")
 
-  trait RLPEncoder[T] {
+  trait RLPEncoder[T]:
     def encode(obj: T): RLPEncodeable
-  }
-  object RLPEncoder {
+  object RLPEncoder:
     def apply[T](implicit ev: RLPEncoder[T]): RLPEncoder[T] = ev
 
     def instance[T](f: T => RLPEncodeable): RLPEncoder[T] =
-      new RLPEncoder[T] {
+      new RLPEncoder[T]:
         override def encode(obj: T): RLPEncodeable = f(obj)
-      }
 
     def encode[T: RLPEncoder](obj: T): RLPEncodeable =
       RLPEncoder[T].encode(obj)
-  }
 
-  trait RLPDecoder[T] {
+  trait RLPDecoder[T]:
     def decode(rlp: RLPEncodeable): T
-  }
-  object RLPDecoder {
+  object RLPDecoder:
     def apply[T](implicit ev: RLPDecoder[T]): RLPDecoder[T] = ev
 
     def instance[T](f: RLPEncodeable => T): RLPDecoder[T] =
-      new RLPDecoder[T] {
+      new RLPDecoder[T]:
         override def decode(rlp: RLPEncodeable): T = f(rlp)
-      }
 
     def decode[T: RLPDecoder](rlp: RLPEncodeable): T =
       RLPDecoder[T].decode(rlp)
-  }
 
   def encode[T](input: T)(implicit enc: RLPEncoder[T]): Array[Byte] = RLP.encode(enc.encode(input))
 
@@ -104,12 +92,11 @@ package object rlp {
 
   def tryDecode[T](subject: => String, encodeable: RLPEncodeable)(f: RLPEncodeable => T): T =
     try f(encodeable)
-    catch {
+    catch
       case RLPException(message, encodeables) =>
         RLPException.decodeError(subject, message, encodeable :: encodeables)
       case NonFatal(ex) =>
         RLPException.decodeError(subject, ex.getMessage, List(encodeable))
-    }
 
   /** This function calculates the next element item based on a previous element starting position. It's meant to be
     * used while decoding a stream of RLPEncoded Items.
@@ -125,41 +112,34 @@ package object rlp {
     */
   def nextElementIndex(data: Array[Byte], pos: Int): Int = RLP.getItemBounds(data, pos).end + 1
 
-  trait RLPSerializable {
+  trait RLPSerializable:
     def toRLPEncodable: RLPEncodeable
     def toBytes(implicit di: DummyImplicit): ByteString = ByteString(toBytes: Array[Byte])
     def toBytes: Array[Byte] = encode(this.toRLPEncodable)
-  }
 
   type RLPCodec[T] = RLPEncoder[T] with RLPDecoder[T]
 
-  object RLPCodec {
+  object RLPCodec:
     def instance[T](enc: T => RLPEncodeable, dec: PartialFunction[RLPEncodeable, T])(implicit
         ct: ClassTag[T]
     ): RLPCodec[T] =
-      new RLPEncoder[T] with RLPDecoder[T] {
+      new RLPEncoder[T] with RLPDecoder[T]:
         override def encode(obj: T): RLPEncodeable =
           enc(obj)
 
         override def decode(rlp: RLPEncodeable): T =
-          if (dec.isDefinedAt(rlp)) dec(rlp)
+          if dec.isDefinedAt(rlp) then dec(rlp)
           else RLPException.decodeError(s"type ${ct.runtimeClass.getSimpleName}", "Unexpected RLP.", List(rlp))
-      }
 
     def apply[T](enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPCodec[T] =
-      new RLPEncoder[T] with RLPDecoder[T] {
+      new RLPEncoder[T] with RLPDecoder[T]:
         override def encode(obj: T): RLPEncodeable = enc.encode(obj)
         override def decode(rlp: RLPEncodeable): T = dec.decode(rlp)
-      }
 
-    implicit class Ops[A](val codec: RLPCodec[A]) extends AnyVal {
+    implicit class Ops[A](val codec: RLPCodec[A]) extends AnyVal:
 
       /** Given a codec for type A, make a coded for type B. */
       def xmap[B](f: A => B, g: B => A): RLPCodec[B] =
-        new RLPEncoder[B] with RLPDecoder[B] {
+        new RLPEncoder[B] with RLPDecoder[B]:
           override def encode(obj: B): RLPEncodeable = codec.encode(g(obj))
           override def decode(rlp: RLPEncodeable): B = f(codec.decode(rlp))
-        }
-    }
-  }
-}

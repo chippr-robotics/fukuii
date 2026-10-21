@@ -54,6 +54,7 @@ import com.chipprbots.ethereum.network.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
+import com.chipprbots.ethereum.network.discovery.DiscoveryRuntime
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -205,6 +206,29 @@ trait PeerDiscoveryManagerBuilder:
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
+  // One runtime for the node's life: the supervised PeerDiscoveryManager reuses it across restarts. Only shut it down if
+  // something actually created it.
+  private lazy val discoveryIoRuntimeCreated = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /** Discovery's own bounded runtime (task #52): discv4 ECDSA must not compete with block import and the sync fetchers
+    * for `IORuntime.global`. Passed explicitly — the implicit `ioRuntime` above stays global for everyone else.
+    */
+  lazy val discoveryIoRuntime: IORuntime =
+    discoveryIoRuntimeCreated.set(true)
+    DiscoveryRuntime(discoveryConfig.computeThreads)
+
+  /** Shut the discovery runtime down after PeerDiscoveryManager has released the discovery service — signalled by the
+    * service resource's own finalizer setting the discovery status back to NotListening. Call after sending `Stop`.
+    */
+  def shutdownDiscoveryIoRuntime(timeout: scala.concurrent.duration.FiniteDuration): Unit =
+    if discoveryIoRuntimeCreated.get then
+      val released = DiscoveryRuntime.shutdownAfterRelease(
+        discoveryIoRuntime,
+        () => nodeStatusHolder.get.discoveryStatus == com.chipprbots.ethereum.utils.ServerStatus.NotListening,
+        timeout
+      )
+      if !released then log.warn(s"Discovery did not release within $timeout; shut its runtime down anyway")
+
   // Typed ref — for in-scope callers and direct Typed wiring.
   lazy val peerDiscoveryManagerTyped: org.apache.pekko.actor.typed.ActorRef[PeerDiscoveryManager.Command] =
     classicSystem.spawn(
@@ -233,9 +257,9 @@ trait PeerDiscoveryManagerBuilder:
                       .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
-            ),
+            )(discoveryIoRuntime),
             randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
-          )
+          )(using discoveryIoRuntime)
         )
         .onFailure[Throwable](SupervisorStrategy.restart),
       "peer-discovery-manager-typed"
@@ -412,6 +436,10 @@ trait PeerManagerActorBuilder:
 
   lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
+  lazy val snapGoodPeersOpt: Option[SnapGoodPeers] =
+    val cfg = SnapGoodPeersConfig(instanceConfig.config, instanceConfig.config.getString("datadir"))
+    if cfg.enabled then Some(new SnapGoodPeers(cfg)) else None
+
   lazy val peerManager: TypedActorRef[PeerManagerActor.Command] =
     val ref = classicSystem.spawn(
       PeerManagerActor.behavior(
@@ -429,7 +457,8 @@ trait PeerManagerActorBuilder:
           instanceConfig.supportedCapabilities
         ),
         discoveryConfig,
-        blacklist
+        blacklist,
+        snapGoodPeers = snapGoodPeersOpt
       ),
       "peer-manager"
     )
@@ -455,7 +484,8 @@ trait NetworkPeerManagerActorBuilder:
           evmCodeStorageOpt = Some(storagesInstance.storages.evmCodeStorage),
           mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
           blockchainReader = Some(blockchainReader),
-          isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
+          isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty,
+          genesisHeadEvictionGrace = com.chipprbots.ethereum.utils.Config.Network.peer.genesisHeadEvictionGrace
         ),
         "network-peer-manager"
       )
@@ -513,6 +543,14 @@ trait NetServiceBuilder:
     classicSystem.toTyped.scheduler
   )
 
+/** The node's [[com.chipprbots.ethereum.transactions.TxGossipGate]]: shared by sync (SNAP/recovery close it, regular
+  * sync and mining mark the node synced), the Engine API (forkchoiceUpdated marks it synced) and the tx pool, which
+  * reads it on every peer tx message.
+  */
+trait TxGossipGateBuilder:
+  lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
+    new com.chipprbots.ethereum.transactions.TxGossipGate()
+
 trait PendingTransactionsManagerBuilder:
   def pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command]
   // Alias kept for callers that reference the Typed ref by the old name.
@@ -521,7 +559,7 @@ trait PendingTransactionsManagerBuilder:
 object PendingTransactionsManagerBuilder:
   trait Default extends PendingTransactionsManagerBuilder:
     self: ActorSystemBuilder & PeerManagerActorBuilder & NetworkPeerManagerActorBuilder & PeerEventBusBuilder &
-      TxPoolConfigBuilder & BlockchainBuilder & StorageBuilder & EventTopicsBuilder =>
+      TxPoolConfigBuilder & BlockchainBuilder & StorageBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
 
     lazy val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
       classicSystem.spawn(
@@ -534,7 +572,8 @@ object PendingTransactionsManagerBuilder:
               peerEventBus,
               pendingTxTopic,
               blockchainReader,
-              storagesInstance.storages.stateStorage
+              storagesInstance.storages.stateStorage,
+              txGossipGate = txGossipGate
             )
           )
           .onFailure[Throwable](
@@ -608,7 +647,8 @@ trait EthInfoServiceBuilder:
     syncController,
     Capability.best(instanceConfig.supportedCapabilities),
     asyncConfig.askTimeout,
-    classicSystem.toTyped.scheduler
+    classicSystem.toTyped.scheduler,
+    com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
   )
 
 trait EthSimulateServiceBuilder:
@@ -639,9 +679,22 @@ trait EthMiningServiceBuilder:
     coinbaseProvider,
     classicSystem
   )
+
+/** The node's one gas price oracle (go-ethereum `eth/gasprice`), shared by eth_gasPrice, eth_maxPriorityFeePerGas,
+  * eth_feeHistory's limits and the send/sign/fill fee defaults, so they read a single per-head cache.
+  */
+trait GasPriceOracleBuilder:
+  self: BlockchainBuilder & BlockchainConfigBuilder & InstanceConfigProvider =>
+
+  lazy val gasPriceOracle: com.chipprbots.ethereum.jsonrpc.GasPriceOracle =
+    new com.chipprbots.ethereum.jsonrpc.GasPriceOracle(
+      blockchainReader,
+      com.chipprbots.ethereum.jsonrpc.GasPriceOracle.configFrom(instanceConfig.config)(using blockchainConfig)
+    )
+
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -650,11 +703,14 @@ trait EthTxServiceBuilder:
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
     storagesInstance.storages.transactionMappingStorage,
-    classicSystem.toTyped.scheduler
+    classicSystem.toTyped.scheduler,
+    com.chipprbots.ethereum.jsonrpc.RpcTxSubmission.fromConfig(instanceConfig.config),
+    gasPriceOracleOpt = Some(gasPriceOracle)
   )
 
 trait EthBlocksServiceBuilder:
-  self: BlockchainBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder =>
+  self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & BlockQueueBuilder & StorageBuilder &
+    GasPriceOracleBuilder =>
 
   /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
   def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
@@ -666,7 +722,10 @@ trait EthBlocksServiceBuilder:
       mining,
       blockQueue,
       forkChoiceManagerForRpc,
-      storagesInstance.pruningMode
+      storagesInstance.pruningMode,
+      // This node's chain config, not the constructor's global default: it renders every transaction object.
+      blockchainConfig,
+      gasPriceOracleOpt = Some(gasPriceOracle)
     )
 
 trait EthUserServiceBuilder:
@@ -691,7 +750,7 @@ trait EthFilterServiceBuilder:
 
 trait PersonalServiceBuilder:
   self: KeyStoreBuilder & BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder &
-    StorageBuilder & TxPoolConfigBuilder & EthTxServiceBuilder & ActorSystemBuilder =>
+    StorageBuilder & TxPoolConfigBuilder & EthTxServiceBuilder & EthInfoServiceBuilder & ActorSystemBuilder =>
 
   lazy val personalService: PersonalServiceAPI = new PersonalService(
     keyStore,
@@ -700,6 +759,7 @@ trait PersonalServiceBuilder:
     txPoolConfig,
     this,
     ethTxService,
+    new com.chipprbots.ethereum.jsonrpc.EthInfoTxGasEstimator(ethInfoService),
     classicSystem.toTyped.scheduler
   )
 
@@ -715,7 +775,7 @@ trait SyncControllerRefBuilder:
   def syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command]
 
 trait FukuiiServiceBuilder:
-  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder =>
+  self: TransactionHistoryServiceBuilder & JSONRpcConfigBuilder & BlockchainConfigBuilder =>
 
   lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 
@@ -764,7 +824,7 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder =>
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder =>
 
   lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
 
@@ -775,11 +835,22 @@ trait AdminServiceBuilder:
     blockchainConfig,
     instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
     instanceConfig.config.getString("datadir"),
-    blockedIPRegistry
+    blockedIPRegistry,
+    chainImporter,
+    () =>
+      import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
+      syncController.askForTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status](replyTo =>
+        SyncController.WrappedSyncProtocol(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.GetStatus(replyTo))
+      )(
+        timeout = org.apache.pekko.util.Timeout(
+          instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
+        ),
+        scheduler = classicSystem.toTyped.scheduler
+      )
   )(classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:
-  this: PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder =>
+  this: PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder & BlockchainConfigBuilder =>
 
   lazy val txPoolService: TxPoolService = new TxPoolService(
     pendingTransactionsManager,
@@ -789,7 +860,7 @@ trait TxPoolServiceBuilder:
   )
 
 trait DebugTracingServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
 
   lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
     new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
@@ -797,11 +868,12 @@ trait DebugTracingServiceBuilder:
       blockchainReader,
       mining,
       stxLedger,
-      storagesInstance.storages.transactionMappingStorage
+      storagesInstance.storages.transactionMappingStorage,
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
     )
 
 trait TraceServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
 
   lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
     new com.chipprbots.ethereum.jsonrpc.TraceService(
@@ -809,7 +881,8 @@ trait TraceServiceBuilder:
       blockchainReader,
       mining,
       stxLedger,
-      storagesInstance.storages.transactionMappingStorage
+      storagesInstance.storages.transactionMappingStorage,
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
     )
 
 trait JSONRpcConfigBuilder:
@@ -875,7 +948,8 @@ trait JSONRpcHealthcheckerBuilder:
 
 trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
-    MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder =>
+    MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder &
+    TxGossipGateBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.*
 
@@ -901,7 +975,8 @@ trait EngineApiBuilder extends Logger:
       getPayloadRebuildBudget = EngineApiService.GetPayloadRebuildBudget,
       // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
       builderGasCeil = mining.config.generic.gasLimitTarget,
-      reorgState = blockchain
+      reorgState = blockchain,
+      txGossipGate = Some(txGossipGate)
     )(blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
@@ -1066,7 +1141,7 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
   self: ActorSystemBuilder & ServerActorBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder &
     NodeStatusBuilder & StorageBuilder & StxLedgerBuilder & PeerEventBusBuilder & PendingTransactionsManagerBuilder &
     OmmersPoolBuilder & NetworkPeerManagerActorBuilder & SyncConfigBuilder & ShutdownHookBuilder & MiningBuilder &
-    BlacklistBuilder & MESSBuilder & EventTopicsBuilder =>
+    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
 
   /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
     * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
@@ -1100,7 +1175,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           this,
           messConfigOpt,
           forkChoiceManagerForSync,
-          reorgState = blockchain
+          reorgState = blockchain,
+          txGossipGate = txGossipGate
         ),
         "sync-controller"
       )
@@ -1242,6 +1318,7 @@ trait Node
     with EthProofServiceBuilder
     with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
+    with GasPriceOracleBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
     with EthUserServiceBuilder
@@ -1275,6 +1352,7 @@ trait Node
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder
+    with TxGossipGateBuilder
     with PendingTransactionsManagerBuilder.Default
     with OmmersPoolBuilder
     with NetworkPeerManagerActorBuilder

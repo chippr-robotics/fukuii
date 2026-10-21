@@ -1,116 +1,121 @@
 package com.chipprbots.ethereum.console
 
-import org.apache.pekko.actor.ActorSystem
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.utils.Logger
 
 /** Periodically updates the TUI with node status information.
   *
-  * This component queries various actors for status information and updates the TUI display. It runs a background
-  * thread that handles both the update loop and keyboard input.
+  * A background thread repeats [[tick]]: poll the status source, redraw, then wait up to `updateIntervalMs` for a key
+  * press. The key wait IS the frame pacing — a key is handled as soon as it arrives, and with no input the screen still
+  * refreshes every interval.
+  *
+  * @param statusSource
+  *   polls the running node; may block briefly (it runs on the updater thread, never on an actor thread) and may throw
+  * @param onQuit
+  *   invoked once, on a fresh thread, when the user presses `q`. It must stop the node (e.g. `sys.exit`), and it may
+  *   call [[stop]] — it does not run on the updater thread, so stopping cannot join itself.
   */
 class TuiUpdater(
     tui: Tui,
     config: TuiConfig,
-    peerManager: Option[Any], // Any: Classic vs Typed ActorRef have no common typed supertype; only .isDefined is used
-    syncController: Option[Any], // Any: same — Classic ActorRef vs Typed ActorRef[Command]; only .isDefined is used
+    statusSource: () => NodeStatusSnapshot,
     networkName: String,
-    shutdownHook: () => Unit
-)(using @annotation.unused _system: ActorSystem)
-    extends Logger:
+    onQuit: () => Unit
+) extends Logger:
 
-  private var running = false
+  @volatile private var running = false
   private var updateThread: Option[Thread] = None
 
   /** Start the updater. */
-  def start(): Unit =
+  def start(): Unit = synchronized {
     if !tui.isEnabled then log.info("TUI is disabled, not starting updater")
-    else
+    else if updateThread.isEmpty then
       log.info("Starting TUI updater")
       running = true
-
-      // Update network name immediately
       tui.updateNetwork(networkName)
+      val thread = new Thread(() => updateLoop(), "TuiUpdateThread")
+      thread.setDaemon(true)
+      updateThread = Some(thread)
+      thread.start()
+  }
 
-      // Start update thread
-      updateThread = Some(new Thread(() => updateLoop(), "TuiUpdateThread"))
-      updateThread.foreach(_.start())
-
-  /** Stop the updater. */
+  /** Stop the updater. Safe to call from any thread, including the updater's own. */
   def stop(): Unit =
-    log.info("Stopping TUI updater")
-    running = false
-    updateThread.foreach { thread =>
-      thread.interrupt()
-      thread.join(config.shutdownTimeoutMs)
+    val thread = synchronized {
+      running = false
+      val t = updateThread
+      updateThread = None
+      t
     }
-    updateThread = None
+    thread.filterNot(_ eq Thread.currentThread()).foreach { t =>
+      log.info("Stopping TUI updater")
+      t.interrupt()
+      t.join(config.shutdownTimeoutMs)
+    }
 
-  /** Main update loop. */
+  /** Whether the update loop is running. */
+  def isRunning: Boolean = running
+
+  /** One iteration of the update loop.
+    *
+    * @return
+    *   true to keep looping
+    */
+  private[console] def tick(): Boolean =
+    refreshStatus()
+    tui.render()
+    tui.checkInput(config.updateIntervalMs) match
+      case Some(key) =>
+        tui.handleCommand(key) match
+          case TuiCommand.Continue => true
+          case TuiCommand.Disable =>
+            log.info("TUI disabled by user; node continues with standard logging")
+            false
+          case TuiCommand.Quit =>
+            log.info("Quit requested via TUI")
+            // Off-thread: onQuit typically exits the JVM, whose shutdown hooks stop this updater and join its thread.
+            val quitter = new Thread(() => onQuit(), "TuiQuit")
+            quitter.start()
+            false
+      case None => true
+
   private def updateLoop(): Unit =
     try
       while running && tui.isEnabled do
-        try
-          // Update status information
-          updateStatus()
+        val keepGoing =
+          try tick()
+          catch
+            case _: InterruptedException => false
+            case NonFatal(e) =>
+              log.error(s"Error in TUI update loop: ${e.getMessage}", e)
+              true
+        if !keepGoing then running = false
+    finally running = false
 
-          // Render the UI
-          tui.render()
-
-          // Check for keyboard input
-          tui.checkInput() match
-            case Some(cmd) =>
-              val shouldContinue = tui.handleCommand(cmd)
-              if !shouldContinue then
-                log.info("Quit requested via TUI")
-                // Use the provided shutdown hook for graceful shutdown
-                shutdownHook()
-            case None => // No input
-          // Sleep for a bit
-          Thread.sleep(config.updateIntervalMs)
-        catch
-          case _: InterruptedException =>
-            // Thread interrupted, exit loop
-            running = false
-          case e: Exception =>
-            log.error(s"Error in TUI update loop: ${e.getMessage}", e)
-            Thread.sleep(config.updateIntervalMs)
-    finally {
-      // Shutdown is handled in StdNode.shutdown() to avoid race conditions
-    }
-
-  /** Update status information from various sources. */
-  private def updateStatus(): Unit =
-    // Update connection status based on whether managers are defined
-    if peerManager.isDefined && syncController.isDefined then tui.updateConnectionStatus("Connected")
-    else tui.updateConnectionStatus("Initializing")
-
-    // Note: In a production implementation, we would need to:
-    // 1. Query PeerManagerActor for peer count
-    // 2. Query SyncController for sync status and block info
-    // 3. Use Ask pattern or some other mechanism to get this information
-    //
-    // For this initial implementation, we're setting up the structure.
-    // The actual actor queries would be added in integration.
+  private def refreshStatus(): Unit =
+    try tui.updateStatus(statusSource())
+    catch
+      case NonFatal(e) =>
+        log.debug(s"TUI status poll failed: ${e.getMessage}")
+        tui.updateConnectionStatus(s"Error: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
 
 object TuiUpdater:
   /** Create a TUI updater with default configuration. */
   def apply(
       tui: Tui,
-      peerManager: Option[Any], // Any: see class comment — mixed Classic/Typed actor refs
-      syncController: Option[Any], // Any: see class comment — mixed Classic/Typed actor refs
+      statusSource: () => NodeStatusSnapshot,
       networkName: String,
-      shutdownHook: () => Unit
-  )(using system: ActorSystem): TuiUpdater =
-    new TuiUpdater(tui, TuiConfig.default, peerManager, syncController, networkName, shutdownHook)
+      onQuit: () => Unit
+  ): TuiUpdater =
+    new TuiUpdater(tui, TuiConfig.default, statusSource, networkName, onQuit)
 
   /** Create a TUI updater with custom configuration. */
   def apply(
       tui: Tui,
       config: TuiConfig,
-      peerManager: Option[Any], // Any: see class comment — mixed Classic/Typed actor refs
-      syncController: Option[Any], // Any: see class comment — mixed Classic/Typed actor refs
+      statusSource: () => NodeStatusSnapshot,
       networkName: String,
-      shutdownHook: () => Unit
-  )(using system: ActorSystem): TuiUpdater =
-    new TuiUpdater(tui, config, peerManager, syncController, networkName, shutdownHook)
+      onQuit: () => Unit
+  ): TuiUpdater =
+    new TuiUpdater(tui, config, statusSource, networkName, onQuit)

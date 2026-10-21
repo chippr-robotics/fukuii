@@ -78,6 +78,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -
 WORKDIR /app
 RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
 COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly.jar
+# JDK 25 C2 ReduceAllocationMerges workaround (JDK-8385993); see docs/runbooks/known-issues.md Issue 16.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
 ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly.jar"]
 DOCKER
 docker build -q -t chipprbots/fukuii:latest "$CTX"

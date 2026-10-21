@@ -24,6 +24,8 @@ import com.chipprbots.ethereum.jsonrpc.EthInfoService.*
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.utils.BlobParams
+import com.chipprbots.ethereum.utils.BlobSchedule
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.NetworkType
 
@@ -85,8 +87,30 @@ class EthConfigForkSelectionSpec
     response.current.value.precompiles should have size 10
     response.current.value.systemContracts.keySet shouldBe Set("BEACON_ROOTS_ADDRESS")
 
+  it should "report the chain's own blob schedule, not mainnet's (#1637)" in new TestSetup:
+    // Ephemery's BPO values (genesis.json config.blobSchedule) on the same fork schedule, head at BPO1.
+    override def headTime: Long = 510L
+    override def blobSchedule: BlobSchedule = BlobSchedule(
+      cancun = Some(BlobParams.Cancun),
+      prague = Some(BlobParams.Prague),
+      bpo1 = Some(BlobParams(8, 12, BigInt(6676955))),
+      bpo2 = Some(BlobParams(10, 15, BigInt(8346193)))
+    )
+
+    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    response.current.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(8), BigInt(12), BigInt(6676955))
+    response.next.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(10), BigInt(15), BigInt(8346193))
+    response.last.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(10), BigInt(15), BigInt(8346193))
+
+  it should "report Osaka with the Prague entry it inherits" in new TestSetup:
+    override def headTime: Long = 480L
+    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    response.current.value.activationTime shouldBe Some(480L)
+    response.current.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(6), BigInt(9), BigInt(5007716))
+
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup:
     def headTime: Long = 540L
+    def blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
 
     /** hive rpc-compat fixture schedule (tests/genesis.json). */
     override lazy val blockchainConfig = super.blockchainConfig.copy(
@@ -98,7 +122,8 @@ class EthConfigForkSelectionSpec
         osakaTimestamp = Some(480L),
         bpo1Timestamp = Some(510L),
         bpo2Timestamp = Some(540L)
-      )
+      ),
+      blobSchedule = blobSchedule
     )
 
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]

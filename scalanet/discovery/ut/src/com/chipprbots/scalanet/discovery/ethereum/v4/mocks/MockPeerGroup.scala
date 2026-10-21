@@ -17,7 +17,7 @@ import scala.concurrent.duration.*
 class MockPeerGroup[A, M](
     override val processAddress: A,
     serverEventsQueue: Queue[IO, ServerEvent[A, M]]
-) extends PeerGroup[A, M] {
+) extends PeerGroup[A, M]:
 
   private val channels = TrieMap.empty[A, MockChannel[A, M]]
 
@@ -26,38 +26,35 @@ class MockPeerGroup[A, M](
     serverEventsQueue.take.map(Some(_))
 
   // Intended for the System Under Test to open outgoing channels.
-  override def client(to: A): Resource[IO, Channel[A, M]] = {
+  override def client(to: A): Resource[IO, Channel[A, M]] =
     Resource.make(
-      for {
+      for
         channel <- getOrCreateChannel(to)
         _ <- IO(channel.refCount.incrementAndGet())
-      } yield channel
+      yield channel
     ) { channel =>
       IO(channel.refCount.decrementAndGet()).void
     }
-  }
 
   def getOrCreateChannel(to: A): IO[MockChannel[A, M]] =
     IO(channels.getOrElseUpdate(to, new MockChannel[A, M](processAddress, to)))
 
   def createServerChannel(from: A): IO[MockChannel[A, M]] =
-    for {
+    for
       channel <- IO(new MockChannel[A, M](processAddress, from))
       _ <- IO(channel.refCount.incrementAndGet())
       event = ChannelCreated(channel, IO(channel.refCount.decrementAndGet()).void)
       _ <- serverEventsQueue.offer(event)
-    } yield channel
-}
+    yield channel
 
-object MockPeerGroup {
+object MockPeerGroup:
   def apply[A, M](processAddress: A): IO[MockPeerGroup[A, M]] =
     Queue.unbounded[IO, ServerEvent[A, M]].map(queue => new MockPeerGroup(processAddress, queue))
-}
 
 class MockChannel[A, M](
     override val from: A,
     override val to: A
-) extends Channel[A, M] {
+) extends Channel[A, M]:
 
   // In lieu of actually closing the channel,
   // just count how many times it was opened and released.
@@ -86,4 +83,3 @@ class MockChannel[A, M](
 
   def nextMessageFromSUT(timeout: FiniteDuration = 250.millis): IO[Option[ChannelEvent[M]]] =
     IO.blocking(Option(messagesFromSUT.poll(timeout.toMillis, TimeUnit.MILLISECONDS)))
-}

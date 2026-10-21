@@ -35,7 +35,7 @@ if ! command -v sbt &> /dev/null; then
         sudo apk add --no-cache bash curl openjdk25 || true
         
         # Download and install SBT
-        SBT_VERSION="1.10.7"
+        SBT_VERSION="1.13.0"
         cd /tmp
         curl -L "https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz" -o sbt.tgz
         sudo tar -xzf sbt.tgz -C /usr/local

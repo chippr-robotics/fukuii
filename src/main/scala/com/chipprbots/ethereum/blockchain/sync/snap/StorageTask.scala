@@ -28,9 +28,7 @@ case class StorageTask(
     last: ByteString,
     // Runtime fields
     val pending: Boolean = false,
-    val done: Boolean = false,
-    val slots: Seq[(ByteString, ByteString)] = Seq.empty, // (slotHash, slotValue)
-    val proof: Seq[ByteString] = Seq.empty
+    val done: Boolean = false
 ):
 
   /** Check if this task is completed */
@@ -49,23 +47,12 @@ case class StorageTask(
   def accountString: String =
     accountHash.take(4).toArray.map("%02x".format(_)).mkString
 
-  /** Calculate progress based on downloaded storage slots */
-  def progress: Double =
-    if done then 1.0
-    else if slots.isEmpty then 0.0
-    else
-      // Rough estimate based on slot count
-      // Typical storage ranges can vary widely (from 0 to thousands of slots)
-      math.min(0.9, slots.size.toDouble / StorageTask.ESTIMATED_SLOTS_FOR_NEAR_COMPLETE)
+  /** Task progress: 1.0 once done, otherwise 0.0 (downloaded slots are not tracked on the task; they travel in
+    * `ReadyStorageChunk`).
+    */
+  def progress: Double = if done then 1.0 else 0.0
 
 object StorageTask:
-
-  /** Estimated number of storage slots that represents "almost complete" (90% progress). This is a rough heuristic.
-    * Actual storage ranges vary dramatically:
-    *   - Most contracts have 0-10 storage slots
-    *   - Popular contracts can have thousands of slots
-    */
-  val ESTIMATED_SLOTS_FOR_NEAR_COMPLETE = 100.0
 
   /** Create initial storage task for an account
     *
@@ -80,14 +67,17 @@ object StorageTask:
     *   Storage task covering full storage space
     */
   def createStorageTask(accountHash: ByteString, storageRoot: ByteString): StorageTask =
-    val min = ByteString(Array.fill(32)(0.toByte))
-    val max = ByteString(Array.fill(32)(0xff.toByte))
     StorageTask(
       accountHash = accountHash,
       storageRoot = storageRoot,
-      next = min, // 0x00... (start)
-      last = max // 0xFF... (end, exclusive)
+      next = FullRangeStart, // 0x00... (start)
+      last = FullRangeEnd // 0xFF... (end, exclusive)
     )
+
+  // Shared full-range boundaries (spec 014). ByteString is immutable, so every initial task can point at the same two
+  // instances instead of allocating two 32-byte ByteStrings each: on Sepolia 2.2M queued tasks carried ~9M ByteStrings.
+  private val FullRangeStart: ByteString = ByteString(Array.fill(32)(0.toByte))
+  private val FullRangeEnd: ByteString = ByteString(Array.fill(32)(0xff.toByte))
 
   /** Create storage tasks for multiple accounts
     *

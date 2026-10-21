@@ -32,6 +32,16 @@ override_dh_auto_install:
 	# Install configuration files
 	cp -r target/universal/fukuii-*/conf/* debian/fukuii/etc/fukuii/
 	
+	# application.ini carries the launcher's default JVM flags (heap, G1,
+	# MaxDirectMemorySize, OOM-exit). The launcher finds it via the
+	# /usr/share/fukuii/conf -> /etc/fukuii symlink (see debian/fukuii.links).
+	# The shipped default heap-dump path is the Docker one (/app/data/logs);
+	# point it at the package's state directory instead.
+	test -f debian/fukuii/etc/fukuii/application.ini
+	sed -i 's|^-J-XX:HeapDumpPath=.*|-J-XX:HeapDumpPath=/var/lib/fukuii/heapdump.hprof|' \
+	    debian/fukuii/etc/fukuii/application.ini
+	grep -q '^-J-XX:HeapDumpPath=/var/lib/fukuii/' debian/fukuii/etc/fukuii/application.ini
+	
 	# Install wrapper script
 	install -m 755 debian/fukuii-wrapper.sh debian/fukuii/usr/bin/fukuii
 	

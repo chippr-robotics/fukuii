@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Hex
 
-class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheckDrivenPropertyChecks {
+class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheckDrivenPropertyChecks:
 
   test("nextElementIndex of empty data", UnitTest, RLPTest) {
     val maybeIndex = Try(nextElementIndex(Array.empty[Byte], 0))
@@ -592,14 +592,13 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   }
 
   test("https://github.com/ethereum/tests/blob/master/rlptest.txt", UnitTest, RLPTest) {
-    for (input: (RLPEncodeable, String) <- rlpTestData) {
+    for input: (RLPEncodeable, String) <- rlpTestData do
       val data = RLP.encode(input._1)
       assert(input._2 == Hex.toHexString(data))
       val dataObtained = RLP.rawDecode(data)
       val obtained: RLPEncodeable = dataObtained
       val encodedAgain = RLP.encode(obtained)
       assert(data.sameElements(encodedAgain))
-    }
   }
 
   test("SimpleBlock encoding", UnitTest, RLPTest) {
@@ -640,51 +639,44 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   }
 
   implicit def emptySeqEncDec: RLPEncoder[Seq[Any]] & RLPDecoder[Seq[Any]] = new RLPEncoder[Seq[Any]]
-    with RLPDecoder[Seq[Any]] {
+    with RLPDecoder[Seq[Any]]:
     override def encode(obj: Seq[Any]): RLPEncodeable = RLPList()
 
-    override def decode(rlp: RLPEncodeable): Seq[Any] = rlp match {
+    override def decode(rlp: RLPEncodeable): Seq[Any] = rlp match
       case l: RLPList if l.items.isEmpty => Seq()
       case _                             => throw new Exception("src is not an empty Seq")
-    }
-  }
 
   implicit val stringSeqEncDec: RLPEncoder[Seq[String]] & RLPDecoder[Seq[String]] = new RLPEncoder[Seq[String]]
-    with RLPDecoder[Seq[String]] {
+    with RLPDecoder[Seq[String]]:
     override def encode(strings: Seq[String]): RLPEncodeable = RLPList(strings.map(stringEncDec.encode)*)
 
-    override def decode(rlp: RLPEncodeable): Seq[String] = rlp match {
+    override def decode(rlp: RLPEncodeable): Seq[String] = rlp match
       case l: RLPList => l.items.map(item => stringFromEncodeable(item))
       case _          => throw new RuntimeException("Invalid String Seq Decoder")
-    }
-  }
 
   implicit def stringSeqFromEncodeable(rlp: RLPEncodeable)(implicit dec: RLPDecoder[Seq[String]]): Seq[String] =
     dec.decode(rlp)
 
   implicit val intSeqEncDec: RLPEncoder[Seq[Int]] & RLPDecoder[Seq[Int]] = new RLPEncoder[Seq[Int]]
-    with RLPDecoder[Seq[Int]] {
+    with RLPDecoder[Seq[Int]]:
     override def encode(ints: Seq[Int]): RLPEncodeable = toRlpList(ints)
 
-    override def decode(rlp: RLPEncodeable): Seq[Int] = rlp match {
+    override def decode(rlp: RLPEncodeable): Seq[Int] = rlp match
       case l: RLPList => l.items.map(item => intFromEncodeable(item))
       case _          => throw new RuntimeException("Invalid Int Seq Decoder")
-    }
-  }
 
   implicit def intSeqFromEncodeable(rlp: RLPEncodeable)(implicit dec: RLPDecoder[Seq[Int]]): Seq[Int] = dec.decode(rlp)
 
   case class MultiList1(number: Int, seq1: Seq[String], string: String, seq2: Seq[Int])
 
-  object MultiList1 {
+  object MultiList1:
     implicit val encDec: RLPEncoder[MultiList1] & RLPDecoder[MultiList1] = new RLPEncoder[MultiList1]
-      with RLPDecoder[MultiList1] {
-      override def encode(obj: MultiList1): RLPEncodeable = {
+      with RLPDecoder[MultiList1]:
+      override def encode(obj: MultiList1): RLPEncodeable =
         import obj.*
         RLPList(toEncodeable(number), toEncodeable(seq1), toEncodeable(string), toEncodeable(seq2))
-      }
 
-      override def decode(rlp: RLPEncodeable): MultiList1 = rlp match {
+      override def decode(rlp: RLPEncodeable): MultiList1 = rlp match
         case l: RLPList =>
           MultiList1(
             intFromEncodeable(l.items.head),
@@ -693,21 +685,17 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
             intSeqEncDec.decode(l.items(3))
           )
         case _ => throw new RuntimeException("Invalid Int Seq Decoder")
-      }
-    }
-  }
 
   case class MultiList2(seq1: Seq[String], seq2: Seq[Int], seq3: Seq[Any] = Seq())
 
-  object MultiList2 {
+  object MultiList2:
     implicit val encDec: RLPEncoder[MultiList2] & RLPDecoder[MultiList2] = new RLPEncoder[MultiList2]
-      with RLPDecoder[MultiList2] {
-      override def encode(obj: MultiList2): RLPEncodeable = {
+      with RLPDecoder[MultiList2]:
+      override def encode(obj: MultiList2): RLPEncodeable =
         import obj.*
         RLPList(toEncodeable(seq1), toEncodeable(seq2), toEncodeable(seq3))
-      }
 
-      override def decode(rlp: RLPEncodeable): MultiList2 = rlp match {
+      override def decode(rlp: RLPEncodeable): MultiList2 = rlp match
         case l: RLPList =>
           MultiList2(
             stringSeqEncDec.decode(l.items.head),
@@ -715,49 +703,38 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
             emptySeqEncDec.decode(l.items(2))
           )
         case _ => throw new RuntimeException("Invalid Int Seq Decoder")
-      }
-    }
-  }
 
   case class EmptyListOfList()
 
-  object EmptyListOfList {
+  object EmptyListOfList:
     val instance: Seq[RLPList] = Seq(RLPList(RLPList(), RLPList()), RLPList())
 
     implicit val encDec: RLPEncoder[EmptyListOfList] & RLPDecoder[EmptyListOfList] = new RLPEncoder[EmptyListOfList]
-      with RLPDecoder[EmptyListOfList] {
+      with RLPDecoder[EmptyListOfList]:
       override def encode(obj: EmptyListOfList): RLPEncodeable = RLPList(instance*)
 
-      override def decode(rlp: RLPEncodeable): EmptyListOfList = rlp match {
+      override def decode(rlp: RLPEncodeable): EmptyListOfList = rlp match
         case l: RLPList =>
-          l.items match {
+          l.items match
             case items if items == instance => EmptyListOfList()
             case _                          => throw new RuntimeException("Invalid EmptyListOfList Decoder")
-          }
         case _ => throw new RuntimeException("Invalid EmptyListOfList Decoder")
-      }
-    }
-  }
 
   case class RepOfTwoListOfList()
 
-  object RepOfTwoListOfList {
+  object RepOfTwoListOfList:
     val instance: Seq[RLPList] = Seq(RLPList(), RLPList(RLPList()), RLPList(RLPList(), RLPList(RLPList())))
 
     implicit val encDec: RLPEncoder[RepOfTwoListOfList] & RLPDecoder[RepOfTwoListOfList] =
-      new RLPEncoder[RepOfTwoListOfList] with RLPDecoder[RepOfTwoListOfList] {
+      new RLPEncoder[RepOfTwoListOfList] with RLPDecoder[RepOfTwoListOfList]:
         override def encode(obj: RepOfTwoListOfList): RLPEncodeable = RLPList(instance*)
 
-        override def decode(rlp: RLPEncodeable): RepOfTwoListOfList = rlp match {
+        override def decode(rlp: RLPEncodeable): RepOfTwoListOfList = rlp match
           case l: RLPList =>
-            l.items match {
+            l.items match
               case items if items == instance => RepOfTwoListOfList()
               case _                          => throw new RuntimeException("Invalid RepOfTwoListOfList Decoder")
-            }
           case _ => throw new RuntimeException("Invalid RepOfTwoListOfList Decoder")
-        }
-      }
-  }
 
   val rlpTestData: Seq[(RLPEncodeable, String)] = Seq(
     intEncDec.encode(0) -> "80",
@@ -780,29 +757,25 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   // The following classes are used for a simplifying testing for nested objects (allowing using simple RLPEncoder and RLPDecoder)
   private case class TestSimpleTransaction(id: Int, name: String)
 
-  private object TestSimpleTransaction {
+  private object TestSimpleTransaction:
     implicit val encDec: RLPEncoder[TestSimpleTransaction] & RLPDecoder[TestSimpleTransaction] =
-      new RLPEncoder[TestSimpleTransaction] with RLPDecoder[TestSimpleTransaction] {
-        override def encode(obj: TestSimpleTransaction): RLPEncodeable = {
+      new RLPEncoder[TestSimpleTransaction] with RLPDecoder[TestSimpleTransaction]:
+        override def encode(obj: TestSimpleTransaction): RLPEncodeable =
           import obj.*
           import RLPImplicitConversions.*
           RLPList(id: RLPEncodeable, name: RLPEncodeable)
-        }
 
-        override def decode(rlp: RLPEncodeable): TestSimpleTransaction = rlp match {
+        override def decode(rlp: RLPEncodeable): TestSimpleTransaction = rlp match
           case RLPList(idRlp, nameRlp) =>
             TestSimpleTransaction(
               intFromEncodeable(idRlp),
               stringFromEncodeable(nameRlp)
             )
           case _ => throw new RuntimeException("Invalid Simple Transaction")
-        }
-      }
 
     implicit def fromEncodeable(rlp: RLPEncodeable)(implicit
         dec: RLPDecoder[TestSimpleTransaction]
     ): TestSimpleTransaction = dec.decode(rlp)
-  }
 
   private case class TestSimpleBlock(
       id: Byte,
@@ -813,10 +786,10 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
       unclesIds: Seq[Int]
   )
 
-  private object TestSimpleBlock {
+  private object TestSimpleBlock:
     implicit val encDec: RLPEncoder[TestSimpleBlock] & RLPDecoder[TestSimpleBlock] = new RLPEncoder[TestSimpleBlock]
-      with RLPDecoder[TestSimpleBlock] {
-      override def encode(obj: TestSimpleBlock): RLPEncodeable = {
+      with RLPDecoder[TestSimpleBlock]:
+      override def encode(obj: TestSimpleBlock): RLPEncodeable =
         import obj.*
         import RLPImplicitConversions.*
         RLPList(
@@ -827,9 +800,8 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
           RLPList(txs.map(TestSimpleTransaction.encDec.encode)*),
           RLPList(unclesIds.map(id => toEncodeable(id))*)
         )
-      }
 
-      override def decode(rlp: RLPEncodeable): TestSimpleBlock = rlp match {
+      override def decode(rlp: RLPEncodeable): TestSimpleBlock = rlp match
         case RLPList(idRlp, parentIdRlp, ownerRlp, nonceRlp, (txs: RLPList), (unclesIds: RLPList)) =>
           TestSimpleBlock(
             byteFromEncodeable(idRlp),
@@ -840,7 +812,3 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
             unclesIds.items.map(intFromEncodeable)
           )
         case _ => throw new Exception("Can't transform RLPEncodeable to block")
-      }
-    }
-  }
-}

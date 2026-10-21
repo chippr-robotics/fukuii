@@ -217,3 +217,94 @@ class NetworkPeerManagerActorHandshakeSpec extends ScalaTestWithActorTestKit wit
     npma ! PeerEventCmd(PeerDisconnected(peerId))
     bus.expectNoMessage(200.millis)
   }
+
+  // ── Standby connections (death watch) ────────────────────────────────────────
+  // The current entry's actor dying must hand the peer ID over to a live second connection (the outbound an
+  // inbound-wins swap displaced, or a dropped duplicate) instead of dropping the peer, and a standby whose own actor
+  // died must never take over.
+
+  private def peerOn(probe: TestProbe, addr: InetSocketAddress, inbound: Boolean): Peer =
+    Peer(peerId, addr, probe.ref, incomingConnection = inbound, nodeId = Some(nodeIdBytes))
+
+  private def stopAndAwait(probe: TestProbe): Unit =
+    val watcher = TestProbe()
+    watcher.watch(probe.ref)
+    classicSystem.stop(probe.ref)
+    watcher.expectTerminated(probe.ref)
+
+  private def expectPeerRemoved(bus: TestProbe): Unit =
+    bus.expectMsgType[UnsubscribeCmd](3.seconds)
+    bus.expectMsgType[UnsubscribeCmd](3.seconds)
+
+  private def expectPeerKnown(npma: ActorRef): Unit =
+    val reply = TestProbe()
+    npma ! NetworkPeerManagerActor.PeerInfoRequestCmd(
+      peerId,
+      reply.ref.toTyped[NetworkPeerManagerActor.PeerInfoResponse]
+    )
+    reply.expectMsgType[NetworkPeerManagerActor.PeerInfoResponse].peerInfo shouldBe defined
+
+  it should "restore the displaced outbound when the swapped-in inbound dies" taggedAs UnitTest in {
+    val (npma, _, bus) = newNpma()
+    drainInitialSubscriptions(bus)
+    val out = TestProbe(); val in = TestProbe()
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(out, outboundAddr, inbound = false), peerInfo))
+    bus.expectMsgType[SubscribeCmd]; bus.expectMsgType[SubscribeCmd]
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(in, inboundAddr, inbound = true), peerInfo))
+
+    stopAndAwait(in)
+    bus.expectNoMessage(300.millis) // not removed: the outbound took over
+    expectPeerKnown(npma)
+
+    stopAndAwait(out)
+    expectPeerRemoved(bus)
+  }
+
+  it should "not restore the displaced outbound if it died first" taggedAs UnitTest in {
+    val (npma, _, bus) = newNpma()
+    drainInitialSubscriptions(bus)
+    val out = TestProbe(); val in = TestProbe()
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(out, outboundAddr, inbound = false), peerInfo))
+    bus.expectMsgType[SubscribeCmd]; bus.expectMsgType[SubscribeCmd]
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(in, inboundAddr, inbound = true), peerInfo))
+
+    stopAndAwait(out)
+    bus.expectNoMessage(300.millis) // the current entry is the inbound
+    expectPeerKnown(npma)
+
+    stopAndAwait(in)
+    expectPeerRemoved(bus) // no standby left to take over
+  }
+
+  it should "keep the outbound when the swapped-in inbound is already dead on arrival" taggedAs UnitTest in {
+    val (npma, _, bus) = newNpma()
+    drainInitialSubscriptions(bus)
+    val out = TestProbe(); val in = TestProbe()
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(out, outboundAddr, inbound = false), peerInfo))
+    bus.expectMsgType[SubscribeCmd]; bus.expectMsgType[SubscribeCmd]
+
+    stopAndAwait(in)
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(in, inboundAddr, inbound = true), peerInfo))
+    bus.expectNoMessage(300.millis)
+    expectPeerKnown(npma)
+
+    stopAndAwait(out)
+    expectPeerRemoved(bus)
+  }
+
+  it should "hand over to a dropped duplicate when the kept entry's actor dies" taggedAs UnitTest in {
+    val (npma, _, bus) = newNpma()
+    drainInitialSubscriptions(bus)
+    val first = TestProbe(); val second = TestProbe()
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(first, outboundAddr, inbound = false), peerInfo))
+    bus.expectMsgType[SubscribeCmd]; bus.expectMsgType[SubscribeCmd]
+    val secondAddr = new InetSocketAddress("127.0.0.1", 30305)
+    npma ! PeerEventCmd(PeerHandshakeSuccessful(peerOn(second, secondAddr, inbound = false), peerInfo)) // dropped
+
+    stopAndAwait(first)
+    bus.expectNoMessage(300.millis)
+    expectPeerKnown(npma)
+
+    stopAndAwait(second)
+    expectPeerRemoved(bus)
+  }

@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.apache.pekko.util.ByteString
-
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.*
 import org.json4s.JsonAST.*
@@ -10,8 +8,12 @@ import org.json4s.JsonDSL.*
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthInfoService.*
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
+import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionRequest
+import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionResponse
+import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionRequest
+import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SignRequest
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
@@ -88,25 +90,28 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits:
   given eth_sendTransaction: JsonMethodCodec[SendTransactionRequest, SendTransactionResponse] =
     new JsonMethodCodec[SendTransactionRequest, SendTransactionResponse]:
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendTransactionRequest] =
-        params match
-          case Some(JArray(JObject(tx) :: _)) =>
-            extractTx(tx.toMap).map(SendTransactionRequest.apply)
-          case _ =>
-            Left(InvalidParams())
+        txArgsParam(params).map(SendTransactionRequest.apply)
 
       def encodeJson(t: SendTransactionResponse): JValue =
         encodeAsHex(t.txHash)
 
+  given eth_signTransaction: JsonMethodCodec[SignTransactionRequest, SignTransactionResponse] =
+    new JsonMethodCodec[SignTransactionRequest, SignTransactionResponse]:
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignTransactionRequest] =
+        txArgsParam(params).map(SignTransactionRequest(_, passphrase = None))
+
+      def encodeJson(t: SignTransactionResponse): JValue = SignTransactionResult.encode(t.result)
+
+  given eth_fillTransaction: JsonMethodCodec[FillTransactionRequest, FillTransactionResponse] =
+    new JsonMethodCodec[FillTransactionRequest, FillTransactionResponse]:
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, FillTransactionRequest] =
+        txArgsParam(params).map(FillTransactionRequest.apply)
+
+      def encodeJson(t: FillTransactionResponse): JValue = SignTransactionResult.encode(t.result)
+
   given eth_call: (JsonMethodDecoder[CallRequest] & JsonEncoder[CallResponse]) =
     new JsonMethodDecoder[CallRequest] with JsonEncoder[CallResponse]:
-      def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] =
-        params match
-          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
-            for
-              blockParam <- extractBlockParam(blockValue)
-              tx <- extractCall(txObj)
-            yield CallRequest(tx, blockParam)
-          case _ => Left(InvalidParams())
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] = decodeCallParams(params)
 
       def encodeJson(t: CallResponse): JValue = encodeAsHex(t.returnData)
 
@@ -114,44 +119,28 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits:
   class eth_estimateGas extends JsonMethodDecoder[CallRequest] with JsonEncoder[EstimateGasResponse]:
     override def encodeJson(t: EstimateGasResponse): JValue = encodeAsHex(t.gas)
 
-    override def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] =
-      withoutBlockParam.applyOrElse(params, eth_call.decodeJson)
+    override def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] = decodeCallParams(params)
 
-    def withoutBlockParam: PartialFunction[Option[JArray], Either[JsonRpcError, CallRequest]] = {
-      case Some(JArray((txObj: JObject) :: Nil)) =>
-        extractCall(txObj).map(CallRequest(_, BlockParam.Latest))
-    }
-
+  /** eth_createAccessList params: `[call, block?, stateOverrides?]` (go-ethereum `CreateAccessList(args, blockNrOrHash
+    * *, stateOverrides *StateOverride)`).
+    */
   given eth_createAccessList: (JsonMethodDecoder[CreateAccessListRequest] & JsonEncoder[CreateAccessListResponse]) =
     new JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse]:
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, CreateAccessListRequest] =
         params match
-          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
+          case Some(JArray(txObj :: rest)) if rest.size <= 2 =>
+            val padded = rest.padTo(2, JNothing)
             for
-              blockParam <- extractBlockParam(blockValue)
               tx <- extractCall(txObj)
-            yield CreateAccessListRequest(tx, blockParam)
-          case Some(JArray((txObj: JObject) :: Nil)) =>
-            extractCall(txObj).map(CreateAccessListRequest(_, BlockParam.Latest))
+              block <- optionalBlockParam(padded(0))
+              stateOverrides <- CallOverridesJson.decodeStateOverrides(padded(1), 2)
+            yield CreateAccessListRequest(tx, block, stateOverrides)
           case _ => Left(InvalidParams())
 
+      // geth AccessListResult: accessList, then error only when the call failed, gasUsed
       def encodeJson(t: CreateAccessListResponse): JValue =
-        val fields = List(
-          "accessList" -> JArray(t.accessList.toList.map { item =>
-            val addr = item("address") match
-              case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
-              case other                                     => JString(other.toString)
-            val keys = item("storageKeys") match
-              case ks: List[?] =>
-                JArray(ks.map {
-                  case bi: BigInt => JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
-                  case other      => JString(other.toString)
-                })
-              case _ => JArray(Nil)
-            JObject("address" -> addr, "storageKeys" -> keys)
-          }),
-          "gasUsed" -> encodeAsHex(t.gasUsed)
-        )
+        val fields =
+          List("accessList" -> TxArgsJson.encodeAccessList(t.accessList), "gasUsed" -> encodeAsHex(t.gasUsed))
         val errorField = t.error.map(e => "error" -> JString(e)).toList
         JObject(fields ::: errorField)
 
@@ -166,28 +155,29 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits:
         case _ =>
           Left(InvalidParams())
 
-  def extractCall(obj: JObject): Either[JsonRpcError, CallTx] =
-    def toEitherOpt[A, B](opt: Option[Either[A, B]]): Either[A, Option[B]] =
-      opt match
-        case Some(Right(v)) => Right(Option(v))
-        case Some(Left(e))  => Left(e)
-        case None           => Right(None)
+  /** A call object (execution-apis `GenericTransaction`), decoded and checked by the shared S1 decoder:
+    * [[TxArgsJson.decodeForCall]] (geth `TransactionArgs` + `CallDefaults`' state-free checks). Used by eth_call,
+    * eth_estimateGas, eth_createAccessList, debug_traceCall(Many) and trace_call(Many).
+    */
+  def extractCall(obj: JValue): Either[JsonRpcError, TxArgs] = TxArgsJson.decodeForCall(obj, 0)
 
-    for
-      from <- toEitherOpt((obj \ "from").extractOpt[String].map(extractBytes))
-      to <- toEitherOpt((obj \ "to").extractOpt[String].map(extractBytes))
-      gas <- optionalQuantity(obj \ "gas")
-      gasPrice <- optionalQuantity(obj \ "gasPrice")
-      maxFeePerGas <- optionalQuantity(obj \ "maxFeePerGas")
-      value <- optionalQuantity(obj \ "value")
-      data <- toEitherOpt((obj \ "data").extractOpt[String].map(extractBytes))
-      input <- toEitherOpt((obj \ "input").extractOpt[String].map(extractBytes))
-    yield CallTx(
-      from = from,
-      to = to,
-      gas = gas,
-      gasPrice = gasPrice.orElse(maxFeePerGas).getOrElse(0),
-      value = value.getOrElse(0),
-      data = data.orElse(input).getOrElse(ByteString("")),
-      gasPriceExplicit = gasPrice.isDefined || maxFeePerGas.isDefined
-    )
+  /** eth_call / eth_estimateGas params: `[call, block?, stateOverrides?, blockOverrides?]` (execution-apis; go-ethereum
+    * `BlockChainAPI.Call(args, blockNrOrHash *, overrides *StateOverride, blockOverrides *BlockOverrides)`). An absent
+    * or null block is `latest`; an absent or null override is none.
+    */
+  private[jsonrpc] def decodeCallParams(params: Option[JArray]): Either[JsonRpcError, CallRequest] =
+    params match
+      case Some(JArray(txObj :: rest)) if rest.size <= 3 =>
+        val padded = rest.padTo(3, JNothing)
+        for
+          tx <- extractCall(txObj)
+          block <- optionalBlockParam(padded(0))
+          stateOverrides <- CallOverridesJson.decodeStateOverrides(padded(1), 2)
+          blockOverrides <- CallOverridesJson.decodeBlockOverrides(padded(2), 3)
+        yield CallRequest(tx, block, stateOverrides, blockOverrides)
+      case _ => Left(InvalidParams())
+
+  private def optionalBlockParam(v: JValue): Either[JsonRpcError, BlockParam] =
+    v match
+      case JNull | JNothing => Right(BlockParam.Latest)
+      case other            => extractBlockParam(other)

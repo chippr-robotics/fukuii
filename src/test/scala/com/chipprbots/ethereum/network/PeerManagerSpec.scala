@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnec
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.PeerHandshaked
+import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
@@ -1046,6 +1047,9 @@ class PeerManagerSpec
 
     val knownNodes: Set[URI] = Set.empty
 
+    /** Spec 012: remembered snap peers. None unless a test mixes in [[SnapGoodSetup]]. */
+    lazy val snapGoodPeersStore: Option[SnapGoodPeers] = None
+
     val peerFactory: (
         org.apache.pekko.actor.typed.scaladsl.ActorContext[PeerManagerActor.Command],
         InetSocketAddress,
@@ -1107,7 +1111,8 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
-          Some(testScheduler)
+          Some(testScheduler),
+          snapGoodPeersStore
         ),
         s"pma-${java.util.UUID.randomUUID()}",
         typed.DispatcherSelector.fromConfig(org.apache.pekko.testkit.CallingThreadDispatcher.Id)
@@ -1115,6 +1120,7 @@ class PeerManagerSpec
 
     def start(): Unit =
       peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerHandshaked
+      peerEventBus.expectMsgType[SubscribeCmd].to shouldBe WrongNetworkPeersClassifier
 
       peerManager ! PeerManagerActor.StartConnectingCmd
 
@@ -1125,6 +1131,340 @@ class PeerManagerSpec
       req.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes)
       val knownReq = knownNodesManager.expectMsgType[KnownNodesManager.GetKnownNodesReq]
       knownReq.replyTo ! KnownNodesManager.KnownNodes(knownNodes)
+
+  // ── Wrong-network exclusion (#88) ──────────────────────────────────────────
+
+  it should "not dial a node whose STATUS named another network, but still dial other nodes (#88)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val wrongHex = "aa" * 64
+    val okHex = "bb" * 64
+    val wrongUri = new URI(s"enode://$wrongHex@10.0.0.9:30303")
+    val okUri = new URI(s"enode://$okHex@10.0.0.10:30303")
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.9")
+    )
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "dial an excluded wrong-network node when the operator asks explicitly (#88)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val wrongHex = "cc" * 64
+    val wrongUri = new URI(s"enode://$wrongHex@10.0.0.11:30303")
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.11")
+    )
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri, explicit = true)
+
+    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
+
+  // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
+
+  trait HandshakedCrawlerSetup extends TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(crawler, crawlerProbe) = createdPeers.head
+    val ConnectTo(crawlerUri) = crawlerProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val crawlerHex: String = crawlerUri.getUserInfo
+    val crawlerNodeId: ByteString = ByteString(Hex.decode(crawlerHex))
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(crawler.copy(nodeId = Some(crawlerNodeId)), initialPeerInfo)
+    )
+
+    def stopAndAwait(probe: TestProbe): Unit =
+      val watcher = TestProbe()
+      watcher.watch(probe.ref)
+      probe.ref ! PoisonPill
+      watcher.expectTerminated(probe.ref)
+
+    /** Evict the handshaked crawler, which puts its node ID in the exclusion set. */
+    def evictCrawler(): Unit =
+      peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+      crawlerProbe.fishForMessage(3.seconds) {
+        case PeerActor.DisconnectPeer(r) => r == Disconnect.Reasons.UselessPeer
+        case _                           => false
+      }
+
+    /** The evicted connection actually goes away. */
+    def dropOriginalCrawler(): Unit =
+      stopAndAwait(crawlerProbe)
+      peerEventBus.fishForMessage(3.seconds, "waiting for the original crawler's PeerDisconnected") {
+        case PublishCmd(PeerDisconnected(id)) => id == crawler.id
+        case _                                => false
+      }
+
+    /** The crawler's node ID dials us and completes the handshake; returns the new inbound PeerActor's probe. */
+    def reconnectCrawlerInbound(): TestProbe =
+      peerManager ! PeerManagerActor.HandlePeerConnectionCmd(incomingConnection1.ref, incomingPeerAddress1)
+      val inboundProbe: TestProbe = Iterator
+        .continually(createdPeerQueue.poll(3, TimeUnit.SECONDS))
+        .map { tp =>
+          assert(tp ne null, "inbound PeerActor not created within 3s"); tp
+        }
+        .find(_.peer.remoteAddress == incomingPeerAddress1)
+        .get
+        .probe
+      inboundProbe.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
+      inboundProbe.reply(
+        PeerEvent.PeerHandshakeSuccessful(
+          Peer(
+            PeerId(crawlerHex),
+            incomingPeerAddress1,
+            inboundProbe.ref.toTyped[PeerActor.Command],
+            incomingConnection = true,
+            nodeId = Some(crawlerNodeId)
+          ),
+          initialPeerInfo
+        )
+      )
+      inboundProbe
+
+  it should "disconnect an evicted genesis-head peer with UselessPeer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+    crawlerProbe.fishForMessage(3.seconds) {
+      case PeerActor.DisconnectPeer(r) => r == Disconnect.Reasons.UselessPeer
+      case _                           => false
+    }
+
+  it should "not evict a maintained peer even if its head is genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    val replyProbe = TestProbe()
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+      crawlerUri,
+      replyProbe.ref.toTyped[PeerManagerActor.AddMaintainedPeerResponse]
+    )
+    peerManager ! PeerManagerActor.EvictGenesisHeadPeerCmd(crawler.id, "enrscout")
+    crawlerProbe.expectNoMessage(500.millis)
+
+  it should "reject an evicted genesis-head node that reconnects inbound, without a new grace period" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    evictCrawler()
+    val inboundProbe = reconnectCrawlerInbound()
+    inboundProbe.expectMsg(3.seconds, PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
+
+  // Subscribers (NetworkPeerManagerActor, PendingTransactionsManager) register a peer under its handshake ID on the
+  // handshake event even when we reject it; only PeerDisconnected under that same ID removes it. Without this, every
+  // redial of an excluded crawler left one permanent entry in PendingTransactionsManager.connectedPeers.
+  it should "publish PeerDisconnected under the handshake ID when a rejected inbound reconnect goes away" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    evictCrawler()
+    dropOriginalCrawler()
+    val inboundProbe = reconnectCrawlerInbound()
+    inboundProbe.expectMsg(3.seconds, PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
+    stopAndAwait(inboundProbe)
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected under the handshake ID") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(crawlerHex)
+      case _                                => false
+    }
+
+  it should "let a maintained node reconnect inbound even while it is excluded" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    evictCrawler()
+    dropOriginalCrawler()
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(crawlerUri, discardReplyRef)
+    val inboundProbe = reconnectCrawlerInbound()
+    inboundProbe.expectNoMessage(500.millis)
+
+  it should "let a trusted node reconnect inbound even while it is excluded" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    evictCrawler()
+    dropOriginalCrawler()
+    peerManager ! PeerManagerActor.AddTrustedPeerCmd(
+      crawlerUri,
+      testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
+    )
+    val inboundProbe = reconnectCrawlerInbound()
+    inboundProbe.expectNoMessage(500.millis)
+
+  it should "not publish PeerDisconnected for a stale handshake while another live connection has the node ID" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new HandshakedCrawlerSetup:
+    // A second, pending connection whose actor dies before its (late) handshake for the crawler's node ID arrives.
+    val TestPeer(late, lateProbe) = createdPeers(1)
+    lateProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    stopAndAwait(lateProbe)
+    peerEventBus.fishForMessage(3.seconds, "waiting for the pending peer's PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(lateProbe.ref.path.name)
+      case _                                => false
+    }
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(
+        late.copy(id = PeerId(crawlerHex), nodeId = Some(crawlerNodeId)),
+        initialPeerInfo
+      )
+    )
+    // The live crawler connection still owns the node ID: subscribers must not drop it.
+    val published = peerEventBus.receiveWhile(500.millis) { case m => m }
+    published.collect { case PublishCmd(PeerDisconnected(id)) => id } should not contain PeerId(crawlerHex)
+
+  // Sepolia v0.9.6: an enrscout crawler closed TCP right after STATUS. Its PeerActor stopped while
+  // PeerHandshakeSuccessful was still in flight, so the termination was processed first and the late handshake
+  // created a handshaked entry for a dead actor. It was then "evicted" every ~70 s, forever.
+  it should "not register a handshake whose peer actor has already terminated" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    handleInitialNodesDiscovery()
+
+    val TestPeer(gone, goneProbe) = createdPeers.head
+    val ConnectTo(goneUri) = goneProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val goneHex: String = goneUri.getUserInfo
+    val goneNodeId: ByteString = ByteString(Hex.decode(goneHex))
+
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(goneProbe.ref)
+    goneProbe.ref ! PoisonPill
+    watcher.expectTerminated(goneProbe.ref)
+    peerEventBus.fishForMessage(3.seconds, "waiting for the pending peer's PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneProbe.ref.path.name)
+      case _                                => false
+    }
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(gone.copy(id = PeerId(goneHex), nodeId = Some(goneNodeId)), initialPeerInfo)
+    )
+    // Subscribers that saw the late handshake are told to drop it again.
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected of the stale handshake") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneHex)
+      case _                                => false
+    }
+
+    val requestSender: TestProbe = TestProbe()
+    peerManager ! PeerManagerActor.GetPeersCmd(requestSender.ref)
+    requestSender.expectMsgClass(classOf[Peers]).peers.keys.flatMap(_.nodeId) should not contain goneNodeId
+
+  // ── Remembered good snap peers (spec 012) ──────────────────────────────────
+
+  trait SnapGoodSetup extends TestSetup:
+    lazy val goodHex: String = "ee" * 64
+    lazy val goodNodeId: ByteString = ByteString(Hex.decode(goodHex))
+    lazy val goodFile: java.nio.file.Path =
+      java.nio.file.Files.createTempDirectory("pma-snap-good").resolve("snap-good-peers.v1")
+    override lazy val snapGoodPeersStore: Option[SnapGoodPeers] =
+      val seed = new SnapGoodPeers(
+        SnapGoodPeersConfig(true, 16, 12.hours, 10, 7.days, 5.minutes, goodFile)
+      )
+      seed.recordServed(goodHex, "10.1.1.1", 30303, 10.0, System.currentTimeMillis())
+      seed.save()
+      Some(new SnapGoodPeers(seed.config))
+
+  it should "dial remembered good snap peers at startup, and keep them after a handshake and a served report" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SnapGoodSetup:
+    start()
+    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    tp should not be null
+    tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
+    // The dial attempt is counted (and persisted) until a handshake proves the peer is reachable.
+    java.nio.file.Files.readString(goodFile) should include("\t1\n")
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(tp.peer.copy(nodeId = Some(goodNodeId)), initialPeerInfo)
+    )
+    java.nio.file.Files.readString(goodFile) should include("\t0\n")
+
+    peerManager ! PeerManagerActor.SnapServedReportCmd(
+      Map(tp.peer.id -> PeerManagerActor.SnapServed(responses = 50, bytes = 6_553_600L))
+    )
+    val score = java.nio.file.Files.readAllLines(goodFile).get(1).split('\t')(3).toDouble
+    score should be > 100.0 // 10 seeded + 50 + 100 weight
+
+  it should "dial a remembered snap peer within the reserved budget even when the outgoing limit is zero" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SnapGoodSetup:
+    val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+    peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+    start()
+    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    tp should not be null
+    tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
+
+  it should "not take a failed-dial strike while the outgoing table is full" taggedAs (UnitTest, NetworkTest) in
+    new SnapGoodSetup:
+      val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+      peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
+      // Maintained peers bypass the limit and fill the reserved budget (2 slots) before the first re-dial.
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"11" * 64}@10.2.2.2:30303"),
+        discardReplyRef
+      )
+      peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+        new URI(s"enode://${"22" * 64}@10.2.2.3:30303"),
+        discardReplyRef
+      )
+      start()
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      testScheduler.timePasses(16.minutes) // three re-dial cycles
+      createdPeerQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe null
+      // No dial was issued, so no strike: the entry still has zero failed dials in the persisted file.
+      java.nio.file.Files.readString(goodFile) should include("\t0\n")
+
+  it should "not dial a remembered snap peer that is excluded as wrong-network" taggedAs (UnitTest, NetworkTest) in
+    new SnapGoodSetup:
+      start()
+      createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS) should not be null
+      // A second, separate manager would be needed to observe startup exclusion; here assert the
+      // exclusion path directly: after PeerOnWrongNetwork a re-dial cycle creates no new peer.
+      peerManager ! PeerManagerActor.PeerEventReceived(PeerEvent.PeerOnWrongNetwork(goodNodeId, "10.1.1.1"))
+      testScheduler.timePasses(6.minutes)
+      createdPeerQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe null
+
+  "PeerManagerActor.WrongNetworkExclusions" should "exclude a node until its expiry, then forget it" taggedAs UnitTest in {
+    val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
+    val a = ByteString(1, 2, 3)
+    ex.add(a, expiresAtMs = 1000L) shouldBe true
+    ex.add(a, expiresAtMs = 2000L) shouldBe false // already excluded: refreshed, not new
+    ex.isExcluded(a, nowMs = 1999L) shouldBe true
+    ex.isExcluded(a, nowMs = 2000L) shouldBe false // expired
+    ex.size shouldBe 0 // expired entry dropped on lookup
+    ex.isExcluded(ByteString(9), nowMs = 0L) shouldBe false
+  }
+
+  it should "stay bounded, evicting the oldest entry" taggedAs UnitTest in {
+    val ex = new PeerManagerActor.WrongNetworkExclusions(maxEntries = 2)
+    ex.add(ByteString(1), 10_000L)
+    ex.add(ByteString(2), 10_000L)
+    ex.add(ByteString(3), 10_000L)
+    ex.size shouldBe 2
+    ex.isExcluded(ByteString(1), 0L) shouldBe false
+    ex.isExcluded(ByteString(3), 0L) shouldBe true
+  }
+
+  "PeerConfiguration.wrongNetworkExclusionDuration" should "default to 24 hours from the shipped config" taggedAs UnitTest in {
+    Config.Network.peer.wrongNetworkExclusionDuration shouldBe 24.hours
+  }
 
   // ── Regression tests for blacklistDurationForDisconnect ────────────────────
   // Sepolia 2026-05-13: when SNAP-syncing from genesis, ~40+ peers per minute were

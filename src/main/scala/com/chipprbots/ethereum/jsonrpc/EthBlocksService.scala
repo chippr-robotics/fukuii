@@ -28,6 +28,12 @@ object EthBlocksService:
   case class BlockByBlockHashRequest(blockHash: ByteString, fullTxs: Boolean)
   case class BlockByBlockHashResponse(blockResponse: Option[BaseBlockResponse])
 
+  case class HeaderByHashRequest(blockHash: ByteString)
+  case class HeaderByHashResponse(headerResponse: Option[BaseBlockResponse])
+
+  case class HeaderByNumberRequest(block: BlockParam)
+  case class HeaderByNumberResponse(headerResponse: Option[BaseBlockResponse])
+
   case class BlockByNumberRequest(block: BlockParam, fullTxs: Boolean)
   case class BlockByNumberResponse(blockResponse: Option[BaseBlockResponse])
 
@@ -58,6 +64,26 @@ object EthBlocksService:
       baseFeePerBlobGas: Seq[BigInt],
       blobGasUsedRatio: Seq[Double]
   )
+
+  /** Gas-weighted percentile of effective priority fees within one block (go-ethereum `eth/gasprice/feehistory.go`).
+    *
+    * Transactions are ordered by tip ascending; for each percentile `p` the result is the tip of the first transaction
+    * whose cumulative gas reaches `blockGasUsed * p / 100`, or the highest tip if none does. A block without
+    * transactions yields zeros.
+    *
+    * @param txs
+    *   (effective priority fee per gas, gas used) for each transaction in the block
+    */
+  def percentileRewards(txs: Seq[(BigInt, BigInt)], blockGasUsed: BigInt, percentiles: Seq[Double]): Seq[BigInt] =
+    if txs.isEmpty then percentiles.map(_ => BigInt(0))
+    else
+      val sorted = txs.sortBy(_._1)
+      val cumulativeGas = sorted.map(_._2).scanLeft(BigInt(0))(_ + _).tail
+      percentiles.map { p =>
+        val threshold = (BigDecimal(blockGasUsed) * BigDecimal(p) / BigDecimal(100)).toBigInt
+        val idx = cumulativeGas.indexWhere(_ >= threshold)
+        sorted(if idx < 0 then sorted.size - 1 else idx)._1
+      }
 
   case class MaxPriorityFeePerGasRequest()
   case class MaxPriorityFeePerGasResponse(maxPriorityFeePerGas: BigInt)
@@ -112,12 +138,18 @@ class EthBlocksService(
     // final in Scala 3 and cannot be overridden by subclassing, so this can't be a `given` itself and
     // remain testable — instead it backs an anonymous `given` below for the implicit call sites in this
     // class (TransactionReceiptResponse, SignedTransaction.getSender) that require one in scope.
-    val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
+    // NodeBuilder passes the node's one oracle (shared with EthTxService); tests get their own
+    gasPriceOracleOpt: Option[GasPriceOracle] = None
 ) extends ResolveBlock:
   final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthBlocksService.*
 
   given BlockchainConfig = blockchainConfig
+
+  /** The gas price oracle behind eth_maxPriorityFeePerGas; its settings also bound eth_feeHistory. */
+  lazy val gasPriceOracle: GasPriceOracle =
+    gasPriceOracleOpt.getOrElse(new GasPriceOracle(blockchainReader, GasPriceOracle.defaultConfig))
 
   /** ETH-family chains must not emit `totalDifficulty` — execution-apis dropped it from the Block schema after the
     * merge, and rpc-compat compares the object exactly. ETC is PoW and still reports it, so this is a gate rather than
@@ -202,6 +234,34 @@ class EthBlocksService(
         )
       }
     Right(BlockByNumberResponse(blockResponseOpt))
+  }
+
+  /** Implements eth_getHeaderByHash: the block header as the eth_getBlockByHash object minus the body-derived fields
+    * (see the encoder), or None for an unknown or non-exposed hash. Same exposure rule as getByBlockHash.
+    */
+  def getHeaderByHash(request: HeaderByHashRequest): ServiceResponse[HeaderByHashResponse] = IO {
+    val hash = BlockHash(request.blockHash)
+    val headerOpt = blockchainReader.getBlockHeaderByHash(hash).orElse(blockQueue.getBlockByHash(hash).map(_.header))
+    val isExposed = headerOpt.exists { h =>
+      blockchainReader.getBlockHeaderByNumber(h.number.value).exists(_.hash == h.hash) ||
+      blockchainReader.getReceiptsByHash(h.hash).isDefined
+    }
+    val response =
+      if !isExposed then None
+      else headerOpt.map(h => BlockResponse(Block(h, BlockBody(Nil, Nil)), emitTotalDifficulty = false))
+    Right(HeaderByHashResponse(response))
+  }
+
+  /** Implements eth_getHeaderByNumber (number or latest/safe/finalized/earliest/pending tag). */
+  def getHeaderByNumber(request: HeaderByNumberRequest): ServiceResponse[HeaderByNumberResponse] = IO {
+    val response = resolveBlock(request.block).toOption.map { case ResolvedBlock(block, pending) =>
+      BlockResponse(
+        Block(block.header, BlockBody(Nil, Nil)),
+        pendingBlock = pending.isDefined,
+        emitTotalDifficulty = false
+      )
+    }
+    Right(HeaderByNumberResponse(response))
   }
 
   def getBlockTransactionCountByNumber(
@@ -324,7 +384,11 @@ class EthBlocksService(
   def feeHistory(req: FeeHistoryRequest): ServiceResponse[FeeHistoryResponse] = IO {
     val bestBlock = blockchainReader.getBestBlockNumber
     val newestBlockNum = resolveBlock(req.newestBlock).toOption.map(_.block.header.number.value).getOrElse(bestBlock)
-    val count = req.blockCount.min(1024).toInt
+    // go-ethereum `Oracle.FeeHistory`: at most MaxHeaderHistory blocks, MaxBlockHistory when rewards are requested
+    val maxHistory =
+      if req.rewardPercentiles.exists(_.nonEmpty) then gasPriceOracle.config.maxBlockHistory
+      else gasPriceOracle.config.maxHeaderHistory
+    val count = req.blockCount.min(maxHistory).toInt
     val oldestBlock = (newestBlockNum - count + 1).max(0)
 
     val baseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
@@ -369,9 +433,25 @@ class EthBlocksService(
         .getOrElse(0.0)
     }.toSeq
 
-    val rewards = req.rewardPercentiles.map { _ =>
-      (oldestBlock.toLong to newestBlockNum.toLong).map { _ =>
-        req.rewardPercentiles.getOrElse(Seq.empty).map(_ => BigInt(0))
+    val rewards = req.rewardPercentiles.map { percentiles =>
+      (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
+        val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
+          .getBlockHeaderByNumber(num)
+          .flatMap(header => blockchainReader.getBlockByHash(header.hash).map(block => (header, block)))
+          .flatMap { case (header, block) =>
+            blockchainReader.getReceiptsByHash(header.hash).map { receipts =>
+              val cumulative = receipts.map(_.cumulativeGasUsed)
+              val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
+              val baseFee = header.baseFee.getOrElse(BigInt(0))
+              block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
+                val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
+                (tip, gas)
+              }
+            }
+          }
+          .getOrElse(Seq.empty)
+        val blockGasUsed = blockchainReader.getBlockHeaderByNumber(num).map(_.gasUsed.value).getOrElse(BigInt(0))
+        percentileRewards(txTipsAndGas, blockGasUsed, percentiles)
       }.toSeq
     }
 
@@ -388,12 +468,10 @@ class EthBlocksService(
   }
 
   def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
-    IO {
-      // Return the per-chain minimum tip from config rather than a hardcoded 1 gwei literal.
-      // On ETC/Mordor post-Olympia: blockchainConfig.minTip = 1 gwei (ECIP-1112).
-      // On ETH/Sepolia: minTip defaults to 1 gwei. Both match the reference client stub behaviour.
-      Right(MaxPriorityFeePerGasResponse(blockchainConfig.minTip))
-    }
+    // go-ethereum / core-geth `EthereumAPI.MaxPriorityFeePerGas`: the oracle's suggested tip, on every chain. Where
+    // no base fee exists yet (ETC/Mordor before Olympia) every sampled tip is a whole gas price, so this equals
+    // eth_gasPrice, as core-geth answers there.
+    IO(Right(MaxPriorityFeePerGasResponse(gasPriceOracle.suggestTipCap())))
 
   def blobBaseFee(@unused req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
     val fee = blockchainReader.getBestBlock

@@ -14,6 +14,7 @@ import org.json4s.Extraction
 import org.json4s.Formats
 import org.json4s.JsonAST.*
 import org.json4s.JsonDSL.*
+import org.json4s.jvalue2monadic
 import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -21,7 +22,6 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.GetBlockTransactionCountByNumberResponse
 import com.chipprbots.ethereum.jsonrpc.EthTxService.*
@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.OptionNoneT
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.QuantitiesSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.UnformattedDataJsonSerializer
 import com.chipprbots.ethereum.testing.Tags.*
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 
 // scalastyle:off magic.number
 class JsonRpcControllerEthLegacyTransactionSpec
@@ -123,7 +122,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     val params: List[JObject] = JObject(
       "from" -> Address(42).toString,
       "to" -> Address(123).toString,
-      "value" -> 1000
+      "value" -> "0x3e8"
     ) :: Nil
 
     val txHash: ByteString = ByteString(1, 2, 3, 4)
@@ -332,6 +331,25 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveStringResult("0x7b")
+
+  // go-ethereum TransactionAPI.GetTransactionCount: "pending" is the pool nonce (GetPoolNonce), not a block's state.
+  it should "eth_getTransactionCount under pending answer the pool's next nonce" taggedAs (UnitTest, RPCTest) in
+    new JsonRpcControllerFixture:
+      val mockEthUserService: EthUserService = mock[EthUserService]
+      val mockEthTxService: EthTxService = mock[EthTxService]
+      override val jsonRpcController: JsonRpcController =
+        super.jsonRpcController.copy(ethUserService = mockEthUserService, ethTxService = mockEthTxService)
+
+      val address = Address("0x7B9Bc474667Db2fFE5b08d000F1Acc285B2Ae47D")
+      (mockEthTxService.poolNonceAtHead).expects(address).returning(IO.pure(Right(BigInt(124))))
+
+      val request: JsonRpcRequest = newJsonRpcRequest(
+        "eth_getTransactionCount",
+        List(JString(address.toString), JString("pending"))
+      )
+
+      val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+      response should haveStringResult("0x7c")
 
   it should "eth_getBlockTransactionCountByNumber " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     // MIGRATION: Scala 3 scalamock macro drops Option[ForkChoiceManager] type arg — use concrete stub
@@ -554,74 +572,75 @@ class JsonRpcControllerEthLegacyTransactionSpec
       )
     )
 
-  "eth_pendingTransactions" should "request pending transactions and return valid response when mempool is empty" taggedAs (
+  // go-ethereum TransactionAPI.PendingTransactions: the pool's transactions sent from one of the node's own accounts,
+  // as transaction objects. fukuii used to answer every pool transaction's hash.
+  "eth_pendingTransactions" should "ask the pool for the keystore accounts' transactions and answer [] when none" taggedAs (
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
+    val own: Address = Address("0x00000000000000000000000000000000000000aa")
+    personalService.listAccountsFn = _ => IO.pure(Right(ListAccountsResponse(List(own))))
     val mockEthTxService: EthTxService = mock[EthTxService]
-    mockEthTxService.ethPendingTransactions
-      .expects(*)
-      .returning(IO.pure(Right(EthPendingTransactionsResponse(List()))))
+    mockEthTxService.pendingTransactionsFrom
+      .expects(Set(own))
+      .returning(IO.pure(Right(OwnPendingTransactionsResponse(Nil))))
     val jRpcController: JsonRpcController = jsonRpcController.copy(ethTxService = mockEthTxService)
 
-    val request: JsonRpcRequest = JsonRpcRequest(
-      "2.0",
-      "eth_pendingTransactions",
-      Some(
-        JArray(
-          List()
-        )
-      ),
-      Some(JInt(1))
-    )
+    val request: JsonRpcRequest = JsonRpcRequest("2.0", "eth_pendingTransactions", Some(JArray(Nil)), Some(JInt(1)))
 
-    val response: JsonRpcResponse = jRpcController.handleRequest(request).unsafeRunSync()
+    jRpcController.handleRequest(request).unsafeRunSync() should haveResult(JArray(Nil))
 
-    response should haveResult(JArray(List()))
-
-  it should "request pending transactions and return valid response when mempool has transactions" taggedAs (
+  it should "answer full pending transaction objects: no block fields, a fee-market tx's fee cap as gasPrice" taggedAs (
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
-    val transactions: IndexedSeq[PendingTransaction] = (0 to 1).map { _ =>
-      val fakeTransaction = SignedTransactionWithSender(
-        LegacyTransaction(
-          nonce = 0,
-          gasPrice = GasPrice(123),
-          gasLimit = GasAmount(123),
-          receivingAddress = Address("0x1234"),
-          value = 0,
-          payload = ByteString()
-        ),
-        signature = ECDSASignature(0, 0, 0),
-        sender = Address("0x1234")
+    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val own: Address = Address(key)
+    val stx: SignedTransaction = SignedTransaction.sign(
+      TransactionWithDynamicFee(
+        blockchainConfig.chainId.value,
+        5,
+        BigInt(2),
+        BigInt(30),
+        GasAmount(21_000),
+        Some(Address(1)),
+        7,
+        ByteString.empty,
+        Nil
+      ),
+      key,
+      Some(blockchainConfig.chainId.value)
+    )
+    personalService.listAccountsFn = _ => IO.pure(Right(ListAccountsResponse(List(own))))
+    val mockEthTxService: EthTxService = mock[EthTxService]
+    mockEthTxService.pendingTransactionsFrom
+      .expects(Set(own))
+      .returning(IO.pure(Right(OwnPendingTransactionsResponse(Seq(TransactionResponse(stx))))))
+    val jRpcController: JsonRpcController = jsonRpcController.copy(ethTxService = mockEthTxService)
+
+    val request: JsonRpcRequest = JsonRpcRequest("2.0", "eth_pendingTransactions", Some(JArray(Nil)), Some(JInt(1)))
+    val response: JsonRpcResponse = jRpcController.handleRequest(request).unsafeRunSync()
+
+    val JArray(List(txJson)) = response.result.get: @unchecked
+    txJson \ "hash" shouldBe encodeAsHex(stx.hash.value)
+    txJson \ "from" shouldBe encodeAsHex(own.bytes)
+    txJson \ "type" shouldBe JString("0x2")
+    txJson \ "nonce" shouldBe JString("0x5")
+    txJson \ "gasPrice" shouldBe JString("0x1e") // the fee cap: a pending tx has paid nothing yet
+    txJson \ "maxPriorityFeePerGas" shouldBe JString("0x2")
+    txJson \ "blockHash" shouldBe JNull
+    txJson \ "blockNumber" shouldBe JNull
+    txJson \ "transactionIndex" shouldBe JNull
+
+  it should "fail with the keystore's error rather than answer an empty list" taggedAs (UnitTest, RPCTest) in
+    new JsonRpcControllerFixture:
+      personalService.listAccountsFn = _ => IO.pure(Left(JsonRpcError.LogicError("keystore unavailable")))
+      val mockEthTxService: EthTxService = mock[EthTxService]
+      (mockEthTxService.pendingTransactionsFrom).expects(*).never()
+      val jRpcController: JsonRpcController = jsonRpcController.copy(ethTxService = mockEthTxService)
+
+      val request: JsonRpcRequest = JsonRpcRequest("2.0", "eth_pendingTransactions", Some(JArray(Nil)), Some(JInt(1)))
+
+      jRpcController.handleRequest(request).unsafeRunSync() should haveError(
+        JsonRpcError.LogicError("keystore unavailable")
       )
-      PendingTransaction(fakeTransaction, System.currentTimeMillis)
-    }
-
-    val mockEthTxService: EthTxService = mock[EthTxService]
-    mockEthTxService.ethPendingTransactions
-      .expects(*)
-      .returning(IO.pure(Right(EthPendingTransactionsResponse(transactions))))
-    val jRpcController: JsonRpcController = jsonRpcController.copy(ethTxService = mockEthTxService)
-
-    val request: JsonRpcRequest = JsonRpcRequest(
-      "2.0",
-      "eth_pendingTransactions",
-      Some(
-        JArray(
-          List()
-        )
-      ),
-      Some(JInt(1))
-    )
-
-    val response: JsonRpcResponse = jRpcController.handleRequest(request).unsafeRunSync()
-
-    val result: JArray = JArray(
-      transactions.map { tx =>
-        encodeAsHex(tx.stx.tx.hash.value)
-      }.toList
-    )
-
-    response should haveResult(result)

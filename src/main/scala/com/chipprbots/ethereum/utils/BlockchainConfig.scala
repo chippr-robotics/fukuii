@@ -64,7 +64,15 @@ case class BlockchainConfig(
     // `config.depositContractAddress`) and NOT a universal constant: hive's rpc-compat
     // fixture declares the zero address, Sepolia uses its own. `None` means "not declared",
     // and readers fall back to the mainnet contract. ETC/Mordor never declare it.
-    depositContractAddress: Option[Address] = None
+    depositContractAddress: Option[Address] = None,
+    // Start price of the RPC gas price oracle (chain conf `gpo-default-price`, wei). `None` takes the chain family's
+    // reference client: 1 mwei on ETH-family chains (geth), 1 gwei on ETC (core-geth). Not consensus: eth_gasPrice,
+    // eth_maxPriorityFeePerGas and the send/sign/fill fee defaults only. See jsonrpc.GasPriceOracle.
+    gasPriceOracleDefault: Option[BigInt] = None,
+    // EIP-7840 / EIP-7892 blob parameters per fork (#1637). Read from the chain conf's `blob-schedule`; a conf without
+    // one gets BlobSchedule.Empty and may declare no blob fork. The default here applies only to configs built in
+    // code (tests, fixture replays): go-ethereum's default Cancun/Prague/BPO1/BPO2 values, the pre-#1637 constants.
+    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
@@ -96,6 +104,12 @@ case class BlockchainConfig(
   /** EIP-7892 BPO2: second blob-target bump. Sepolia activated 2025-10-28. */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
+
+  /** The blob parameters (target, max, base-fee update fraction) in force at `timestamp`: go-ethereum
+    * `eip4844.latestBlobConfig` over this chain's `blob-schedule`. `None` before the chain's first blob fork.
+    */
+  def blobParamsAt(timestamp: Timestamp): Option[BlobParams] =
+    blobSchedule.paramsAt(timestamp, forkTimestamps)
 
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
@@ -321,6 +335,11 @@ object BlockchainConfig:
     val depositContractAddress: Option[Address] =
       Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption
 
+    val gasPriceOracleDefault: Option[BigInt] =
+      Option.when(blockchainConfig.hasPath("gpo-default-price"))(
+        BigInt(blockchainConfig.getString("gpo-default-price"))
+      )
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
@@ -330,6 +349,10 @@ object BlockchainConfig:
       bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
       bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
     )
+
+    // Throws BlobSchedule.InvalidBlobSchedule on a schedule fukuii would mis-execute (missing entry for a declared
+    // blob fork, max < target, zero fraction, unordered blob-fork timestamps, unsupported bpo3+).
+    val blobSchedule: BlobSchedule = BlobSchedule.fromConfig(blockchainConfig, forkTimestamps)
 
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
@@ -396,7 +419,9 @@ object BlockchainConfig:
       networkType = networkType,
       terminalTotalDifficulty = terminalTotalDifficulty,
       depositContractAddress = depositContractAddress,
-      forkTimestamps = forkTimestamps
+      forkTimestamps = forkTimestamps,
+      gasPriceOracleDefault = gasPriceOracleDefault,
+      blobSchedule = blobSchedule
     )
   // scalastyle:on method.length
   private def readPubKeySet(blockchainConfig: TypesafeConfig, path: String): Set[ByteString] =

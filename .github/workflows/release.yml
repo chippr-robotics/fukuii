@@ -160,7 +160,8 @@ jobs:
           **Universal JAR** (requires JDK 25+):
           ```bash
           HEADER
-          echo "java -jar fukuii-assembly-${VERSION}.jar" >> release_notes.md
+          # JDK-8385993 C2 workaround; see docs/runbooks/known-issues.md Issue 16.
+          echo "java -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -jar fukuii-assembly-${VERSION}.jar" >> release_notes.md
           echo '```' >> release_notes.md
 
           cat >> release_notes.md << 'DISTRO'
