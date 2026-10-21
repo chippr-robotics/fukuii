@@ -694,7 +694,9 @@ class EthSimulateService(
     // uint64 bit pattern -> unsigned BigInt; see validateBlockOrdering above for the sign-extension bug this avoids.
     val timestamp = ov.time.getOrElse(parentHeader.unixTimestamp.toUnsignedBigInt + 12)
     val gasLimit = ov.gasLimit.map(GasAmount(_)).getOrElse(parentHeader.gasLimit)
-    val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
+    // go-ethereum makeHeaders (simulate.go:680): `Coinbase: header.Coinbase`, the previous header's — the base block's
+    // for the first simulated block, then each simulated block's own, so an override carries forward. (Not zero.)
+    val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(parentHeader.beneficiary)
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
     val baseFee = ov.baseFeePerGas.getOrElse(
       if !validation then BigInt(0)

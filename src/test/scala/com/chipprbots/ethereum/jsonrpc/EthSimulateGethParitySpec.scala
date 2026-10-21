@@ -171,3 +171,27 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
       "0x000000000000000000000000cd234a471b72ba2f1ccf0a70fcaba648a5eecd8d"
     )
   }
+
+  // ── 7: default coinbase (simulate.go:680, `Coinbase: header.Coinbase`) ──────
+
+  private val BaseMiner = "0x00000000000000000000000000000000000000aa"
+  private val OtherMiner = "0x00000000000000000000000000000000000000bb"
+  private def minerNode = new Node(baseMiner = ByteString(org.bouncycastle.util.encoders.Hex.decode(BaseMiner.drop(2))))
+
+  it should "inherit the base block's miner as the default coinbase, through gap blocks" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val payload = """{"blockStateCalls":[{},{"blockOverrides":{"number":"0x21"}}]}"""
+    val (_, bs) = minerNode.blocks(payload)
+    bs.map(b => str(b \ "number")) shouldBe List("0x1e", "0x1f", "0x20", "0x21")
+    bs.map(b => str(b \ "miner")) shouldBe List.fill(4)(BaseMiner)
+  }
+
+  it should "carry a feeRecipient override forward to later blocks" taggedAs (UnitTest, RPCTest) in {
+    val payload =
+      s"""{"blockStateCalls":[{"blockOverrides":{"feeRecipient":"$OtherMiner"}},{}]}"""
+    val (_, bs) = minerNode.blocks(payload)
+    bs.map(b => str(b \ "miner")) shouldBe List(OtherMiner, OtherMiner)
+  }
+
