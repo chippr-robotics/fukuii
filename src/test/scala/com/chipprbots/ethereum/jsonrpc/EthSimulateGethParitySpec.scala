@@ -108,3 +108,43 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     new Node().error("""{}""") shouldBe (-32602, "empty input")
   }
 
+  // ── 3-4: state override validation (override.go:80-110) ────────────────────
+
+  it should "reject an account override with both state and stateDiff, -32000 (override.go:108-110)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$To":{"state":{},"stateDiff":{}}},"calls":[{"from":"$From","to":"$To"}]}]}"""
+    new Node().error(payload) shouldBe (-32000, s"account $To has both 'state' and 'stateDiff'")
+  }
+
+  it should "reject moving a precompile onto its own address, -32000 (override.go:84-88)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val one = "0x0000000000000000000000000000000000000001"
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$one":{"movePrecompileToAddress":"$one"}},"calls":[{"from":"$From","to":"$one"}]}]}"""
+    new Node().error(payload) shouldBe (-32000, s"account $one is already overridden")
+  }
+
+  it should "reject moving a precompile onto any other overridden address, -32000 (override.go:86)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val one = "0x0000000000000000000000000000000000000001"
+    val other = "0x0000000000000000000000000000000000000077"
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$one":{"movePrecompileToAddress":"$other"},"$other":{"balance":"0x1"}},"calls":[{"from":"$From","to":"$one"}]}]}"""
+    new Node().error(payload) shouldBe (-32000, s"account $other is already overridden")
+  }
+
+  it should "still move a precompile to a fresh address" taggedAs (UnitTest, RPCTest) in {
+    val one = "0x0000000000000000000000000000000000000001"
+    val fresh = "0x00000000000000000000000000000000000000c0"
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$one":{"movePrecompileToAddress":"$fresh"}},"calls":[{"from":"$From","to":"$fresh"}]}]}"""
+    new Node().run(payload).isRight shouldBe true
+  }
+

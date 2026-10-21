@@ -191,12 +191,25 @@ object EthSimulateService:
       Address(0x100)
     )
     val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
-    for (address, ov) <- overrides do
+    // go-ethereum's StateOverride.Apply (internal/ethapi/override/override.go:60-127) walks the accounts in address
+    // order, so a request with several faults reports the same one. Its errors are plain `fmt.Errorf`s: -32000.
+    val sortedOverrides = overrides.toSeq.sortBy { case (address, _) => BigInt(1, address.bytes.toArray) }
+    for (address, ov) <- sortedOverrides do
       ov.movePrecompileToAddress.foreach { targetAddr =>
         if !allPrecompiles.contains(address) then
           break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
+        // override.go:84-88: "Refuse to move a precompile to an address that has been or will be overridden" — any
+        // key of this override set, the precompile's own address included (not the -38022 of the execution-apis
+        // vector, which moves a non-precompile and so stops at the check above).
+        if overrides.contains(targetAddr) then
+          break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(targetAddr)} is already overridden")))
         pendingMoves += (address -> targetAddr)
       }
+      // override.go:108-110, after the account's nonce, code and balance are set (the error discards them all)
+      if ov.state.isDefined && ov.stateDiff.isDefined then
+        break(
+          Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} has both 'state' and 'stateDiff'"))
+        )
     // Two precompiles moving to the same target is ambiguous — geth silently
     // drops the colliding moves rather than erroring (matches the
     // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
