@@ -409,6 +409,18 @@ lazy val node = {
 
 }
 
+// Coverage-only aggregator. The root project does not `aggregate` the sub-modules (it only dependsOn them), so
+// `coverageAggregate` on the root found just the root's scoverage-data. CI runs `coverageAgg/coverageAggregate`
+// to merge root + bytes/crypto/rlp/scalanet/scalanetDiscovery into coverageAgg/target/scala-*/scoverage-report/.
+// It has no sources and is not published; no other task is routed through it.
+lazy val coverageAgg = (project in file(".coverage-agg"))
+  .aggregate(node, bytes, crypto, rlp, scalanet, scalanetDiscovery)
+  .settings(
+    name := "fukuii-coverage-agg",
+    scalaVersion := `scala-3`,
+    publish / skip := true
+  )
+
 // Scoverage configuration
 // Must be ThisBuild-scoped: `sbt coverage` sets ThisBuild / coverageEnabled, and a project-scoped (root) value
 // would shadow it, leaving the root module uninstrumented ("No coverage data, skipping reports").
