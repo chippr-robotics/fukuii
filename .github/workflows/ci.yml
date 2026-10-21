@@ -135,7 +135,10 @@ jobs:
         # wall-clock, not a correctness failure). Raised to 90 min (~2x the historical run) to
         # absorb suite growth + coverage/runner variance with headroom. Follow-up: split the
         # coverage run or shard Tier 2 to bring it back down.
-        timeout-minutes: 90
+        # Measured on the 4-core host with the fixed instrumentation (root module now actually instrumented):
+        # compile ~5 min + testEssential ~46 min + testOnly (testStandard minus SlowTest) ~52 min, i.e. ~105 min
+        # end to end, so 90 min is no longer enough. 150 min leaves ~45 min for slower GitHub runners.
+        timeout-minutes: 150
       
       - name: Validate KPI Baselines
         run: |
