@@ -833,19 +833,17 @@ class EthSimulateService(
     * type is therefore:
     *   - authorizationList -> 0x4; blobVersionedHashes -> 0x3; otherwise 0x2 at a block with a base fee, so an
     *     accessList alone rides in a 0x2 transaction, as in geth;
-    *   - gasPrice -> legacy, except that gasPrice with an accessList needs `"type": "0x1"` (S1 fail-loudly rule,
-    *     [[TxArgs.resolveType]]; geth would drop the list from the transaction), and gasPrice with blob fields or an
-    *     authorizationList is refused rather than dropping them;
+    *   - gasPrice -> legacy, except that gasPrice with an accessList is 0x1 (transaction_args.go:555-560), and gasPrice
+    *     with blob fields or an authorizationList is refused rather than dropping them (fukuii fail-loudly rule);
     *   - at a block without a base fee (ETH before London, ETC before Olympia) geth's CallDefaults sets gasPrice to 0,
-    *     so the default is legacy, and an accessList gives 0x1 (fukuii keeps the list; geth's gasPrice default drops
-    *     it);
-    *   - an explicit `type` (which geth does not read) is honoured and checked against the fields present (S1 rule,
-    *     kept deliberately).
+    *     so the default is legacy, and an accessList gives 0x1, as gasPrice with an accessList does in geth;
+    *   - a `type` in the call is NOT read: geth's TransactionArgs has no such field and ignores the key
+    *     (transaction_args.go:42-71), so TxArgsJson drops it and the type is always inferred as above (user decision
+    *     2026-10-21, #1660 item 10; it replaces the #1629 S1 "explicit type wins" rule).
     *
-    * Absent fees are zero (CallDefaults). An explicit `type` the simulated block's fork does not admit is refused here
-    * ([[TxTypeGate]], through [[CallTxBuilder.checkActive]]; fukuii rule), as are 1559 fields where there is no base
-    * fee, before any default can collide with them. An access list, blob hashes or authorizations the fork does not
-    * admit are geth's preCheck `ErrTxTypeNotSupported`, reported by [[preCheck]] at geth's position.
+    * Absent fees are zero (CallDefaults). 1559 fields where there is no base fee are refused before any default can
+    * collide with them. An access list, blob hashes or authorizations the fork does not admit are geth's preCheck
+    * `ErrTxTypeNotSupported`, reported by [[preCheck]] at geth's position.
     *
     * Everything here is sanitizeCall / CallDefaults (go-ethereum master ffb9e230: simulate.go:417-420, 531-555;
     * transaction_args.go:401-423), or a fukuii request-shape rule, and so precedes the nonce-limit check and preCheck.
