@@ -166,7 +166,10 @@ class JsonRpcControllerTypedTxSpec
     )
     jsonRpcController.handleRequest(newJsonRpcRequest("eth_sendTransaction", params)).unsafeRunSync() should
       haveResult(JString(s"0x${Hex.toHexString(signed.hash.value.toArray)}"))
-    seen.map(_.tx.txType) shouldBe Some(Some(TxArgs.AccessListType))
+    // the request's "type" is not read (geth's TransactionArgs has no such field; #1660 item 10): the service infers 0x1
+    // from gasPrice-less accessList defaults, so the decoded args carry no type
+    seen.map(_.tx.txType) shouldBe Some(None)
+    seen.map(_.tx.accessList.isDefined) shouldBe Some(true)
     seen.map(_.tx.callData) shouldBe Some(ByteString(0x12, 0x34))
 
   it should "reject data and input that differ" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:

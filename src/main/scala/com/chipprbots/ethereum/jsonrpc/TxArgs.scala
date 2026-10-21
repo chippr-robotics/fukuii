@@ -56,12 +56,8 @@ object TxArgsError:
   def UnsupportedDefaultType(t: Byte): TxArgsError =
     TxArgsError(s"unsupported default transaction type ${hex(BigInt(t & 0xff))}")
 
-  // fukuii-defined, deliberate deviation from geth (which silently builds a legacy tx and drops the list/blobs):
+  // fukuii-defined, deliberate deviation from geth (which silently builds a legacy tx and drops the blobs):
   // fail-loudly rule, user decision 2026-10-18 (#1629). Always -32602.
-  val GasPriceWithAccessListUntyped: TxArgsError = TxArgsError(
-    """gasPrice with accessList requires "type": "0x1" (or use maxFeePerGas/maxPriorityFeePerGas)""",
-    invalidParams = true
-  )
   val GasPriceWithBlobFields: TxArgsError =
     TxArgsError("blob fields require a blob transaction; gasPrice is not allowed", invalidParams = true)
 
@@ -127,19 +123,21 @@ final case class TxArgs(
 
   /** Resolve the transaction type.
     *
-    * An explicit `type` wins and is checked against the fields present (fukuii rule; geth ignores `type`). Otherwise
-    * go-ethereum `ToTransaction(defaultType)` is followed exactly:
+    * The JSON decoder never sets `txType` (user decision 2026-10-21, #1660 item 10: go-ethereum's `TransactionArgs` has
+    * no `type` field, transaction_args.go:42-71, and ignores the key everywhere), so a request's type is always
+    * inferred. A `txType` set programmatically (internal callers) still wins and is checked against the fields present.
+    * Inference follows go-ethereum `ToTransaction(defaultType)` (transaction_args.go:537-560) exactly:
     *   - authorizationList present, or defaultType 0x4 -> 0x4
     *   - blobVersionedHashes present (or blobs, whose hashes S2 derives), or defaultType 0x3 -> 0x3
     *   - maxFeePerGas or maxPriorityFeePerGas present, or defaultType 0x2 -> 0x2 (geth tests maxFeePerGas only, because
     *     setDefaults has always filled it by then; testing either field gives the same post-defaults result)
     *   - accessList present, or defaultType 0x1 -> 0x1
     *   - otherwise legacy
-    *   - then: gasPrice present -> legacy, overriding all of the above
+    *   - then: gasPrice present -> legacy, overriding all of the above, except that gasPrice with an accessList is an
+    *     EIP-2930 transaction (transaction_args.go:555-560)
     *   - DEVIATION from geth (deliberate fail-loudly rule, user decision 2026-10-18): where geth's override would
-    *     silently drop an accessList or blob fields given with gasPrice and no explicit type, this returns
-    *     [[TxArgsError.GasPriceWithBlobFields]] / [[TxArgsError.GasPriceWithAccessListUntyped]] (-32602) instead. An
-    *     explicit `"type": "0x1"` with gasPrice + accessList still builds an EIP-2930 transaction.
+    *     silently drop blob fields given with gasPrice, this returns [[TxArgsError.GasPriceWithBlobFields]] (-32602)
+    *     instead.
     *
     * gasPrice together with maxFeePerGas/maxPriorityFeePerGas, or with authorizationList, is an error in either case.
     */
@@ -167,7 +165,7 @@ final case class TxArgs(
         else LegacyType
       if gasPrice.isEmpty then Right(inferred)
       else if blobVersionedHashes.isDefined || blobs.isDefined then Left(GasPriceWithBlobFields)
-      else if accessList.isDefined then Left(GasPriceWithAccessListUntyped)
+      else if accessList.isDefined then Right(AccessListType)
       else Right(LegacyType)
 
   private def checkExplicitType(t: Byte): Either[TxArgsError, Unit] =

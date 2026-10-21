@@ -279,6 +279,8 @@ class BlockPreparator(
     if overrides.precompileRelocations.nonEmpty then
       ctx = ctx.copy(precompileRelocations = overrides.precompileRelocations)
     if overrides.traceTransfers then ctx = ctx.copy(traceTransfers = true)
+    // BLOBBASEFEE reads the override too, not only the sender's blob-gas charge (updateSenderAccountBeforeExecution)
+    if overrides.blobBaseFeeOverride.isDefined then ctx = ctx.copy(blobBaseFeeOverride = overrides.blobBaseFeeOverride)
     if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
     // EIP-7928: the transaction's block-access recorder, while an Amsterdam block executes.
     if accessRecorder.isDefined then ctx = ctx.copy(accessRecorder = accessRecorder)

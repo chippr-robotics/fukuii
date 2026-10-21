@@ -1365,7 +1365,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
           stateGasReservoir = state.stateGasReservoir,
           evmStateGasUsed = state.evmStateGasUsed,
           // EIP-7928: the create frame records into the same index's recorder, whatever its outcome.
-          accessRecorder = state.env.accessRecorder
+          accessRecorder = state.env.accessRecorder,
+          blobBaseFeeOverride = state.env.blobBaseFeeOverride
         )
 
         val ((result, newAddress), stack2) = this match
@@ -1601,7 +1602,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       stateGasReservoir = state.stateGasReservoir,
       evmStateGasUsed = state.evmStateGasUsed,
       // EIP-7928: the child records into the same index's recorder, whatever its outcome.
-      accessRecorder = state.env.accessRecorder
+      accessRecorder = state.env.accessRecorder,
+      blobBaseFeeOverride = state.env.blobBaseFeeOverride
     )
 
     // Recomputed rather than threaded: the world is unchanged since `execute` decided it, so this is the
@@ -2027,10 +2029,13 @@ case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas:
     val bcConfig = state.env.evmConfig.blockchainConfig
     val excessBlobGas = state.env.blockHeader.excessBlobGas.getOrElse(BigInt(0))
     val fraction = bcConfig.blobParamsAt(timestamp).baseFeeUpdateFraction
-    val fee = com.chipprbots.ethereum.utils.BlobParams.fakeExponential(
-      com.chipprbots.ethereum.utils.BlobParams.MinBlobBaseFee,
-      excessBlobGas,
-      fraction
+    // eth_simulateV1 `blockOverrides.blobBaseFee` replaces the derived fee (go-ethereum BlockContext.BlobBaseFee)
+    val fee = state.env.blobBaseFeeOverride.getOrElse(
+      com.chipprbots.ethereum.utils.BlobParams.fakeExponential(
+        com.chipprbots.ethereum.utils.BlobParams.MinBlobBaseFee,
+        excessBlobGas,
+        fraction
+      )
     )
     state.withStack(state.stack.push(UInt256(fee))).step()
 

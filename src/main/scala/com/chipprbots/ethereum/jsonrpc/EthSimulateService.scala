@@ -10,6 +10,7 @@ import scala.util.boundary.break
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -41,7 +42,9 @@ object EthSimulateService:
       prevRandao: Option[ByteString] = None,
       baseFeePerGas: Option[BigInt] = None,
       blobBaseFee: Option[BigInt] = None,
-      difficulty: Option[BigInt] = None
+      difficulty: Option[BigInt] = None,
+      // EIP-4895: the block's withdrawals (go-ethereum BlockOverrides.Withdrawals); read from Shanghai on
+      withdrawals: Option[Seq[Withdrawal]] = None
   )
 
   case class StateOverride(
@@ -148,6 +151,33 @@ object EthSimulateService:
     override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] =
       underlying.multiGetNodes(hashes)
 
+  /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
+    * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.
+    */
+  private[jsonrpc] def createdContractAddress(sender: Address, nonce: BigInt): Address =
+    import com.chipprbots.ethereum.rlp.UInt256RLPImplicits.*
+    Address(
+      kec256(rlp.encode(rlp.RLPList(rlp.RLPValue(sender.bytes.toArray), UInt256(nonce).toRLPEncodable)))
+    )
+
+  /** EIP-4895: credits each withdrawal's `amount` Gwei to its address, as block execution does
+    * (`BlockExecution.processWithdrawals`; go-ethereum `core.ProcessWithdrawals`): no gas, the account is created if
+    * absent, and a zero amount does not touch the account. EIP-7928: every recipient is read, a zero amount included.
+    */
+  private[jsonrpc] def creditWithdrawals(
+      world: InMemoryWorldStateProxy,
+      withdrawals: Seq[Withdrawal],
+      accessRecorder: Option[BlockAccessRecorder]
+  ): InMemoryWorldStateProxy =
+    val GweiToWei = BigInt("1000000000")
+    withdrawals.foldLeft(world) { (w, withdrawal) =>
+      BlockAccessRecorder.account(accessRecorder, withdrawal.address)
+      if withdrawal.amount == 0 then w
+      else
+        val account = w.getAccount(withdrawal.address).getOrElse(w.getEmptyAccount)
+        w.saveAccount(withdrawal.address, account.increaseBalance(UInt256(withdrawal.amount * GweiToWei)))
+    }
+
   /** EIP-55 mixed-case checksum encoding, as go-ethereum's `Address.Hex()` prints addresses in error messages. */
   private[jsonrpc] def checksumAddress(address: Address): String =
     val hex = address.bytes.toArray.map(b => f"${b & 0xff}%02x").mkString
@@ -191,12 +221,25 @@ object EthSimulateService:
       Address(0x100)
     )
     val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
-    for (address, ov) <- overrides do
+    // go-ethereum's StateOverride.Apply (internal/ethapi/override/override.go:60-127) walks the accounts in address
+    // order, so a request with several faults reports the same one. Its errors are plain `fmt.Errorf`s: -32000.
+    val sortedOverrides = overrides.toSeq.sortBy { case (address, _) => BigInt(1, address.bytes.toArray) }
+    for (address, ov) <- sortedOverrides do
       ov.movePrecompileToAddress.foreach { targetAddr =>
         if !allPrecompiles.contains(address) then
           break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
+        // override.go:84-88: "Refuse to move a precompile to an address that has been or will be overridden" — any
+        // key of this override set, the precompile's own address included (not the -38022 of the execution-apis
+        // vector, which moves a non-precompile and so stops at the check above).
+        if overrides.contains(targetAddr) then
+          break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(targetAddr)} is already overridden")))
         pendingMoves += (address -> targetAddr)
       }
+      // override.go:108-110, after the account's nonce, code and balance are set (the error discards them all)
+      if ov.state.isDefined && ov.stateDiff.isDefined then
+        break(
+          Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} has both 'state' and 'stateDiff'"))
+        )
     // Two precompiles moving to the same target is ambiguous — geth silently
     // drops the colliding moves rather than erroring (matches the
     // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
@@ -280,6 +323,11 @@ class EthSimulateService(
     }
 
   private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
+    // go-ethereum SimulateV1 (internal/ethapi/api.go:886-887): no blocks to simulate is `invalidParamsError{"empty
+    // input"}`, -32602. (A missing or null `blockStateCalls` decodes to no blocks and is refused the same way, as
+    // geth's nil slice is.)
+    if req.blockStateCalls.isEmpty then break(Left(JsonRpcError.InvalidParams("empty input")))
+
     // Validate blockStateCalls count
     if req.blockStateCalls.size > MaxBlockStateCalls then
       break(
@@ -496,20 +544,30 @@ class EthSimulateService(
     val txs = executed.transactions
     val receipts = executed.receipts
 
-    world = executed.world
+    val worldAfterCalls = executed.world
+    world = worldAfterCalls
 
-    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the EIP-7002 / EIP-7251 /
-    // EIP-8282 request system calls (there are no withdrawals: blockOverrides carries none here) — and the
-    // requestsHash computed from what they and the EIP-6110 deposit logs return.
+    // EIP-4895 (Shanghai on): the block's withdrawals are `blockOverrides.withdrawals`, none by default (go-ethereum
+    // sanitizeChain defaults them to an empty list; processBlock simulate.go:491-496 puts them in the block body, and
+    // PostExecution credits them before the request system calls). Before Shanghai the block has no withdrawals and the
+    // override is not read.
+    val shanghai = blockchainConfig.isShanghaiTimestamp(simHeader.unixTimestamp)
+    val withdrawals: Seq[Withdrawal] =
+      if shanghai then blockOverrides.flatMap(_.withdrawals).getOrElse(Seq.empty) else Seq.empty
+    val postExecutionReads = new BlockAccessRecorder
+    world = creditWithdrawals(world, withdrawals, Option.when(amsterdam)(postExecutionReads))
+
+    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
+    // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
+    // EIP-6110 deposit logs return.
     val amsterdamRequestsHash: Option[ByteString] =
       if !amsterdam then None
       else
-        val postExecutionReads = new BlockAccessRecorder
         SimulatedBlockSystemCalls.requests(simHeader, world, receipts, Some(postExecutionReads)) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
             val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
-            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, world, persisted))
+            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
             world = persisted
             Some(BlockExecution.computeRequestsHash(requests))
 
@@ -554,11 +612,16 @@ class EthSimulateService(
     }
 
     // Build final header with computed roots and blob gas
+    // The header commits to the block's withdrawals (EmptyWithdrawalsRoot when there are none)
+    val withdrawalsRoot = StdBlockValidator.computeWithdrawalsRoot(withdrawals)
     val finalExtraFields = simHeader.extraFields match
-      case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
+      case s: HefPostShanghai => s.copy(withdrawalsRoot = withdrawalsRoot)
+      case c: HefPostCancun   => c.copy(withdrawalsRoot = withdrawalsRoot)
+      case p: HefPostPrague   => p.copy(withdrawalsRoot = withdrawalsRoot, blobGasUsed = blobGasUsed)
       // Amsterdam: the simulated block's own blobGasUsed, its EIP-7928 access list hash and its EIP-7685 requestsHash.
       case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
         a.copy(
+          withdrawalsRoot = withdrawalsRoot,
           blobGasUsed = blobGasUsed,
           blockAccessListHash = accessList.fold(a.blockAccessListHash)(_.build.hash),
           requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
@@ -594,7 +657,7 @@ class EthSimulateService(
     // Some(Seq.empty) adds a 1-byte extra `0xc0` to the body, which throws off
     // both the reported "size" and the block hash for legacy blocks.
     val withdrawalsOpt: Option[Seq[com.chipprbots.ethereum.domain.Withdrawal]] =
-      if finalHeader.withdrawalsRoot.isDefined then Some(Seq.empty) else None
+      if finalHeader.withdrawalsRoot.isDefined then Some(withdrawals) else None
     val body = BlockBody(txs, Nil, withdrawalsOpt)
     val blockResult = SimulateBlockResult(finalHeader, body, txs, executed.senders, updatedCallResults, receipts)
     Right((finalHeader, world, blockResult, executed.receiptGasUsed))
@@ -667,7 +730,9 @@ class EthSimulateService(
     // uint64 bit pattern -> unsigned BigInt; see validateBlockOrdering above for the sign-extension bug this avoids.
     val timestamp = ov.time.getOrElse(parentHeader.unixTimestamp.toUnsignedBigInt + 12)
     val gasLimit = ov.gasLimit.map(GasAmount(_)).getOrElse(parentHeader.gasLimit)
-    val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
+    // go-ethereum makeHeaders (simulate.go:680): `Coinbase: header.Coinbase`, the previous header's — the base block's
+    // for the first simulated block, then each simulated block's own, so an override carries forward. (Not zero.)
+    val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(parentHeader.beneficiary)
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
     val baseFee = ov.baseFeePerGas.getOrElse(
       if !validation then BigInt(0)
@@ -768,19 +833,17 @@ class EthSimulateService(
     * type is therefore:
     *   - authorizationList -> 0x4; blobVersionedHashes -> 0x3; otherwise 0x2 at a block with a base fee, so an
     *     accessList alone rides in a 0x2 transaction, as in geth;
-    *   - gasPrice -> legacy, except that gasPrice with an accessList needs `"type": "0x1"` (S1 fail-loudly rule,
-    *     [[TxArgs.resolveType]]; geth would drop the list from the transaction), and gasPrice with blob fields or an
-    *     authorizationList is refused rather than dropping them;
+    *   - gasPrice -> legacy, except that gasPrice with an accessList is 0x1 (transaction_args.go:555-560), and gasPrice
+    *     with blob fields or an authorizationList is refused rather than dropping them (fukuii fail-loudly rule);
     *   - at a block without a base fee (ETH before London, ETC before Olympia) geth's CallDefaults sets gasPrice to 0,
-    *     so the default is legacy, and an accessList gives 0x1 (fukuii keeps the list; geth's gasPrice default drops
-    *     it);
-    *   - an explicit `type` (which geth does not read) is honoured and checked against the fields present (S1 rule,
-    *     kept deliberately).
+    *     so the default is legacy, and an accessList gives 0x1, as gasPrice with an accessList does in geth;
+    *   - a `type` in the call is NOT read: geth's TransactionArgs has no such field and ignores the key
+    *     (transaction_args.go:42-71), so TxArgsJson drops it and the type is always inferred as above (user decision
+    *     2026-10-21, #1660 item 10; it replaces the #1629 S1 "explicit type wins" rule).
     *
-    * Absent fees are zero (CallDefaults). An explicit `type` the simulated block's fork does not admit is refused here
-    * ([[TxTypeGate]], through [[CallTxBuilder.checkActive]]; fukuii rule), as are 1559 fields where there is no base
-    * fee, before any default can collide with them. An access list, blob hashes or authorizations the fork does not
-    * admit are geth's preCheck `ErrTxTypeNotSupported`, reported by [[preCheck]] at geth's position.
+    * Absent fees are zero (CallDefaults). 1559 fields where there is no base fee are refused before any default can
+    * collide with them. An access list, blob hashes or authorizations the fork does not admit are geth's preCheck
+    * `ErrTxTypeNotSupported`, reported by [[preCheck]] at geth's position.
     *
     * Everything here is sanitizeCall / CallDefaults (go-ethereum master ffb9e230: simulate.go:417-420, 531-555;
     * transaction_args.go:401-423), or a fukuii request-shape rule, and so precedes the nonce-limit check and preCheck.
@@ -1055,7 +1118,22 @@ class EthSimulateService(
           val remainingState = blockHeader.gasLimit.value - accumStateGas
           if validation && remainingExecution >= AmsterdamGas.TxMaxGasLimit then remainingState
           else remainingExecution.min(remainingState)
-      val gasLimit = call.gas.map(_.value).getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
+      // go-ethereum sanitizeCall (simulate.go:531-555): the call's gas defaults to what the block has left; a call that
+      // asks for more than that is refused (-38015) rather than run with less; and the gas is then clamped to the
+      // request-wide budget (the RPC gas cap, 50M, charged each call's gasUsed), which is why a clamped call's gas — and
+      // so its transaction hash — is not the requested one. A clamped call's VM failures say so (see `gasCapped`).
+      val remainingBlock = remainingBlockGas.max(BigInt(0))
+      val requestedGas = call.gas.map(_.value).getOrElse(remainingBlock)
+      if requestedGas > remainingBlock then
+        break(
+          Left(
+            JsonRpcError.SimulateBlockGasLimitExceeded(
+              s"block gas limit reached: remaining: $remainingBlock, required: $requestedGas"
+            )
+          )
+        )
+      val gasLimit = requestedGas.min(remainingGlobalGas.max(BigInt(0)))
+      val gasCapped = gasLimit < requestedGas
       val value = call.value.getOrElse(BigInt(0))
       val toAddr = call.to
 
@@ -1185,7 +1263,11 @@ class EthSimulateService(
               logTopics = Seq(
                 TransferEventTopic,
                 ByteString(new Array[Byte](12) ++ sender.bytes.toArray),
-                ByteString(new Array[Byte](12) ++ toAddr.map(_.bytes.toArray).getOrElse(new Array[Byte](20)))
+                // A creation's transfer goes to the created address, as geth's tracer sees it (`OnEnter` is given the
+                // new contract's address); that address is derived from the sender's state nonce before the call.
+                ByteString(
+                  new Array[Byte](12) ++ toAddr.getOrElse(createdContractAddress(sender, stateNonce)).bytes.toArray
+                )
               ),
               data =
                 val raw = UInt256(value).bytes
@@ -1245,10 +1327,13 @@ class EthSimulateService(
           )
         case Some(err) =>
           // Map VM error names to geth-compatible lowercase messages
-          val errMsg = err match
+          val baseMsg = err match
             case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
             case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
             case other                                          => other.toString.toLowerCase
+          // simulate.go:470-474: a clamped call's VM error (not a revert) says the gas was clamped
+          val errMsg =
+            if gasCapped then baseMsg + " (gas limit was capped by the RPC server's global gas cap)" else baseMsg
           SimulateCallResult(
             status = BigInt(0),
             returnData = returnData,

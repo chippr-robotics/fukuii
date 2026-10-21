@@ -86,7 +86,6 @@ object TxArgsJson:
       input <- d.opt("input")(d.bytes)
       accessList <- d.opt("accessList")(d.accessList)
       chainId <- d.opt("chainId")(d.big).map(_.map(ChainId(_)))
-      txType <- d.opt("type")(d.txType)
       hashes <- d.opt("blobVersionedHashes")(d.list(_, _)(d.hash32)).map(_.map(_.map(BlobVersionedHash(_))))
       blobs <- d.opt("blobs")(d.list(_, _)(d.fixed(BlobLength, "kzg4844.Blob")))
       commitments <- d.opt("commitments")(d.list(_, _)(d.fixed(CommitmentLength, "kzg4844.Commitment")))
@@ -106,7 +105,11 @@ object TxArgsJson:
       input = input,
       accessList = accessList,
       chainId = chainId,
-      txType = txType,
+      // `type` is not read: go-ethereum's TransactionArgs has no such field (transaction_args.go:42-71) and ignores the
+      // key, on every path that decodes one (eth_call, eth_estimateGas, eth_createAccessList, eth_simulateV1,
+      // eth_sendTransaction, eth_signTransaction, eth_fillTransaction). The type is inferred from the fields present
+      // (ToTransaction, transaction_args.go:537-560; see [[TxArgs.resolveType]]). User decision 2026-10-21, #1660 item 10.
+      txType = None,
       blobVersionedHashes = hashes,
       blobs = blobs,
       commitments = commitments,
