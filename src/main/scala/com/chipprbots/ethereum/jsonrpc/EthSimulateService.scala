@@ -1084,7 +1084,22 @@ class EthSimulateService(
           val remainingState = blockHeader.gasLimit.value - accumStateGas
           if validation && remainingExecution >= AmsterdamGas.TxMaxGasLimit then remainingState
           else remainingExecution.min(remainingState)
-      val gasLimit = call.gas.map(_.value).getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
+      // go-ethereum sanitizeCall (simulate.go:531-555): the call's gas defaults to what the block has left; a call that
+      // asks for more than that is refused (-38015) rather than run with less; and the gas is then clamped to the
+      // request-wide budget (the RPC gas cap, 50M, charged each call's gasUsed), which is why a clamped call's gas — and
+      // so its transaction hash — is not the requested one. A clamped call's VM failures say so (see `gasCapped`).
+      val remainingBlock = remainingBlockGas.max(BigInt(0))
+      val requestedGas = call.gas.map(_.value).getOrElse(remainingBlock)
+      if requestedGas > remainingBlock then
+        break(
+          Left(
+            JsonRpcError.SimulateBlockGasLimitExceeded(
+              s"block gas limit reached: remaining: $remainingBlock, required: $requestedGas"
+            )
+          )
+        )
+      val gasLimit = requestedGas.min(remainingGlobalGas.max(BigInt(0)))
+      val gasCapped = gasLimit < requestedGas
       val value = call.value.getOrElse(BigInt(0))
       val toAddr = call.to
 
@@ -1278,10 +1293,13 @@ class EthSimulateService(
           )
         case Some(err) =>
           // Map VM error names to geth-compatible lowercase messages
-          val errMsg = err match
+          val baseMsg = err match
             case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
             case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
             case other                                          => other.toString.toLowerCase
+          // simulate.go:470-474: a clamped call's VM error (not a revert) says the gas was clamped
+          val errMsg =
+            if gasCapped then baseMsg + " (gas limit was capped by the RPC server's global gas cap)" else baseMsg
           SimulateCallResult(
             status = BigInt(0),
             returnData = returnData,

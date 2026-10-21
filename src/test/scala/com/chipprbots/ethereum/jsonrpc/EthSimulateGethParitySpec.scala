@@ -195,3 +195,60 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     bs.map(b => str(b \ "miner")) shouldBe List(OtherMiner, OtherMiner)
   }
 
+  // ── 6: per-call gas against the block and the request budget (simulate.go:531-555) ──────────────────────
+
+  private def gasBlock(gasLimit: String, calls: String*): String =
+    s"""{"blockStateCalls":[{"blockOverrides":{"gasLimit":"$gasLimit"},$Funded,"calls":[${calls.mkString(
+        ","
+      )}]}],"returnFullTransactions":true}"""
+
+  it should "refuse a call that asks for more gas than the block has, -38015 (simulate.go:547-548)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    new Node().error(gasBlock("0x10000", s"""{"from":"$From","to":"$To","gas":"0x20000"}""")) shouldBe
+      (-38015, "block gas limit reached: remaining: 65536, required: 131072")
+  }
+
+  it should "count the gas earlier calls used against the block (remaining, not the limit)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    new Node().error(
+      gasBlock(
+        "0x10000",
+        s"""{"from":"$From","to":"$To","gas":"0x5208"}""",
+        s"""{"from":"$From","to":"$To","gas":"0x10000"}"""
+      )
+    ) shouldBe (-38015, "block gas limit reached: remaining: 44536, required: 65536")
+  }
+
+  it should "clamp a call's gas to the request-wide 50M budget, and the transaction carries the clamped gas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // block limit 0x4000000 = 67,108,864; asked 0x3000000 = 50,331,648 > 50,000,000 (0x2faf080)
+    val (_, bs) =
+      new Node().blocks(gasBlock("0x4000000", s"""{"from":"$From","to":"$To","gas":"0x3000000"}"""))
+    val tx = arr(bs.head \ "transactions").head
+    str(tx \ "gas") shouldBe "0x2faf080"
+  }
+
+  it should "say so when a clamped call fails in the VM (simulate.go:470-474)" taggedAs (UnitTest, RPCTest) in {
+    // 0x5b600056: JUMPDEST PUSH1 0 JUMP — spins until the gas is gone
+    val payload =
+      s"""{"blockStateCalls":[{"blockOverrides":{"gasLimit":"0x4000000"},
+         |"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x5b600056"}},
+         |"calls":[{"from":"$From","to":"$To","gas":"0x3000000"}]}]}""".stripMargin
+    val (_, bs) = new Node().blocks(payload)
+    val error = arr(bs.head \ "calls").head \ "error"
+    str(error \ "message") shouldBe "out of gas (gas limit was capped by the RPC server's global gas cap)"
+  }
+
+  it should "leave an unclamped VM failure's message alone" taggedAs (UnitTest, RPCTest) in {
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x5b600056"}},
+         |"calls":[{"from":"$From","to":"$To","gas":"0x30000"}]}]}""".stripMargin
+    val (_, bs) = new Node().blocks(payload)
+    str((arr(bs.head \ "calls").head \ "error") \ "message") shouldBe "out of gas"
+  }
