@@ -518,6 +518,22 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.dormantReasons.toSeq shouldBe Seq("no snap-capable peers after the capability grace period")
   }
 
+  it should "not launch a second account coordinator when the capability check fires with one already running (#1516)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(root)
+    h.module.downloadPeers = Map(peer("a"))
+    val running = TestInbox[AccountRangeCoordinator.Command]()
+    h.module.accountRangeCoordinator = Some(running.ref)
+    var result: Option[Behavior[Command]] = None
+
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+    h.module.dormantReasons shouldBe empty
+    running.hasMessages shouldBe false
+  }
+
   it should "offer the snap-serving peers on each download tick arm" taggedAs UnitTest in {
     val h = new Harness()
     val bytecode = TestInbox[ByteCodeCoordinator.Command]()

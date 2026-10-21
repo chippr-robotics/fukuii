@@ -168,8 +168,7 @@ class SNAPSyncingDispatchTableSpec
       // Refresh-side bootstrap replies are guarded by `pendingPivotRefresh.isDefined` (none pending here).
       "BootstrapComplete" -> everywhere(CatchAll),
       "PivotBootstrapFailed" -> everywhere(CatchAll),
-      // A second account launch reuses the account coordinator's name (same generation) and throws.
-      "CheckSnapCapability" -> everywhere(Handled).updated("AccountRangeSync", Crashed),
+      // #1516: with an account coordinator already running the arm leaves it alone (a second launch reused its name).
       // Guarded on the phase-complete / healed-code flags.
       "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync", "StateValidation"),
       "HealedCodeWaitTimeout" -> handledOnlyIn("StateValidation"),
