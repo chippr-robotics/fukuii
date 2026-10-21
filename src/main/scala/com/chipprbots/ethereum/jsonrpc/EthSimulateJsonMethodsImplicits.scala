@@ -55,7 +55,10 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case bo: JObject =>
             unknownKey(bo, KnownBlockOverrideKeys) match
               case Some(k) => return Left(InvalidParams(s"invalid argument 0: unknown field \"$k\" in block override"))
-              case None    => Some(decodeBlockOverrides(bo))
+              case None =>
+                decodeBlockOverrides(bo) match
+                  case Right(ov) => Some(ov)
+                  case Left(err) => return Left(err)
           case _ => None
 
         val stateOverrides = (obj \ "stateOverrides") match
@@ -69,7 +72,7 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
                         Left(
                           InvalidParams(s"invalid argument 0: unknown field \"$k\" in state override for $addrHex")
                         )
-                      case None => Right((addr, decodeStateOverride(value)))
+                      case None => decodeStateOverride(value, addrHex).map(ov => (addr, ov))
                   case Left(_) => Left(InvalidParams(s"invalid address: $addrHex"))
               case (k, _) => Left(InvalidParams(s"invalid state override entry: $k"))
             }
@@ -116,57 +119,146 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
       private def unknownKey(obj: JObject, known: Set[String]): Option[String] =
         obj.obj.collectFirst { case (k, _) if !known.contains(k) => k }
 
-      private def decodeBlockOverrides(obj: JObject): BlockOverrides =
-        BlockOverrides(
-          number = optQty(obj, "number"),
-          time = optQty(obj, "time"),
-          gasLimit = optQty(obj, "gasLimit"),
-          feeRecipient = (obj \ "feeRecipient").extractOpt[String].flatMap(s => extractAddress(JString(s)).toOption),
-          prevRandao = optBytes(obj, "prevRandao"),
-          baseFeePerGas = optQty(obj, "baseFeePerGas"),
-          blobBaseFee = optQty(obj, "blobBaseFee"),
-          difficulty = optQty(obj, "difficulty")
+      // The override fields are decoded as strictly as go-ethereum's JSON unmarshalling of BlockOverrides and
+      // OverrideAccount: a value that is not the field's type is -32602 (invalid argument 0), never a silently absent
+      // override. (#1660 item 13: the same rule TxArgsJson applies to the calls.)
+      private def decodeBlockOverrides(obj: JObject): Either[JsonRpcError, BlockOverrides] =
+        val what = "block override"
+        for
+          number <- optQty(obj, "number", what)
+          time <- optQty(obj, "time", what)
+          gasLimit <- optQty(obj, "gasLimit", what)
+          feeRecipient <- optAddress(obj, "feeRecipient", what)
+          prevRandao <- optBytes(obj, "prevRandao", what)
+          baseFeePerGas <- optQty(obj, "baseFeePerGas", what)
+          blobBaseFee <- optQty(obj, "blobBaseFee", what)
+          difficulty <- optQty(obj, "difficulty", what)
+          withdrawals <- optWithdrawals(obj, "withdrawals", what)
+        yield BlockOverrides(
+          number = number,
+          time = time,
+          gasLimit = gasLimit,
+          feeRecipient = feeRecipient,
+          prevRandao = prevRandao,
+          baseFeePerGas = baseFeePerGas,
+          blobBaseFee = blobBaseFee,
+          difficulty = difficulty,
+          withdrawals = withdrawals
         )
 
-      private def decodeStateOverride(obj: JObject): StateOverride =
-        StateOverride(
-          balance = optQty(obj, "balance"),
-          nonce = optQty(obj, "nonce"),
-          code = optBytes(obj, "code"),
-          state = decodeStorageMap(obj, "state"),
-          stateDiff = decodeStorageMap(obj, "stateDiff"),
-          movePrecompileToAddress = (obj \ "movePrecompileToAddress")
-            .extractOpt[String]
-            .flatMap(s => extractAddress(JString(s)).toOption)
+      private def decodeStateOverride(obj: JObject, addrHex: String): Either[JsonRpcError, StateOverride] =
+        val what = s"state override for $addrHex"
+        for
+          balance <- optQty(obj, "balance", what)
+          nonce <- optQty(obj, "nonce", what)
+          code <- optBytes(obj, "code", what)
+          state <- decodeStorageMap(obj, "state", what)
+          stateDiff <- decodeStorageMap(obj, "stateDiff", what)
+          move <- optAddress(obj, "movePrecompileToAddress", what)
+        yield StateOverride(
+          balance = balance,
+          nonce = nonce,
+          code = code,
+          state = state,
+          stateDiff = stateDiff,
+          movePrecompileToAddress = move
         )
 
-      private def decodeStorageMap(obj: JObject, field: String): Option[Map[BigInt, BigInt]] =
-        def hexToBigInt(hex: String): BigInt =
-          val clean = hex.stripPrefix("0x").stripPrefix("0X")
-          if clean.isEmpty then BigInt(0)
-          else
-            val padded = if clean.length % 2 != 0 then "0" + clean else clean
-            BigInt(1, org.bouncycastle.util.encoders.Hex.decode(padded))
+      private def invalid(field: String, what: String, value: JValue): JsonRpcError =
+        InvalidParams(
+          s"invalid argument 0: invalid $field in $what: ${org.json4s.native.JsonMethods.compact(org.json4s.native.JsonMethods.render(value))}"
+        )
+
+      private def isHexDigits(s: String): Boolean =
+        s.forall(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+
+      // hexutil.Bytes: a 0x prefix is required (or the empty string) and the digits are in pairs
+      private def hexBytes(hex: String): Option[Array[Byte]] =
+        val clean = hex.stripPrefix("0x").stripPrefix("0X")
+        Option.when((hex.isEmpty || clean.length != hex.length) && clean.length % 2 == 0 && isHexDigits(clean))(
+          org.bouncycastle.util.encoders.Hex.decode(clean)
+        )
+
+      // A quantity: the digits are any length (an odd count is padded), as the decoder always accepted
+      private def hexToBigInt(hex: String): Option[BigInt] =
+        val clean = hex.stripPrefix("0x").stripPrefix("0X")
+        if clean.isEmpty then Some(BigInt(0))
+        else Option.when(isHexDigits(clean))(BigInt(clean, 16))
+
+      private def decodeStorageMap(
+          obj: JObject,
+          field: String,
+          what: String
+      ): Either[JsonRpcError, Option[Map[BigInt, BigInt]]] =
         (obj \ field) match
           case JObject(fields) =>
-            Some(fields.collect { case (keyHex, JString(valueHex)) =>
-              (hexToBigInt(keyHex), hexToBigInt(valueHex))
-            }.toMap)
-          case _ => None
+            val entries = fields.map {
+              case (keyHex, v @ JString(valueHex)) =>
+                (hexToBigInt(keyHex), hexToBigInt(valueHex)) match
+                  case (Some(k), Some(x)) => Right((k, x))
+                  case _                  => Left(invalid(field, what, JObject(keyHex -> v)))
+              case (keyHex, v) => Left(invalid(field, what, JObject(keyHex -> v)))
+            }
+            entries.collectFirst { case Left(e) => e } match
+              case Some(e) => Left(e)
+              case None    => Right(Some(entries.collect { case Right(kv) => kv }.toMap))
+          case JNothing | JNull => Right(None)
+          case other            => Left(invalid(field, what, other))
 
-      private def optQty(obj: JObject, field: String): Option[BigInt] =
-        (obj \ field).extractOpt[String].flatMap { s =>
-          val hex = s.stripPrefix("0x").stripPrefix("0X")
-          if hex.isEmpty then Some(BigInt(0))
-          else
-            val padded = if hex.length % 2 != 0 then "0" + hex else hex
-            scala.util.Try(BigInt(1, org.bouncycastle.util.encoders.Hex.decode(padded))).toOption
-        }
+      private def optQty(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[BigInt]] =
+        (obj \ field) match
+          case JNothing | JNull => Right(None)
+          case v @ JString(s) =>
+            hexToBigInt(s) match
+              case Some(n) => Right(Some(n))
+              case None    => Left(invalid(field, what, v))
+          case other => Left(invalid(field, what, other))
 
-      private def optBytes(obj: JObject, field: String): Option[ByteString] =
-        (obj \ field).extractOpt[String].flatMap { s =>
-          scala.util.Try(ByteString(org.bouncycastle.util.encoders.Hex.decode(s.stripPrefix("0x")))).toOption
-        }
+      private def optBytes(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[ByteString]] =
+        (obj \ field) match
+          case JNothing | JNull => Right(None)
+          case v @ JString(s) =>
+            hexBytes(s) match
+              case Some(b) => Right(Some(ByteString(b)))
+              case None    => Left(invalid(field, what, v))
+          case other => Left(invalid(field, what, other))
+
+      private def optAddress(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[Address]] =
+        (obj \ field) match
+          case JNothing | JNull => Right(None)
+          case v @ JString(s)   =>
+            // common.Address: 0x and exactly 20 bytes
+            if s.length == 42 && (s.startsWith("0x") || s.startsWith("0X")) && isHexDigits(s.drop(2)) then
+              extractAddress(v) match
+                case Right(a) => Right(Some(a))
+                case Left(_)  => Left(invalid(field, what, v))
+            else Left(invalid(field, what, v))
+          case other => Left(invalid(field, what, other))
+
+      // go-ethereum types.Withdrawal's JSON: index, validatorIndex, amount are uint64 quantities, address an address
+      private def optWithdrawals(
+          obj: JObject,
+          field: String,
+          what: String
+      ): Either[JsonRpcError, Option[Seq[Withdrawal]]] =
+        (obj \ field) match
+          case JNothing | JNull => Right(None)
+          case JArray(items) =>
+            val decoded = items.map {
+              case w: JObject =>
+                for
+                  index <- optQty(w, "index", what).flatMap(_.toRight(invalid("withdrawals.index", what, w)))
+                  validatorIndex <- optQty(w, "validatorIndex", what)
+                    .flatMap(_.toRight(invalid("withdrawals.validatorIndex", what, w)))
+                  address <- optAddress(w, "address", what).flatMap(_.toRight(invalid("withdrawals.address", what, w)))
+                  amount <- optQty(w, "amount", what).flatMap(_.toRight(invalid("withdrawals.amount", what, w)))
+                yield Withdrawal(index, validatorIndex, address, amount)
+              case other => Left(invalid(field, what, other))
+            }
+            decoded.collectFirst { case Left(e) => e } match
+              case Some(e) => Left(e)
+              case None    => Right(Some(decoded.collect { case Right(w) => w }))
+          case other => Left(invalid(field, what, other))
 
       // --- Encoder ---
       override def encodeJson(t: EthSimulateResponse): JValue =
@@ -197,7 +289,9 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           "timestamp" -> encodeAsHex(h.unixTimestamp.toUnsignedBigInt),
           "transactionsRoot" -> encodeAsHex(h.transactionsRoot.value),
           "uncles" -> JArray(Nil)
-        ) ++ (if h.withdrawalsRoot.isDefined then List("withdrawals" -> JArray(Nil)) else Nil)
+        ) ++ (if h.withdrawalsRoot.isDefined then
+                List("withdrawals" -> JArray(block.body.withdrawals.getOrElse(Seq.empty).map(encodeWithdrawal).toList))
+              else Nil)
 
         // Conditionally add fork-specific fields
         val baseFeeField = h.baseFee.map(bf => "baseFeePerGas" -> encodeAsHex(bf)).toList
@@ -231,6 +325,15 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
         val callsField = "calls" -> JArray(block.calls.map(encodeCallResult(_, blockHash, h)).toList)
 
         JObject(headerFields :+ txField :+ callsField)
+
+      // go-ethereum types.Withdrawal's JSON
+      private def encodeWithdrawal(w: Withdrawal): JValue =
+        JObject(
+          "index" -> encodeAsHex(w.index),
+          "validatorIndex" -> encodeAsHex(w.validatorIndex),
+          "address" -> encodeAsHex(w.address.bytes),
+          "amount" -> encodeAsHex(w.amount)
+        )
 
       private def encodeSimulatedTxFull(
           stx: com.chipprbots.ethereum.domain.SignedTransaction,

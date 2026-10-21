@@ -285,3 +285,91 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     bs.map(b => str(arr(b \ "calls").head \ "returnData")) shouldBe
       List("0x" + "0" * 60 + "1234", "0x" + "0" * 63 + "1")
   }
+
+  // ── 11: blockOverrides.withdrawals (simulate.go:491-499; geth honours it) ───
+
+  private val EmptyWithdrawalsRootHex = "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
+
+  it should "put blockOverrides.withdrawals in the block, commit to them, and credit them after the calls" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // SELFBALANCE; MSTORE(0); RETURN(0, 32) at To. The withdrawal of 5 Gwei to To lands after block 1's calls, so
+    // block 1's call sees 0 and block 2's call sees 5 Gwei = 0x12a05f200.
+    val payload =
+      s"""{"blockStateCalls":[
+         |{"blockOverrides":{"withdrawals":[{"index":"0x0","validatorIndex":"0x1","address":"$To","amount":"0x5"}]},
+         | "stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x4760005260206000f3"}},
+         | "calls":[{"from":"$From","to":"$To"}]},
+         |{"calls":[{"from":"$From","to":"$To"}]}]}""".stripMargin
+    val (res, bs) = new Node().blocks(payload)
+    arr(bs.head \ "withdrawals") should have size 1
+    val w = arr(bs.head \ "withdrawals").head
+    (str(w \ "index"), str(w \ "validatorIndex"), str(w \ "address"), str(w \ "amount")) shouldBe
+      ("0x0", "0x1", To, "0x5")
+    str(bs.head \ "withdrawalsRoot") should not be EmptyWithdrawalsRootHex
+    res.blocks.head.header.withdrawalsRoot.map(_.toSeq) shouldBe
+      Some(
+        com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
+          .computeWithdrawalsRoot(
+            Seq(Withdrawal(0, 1, Address(To), 5))
+          )
+          .toSeq
+      )
+    bs.map(b => str(arr(b \ "calls").head \ "returnData")) shouldBe
+      List("0x" + "0" * 64, "0x" + "0" * 55 + "12a05f200")
+    // the next block carries none, and says so
+    arr(bs(1) \ "withdrawals") shouldBe empty
+    str(bs(1) \ "withdrawalsRoot") shouldBe EmptyWithdrawalsRootHex
+  }
+
+  it should "leave a zero-amount withdrawal's account untouched" taggedAs (UnitTest, RPCTest) in {
+    val payload =
+      s"""{"blockStateCalls":[
+         |{"blockOverrides":{"withdrawals":[{"index":"0x0","validatorIndex":"0x1","address":"$To","amount":"0x0"}]},
+         | "stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"0x4760005260206000f3"}},
+         | "calls":[{"from":"$From","to":"$To"}]},
+         |{"calls":[{"from":"$From","to":"$To"}]}]}""".stripMargin
+    val (_, bs) = new Node().blocks(payload)
+    str(arr(bs(1) \ "calls").head \ "returnData") shouldBe "0x" + "0" * 64
+  }
+
+  // ── 13: override values are validated, not silently dropped ─────────────────
+
+  private def decodeOverrides(payload: String) =
+    EthSimulateJsonMethodsImplicits.eth_simulateV1.decodeJson(Some(JArray(List(parse(payload), JString("latest")))))
+
+  private def bad(inner: String) =
+    decodeOverrides(s"""{"blockStateCalls":[{$inner,"calls":[{"from":"$From","to":"$To"}]}]}""").left
+      .map(e => e.code)
+
+  it should "refuse blobVersionedHashes that are not hex (-32602)" taggedAs (UnitTest, RPCTest) in {
+    decodeOverrides(
+      s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"$To","blobVersionedHashes":["0xnothex"]}]}]}"""
+    ).left.map(_.code) shouldBe Left(-32602)
+  }
+
+  it should "refuse a malformed block override value (-32602)" taggedAs (UnitTest, RPCTest) in {
+    bad(""""blockOverrides":{"number":"0xzz"}""") shouldBe Left(-32602)
+    bad(""""blockOverrides":{"feeRecipient":"0x12"}""") shouldBe Left(-32602)
+    bad(""""blockOverrides":{"prevRandao":"0xnothex"}""") shouldBe Left(-32602)
+    bad(""""blockOverrides":{"time":5}""") shouldBe Left(-32602)
+    bad(""""blockOverrides":{"withdrawals":[{"index":"0x0"}]}""") shouldBe Left(-32602)
+  }
+
+  it should "refuse a malformed state override value (-32602)" taggedAs (UnitTest, RPCTest) in {
+    bad(s""""stateOverrides":{"$To":{"balance":"0xzz"}}""") shouldBe Left(-32602)
+    bad(s""""stateOverrides":{"$To":{"code":"0xabc"}}""") shouldBe Left(-32602)
+    bad(s""""stateOverrides":{"$To":{"movePrecompileToAddress":"0x12"}}""") shouldBe Left(-32602)
+    bad(s""""stateOverrides":{"$To":{"stateDiff":{"0x01":"0xzz"}}}""") shouldBe Left(-32602)
+    bad(s""""stateOverrides":{"$To":{"state":[1]}}""") shouldBe Left(-32602)
+  }
+
+  it should "still accept well-formed overrides" taggedAs (UnitTest, RPCTest) in {
+    bad(
+      s""""stateOverrides":{"$To":{"balance":"0x1","code":"0x00","stateDiff":{"0x01":"0x02"}}}"""
+    ).isLeft shouldBe false
+    bad(
+      """"blockOverrides":{"number":"0x21","prevRandao":"0x00","feeRecipient":"0x00000000000000000000000000000000000000aa"}"""
+    ).isLeft shouldBe false
+  }

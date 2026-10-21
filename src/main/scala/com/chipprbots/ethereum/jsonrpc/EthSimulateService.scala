@@ -10,6 +10,7 @@ import scala.util.boundary.break
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
+import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -41,7 +42,9 @@ object EthSimulateService:
       prevRandao: Option[ByteString] = None,
       baseFeePerGas: Option[BigInt] = None,
       blobBaseFee: Option[BigInt] = None,
-      difficulty: Option[BigInt] = None
+      difficulty: Option[BigInt] = None,
+      // EIP-4895: the block's withdrawals (go-ethereum BlockOverrides.Withdrawals); read from Shanghai on
+      withdrawals: Option[Seq[Withdrawal]] = None
   )
 
   case class StateOverride(
@@ -156,6 +159,24 @@ object EthSimulateService:
     Address(
       kec256(rlp.encode(rlp.RLPList(rlp.RLPValue(sender.bytes.toArray), UInt256(nonce).toRLPEncodable)))
     )
+
+  /** EIP-4895: credits each withdrawal's `amount` Gwei to its address, as block execution does
+    * (`BlockExecution.processWithdrawals`; go-ethereum `core.ProcessWithdrawals`): no gas, the account is created if
+    * absent, and a zero amount does not touch the account. EIP-7928: every recipient is read, a zero amount included.
+    */
+  private[jsonrpc] def creditWithdrawals(
+      world: InMemoryWorldStateProxy,
+      withdrawals: Seq[Withdrawal],
+      accessRecorder: Option[BlockAccessRecorder]
+  ): InMemoryWorldStateProxy =
+    val GweiToWei = BigInt("1000000000")
+    withdrawals.foldLeft(world) { (w, withdrawal) =>
+      BlockAccessRecorder.account(accessRecorder, withdrawal.address)
+      if withdrawal.amount == 0 then w
+      else
+        val account = w.getAccount(withdrawal.address).getOrElse(w.getEmptyAccount)
+        w.saveAccount(withdrawal.address, account.increaseBalance(UInt256(withdrawal.amount * GweiToWei)))
+    }
 
   /** EIP-55 mixed-case checksum encoding, as go-ethereum's `Address.Hex()` prints addresses in error messages. */
   private[jsonrpc] def checksumAddress(address: Address): String =
@@ -523,20 +544,30 @@ class EthSimulateService(
     val txs = executed.transactions
     val receipts = executed.receipts
 
-    world = executed.world
+    val worldAfterCalls = executed.world
+    world = worldAfterCalls
 
-    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the EIP-7002 / EIP-7251 /
-    // EIP-8282 request system calls (there are no withdrawals: blockOverrides carries none here) — and the
-    // requestsHash computed from what they and the EIP-6110 deposit logs return.
+    // EIP-4895 (Shanghai on): the block's withdrawals are `blockOverrides.withdrawals`, none by default (go-ethereum
+    // sanitizeChain defaults them to an empty list; processBlock simulate.go:491-496 puts them in the block body, and
+    // PostExecution credits them before the request system calls). Before Shanghai the block has no withdrawals and the
+    // override is not read.
+    val shanghai = blockchainConfig.isShanghaiTimestamp(simHeader.unixTimestamp)
+    val withdrawals: Seq[Withdrawal] =
+      if shanghai then blockOverrides.flatMap(_.withdrawals).getOrElse(Seq.empty) else Seq.empty
+    val postExecutionReads = new BlockAccessRecorder
+    world = creditWithdrawals(world, withdrawals, Option.when(amsterdam)(postExecutionReads))
+
+    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
+    // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
+    // EIP-6110 deposit logs return.
     val amsterdamRequestsHash: Option[ByteString] =
       if !amsterdam then None
       else
-        val postExecutionReads = new BlockAccessRecorder
         SimulatedBlockSystemCalls.requests(simHeader, world, receipts, Some(postExecutionReads)) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
             val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
-            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, world, persisted))
+            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
             world = persisted
             Some(BlockExecution.computeRequestsHash(requests))
 
@@ -581,11 +612,16 @@ class EthSimulateService(
     }
 
     // Build final header with computed roots and blob gas
+    // The header commits to the block's withdrawals (EmptyWithdrawalsRoot when there are none)
+    val withdrawalsRoot = StdBlockValidator.computeWithdrawalsRoot(withdrawals)
     val finalExtraFields = simHeader.extraFields match
-      case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
+      case s: HefPostShanghai => s.copy(withdrawalsRoot = withdrawalsRoot)
+      case c: HefPostCancun   => c.copy(withdrawalsRoot = withdrawalsRoot)
+      case p: HefPostPrague   => p.copy(withdrawalsRoot = withdrawalsRoot, blobGasUsed = blobGasUsed)
       // Amsterdam: the simulated block's own blobGasUsed, its EIP-7928 access list hash and its EIP-7685 requestsHash.
       case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
         a.copy(
+          withdrawalsRoot = withdrawalsRoot,
           blobGasUsed = blobGasUsed,
           blockAccessListHash = accessList.fold(a.blockAccessListHash)(_.build.hash),
           requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
@@ -621,7 +657,7 @@ class EthSimulateService(
     // Some(Seq.empty) adds a 1-byte extra `0xc0` to the body, which throws off
     // both the reported "size" and the block hash for legacy blocks.
     val withdrawalsOpt: Option[Seq[com.chipprbots.ethereum.domain.Withdrawal]] =
-      if finalHeader.withdrawalsRoot.isDefined then Some(Seq.empty) else None
+      if finalHeader.withdrawalsRoot.isDefined then Some(withdrawals) else None
     val body = BlockBody(txs, Nil, withdrawalsOpt)
     val blockResult = SimulateBlockResult(finalHeader, body, txs, executed.senders, updatedCallResults, receipts)
     Right((finalHeader, world, blockResult, executed.receiptGasUsed))
