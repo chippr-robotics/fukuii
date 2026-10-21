@@ -406,7 +406,9 @@ lazy val node = {
 }
 
 // Scoverage configuration
-coverageEnabled := false // Disabled by default, enable with `sbt coverage`
+// Must be ThisBuild-scoped: `sbt coverage` sets ThisBuild / coverageEnabled, and a project-scoped (root) value
+// would shadow it, leaving the root module uninstrumented ("No coverage data, skipping reports").
+ThisBuild / coverageEnabled := false // Disabled by default, enable with `sbt coverage`
 coverageMinimumStmtTotal := 70
 coverageFailOnMinimum := true
 coverageHighlighting := true
