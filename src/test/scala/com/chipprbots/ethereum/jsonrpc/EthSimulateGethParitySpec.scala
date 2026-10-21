@@ -373,25 +373,3 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
       """"blockOverrides":{"number":"0x21","prevRandao":"0x00","feeRecipient":"0x00000000000000000000000000000000000000aa"}"""
     ).isLeft shouldBe false
   }
-
-  // ── 5: a precompile's input-length failure (contracts.go:1050, 1555) ────────
-
-  private def precompileCall(to: String, input: String): (String, String) =
-    val payload =
-      s"""{"blockStateCalls":[{$Funded,"calls":[{"from":"$From","to":"$to","input":"$input"}]}]}"""
-    val (_, bs) = new Node().blocks(payload)
-    val error = arr(bs.head \ "calls").head \ "error"
-    (
-      error \ "code" match
-        case JInt(c) => c.toString
-        case other   => fail(s"expected an error code, got $other"),
-      str(error \ "message")
-    )
-
-  it should "say \"invalid input length\" for an empty EIP-2537 BLS G1ADD input" taggedAs (UnitTest, RPCTest) in {
-    precompileCall("0x000000000000000000000000000000000000000b", "0x") shouldBe ("-32015", "invalid input length")
-  }
-
-  it should "say \"invalid input length\" for a short EIP-4844 point evaluation input" taggedAs (UnitTest, RPCTest) in {
-    precompileCall("0x000000000000000000000000000000000000000a", "0x01") shouldBe ("-32015", "invalid input length")
-  }

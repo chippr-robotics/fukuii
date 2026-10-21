@@ -1330,14 +1330,7 @@ class EthSimulateService(
           val baseMsg = err match
             case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
             case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
-            // A precompile's failure carries no reason here (ProgramError has one PreCompiledContractFail), and the two
-            // precompile faults that appear in practice — EIP-2537 BLS inputs and EIP-4844's point evaluation of the
-            // wrong length — are geth's `errBLS12381InvalidInputLength` / `errBlobVerifyInvalidInputLength`, both "invalid
-            // input length" (core/vm/contracts.go:1050, 1555; blake2f's wrong length is the same text, :995). Other
-            // precompile faults (blake2f's final flag, bn256 pairing size, BLS subgroup / field errors, MODEXP bounds)
-            // have their own geth texts and need the precompile to carry its reason: not done here.
-            case com.chipprbots.ethereum.vm.PreCompiledContractFail => "invalid input length"
-            case other                                              => other.toString.toLowerCase
+            case other                                          => other.toString.toLowerCase
           // simulate.go:470-474: a clamped call's VM error (not a revert) says the gas was clamped
           val errMsg =
             if gasCapped then baseMsg + " (gas limit was capped by the RPC server's global gas cap)" else baseMsg
