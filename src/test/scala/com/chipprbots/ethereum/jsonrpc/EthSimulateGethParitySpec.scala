@@ -148,3 +148,26 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     new Node().run(payload).isRight shouldBe true
   }
 
+  // ── 1: traceTransfers on a creation (geth's tracer `OnEnter` is given the created address) ──────────────
+
+  /** Sender 0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0 at nonce 0 / 1 deploys to the widely published addresses. */
+  it should "derive a creation's address from the sender and nonce" taggedAs UnitTest in {
+    val sender = Address("0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0")
+    createdContractAddress(sender, 0) shouldBe Address("0xcd234a471b72ba2f1ccf0a70fcaba648a5eecd8d")
+    createdContractAddress(sender, 1) shouldBe Address("0x343c43a37d37dff08ae8c4a11544c718abb4fcf8")
+  }
+
+  it should "report a creation's traced transfer to the created address, not zero" taggedAs (UnitTest, RPCTest) in {
+    val sender = "0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0"
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$sender":{"balance":"0x3635c9adc5dea00000"}},
+         |"calls":[{"from":"$sender","input":"0x00","value":"0x1"}]}],"traceTransfers":true}""".stripMargin
+    val (_, bs) = new Node().blocks(payload)
+    val logs = arr(arr(bs.head \ "calls").head \ "logs")
+    logs should have size 1
+    arr(logs.head \ "topics").map(str) shouldBe List(
+      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "0x0000000000000000000000006ac7ea33f8831ea9dcc53393aaa88b25a785dbf0",
+      "0x000000000000000000000000cd234a471b72ba2f1ccf0a70fcaba648a5eecd8d"
+    )
+  }

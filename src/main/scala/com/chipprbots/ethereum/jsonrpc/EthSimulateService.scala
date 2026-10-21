@@ -148,6 +148,15 @@ object EthSimulateService:
     override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] =
       underlying.multiGetNodes(hashes)
 
+  /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
+    * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.
+    */
+  private[jsonrpc] def createdContractAddress(sender: Address, nonce: BigInt): Address =
+    import com.chipprbots.ethereum.rlp.UInt256RLPImplicits.*
+    Address(
+      kec256(rlp.encode(rlp.RLPList(rlp.RLPValue(sender.bytes.toArray), UInt256(nonce).toRLPEncodable)))
+    )
+
   /** EIP-55 mixed-case checksum encoding, as go-ethereum's `Address.Hex()` prints addresses in error messages. */
   private[jsonrpc] def checksumAddress(address: Address): String =
     val hex = address.bytes.toArray.map(b => f"${b & 0xff}%02x").mkString
@@ -1203,7 +1212,11 @@ class EthSimulateService(
               logTopics = Seq(
                 TransferEventTopic,
                 ByteString(new Array[Byte](12) ++ sender.bytes.toArray),
-                ByteString(new Array[Byte](12) ++ toAddr.map(_.bytes.toArray).getOrElse(new Array[Byte](20)))
+                // A creation's transfer goes to the created address, as geth's tracer sees it (`OnEnter` is given the
+                // new contract's address); that address is derived from the sender's state nonce before the call.
+                ByteString(
+                  new Array[Byte](12) ++ toAddr.getOrElse(createdContractAddress(sender, stateNonce)).bytes.toArray
+                )
               ),
               data =
                 val raw = UInt256(value).bytes
