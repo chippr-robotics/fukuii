@@ -102,7 +102,7 @@ jobs:
         timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners; 15 left no headroom (spec 016 S0d, #1514)
       
       - name: Run Standard Tests with Coverage (Tier 2)
-        # Tier 2 runs `clean; coverage; testEssential; testStandard; coverageReport`
+        # Tier 2 runs `clean; coverage; testEssential; testOnly (testStandard minus SlowTest); coverageReport`
         # — a full coverage-instrumented recompile plus a re-run of BOTH test tiers in
         # one sbt session. It takes ~45 min and has been timing out (jobs hit 1h5m and
         # failed at the 45-min step cap), making it a permanently-red gate that blocks
@@ -122,7 +122,7 @@ jobs:
           # Use 'clean' to force recompilation with coverage instrumentation
           # since Tier 1 compiled classes without instrumentation
           # Include both testEssential and testStandard for comprehensive coverage
-          sbt -v "clean; coverage; testEssential; testStandard; coverageReport; coverageAgg/coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
+          sbt -v "clean; coverage; testEssential; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l SlowTest; coverageReport; coverageAgg/coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
             echo "sbt testStandard failed — dumping 'last test'"
             sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-standard.log || true
             exit 1
@@ -191,7 +191,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           # Specify the coverage file locations for scoverage
-          files: "**/target/scala-*/scoverage-report/scoverage.xml"
+          files: ".coverage-agg/target/scala-*/scoverage-report/scoverage.xml"
           directory: .
           flags: unittests
           name: codecov-fukuii
@@ -209,6 +209,18 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
       
+      # SlowTest suites are excluded from the instrumented run above: scoverage's per-statement Invoker slows hot
+      # loops (e.g. Ethash hashimoto in EthashNonceSearchSpec) by orders of magnitude (>2 h, never finished).
+      # They still run here, uninstrumented, with the same exclusions testStandard applies. `clean` forces a
+      # recompile without instrumentation; it runs after the coverage upload steps so their inputs survive.
+      - name: Run SlowTest suites (uninstrumented)
+        run: |
+          set -o pipefail
+          sbt -v "clean; testOnly -- -n SlowTest -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest" 2>&1 | tee /tmp/sbt-slowtest.log
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 45
+
       - name: Build assembly
         run: sbt assembly
         env:
