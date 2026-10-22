@@ -258,8 +258,9 @@ jobs:
       
       - name: Run instrumented tests (coverage)
         # `clean` forces a coverage-instrumented recompile. Two sbt invocations so a failing sub-module test run
-        # cannot skip the root run (and vice versa): the second `coverage` re-sets the same scalacOptions, so
-        # nothing recompiles, and no `clean` runs, so the measurement files from the first one are kept.
+        # cannot skip the root run (and vice versa): the second `coverage` re-sets the same scalacOptions, so the
+        # sub-modules do not recompile (the root compiles instrumented here), and no `clean` runs, so the
+        # sub-modules' measurement files from the first one are kept.
         # The root run uses the testStandard exclusions from build.sbt plus -l SlowTest: scoverage's per-statement
         # Invoker makes the Ethash hot loops effectively never finish (EthashNonceSearchSpec ran >2 h), and the
         # gating job runs SlowTest uninstrumented. It is a superset of the root half of testEssential, so
@@ -313,6 +314,9 @@ jobs:
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
+            .coverage-agg/target/scala-*/scoverage-report/**
+          # The merged report lives under the dot-directory .coverage-agg/, which upload-artifact skips by default.
+          include-hidden-files: true
           retention-days: 30
           if-no-files-found: warn
       
