@@ -226,6 +226,55 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers:
     classicSystem.stop(rlpxConnectionProbe.ref)
     watcher.expectTerminated(peer, 3.seconds)
 
+  it should "ignore an RlpxTerminated from a different connection while disconnected (#1527)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+
+    import DefaultValues.*
+
+    val peer: TestActorRef[Nothing] =
+      peerActor(MockHandshakerAlwaysSucceeds(defaultStatus, defaultBlockNumber, defaultForkAccepted))
+    peer ! ConnectTo(uri)
+    rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.ConnectTo(uri))
+    rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionEstablished(ByteString()))
+    expectStatus(peer, StatusResponse(Handshaked))
+
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(peer)
+    peer ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+    expectStatus(peer, StatusResponse(PeerActor.Status.Disconnected))
+
+    val otherRlpx: TestProbe = TestProbe()
+    peer ! PeerActor.RlpxTerminated(otherRlpx.ref.toTyped[RLPxConnectionHandler.Command])
+    watcher.expectNoMessage(300.millis)
+    expectStatus(peer, StatusResponse(PeerActor.Status.Disconnected)) // still alive, still waiting for the pill
+
+  it should "stop promptly when the RLPx child dies after a remote Disconnect (#1527)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+
+    import DefaultValues.*
+
+    val peer: TestActorRef[Nothing] =
+      peerActor(MockHandshakerAlwaysSucceeds(defaultStatus, defaultBlockNumber, defaultForkAccepted))
+    peer ! ConnectTo(uri)
+    rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.ConnectTo(uri))
+    rlpxConnectionProbe.send(peer, RLPxConnectionHandler.ConnectionEstablished(ByteString()))
+    expectStatus(peer, StatusResponse(Handshaked))
+
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(peer)
+    rlpxConnectionProbe.send(
+      peer,
+      RLPxConnectionHandler.MessageReceived(Disconnect(Disconnect.Reasons.ClientQuitting))
+    )
+    expectStatus(peer, StatusResponse(PeerActor.Status.Disconnected))
+
+    classicSystem.stop(rlpxConnectionProbe.ref)
+    watcher.expectTerminated(peer, 3.seconds)
+
   "PeerActor.rejectionRetryDelay" should "treat only transient reasons as retryable" taggedAs (
     UnitTest,
     NetworkTest

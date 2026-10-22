@@ -97,7 +97,7 @@ object PeerActor:
   private case object StopActor extends Command
 
   // Death-watch notification for the RLPx child (replaces Classic Terminated)
-  final private case class RlpxTerminated(ref: ActorRef[RLPxConnectionHandler.Command]) extends Command
+  final private[network] case class RlpxTerminated(ref: ActorRef[RLPxConnectionHandler.Command]) extends Command
 
   // =========================================================================
   // Public message/value types
@@ -481,19 +481,23 @@ object PeerActor:
         Disconnect.reasonToString(reason)
       )
       rlpxConnection.sendMessage(Disconnect(reason))
-      schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-      disconnected(rlpxConnection)
+      disconnected(rlpxConnection, schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor))
 
-    /** The poison-pill timer only exists to let a Disconnect frame flush. Once the RLPx child is gone (remote closed
-      * TCP, or our Disconnect was flushed and the socket closed) there is nothing left to wait for: stop at once so
-      * PeerManagerActor's death-watch publishes PeerDisconnected now rather than disconnectPoisonPillTimeout (15 s)
-      * later (#1527). This is a plain stop, never a reconnect, so it cannot reintroduce the self-reconnect/duplicate
-      * churn fixed in `handleHandshakedTerminated`.
+    /** The poison-pill timer only exists to let a Disconnect frame flush. If the REMOTE closes TCP, RLPx stops itself
+      * (TcpClosed / TcpConnectionTerminated / TcpWriteFailed / AckTimeout) and there is nothing left to wait for: stop
+      * at once so PeerManagerActor's death-watch publishes PeerDisconnected now rather than disconnectPoisonPillTimeout
+      * (15 s) later (#1527). Against a silent remote the pill still governs. This is a plain stop, never a reconnect,
+      * so it cannot reintroduce the self-reconnect/duplicate churn fixed in `handleHandshakedTerminated`. The pending
+      * pill is cancelled so no StopActor reaches dead letters.
       */
-    private def disconnected(rlpxConnection: RLPxConnection): Behavior[Command] =
+    private def disconnected(rlpxConnection: RLPxConnection, pill: Cancellable): Behavior[Command] =
       Behaviors.receiveMessage {
-        case StopActor                                        => Behaviors.stopped
-        case RlpxTerminated(ref) if ref == rlpxConnection.ref => Behaviors.stopped
+        case StopActor =>
+          pill.cancel()
+          Behaviors.stopped
+        case RlpxTerminated(ref) if ref == rlpxConnection.ref =>
+          pill.cancel()
+          Behaviors.stopped
         case GetStatus(replyTo) =>
           replyTo ! StatusResponse(Disconnected)
           Behaviors.same
@@ -582,8 +586,7 @@ object PeerActor:
       status match
         case Handshaked =>
           // graceful stop — let the Disconnect wire message flush before stopping
-          schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-          disconnected(rlpxConnection)
+          disconnected(rlpxConnection, schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor))
         case _ =>
           Behaviors.stopped
 
