@@ -1,0 +1,33 @@
+name: Set up sbt
+description: >-
+  Install the pinned sbt launcher. Tries the GitHub release tarball first (with retries; the GitHub -> Azure blob
+  redirect sometimes serves a short garbage body), then falls back to the repo.scala-sbt.org apt repository. Either
+  source alone has had multi-hour outages; failing over keeps CI from dying at setup.
+inputs:
+  version:
+    description: sbt launcher version (project/build.properties pins the build's own sbt version)
+    required: false
+    default: "1.13.0"
+runs:
+  using: composite
+  steps:
+    - name: Install sbt
+      shell: bash
+      run: |
+        set -euo pipefail
+        v="${{ inputs.version }}"
+        if curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
+             -o /tmp/sbt.tgz "https://github.com/sbt/sbt/releases/download/v${v}/sbt-${v}.tgz" \
+           && tar xz -C /tmp -f /tmp/sbt.tgz; then
+          sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
+          echo "sbt ${v} installed from the GitHub release"
+        else
+          echo "::warning::GitHub release download of sbt ${v} failed; falling back to repo.scala-sbt.org"
+          curl -sL --retry 3 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" \
+            | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" \
+            | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y sbt
+        fi
+        command -v sbt
