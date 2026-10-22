@@ -150,6 +150,9 @@ final class CheckpointImporter(
           case Right(_)  =>
             // Header, chain weight, best-block pointer, and the done-markers all committed in a
             // single atomic batch — partial state here would be worse than no state at all.
+            // Durability barrier (#1581): under pruning.mode=inmemory the nodes written above sit only in the node cache,
+            // not the WAL. Flush them before the flags, whose synced commit then makes them durable with the flags.
+            stateStorage.forcePersist(StateStorage.SnapSyncFinalization)
             blockchainWriter
               .storeBlockHeader(header.blockHeader)
               .and(blockchainWriter.storeChainWeight(blockHash, header.chainWeight))
@@ -157,7 +160,7 @@ final class CheckpointImporter(
               .and(appStateStorage.snapSyncDone())
               .and(appStateStorage.bytecodeRecoveryDone())
               .and(appStateStorage.storageRecoveryDone())
-              .commit()
+              .commitSync()
 
             val elapsed = System.currentTimeMillis() - startMs
             log.info(

@@ -15,6 +15,13 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportError
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportResult
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -73,6 +80,31 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       bytecodes.foreach { case (h, code) =>
         freshStorage.storages.evmCodeStorage.get(h).map(_.toArray.toSeq) shouldBe Some(code.toSeq)
       }
+
+    "write the imported nodes to the data source before the completion flags under inmemory pruning (#1581)" taggedAs UnitTest in new Setup:
+      val header = checkpointHeader
+      val rootHash = hash("rootNode")
+      val nodes: Seq[(ByteString, Array[Byte])] = Seq((rootHash, Array.fill[Byte](48)(0xab.toByte)))
+      val bytes: Array[Byte] = encodeArchive(header, nodes, Nil)
+
+      // Records, at the synced (flags) write, whether the node had already reached the data source.
+      val ds = new FlagsProbeDataSource(rootHash)
+      val inMemory = new EphemDataSourceComponent
+        with CheckpointImporterSpec.FixedDataSource(ds)
+        with LocalPruningConfigBuilder
+        with CheckpointImporterSpec.FixedPruningMode(InMemoryPruning(10))
+        with Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider
+      val importer = new CheckpointImporter(
+        BlockchainWriter(inMemory.storages),
+        inMemory.storages.stateStorage,
+        inMemory.storages.evmCodeStorage,
+        inMemory.storages.appStateStorage
+      )
+
+      importer.importFromStream(new ByteArrayInputStream(bytes), Some(checkpointChainId)).value
+      inMemory.storages.appStateStorage.isSnapSyncDone() shouldBe true
+      ds.nodeDurableAtFlags shouldBe Some(true)
 
     "reject an archive with a mismatched chainId" taggedAs UnitTest in new Setup:
       val header = checkpointHeader
@@ -170,3 +202,19 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       bytecodes.foreach { case (h, b) => w.writeBytecode(h, b) }
       w.finish()
       baos.toByteArray
+
+object CheckpointImporterSpec:
+  /** Puts `ds` under every store; must come before `Storages.DefaultStorages` in the mix-in order. */
+  trait FixedDataSource(ds: EphemDataSource) extends EphemDataSourceComponent:
+    override val dataSource: EphemDataSource = ds
+
+  /** Sets the pruning mode before `Storages.DefaultStorages` reads it (its `storages` val is built at construction). */
+  trait FixedPruningMode(mode: PruningMode) extends Storages.PruningModeComponent:
+    override val pruningMode: PruningMode = mode
+
+/** Records, at the synced (flags) write, whether `probe` had already reached the data source. */
+final class FlagsProbeDataSource(probe: ByteString) extends EphemDataSource(Map.empty):
+  var nodeDurableAtFlags: Option[Boolean] = None
+  override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    nodeDurableAtFlags = Some(new NodeStorage(this).get(probe).isDefined)
+    super.update(dataSourceUpdates)
