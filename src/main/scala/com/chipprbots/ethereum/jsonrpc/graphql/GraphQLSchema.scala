@@ -809,7 +809,10 @@ object GraphQLSchema:
           resolve = c => c.value.block.body.withdrawals
         ),
         Field("blobGasUsed", OptionType(LongType), resolve = _.value.header.blobGasUsed.map(_.toLong)),
-        Field("excessBlobGas", OptionType(LongType), resolve = _.value.header.excessBlobGas.map(_.toLong))
+        Field("excessBlobGas", OptionType(LongType), resolve = _.value.header.excessBlobGas.map(_.toLong)),
+        // Amsterdam (EIP-7843 / EIP-7928), named as geth's graphql schema: null on pre-Amsterdam headers.
+        Field("slotNumber", OptionType(LongType), resolve = _.value.header.slotNumber.map(_.toLong)),
+        Field("blockAccessListHash", OptionType(Bytes32Type), resolve = _.value.header.blockAccessListHash)
       )
   )
 
