@@ -216,11 +216,12 @@ jobs:
   coverage:
     name: Coverage (JDK 25, Scala 3.3.8)
     # Informational, NOT a required check. Instrumented run (scoverage) -> merged report -> Codecov.
-    # Same skip rules as the Tier 2 gate: no version-bump pushes, not on the staging fast-iteration branch.
+    # Runs after every merge to staging (push) and on PRs into main, so coverage is measured continuously
+    # without adding a ~1 h job to every staging PR. Skips version-bump pushes.
     if: >-
-      (github.event_name != 'push' ||
-      !startsWith(github.event.head_commit.message, 'chore: bump version to')) &&
-      github.base_ref != 'staging' && github.ref != 'refs/heads/staging'
+      (github.event_name == 'push' &&
+      !startsWith(github.event.head_commit.message, 'chore: bump version to')) ||
+      (github.event_name == 'pull_request' && github.base_ref != 'staging')
     runs-on: ubuntu-latest
     
     steps:
