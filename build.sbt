@@ -118,6 +118,12 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-XX:+UnlockDiagnosticVMOptions",
     "-XX:-ReduceAllocationMerges"
   ),
+  // Scoverage's statement/branch instrumentation slows forked test JVMs several-fold; the 3 s TestKit expectMsg
+  // defaults in BlockFetcherSpec then time out (observed: 3 failures only when the root module is instrumented).
+  // (Classic TestKit and the typed ActorTestKit use separate timefactor keys.) Scale timeouts only while `sbt coverage` is active; normal runs are unchanged.
+  Test / javaOptions ++= (if (coverageEnabled.value)
+                            Seq("-Dpekko.test.timefactor=4", "-Dpekko.actor.testkit.typed.timefactor=4")
+                          else Seq.empty),
   Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
   Test / logBuffered := false, // Stream forked JVM test output immediately rather than buffering per-suite
   (Test / testOptions) += Tests.Argument("-oDG"),
@@ -405,8 +411,23 @@ lazy val node = {
 
 }
 
+// Coverage-only aggregator. The root project does not `aggregate` the sub-modules (it only dependsOn them), so
+// `coverageAggregate` on the root found just the root's scoverage-data. CI runs `coverageAgg/coverageAggregate`
+// to merge root + bytes/crypto/rlp/scalanet/scalanetDiscovery into coverageAgg/target/scala-*/scoverage-report/.
+// It has no sources and is not published; no other task is routed through it.
+lazy val coverageAgg = (project
+  .in(file(".coverage-agg")))
+  .aggregate(node, bytes, crypto, rlp, scalanet, scalanetDiscovery)
+  .settings(
+    name := "fukuii-coverage-agg",
+    scalaVersion := `scala-3`,
+    publish / skip := true
+  )
+
 // Scoverage configuration
-coverageEnabled := false // Disabled by default, enable with `sbt coverage`
+// Must be ThisBuild-scoped: `sbt coverage` sets ThisBuild / coverageEnabled, and a project-scoped (root) value
+// would shadow it, leaving the root module uninstrumented ("No coverage data, skipping reports").
+ThisBuild / coverageEnabled := false // Disabled by default, enable with `sbt coverage`
 coverageMinimumStmtTotal := 70
 coverageFailOnMinimum := true
 coverageHighlighting := true

@@ -97,40 +97,25 @@ jobs:
           FUKUII_DEV: true
         timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners; 15 left no headroom (spec 016 S0d, #1514)
       
-      - name: Run Standard Tests with Coverage (Tier 2)
-        # Tier 2 runs `clean; coverage; testEssential; testStandard; coverageReport`
-        # — a full coverage-instrumented recompile plus a re-run of BOTH test tiers in
-        # one sbt session. It takes ~45 min and has been timing out (jobs hit 1h5m and
-        # failed at the 45-min step cap), making it a permanently-red gate that blocks
-        # every merge. Skip it on the staging fast-iteration branch (pushes to staging
-        # and PRs targeting staging) and rely there on the fast gates that already run:
-        # Tier 1 Essential, KPI baselines, and the deterministic consensus Gating
-        # Integration suite (EVM compliance / ethereum-tests / ECIP-1017). Full Tier 2
-        # with coverage still runs on develop and on the release gate (PRs into main),
-        # so the heavy suite + coverage are enforced at the main boundary.
+      - name: Run Standard Tests (Tier 2)
+        # Uninstrumented pass/fail gate: `testStandard` = compile-all + every non-Tier-3 suite (SlowTest included).
+        # Coverage is measured in the separate, non-required "Coverage" job below; scoverage instrumentation makes
+        # time-sensitive specs flaky and hot loops (Ethash) orders of magnitude slower, so it must not gate merges.
+        # Skipped on the staging fast-iteration branch (pushes to staging and PRs targeting staging); it still runs
+        # on develop and on the release gate (PRs into main).
         if: github.base_ref != 'staging' && github.ref != 'refs/heads/staging'
         run: |
           echo "=========================================="
-          echo "Running Standard Tests with Coverage (coverage-instrumented double-run; ~45-60 min)"
+          echo "Running Standard Tests (Tier 2, uninstrumented)"
           echo "=========================================="
           set -o pipefail
-          # Run tests with coverage in a single sbt session
-          # Use 'clean' to force recompilation with coverage instrumentation
-          # since Tier 1 compiled classes without instrumentation
-          # Include both testEssential and testStandard for comprehensive coverage
-          sbt -v "clean; coverage; testEssential; testStandard; coverageReport; coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
+          sbt -v testStandard 2>&1 | tee /tmp/sbt-testStandard.log || {
             echo "sbt testStandard failed — dumping 'last test'"
             sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-standard.log || true
             exit 1
           }
         env:
           FUKUII_DEV: true
-        # Coverage-instrumented double-run (testEssential + testStandard). At 0.7.0 (#1326)
-        # this took 42.7 min — already at the edge of the old 45-min cap — and the suite has
-        # since grown past it, so PRs into main failed at the cap with all tests PASSING (pure
-        # wall-clock, not a correctness failure). Raised to 90 min (~2x the historical run) to
-        # absorb suite growth + coverage/runner variance with headroom. Follow-up: split the
-        # coverage run or shard Tier 2 to bring it back down.
         timeout-minutes: 90
       
       - name: Validate KPI Baselines
@@ -181,30 +166,6 @@ jobs:
           FUKUII_DEV: true
         timeout-minutes: 15
       
-      - name: Upload coverage reports to Codecov
-        if: always()
-        uses: codecov/codecov-action@v6
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          # Specify the coverage file locations for scoverage
-          files: "**/target/scala-*/scoverage-report/scoverage.xml"
-          directory: .
-          flags: unittests
-          name: codecov-fukuii
-          fail_ci_if_error: false
-          verbose: true
-      
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: coverage-reports-jdk25-scala-3.3.8
-          path: |
-            **/target/scala-*/scoverage-report/**
-            **/target/scala-*/scoverage-data/**
-          retention-days: 30
-          if-no-files-found: warn
-      
       - name: Build assembly
         run: sbt assembly
         env:
@@ -247,3 +208,112 @@ jobs:
             **/target/scala-*/*-assembly-*.jar
           retention-days: 7
           if-no-files-found: warn
+
+  coverage:
+    name: Coverage (JDK 25, Scala 3.3.8)
+    # Informational, NOT a required check. Instrumented run (scoverage) -> merged report -> Codecov.
+    # Runs after every merge to staging (push) and on PRs into main, so coverage is measured continuously
+    # without adding a ~1 h job to every staging PR. Skips version-bump pushes.
+    if: >-
+      (github.event_name == 'push' &&
+      !startsWith(github.event.head_commit.message, 'chore: bump version to')) ||
+      (github.event_name == 'pull_request' && github.base_ref != 'staging')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+            ${{ runner.os }}-sbt-
+      
+      - name: Set up SBT
+        run: |
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install sbt
+      
+      - name: Run instrumented tests (coverage)
+        # `clean` forces a coverage-instrumented recompile. Two sbt invocations so a failing sub-module test run
+        # cannot skip the root run (and vice versa): the second `coverage` re-sets the same scalacOptions, so the
+        # sub-modules do not recompile (the root compiles instrumented here), and no `clean` runs, so the
+        # sub-modules' measurement files from the first one are kept.
+        # The root run uses the testStandard exclusions from build.sbt plus -l SlowTest: scoverage's per-statement
+        # Invoker makes the Ethash hot loops effectively never finish (EthashNonceSearchSpec ran >2 h), and the
+        # gating job runs SlowTest uninstrumented. It is a superset of the root half of testEssential, so
+        # testEssential is not run again. Test failures (instrumented runs are several times slower and expose
+        # timing-sensitive specs) must not stop the report, so this step is continue-on-error; pass/fail is gated
+        # by the uninstrumented job. -XX:-ReduceAllocationMerges comes from .jvmopts (sbt JVM) and build.sbt
+        # (forked test JVMs).
+        id: coverage_tests
+        continue-on-error: true
+        run: |
+          rc=0
+          sbt -v "clean; coverage; rlp / test; bytes / test; crypto / test" 2>&1 | tee /tmp/sbt-coverage-submodules.log || rc=1
+          sbt -v "coverage; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l SlowTest" 2>&1 | tee /tmp/sbt-coverage-root.log || rc=1
+          exit $rc
+        env:
+          FUKUII_DEV: true
+        # Measured ~105 min when testEssential also ran instrumented (compile ~5 + testEssential ~46 + testOnly ~52);
+        # dropping the redundant testEssential root run should land near ~60 min. 150 keeps ample headroom.
+        timeout-minutes: 150
+
+      - name: Generate coverage reports
+        # Reads the measurement files already on disk: no `clean`, no `coverage` toggle (either would recompile or
+        # wipe the data). Separate invocations so a root threshold failure in coverageReport still lets the merged
+        # report be written; the merged aggregate's exit status is the step result.
+        if: always()
+        run: |
+          sbt -v coverageReport 2>&1 | tee /tmp/sbt-coverage-report.log || echo "root coverageReport failed (e.g. below minimum); continuing to the merged report"
+          sbt -v coverageAgg/coverageAggregate 2>&1 | tee /tmp/sbt-coverage-aggregate.log
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 20
+      
+      - name: Upload coverage reports to Codecov
+        if: always()
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Specify the coverage file locations for scoverage
+          files: ".coverage-agg/target/scala-*/scoverage-report/scoverage.xml"
+          directory: .
+          flags: unittests
+          name: codecov-fukuii
+          fail_ci_if_error: false
+          verbose: true
+      
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-reports-jdk25-scala-3.3.8
+          path: |
+            **/target/scala-*/scoverage-report/**
+            **/target/scala-*/scoverage-data/**
+            .coverage-agg/target/scala-*/scoverage-report/**
+          # The merged report lives under the dot-directory .coverage-agg/, which upload-artifact skips by default.
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: warn
+      
