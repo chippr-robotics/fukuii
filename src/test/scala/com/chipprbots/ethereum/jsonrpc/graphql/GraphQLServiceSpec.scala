@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
@@ -80,6 +81,46 @@ class GraphQLServiceSpec
     data.downField("number").as[String].toOption.get shouldBe "0x" + block.header.number.value.toString(16)
     val gotHash: String = data.downField("hash").as[String].toOption.get
     gotHash shouldBe "0x" + block.header.hash.toArray.map("%02x".format(_)).mkString
+
+  it should "serve the Amsterdam header fields blockAccessListHash and slotNumber, null before Amsterdam (#1629)" in new GraphQLTestSetup:
+    val bal: ByteString = ByteString(Array.tabulate[Byte](32)(i => (i + 1).toByte))
+    val amsterdamHeader = block.header.copy(extraFields =
+      BlockHeader.HeaderExtraFields.HefPostAmsterdam(
+        baseFee = 7,
+        withdrawalsRoot = ByteString(Array.fill[Byte](32)(1)),
+        blobGasUsed = 0,
+        excessBlobGas = 0,
+        parentBeaconBlockRoot = ByteString(Array.fill[Byte](32)(2)),
+        requestsHash = ByteString(Array.fill[Byte](32)(3)),
+        blockAccessListHash = bal,
+        slotNumber = 4660
+      )
+    )
+    val amsterdam: Block = block.copy(header = amsterdamHeader)
+    blockchainWriter
+      .storeBlock(amsterdam)
+      .and(blockchainWriter.storeChainWeight(amsterdam.header.hash, weight))
+      .commit()
+    blockchainWriter.saveBestKnownBlocks(amsterdam.hash, amsterdam.number.value)
+
+    val (status, body) =
+      service.execute("{ block { blockAccessListHash slotNumber } }", None, None).unsafeRunSync()
+    status shouldBe 200
+    val data: ACursor = body.hcursor.downField("data").downField("block")
+    data.downField("blockAccessListHash").as[String].toOption.get shouldBe "0x" + bal.toArray
+      .map("%02x".format(_))
+      .mkString
+    data.downField("slotNumber").as[String].toOption.get shouldBe "0x1234"
+
+  it should "serve null blockAccessListHash and slotNumber for a pre-Amsterdam block (#1629)" in new GraphQLTestSetup:
+    blockchainWriter.storeBlock(block).and(blockchainWriter.storeChainWeight(block.header.hash, weight)).commit()
+    blockchainWriter.saveBestKnownBlocks(block.hash, block.number.value)
+    val (status, body) =
+      service.execute("{ block { blockAccessListHash slotNumber } }", None, None).unsafeRunSync()
+    status shouldBe 200
+    val data: ACursor = body.hcursor.downField("data").downField("block")
+    data.downField("blockAccessListHash").focus.get shouldBe Json.Null
+    data.downField("slotNumber").focus.get shouldBe Json.Null
 
   it should "return null for an unknown transaction" in new GraphQLTestSetup:
     val unknown: String = "0x" + ("00" * 32)
