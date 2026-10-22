@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
+import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
@@ -192,11 +193,29 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
   private val header: BlockHeader = Fixtures.Blocks.ValidBlock.header
   private val pivot: BigInt = header.number.value
 
+  private class CountingDataSourceComponent(counting: com.chipprbots.ethereum.db.dataSource.EphemDataSource)
+      extends EphemDataSourceComponent:
+    override val dataSource: com.chipprbots.ethereum.db.dataSource.EphemDataSource = counting
+
   /** The module on its stub, the kit that runs it, and the peer manager inbox. */
   final private class Harness(bootstrapping: Boolean = false):
+    /** Counts the batches that reach the data source (a `DataSourceBatchUpdate.commit` is one). */
+    val dataSourceBatches = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val countingDataSource = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+      override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+        if updates.nonEmpty then dataSourceBatches.incrementAndGet()
+        super.update(updates)
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
     val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
-    private val chain = new EphemBlockchainTestSetup with TestSyncConfig {}
+    private val chain = new EphemBlockchainTestSetup with TestSyncConfig:
+      override lazy val storagesInstance
+          : EphemDataSourceComponent & LocalPruningConfigBuilder & com.chipprbots.ethereum.db.components.Storages.DefaultStorages =
+        // The class comes first in the linearization, so its `dataSource` is set before DefaultStorages builds the
+        // stores from it (an `override val` in the anonymous class itself would be set after, and never used).
+        new CountingDataSourceComponent(countingDataSource)
+          with LocalPruningConfigBuilder
+          with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
+          with com.chipprbots.ethereum.TestInstanceConfigProvider
     private var action: () => Unit = () => ()
     private var captured: StubPivotSelectorState & PivotSelector = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
@@ -517,4 +536,17 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.parent.hasMessages shouldBe false
     h.module.stagnationResets shouldBe empty
     h.module.pivotRefreshCommits shouldBe empty
+  }
+
+  it should "record the pivot header, its chain weight and the best block in one batch (#1434)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+    val before = h.dataSourceBatches.get()
+
+    h.call(m => m.updateBestBlockForPivot(header, pivot))
+
+    h.dataSourceBatches.get() - before shouldBe 1
+    h.module.blockchainReader.getBlockHeaderByHash(header.hash) shouldBe Some(header)
+    h.module.blockchainReader.getChainWeightByHash(header.hash).map(_.totalDifficulty.value) shouldBe Some(BigInt(7))
+    h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
   }
