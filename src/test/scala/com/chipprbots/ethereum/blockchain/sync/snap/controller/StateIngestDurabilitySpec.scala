@@ -256,6 +256,28 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     flagImpliesRoot(h)
   }
 
+  it should "sync the completion flags after the Path-scheme publish under inmemory pruning (#1581)" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true, mode = InMemoryPruning(10))
+    h.storeChain()
+    // SNAP wrote the state path-keyed; the publish copies it into the hash-keyed store execution reads.
+    h.pathStore.get.writeAccountNode(Array.emptyByteArray, h.rootNode)
+    val result = PathToHashExporter.publish(h.pathStore.get, h.target)
+    result.accountNodes shouldBe 1L
+    h.module.pathPublish = Some((pivot, h.root))
+
+    h.call(_.onPathPublishDone(result, 0L))
+
+    h.module.pathPublish shouldBe None
+    h.module.currentPhase shouldBe SyncPhase.Completed
+    val synced = h.recording.writes.indices.filter(i => h.recording.writes(i)._1)
+    synced should have size 1
+    val flags = synced.head
+    h.flagSetAfter(flags) shouldBe false
+    h.flagSetAfter(flags + 1) shouldBe true
+    h.rootNodeDurableAfter(flags) shouldBe true
+    flagImpliesRoot(h)
+  }
+
   it should "write the ingested nodes to the data source before the completion flags under inmemory pruning (#1581)" taggedAs UnitTest in {
     val h = new Harness(pathScheme = false, mode = InMemoryPruning(10))
     h.storeChain()

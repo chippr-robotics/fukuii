@@ -86,11 +86,12 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
   * writes are such writes: plain commits, WAL appended, not fsynced, so the property holds on both schemes. Under
   * `pruning.mode = "inmemory"` it does not: the trie store (`stateTries.getBackingStorage`, a
   * `CachedReferenceCountedStorage`, which is also the Path publish's target) keeps nodes in its LRU cache and change
-  * log, and its `persist()` does nothing, so those nodes are not in the WAL when the flags sync, on either scheme.
-  * There is no separate flush or sync barrier before `completeSnapSync` on either scheme, and none that would hold if
-  * ingest writes skipped the WAL. Adding one changes behaviour on the ETC path, so T055 does not: it is added by T056,
-  * as a hard precondition of any relaxed WAL policy (user decision 2026-10-11). `StateIngestDurabilitySpec` pins
-  * today's call ordering on both schemes.
+  * log, and its `persist()` does nothing, so those nodes are not in the WAL when the flags sync, on either scheme. To
+  * close that gap, finalization calls `stateTries.forcePersist(StateStorage.SnapSyncFinalization)` just before the
+  * flags (#1581): under inmemory pruning it flushes the node cache to the data source, so the flags' synced WAL commit
+  * covers the nodes too; under archive and basic pruning it writes nothing. No memtable flush is needed while the WAL
+  * is on. A relaxed WAL policy (T056, user decision 2026-10-11) must add a memtable flush and WAL sync to this barrier.
+  * `StateIngestDurabilitySpec` pins the call ordering on both schemes, including inmemory pruning.
   */
 private[sync] trait StateIngest:
 
