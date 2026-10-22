@@ -257,3 +257,31 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val hash = StorageRecoveryActor.coordinatorWiring(SNAPSyncConfig(storageScheme = StorageScheme.Hash), ingest)
     hash.storageScheme shouldBe StorageScheme.Hash
   }
+
+  it should "spawn its real Hash-scheme coordinator with the progress store wired and keep running (#1595)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val syncController = TestProbe("syncController_hashSpawn")
+    val networkPeerManager = TestProbe("npm_hashSpawn")
+    val (stateStorage, appStateStorage, flatSlots) = newStorages()
+    val progress = new SnapSyncProgressStorage(EphemDataSource())
+    val actor = testKit.spawn(
+      StorageRecoveryActor.testApply(
+        stateRoot = fakeStateRoot,
+        stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots, Some(progress)),
+        networkPeerManager = networkPeerManager.ref,
+        syncController = syncController.ref.toTyped[Any],
+        pivotBlockNumber = BigInt(100),
+        snapSyncConfig = SNAPSyncConfig(storageScheme = StorageScheme.Hash),
+        preloaded = Some(missingOne),
+        coordinatorForTesting = None
+      ),
+      "storage-recovery-spec-hash-spawn"
+    )
+    // The coordinator is built from the config; had the progress store or scheme broken its construction, the supervised
+    // child would be restarted and then stop, and the recovery actor would report its termination.
+    syncController.expectNoMessage(2.seconds)
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    testKit.stop(actor)
+  }

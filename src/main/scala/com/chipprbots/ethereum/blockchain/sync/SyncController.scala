@@ -1298,7 +1298,7 @@ object SyncController:
         val best = appStateStorage.getBestBlockNumber()
         val stranded =
           best > 0 && !appStateStorage.isSnapSyncDone() && !appStateStorage.isFastSyncDone() &&
-            !appStateStorage.isSnapSyncAccountsComplete() && !appStateStorage.getSnapSyncPivotBlock().contains(best)
+            !snapHasStake()
         val floor = Option.when(stranded)(best + 1)
         val floorUpdate = floor match
           case Some(f) =>
@@ -1349,6 +1349,10 @@ object SyncController:
       appStateStorage.isFastSyncDone() && !snapHasStake()
 
     /** SNAP holds part of this node's state: its saved pivot is the best block, or its accounts are complete (#1434).
+      *
+      * `SnapSyncDone` is the only guard against a stale stake: a finished node keeps AccountsComplete = true (and its
+      * saved pivot) for good, so every caller must test `isSnapSyncDone()` first, as `start()` does.
+      *
       * The same test serves both startup branches: with do-snap-sync off, a restart mid-SNAP must not hand the partial
       * trie to regular sync either.
       */

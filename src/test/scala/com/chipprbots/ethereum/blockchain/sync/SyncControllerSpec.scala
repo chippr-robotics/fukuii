@@ -699,6 +699,27 @@ class SyncControllerSpec
     assert(!childNamed(testSetup, "regular-sync"))
   }
 
+  it should "not start SNAP on a finished node whose stale stake remains, when do-snap-sync is off (#1434)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    // SnapSyncDone is the guard: a finished node keeps AccountsComplete = true and best = saved pivot forever.
+    val appState = storagesInstance.storages.appStateStorage
+    seedMidHeal(testSetup, pivot = StrandedBest, best = StrandedBest)
+    appState.snapSyncDone().commit()
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.getSnapSyncPivotBlock() shouldBe Some(StrandedBest)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "regular-sync"))
+    }
+    assert(!childNamed(testSetup, "snap-sync"))
+  }
+
   it should "start SNAP with a pivot above the best block of a node upgraded mid-fast-sync" taggedAs (
     UnitTest,
     SyncTest

@@ -130,7 +130,6 @@ object StorageRecoveryActor:
     coordinatorForTesting = None
   )
 
-  /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   /** What the recovery coordinator takes from the node's SNAP configuration, as the SNAP path's `DownloadSupervisor`
     * passes it (#1595). Left at the coordinator's defaults, a Path-scheme node (ETH) ran the Hash branch and wrote no
     * storage cursors. The Path node store itself reaches the coordinator through `stateIngest.pathNodes`.
@@ -143,6 +142,7 @@ object StorageRecoveryActor:
   private[sync] def coordinatorWiring(snapSyncConfig: SNAPSyncConfig, stateIngest: StateIngest): CoordinatorWiring =
     CoordinatorWiring(snapSyncConfig.storageScheme, Some(stateIngest.snapProgress))
 
+  /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   private[sync] def testApply(
       stateRoot: ByteString,
       stateIngest: StateIngest,
