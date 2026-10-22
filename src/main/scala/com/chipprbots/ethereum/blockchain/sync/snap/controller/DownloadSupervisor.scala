@@ -371,7 +371,12 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
         p.peerInfo.remoteStatus.supportsSnap
       }
-      if snapPeerCount > 0 then
+      if snapPeerCount > 0 && accountRangeCoordinator.isDefined then
+        // #1516: the account phase is already running (a peer arrived inside the grace period and launched it), and
+        // spawning a second coordinator under the same name throws InvalidActorNameException. Nothing to do.
+        ctx.log.debug("Capability check: account range coordinator already running, not launching another")
+        Behaviors.same
+      else if snapPeerCount > 0 then
         val effectiveConcurrency = snapSyncConfig.accountConcurrency.max(1)
         ctx.log.info(
           s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency, peers=$snapPeerCount)"
