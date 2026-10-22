@@ -482,11 +482,18 @@ object PeerActor:
       )
       rlpxConnection.sendMessage(Disconnect(reason))
       schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-      disconnected()
+      disconnected(rlpxConnection)
 
-    private def disconnected(): Behavior[Command] =
+    /** The poison-pill timer only exists to let a Disconnect frame flush. Once the RLPx child is gone (remote closed
+      * TCP, or our Disconnect was flushed and the socket closed) there is nothing left to wait for: stop at once so
+      * PeerManagerActor's death-watch publishes PeerDisconnected now rather than disconnectPoisonPillTimeout (15 s)
+      * later (#1527). This is a plain stop, never a reconnect, so it cannot reintroduce the self-reconnect/duplicate
+      * churn fixed in `handleHandshakedTerminated`.
+      */
+    private def disconnected(rlpxConnection: RLPxConnection): Behavior[Command] =
       Behaviors.receiveMessage {
-        case StopActor => Behaviors.stopped
+        case StopActor                                        => Behaviors.stopped
+        case RlpxTerminated(ref) if ref == rlpxConnection.ref => Behaviors.stopped
         case GetStatus(replyTo) =>
           replyTo ! StatusResponse(Disconnected)
           Behaviors.same
@@ -576,7 +583,7 @@ object PeerActor:
         case Handshaked =>
           // graceful stop — let the Disconnect wire message flush before stopping
           schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-          disconnected()
+          disconnected(rlpxConnection)
         case _ =>
           Behaviors.stopped
 
