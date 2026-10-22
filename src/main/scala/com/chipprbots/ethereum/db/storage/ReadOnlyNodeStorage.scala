@@ -53,7 +53,11 @@ class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesK
     *   the new DataSource after the removals and insertions were done.
     */
   override def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesKeyValueStorage =
-    toRemove.foreach(elementToRemove => buffer -= elementToRemove)
+    // Removals are ignored on purpose (#1607). Trie nodes are content-addressed: a node an update replaces can still be
+    // referenced by an earlier root this session persisted, or be re-created later, and dropping it from the buffer
+    // makes that root unreadable ("State node doesn't exist"). The removal never reached the DB anyway (`persist` only
+    // forwards upserts, since nothing writes `None` into the buffer), so ignoring it is exact; memory stays bounded by
+    // the request's lifetime.
     toUpsert.foreach { case (toUpsertKey, toUpsertValue) => buffer += (toUpsertKey -> Some(toUpsertValue)) }
     this
 

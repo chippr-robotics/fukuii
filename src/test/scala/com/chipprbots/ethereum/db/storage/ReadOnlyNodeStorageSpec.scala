@@ -59,6 +59,22 @@ class ReadOnlyNodeStorageSpec extends AnyFlatSpec with Matchers:
     cachedStateStorage.forcePersist(GenesisDataLoad) shouldEqual true
     dataSource.storage.size shouldEqual 1
 
+  it should "keep a node readable after a later update names it for removal (content-addressed, #1607)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val keyA = ByteString("node-a").toArray[Byte]
+    val keyB = ByteString("node-b").toArray[Byte]
+    val readOnlyNodeStorage = ReadOnlyNodeStorage(new ArchiveNodeStorage(nodeStorage))
+
+    readOnlyNodeStorage.update(Nil, Seq(ByteString(keyA) -> Array[Byte](1)))
+    // root A -> root B: the replaced node A is listed for removal, but an earlier root may still reference it
+    readOnlyNodeStorage.update(Seq(ByteString(keyA)), Seq(ByteString(keyB) -> Array[Byte](2)))
+
+    readOnlyNodeStorage.get(ByteString(keyA)).map(_.toSeq) shouldEqual Some(Seq[Byte](1))
+    readOnlyNodeStorage.get(ByteString(keyB)).map(_.toSeq) shouldEqual Some(Seq[Byte](2))
+    dataSource.storage.size shouldEqual 0
+
   trait TestSetup:
     val newLeaf: LeafNode = LeafNode(ByteString(1), ByteString(1))
     val dataSource: EphemDataSource = EphemDataSource()
