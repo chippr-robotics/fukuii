@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -306,6 +307,11 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                 s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
                 "bytecodeRecoveryDone NOT set"
             )
+          // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
+          // in the node cache, not in the WAL; flush them to the data source BEFORE the flags, so the flags' synced
+          // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
+          // A no-op under archive and basic pruning, which write through. The WAL is on, so no memtable flush is needed.
+          stateIngest.stateTries.forcePersist(StateStorage.SnapSyncFinalization)
           val doneFlags = stateIngest.appState.snapSyncDone().and(stateIngest.appState.storageRecoveryDone())
           (if bytecodeComplete then doneFlags.and(stateIngest.appState.bytecodeRecoveryDone()) else doneFlags)
             .commitSync()

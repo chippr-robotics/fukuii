@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.StateStorage.FlushSituation
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
+import com.chipprbots.ethereum.db.storage.StateStorage.SnapSyncFinalization
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.mpt.MptNode
@@ -291,7 +292,8 @@ class CachedReferenceCountedStateStorage(
 
   override def forcePersist(reason: FlushSituation): Boolean =
     reason match
-      case GenesisDataLoad => CachedReferenceCountedStorage.persistCache(lruCache, nodeStorage, forced = true)
+      case GenesisDataLoad | SnapSyncFinalization =>
+        CachedReferenceCountedStorage.persistCache(lruCache, nodeStorage, forced = true)
 
   override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
     val blockToPrune = bn - pruningHistory
@@ -363,3 +365,6 @@ object StateStorage:
 
   sealed abstract class FlushSituation
   case object GenesisDataLoad extends FlushSituation
+
+  /** SNAP finalization, just before the completion flags are written: the ingested state must be in the data source. */
+  case object SnapSyncFinalization extends FlushSituation

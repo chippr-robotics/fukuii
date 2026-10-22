@@ -32,6 +32,10 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -68,12 +72,17 @@ final private class RecordingDataSource extends EphemDataSource(Map.empty):
 private trait RecordingStore extends EphemDataSourceComponent:
   override val dataSource: RecordingDataSource = new RecordingDataSource
 
+/** Sets the pruning mode before `Storages.DefaultStorages` reads it (its `storages` val is built at construction). */
+private trait FixedPruningMode(mode: PruningMode) extends Storages.PruningModeComponent:
+  override val pruningMode: PruningMode = mode
+
 /** The ephemeral test chain with its stores over a [[RecordingDataSource]]. */
-private class RecordingChain extends EphemBlockchainTestSetup with TestSyncConfig:
+private class RecordingChain(mode: PruningMode = ArchivePruning) extends EphemBlockchainTestSetup with TestSyncConfig:
   override lazy val storagesInstance: EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
     new EphemDataSourceComponent
       with RecordingStore
       with LocalPruningConfigBuilder
+      with FixedPruningMode(mode)
       with Storages.DefaultStorages
       with com.chipprbots.ethereum.TestInstanceConfigProvider
 
@@ -105,6 +114,7 @@ private class DurabilityStub(
   private val monitor = new SyncProgressMonitor(null)
   override def progressMonitor: SyncProgressMonitor = monitor
   override def pathNodeStorageOpt: Option[PathNodeStorage] = pathStore
+  override def stateStorage: StateStorage = chain.storagesInstance.storages.stateStorage
   override def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
     mptStorageRequests += pivotBlockNumber
     target
@@ -137,8 +147,8 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
   private val pivot = BigInt(1_000)
 
   /** One finalization run over a recording store. */
-  final private class Harness(pathScheme: Boolean):
-    val chain: RecordingChain = new RecordingChain
+  final private class Harness(pathScheme: Boolean, mode: PruningMode = ArchivePruning):
+    val chain: RecordingChain = new RecordingChain(mode)
     val recording: RecordingDataSource = chain.recording
     val target: MptStorage = chain.storagesInstance.storages.stateStorage.getBackingStorage(pivot)
     val pathStore: Option[PathNodeStorage] = Option.when(pathScheme)(new PathNodeStorage(recording))
@@ -241,6 +251,21 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     flags should be >= afterPublish
     h.recording.writes.slice(beforePublish, afterPublish).forall(!_._1) shouldBe true
     h.flagSetAfter(flags) shouldBe false
+    h.flagSetAfter(flags + 1) shouldBe true
+    h.rootNodeDurableAfter(flags) shouldBe true
+    flagImpliesRoot(h)
+  }
+
+  it should "write the ingested nodes to the data source before the completion flags under inmemory pruning (#1581)" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = false, mode = InMemoryPruning(10))
+    h.storeChain()
+    // Under inmemory pruning this write lands in the LRU cache only; nothing reaches the data source yet.
+    h.target.storeRawNodes(Seq(h.root -> h.rootNode))
+
+    h.call(_.finalizeSnapSync(pivot))
+
+    h.module.currentPhase shouldBe SyncPhase.Completed
+    val flags = h.recording.writes.indices.filter(i => h.recording.writes(i)._1).head
     h.flagSetAfter(flags + 1) shouldBe true
     h.rootNodeDurableAfter(flags) shouldBe true
     flagImpliesRoot(h)
