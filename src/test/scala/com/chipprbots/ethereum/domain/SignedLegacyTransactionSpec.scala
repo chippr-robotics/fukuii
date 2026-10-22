@@ -22,6 +22,25 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
     SignedTransactionBehavior(Generators.legacyTransactionGen, allowedPointSigns)
   )
 
+  "Legacy transaction sender cache" should "not reuse a sender recovered under a different chain config (#1629)" taggedAs (UnitTest) in {
+    // geth transaction_signing_test vector signed for chainId 1 (v = 37)
+    val rlp =
+      "f864808504a817c800825208943535353535353535353535353535353535353535808025a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116da0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d"
+    val stx =
+      import SignedTransactions.*
+      Hex.decode(rlp).toSignedTransaction
+    val base = Config.blockchains.blockchainConfig
+    val foreign: BlockchainConfig = base.copy(chainId = ChainId(61))
+    val native: BlockchainConfig = base.copy(chainId = ChainId(1))
+    val expected = Address("0xf0f6f18bca1b28cd68e4357452947e021241e9ce")
+
+    // A mismatched-chain recovery falls back to the pre-155 payload and yields some other address. It must not stick.
+    getSender(stx)(foreign) should not be Some(expected)
+    getSender(stx)(native) shouldEqual Some(expected)
+    // and the reverse order stays consistent
+    getSender(stx)(foreign) should not be Some(expected)
+  }
+
   "Legacy transaction sender" should "be properly recoverable from rlp encoded values" taggedAs (UnitTest) in {
 
     implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig.copy(chainId = ChainId(1))

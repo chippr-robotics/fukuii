@@ -39,7 +39,13 @@ object SignedTransaction:
   // Cache available processors count for parallel execution (constant at runtime)
   private val availableProcessors: Int = Runtime.getRuntime.availableProcessors
 
-  private val txSenders: Cache[TxHash, Address] = CacheBuilder
+  /** Recovery of a legacy transaction depends on the configured chain id (a `v` naming another chain is treated as
+    * unprotected and signs the pre-EIP-155 payload, recovering an unrelated address), so a sender is only valid for the
+    * chain id it was recovered under (#1629).
+    */
+  final private case class SenderKey(txHash: TxHash, chainId: BigInt)
+
+  private val txSenders: Cache[SenderKey, Address] = CacheBuilder
     .newBuilder()
     .maximumSize(maximumSenderCacheSize)
     .recordStats()
@@ -268,9 +274,10 @@ object SignedTransaction:
         )
 
   def getSender(tx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[Address] =
-    Option(txSenders.getIfPresent(tx.hash)).orElse {
+    val key = SenderKey(tx.hash, blockchainConfig.chainId.value)
+    Option(txSenders.getIfPresent(key)).orElse {
       val result = calculateSender(tx)
-      result.foreach(address => txSenders.put(tx.hash, address))
+      result.foreach(address => txSenders.put(key, address))
       result
     }
 
@@ -302,7 +309,7 @@ object SignedTransaction:
     IO(txs.foreach(calculateAndCacheSender))
 
   private def calculateAndCacheSender(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig) =
-    calculateSender(stx).foreach(address => txSenders.put(stx.hash, address))
+    calculateSender(stx).foreach(address => txSenders.put(SenderKey(stx.hash, blockchainConfig.chainId.value), address))
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
     *
