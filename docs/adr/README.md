@@ -35,6 +35,7 @@ Platform, language, runtime, and build system decisions.
 - [INF-005: Docker Deployment Strategy and Container Best Practices](infrastructure/INF-005-docker-deployment-strategy.md) - Accepted
 - [INF-006: SNAP State-Ingest Capability and the Exporter Durability Boundary](infrastructure/INF-006-snap-state-ingest-capability.md) - Proposed
 - [INF-007: JDK 25 Baseline and the C2 ReduceAllocationMerges Workaround](infrastructure/INF-007-jdk-25-baseline.md) - Accepted
+- [INF-009: Scala 3.9 LTS Toolchain](infrastructure/INF-009-scala-3-9-lts.md) - Accepted
 
 [View all Infrastructure ADRs →](infrastructure/README.md)
 
