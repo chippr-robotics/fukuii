@@ -172,12 +172,10 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
   def flushTrieNodeWrites(): Unit =
     if trieNodeWrites.nonEmpty then
       val startNs = System.nanoTime()
-      val updates = trieNodeWrites.toList
-      trieNodeWrites.clear()
       val pns = stateIngest.pathNodes.getOrElse(
         throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
       )
-      pns.dataSource.update(updates)
+      StorageOrderedApply.commitBuffered(trieNodeWrites)(pns.dataSource.update)
       trieWriteNanos += System.nanoTime() - startNs
 
   /** Write the nodes a worker built for an account served whole in one response. */
@@ -442,3 +440,14 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
 
         task = task.copy(done = true, pending = false)
         recordCompletedTask(task)
+
+private[actors] object StorageOrderedApply:
+
+  /** Write the buffered node updates, and clear the buffer only once the write has returned. Clearing first would drop
+    * the nodes if the write throws, and a caller that survived the exception could then record a done marker over nodes
+    * that were never written (#1549). On a throw the buffer is left intact and the exception propagates.
+    */
+  def commitBuffered[A](buffer: mutable.Buffer[A])(write: Seq[A] => Unit): Unit =
+    if buffer.nonEmpty then
+      write(buffer.toList)
+      buffer.clear()

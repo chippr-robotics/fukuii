@@ -550,8 +550,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     val droppedResponses = abandonPendingResponses()
     if droppedResponses.nonEmpty then
       log.info(s"postStop: dropping ${droppedResponses.size} unapplied storage response(s)")
-    flushTrieNodeWrites()
-    shutdownProcessingPool()
+    // The pool goes down even if the final node flush throws (#1549).
+    try flushTrieNodeWrites()
+    finally shutdownProcessingPool()
     // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
     // don't lose data when the actor terminates (force-complete, restart).
     // This synchronous commit is the next batch in sequence; the same rule picks which staged markers may ride in it
