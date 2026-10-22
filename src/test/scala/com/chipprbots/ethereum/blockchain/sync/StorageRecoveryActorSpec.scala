@@ -13,6 +13,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.cache.LruCache
@@ -80,7 +81,8 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   private def recoveryIngest(
       stateStorage: StateStorage,
       appStateStorage: AppStateStorage,
-      flatSlotStorage: FlatSlotStorage
+      flatSlotStorage: FlatSlotStorage,
+      progress: Option[SnapSyncProgressStorage] = None
   ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = appStateStorage
@@ -93,7 +95,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progress.getOrElse(notReached("snapProgress"))
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
@@ -238,4 +240,20 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     syncController.expectNoMessage((abandonAfter.toMillis / 2).millis)
     appStateStorage.isStorageRecoveryDone() shouldBe false
     testKit.stop(actor)
+  }
+
+  it should "spawn its storage coordinator with the node's storage scheme and the SNAP progress store (#1595)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val (stateStorage, appStateStorage, flatSlots) = newStorages()
+    val progress = new SnapSyncProgressStorage(EphemDataSource())
+    val ingest = recoveryIngest(stateStorage, appStateStorage, flatSlots, Some(progress))
+
+    val path = StorageRecoveryActor.coordinatorWiring(SNAPSyncConfig(storageScheme = StorageScheme.Path), ingest)
+    path.storageScheme shouldBe StorageScheme.Path
+    path.snapProgressStorage.exists(_ eq progress) shouldBe true
+
+    val hash = StorageRecoveryActor.coordinatorWiring(SNAPSyncConfig(storageScheme = StorageScheme.Hash), ingest)
+    hash.storageScheme shouldBe StorageScheme.Hash
   }
