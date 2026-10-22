@@ -1298,7 +1298,7 @@ object SyncController:
         val best = appStateStorage.getBestBlockNumber()
         val stranded =
           best > 0 && !appStateStorage.isSnapSyncDone() && !appStateStorage.isFastSyncDone() &&
-            !appStateStorage.isSnapSyncAccountsComplete() && !appStateStorage.getSnapSyncPivotBlock().contains(best)
+            !snapHasStake()
         val floor = Option.when(stranded)(best + 1)
         val floorUpdate = floor match
           case Some(f) =>
@@ -1346,8 +1346,19 @@ object SyncController:
       * part-way through SNAP therefore resumes SNAP, whatever FastSyncDone says.
       */
     private def fastSyncFinishedWithoutSnapStake(): Boolean =
-      appStateStorage.isFastSyncDone() && !appStateStorage.isSnapSyncAccountsComplete() &&
-        !appStateStorage.getSnapSyncPivotBlock().contains(appStateStorage.getBestBlockNumber())
+      appStateStorage.isFastSyncDone() && !snapHasStake()
+
+    /** SNAP holds part of this node's state: its saved pivot is the best block, or its accounts are complete (#1434).
+      *
+      * `SnapSyncDone` is the only guard against a stale stake: a finished node keeps AccountsComplete = true (and its
+      * saved pivot) for good, so every caller must test `isSnapSyncDone()` first, as `start()` does.
+      *
+      * The same test serves both startup branches: with do-snap-sync off, a restart mid-SNAP must not hand the partial
+      * trie to regular sync either.
+      */
+    private def snapHasStake(): Boolean =
+      appStateStorage.isSnapSyncAccountsComplete() ||
+        appStateStorage.getSnapSyncPivotBlock().contains(appStateStorage.getBestBlockNumber())
 
     /** SNAP has finalized: whatever pivot floor it started with is spent. */
     private def clearSnapPivotFloor(): Unit =
@@ -1542,6 +1553,12 @@ object SyncController:
           val needStorage = !appStateStorage.isStorageRecoveryDone()
           if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
           else startRegularSync()._2
+        case (false, SyncMode.Regular) if snapHasStake() =>
+          // #1434: do-snap-sync is off, but SNAP was running here and left work behind (a restart mid-heal, or mid-download
+          // with best = pivot). Regular sync on that partial trie only fetches nodes on demand, and its stuck handler
+          // would re-run SNAP from a new pivot, discarding the download. Resume SNAP where it stopped.
+          log.warn("do-snap-sync is off, but SNAP has progress here and has not finished; resuming SNAP")
+          startSnapSync(minPivotBlock = liveSnapPivotFloor())
         case (_, SyncMode.Regular) =>
           // Says what actually happens. Regular sync fetches missing nodes on demand (redownload-missing-state-nodes);
           // when peers cannot serve them BlockImporter reports RegularSyncStuck, and that handler starts SNAP whatever

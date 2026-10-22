@@ -25,6 +25,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
@@ -128,6 +130,18 @@ object StorageRecoveryActor:
     coordinatorForTesting = None
   )
 
+  /** What the recovery coordinator takes from the node's SNAP configuration, as the SNAP path's `DownloadSupervisor`
+    * passes it (#1595). Left at the coordinator's defaults, a Path-scheme node (ETH) ran the Hash branch and wrote no
+    * storage cursors. The Path node store itself reaches the coordinator through `stateIngest.pathNodes`.
+    */
+  final private[sync] case class CoordinatorWiring(
+      storageScheme: StorageScheme,
+      snapProgressStorage: Option[SnapSyncProgressStorage]
+  )
+
+  private[sync] def coordinatorWiring(snapSyncConfig: SNAPSyncConfig, stateIngest: StateIngest): CoordinatorWiring =
+    CoordinatorWiring(snapSyncConfig.storageScheme, Some(stateIngest.snapProgress))
+
   /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   private[sync] def testApply(
       stateRoot: ByteString,
@@ -206,6 +220,7 @@ object StorageRecoveryActor:
                 case None =>
                   val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
                   val mptStorage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
+                  val wiring = coordinatorWiring(snapSyncConfig, stateIngest)
                   ctx.spawn(
                     Behaviors
                       .supervise(
@@ -220,6 +235,8 @@ object StorageRecoveryActor:
                           snapSyncController = srcAdapter,
                           initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                           minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                          snapProgressStorage = wiring.snapProgressStorage,
+                          storageScheme = wiring.storageScheme,
                           stateIngest = stateIngest
                         )
                       )

@@ -424,14 +424,18 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
             if pivotBlockNumber == BigInt(0) then header.difficulty.value else pivotBlockNumber.max(genesisTD)
           (proxy, "BLOCK_NUMBER_PROXY")
         }
-    stateIngest.chainWriter.storeBlockHeader(header).commit()
+    // #1434: one batch, so a crash cannot leave the best block on the previous pivot while the new pivot's header is
+    // stored: startup routing compares SNAP's saved pivot with the best block.
     stateIngest.chainWriter
-      .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
-      .commit()
-    // Always advance the self-reported best-block pointer so STATUS messages show the correct
-    // pivot block number.
-    stateIngest.appState
-      .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
+      .storeBlockHeader(header)
+      .and(
+        stateIngest.chainWriter
+          .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
+      )
+      .and(
+        stateIngest.appState
+          .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
+      )
       .commit()
     ctx.log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +

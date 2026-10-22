@@ -658,6 +658,68 @@ class SyncControllerSpec
     assert(!childNamed(testSetup, "regular-sync"))
   }
 
+  it should "resume SNAP on a mid-heal node when do-snap-sync is off (#1434)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    // do-snap-sync = false does not strand a node that SNAP already holds: accounts are complete, the trie is partial,
+    // and regular sync there would only fetch the missing nodes one by one.
+    seedMidHeal(testSetup, pivot = StrandedBest + 1, best = StrandedBest + 100)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "snap-sync"))
+    }
+    assert(!childNamed(testSetup, "regular-sync"))
+    storagesInstance.storages.appStateStorage.isSnapSyncAccountsComplete() shouldBe true
+  }
+
+  it should "resume SNAP on a node whose best block is SNAP's pivot when do-snap-sync is off (#1434)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = BlockNumber(StrandedBest))).commit()
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncPivotBlock(StrandedBest))
+      .and(appState.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0x66))))
+      .commit()
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "snap-sync"))
+    }
+    assert(!childNamed(testSetup, "regular-sync"))
+  }
+
+  it should "not start SNAP on a finished node whose stale stake remains, when do-snap-sync is off (#1434)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    // SnapSyncDone is the guard: a finished node keeps AccountsComplete = true and best = saved pivot forever.
+    val appState = storagesInstance.storages.appStateStorage
+    seedMidHeal(testSetup, pivot = StrandedBest, best = StrandedBest)
+    appState.snapSyncDone().commit()
+    appState.isSnapSyncAccountsComplete() shouldBe true
+    appState.getSnapSyncPivotBlock() shouldBe Some(StrandedBest)
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "regular-sync"))
+    }
+    assert(!childNamed(testSetup, "snap-sync"))
+  }
+
   it should "start SNAP with a pivot above the best block of a node upgraded mid-fast-sync" taggedAs (
     UnitTest,
     SyncTest
