@@ -35,7 +35,8 @@ object ExecEnv:
       context.blobVersionedHashes,
       context.traceTransfers,
       context.tracer,
-      context.accessRecorder
+      context.accessRecorder,
+      context.blobBaseFeeOverride
     )
 
 /** Execution environment constants of an EVM program. See section 9.3 in Yellow Paper for more detail.
@@ -64,6 +65,9 @@ object ExecEnv:
   * @param accessRecorder
   *   EIP-7928: where this frame records the accounts and slots it reads. Present only while an Amsterdam block
   *   executes; see [[BlockAccessRecorder]].
+  * @param blobBaseFeeOverride
+  *   the simulated block's `blobBaseFee` override, which BLOBBASEFEE returns instead of the derived fee; see
+  *   [[ProgramContext.blobBaseFeeOverride]].
   */
 case class ExecEnv(
     ownerAddr: Address,
@@ -81,5 +85,6 @@ case class ExecEnv(
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
     traceTransfers: Boolean = false,
     tracer: Option[ExecutionTracer] = None,
-    accessRecorder: Option[BlockAccessRecorder] = None
+    accessRecorder: Option[BlockAccessRecorder] = None,
+    blobBaseFeeOverride: Option[BigInt] = None
 )
