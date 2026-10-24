@@ -95,7 +95,7 @@ private[actors] class StubAccountTrieAssemblyState(
   // AccountTrieAssemblyState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   val pendingTasks: mutable.PriorityQueue[AccountTask] =
-    mutable.PriorityQueue.empty[AccountTask](Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
+    mutable.PriorityQueue.empty[AccountTask](using Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
   val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] = mutable.Map.empty
   val completedTasks: mutable.ArrayBuffer[AccountTask] = mutable.ArrayBuffer.empty
   val workers: mutable.ArrayBuffer[WorkerRef] = mutable.ArrayBuffer.empty
