@@ -386,19 +386,33 @@ ratchet table and in `dc4-ledger.md` in this spec directory: site, reason, date,
 
 ---
 
-## §B — GT-2 baseline (filled before PR 1 merges; every PR reports the same rows)
+## §B — GT-2 baseline (measured 2026-10-20/21; every PR reports the same rows)
 
-| # | Figure | Baseline (3.3.8, commit `<sha>`) | Source |
+The baseline tree is staging `481f19875` (the 0.10.0 release content, Scala 3.3.8, sbt 1.13.0, JDK 25). The timing jar
+"A" is the published `fukuii-assembly-0.10.0.jar` (sha256 `0a4eda26…cc50`, built from `5c5720d8c`; code-identical to
+`481f19875`, which adds only release notes). Measured after PR 1 (#1631) and PR 2 (#1632) had merged: GT-2 was not filled
+before PR 1 as planned, and this records the state they left.
+
+| # | Figure | Baseline (3.3.8) | Source |
 |---|---|---|---|
-| 1 | `testEssential` succeeded / failed | [MEASURE] (last known 3,621 / 0) | CI JDK 25 |
-| 2 | Statement coverage (aggregate) | [MEASURE] | host, Tier 2 command |
-| 3 | ethereum/tests ETC / ETH | [MEASURE] | `ethereum-tests-nightly` dispatch |
-| 4 | hive rpc-compat | [MEASURE] (273/273 since #1616) | CI |
-| 5 | hive graphql | [MEASURE] (waiver `graphql-gasprice-stale-fixture` noted) | CI |
-| 6 | SNAP `SyncTest` | [MEASURE] | `snap-synctest.yml` |
-| 7 | Mordor range `H_M+1 … H_M+N`, parent root, range SHA-256 | [MEASURE] | host |
-| 8 | Platåberget range `H_P+1 … H_P+N`, parent root, range SHA-256 | [MEASURE] | host |
-| 9 | `[IMPORT-TIMING]` p50 / p99 ms, Mordor (jar A, median of 2) | [MEASURE] | host, JDK 21 |
-| 10 | `[IMPORT-TIMING]` p50 / p99 ms, Platåberget (jar A, median of 2) | [MEASURE] | host, JDK 21 |
-| 11 | `compile-all` warnings (3.3.8) | 365 (GT-1 A) | GT-1 |
-| 12 | `scalafixAll --check` finding lines per module (0.13.0) | crypto 38, scalanet 60, discovery 4,074, root 6,489; bytes and rlp 0 (GT-1 E0) | GT-1, re-measure with PR 1's scalafix version |
+| 1 | `testEssential` succeeded / failed | root **6,312 / 0**; crypto 30, rlp 11, bytes 80 (0 failed) | CI "Test and Build" on `481f19875` (#1658) |
+| 2 | Statement coverage (aggregate) | **not measurable on `481f19875`**: scoverage recorded no data (root never instrumented). After the fix (#1663, #1665): **71.63% statement / 64.72% branch** aggregate (root 73.74%; bytes 95.37; crypto 91.68; rlp 76.57; scalanet 22.44; scalanetDiscovery 30.54) | host run of the fixed build on `481f19875` + #1663 commits |
+| 3 | ethereum/tests | **66 / 0** (2 canceled) | `ethereum-tests-nightly` dispatch on staging `481f19875`, run 39535087001 |
+| 4 | hive rpc-compat | **273 / 273** | CI on #1658 |
+| 5 | hive graphql | **50 passed, 2 failed (both waived, gate 0 failures)** | CI on #1658 |
+| 6 | SNAP `SyncTest` | **pass** | `snap-synctest.yml` on the 0.10.0 notes PR (tree = `481f19875`) |
+| 7 | Mordor range | **17,207,612 … 17,212,611** (N = 5,000), parent `0xb93e833b…a388`, file sha256 `d43183f4…b5c4`. Frozen datadir `/home/dontpanic/mordor-data` (head 17,207,611, 5.1 GB, unit stopped since 2026-10-17). Blocks fetched from public core-geth RPC with every header/tx/uncle hash verified. **Deviation (user decision 2026-10-20):** recent Mordor is nearly empty (9 of 2,000 blocks carry txs, max 353k gas), so the ≥200 × 1 Mgas rule cannot be met on any recent window; ETC execution coverage rests on row 3 and the VM/consensus specs | host |
+| 8 | **Ephemery-164** range (replaces Platåberget, user decision 2026-10-17) | **135,638 … 147,609** (N = 11,972), parent `0xa68aac54…4968`, file sha256 `6a09b442…50f9` (trimmed from the Erigon-built 135,090–147,609 file, sha256 `56574c34…4edd`). Includes the 2,000-block typed-tx + blob load run (145,609–147,609). Frozen datadir `/chipprbots/blockchain/ephemery/frozen-H-data` (head 135,637, 100 MB). Not Amsterdam (Prague/Osaka + BPO) | host |
+| 9 | `[IMPORT-TIMING]` p50 / p99 ms, Mordor (jar A, median of 2) | **0.55 / 51.25** (runs: 0.50/59.30, 0.60/43.20; 5,000 imported, 0 already present, ~7 min each) | host, JDK 25 |
+| 10 | `[IMPORT-TIMING]` p50 / p99 ms, Ephemery (jar A, median of 2) | **1.80 / 258.85** (runs: 1.80/266.10, 1.80/251.60; 11,972 imported, 0 present, ~40 min each) | host, JDK 25 |
+| 11 | `compile-all` warnings (3.3.8) | **336** (191 root + 145 across the other modules; GT-1 measured 365 on its older tree) | host, staging `166455837` |
+| 12 | `scalafixAll --check` finding lines per module (scalafix from PR 1) | finding lines (files to rewrite / lint / unparseable): **bytes 0, crypto 0, rlp 0; scalanet 60 (5 / 0 / 0); scalanetDiscovery 4,036 (44 / 21 / 0); root 7,245 (210 / 59 / 37)**. The root lint findings are `DisableSyntax.return` (58) plus one other; this is the #1656 inventory PR 6b clears | host, staging `166455837` |
+
+**Command line (fixed from here on).** `differential.sh <mordor|ephemery> <jar> <label>` (attached to PR 0 under
+`scripts/spec020/`): copies the frozen datadir, then runs
+`java -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -Xms1g -Xmx{4g|3g} -Xss8M -XX:MaxDirectMemorySize=512M
+-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -jar <jar> <chain> import <range>` (the offline strict importer from #1651: executes
+and validates every block against its header, no networking), with a logback that records `[IMPORT-TIMING]` at DEBUG
+(the `import-timing-log` key is not honoured by the offline tool, CQ-020-14). Pass = exit 0 and `N imported, 0 already
+present`. Timing drops the first 200 blocks. **Host noise:** the live Ephemery node ran during every run (it will for B
+runs too); comparisons are A/B/A/B on the same host.

@@ -1,6 +1,29 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.1.0 → 1.1.1 (PATCH)
+Rationale: spec 020 (Scala 3.9 LTS toolchain migration), GT-3. The technology section named "sbt 1.10.7+"; the
+build has used sbt 1.13.0 since #1631 (spec 020 PR 1), and the compiler moves to the 3.9 LTS line from 0.11.0.
+Wording-only: no principle is added, removed or redefined. Principle IV (scalafmt 3.8.3 config) is unchanged and
+still true; the scalafmt 3.11 move (spec 020 FU-1) will PATCH it separately.
+
+Changes:
+  - Technology & Architecture Constraints, Language/Runtime: "Scala 3.x LTS on JDK 25 (OpenJDK); build with sbt
+    1.10.7+" → "Scala 3.x LTS (the 3.9 line from 0.11.0) on JDK 25 (OpenJDK); build with sbt 1.13.0+ (1.x line)".
+  - Version bumped to 1.1.1; Last Amended updated. ADR INF-009 records the decision.
+
+Templates & artifacts reviewed for alignment:
+  ✅ .specify/templates/plan-template.md  (no change required)
+  ✅ .specify/templates/spec-template.md  (no change required)
+  ✅ .specify/templates/tasks-template.md (no change required)
+  ✅ .specify/templates/checklist-template.md (no change required)
+
+Last Amended: 2026-10-20
+-->
+
+<!--
+SYNC IMPACT REPORT
+==================
 Version change: 1.0.0 → 1.1.0
 Rationale: Fukuii is now a multi-network client: ETC/Mordor (PoW, chain-ID 61/63)
 AND ETH/Sepolia (PoS, chain-ID 1/11155111). Principle I was ETC-only and incorrectly
@@ -229,8 +252,8 @@ trust that a version number and changelog accurately describe what changed.
 
 ## Technology & Architecture Constraints
 
-- **Language/Runtime**: Scala 3.x LTS on JDK 25 (OpenJDK); build with sbt
-  1.10.7+. No Scala 2 and no cross-build.
+- **Language/Runtime**: Scala 3.x LTS (the 3.9 line from 0.11.0) on JDK 25
+  (OpenJDK); build with sbt 1.13.0+ (1.x line). No Scala 2 and no cross-build.
 - **Core libraries**: Apache Pekko (actors/HTTP), Cats Effect (`IO`), Monix,
   RocksDB for storage, BouncyCastle for crypto. New dependencies MUST be Scala 3
   compatible and justified in the plan.
@@ -285,4 +308,4 @@ provide operational detail.
   plan for execution context; this file defines the standards those plans must
   satisfy.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-06-13
+**Version**: 1.1.1 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-10-20
