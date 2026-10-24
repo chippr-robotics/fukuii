@@ -243,7 +243,7 @@ class JsonRpcControllerFixture(implicit
     null,
     new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
     null
-  )(scala.concurrent.ExecutionContext.global)
+  )(using scala.concurrent.ExecutionContext.global, summon)
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(
