@@ -62,7 +62,7 @@ private[actors] class StubAccountTaskLifecycleState(
   val emptyResponseStrikes: mutable.Map[PeerId, Int] = mutable.Map.empty
   var pivotRefreshRequested: Boolean = false
   val pendingTasks: mutable.PriorityQueue[AccountTask] =
-    mutable.PriorityQueue.empty[AccountTask](Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
+    mutable.PriorityQueue.empty[AccountTask](using Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
   val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] = mutable.Map.empty
   val completedTasks: mutable.ArrayBuffer[AccountTask] = mutable.ArrayBuffer.empty
   var lastDispatchOrResponseMs: Long = 0L
