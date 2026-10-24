@@ -219,7 +219,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
-  val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(
+  val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(using
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
