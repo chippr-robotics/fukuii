@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.testing.NoRandomAccessSeq
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestEvmCodeStorage
 
@@ -228,6 +229,21 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.idled.toSeq shouldBe Seq(worker.ref)
     controller.hasMessages shouldBe false
     m.completionChecks shouldBe 1
+  }
+
+  // #1675: the subsequence check reads the requested hashes by index. A request is bounded (85 hashes), but the
+  // task's Seq can be a linear one; the check indexes its own Vector copy rather than the task's Seq.
+  it should "match a response against the requested hashes without random access into the task's Seq" taggedAs UnitTest in {
+    val (m, _) = newModule()
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val codes = (1 to 5).map(code)
+    inFlight(m, NoRandomAccessSeq.from(codes.map(kec256(_))), worker.ref, peer("p1"))
+
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq(codes(0), codes(2), codes(4))))
+
+    Seq(0, 2, 4).foreach(i => m.bytecodeStore.get(kec256(codes(i))) shouldBe Some(codes(i)))
+    m.bytecodesDownloaded shouldBe 3L
+    m.cooldowns shouldBe empty
   }
 
   it should "ignore a response for an unknown request" taggedAs UnitTest in {

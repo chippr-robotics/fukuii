@@ -161,6 +161,9 @@ private[actors] trait ByteCodeResponseHandling:
       val matched = mutable.HashSet.empty[ByteString]
       val seenReturned = mutable.HashSet.empty[ByteString]
       val pairs = Vector.newBuilder[(ByteString, ByteString)]
+      // Read by index below; a linear Seq would make each read O(i). Bounded (one request's hashes), so one copy is
+      // cheap, and none is made when the task's Seq is already indexed (#1675).
+      val requested: IndexedSeq[ByteString] = requestedHashes.toIndexedSeq
       var reqIdx = 0
 
       var error: String | Null = null
@@ -177,8 +180,8 @@ private[actors] trait ByteCodeResponseHandling:
           seenReturned += rh
 
           // Verify returned hashes form a subsequence of the requested hashes, preserving order.
-          while reqIdx < requestedHashes.size && requestedHashes(reqIdx) != rh do reqIdx += 1
-          if reqIdx >= requestedHashes.size then
+          while reqIdx < requested.size && requested(reqIdx) != rh do reqIdx += 1
+          if reqIdx >= requested.size then
             val sample = rh.take(4).toArray.map("%02x".format(_)).mkString
             error = s"Received bytecode hash not present in requested list or out of order (sample=$sample)"
           else
