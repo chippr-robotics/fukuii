@@ -45,8 +45,8 @@ Within each slice, **tests come before implementation**, and the tests must fail
 **Purpose**: settle the open facts that the design depends on before any code changes.
 
 - [ ] T001 Confirm #1672 (`fix/snap-range-checks-linear`) is merged to staging. Branch `spec/022-impl-slice1` from that commit in a full clone (not a linked worktree).
-- [ ] T002 [P] Find out whether the contract-storage task list outlives the storage phase. Read `blockchain/sync/snap/DownloadSupervisor.scala:694,757-760`, `SyncLifecycle.scala:342` and `SnapResumePlanner.scala:325`. Record which file or key holds abandoned accounts, and whether `SnapStorageDone` markers survive force-complete. This resolves the conflict noted in research R-5. Write the answer into research.md as R-5a.
-- [ ] T003 [P] List the spec 016 resume tests that assume the persisted heal frontier is restored on restart. Grep `src/test/scala` for `persistFrontier`, `loadAll`, `CompleteMarkerKey`, `FrontierPersistence` and `healingFrontier`. Write the list into research.md as R-5b. These tests change in slice 4.
+- [x] T002 [P] Find out whether the contract-storage task list outlives the storage phase. **Done: research.md R-5a.** The list survives, and markers survive force-complete but are wiped on clean completion, so the excluded set must be persisted at each decision point. Read `blockchain/sync/snap/DownloadSupervisor.scala:694,757-760`, `SyncLifecycle.scala:342` and `SnapResumePlanner.scala:325`. Record which file or key holds abandoned accounts, and whether `SnapStorageDone` markers survive force-complete. This resolves the conflict noted in research R-5. Write the answer into research.md as R-5a.
+- [x] T003 [P] List the spec 016 resume tests that assume the persisted heal frontier is restored on restart. **Done: research.md R-5b.** Grep `src/test/scala` for `persistFrontier`, `loadAll`, `CompleteMarkerKey`, `FrontierPersistence` and `healingFrontier`. Write the list into research.md as R-5b. These tests change in slice 4.
 - [ ] T004 [P] Record the regression baseline on the slice-1 base commit. Run `./scripts/fukuii-test essential` once, plus `sbt "testOnly *SnapHashTrieSpec *MerkleProofVerifier* *StateIngestDurabilitySpec *Checkpoint*"`. Save the counts to `.local/docs/continuations/s022-baseline.md`.
 - [ ] T005 [P] Write the dev-iteration runbook into quickstart.md under a new "§0 Dev loop" section:
   - **Local snap server**: `coregeth-mordor.service` (core-geth v1.12.23; enode `9e5d0ea7…602a@127.0.0.1:30313`).
@@ -148,6 +148,8 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - root mismatch: `StorageOrderedApply.scala:123-148`, which today logs and accepts;
   - missing code.
 
+  Persist each entry **at the moment the decision is made**: give-up, max-empty skip and root mismatch end the phase cleanly, and `DownloadSupervisor:760` then wipes the `SnapStorageDone` markers (R-5a). Store entries as AppState `SnapExcluded/<accountHash>` → reason, written with `updateSync`.
+
   **[beacon] [forge]**
 - [ ] T034 [US1] On Path, at heal start, point-delete every account-trie position along each excluded account's 64-nibble key, depth 0 to 64, leaf slot included, in one batch (geth `pathTrie.delete`). Run this after the account range has committed. File: `actors/TrieNodeHealingCoordinator.scala`, or a new `actors/healing/ExcludedAccountSeeding.scala`. **[beacon] [vault]**
 - [ ] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
@@ -173,7 +175,10 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 - [ ] T042 [US4] Add the invariant marker `snap.heal.invariant=2` and the `checkpoint.import.inProgress` key to AppState `s`, both written with `updateSync`, following data-model.md "Invariant marker". Files: `db/storage/AppStateStorage.scala` and `blockchain/sync/checkpoint/CheckpointImporter.scala:81-156` (set the key before streaming, clear it on CRC success). **[vault] [forge]**
 - [ ] T043 [US4] Detect a pre-invariant datadir at SNAP start, run one repair pass (the background-audit engine run inline before completion), then stamp the marker. Files: `blockchain/sync/SyncController.scala:1510-1516` and `SNAPSyncController.scala`. **[beacon] [forge]**
-- [ ] T044 [US4] Retire the persisted frontier: stop `persistFrontier` / `unpersistFrontier`, clear CF `g` once on upgrade, and update the spec 016 resume tests listed in T003. Files: `actors/healing/FrontierPersistence.scala` and `actors/healing/HealResponseProcessing.scala:107,410`. **[vault]**
+- [ ] T044 [US4] Retire the persisted frontier:
+  - stop **every** writer to CF `g`: `persistFrontier`, `unpersistFrontier`, `markComplete` (`TrieNodeHealingCoordinator:843,1124`), `clearComplete` (`FrontierPersistence:105`) and `markSubtreeComplete` (`FrontierPersistence:162`, `TrieNodeHealingCoordinator:1119`);
+  - clear `g` once on upgrade with `deleteRange`, and keep `g` listed in `Namespaces.nsSeq`;
+  - update the tests in research R-5b, including `CleanRebuildEarlyCompletionSpec` and `DecoupledHealSafetySpec`. Files: `actors/healing/FrontierPersistence.scala` and `actors/healing/HealResponseProcessing.scala:107,410`. **[vault]**
 - [ ] T045 Run T039–T041 and all earlier slice tests. Open the slice-4 PR and request reviews from vault and forge.
 
 **Checkpoint**: old datadirs are repaired once, new ones are never audited on the critical path, and CF `g` no longer grows.

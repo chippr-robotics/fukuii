@@ -96,6 +96,54 @@ Paths are relative to `src/main/scala/com/chipprbots/ethereum/blockchain/sync/sn
   - abandoned accounts can perhaps be recovered from the contract-storage task file plus the absence of a `SnapStorageDone` marker. Markers are deliberately kept on force-complete (`DownloadSupervisor:757-759`), but forge reports that they are cleared at `DownloadSupervisor:760` [conflict: check in Slice 0];
   - the datadir therefore needs one full repair pass.
 
+## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
+
+**Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**
+
+- **The task list.** `<datadir>/snap/fukuii-contract-storage-*.bin` holds 64 bytes per contract account (accountHash ‖ storageRoot). It is written by `ContractWorkCarry:172-178` and `AccountRangeCoordinator:280`. Its pointer and count are AppState keys (`db/storage/AppStateStorage.scala:567-568`, written at `controller/DownloadSupervisor:693-697`). It is **not** in CF `g`.
+- **It survives force-complete and healing.**
+  - Neither the force-complete path (`StorageRangeCoordinator:754-785`, `DownloadSupervisor:765-780`) nor the finalisation sweep touches it.
+  - The pointer is blanked only by `restartSnapSync` (`SyncLifecycle:342`) and by unusable-file recovery (`SnapResumePlanner:325`).
+- **The `:757`/`:760` "conflict" is not real.** `:760` is in the clean-completion arm, `case StorageRangeSyncComplete` (`:754-763`).
+  - Force-complete (`:765-780`) clears no `SnapStorageDone` markers.
+  - Clean completion **does** wipe them (`:760`), and so does an account phase that starts with no carried task files (`SnapResumePlanner:742`).
+  - The markers live in AppState `s` (`SnapStorageDoneStorage.scala:9-16`), so clearing `g` doesn't touch them.
+- **The gap this exposes for D5:**
+  - Give-up, max-empty skip and root mismatch all end the storage phase *cleanly* (`StorageResponseProcessing:75-98,303-316`, `StorageOrderedApply:433-439`). Then `:760` wipes the only durable trace of which accounts finished.
+  - `abandonedAccounts` (`StorageRangeCoordinator:297`) is in memory only, and doesn't include max-empty skips.
+  - Missing code can't be derived from the markers at all.
+  - **So the excluded set must be persisted at each decision point, as it happens.** Deriving it later from the task file minus the markers doesn't work.
+- **Where to store it [I].** A sibling key prefix in AppState `s`, e.g. `SnapExcluded/<accountHash>` → reason byte, written with `updateSync` and with its own clear policy. Not in `g` (cleared by D6), and not reusing the markers.
+
+## R-5b. Tests that assume the persisted heal frontier (T003; vault, 2026-10-28)
+
+`src/it/scala` has none. In production the frontier is on (`sync.conf:152`), and the store also exists whenever `pruned-heal-verification` is on. Paths below are under `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/`.
+
+- **Delete or rewrite in slice 4:**
+  - `HealingFrontierResumeSpec`:
+    - `:141` and `:177` (restore across restart): delete;
+    - `:150`, `:161`, `:171`: rewrite as "a restart re-seeds from the current root";
+    - `:189`, `:202`, `:215`, `:226`: delete.
+  - `healing/FrontierPersistenceSpec:160-230`: delete the persist, unpersist and clear halves.
+  - `healing/FrontierPersistenceOrderSpec:172,184`: delete.
+  - `healing/HealResponseProcessingSpec:342`: drop the `m.persisted` assertion.
+- **`store.isComplete` assertions that fail once the marker stops** (slice 4):
+  - `CleanRebuildEarlyCompletionSpec:158,213`
+  - `DecoupledHealSafetySpec:313`
+  - `ScopedVerificationParitySpec:143`
+  - `ScopedVerificationFallbackSpec:175,189`
+  - `PrunedHealParitySpec:147`
+- **Spec 005 subtree records** (slice 5, T056): `SubtreeCompleteSeedingSpec`, `PrunedHeal*`, `healing/FrontierRebuildBfsSpec:226`, `HealResponseProcessingSpec:399`.
+- **Keep:** the format pins `db/storage/HealingFrontierStorage*Spec` and `SnapFrozenFormatsGoldenSpec:234,366-389`. The storage class is still needed to clear `g`.
+- **Wiring, compile-only edits:** `SNAPSyncControllerPinSpec:100-160,320-335`, `HealingOrchestratorSpec:257-258`, about 13 `notReached("healingFrontier")` stubs, `TrieNodeHealingDispatchTableSpec:108`.
+- **Other writers to `g` beyond `persistFrontier`/`unpersistFrontier`:**
+  - `markComplete` (`TrieNodeHealingCoordinator:843,1124`);
+  - `clearComplete` (`FrontierPersistence:105`);
+  - `markSubtreeComplete` (`FrontierPersistence:162`, `TrieNodeHealingCoordinator:1119`).
+
+  All of them must stop for T040 to hold. Scoped verification gates on `isComplete` (`:1142`), so it goes dark with them.
+- **The `g` column family stays listed** in `Namespaces.nsSeq` (`db/storage/Namespaces.scala:48`); RocksDB won't open a database with an unlisted column family. Clear it with `deleteRange`; never delist it.
+
 ## R-6. FR-020: what the Hash scheme still does (forge)
 
 **Finding [V]:** in fukuii, the scheme only changes how SNAP writes state during sync. After sync, every component reads the hash-keyed store on both schemes:
