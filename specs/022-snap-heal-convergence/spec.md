@@ -156,9 +156,11 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
 - **FR-002**: Healed nodes waiting for their children MUST be held outside durable storage. Memory for them MUST be bounded by a configured limit, sized from in-flight requests × trie depth. Reaching the limit MUST pause new heal requests, never trigger an early write.
 - **FR-003**: When a held node's last outstanding child is persisted, the node and any ancestors that become complete MUST be persisted in one atomic write.
 - **FR-004**: A process crash or kill at any point MUST NOT leave a persisted node with an absent child. Fault-injection tests MUST verify this.
-- **FR-005**: The account download MUST NOT commit to the account trie an account whose storage or code is incomplete, so that no account-trie node above such an account looks complete.
+- **FR-005** *(amended 2026-10-28, pending user confirmation; see plan.md "Decisions Needed From the User")*: No account whose storage or code is incomplete may appear complete to healing. Every such account MUST be recorded durably before any action is taken on it.
   - Covers storage that was abandoned at force-complete, skipped after repeated empty responses, or rejected for a root mismatch, and code that is missing.
-  - This follows go-ethereum: accounts with outstanding storage or code hold back the range's progress, and accounts with chunked storage are removed from the generated trie so healing reaches them.
+  - On Path, the positions above such an account are removed from the account trie, as go-ethereum's `genTrie.delete` does.
+  - On Hash, nodes already flushed cannot be recalled, so the account's storage root and code are seeded for healing, resolved against the current root on every pivot move.
+  - *Original wording:* "MUST NOT commit to the account trie an account whose storage or code is incomplete". This cannot be implemented on Hash, because the account trie is built before the storage outcome is known (research.md R-2).
 - **FR-006**: Every account excluded under FR-005 MUST be reachable by healing from the current root, and MUST be fetched before completion is declared.
 - **FR-007** (Path): When one node is needed at more than one position, every position MUST be recorded, filled when the node arrives, and re-discovered if a pivot move drops the request.
 - **FR-008** (Path): When a node is written at a position that replaces a deeper subtree, nodes left at deeper positions under it MUST be removed, or MUST be guaranteed never to be read as valid.
