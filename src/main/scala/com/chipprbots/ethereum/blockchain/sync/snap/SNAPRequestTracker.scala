@@ -321,16 +321,18 @@ class SNAPRequestTracker(
       else
         // Validate storage slots are monotonically increasing within each account. Every account is checked: a
         // collectFirst over all accounts stopped at the first one, so only its slots were ever validated.
-        val violation = response.slots.iterator.zipWithIndex.flatMap { case (accountSlots, accountIdx) =>
-          val slots = accountSlots.toIndexedSeq
-          (1 until slots.size)
-            .find { i =>
-              val prevHash = slots(i - 1)._1
-              val currHash = slots(i)._1
-              compareUnsignedLexicographically(prevHash, currHash) >= 0
-            }
-            .map(i => (accountIdx, i))
-        }.nextOption()
+        val violation = response.slots.iterator.zipWithIndex
+          .flatMap { case (accountSlots, accountIdx) =>
+            val slots = accountSlots.toIndexedSeq
+            (1 until slots.size)
+              .find { i =>
+                val prevHash = slots(i - 1)._1
+                val currHash = slots(i)._1
+                compareUnsignedLexicographically(prevHash, currHash) >= 0
+              }
+              .map(i => (accountIdx, i))
+          }
+          .nextOption()
         violation match
           case Some((accountIdx, i)) =>
             SNAPSyncMetrics.incrementMalformedResponse()

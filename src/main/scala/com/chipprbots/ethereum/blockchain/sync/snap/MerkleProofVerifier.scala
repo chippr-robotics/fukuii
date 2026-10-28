@@ -76,9 +76,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger:
 
   // ─── Reconstruction algorithm ───────────────────────────────────────────────
 
-  /** True when some key is not strictly greater than the key before it. Walks the range once with iterators:
-    * decoded RLP lists are immutable `Queue`s, where `leaves(i)` costs O(i), so an indexed pairwise loop made every
-    * 46k-account response quadratic and pinned the CPU during account download.
+  /** True when some key is not strictly greater than the key before it. Walks the range once with iterators: decoded
+    * RLP lists are immutable `Queue`s, where `leaves(i)` costs O(i), so an indexed pairwise loop made every 46k-account
+    * response quadratic and pinned the CPU during account download.
     */
   private def notStrictlyAscending(leaves: Seq[(ByteString, ByteString)]): Boolean =
     leaves.iterator.zip(leaves.iterator.drop(1)).exists((prev, curr) => cmpBytes(prev._1, curr._1) >= 0)
@@ -93,8 +93,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger:
     // intentional, expected outcome instead of exception-driven control flow, and avoids building
     // a doomed temporary trie first. Never weakens StackTrie's own `require`; this only stops
     // clearly-invalid input from reaching it.
-    if notStrictlyAscending(leaves) then
-      Left("range is not monotonically increasing")
+    if notStrictlyAscending(leaves) then Left("range is not monotonically increasing")
     else if leaves.exists(_._2.isEmpty) then Left("range contains deletion (empty value)")
     else
       val snapTrie = new SnapHashTrie(_ => ())
@@ -110,8 +109,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger:
       proofRawMap: Map[ByteString, Array[Byte]]
   ): Either[String, Unit] =
     // Validate: monotonically strictly increasing keys, no empty values
-    if notStrictlyAscending(leaves) then
-      Left("range is not monotonically increasing")
+    if notStrictlyAscending(leaves) then Left("range is not monotonically increasing")
     else if leaves.exists(_._2.isEmpty) then Left("range contains deletion (empty value)")
     // Edge case B: proof present, zero leaves — proof of absence
     else if leaves.isEmpty then
