@@ -162,6 +162,27 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     result.swap.getOrElse(fail("Expected Left")) should include("not monotonically increasing")
   }
 
+  it should "find an AccountRange ordering violation at the last index of a decoder-shaped Queue" taggedAs UnitTest in {
+    // Decoded RLP lists are immutable Queues, where indexed access is O(i). The check must still be exact (and
+    // linear): a violation between the last two entries is reported at that index.
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
+
+    val ascending = (1 to 999).map(i => (ByteString(f"account$i%05d"), Account(nonce = i, balance = i)))
+    val outOfOrder = (ByteString("account00000"), Account(nonce = 0, balance = 0))
+    val response = AccountRange(
+      requestId = requestId,
+      accounts = scala.collection.immutable.Queue.from(ascending :+ outOfOrder),
+      proof = Seq.empty
+    )
+
+    tracker.validateAccountRange(response) shouldBe Left("Accounts not monotonically increasing at index 999")
+  }
+
   it should "reject AccountRange response for unknown request ID" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
 

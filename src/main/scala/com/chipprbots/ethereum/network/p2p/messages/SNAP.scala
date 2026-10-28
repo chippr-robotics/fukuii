@@ -181,7 +181,7 @@ object SNAP:
               accountsList: RLPList,
               proofList: RLPList
             ) =>
-          val accounts = accountsList.items.map {
+          val accounts = accountsList.items.toVector.map {
             case RLPList(RLPValue(hashBytes), accountRLP: RLPEncodeable) =>
               val hash = ByteString(hashBytes)
               val account = rlp.encode(accountRLP).toAccount
@@ -191,7 +191,7 @@ object SNAP:
                 s"Cannot decode account data. Expected RLPList[2] [hash, body], got: ${other.getClass.getSimpleName}"
               )
           }
-          val proof = proofList.items.map {
+          val proof = proofList.items.toVector.map {
             case RLPValue(proofBytes) => ByteString(proofBytes)
             case other =>
               throw new RuntimeException(
@@ -348,9 +348,9 @@ object SNAP:
               slotsList: RLPList,
               proofList: RLPList
             ) =>
-          val slots = slotsList.items.map {
+          val slots = slotsList.items.toVector.map {
             case accountSlots: RLPList =>
-              accountSlots.items.map {
+              accountSlots.items.toVector.map {
                 case RLPList(RLPValue(hashBytes), RLPValue(valueBytes)) =>
                   (ByteString(hashBytes), ByteString(valueBytes))
                 case other =>
@@ -363,7 +363,7 @@ object SNAP:
                 s"Cannot decode storage slots for account. Expected RLPList, got: ${other.getClass.getSimpleName}"
               )
           }
-          val proof = proofList.items.map {
+          val proof = proofList.items.toVector.map {
             case RLPValue(proofBytes) => ByteString(proofBytes)
             case other =>
               throw new RuntimeException(
@@ -484,7 +484,7 @@ object SNAP:
               RLPValue(requestIdBytes),
               codesList: RLPList
             ) =>
-          val codes = codesList.items.map {
+          val codes = codesList.items.toVector.map {
             case RLPValue(codeBytes) => ByteString(codeBytes)
             case other =>
               throw new RuntimeException(
@@ -621,7 +621,7 @@ object SNAP:
               RLPValue(requestIdBytes),
               nodesList: RLPList
             ) =>
-          val nodes = nodesList.items.map {
+          val nodes = nodesList.items.toVector.map {
             case RLPValue(nodeBytes) => ByteString(nodeBytes)
             case other =>
               throw new RuntimeException(

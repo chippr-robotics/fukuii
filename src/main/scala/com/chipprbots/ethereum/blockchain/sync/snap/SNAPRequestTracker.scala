@@ -291,10 +291,11 @@ class SNAPRequestTracker(
         SNAPSyncMetrics.incrementMalformedResponse()
         Left(s"Expected ${RequestType.GetAccountRange} but got response for ${pending.requestType}")
       else
-        // Check accounts are monotonically increasing
-        val violation = (1 until response.accounts.size).find { i =>
-          val prevHash = response.accounts(i - 1)._1
-          val currHash = response.accounts(i)._1
+        // Check accounts are monotonically increasing. Decoded lists are Queues (O(i) indexing), so index a copy.
+        val accounts = response.accounts.toIndexedSeq
+        val violation = (1 until accounts.size).find { i =>
+          val prevHash = accounts(i - 1)._1
+          val currHash = accounts(i)._1
           compareUnsignedLexicographically(prevHash, currHash) >= 0
         }
         violation match
@@ -320,10 +321,11 @@ class SNAPRequestTracker(
       else
         // Validate storage slots are monotonically increasing within each account
         val violation = response.slots.zipWithIndex.collectFirst { case (accountSlots, accountIdx) =>
-          (1 until accountSlots.size)
+          val slots = accountSlots.toIndexedSeq
+          (1 until slots.size)
             .find { i =>
-              val prevHash = accountSlots(i - 1)._1
-              val currHash = accountSlots(i)._1
+              val prevHash = slots(i - 1)._1
+              val currHash = slots(i)._1
               compareUnsignedLexicographically(prevHash, currHash) >= 0
             }
             .map(i => (accountIdx, i))
