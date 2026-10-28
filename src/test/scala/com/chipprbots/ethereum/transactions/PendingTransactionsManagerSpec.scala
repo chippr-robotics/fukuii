@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.NoRandomAccessSeq
 import com.chipprbots.ethereum.testing.Tags.OlympiaTest
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
@@ -470,6 +471,29 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     announceThenDeliver(this, announcedSize = 120, deliveredSize = 110)
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
+
+  // #1675: `originalSizes` is a decoded RLP list. Looking it up by index per delivered tx was O(i) per lookup on the
+  // Queue the decoder built, so one PooledTransactions reply of N txs (N peer-controlled) cost O(N²) on the pool actor.
+  it should "check delivered sizes against the announcement without random access into the reply" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stxs: Seq[SignedTransaction] = (1 to 3).map(_ => newStx().tx)
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(stxs.map(_ => 0.toByte), stxs.map(_ => BigInt(110)), stxs.map(_.hash.value)),
+        peer1.id
+      )
+    )
+    etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd] // the GetPooledTransactions
+    // Only the last tx is off its announcement (by 20 bytes): it must be found, at its own index.
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.PooledTransactions(BigInt(1), stxs, NoRandomAccessSeq(110, 110, 130)),
+        peer1.id
+      )
+    )
     peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
 
   // ---- one requester per announced hash, re-requested from another announcer on failure ---------------------

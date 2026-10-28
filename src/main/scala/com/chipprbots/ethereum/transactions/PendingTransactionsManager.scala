@@ -697,6 +697,9 @@ object PendingTransactionsManager:
           ) if acceptPeerTxs() =>
         // Validate received txs against their announcements (type/size mismatch = blob violation)
         import com.chipprbots.ethereum.domain.*
+        // Read by each tx's position below. `originalSizes` is a decoded list of a length the peer chooses, and indexing
+        // a linear Seq is O(i) per read, so index one indexed copy (no copy when it already is one) (#1675).
+        val deliveredSizes: IndexedSeq[Int] = msg.originalSizes.toIndexedSeq
         val announcementViolation: Option[String] = msg.txs.zipWithIndex.iterator
           .flatMap { case (stx, idx) =>
             pendingAnnouncements.get(stx.hash.value, peerId).flatMap {
@@ -713,7 +716,7 @@ object PendingTransactionsManager:
                 // size it announces is not always the exact wire length. For a blob tx its Transaction.Size() prices the
                 // outer list header as if it wrapped the sidecar alone, one byte short when the sidecar is tiny — a blob
                 // tx sent without blobs. Dropping on any difference disconnected go-ethereum peers over that byte.
-                val deliveredSize = msg.originalSizes.lift(idx).map(BigInt(_))
+                val deliveredSize = deliveredSizes.lift(idx).map(BigInt(_))
                 val sizeMismatch = deliveredSize.exists(size => (size - announcedSize).abs > AnnouncedSizeSlackBytes)
                 Option.when(typeMismatch || sizeMismatch)(
                   s"tx ${stx.hash.toHex} announced as type $announcedType, $announcedSize bytes; " +
