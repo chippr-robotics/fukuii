@@ -43,7 +43,7 @@ private[actors] trait HealDispatchState:
   def knownAvailablePeers: mutable.Set[Peer]
   def peerCooldownUntilMs: mutable.Map[String, Long]
   def peerResponseBytesTarget: mutable.Map[String, BigInt]
-  def healAttempts: mutable.Map[ByteString, Int]
+  def healAttempts: HealAttemptMap
   var healRate: Double
   var lastThrottleAdjustMs: Long
   def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
@@ -129,7 +129,7 @@ private[actors] trait HealDispatch extends HealDispatchApi:
       healAttempts.update(hash, attempts)
       if attempts == decoupledHealMaxAttemptsNoRefresh + 1 then
         // Crossed the threshold for the first time since the last serve-root advance — surface it once.
-        val unservable = healAttempts.count { case (_, n) => n > decoupledHealMaxAttemptsNoRefresh }
+        val unservable = healAttempts.unservableCount
         log.warn(
           s"[HEAL-SERVE-ROOT] Heal task ${Hex.toHexString(hash.take(4).toArray)} unservable after $attempts " +
             s"attempts with no serve-root advance (threshold=$decoupledHealMaxAttemptsNoRefresh). " +
@@ -346,3 +346,45 @@ private[actors] trait HealDispatch extends HealDispatchApi:
             eligiblePeers = List(peer)
           }
       if eligiblePeers.nonEmpty then for peer <- eligiblePeers if pendingTasks.nonEmpty do dispatchIfPossible(peer)
+
+/** The per-task count of unsatisfied fetch attempts (spec 004 T015/FR-006: content-mismatch drops, empty responses,
+  * timeout re-queues), keyed by node hash, that also keeps how many tasks are past the unservable threshold (`attempts
+  * > threshold`).
+  *
+  * The healing gauge pulse ([[FrontierPersistence.emitHealingFrontierGauges]]) and the threshold crossing
+  * ([[HealDispatch.noteUnservableAttempt]]) read that number. They used to recount the whole map, which is bounded only
+  * by the pending-task set, on every pulse (#1675). Every change to the map goes through `addOne`, `subtractOne` or
+  * `clear`, which adjust the count, so it always equals `count { case (_, n) => n > threshold }`.
+  *
+  * `threshold` is read when an entry changes. It is configuration, constant for the map's life; it is a function only
+  * so that the map can be built before the value is initialized.
+  */
+final class HealAttemptMap(threshold: () => Int) extends mutable.AbstractMap[ByteString, Int]:
+  private val underlying = mutable.HashMap.empty[ByteString, Int]
+  private var pastThreshold = 0
+
+  /** How many tasks have more than `threshold` attempts. O(1). */
+  def unservableCount: Int = pastThreshold
+
+  override def get(key: ByteString): Option[Int] = underlying.get(key)
+
+  override def iterator: Iterator[(ByteString, Int)] = underlying.iterator
+
+  override def size: Int = underlying.size
+
+  override def knownSize: Int = underlying.size
+
+  override def addOne(elem: (ByteString, Int)): this.type =
+    val (key, attempts) = elem
+    val limit = threshold()
+    underlying.put(key, attempts).foreach(previous => if previous > limit then pastThreshold -= 1)
+    if attempts > limit then pastThreshold += 1
+    this
+
+  override def subtractOne(key: ByteString): this.type =
+    underlying.remove(key).foreach(previous => if previous > threshold() then pastThreshold -= 1)
+    this
+
+  override def clear(): Unit =
+    underlying.clear()
+    pastThreshold = 0
