@@ -61,12 +61,12 @@ val baseScalacOptions = Seq(
 
 // Scala 3 warning and feature options
 val scala3Options = Seq(
-  "-source:3.4-migration", // spec 020 DC-2 step 3.4 (transient); `import x.*` is enforced by scripts/ci/check_scala_imports.sh
+  "-source:3.4", // spec 020 DC-2 step 3.4; `import x.*` is enforced by scripts/ci/check_scala_imports.sh
   "-language:adhocExtensions", // Allow extending non-open classes (TestKit, Pekko test patterns)
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
-  "-Wconf:id=E198:w", // spec 020 PR 3: demoted for the 3.4 rewrite step only (restored to :error next commit). Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)
+  "-Wconf:id=E198:error", // Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)
   "-Wconf:cat=feature:s", // Suppress adhocExtensions feature warnings (extending non-open Pekko/library classes)
-  "-Wconf:cat=unchecked:w", // spec 020 PR 3: demoted for the 3.4 rewrite step only (restored to :error next commit). Ratchet step 4/4: unchecked patterns are build errors
+  "-Wconf:cat=unchecked:error", // Ratchet step 4/4: unchecked patterns are build errors
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
