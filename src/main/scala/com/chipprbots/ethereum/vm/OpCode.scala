@@ -498,7 +498,7 @@ sealed abstract class TernaryOp(code: Int, baseGasFn: FeeSchedule => BigInt)(
     stack1.push(res)
 
 sealed abstract class ConstOp(code: Int)(
-    val f: ProgramState[? <: WorldStateProxy[_, ? <: Storage[_]], ? <: Storage[_]] => UInt256
+    val f: ProgramState[? <: WorldStateProxy[?, ? <: Storage[?]], ? <: Storage[?]] => UInt256
 ) extends OpCode(code, 0, 1, _.G_base)
     with ConstGas
     with StackOnlyOp:
@@ -521,13 +521,13 @@ case object MUL extends BinaryOp(0x02, _.G_low)(_ * _) with ConstGas
 
 case object SUB extends BinaryOp(0x03, _.G_verylow)(_ - _) with ConstGas
 
-case object DIV extends BinaryOp(0x04, _.G_low)(_ div _) with ConstGas
+case object DIV extends BinaryOp(0x04, _.G_low)(_ `div` _) with ConstGas
 
-case object SDIV extends BinaryOp(0x05, _.G_low)(_ sdiv _) with ConstGas
+case object SDIV extends BinaryOp(0x05, _.G_low)(_ `sdiv` _) with ConstGas
 
-case object MOD extends BinaryOp(0x06, _.G_low)(_ mod _) with ConstGas
+case object MOD extends BinaryOp(0x06, _.G_low)(_ `mod` _) with ConstGas
 
-case object SMOD extends BinaryOp(0x07, _.G_low)(_ smod _) with ConstGas
+case object SMOD extends BinaryOp(0x07, _.G_low)(_ `smod` _) with ConstGas
 
 case object ADDMOD extends TernaryOp(0x08, _.G_mid)(_.addmod(_, _)) with ConstGas
 
@@ -544,9 +544,9 @@ case object LT extends BinaryOp(0x10, _.G_verylow)(_ < _) with ConstGas
 
 case object GT extends BinaryOp(0x11, _.G_verylow)(_ > _) with ConstGas
 
-case object SLT extends BinaryOp(0x12, _.G_verylow)(_ slt _) with ConstGas
+case object SLT extends BinaryOp(0x12, _.G_verylow)(_ `slt` _) with ConstGas
 
-case object SGT extends BinaryOp(0x13, _.G_verylow)(_ sgt _) with ConstGas
+case object SGT extends BinaryOp(0x13, _.G_verylow)(_ `sgt` _) with ConstGas
 
 case object EQ extends BinaryOp(0x14, _.G_verylow)(_ == _) with ConstGas
 
