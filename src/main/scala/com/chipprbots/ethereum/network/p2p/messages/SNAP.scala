@@ -269,7 +269,7 @@ object SNAP:
               RLPValue(limitHashBytes),
               RLPValue(responseBytesBytes)
             ) =>
-          val accountHashes = accountHashesList.items.map {
+          val accountHashes = accountHashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -426,7 +426,7 @@ object SNAP:
               hashesList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val hashes = hashesList.items.map {
+          val hashes = hashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -555,9 +555,9 @@ object SNAP:
               pathsList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val paths = pathsList.items.map {
+          val paths = pathsList.items.toVector.map {
             case path: RLPList =>
-              path.items.map {
+              path.items.toVector.map {
                 case RLPValue(hashBytes) => ByteString(hashBytes)
                 case other =>
                   throw new RuntimeException(
@@ -685,7 +685,7 @@ object SNAP:
               hashesList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val hashes = hashesList.items.map {
+          val hashes = hashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -747,7 +747,7 @@ object SNAP:
             ) =>
           AccessLists(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            accessListsList.items
+            accessListsList.items.toVector
           )
         case rlpList: RLPList =>
           throw new RuntimeException(

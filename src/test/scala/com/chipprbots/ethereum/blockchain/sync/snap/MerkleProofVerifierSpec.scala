@@ -220,6 +220,17 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers:
     result shouldBe Left("range is not monotonically increasing")
   }
 
+  it should "find a nil-proof ordering violation between the last two slots of a longer range" taggedAs UnitTest in {
+    val ascending = (1 to 500).map(i => ByteString(Array.fill(30)(0x00.toByte) ++ Array((i >> 8).toByte, i.toByte)))
+    val slots = (ascending :+ ascending.head).map(_ -> ByteString("v"))
+    MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(
+      slots = scala.collection.immutable.Queue.from(slots),
+      proof = Seq.empty,
+      startHash = ZeroKey,
+      endHash = MaxKey
+    ) shouldBe Left("range is not monotonically increasing")
+  }
+
   it should "explicitly reject (not merely catch-and-convert) a nil-proof storage response with an empty (deletion) value" taggedAs UnitTest in {
     val slotHash = ByteString(Array.fill(32)(0x33.toByte))
     val result = MerkleProofVerifier(kec256(ByteString("storage-root"))).verifyStorageRange(

@@ -130,6 +130,24 @@ class SNAPRoundTripSpec extends AnyWordSpec with Matchers with ScalaCheckPropert
       }
     }
 
+    "decoders" should {
+      "produce Vectors, so indexed access into a response is not O(i) (#1672)" taggedAs UnitTest in {
+        val hash = ByteString(Array.fill(32)(1.toByte))
+        val accountRange = AccountRange(1, Seq(hash -> Account(nonce = 1)), Seq(ByteString("p"))).toBytes.toAccountRange
+        accountRange.accounts shouldBe a[Vector[?]]
+        accountRange.proof shouldBe a[Vector[?]]
+        val storage = StorageRanges(2, Seq(Seq(hash -> ByteString("v"))), Seq(ByteString("p"))).toBytes.toStorageRanges
+        storage.slots shouldBe a[Vector[?]]
+        storage.slots.head shouldBe a[Vector[?]]
+        storage.proof shouldBe a[Vector[?]]
+        ByteCodes(3, Seq(ByteString("c"))).toBytes.toByteCodes.codes shouldBe a[Vector[?]]
+        TrieNodes(4, Seq(ByteString("n"))).toBytes.toTrieNodes.nodes shouldBe a[Vector[?]]
+        val getTrieNodes = GetTrieNodes(5, hash, Seq(Seq(ByteString("a"))), 100).toBytes.toGetTrieNodes
+        getTrieNodes.paths shouldBe a[Vector[?]]
+        getTrieNodes.paths.head shouldBe a[Vector[?]]
+      }
+    }
+
     "TrieNodes" should {
       "round-trip forAll with varied node sizes" taggedAs UnitTest in {
         val gen = for
