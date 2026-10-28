@@ -162,6 +162,27 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     result.swap.getOrElse(fail("Expected Left")) should include("not monotonically increasing")
   }
 
+  it should "find an AccountRange ordering violation at the last index of a decoder-shaped Queue" taggedAs UnitTest in {
+    // Decoded RLP lists are immutable Queues, where indexed access is O(i). The check must still be exact (and
+    // linear): a violation between the last two entries is reported at that index.
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
+
+    val ascending = (1 to 999).map(i => (ByteString(f"account$i%05d"), Account(nonce = i, balance = i)))
+    val outOfOrder = (ByteString("account00000"), Account(nonce = 0, balance = 0))
+    val response = AccountRange(
+      requestId = requestId,
+      accounts = scala.collection.immutable.Queue.from(ascending :+ outOfOrder),
+      proof = Seq.empty
+    )
+
+    tracker.validateAccountRange(response) shouldBe Left("Accounts not monotonically increasing at index 999")
+  }
+
   it should "reject AccountRange response for unknown request ID" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
 
@@ -220,6 +241,57 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val result = tracker.validateStorageRanges(response)
     result shouldBe a[Left[?, ?]]
     result.swap.getOrElse(fail("Expected Left")) should include("not monotonically increasing")
+  }
+
+  it should "reject StorageRanges whose ordering violation is in a later account" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
+
+    val ordered = Seq((ByteString("slot1"), ByteString("value1")), (ByteString("slot2"), ByteString("value2")))
+    val unordered = Seq((ByteString("slot2"), ByteString("value2")), (ByteString("slot1"), ByteString("value1")))
+    val response = StorageRanges(requestId = requestId, slots = Seq(ordered, unordered), proof = Seq.empty)
+
+    tracker.validateStorageRanges(response) shouldBe
+      Left("Storage slots not monotonically increasing for account 1 at index 1")
+  }
+
+  it should "validate account and storage ordering without random access into the response (#1672)" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val accountRequestId = tracker.generateRequestId()
+    tracker.trackRequest(accountRequestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
+    val accounts = (1 to 200).map(i => (ByteString(f"account$i%05d"), Account(nonce = i, balance = i)))
+    val accountResponse = AccountRange(accountRequestId, SequentialOnly(accounts), proof = Seq.empty)
+    tracker.validateAccountRange(accountResponse) shouldBe Right(accountResponse)
+
+    val storageRequestId = tracker.generateRequestId()
+    tracker.trackRequest(storageRequestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
+    val slots = (1 to 200).map(i => (ByteString(f"slot$i%05d"), ByteString("v")))
+    val storageResponse = StorageRanges(storageRequestId, SequentialOnly(Seq(SequentialOnly(slots))), proof = Seq.empty)
+    tracker.validateStorageRanges(storageResponse) shouldBe Right(storageResponse)
+  }
+
+  it should "report the first violating account when several StorageRanges accounts are out of order" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
+
+    val single = Seq((ByteString("slot1"), ByteString("value1")))
+    val unordered = Seq((ByteString("slot3"), ByteString("value3")), (ByteString("slot2"), ByteString("value2")))
+    val response =
+      StorageRanges(requestId = requestId, slots = Seq(Seq.empty, single, unordered, unordered), proof = Seq.empty)
+
+    tracker.validateStorageRanges(response) shouldBe
+      Left("Storage slots not monotonically increasing for account 2 at index 1")
   }
 
   it should "validate ByteCodes response" taggedAs UnitTest in {
@@ -494,3 +566,11 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     }
     fired.get() shouldBe 0
   }
+
+/** A Seq whose random access fails the test: the ordering checks must walk a response sequentially, because decoded RLP
+  * lists are Queues where indexed access is O(i) (#1672).
+  */
+final class SequentialOnly[A](underlying: Seq[A]) extends scala.collection.immutable.Seq[A]:
+  def apply(i: Int): A = throw new AssertionError(s"random access at index $i")
+  def length: Int = underlying.length
+  def iterator: Iterator[A] = underlying.iterator
