@@ -154,7 +154,7 @@ object PeerGroup:
         authConfig: Option[Socks5AuthenticationConfig]
     )
 
-    def apply[A, M](config: Socks5Config)(underlying: PeerGroup[A, M] with ProxySupport[A, M]): PeerGroup[A, M] =
+    def apply[A, M](config: Socks5Config)(underlying: PeerGroup[A, M] & ProxySupport[A, M]): PeerGroup[A, M] =
       new PeerGroup[A, M]:
         override def processAddress: A = underlying.processAddress
         override def client(to: A): Resource[IO, Channel[A, M]] = underlying.client(to, config)
@@ -180,7 +180,7 @@ object PeerGroup:
     case class HandshakeFailed[A, M](failure: HandshakeException[A]) extends ServerEvent[A, M]
 
     object HandshakeFailed:
-      def collector[A]: PartialFunction[ServerEvent[A, _], HandshakeException[A]] = { case HandshakeFailed(failure) =>
+      def collector[A]: PartialFunction[ServerEvent[A, ?], HandshakeException[A]] = { case HandshakeFailed(failure) =>
         failure
       }
 

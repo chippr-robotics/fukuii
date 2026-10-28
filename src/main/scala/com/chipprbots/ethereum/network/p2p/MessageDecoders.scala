@@ -599,7 +599,6 @@ object EthereumMessageDecoder:
   * replacement.
   */
 object SNAPMessageDecoder extends MessageDecoder:
-  import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange.*
@@ -660,7 +659,6 @@ object SNAPMessageDecoder extends MessageDecoder:
   * lenient-skip `UnknownMessageTypeError` catch-all, which is reserved for codes this codebase has never heard of.
   */
 object SNAP2MessageDecoder extends MessageDecoder:
-  import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.*
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange.*

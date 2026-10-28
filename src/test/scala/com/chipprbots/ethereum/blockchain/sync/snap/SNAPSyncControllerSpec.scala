@@ -141,7 +141,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "handle different phases correctly" taggedAs UnitTest in {
-    import SNAPSyncController.*
 
     val phases = Seq(Idle, AccountRangeSync, ByteCodeAndStorageSync, StateHealing, StateValidation, Completed)
 
