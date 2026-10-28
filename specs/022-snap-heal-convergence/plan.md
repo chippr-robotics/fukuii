@@ -24,7 +24,7 @@ Healing will persist a trie node only when its whole subtree is present.
 - The full-trie walk stops being a gate and becomes a background audit after handoff.
 - The persisted heal frontier stops being a correctness mechanism. A restart re-discovers from the root.
 
-**Scheme decision (FR-020):** keep the Hash scheme for 0.11.0. Retiring it is spec 018 DC-9; see research.md R-6. This needs user confirmation.
+**Scheme decision (FR-020):** keep the Hash scheme for 0.11.0. Retiring it is spec 018 DC-9; see research.md R-6. Confirmed by the user on 2026-10-28.
 
 ## Technical Context
 
@@ -203,14 +203,14 @@ Slice 5 must land **last**. Removing the gate before slices 1–4 brings back ta
 
 That is **about 5–7 days of serialized host time** on the 0.11.0 critical path after the code lands. The user has said the release waits on this.
 
-## Decisions Needed From the User
+## Decisions From the User (confirmed 2026-10-28)
 
 1. **FR-020: keep the Hash scheme for 0.11.0 (recommended).**
    - In fukuii, everything after sync reads the hash-keyed store on both schemes: execution, pruning, proofs, checkpoint and recovery. Path is the **additional** layer, exported into that store at handoff.
    - Moving ETC to today's Path scheme makes sync slower (an extra export scan) and uses 2–3× the disk during sync, and gains nothing on reads.
    - The real retirement of both is spec 018 DC-9 (user decision 2026-10-17: ETC re-syncs from a checkpoint onto the unified layout).
    - Hash-specific work in this plan is small and sits behind `StorageScheme`.
-2. **FR-005 wording amendment.** "MUST NOT commit an account with incomplete storage" cannot be implemented on Hash: branches already flushed cannot be recalled. Proposed outcome-based wording: "no account with incomplete storage or code may appear complete to healing, and every such account is reached and completed before completion is declared." D5 implements it per scheme. The spec text carries this amendment, marked pending confirmation.
+2. **FR-005 wording amendment.** "MUST NOT commit an account with incomplete storage" cannot be implemented on Hash: branches already flushed cannot be recalled. Proposed outcome-based wording: "no account with incomplete storage or code may appear complete to healing, and every such account is reached and completed before completion is declared." D5 implements it per scheme. The user confirmed this amendment on 2026-10-28.
 
 ## Complexity Tracking
 
