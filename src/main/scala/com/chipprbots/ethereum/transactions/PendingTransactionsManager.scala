@@ -49,6 +49,13 @@ object PendingTransactionsManager:
   /** How far a delivered tx's size may differ from its announced size before the peer counts as lying about it. */
   private[transactions] val AnnouncedSizeSlackBytes: Int = 8
 
+  /** The most hashes one GetPooledTransactions asks for: go-ethereum's `maxTxRetrievals` (eth/fetcher/tx_fetcher.go,
+    * 256 at c6e3a0d7, 2026-09-23), "a failsafe against malicious announces which might cause us to request more data
+    * than we'd expect". An announcement can carry up to `announcement-max-entries` hashes; they are all still
+    * requested, in batches of at most this many, so a reply (and the per-tx work on it) is bounded by our request.
+    */
+  private[transactions] val MaxTxRetrievals: Int = 256
+
   sealed trait Command
 
   case class AddTransactions(signedTransactions: Set[SignedTransactionWithSender]) extends Command
@@ -380,11 +387,16 @@ object PendingTransactionsManager:
       }
       if toRequest.nonEmpty then requestPooledTransactions(peerId, toRequest)
 
+    /** Ask `peerId` for `hashes`, at most [[MaxTxRetrievals]] per request. Every hash is already recorded as requested
+      * from `peerId` ([[PendingAnnouncements.announce]]), so none may be left out: the excess goes in further requests.
+      */
     def requestPooledTransactions(peerId: PeerId, hashes: Seq[ByteString]): Unit =
-      networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
-        ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, hashes),
-        peerId
-      )
+      hashes.grouped(MaxTxRetrievals).foreach { batch =>
+        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
+          ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, batch),
+          peerId
+        )
+      }
 
     /** Send the requests that moved to another announcer (its predecessor timed out, was dropped or disconnected). */
     def requestFromAlternates(reassigned: Map[PeerId, Seq[ByteString]], why: String): Unit =

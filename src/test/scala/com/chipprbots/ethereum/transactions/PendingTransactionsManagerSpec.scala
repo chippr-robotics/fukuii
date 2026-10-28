@@ -496,6 +496,27 @@ class PendingTransactionsManagerSpec
     )
     peerManager.expectMsg(PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer1.id))
 
+  // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7, 2026-09-23): `maxTxRetrievals = 256`, the most transactions it
+  // asks for in one request, "a failsafe against malicious announces which might cause us to request more data than
+  // we'd expect". An announcement may carry up to announcement-max-entries hashes; every one is still requested.
+  it should "request at most 256 announced hashes per GetPooledTransactions, and every hash once" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hashes: Seq[ByteString] =
+      (1 to 600).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(100)), hashes),
+        peer1.id
+      )
+    )
+    val requests = Seq.fill(3)(requestedFrom(this))
+    requests.map(_._1).distinct shouldBe Seq(peer1.id)
+    requests.map(_._2.size) shouldBe Seq(256, 256, 88)
+    requests.flatMap(_._2) shouldBe hashes
+    etcPeerManager.expectNoMessage(200.millis)
+
   // ---- one requester per announced hash, re-requested from another announcer on failure ---------------------
   //
   // hive devp2p TestBlobTxWithoutSidecar / TestBlobTxWithMismatchedSidecar (go-ethereum #35869): three peers announce
