@@ -7,7 +7,6 @@ import cats.data.NonEmptyList
 import cats.implicits.*
 
 import scala.annotation.tailrec
-import scala.collection.immutable.Queue
 import scala.collection.immutable.SortedMap
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
@@ -29,7 +28,10 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.Bl
   * @param importer
   *   the BlockImporter actor reference
   * @param readyBlocks
+  *   blocks fetched in full, oldest first, waiting to be imported
   * @param waitingHeaders
+  *   headers whose bodies are still to be fetched, oldest first. Both are `Vector`s: the fetcher reads their sizes and
+  *   last elements on every step, which a `Queue` computes in O(n) (#1675)
   * @param inFlightHeaders
   *   number of header requests currently outstanding (replies expected and will be processed)
   * @param headersToIgnore
@@ -50,8 +52,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.Bl
 case class BlockFetcherState(
     importer: ActorRef[BlockImporter.Command],
     blockValidator: BlockValidator,
-    readyBlocks: Queue[Block],
-    waitingHeaders: Queue[BlockHeader],
+    readyBlocks: Vector[Block],
+    waitingHeaders: Vector[BlockHeader],
     inFlightHeaders: Int,
     headersToIgnore: Int,
     nextDispatchBlock: BigInt,
@@ -190,9 +192,9 @@ case class BlockFetcherState(
         )
 
   private def checkConsistencyWithReadyBlocks(headers: Seq[BlockHeader]): Boolean =
-    (readyBlocks, headers) match
-      case (_ :+ last, head +: _) if waitingHeaders.isEmpty => last.header.isParentOf(head)
-      case _                                                => true
+    (readyBlocks.lastOption, headers.headOption) match
+      case (Some(last), Some(head)) if waitingHeaders.isEmpty => last.header.isParentOf(head)
+      case _                                                  => true
 
   def validateNewBlockHashes(hashes: Seq[BlockHash]): Either[String, Seq[BlockHash]] =
     hashes
@@ -209,7 +211,7 @@ case class BlockFetcherState(
     * ordered subset of the requested headers.
     */
   def validateBodies(receivedBodies: Seq[BlockBody]): Either[BlacklistReason, Seq[Block]] =
-    bodiesAreOrderedSubsetOfRequested(waitingHeaders.toList, receivedBodies)
+    bodiesAreOrderedSubsetOfRequested(waitingHeaders, receivedBodies)
       .toRight(BlacklistReason.UnrequestedBodies)
 
   // Checks that the received block bodies are an ordered subset of the ones requested
@@ -217,7 +219,7 @@ case class BlockFetcherState(
   private def bodiesAreOrderedSubsetOfRequested(
       requestedHeaders: Seq[BlockHeader],
       respondedBodies: Seq[BlockBody],
-      matchedBlocks: Seq[Block] = Nil
+      matchedBlocks: Vector[Block] = Vector.empty
   ): Option[Seq[Block]] =
     (requestedHeaders, respondedBodies) match
       case (Seq(), _ +: _) => None
@@ -236,7 +238,7 @@ case class BlockFetcherState(
   def handleRequestedBlocks(blocks: Seq[Block], fromPeer: PeerId): BlockFetcherState =
     if blocks.isEmpty then
       copy(
-        waitingHeaders = Queue.empty
+        waitingHeaders = Vector.empty
       )
     else
       blocks.foldLeft(this) { case (state, block) =>
@@ -247,13 +249,13 @@ case class BlockFetcherState(
     * ready blocks queue.
     */
   def enqueueRequestedBlock(block: Block, fromPeer: PeerId): BlockFetcherState =
-    waitingHeaders.dequeueOption
-      .map { case (waitingHeader, waitingHeadersTail) =>
+    waitingHeaders.headOption
+      .map { waitingHeader =>
         if waitingHeader.hash == block.hash then
           enqueueReadyBlock(block, fromPeer)
             .withPossibleNewTopAt(block.number.value)
             .copy(
-              waitingHeaders = waitingHeadersTail
+              waitingHeaders = waitingHeaders.tail
             )
         else this
       }
@@ -261,7 +263,7 @@ case class BlockFetcherState(
 
   def enqueueReadyBlock(block: Block, fromPeer: PeerId): BlockFetcherState =
     withPeerForBlocks(fromPeer, Seq(block.number.value))
-      .copy(readyBlocks = readyBlocks.enqueue(block))
+      .copy(readyBlocks = readyBlocks :+ block)
 
   def pickBlocks(amount: Int): Option[(NonEmptyList[Block], BlockFetcherState)] =
     if readyBlocks.nonEmpty then
@@ -286,7 +288,7 @@ case class BlockFetcherState(
       .map(blocks =>
         (
           NonEmptyList(blocks.head, blocks.tail.toList),
-          copy(readyBlocks = Queue(), lastBlock = blocks.last.number.value)
+          copy(readyBlocks = Vector.empty, lastBlock = blocks.last.number.value)
         )
       )
 
@@ -298,8 +300,8 @@ case class BlockFetcherState(
     val newFetchingBodiesState =
       if fetchingBodiesState == AwaitingBodies then AwaitingBodiesToBeIgnored else fetchingBodiesState
     copy(
-      readyBlocks = Queue(),
-      waitingHeaders = Queue(),
+      readyBlocks = Vector.empty,
+      waitingHeaders = Vector.empty,
       responseBuffer = SortedMap.empty,
       headersToIgnore = headersToIgnore + inFlightHeaders,
       inFlightHeaders = 0,
@@ -397,8 +399,8 @@ object BlockFetcherState:
     BlockFetcherState(
       importer = importer,
       blockValidator = blockValidator,
-      readyBlocks = Queue(),
-      waitingHeaders = Queue(),
+      readyBlocks = Vector.empty,
+      waitingHeaders = Vector.empty,
       inFlightHeaders = 0,
       headersToIgnore = 0,
       nextDispatchBlock = lastBlock + 1,

@@ -68,11 +68,30 @@ class BlockFetcherStateSpec extends ScalaTestWithActorTestKit with AnyWordSpecLi
 
         val result = BlockFetcherState
           .initial(importer, validators.blockValidator, 0)
-          .copy(readyBlocks = Queue(blocks.head))
+          .copy(readyBlocks = Vector(blocks.head))
           .appendHeaders(blocks.map(_.header))
           .map(_.handleRequestedBlocks(blocks, peer))
 
         assert(result.map(_.waitingHeaders) === Left(HeadersNotMatchingReadyBlocks))
+      }
+
+      // #1675: the fetcher reads both queues' sizes and last elements on every step, which a Queue computes in O(n), and
+      // matched bodies were appended to a List, copying it per block.
+      "keep both queues and the matched blocks indexed, in request order" taggedAs (UnitTest, SyncTest) in {
+        val Right(state) =
+          BlockFetcherState
+            .initial(importer, validators.blockValidator, 0)
+            .appendHeaders(blocks.map(_.header)): @unchecked
+        state.waitingHeaders shouldBe a[Vector[?]]
+
+        val matched = state.validateBodies(blocks.map(_.body))
+        matched shouldBe Right(blocks)
+        matched.toOption.get shouldBe a[Vector[?]]
+
+        val fetched = state.handleRequestedBlocks(blocks, peer)
+        fetched.readyBlocks shouldBe a[Vector[?]]
+        fetched.readyBlocks shouldBe blocks
+        fetched.waitingHeaders shouldBe empty
       }
     }
 
