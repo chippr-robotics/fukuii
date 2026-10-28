@@ -883,7 +883,9 @@ class BlockPreparator(
     * @param acumGas,
     *   accumulated gas of the previoulsy executed transactions of the same block
     * @param acumReceipts,
-    *   accumulated receipts of the previoulsy executed transactions of the same block
+    *   accumulated receipts of the previoulsy executed transactions of the same block, in execution order. A `Vector`:
+    *   each step appends one receipt and (on an Amsterdam block) reads the count, both O(1) here, where the `List` this
+    *   used to be made each append copy every earlier receipt, O(txs²) per block (#1675).
     * @return
     *   a BlockResult if the execution of all the transactions in the block was successful or a BlockExecutionError if
     *   one of them failed
@@ -894,7 +896,7 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       blockHeader: BlockHeader,
       acumGas: BigInt = 0,
-      acumReceipts: Seq[Receipt] = Nil,
+      acumReceipts: Vector[Receipt] = Vector.empty,
       acumExecutionGas: BigInt = 0,
       acumStateGas: BigInt = 0,
       // EIP-7928: the block's access-list builder, on an Amsterdam block only. Each executed transaction is folded in
@@ -1013,7 +1015,7 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       blockHeader: BlockHeader,
       acumGas: BigInt = 0,
-      acumReceipts: Seq[Receipt] = Nil,
+      acumReceipts: Vector[Receipt] = Vector.empty,
       executed: Seq[SignedTransaction] = Nil,
       acumExecutionGas: BigInt = 0,
       acumStateGas: BigInt = 0
@@ -1031,7 +1033,7 @@ class BlockPreparator(
           worldState,
           blockHeader,
           gas,
-          receipts,
+          receipts.toVector,
           executed ++ signedTransactions.take(txIndex),
           execGas,
           stateGas
