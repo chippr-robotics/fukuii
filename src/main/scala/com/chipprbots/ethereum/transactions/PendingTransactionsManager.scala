@@ -246,15 +246,23 @@ object PendingTransactionsManager:
           authoritiesByTx = authoritiesByTx.updated(hash, TxAdmission.setCodeAuthorities(sct))
         case _ => ()
 
-    /** What the pool holds that [[TxAdmission.poolRejection]] reads for a transaction from `sender` (hash `hash`). */
-    def poolView(sender: Address, hash: ByteString): TxAdmission.PoolView =
-      val pooled = pendingTransactions.asMap().values().asScala.toSeq
+    /** The pool by sender, read in one pass ([[PoolSenderIndex]]), for the pool-state rules. */
+    def poolSenderIndex(): PoolSenderIndex =
+      val pool = pendingTransactions.asMap()
+      PoolSenderIndex(
+        pool.values().asScala.iterator.map(ptx => (ptx.stx.senderAddress, ptx.stx.tx.hash.value, ptx.stx.tx.tx)),
+        pool.containsKey
+      )
+
+    /** What the pool holds that [[TxAdmission.poolRejection]] reads for a transaction from `sender` (hash `hash`), read
+      * from `index` — built once per batch by [[admit]] (once per local submission) — rather than from a copy of the
+      * whole pool per transaction (#1675).
+      */
+    def poolView(sender: Address, hash: ByteString, index: PoolSenderIndex): TxAdmission.PoolView =
       TxAdmission.PoolView(
-        senderTxs = pooled.collect {
-          case ptx if ptx.stx.senderAddress == sender && ptx.stx.tx.hash.value != hash => ptx.stx.tx.tx
-        },
+        senderTxs = index.pooledFrom(sender, excluding = Some(hash)),
         hasPendingAuthorization = authoritiesByTx.valuesIterator.exists(_.contains(sender)),
-        pooledFrom = address => pooled.collect { case ptx if ptx.stx.senderAddress == address => ptx.stx.tx.tx }
+        pooledFrom = address => index.pooledFrom(address)
       )
 
     /** Keep `networkForm` for the pooled blob tx `hash`, evicting the oldest blob txs (sidecar and tx together) past
@@ -530,13 +538,16 @@ object PendingTransactionsManager:
       if transactionsToAdd.isEmpty then Set.empty
       else
         val timestamp = System.currentTimeMillis()
+        // The pool by sender, read once for the whole batch, and only where the pool-state rules read it (#1675).
+        val senderIndex: Option[PoolSenderIndex] = Option.when(TxAdmission.poolStateRulesApply)(poolSenderIndex())
         // One tx at a time, its sidecar right after its put: a later put can size-evict an earlier tx, and the removal
         // listener must then find that tx's sidecar already stored to drop it. In nonce order per sender, so the
-        // pool-state rules see each sender's earlier txs from this batch as pooled.
+        // pool-state rules see each sender's earlier txs from this batch as pooled (each is indexed once it is in).
         transactionsToAdd.toSeq.sortBy(t => (t.senderAddress.toUnprefixedString, t.tx.tx.nonce)).foreach { t =>
           val hash = t.tx.hash.value
-          if poolAdmits(t, checked) then
+          if poolAdmits(t, checked, senderIndex) then
             putPooled(PendingTransaction(t, timestamp))
+            if pool.containsKey(hash) then senderIndex.foreach(_.add(t.senderAddress, hash, t.tx.tx))
             blobSidecars.get(hash).foreach(storeSidecar(hash, _))
         }
         val admitted = transactionsToAdd.filter(t => pool.containsKey(t.tx.hash.value))
@@ -547,28 +558,34 @@ object PendingTransactionsManager:
         admitted
 
     /** The pool-state rules ([[TxAdmission.poolRejection]]) for a peer's tx, as go-ethereum applies them to remote txs
-      * too. Only where they apply ([[TxAdmission.poolStateRulesApply]]) and the head's state was read; a peer's tx with
-      * a pooled nonce never reaches here (the pending-nonce check refuses it), so no replacement is decided here.
+      * too. Only where they apply ([[TxAdmission.poolStateRulesApply]], exactly where [[admit]] builds `senderIndex`)
+      * and the head's state was read; a peer's tx with a pooled nonce never reaches here (the pending-nonce check
+      * refuses it), so no replacement is decided here.
       */
-    def poolAdmits(t: SignedTransactionWithSender, checked: StateChecked): Boolean =
-      if !TxAdmission.poolStateRulesApply then true
-      else
-        (checked.accounts.get(t.senderAddress), checked.head) match
-          case (Some(account), Some(head)) =>
-            TxAdmission.poolRejection(
-              t.tx.tx,
-              alreadyKnown = false,
-              account,
-              poolView(t.senderAddress, t.tx.hash.value),
-              head,
-              txPoolConfig.priceBump,
-              txPoolConfig.blobPriceBump
-            ) match
-              case Some(r) =>
-                context.log.debug("Rejecting tx {} from {}: {}", t.tx.hash.toHex, t.senderAddress, r.message)
-                false
-              case None => true
-          case _ => true
+    def poolAdmits(
+        t: SignedTransactionWithSender,
+        checked: StateChecked,
+        senderIndex: Option[PoolSenderIndex]
+    ): Boolean =
+      senderIndex match
+        case None => true // the pool-state rules do not apply on this chain
+        case Some(index) =>
+          (checked.accounts.get(t.senderAddress), checked.head) match
+            case (Some(account), Some(head)) =>
+              TxAdmission.poolRejection(
+                t.tx.tx,
+                alreadyKnown = false,
+                account,
+                poolView(t.senderAddress, t.tx.hash.value, index),
+                head,
+                txPoolConfig.priceBump,
+                txPoolConfig.blobPriceBump
+              ) match
+                case Some(r) =>
+                  context.log.debug("Rejecting tx {} from {}: {}", t.tx.hash.toHex, t.senderAddress, r.message)
+                  false
+                case None => true
+            case _ => true
 
     /** Put a local tx in the pool, first dropping any pooled tx from the same sender with the same nonce. */
     def addOrOverride(newStx: SignedTransaction, newStxSender: Address, blobRawBytesOpt: Option[ByteString]): Unit =
@@ -650,7 +667,7 @@ object PendingTransactionsManager:
               stx.tx,
               alreadyKnown = pendingTransactions.asMap().containsKey(hash),
               account,
-              poolView(sender, hash),
+              poolView(sender, hash, poolSenderIndex()),
               head,
               txPoolConfig.priceBump,
               txPoolConfig.blobPriceBump
