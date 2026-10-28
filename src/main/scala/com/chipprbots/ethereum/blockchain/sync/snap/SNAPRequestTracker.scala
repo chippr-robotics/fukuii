@@ -319,8 +319,9 @@ class SNAPRequestTracker(
         SNAPSyncMetrics.incrementMalformedResponse()
         Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
       else
-        // Validate storage slots are monotonically increasing within each account
-        val violation = response.slots.zipWithIndex.collectFirst { case (accountSlots, accountIdx) =>
+        // Validate storage slots are monotonically increasing within each account. Every account is checked: a
+        // collectFirst over all accounts stopped at the first one, so only its slots were ever validated.
+        val violation = response.slots.iterator.zipWithIndex.flatMap { case (accountSlots, accountIdx) =>
           val slots = accountSlots.toIndexedSeq
           (1 until slots.size)
             .find { i =>
@@ -329,7 +330,7 @@ class SNAPRequestTracker(
               compareUnsignedLexicographically(prevHash, currHash) >= 0
             }
             .map(i => (accountIdx, i))
-        }.flatten
+        }.nextOption()
         violation match
           case Some((accountIdx, i)) =>
             SNAPSyncMetrics.incrementMalformedResponse()

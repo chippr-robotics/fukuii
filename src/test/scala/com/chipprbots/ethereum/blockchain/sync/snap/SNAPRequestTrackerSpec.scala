@@ -243,6 +243,22 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     result.swap.getOrElse(fail("Expected Left")) should include("not monotonically increasing")
   }
 
+  it should "reject StorageRanges whose ordering violation is in a later account" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val testProbe = TestProbe()
+    val peer = createTestPeer("test-peer", testProbe.ref)
+
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
+
+    val ordered = Seq((ByteString("slot1"), ByteString("value1")), (ByteString("slot2"), ByteString("value2")))
+    val unordered = Seq((ByteString("slot2"), ByteString("value2")), (ByteString("slot1"), ByteString("value1")))
+    val response = StorageRanges(requestId = requestId, slots = Seq(ordered, unordered), proof = Seq.empty)
+
+    tracker.validateStorageRanges(response) shouldBe
+      Left("Storage slots not monotonically increasing for account 1 at index 1")
+  }
+
   it should "validate ByteCodes response" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
