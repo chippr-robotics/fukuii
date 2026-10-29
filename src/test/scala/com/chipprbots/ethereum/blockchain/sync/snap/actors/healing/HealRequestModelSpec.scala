@@ -320,6 +320,25 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.satisfy(at1.key) shouldBe Seq(leaf1)
   }
 
+  it should "keep the order of the positions still waiting on a hash when any of them is filled, the first included" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val s = hashOf("aliased")
+    val at = (1 to 4).map(i => HealRequest.atPosition(accountPathset(i), s))
+    book.add(at(0)) shouldBe HealRequestBook.Added.NewFetch
+    at.drop(1).foreach(r => book.add(r) shouldBe HealRequestBook.Added.Joined)
+
+    book.satisfy(at(0).key) // the first: the next one takes its place
+    book.waitingOn(s) shouldBe Seq(at(1), at(2), at(3))
+    book.isFetching(s) shouldBe true
+    book.satisfy(at(2).key) // one in the middle
+    book.waitingOn(s) shouldBe Seq(at(1), at(3))
+    book.satisfy(at(3).key)
+    book.satisfy(at(1).key)
+    book.isFetching(s) shouldBe false
+    book.waitingOn(s) shouldBe empty
+    book.isEmpty shouldBe true
+  }
+
   "HealRequest" should "key a 64-nibble account position apart from a storage-trie root of the same byte length, and give each its depth" taggedAs UnitTest in {
     val accountAt64 = Seq(compact(Array.fill[Byte](64)(0))) // HP: flag byte + 32 bytes = 33 bytes
     val storageRoot = Seq(ByteString(Array.fill[Byte](32)(0)), compact(Array.empty[Byte])) // 32 + 1 = 33 bytes

@@ -51,8 +51,12 @@ object HealRequest:
     * Every heal source encodes paths with `isLeaf = false`, so equal positions have equal bytes.
     */
   def positionKey(pathset: Seq[ByteString]): ByteString =
-    if pathset.size > 1 then ByteString(StorageTrieTag) ++ pathset.head ++ pathset.last
-    else ByteString(AccountTrieTag) ++ pathset.lastOption.getOrElse(ByteString.empty)
+    // One flat array (as `FrontierRebuildBfs.locationKey` builds it), not a rope of `++` chunks: the key is hashed and
+    // compared on every lookup.
+    val builder = ByteString.newBuilder
+    if pathset.size > 1 then builder.putByte(StorageTrieTag).append(pathset.head).append(pathset.last)
+    else builder.putByte(AccountTrieTag).append(pathset.lastOption.getOrElse(ByteString.empty))
+    builder.result()
 
   /** Nibbles from the state root to the position `pathset` names (see `depth`). */
   def depthOf(pathset: Seq[ByteString]): Int =

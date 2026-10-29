@@ -22,14 +22,23 @@ import scala.collection.mutable
   * several edges, and its arrival decrements each. Slice 1 only counts them; slice 2 holds a parent until its count is
   * 0 (D3).
   *
+  * '''Cost.''' Every operation is O(1) per request or edge, aliases included: removing one of many positions waiting on
+  * a hash does not scan the others. The common case, one request per hash and one or two edges per child, allocates no
+  * collection: the first request waiting on a hash is held directly, a set exists only for further ones (Path aliases),
+  * and edges are an immutable list.
+  *
   * Actor-confined: not thread-safe.
   */
 final class HealRequestBook:
   import HealRequestBook.*
 
   private val requests = mutable.HashMap.empty[ByteString, HealRequest]
-  private val waiting = mutable.HashMap.empty[ByteString, mutable.ArrayBuffer[ByteString]]
-  private val parentEdges = mutable.HashMap.empty[ByteString, mutable.ArrayBuffer[ByteString]]
+  // hash -> the first live request waiting on it (the fetch is queued with its pathset), and the further requests
+  // waiting on the same hash, in the order they were recorded (Path aliases; absent when there are none).
+  private val firstWaiting = mutable.HashMap.empty[ByteString, ByteString]
+  private val moreWaiting = mutable.HashMap.empty[ByteString, mutable.LinkedHashSet[ByteString]]
+  // child key -> its parents, one entry per edge, newest first.
+  private val parentEdges = mutable.HashMap.empty[ByteString, List[ByteString]]
   private val outstanding = mutable.HashMap.empty[ByteString, Int]
 
   /** Live requests. */
@@ -42,17 +51,20 @@ final class HealRequestBook:
   def get(key: ByteString): Option[HealRequest] = requests.get(key)
 
   /** Whether a fetch of `hash` is live: some request waits on it. */
-  def isFetching(hash: ByteString): Boolean = waiting.contains(hash)
+  def isFetching(hash: ByteString): Boolean = firstWaiting.contains(hash)
 
   /** The hashes with a live fetch. */
-  def fetchingHashes: collection.Set[ByteString] = waiting.keySet
+  def fetchingHashes: collection.Set[ByteString] = firstWaiting.keySet
 
   /** The live requests waiting on `hash`, in the order they were recorded. */
   def waitingOn(hash: ByteString): Seq[HealRequest] =
-    waiting.get(hash).fold(Seq.empty[HealRequest])(_.iterator.flatMap(requests.get).toSeq)
+    firstWaiting.get(hash) match
+      case None => Seq.empty
+      case Some(first) =>
+        (Iterator.single(first) ++ moreWaiting.get(hash).iterator.flatMap(_.iterator)).flatMap(requests.get).toSeq
 
-  /** The parents with an edge to request `key`, one entry per edge. */
-  def parentsOf(key: ByteString): Seq[ByteString] = parentEdges.get(key).fold(Seq.empty[ByteString])(_.toSeq)
+  /** The parents with an edge to request `key`, one entry per edge, in the order the edges were added. */
+  def parentsOf(key: ByteString): Seq[ByteString] = parentEdges.get(key).fold(Seq.empty[ByteString])(_.reverse)
 
   /** How many of `parent`'s child edges are still outstanding. */
   def outstandingChildren(parent: ByteString): Int = outstanding.getOrElse(parent, 0)
@@ -79,7 +91,7 @@ final class HealRequestBook:
       outstanding(parent) = children.size
       children.flatMap { child =>
         val added = record(child)
-        parentEdges.getOrElseUpdate(child.key, mutable.ArrayBuffer.empty) += parent
+        parentEdges(child.key) = parent :: parentEdges.getOrElse(child.key, Nil)
         if added == Added.NewFetch then Some(child) else None
       }
 
@@ -90,13 +102,10 @@ final class HealRequestBook:
     requests.remove(key) match
       case None => Seq.empty
       case Some(request) =>
-        waiting.get(request.hash).foreach { keys =>
-          keys -= key
-          if keys.isEmpty then waiting.remove(request.hash)
-        }
+        removeWaiting(request.hash, key)
         parentEdges.remove(key).fold(Seq.empty[ByteString]) { parents =>
           val done = mutable.ArrayBuffer.empty[ByteString]
-          parents.foreach { parent =>
+          parents.reverseIterator.foreach { parent =>
             outstanding.get(parent).foreach { n =>
               if n <= 1 then
                 outstanding.remove(parent)
@@ -110,7 +119,8 @@ final class HealRequestBook:
   /** Drop everything: a pivot move or a force-complete (FR-010: discovery restarts from the new root). */
   def clear(): Unit =
     requests.clear()
-    waiting.clear()
+    firstWaiting.clear()
+    moreWaiting.clear()
     parentEdges.clear()
     outstanding.clear()
 
@@ -118,13 +128,41 @@ final class HealRequestBook:
     if requests.contains(request.key) then Added.Duplicate
     else
       requests(request.key) = request
-      waiting.get(request.hash) match
-        case Some(keys) =>
-          keys += request.key
-          Added.Joined
-        case None =>
-          waiting(request.hash) = mutable.ArrayBuffer(request.key)
-          Added.NewFetch
+      if addWaiting(request.hash, request.key) then Added.NewFetch else Added.Joined
+
+  /** Add `key` to the requests waiting on `hash`. True when it is the first, i.e. the hash needs a fetch. */
+  private def addWaiting(hash: ByteString, key: ByteString): Boolean =
+    if firstWaiting.contains(hash) then
+      moreWaiting.getOrElseUpdate(hash, mutable.LinkedHashSet.empty) += key
+      false
+    else
+      firstWaiting(hash) = key
+      true
+
+  /** Remove `key` from the requests waiting on `hash`, in O(1). When it was the first, the next one in order takes its
+    * place. True when no request waits on `hash` any more.
+    */
+  private def removeWaiting(hash: ByteString, key: ByteString): Boolean =
+    firstWaiting.get(hash) match
+      case None => true
+      case Some(first) if first == key =>
+        moreWaiting.get(hash) match
+          case Some(more) if more.nonEmpty =>
+            val next = more.head
+            more -= next
+            if more.isEmpty then moreWaiting.remove(hash)
+            firstWaiting(hash) = next
+            false
+          case _ =>
+            firstWaiting.remove(hash)
+            moreWaiting.remove(hash)
+            true
+      case Some(_) =>
+        moreWaiting.get(hash).foreach { more =>
+          more -= key
+          if more.isEmpty then moreWaiting.remove(hash)
+        }
+        false
 
 object HealRequestBook:
 
