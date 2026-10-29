@@ -75,15 +75,6 @@ class PathNodeStorage(val dataSource: DataSource):
   def accountNodeRemoval(nibblePath: Array[Byte]): DataSourceUpdateOptimized =
     DataSourceUpdateOptimized(namespace = acctNs, toRemove = Seq(encodePath(nibblePath)), toUpsert = Nil)
 
-  /** Delete all account-trie nodes whose path starts with `nibblePrefix`.
-    *
-    * Used by [[com.chipprbots.ethereum.blockchain.sync.snap.SnapPathTrie]] to prune left-boundary ancestor stubs after
-    * a subtree has been fully committed.
-    */
-  def deleteAccountNodesByPrefix(nibblePrefix: Array[Byte]): Unit =
-    val prefix = encodePath(nibblePrefix)
-    deleteByPrefix(acctNs, prefix)
-
   // ---- storage trie (STORAGE_TRIE_PATH column family) ----
 
   /** Write a storage-trie node, scoped by account.
@@ -127,11 +118,6 @@ class PathNodeStorage(val dataSource: DataSource):
       toRemove = Seq(storageKey(accountHash, nibblePath)),
       toUpsert = Nil
     )
-
-  /** Delete all storage-trie nodes for `accountHash` whose path starts with `nibblePrefix`. */
-  def deleteStorageNodesByPrefix(accountHash: ByteString, nibblePrefix: Array[Byte]): Unit =
-    val prefix = storageKey(accountHash, nibblePrefix)
-    deleteByPrefix(storageNs, prefix)
 
   // ---- both tries ----
 
@@ -195,26 +181,6 @@ class PathNodeStorage(val dataSource: DataSource):
   private def storageKey(accountHash: ByteString, nibbles: Array[Byte]): Array[Byte] =
     accountHash.toArray ++ encodePath(nibbles)
 
-  private def deleteByPrefix(ns: IndexedSeq[Byte], prefix: Array[Byte]): Unit =
-    import cats.effect.unsafe.implicits.global
-
-    // Collect keys matching prefix, then batch-delete them.
-    val keys: Vector[Array[Byte]] = dataSource
-      .iterate(ns)
-      .collect { case Right((k, _)) if k.startsWith(prefix) => k }
-      .compile
-      .toVector
-      .unsafeRunSync()
-
-    if keys.nonEmpty then
-      dataSource.update(
-        Seq(DataSourceUpdateOptimized(namespace = ns, toRemove = keys, toUpsert = Nil))
-      )
-
   private def hasAnyEntry(ns: IndexedSeq[Byte]): Boolean =
     import cats.effect.unsafe.implicits.global
     dataSource.iterate(ns).take(1).compile.last.unsafeRunSync().isDefined
-
-  implicit private class ByteArrayOps(val a: Array[Byte]):
-    def startsWith(prefix: Array[Byte]): Boolean =
-      prefix.length <= a.length && java.util.Arrays.equals(a, 0, prefix.length, prefix, 0, prefix.length)
