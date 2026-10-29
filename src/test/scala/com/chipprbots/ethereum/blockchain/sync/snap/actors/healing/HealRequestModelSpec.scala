@@ -19,6 +19,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestKind
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -35,6 +39,9 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * hand, so the order is exact: the root; then parent A, whose children (one of them the shared child C) go out; then,
   * with C still in flight, parent B. The coordinator's own statistics are the barrier and the oracle: after B, the
   * in-flight set is A's leaf, C and B's leaf, with C once.
+  *
+  * The cases after it test the model itself (`HealRequest`, `HealRequestBook`): the per-parent edge counts are
+  * observable only there, on types that did not exist before the fix.
   */
 class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
 
@@ -115,4 +122,109 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       testKit.stop(peer.ref)
       pool.shutdown()
       pool.awaitTermination(5, TimeUnit.SECONDS)
+  }
+
+  // ---- the request model (spec 022 D2, data-model.md "Heal request") -----------------------------------------------
+
+  private def hashOf(seed: String): ByteString = kec256(ByteString(seed))
+
+  "HealRequestBook under the Hash scheme" should "record a child shared by two parents once, count one edge per parent, and release both parents when it arrives (T009)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val (pa, pb) = (hashOf("parent-a"), hashOf("parent-b"))
+    val c = hashOf("shared-child")
+    val leafA = HealRequest.ofNode(accountPathset(0, 0), hashOf("leaf-a"))
+    val leafB = HealRequest.ofNode(accountPathset(1, 0), hashOf("leaf-b"))
+    val cUnderA = HealRequest.ofNode(accountPathset(0, 5), c)
+    val cUnderB = HealRequest.ofNode(accountPathset(1, 5), c)
+
+    book.addChildren(pa, Seq(leafA, cUnderA)) shouldBe Seq(leafA, cUnderA) // both need a fetch
+    book.addChildren(pb, Seq(leafB, cUnderB)) shouldBe Seq(leafB) // C is live: B gains an edge, no second fetch
+    book.size shouldBe 3
+    book.waitingOn(c) shouldBe Seq(cUnderA) // one request for the node, fetched from where it was first found
+    book.parentsOf(c) shouldBe Seq(pa, pb)
+    book.outstandingChildren(pa) shouldBe 2
+    book.outstandingChildren(pb) shouldBe 2
+
+    // C arrives: both parents' counts decrement; neither is done yet, each still waits on its own leaf.
+    book.satisfy(c) shouldBe empty
+    book.outstandingChildren(pa) shouldBe 1
+    book.outstandingChildren(pb) shouldBe 1
+    book.isFetching(c) shouldBe false
+
+    book.satisfy(leafA.key) shouldBe Seq(pa)
+    book.satisfy(leafB.key) shouldBe Seq(pb)
+    book.isEmpty shouldBe true
+    book.outstandingChildren(pa) shouldBe 0
+  }
+
+  it should "count a child one parent references twice as two edges, fetched once" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val parent = hashOf("parent")
+    val c = hashOf("twice")
+    val atSlot2 = HealRequest.ofNode(accountPathset(2), c)
+    book.addChildren(parent, Seq(atSlot2, HealRequest.ofNode(accountPathset(9), c))) shouldBe Seq(atSlot2)
+    book.outstandingChildren(parent) shouldBe 2
+    book.parentsOf(c) shouldBe Seq(parent, parent)
+    book.satisfy(c) shouldBe Seq(parent)
+    book.isEmpty shouldBe true
+  }
+
+  it should "add no second set of edges when a parent is processed again" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val parent = hashOf("parent")
+    val child = HealRequest.ofNode(accountPathset(3), hashOf("child"))
+    book.addChildren(parent, Seq(child)) shouldBe Seq(child)
+    book.addChildren(parent, Seq(child)) shouldBe empty
+    book.outstandingChildren(parent) shouldBe 1
+    book.satisfy(child.key) shouldBe Seq(parent)
+  }
+
+  it should "keep a request live until it is satisfied, so a walk entry for a live hash is not fetched again" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val h = hashOf("node")
+    book.add(HealRequest.ofNode(accountPathset(1), h)) shouldBe HealRequestBook.Added.NewFetch
+    book.add(HealRequest.ofNode(accountPathset(4), h)) shouldBe HealRequestBook.Added.Duplicate
+    book.opensNewSubtree(h) shouldBe true
+    book.addChildren(hashOf("parent"), Seq(HealRequest.ofNode(accountPathset(1), h))) shouldBe empty
+    book.opensNewSubtree(h) shouldBe false // a parent now waits on it
+    book.clear()
+    book.isEmpty shouldBe true
+    book.fetchingHashes shouldBe empty
+    book.outstandingChildren(hashOf("parent")) shouldBe 0
+  }
+
+  "HealRequestBook under the Path scheme" should "keep each position of one node as its own request, fetched once, each released to its own parent" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val s = hashOf("storage-root")
+    val (a0, a1) = (ByteString(Array.fill[Byte](32)(0x0a)), ByteString(Array.fill[Byte](32)(0x0b)))
+    val (leaf0, leaf1) = (hashOf("acct0-position"), hashOf("acct1-position"))
+    val at0 = HealRequest.atPosition(Seq(a0, compact(Array.empty[Byte])), s)
+    val at1 = HealRequest.atPosition(Seq(a1, compact(Array.empty[Byte])), s)
+    at0.key should not be at1.key
+
+    book.addChildren(leaf0, Seq(at0)) shouldBe Seq(at0) // the fetch
+    book.addChildren(leaf1, Seq(at1)) shouldBe empty // joins it: an alias, recorded, not dropped
+    book.add(at1) shouldBe HealRequestBook.Added.Duplicate
+    book.add(HealRequest.atPosition(accountPathset(7), s)) shouldBe HealRequestBook.Added.Joined
+    book.waitingOn(s).map(_.key) shouldBe Seq(at0.key, at1.key, HealRequest.positionKey(accountPathset(7)))
+    book.satisfy(at0.key) shouldBe Seq(leaf0)
+    book.isFetching(s) shouldBe true // the other positions still wait on it
+    book.satisfy(at1.key) shouldBe Seq(leaf1)
+  }
+
+  "HealRequest" should "key a 64-nibble account position apart from a storage-trie root of the same byte length, and give each its depth" taggedAs UnitTest in {
+    val accountAt64 = Seq(compact(Array.fill[Byte](64)(0))) // HP: flag byte + 32 bytes = 33 bytes
+    val storageRoot = Seq(ByteString(Array.fill[Byte](32)(0)), compact(Array.empty[Byte])) // 32 + 1 = 33 bytes
+    (storageRoot.head ++ storageRoot.last).length shouldBe accountAt64.head.length
+    HealRequest.positionKey(accountAt64) should not be HealRequest.positionKey(storageRoot)
+
+    HealRequest.depthOf(accountAt64) shouldBe 64
+    HealRequest.depthOf(storageRoot) shouldBe 64
+    HealRequest.depthOf(accountPathset()) shouldBe 0
+    HealRequest.depthOf(accountPathset(1, 2, 3)) shouldBe 3
+    val storageNode = Seq(ByteString(Array.fill[Byte](32)(1)), compact(nibbles(1, 2)))
+    HealRequest.depthOf(storageNode) shouldBe 66
+    HealRequest.atPosition(storageNode, hashOf("x")).kind shouldBe HealRequestKind.StorageNode
+    HealRequest.ofNode(accountPathset(4), hashOf("y")).kind shouldBe HealRequestKind.AccountNode
+    HealRequest.ofNode(accountPathset(4), hashOf("y")).key shouldBe hashOf("y")
   }

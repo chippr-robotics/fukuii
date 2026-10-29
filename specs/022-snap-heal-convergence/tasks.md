@@ -84,14 +84,14 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Implementation
 
-- [ ] T010 [US1] Introduce the request key type in `blockchain/sync/snap/heal/HealRequest.scala` (new file; not under `actors/healing/`, see the verifier amendment), following data-model.md "Heal request".
+- [x] T010 [US1] Introduce the request key type in `blockchain/sync/snap/heal/HealRequest.scala` (new file; not under `actors/healing/`, see the verifier amendment), following data-model.md "Heal request".
   - The key is a single `ByteString`: the HP-encoded path for Path, the node hash for Hash.
   - **Never key a map by `Seq[ByteString]`.** `MurmurHash3.seqHash` showed up in the Mordor walk profile.
   - Include `depth`, `parent` and `opensNewSubtree`.
   - **[beacon] [forge]**
 - [ ] T011 [US1] Replace `pendingHashSet` / `pathAliases` with maps from position key to request. Response matching becomes hash → `Seq[request]`. Files: `actors/healing/HealResponseProcessing.scala` (`:98-104`, `:347`, `:365`, `:381-382`) and `actors/TrieNodeHealingCoordinator.scala`. **[beacon]**
 - [ ] T012 [US2] On Hash, make the request model reference-counted per parent edge, in `actors/healing/HealResponseProcessing.scala` and `actors/TrieNodeHealingCoordinator.scala`. **[forge]**
-- [ ] T013 [US1] Add `accountNodeUpsert` / `accountNodeRemoval` helpers that return `DataSourceUpdateOptimized`, in `db/storage/PathNodeStorage.scala`, mirroring the existing storage-node helpers. **[vault]**
+- [x] T013 [US1] Add `accountNodeUpsert` / `accountNodeRemoval` helpers that return `DataSourceUpdateOptimized`, in `db/storage/PathNodeStorage.scala`, mirroring the existing storage-node helpers. **[vault]**
 - [ ] T014 [US1] Implement the FR-008 exact-position deletes, in the same batch as the write that makes them stale, in `actors/healing/HealResponseProcessing.scala` (extension-node arm `:361-375`) and in the path-verified presence check (`actors/healing/HealVerification.scala:169-178`). **[beacon] [vault]**
 - [ ] T015 [P] [US1] Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix` from `db/storage/PathNodeStorage.scala:172-186`. They have no callers, scan the whole CF, and HP-encoded keys don't preserve prefixes. Apply the dead-code-review protocol and record the verdict in the commit message. **[vault]**
 - [ ] T016 Run T006–T009 plus `sbt "testOnly *Heal* *SnapPathTrie* *SnapHashTrie*"` and confirm they pass. Open the slice-1 PR to staging and request reviews from beacon and forge.

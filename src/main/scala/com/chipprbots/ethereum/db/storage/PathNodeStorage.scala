@@ -53,10 +53,14 @@ class PathNodeStorage(val dataSource: DataSource):
     *   RLP-encoded node bytes
     */
   def writeAccountNode(nibblePath: Array[Byte], rlp: Array[Byte]): Unit =
-    val key = encodePath(nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = acctNs, toRemove = Nil, toUpsert = Seq(key -> rlp)))
-    )
+    dataSource.update(Seq(accountNodeUpsert(nibblePath, rlp)))
+
+  /** The single-node update [[writeAccountNode]] commits, for a caller that groups several updates into one write batch
+    * (`dataSource.update` applies the updates of one call in order, in one RocksDB WriteBatch). Same key and value
+    * bytes as [[writeAccountNode]]; the account-trie mirror of [[storageNodeUpsert]].
+    */
+  def accountNodeUpsert(nibblePath: Array[Byte], rlp: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(namespace = acctNs, toRemove = Nil, toUpsert = Seq(encodePath(nibblePath) -> rlp))
 
   /** Read an account-trie node by nibble path. Returns `None` if no node is stored at that path. */
   def readAccountNode(nibblePath: Array[Byte]): Option[Array[Byte]] =
@@ -65,10 +69,11 @@ class PathNodeStorage(val dataSource: DataSource):
 
   /** Delete the single account-trie node at exactly `nibblePath`. No-op if the path does not exist. */
   def deleteAccountNode(nibblePath: Array[Byte]): Unit =
-    val key = encodePath(nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = acctNs, toRemove = Seq(key), toUpsert = Nil))
-    )
+    dataSource.update(Seq(accountNodeRemoval(nibblePath)))
+
+  /** The single-node update [[deleteAccountNode]] commits; see [[accountNodeUpsert]]. */
+  def accountNodeRemoval(nibblePath: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(namespace = acctNs, toRemove = Seq(encodePath(nibblePath)), toUpsert = Nil)
 
   /** Delete all account-trie nodes whose path starts with `nibblePrefix`.
     *
