@@ -235,22 +235,40 @@ Read it before planning or implementing. Highlights:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/020-scala-3-9-lts-migration/plan.md` (Scala 3.3.8 → 3.9.0 LTS and sbt 1.10.7 → 1.13.0,
-NO behaviour change; between spec 016 (done) and spec 017. Build tool first, compiler second
-in one-commit-per-step `-source:3.4-migration` … `3.9-migration` rewrites run ON the 3.9
-compiler (3.3.8 rejects them), tooling third, libraries last (none forced). Final flag is
-`-source:3.9`, not `future` (future on 3.9 = new-syntax + 1,541 implicit errors); `import x.*`
-is kept by a CI grep step plus a scalafix `DisableSyntax.regex`. scalafmt STAYS 3.8.3 in 020
-(3.8.4–3.11.5 cannot parse the `taggedAs (…) in new Fixture:` test shape; DC-8 forbids the
-hand edit) — 3.11 is follow-up FU-1 before 017. scapegoat compiler plugin 3.3.6 → 3.4.1 MUST
-ride with the compiler. 8 hand fixes (E172 Ordering → `using`, E171 McpService) precede the
-3.4 step. Given prioritisation: 364 of 371 E205 sites are `RLPImplicits`' duplicate anonymous
-givens — fixed at the 9 definitions (forge + beacon), not at call sites. Warnings: 365 →
-605 (DC-4 ceiling) → 91 post-chain. Consensus oracle = `ChainImporter` against canonical
-headers on fixed Mordor and Platåberget ranges, 3.3 jar vs 3.9 jar on a frozen datadir copy;
-`[IMPORT-TIMING]` p50/p99 within 10%. Range files come from `debug_getRawBlock`, NOT
-`admin_exportChain` (length-prefixed, importer cannot read it). Five published modules
-(bytes, crypto, rlp, scalanet, scalanetDiscovery) break TASTy → MINOR bump to 0.10.0.)
+`specs/022-snap-heal-convergence/plan.md` (#1671, 0.11.0 blocker). SNAP healing never
+converged on a live chain: after healing drained, a full-trie verification walk (787 M nodes,
+~17 h on Sepolia; 16–20 h on ETC mainnet) gated completion, and every pivot re-peg (~12 min)
+made its result stale. Root cause: fukuii breaks "present on disk ⇒ complete subtree".
+- V1, both schemes: healing writes a parent before its children, then a re-peg drops the
+  children.
+- V2: the account trie commits accounts whose storage or code is incomplete.
+- V3, Path: aliases are lost, so two contracts with an identical storage root lose the second
+  owner's storage trie.
+
+Fix (geth/Nethermind/Besu parity), on both schemes:
+- healed nodes are held in memory with an outstanding-child count, and complete chains are
+  committed in one RocksDB batch, released only after the write returns (#1549 is live on
+  the heal path);
+- DEEPEST-FIRST dispatch is required for correctness: FIFO plus children-first holds the whole
+  trie. At the held-memory cap, pause new subtrees only, never children of held nodes;
+- requests are keyed by path (Path) or by hash with reference counts (Hash);
+- a durable excluded-account set: Path deletes the account's trie positions, Hash seeds its
+  storage root and code against the current root on every re-peg; code is a dependency of
+  its leaf;
+- completion = nothing pending, held or excluded for the current root;
+- the full walk becomes a background audit of the hash store after handoff;
+- the persisted frontier (CF `g`) is retired; an invariant marker in AppState forces one
+  repair pass on pre-invariant datadirs (no marker, checkpoint import in progress, or
+  `clearDoneOnStart`).
+
+Both schemes read the HASH-keyed store after sync; Path is an extra export layer. So Hash
+stays for 0.11.0, and retiring both is spec 018 DC-9. Six slices; the gate removal (slice 5)
+lands LAST, or task #73 returns. Release gates: fresh Mordor and fresh Sepolia sync, each
+followed by 24 h following the head. Reviews: beacon (Path), forge (Hash), vault (write
+order).)
+Also active: `specs/020-scala-3-9-lts-migration/plan.md` (Scala 3.3.8 → 3.9.0, no behaviour
+change). PR 3/4 land before 022 code; PR 5's mechanical `-rewrite` is regenerated after 022
+lands.
 Prior plans: `specs/009-amsterdam-fork-support/plan.md`,
 `specs/016-snap-controller-split/plan.md`, `specs/007-hotpath-alloc-reduction/plan.md`.
 <!-- SPECKIT END -->
