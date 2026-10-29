@@ -59,6 +59,22 @@ Every other file has the same count as GT-1.
 nine types and leaves it out. Step (c) collapses it as well, so that every type has one given; with no use site, that
 cannot change any selection.
 
+## Verification after DC-3 (PR 4 steps c and d)
+
+| Point | Command (one-off flags reverted after; no `-rewrite`) | Errors | Warnings | E205 |
+|---|---|---|---|---|
+| After (c), the `RLPImplicits` collapse | `-source:3.6-migration`, `clean compile-all` | 0 | 88 = 81 + 7 | **7**, all `JsonRpcController` MCP |
+| After (d), the explicit MCP codecs | `-source:3.7-migration`, `clean compile-all` | 0 | 604 = 81 + 523 implicit-`using` | **0** |
+| Build flag (committed) | `-source:3.6`, `clean compile-all` | 0 | 81 (the baseline, same categories) | 0 |
+
+- **Selection is unchanged.** `RLPImplicitsGivenSelectionSpec` shows that each scalar `RLPEncoder[X]` and
+  `RLPDecoder[X]` resolves to `xEncDec`, by `eq`. It also checks the encoded bytes of every affected codec against
+  independently computed vectors. It passed before and after the collapse.
+- **The MCP bytecode is identical.** `javap -c -p` over `JsonRpcController*.class` gives the same listing before and
+  after the explicit `using`.
+- **Next step.** The 523 implicit-`using` warnings are the 3.7 rewrite's input (PR 5). GT-1 counted 514; the extra 9
+  come from code added since.
+
 ## Sites
 
 `file:line:col | type searched | old choice | 3.7 choice | same value? | action | reviewer`. Paths are relative to the
