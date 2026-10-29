@@ -58,7 +58,7 @@ private class StubHealDispatchState(
   val knownAvailablePeers: mutable.Set[Peer] = mutable.Set.empty
   val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map.empty
   val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty
-  val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
+  val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   var healRate: Double = 0.0
   var lastThrottleAdjustMs: Long = 0L
   val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty

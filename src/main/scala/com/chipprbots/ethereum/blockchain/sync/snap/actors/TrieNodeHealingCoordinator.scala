@@ -308,7 +308,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // `decoupledHealMaxAttemptsNoRefresh` with no serve-root advance in between is surfaced (log + metric) — it is
   // NEVER force-completed: the content-hash check guarantees a wrong/missing node can never be accepted, so a stuck
   // node simply keeps the walk from finding zero, which is the correct (no-false-completion) behaviour.
-  val healAttempts = mutable.Map.empty[ByteString, Int]
+  // A HealAttemptMap also keeps how many tasks are past that threshold, for the gauges (#1675).
+  val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   // T019 / FR-010: count of nodes healed via a serve root that differs from the walk root (cross-root heals).
   var crossRootHealCount: Long = 0L
   // T020: number of serve-root refreshes engaged this coordinator lifetime (observability only).

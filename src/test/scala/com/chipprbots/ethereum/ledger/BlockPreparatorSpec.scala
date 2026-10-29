@@ -318,8 +318,18 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       defaultBlockHeader
     )
 
-    result match
-      case (_, executedTxs) => executedTxs shouldBe Seq(stx1, stx4)
+    val (blockResult, executedTxs) = result
+    executedTxs shouldBe Seq(stx1, stx4)
+    // Each restart after a failed tx resumes from the receipts and gas before it (#1675 made that accumulator a Vector):
+    // one receipt per executed tx, in order, and the failed tx2 and tx3 add no gas. tx1 and tx4 are the same tx.
+    val receipts = blockResult.receipts
+    receipts shouldBe a[Vector[?]]
+    receipts.size shouldBe 2
+    val perTx = receipts.head.cumulativeGasUsed
+    perTx should be > BigInt(0)
+    receipts.map(_.cumulativeGasUsed) shouldBe Seq(perTx, 2 * perTx)
+    blockResult.executionGasUsed shouldBe 2 * perTx // pre-Amsterdam, the execution counter is the receipt sum
+    blockResult.stateGasUsed shouldBe 0
 
   "produce empty block if all txs fail" taggedAs (UnitTest, StateTest) in new TestSetup:
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
@@ -350,6 +360,29 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
     result match
       case (_, executedTxs) => executedTxs shouldBe Seq.empty
+
+  // #1675: the receipts accumulator used to be a List grown with `:+`, which copies every earlier receipt — O(txs²) per
+  // block — and the Amsterdam access-list index read its `.size` per tx. It is a Vector (append and size O(1)); what
+  // it holds is unchanged: one receipt per executed tx, in block order.
+  "accumulate the block's receipts in a Vector, one per tx, in tx order" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val txCount = 20
+    val stxs: Seq[SignedTransaction] = (0 until txCount).map { i =>
+      val tx = defaultTx.copy(nonce = defaultTx.nonce + i, gasLimit = GasAmount(21000))
+      SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId.value))
+    }
+
+    val result: Either[BlockExecutionError.TxsExecutionError, BlockResult] =
+      mining.blockPreparator.executeTransactions(stxs, initialWorld, defaultBlockHeader)
+
+    result shouldBe a[Right[?, BlockResult]]
+    val receipts = result.toOption.get.receipts
+    receipts shouldBe a[Vector[?]]
+    receipts.size shouldBe txCount
+    // Cumulative gas rises with every tx: the receipts are in execution order, each appended once.
+    receipts.map(_.cumulativeGasUsed).sliding(2).foreach { case Seq(a, b) => b should be > a; case _ => () }
 
   // migrated from old LedgerSpec
   "properly assign stateRootHash before byzantium block (exclusive)" in new TestSetup:

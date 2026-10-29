@@ -202,8 +202,8 @@ private[actors] trait StorageResponseProcessing:
     processingPool.foreach(_.shutdown()) // running jobs finish (they hold no resources); nothing new is accepted
 
   def handleResponse(response0: StorageRanges): Unit =
-    // Index the decoded response once (O(n)): the decoder's Queue makes every `slots(i)` O(i), and the ascending-order
-    // checks below and in MerkleProofVerifier index by position (#1533).
+    // Index the response once (O(n)): the ascending-order checks below and in MerkleProofVerifier index by position
+    // (#1533). Decoded RLP lists are Vectors now; the decoder's old Queue made every `slots(i)` O(i) (#1672/#1675).
     val response = indexedResponse(response0)
     requestTracker.validateStorageRanges(response) match
       case Left(error) =>

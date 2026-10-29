@@ -24,7 +24,7 @@ private[actors] trait FrontierPersistenceState:
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def pendingBackpressure: AtomicInteger
   def crossRootHealCount: Long
-  def healAttempts: mutable.Map[ByteString, Int]
+  def healAttempts: HealAttemptMap
   def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
   var flushing: Boolean
   def pendingSubtreeRecords: mutable.Set[ByteString]
@@ -113,9 +113,8 @@ private[actors] trait FrontierPersistence extends FrontierDrainApi with Frontier
     // spec 004 T019/FR-010: refresh the decoupling observability gauges on every pulse (cheap O(1) reads).
     if decoupledHealServeRoot then
       SNAPSyncMetrics.setHealingCrossRootHeals(crossRootHealCount)
-      SNAPSyncMetrics.setHealingUnservableTasks(
-        healAttempts.count { case (_, n) => n > decoupledHealMaxAttemptsNoRefresh }.toLong
-      )
+      // A running count kept by the map, not a recount of it on every pulse (#1675).
+      SNAPSyncMetrics.setHealingUnservableTasks(healAttempts.unservableCount.toLong)
 
   /** Frontier-emission backpressure, called from the BFS walk thread (healingWriterEc) before each FrontierRebuilt
     * batch. The walk reads the locally-stored trie fast (thousands of nodes/s) while healing drains over the network on

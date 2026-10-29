@@ -120,7 +120,7 @@ private class StubFrontierPersistenceState(
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val pendingBackpressure: AtomicInteger = new AtomicInteger(0)
   var crossRootHealCount: Long = 0L
-  val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
+  val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
   var flushing: Boolean = false
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
