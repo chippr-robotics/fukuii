@@ -52,11 +52,17 @@ final private class RecordingMptStorage(frontier: => Option[HealingFrontierStora
   val stored: mutable.Map[ByteString, Array[Byte]] = mutable.Map.empty
   private var lastWrite: Seq[ByteString] = Nil
   var recordSeenAtPersist: Boolean = false
+  // The next `failWrites` node writes throw before storing anything (HealFlushFailureSpec, #1549).
+  @volatile var failWrites: Int = 0
 
   def get(nodeId: Array[Byte]): MptNode = throw new UnsupportedOperationException("FrontierPersistence reads no node")
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
     throw new UnsupportedOperationException("FrontierPersistence writes raw nodes only")
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+    if failWrites > 0 then
+      failWrites -= 1
+      events += "store-failed"
+      throw new RuntimeException("injected node write failure")
     nodes.foreach { case (h, b) => stored(h) = b }
     lastWrite = nodes.map(_._1)
     events += s"store:${nodes.size}"
