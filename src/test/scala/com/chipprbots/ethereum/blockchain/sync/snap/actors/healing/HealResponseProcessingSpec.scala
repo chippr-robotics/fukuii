@@ -20,6 +20,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.AccountNs
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.Op
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.RecordingDataSource
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.accountKey
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
@@ -219,6 +223,13 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
 
     /** Put `tasks` in flight to `p` as request `id` and answer it with `nodes`. */
     def respond(id: Int, p: Peer, tasks: Seq[HealingEntry], nodes: Seq[ByteString]): Unit =
+      module.activeRequests(BigInt(id)) = ActiveRequest(tasks, p, requestedBytes = BigInt(1024))
+      module.handleResponse(SNAP.TrieNodes(requestId = BigInt(id), nodes = nodes))
+
+    /** As [[respond]], for tasks the live requests (`healRequests`) do not hold: a dispatched entry nothing vouches
+      * for.
+      */
+    def respondUnbooked(id: Int, p: Peer, tasks: Seq[HealingEntry], nodes: Seq[ByteString]): Unit =
       module.activeRequests(BigInt(id)) = ActiveRequest(tasks, p, requestedBytes = BigInt(1024))
       module.handleResponse(SNAP.TrieNodes(requestId = BigInt(id), nodes = nodes))
 
@@ -474,4 +485,70 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pathed.module.isNodeInStorage(hashOf(node), Seq(compact(2))) shouldBe false
     pathed.module.mptStorage.putNode(node)
     pathed.module.isNodeInStorage(hashOf(node), Seq.empty) shouldBe false
+  }
+
+  // ---- spec 022 slice 1 review (beacon W2, item 6, item 7) -------------------------------------------------------
+
+  it should "fill nothing for a dispatched task no live request vouches for, and not queue it again (W2)" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val node = leaf(1, 2)("unbooked")
+    val task = HealingEntry(Seq(compact(1)), hashOf(node))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task), Seq(bytes(node)))
+
+    m.rawNodeBuffer shouldBe empty
+    m.totalNodesHealed shouldBe 0
+    m.completedTaskCount shouldBe 0
+    m.pendingTasks shouldBe empty
+    m.activeRequests shouldBe empty
+    m.healRequests.isEmpty shouldBe true
+  }
+
+  /** A branch at [6] whose children sit at [6,0], [6,4] and [6,9], healed under the Path scheme into a store whose
+    * write batches are recorded. `setUp` marks the children (present, stale, live) before the response.
+    */
+  private def healBranchUnderPath(
+      setUp: (StubHealResponseProcessingState & HealResponseProcessing, Seq[HealingEntry]) => Unit
+  ): (RecordingDataSource, StubHealResponseProcessingState & HealResponseProcessing, Seq[HealingEntry], ByteString) =
+    val ds = new RecordingDataSource
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(ds)))
+    val m = h.module
+    val kids = Seq(leaf(1)("c0"), leaf(2)("c4"), leaf(3)("c9"))
+    val slots = Seq(0, 4, 9)
+    val children = Array.fill[MptNode](16)(NullNode)
+    kids.zip(slots).foreach { case (k, i) => children(i) = HashNode(k.hash) }
+    val branch = BranchNode(children, None)
+    val task = HealingEntry(Seq(compact(6)), hashOf(branch))
+    val childEntries = kids.zip(slots).map { case (k, i) => HealingEntry(Seq(compact(6, i)), hashOf(k)) }
+    setUp(m, childEntries)
+    m.healRequests.add(m.healRequestFor(task))
+    h.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
+    (ds, m, childEntries, accountKey(Array[Byte](6)))
+
+  it should "under the Path scheme delete a stale child in the parent's batch, and leave a present child alone (item 7)" taggedAs UnitTest in {
+    val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
+      m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1) // [6,0]: present (right bytes)
+      m.stalePaths += kids(1).pathset // [6,4]: stale bytes of another hash
+      // [6,9]: absent
+    }
+    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
+      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
+    )
+    m.pendingTasks.toSeq shouldBe Seq(kids(1), kids(2)) // the stale and the absent child are requested
+  }
+
+  it should "under the Path scheme delete a stale child that is already requested, in the parent's batch (item 6)" taggedAs UnitTest in {
+    val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
+      m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1)
+      m.pathReads((kids(2).hash, kids(2).pathset)) = Array[Byte](1)
+      // [6,4] is already requested (queued by a walk, say) and holds stale bytes.
+      m.healRequests.add(m.healRequestFor(kids(1)))
+      m.stalePaths += kids(1).pathset
+    }
+    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
+      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
+    )
+    m.pendingTasks shouldBe empty // already requested: an edge, no second fetch
+    m.healRequests.parentsOf(m.healRequestFor(kids(1)).key) should have size 1
   }

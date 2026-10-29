@@ -4,12 +4,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration.*
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -18,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.readAtPath
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.Account
@@ -193,4 +196,74 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     pns.readStorageNode(owner, nibbles(3)) shouldBe None
     pns.readStorageNode(owner, nibbles(3, 4)) shouldBe None
     pns.readStorageNode(owner, Array.empty[Byte]).map(ByteString(_)) shouldBe Some(ByteString(sExt.encode))
+  }
+
+  it should "delete each alias position's own stale bytes in the batch that writes that position (review item 7)" taggedAs UnitTest in {
+    // The twin storage tries (one storage root S, a branch over slotA and slotB, under two accounts A0 and A1). Stale
+    // bytes sit at both storage-root positions and at A1's slotA position; A0's slot positions are empty.
+    val trie = twinStorageTrie(nonce = 1)
+    val (a0, a1) = (trie("s0").accountHash.get, trie("s1").accountHash.get)
+    val ds = new RecordingDataSource
+    val pns = new PathNodeStorage(ds)
+    pns.writeStorageNode(a0, Array.empty[Byte], plainLeaf(nibbles(0x0e), "s022/item7/stale-s0").encode)
+    pns.writeStorageNode(a1, Array.empty[Byte], plainLeaf(nibbles(0x0e), "s022/item7/stale-s1").encode)
+    pns.writeStorageNode(a1, nibbles(0), plainLeaf(nibbles(0x0e), "s022/item7/stale-s1A").encode)
+    ds.forget()
+    val peer = new ScriptedPeer(testKit)
+    peer.serveFrom.set(Some(trie.served))
+    val pool = Executors.newSingleThreadExecutor()
+    val controller = createTestProbe[SNAPSyncController.Command]()
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = trie.root.hash,
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
+      storageScheme = StorageScheme.Path,
+      pathNodeStorageOpt = Some(pns),
+      movingRootDeltaHeal = true
+    )
+    peer.coordinator.set(coordinator)
+    try
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("item7-peer", createTestProbe[Any]().ref.toClassic)
+      )
+      controller.fishForMessage(60.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+    finally
+      testKit.stop(coordinator)
+      testKit.stop(peer.ref)
+      pool.shutdown()
+      pool.awaitTermination(5, TimeUnit.SECONDS)
+
+    def batchOf(ns: IndexedSeq[Byte], key: ByteString): Set[Op] =
+      val batches = ds.batchesPutting(ns, key)
+      batches should have size 1
+      batches.head.toSet
+    // Each account leaf's batch deletes its own stale storage root (the other column family).
+    batchOf(AccountNs, accountKey(nibbles(0))) shouldBe
+      Set(
+        Op(AccountNs, delete = false, accountKey(nibbles(0))),
+        Op(StorageNs, delete = true, storageKey(a0, Array.empty))
+      )
+    batchOf(AccountNs, accountKey(nibbles(1))) shouldBe
+      Set(
+        Op(AccountNs, delete = false, accountKey(nibbles(1))),
+        Op(StorageNs, delete = true, storageKey(a1, Array.empty))
+      )
+    // S is fetched once and written at both positions; only A1's write finds a stale child below it.
+    batchOf(StorageNs, storageKey(a0, Array.empty)) shouldBe Set(
+      Op(StorageNs, delete = false, storageKey(a0, Array.empty))
+    )
+    batchOf(StorageNs, storageKey(a1, Array.empty)) shouldBe Set(
+      Op(StorageNs, delete = false, storageKey(a1, Array.empty)),
+      Op(StorageNs, delete = true, storageKey(a1, nibbles(0)))
+    )
+    fetchedMoreThanOnce(trie, peer.requests) shouldBe empty
+    trie.nodes.foreach(n => readAtPath(pns, n).map(ByteString(_)) shouldBe Some(n.encoded))
   }

@@ -121,4 +121,63 @@ trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerat
         dataSource.destroy()
       }
     }
+
+  /** One `update` call is one write batch (RocksDB: one `WriteBatch`; spec 022 FR-008 relies on it for a heal write and
+    * its dangling-position deletes). Within it the removals of an update are applied before its upserts, and updates in
+    * order: a delete and a put of the same key leave the put. An update spanning two namespaces changes both.
+    * `rejectsUnknownNamespace` (RocksDB: a namespace is a column family) adds the failure half: an update that cannot
+    * be built changes nothing, not even the namespace before the bad one.
+    */
+  def batchUpdate(createDataSource: => String => DataSource, rejectsUnknownNamespace: Boolean): Unit =
+    val NamespaceA: IndexedSeq[Byte] = IndexedSeq[Byte]('r'.toByte)
+    val NamespaceB: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
+
+    it should "keep the put when one update call deletes and puts the same key" taggedAs (UnitTest, DatabaseTest) in {
+      val key = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
+      val (old, value) = (1.toByte +: key, 2.toByte +: key)
+      withDir { path =>
+        val dataSource = createDataSource(path)
+        dataSource.update(prepareUpdate(namespace = NamespaceA, toUpsert = Seq(key -> old)))
+
+        // remove and upsert of the same key inside one update
+        dataSource.update(prepareUpdate(namespace = NamespaceA, toRemove = Seq(key), toUpsert = Seq(key -> value)))
+        assert(dataSource.get(NamespaceA, key).contains(value))
+
+        // a removal update, then an upsert update, in one call (the order PathNodeStorage.writeNodeWithDeletes uses)
+        dataSource.update(
+          prepareUpdate(namespace = NamespaceA, toRemove = Seq(key)) ++
+            prepareUpdate(namespace = NamespaceA, toUpsert = Seq(key -> old))
+        )
+        assert(dataSource.get(NamespaceA, key).contains(old))
+        dataSource.destroy()
+      }
+    }
+
+    it should "change two namespaces in one update call" taggedAs (UnitTest, DatabaseTest) in {
+      val key = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
+      withDir { path =>
+        val dataSource = createDataSource(path)
+        dataSource.update(prepareUpdate(namespace = NamespaceB, toUpsert = Seq(key -> key)))
+
+        dataSource.update(
+          prepareUpdate(namespace = NamespaceB, toRemove = Seq(key)) ++
+            prepareUpdate(namespace = NamespaceA, toUpsert = Seq(key -> key))
+        )
+        assert(dataSource.get(NamespaceA, key).contains(key))
+        assert(dataSource.get(NamespaceB, key).isEmpty)
+
+        if rejectsUnknownNamespace then
+          val unknown = IndexedSeq[Byte]('~'.toByte)
+          val other = 3.toByte +: key
+          assertThrows[Exception](
+            dataSource.update(
+              prepareUpdate(namespace = NamespaceA, toUpsert = Seq(key -> other)) ++
+                prepareUpdate(namespace = unknown, toUpsert = Seq(key -> other))
+            )
+          )
+          assert(dataSource.get(NamespaceA, key).contains(key)) // the failed batch changed nothing
+        dataSource.destroy()
+      }
+    }
+
   // scalastyle:on

@@ -124,6 +124,114 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       pool.awaitTermination(5, TimeUnit.SECONDS)
   }
 
+  // ---- exits of a joined request (review, forge W1) ------------------------------------------------------------------
+
+  /** The T009 trie and order, up to "B answered while C is in flight": the root, parents A and B (one path per
+    * request), A's children leafA and C out, then B answered, which joins C. Runs `body` with the coordinator, the
+    * peer, the served map, C's in-flight request and a statistics barrier; stops everything afterwards.
+    */
+  private def withSharedChildInFlight(
+      body: (
+          org.apache.pekko.actor.typed.ActorRef[TrieNodeHealingCoordinator.Command],
+          ScriptedPeer,
+          Map[Seq[ByteString], ByteString],
+          SNAP.GetTrieNodes,
+          () => HealingStatistics
+      ) => Unit
+  ): Unit =
+    val c = plainLeaf(nibbles(0x07), "s022/t009/shared")
+    val leafA = plainLeaf(nibbles(0x01), "s022/t009/leafA")
+    val leafB = plainLeaf(nibbles(0x02), "s022/t009/leafB")
+    val a = branch(0 -> leafA, 5 -> c)
+    val b = branch(0 -> leafB, 5 -> c)
+    val root = branch(0 -> a, 1 -> b)
+    val served: Map[Seq[ByteString], ByteString] = Map(
+      accountPathset() -> ByteString(root.encode),
+      accountPathset(0) -> ByteString(a.encode),
+      accountPathset(1) -> ByteString(b.encode),
+      accountPathset(0, 0) -> ByteString(leafA.encode),
+      accountPathset(0, 5) -> ByteString(c.encode),
+      accountPathset(1, 0) -> ByteString(leafB.encode),
+      accountPathset(1, 5) -> ByteString(c.encode)
+    )
+    val pool = Executors.newSingleThreadExecutor()
+    val peer = new ScriptedPeer(testKit)
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = ByteString(root.hash),
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      batchSize = 1,
+      snapSyncController = createTestProbe[SNAPSyncController.Command]().ref,
+      healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
+      storageScheme = StorageScheme.Hash,
+      movingRootDeltaHeal = true
+    )
+    peer.coordinator.set(coordinator)
+    def next(): SNAP.GetTrieNodes = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+    def stats(): HealingStatistics =
+      val probe = createTestProbe[HealingStatistics]()
+      coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
+      probe.expectMessageType[HealingStatistics]
+    try
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(ByteString(root.hash))
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("exit-peer-1", createTestProbe[Any]().ref.toClassic)
+      )
+      peer.answerFrom(next(), served) // the root
+      val parents = Seq(next(), next())
+      peer.answerFrom(parents.find(_.paths == Seq(accountPathset(0))).get, served) // A: leafA and C go out
+      val outOfA = Seq(next(), next())
+      val reqC = outOfA.find(_.paths == Seq(accountPathset(0, 5))).get
+      peer.answerFrom(parents.find(_.paths == Seq(accountPathset(1))).get, served) // B joins C
+      next().paths shouldBe Seq(accountPathset(1, 0)) // leafB; C is not requested again
+      body(coordinator, peer, served, reqC, () => stats())
+    finally
+      testKit.stop(coordinator)
+      testKit.stop(peer.ref)
+      pool.shutdown()
+      pool.awaitTermination(5, TimeUnit.SECONDS)
+
+  it should "re-dispatch a joined child once after its request times out, and fill it with no second fetch" taggedAs UnitTest in {
+    withSharedChildInFlight { (coordinator, peer, served, reqC, stats) =>
+      coordinator ! TrieNodeHealingCoordinator.HealingRequestTimeout(reqC.requestId) // peer 1 now cools down
+      val afterTimeout = stats()
+      afterTimeout.pendingTasks shouldBe 1 // C, queued once
+      afterTimeout.activeTasks shouldBe 2 // leafA, leafB
+
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("exit-peer-2", createTestProbe[Any]().ref.toClassic)
+      )
+      val again = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+      again.paths shouldBe reqC.paths // C, re-dispatched once
+      peer.answerFrom(again, served)
+      val afterC = stats() // C filled for both parents: nothing queued, only the two leaves in flight
+      afterC.pendingTasks shouldBe 0
+      afterC.activeTasks shouldBe 2
+    }
+  }
+
+  it should "re-dispatch a joined child once after its peer disconnects, and fill it with no second fetch" taggedAs UnitTest in {
+    withSharedChildInFlight { (coordinator, peer, served, reqC, stats) =>
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerUnavailable(
+        "exit-peer-1"
+      ) // leafA, C, leafB back to the queue
+      val afterDrop = stats()
+      afterDrop.pendingTasks shouldBe 3
+      afterDrop.activeTasks shouldBe 0
+
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("exit-peer-2", createTestProbe[Any]().ref.toClassic)
+      )
+      val again = Seq.fill(3)(peer.manual.expectMessageType[SNAP.GetTrieNodes])
+      again.count(_.paths == reqC.paths) shouldBe 1 // C, re-dispatched once
+      peer.answerFrom(again.find(_.paths == reqC.paths).get, served)
+      val afterC = stats()
+      afterC.pendingTasks shouldBe 0
+      afterC.activeTasks shouldBe 2
+    }
+  }
+
   // ---- the request model (spec 022 D2, data-model.md "Heal request") -----------------------------------------------
 
   private def hashOf(seed: String): ByteString = kec256(ByteString(seed))
