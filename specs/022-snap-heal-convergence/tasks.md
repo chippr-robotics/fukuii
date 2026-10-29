@@ -131,7 +131,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - **[vault] [beacon] [forge]**
 - [x] T025 [US3] On a re-peg (`TrieNodeHealingCoordinator.scala:606-690`) and on `HealingForceComplete` (`:567-584`), drop the held set and pending requests, flush **only** complete nodes, and re-seed from the new root. **[beacon] [forge]**
 - [x] T026 [US3] Remove the buffer-before-write ordering in `actors/healing/FrontierPersistence.scala:167-206`, so the #1549 heal-path bug is gone. If the Hash `rawNodeBuffer` path survives T024, it must clear only after a successful write and reset `flushing` on failure. **[vault]**
-- [ ] T027 [US3] Write the completion flag with `updateSync`, following research R-3, wherever `StateHealingComplete` is persisted. **[vault]**
+- [x] T027 [US3] Write the completion flag with `updateSync`, following research R-3, wherever `StateHealingComplete` is persisted. **[vault]**
 - [ ] T028 Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
 
 **Checkpoint**: the invariant holds for everything healing writes, and is proven under kill points.

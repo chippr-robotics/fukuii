@@ -206,8 +206,7 @@ private[snap] trait HealingOrchestrator
       if totalFound == 0 then
         ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
-        pivotBlock.foreach(b => stateIngest.appState.putSnapSyncPivotBlock(b).commit())
-        stateRoot.foreach(r => stateIngest.appState.putSnapSyncStateRoot(r.value).commit())
+        persistHealedAnchorSync()
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -235,8 +234,7 @@ private[snap] trait HealingOrchestrator
         healingRoundCount = 0
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
-        for b <- pivotBlock; r <- stateRoot do
-          stateIngest.appState.putSnapSyncPivotBlock(b).and(stateIngest.appState.putSnapSyncStateRoot(r.value)).commit()
+        if pivotBlock.isDefined && stateRoot.isDefined then persistHealedAnchorSync()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -277,13 +275,22 @@ private[snap] trait HealingOrchestrator
       "Path scheme: coordinator verification found no missing nodes — healing complete (no controller walk)."
     )
     healingRoundCount = 0
-    pivotBlock.foreach(b => stateIngest.appState.putSnapSyncPivotBlock(b).commit())
-    stateRoot.foreach(r => stateIngest.appState.putSnapSyncStateRoot(r.value).commit())
+    persistHealedAnchorSync()
     healingValidatedRoot = stateRoot
     timers.cancel(RequestTrieNodeHealing)
     progressMonitor.startPhase(StateValidation)
     currentPhase = StateValidation
     validateState()
+
+  /** Persist the pivot block and state root healing completed against, in ONE write, synced (spec 022 T027, research
+    * R-3): this is the record that healing is complete for that root. Every healed node went to RocksDB before it, and
+    * the WAL is prefix-consistent, so a synced flag implies those nodes survive a power loss too; an unsynced flag
+    * could be lost while the node acts on it.
+    */
+  private def persistHealedAnchorSync(): Unit =
+    val anchors = pivotBlock.map(stateIngest.appState.putSnapSyncPivotBlock).toSeq ++
+      stateRoot.map(r => stateIngest.appState.putSnapSyncStateRoot(r.value))
+    anchors.reduceOption(_.and(_)).foreach(_.commitSync())
 
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. Uses streaming to emit
     * batches as they are found — critical for mainnet-scale tries where a full blocking walk can take hours before the
