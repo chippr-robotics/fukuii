@@ -104,11 +104,10 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * position whose hash is already being fetched joins that fetch (an alias, filled when the node arrives).
     */
   def enqueueRequest(entry: HealingEntry): Boolean =
-    healRequests.add(healRequestFor(entry)) match
-      case HealRequestBook.Added.NewFetch =>
-        pendingTasks += entry
-        true
-      case _ => false
+    if healRequests.add(healRequestFor(entry)).needsFetch then
+      pendingTasks += entry
+      true
+    else false
 
   def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit =
     val entries = pathsAndHashes.flatMap { case (pathset, hash) =>
@@ -152,7 +151,14 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // spec 022 review W2: a dispatched task is the fetch of live requests, and only those are filled. A task no live
     // request waits on is a bookkeeping fault: nothing vouches for the positions it would write, so it is neither
     // filled nor queued again.
-    val unvouched = tasksForRequest.filterNot(task => healRequests.isFetching(task.hash))
+    // A fetch whose last request was replaced by a conflicting one (review W1, HealRequestBook) is expected to come back
+    // empty-handed: not an error.
+    val (retiredTasks, unvouched) =
+      tasksForRequest
+        .filterNot(task => healRequests.isFetching(task.hash))
+        .partition(t => healRequests.isRetired(t.hash))
+    if retiredTasks.nonEmpty then
+      log.debug(s"[HEAL] ${retiredTasks.size} dispatched heal task(s) retired by a conflicting request — dropped")
     if unvouched.nonEmpty then
       log.error(
         s"[HEAL] ${unvouched.size} dispatched heal task(s) that no live request waits on, first " +

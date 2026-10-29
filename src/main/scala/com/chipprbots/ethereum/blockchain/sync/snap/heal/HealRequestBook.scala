@@ -4,6 +4,8 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import org.bouncycastle.util.encoders.Hex
+
 /** The live heal requests of one pivot root (spec 022 D2, data-model.md "Heal request"): every request not yet
   * satisfied, whether still queued or in flight; the requests waiting on each node hash; and, per parent, how many
   * child edges are still outstanding.
@@ -21,6 +23,16 @@ import scala.collection.mutable
   * request key) to the child's request. A Hash-scheme child shared by two parents, or referenced twice by one, has
   * several edges, and its arrival decrements each. Slice 1 only counts them; slice 2 holds a parent until its count is
   * 0 (D3).
+  *
+  * '''A position wanted for another node.''' Under the Path scheme a request is keyed by position alone, so recording a
+  * request whose position is live with a DIFFERENT hash is a conflict ([[HealRequestBook.Added.Conflict]], logged at
+  * warn). The newer request replaces the live one, last writer wins as in geth `trie/sync.go` `scheduleNodeRequest`:
+  * within one pivot root a position has one hash, the book is cleared on every re-peg, and the walk batches of a
+  * superseded root are dropped before they reach it (review W1), so the newer request is the current root's. Keeping
+  * the older one instead could never recover: the current root's walk would offer the right hash again and be refused
+  * again. The replaced request's parent edges stay (they wait on the position). If it was the last request waiting on
+  * its hash, that hash is retired: its fetch, still queued or in flight, fills nothing when it comes back and is not
+  * queued again ([[isRetired]]); it costs at most one more round trip. Within one root this should never happen.
   *
   * '''Cost.''' Every operation is O(1) per request or edge, aliases included: removing one of many positions waiting on
   * a hash does not scan the others. The common case, one request per hash and one or two edges per child, allocates no
@@ -40,6 +52,8 @@ final class HealRequestBook:
   // child key -> its parents, one entry per edge, newest first.
   private val parentEdges = mutable.HashMap.empty[ByteString, List[ByteString]]
   private val outstanding = mutable.HashMap.empty[ByteString, Int]
+  // hashes whose last waiting request was replaced by a conflicting one (see the class comment)
+  private val retired = mutable.HashSet.empty[ByteString]
 
   /** Live requests. */
   def size: Int = requests.size
@@ -52,6 +66,11 @@ final class HealRequestBook:
 
   /** Whether a fetch of `hash` is live: some request waits on it. */
   def isFetching(hash: ByteString): Boolean = firstWaiting.contains(hash)
+
+  /** Whether `hash` lost its last waiting request to a conflicting one: its fetch, if it comes back, fills nothing and
+    * is not an error. Cleared when a request waits on the hash again, and by [[clear]].
+    */
+  def isRetired(hash: ByteString): Boolean = retired.contains(hash)
 
   /** The hashes with a live fetch. */
   def fetchingHashes: collection.Set[ByteString] = firstWaiting.keySet
@@ -81,9 +100,8 @@ final class HealRequestBook:
     * already live gains the edge; a new one is recorded. Returns the children that need a new fetch, in order.
     *
     * A parent already recorded with outstanding children (a node processed a second time, e.g. re-queued by a walk)
-    * adds nothing: its edges are counted once. Under Path a live position keeps the hash it was recorded with: within
-    * one root a position has one hash, so a different one can only come from a walk of a superseded root, and the edge
-    * goes to the live request.
+    * adds nothing: its edges are counted once. A child whose position is live with another hash replaces that request
+    * (a conflict, see the class comment) and needs a fetch unless its hash is already being fetched.
     */
   def addChildren(parent: ByteString, children: Seq[HealRequest]): Seq[HealRequest] =
     if children.isEmpty || outstanding.contains(parent) then Seq.empty
@@ -92,7 +110,7 @@ final class HealRequestBook:
       children.flatMap { child =>
         val added = record(child)
         parentEdges(child.key) = parent :: parentEdges.getOrElse(child.key, Nil)
-        if added == Added.NewFetch then Some(child) else None
+        if added.needsFetch then Some(child) else None
       }
 
   /** `request` was satisfied (its node is stored, or for Hash buffered for the store): drop it and decrement each of
@@ -128,12 +146,24 @@ final class HealRequestBook:
     moreWaiting.clear()
     parentEdges.clear()
     outstanding.clear()
+    retired.clear()
 
   private def record(request: HealRequest): Added =
-    if requests.contains(request.key) then Added.Duplicate
-    else
-      requests(request.key) = request
-      if addWaiting(request.hash, request.key) then Added.NewFetch else Added.Joined
+    requests.get(request.key) match
+      case Some(live) if live.hash == request.hash => Added.Duplicate
+      case Some(live) =>
+        requests(request.key) = request
+        if removeWaiting(live.hash, request.key) then retired += live.hash
+        val newFetch = addWaiting(request.hash, request.key)
+        log.warn(
+          s"[HEAL-KEY-CONFLICT] Position ${Hex.toHexString(request.key.take(8).toArray)} was requested for node " +
+            s"${Hex.toHexString(live.hash.take(4).toArray)} and is now requested for node " +
+            s"${Hex.toHexString(request.hash.take(4).toArray)}: the newer request replaces it (last writer wins)"
+        )
+        Added.Conflict(live, newFetch)
+      case None =>
+        requests(request.key) = request
+        if addWaiting(request.hash, request.key) then Added.NewFetch else Added.Joined
 
   /** Add `key` to the requests waiting on `hash`. True when it is the first, i.e. the hash needs a fetch. */
   private def addWaiting(hash: ByteString, key: ByteString): Boolean =
@@ -142,6 +172,7 @@ final class HealRequestBook:
       false
     else
       firstWaiting(hash) = key
+      retired -= hash
       true
 
   /** Remove `key` from the requests waiting on `hash`, in O(1). When it was the first, the next one in order takes its
@@ -171,9 +202,11 @@ final class HealRequestBook:
 
 object HealRequestBook:
 
+  private val log = org.slf4j.LoggerFactory.getLogger(classOf[HealRequestBook])
+
   /** What recording a request did. */
   enum Added:
-    /** A request with this key is already live; nothing was recorded (an edge, if any, goes to the live one). */
+    /** A request with this key and this hash is already live; nothing was recorded (an edge, if any, goes to it). */
     case Duplicate
 
     /** Recorded; a fetch of its hash is already live, so the served node fills it too (a Path alias). */
@@ -181,3 +214,14 @@ object HealRequestBook:
 
     /** Recorded, and its hash needs a fetch: the caller queues one. */
     case NewFetch
+
+    /** Recorded in place of `previous`, the live request for the same position with another hash (see the class
+      * comment). `newFetch`: its hash needs a fetch.
+      */
+    case Conflict(previous: HealRequest, newFetch: Boolean)
+
+    /** Whether the caller must queue a fetch for the recorded request's hash. */
+    def needsFetch: Boolean = this match
+      case NewFetch              => true
+      case Conflict(_, newFetch) => newFetch
+      case _                     => false

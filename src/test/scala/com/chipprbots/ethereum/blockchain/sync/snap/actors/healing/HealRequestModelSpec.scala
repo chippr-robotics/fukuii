@@ -352,6 +352,46 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.satisfy(expected) shouldBe empty // already satisfied
   }
 
+  it should "let the newer request for a position replace one that expects another node, and retire the old fetch (review W1)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val pos = accountPathset(3, 4)
+    val (hOld, hNew) = (hashOf("superseded-root-node"), hashOf("current-root-node"))
+    val stale = HealRequest.atPosition(pos, hOld) // e.g. a walk entry of an older root
+    val current = HealRequest.atPosition(pos, hNew) // the current root's discovery of the same position
+    val parent = hashOf("current-parent")
+
+    book.add(stale) shouldBe HealRequestBook.Added.NewFetch
+    book.addChildren(parent, Seq(current)) shouldBe Seq(current) // H_new needs its own fetch: it is not joined to H_old
+    book.get(current.key) shouldBe Some(current)
+    book.waitingOn(hNew) shouldBe Seq(current)
+    book.isFetching(hOld) shouldBe false
+    book.isRetired(hOld) shouldBe true // its fetch, still out, fills nothing
+    book.parentsOf(current.key) shouldBe Seq(parent)
+    book.satisfy(stale) shouldBe empty // the old node no longer satisfies the position
+
+    book.add(current) shouldBe HealRequestBook.Added.Duplicate
+    // The same hash wanted again (here, the stale one) gets a live waiter again and stops being retired.
+    book.add(HealRequest.atPosition(accountPathset(5), hOld)) shouldBe HealRequestBook.Added.NewFetch
+    book.isRetired(hOld) shouldBe false
+    book.satisfy(current) shouldBe Seq(parent)
+  }
+
+  it should "keep a fetch live for the other positions when the one it was queued for is replaced" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val s = hashOf("shared")
+    val (first, second) = (HealRequest.atPosition(accountPathset(1), s), HealRequest.atPosition(accountPathset(2), s))
+    book.add(first) shouldBe HealRequestBook.Added.NewFetch
+    book.add(second) shouldBe HealRequestBook.Added.Joined
+    val other = HealRequest.atPosition(accountPathset(1), hashOf("other"))
+    book.add(other) shouldBe HealRequestBook.Added.Conflict(first, newFetch = true)
+    book.waitingOn(s) shouldBe Seq(second) // the fetch now goes out from the second position
+    book.isFetching(s) shouldBe true
+    book.isRetired(s) shouldBe false
+    book.clear()
+    book.isRetired(s) shouldBe false
+    book.isEmpty shouldBe true
+  }
+
   "HealRequest" should "key a 64-nibble account position apart from a storage-trie root of the same byte length, and give each its depth" taggedAs UnitTest in {
     val accountAt64 = Seq(compact(Array.fill[Byte](64)(0))) // HP: flag byte + 32 bytes = 33 bytes
     val storageRoot = Seq(ByteString(Array.fill[Byte](32)(0)), compact(Array.empty[Byte])) // 32 + 1 = 33 bytes

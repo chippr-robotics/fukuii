@@ -555,3 +555,23 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.pendingTasks shouldBe empty // already requested: an edge, no second fetch
     m.healRequests.parentsOf(m.healRequestFor(kids(1)).key) should have size 1
   }
+
+  it should "fill nothing from a fetch whose position now expects another node, and not queue it again (review W1)" taggedAs UnitTest in {
+    val pns = new PathNodeStorage(EphemDataSource())
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(pns))
+    val m = h.module
+    val oldNode = leaf(1)("old")
+    val newNode = leaf(2)("new")
+    val stale = HealingEntry(Seq(compact(4)), hashOf(oldNode))
+    val current = HealingEntry(Seq(compact(4)), hashOf(newNode))
+    m.enqueueRequest(stale) shouldBe true
+    m.pendingTasks.clear() // dispatched
+    m.enqueueRequest(current) shouldBe true // the same position, another node: the newer request wins, its fetch queued
+    m.healRequests.isRetired(stale.hash) shouldBe true
+
+    h.respondUnbooked(1, peer("p1"), Seq(stale), Seq(bytes(oldNode))) // the old fetch comes back with its node
+
+    pns.readAccountNode(Array[Byte](4)) shouldBe None // never written where the newer node is expected
+    m.totalNodesHealed shouldBe 0
+    m.pendingTasks.toSeq shouldBe Seq(current) // only the newer fetch
+  }
