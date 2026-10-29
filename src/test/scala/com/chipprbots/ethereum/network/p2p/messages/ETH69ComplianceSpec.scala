@@ -453,7 +453,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       "decode as stub (empty genesis) for clean UselessPeer rejection" taggedAs UnitTest in {
         import com.chipprbots.ethereum.rlp.*
         // Mirrors the live DECODE_ERROR observed on 5.161.72.73:30303:
-        // RLPList(Queue(RLPValue(45), RLPValue(89), ...)) — 8 RLPValues, no embedded RLPList.
+        // RLPList(Queue(RLPValue(45), RLPValue(89), ...)) — 8 RLPValues, no embedded RLPList. (Logged before
+        // #1672/#1675; decoded lists are Vectors now, so it prints as RLPList(Vector(...)).)
         val eightAllValueBytes = encode(
           RLPList(
             RLPValue(Array[Byte](45)),

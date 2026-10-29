@@ -76,9 +76,10 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger:
 
   // ─── Reconstruction algorithm ───────────────────────────────────────────────
 
-  /** True when some key is not strictly greater than the key before it. Walks the range once with iterators: decoded
-    * RLP lists are immutable `Queue`s, where `leaves(i)` costs O(i), so an indexed pairwise loop made every 46k-account
-    * response quadratic and pinned the CPU during account download.
+  /** True when some key is not strictly greater than the key before it. Walks the range once with iterators, so it is
+    * linear whatever `Seq` it is given. Decoded RLP lists are `Vector`s now; the immutable `Queue` they used to be made
+    * `leaves(i)` O(i), so an indexed pairwise loop made every 46k-account response quadratic and pinned the CPU during
+    * account download (#1672/#1675).
     */
   private def notStrictlyAscending(leaves: Seq[(ByteString, ByteString)]): Boolean =
     leaves.iterator.zip(leaves.iterator.drop(1)).exists((prev, curr) => cmpBytes(prev._1, curr._1) >= 0)

@@ -458,8 +458,9 @@ private[actors] class StorageRangeCoordinatorImpl(
   //      The nodes are now buffered in `trieNodeWrites` and committed as one batch per response — same keys, values and
   //      order, so the database ends up byte-identical.
   //   2. proof verification (`MerkleProofVerifier`); for a whole account that means building and hashing its trie.
-  //   3. `slots(i)` on the RLP decoder's `immutable.Queue` is O(i), so the ascending-order checks in the tracker and the
-  //      verifier were O(n^2) per account. `handleResponse` now indexes the response once (Vector).
+  //   3. `slots(i)` on the RLP decoder's `immutable.Queue` was O(i), so the ascending-order checks in the tracker and
+  //      the verifier were O(n^2) per account. `handleResponse` now indexes the response once (Vector), and the decoder
+  //      itself builds Vectors since #1675.
   // (2) — and, for an account served whole in one response, building its trie nodes — runs on `processingEc`
   // (go-ethereum hashes storage tries off its sync loop too). The job is a pure function of the response; its result
   // comes back as `StorageResponseProcessed`. Everything that reads or writes coordinator state, and every RocksDB
@@ -1339,8 +1340,8 @@ object StorageRangeCoordinator:
         val root = trie.commit()
         PrebuiltStorageTrie.Path(ops.result(), root)
 
-  /** The response with indexed (Vector) collections: the RLP decoder yields `immutable.Queue`, where `apply(i)` is
-    * O(i).
+  /** The response with indexed (Vector) collections, whatever `Seq` it was built with. Decoded RLP lists are `Vector`s
+    * now; the decoder's old `immutable.Queue` made `apply(i)` O(i) (#1672/#1675).
     */
   private[actors] def indexedResponse(response: StorageRanges): StorageRanges =
     response.copy(slots = response.slots.iterator.map(_.toVector).toVector, proof = response.proof.toVector)

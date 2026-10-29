@@ -32,8 +32,11 @@ trait TransactionalKeyValueStorage[K, V]:
     */
   def get(key: K): Option[V] = dataSource.get(namespace, keySerializer(key)).map(valueDeserializer)
 
-  /** Whether a value is stored under `key`: `get(key).isDefined`, for the price of the raw read alone — the value is
-    * not deserialized. For presence checks on large values (a block's receipts) on a hot path (#1675).
+  /** Whether a value is stored under `key`, for the price of the raw read alone — the value is not deserialized. For
+    * presence checks on large values (a block's receipts) on a hot path (#1675).
+    *
+    * Not quite `get(key).isDefined`: a stored value that cannot be decoded counts as present here, where `get` would
+    * fail on it. The decode failure moves to the first real read of the value.
     */
   def containsKey(key: K): Boolean = dataSource.get(namespace, keySerializer(key)).isDefined
 

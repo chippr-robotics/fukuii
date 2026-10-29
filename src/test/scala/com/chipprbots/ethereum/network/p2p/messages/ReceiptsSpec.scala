@@ -82,7 +82,8 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers:
     )
 
   // ── ETH68 Receipts68 round-trip (requestId + raw RLP) ──────────────────────────
-  // Use bytes comparison to avoid Queue vs ArraySeq collection type mismatch in RLPList.items.
+  // Compare bytes, not RLPList structures: RLPValue wraps an Array[Byte], whose equality is by reference, and the
+  // decoded RLPList.items is a Vector (a Queue before #1672/#1675) where the original holds whatever Seq built it.
 
   "ETH68 Receipts68" should "round-trip encode/decode with requestId" taggedAs (UnitTest, NetworkTest) in {
     val msg = Receipts68(BigInt(42), encodedType01ReceiptsList)

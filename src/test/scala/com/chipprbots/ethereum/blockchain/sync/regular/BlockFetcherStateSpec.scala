@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 
-import scala.collection.immutable.Queue
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
@@ -44,7 +42,7 @@ class BlockFetcherStateSpec extends ScalaTestWithActorTestKit with AnyWordSpecLi
           .appendHeaders(headers)
           .map(_.handleRequestedBlocks(List(), peer))
 
-        assert(result.map(_.waitingHeaders) === Right(Queue.empty))
+        assert(result.map(_.waitingHeaders) === Right(Vector.empty))
       }
 
       "enqueue requested blocks" taggedAs (UnitTest, SyncTest) in {
@@ -54,7 +52,7 @@ class BlockFetcherStateSpec extends ScalaTestWithActorTestKit with AnyWordSpecLi
           .appendHeaders(blocks.map(_.header))
           .map(_.handleRequestedBlocks(blocks, peer))
 
-        assert(result.map(_.waitingHeaders) === Right(Queue.empty))
+        assert(result.map(_.waitingHeaders) === Right(Vector.empty))
         blocks.foreach { block =>
           assert(result.map(_.blockProviders(block.number.value)) === Right(peer))
         }

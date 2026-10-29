@@ -42,20 +42,32 @@ class HealAttemptMapSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     m shouldBe empty
   }
 
-  it should "equal the recount after any sequence of updates, removals and clears" taggedAs UnitTest in {
-    val op: Gen[(Int, Int, Int)] =
+  // The bulk and in-place operations are inherited from mutable.MapOps and must reach addOne / subtractOne / clear,
+  // which keep the count. One that wrote the map another way would leave the count stale.
+  it should "equal the recount after any sequence of map operations, bulk and in-place ones included" taggedAs UnitTest in {
+    val key = Gen.choose(0, 7)
+    val value = Gen.choose(0, 5)
+    val op: Gen[(Int, Int, Int, List[(Int, Int)])] =
       for
-        kind <- Gen.frequency(8 -> 0, 3 -> 1, 1 -> 2) // update, remove, clear
-        key <- Gen.choose(0, 7)
-        value <- Gen.choose(0, 5)
-      yield (kind, key, value)
-    forAll(Gen.listOf(op)) { ops =>
+        // update, remove, clear, ++=, --=, filterInPlace, getOrElseUpdate, mapValuesInPlace
+        kind <- Gen.frequency(8 -> 0, 3 -> 1, 1 -> 2, 2 -> 3, 2 -> 4, 2 -> 5, 3 -> 6, 2 -> 7)
+        k <- key
+        v <- value
+        many <- Gen.listOf(Gen.zip(key, value))
+      yield (kind, k, v, many)
+    forAll(Gen.listOf(op), minSuccessful(500)) { ops =>
       val m = new HealAttemptMap(() => threshold)
-      ops.foreach {
-        case (0, key, value) => m.update(hash(key), value)
-        case (1, key, _)     => m.remove(hash(key))
-        case _               => m.clear()
+      ops.foreach { op =>
+        op match
+          case (0, k, v, _)    => m.update(hash(k), v)
+          case (1, k, _, _)    => m.remove(hash(k))
+          case (2, _, _, _)    => m.clear()
+          case (3, _, _, many) => m ++= many.map((k, v) => hash(k) -> v)
+          case (4, _, _, many) => m --= many.map((k, _) => hash(k))
+          case (5, _, v, _)    => m.filterInPlace((_, n) => n <= v)
+          case (6, k, v, _)    => m.getOrElseUpdate(hash(k), v)
+          case (_, _, v, _)    => m.mapValuesInPlace((_, n) => (n + v) % 6)
+        m.unservableCount shouldBe recount(m)
       }
-      m.unservableCount shouldBe recount(m)
     }
   }

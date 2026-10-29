@@ -162,9 +162,10 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     result.swap.getOrElse(fail("Expected Left")) should include("not monotonically increasing")
   }
 
-  it should "find an AccountRange ordering violation at the last index of a decoder-shaped Queue" taggedAs UnitTest in {
-    // Decoded RLP lists are immutable Queues, where indexed access is O(i). The check must still be exact (and
-    // linear): a violation between the last two entries is reported at that index.
+  it should "find an AccountRange ordering violation at the last index of a Queue-backed response" taggedAs UnitTest in {
+    // Decoded RLP lists are Vectors now, but they were immutable Queues, where indexed access is O(i) (#1672/#1675), and
+    // the check takes any Seq. On a Queue it must still be exact (and linear): a violation between the last two
+    // entries is reported at that index.
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
     val peer = createTestPeer("test-peer", testProbe.ref)
@@ -567,8 +568,9 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     fired.get() shouldBe 0
   }
 
-/** A Seq whose random access fails the test: the ordering checks must walk a response sequentially, because decoded RLP
-  * lists are Queues where indexed access is O(i) (#1672).
+/** A Seq whose random access fails the test: the ordering checks must walk a response sequentially, so that they stay
+  * linear on any Seq. Decoded RLP lists are Vectors now; the Queues they used to be made indexed access O(i)
+  * (#1672/#1675).
   */
 final class SequentialOnly[A](underlying: Seq[A]) extends scala.collection.immutable.Seq[A]:
   def apply(i: Int): A = throw new AssertionError(s"random access at index $i")

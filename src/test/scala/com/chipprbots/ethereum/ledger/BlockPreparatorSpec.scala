@@ -318,8 +318,18 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       defaultBlockHeader
     )
 
-    result match
-      case (_, executedTxs) => executedTxs shouldBe Seq(stx1, stx4)
+    val (blockResult, executedTxs) = result
+    executedTxs shouldBe Seq(stx1, stx4)
+    // Each restart after a failed tx resumes from the receipts and gas before it (#1675 made that accumulator a Vector):
+    // one receipt per executed tx, in order, and the failed tx2 and tx3 add no gas. tx1 and tx4 are the same tx.
+    val receipts = blockResult.receipts
+    receipts shouldBe a[Vector[?]]
+    receipts.size shouldBe 2
+    val perTx = receipts.head.cumulativeGasUsed
+    perTx should be > BigInt(0)
+    receipts.map(_.cumulativeGasUsed) shouldBe Seq(perTx, 2 * perTx)
+    blockResult.executionGasUsed shouldBe 2 * perTx // pre-Amsterdam, the execution counter is the receipt sum
+    blockResult.stateGasUsed shouldBe 0
 
   "produce empty block if all txs fail" taggedAs (UnitTest, StateTest) in new TestSetup:
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)

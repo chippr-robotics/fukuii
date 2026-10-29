@@ -291,7 +291,8 @@ class SNAPRequestTracker(
         SNAPSyncMetrics.incrementMalformedResponse()
         Left(s"Expected ${RequestType.GetAccountRange} but got response for ${pending.requestType}")
       else
-        // Check accounts are monotonically increasing. Decoded lists are Queues (O(i) indexing), so index a copy.
+        // Check accounts are monotonically increasing, by index into an indexed copy. Decoded RLP lists are Vectors
+        // now; the decoder's old Queue made each read O(i) (#1672/#1675).
         val accounts = response.accounts.toIndexedSeq
         val violation = (1 until accounts.size).find { i =>
           val prevHash = accounts(i - 1)._1
