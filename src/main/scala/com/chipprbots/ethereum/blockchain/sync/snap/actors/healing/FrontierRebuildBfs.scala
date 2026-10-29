@@ -27,12 +27,14 @@ import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 /** The coordinator state `FrontierRebuildBfs` reads and writes (spec 016 C-H2, research.md R14b). The core's behaviour
   * arms and the code C-H3…C-H5 will move touch them too, or rule (d) keeps them in the core, so the Impl keeps them as
   * fields. `verificationBFSRunning` is the one `var` the module writes (the walk launcher sets it on the actor thread;
-  * the core's completion and failure arms clear it); `prunedSubtreeCount` is the `AtomicLong` the walk's sub-range
-  * threads bump and the verification entry and completion read. The rest are immutable vals rule (d) keeps in the core:
+  * the core's completion and failure arms clear it); `stateRoot`, the walk root, is read by the multi-seed launcher on
+  * the actor thread to tag the walk's batches; `prunedSubtreeCount` is the `AtomicLong` the walk's sub-range threads
+  * bump and the verification entry and completion read. The rest are immutable vals rule (d) keeps in the core:
   * `bfsQueue` (the walk's level queue, `stateIngest.bfsQueue` or an in-memory fallback, built once with the
   * coordinator), the two dispatchers, `prunedEnabled`, the emission batch size and the walk's caps.
   */
 private[actors] trait FrontierRebuildBfsState:
+  def stateRoot: ByteString
   var verificationBFSRunning: Boolean
   def prunedSubtreeCount: AtomicLong
   def bfsQueue: BfsQueueStorage
@@ -85,6 +87,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     */
   private def rebuildFrontierBFS(
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
+      walkRoot: ByteString,
       selfRef: org.apache.pekko.actor.typed.ActorRef[Command],
       queue: BfsQueueStorage,
       effectiveParallelism: Int
@@ -323,7 +326,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
 
       allFrontier.grouped(FrontierBatchSize).foreach { batch =>
         awaitFrontierDrain() // pause the walk if the healing backlog is over the high-water mark
-        selfRef ! FrontierRebuilt(batch)
+        selfRef ! FrontierRebuilt(batch, walkRoot)
       }
 
       val fc = frontierCount.get()
@@ -392,8 +395,8 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
   ): Unit =
     // spec 003 C2/C3: byte-identical thin wrapper over the multi-seed launcher for a single seed. The
     // full-root / crash-recovery / pivot-reseed callers reach the SAME walk (the kernel collapses one
-    // seed to the prior single-entry enqueue).
-    startFrontierBFS(Seq((root, Seq(rootPath), isStor)), onComplete)
+    // seed to the prior single-entry enqueue). The seed is a trie root, so it is the walk root its batches carry.
+    launchFrontierBFS(Seq((root, Seq(rootPath), isStor)), root, onComplete)
 
   /** Multi-seed frontier-rebuild / verification launcher (spec 003 C3). Launches the multi-seed `rebuildFrontierBFS`
     * kernel (C2) on `healingWriterEc`, reusing `verificationBFSRunning`, the shared `bfsQueue`, and the same
@@ -403,6 +406,16 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     */
   def startFrontierBFS(
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
+      onComplete: Long => Unit
+  ): Unit =
+    // The seeds are subtrees of the current walk root (spec 003 scoped verification): its batches carry `stateRoot`,
+    // read here on the actor thread, never from the walk's own thread (spec 022 review W1).
+    launchFrontierBFS(seeds, stateRoot, onComplete)
+
+  /** Both launchers: run the walk over `seeds` and tag its `FrontierRebuilt` batches with `walkRoot`. */
+  private def launchFrontierBFS(
+      seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
+      walkRoot: ByteString,
       onComplete: Long => Unit
   ): Unit =
     val selfRef = self
@@ -429,7 +442,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     verificationBFSRunning = true
     Future {
       try
-        val missingEmitted = rebuildFrontierBFS(seeds, selfRef, bfsQueue, effectiveParallelism)
+        val missingEmitted = rebuildFrontierBFS(seeds, walkRoot, selfRef, bfsQueue, effectiveParallelism)
         onComplete(missingEmitted)
       catch
         case scala.util.control.NonFatal(e) =>

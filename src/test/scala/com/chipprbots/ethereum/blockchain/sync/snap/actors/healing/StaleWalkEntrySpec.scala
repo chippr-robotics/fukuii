@@ -83,7 +83,7 @@ class StaleWalkEntrySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     try
       coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash) // queues the new root
       // A batch of a walk launched on the OLD root, landing after the re-peg.
-      coordinator ! FrontierRebuilt(Seq(HealingEntry(stale.pathset, stale.hash)))
+      coordinator ! FrontierRebuilt(Seq(HealingEntry(stale.pathset, stale.hash)), walkRoot = oldTrie.root.hash)
       stats().pendingTasks shouldBe 1 // only the new root: the stale entry is not queued
 
       peer.serveFrom.set(Some(newTrie.served))

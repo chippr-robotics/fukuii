@@ -105,7 +105,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
 
   private def rows: Seq[Row] = Seq(
     Row("StartTrieNodeHealing", StartTrieNodeHealing(Root), 1, Some(Lifecycle)),
-    Row("FrontierRebuilt", FrontierRebuilt(Seq.empty), 2, Some(Rebuild)),
+    Row("FrontierRebuilt", FrontierRebuilt(Seq.empty, Root), 2, Some(Rebuild)),
     Row("FrontierRebuildComplete", FrontierRebuildComplete(1L, Root), 3, Some(Rebuild)),
     Row("FrontierWalkFailed", FrontierWalkFailed, 4, Some(Rebuild)),
     Row("QueueMissingNodes", QueueMissingNodes(Seq.empty), 5, Some(Response)),

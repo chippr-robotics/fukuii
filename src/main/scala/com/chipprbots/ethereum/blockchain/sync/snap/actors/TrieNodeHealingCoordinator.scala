@@ -484,7 +484,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           // message, so the entries arm sends directly.
           resumed match
             case Some(entries) if entries.nonEmpty =>
-              selfRef ! FrontierRebuilt(entries)
+              selfRef ! FrontierRebuilt(entries, root)
             case Some(_) =>
               // Complete-and-empty: rebuild already proven done; verification alone decides completion.
               selfRef ! RestartResumeVerification(root, emptyPath)
@@ -820,15 +820,26 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * (research.md R4c).
     */
   private[actors] lazy val frontierRebuildArms: PartialFunction[Command, Behavior[Command]] = {
-    case FrontierRebuilt(entries) =>
-      if entries.isEmpty then
-        log.warn(
-          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
+    case FrontierRebuilt(entries, walkRoot) =>
+      if storageScheme == StorageScheme.Path && walkRoot != stateRoot then
+        // spec 022 review W1: a re-peg does not cancel a running walk, and its batches name positions of the root it was
+        // launched on. Under Path a request is keyed by position alone, so such an entry would stand in for the current
+        // root's request for the same position, whose node it is not. The current root's own discovery and walks find
+        // every position it needs. Nothing else changes here (no stagnation reset, no dispatch). Hash scheme:
+        // unchanged (a node is keyed by its hash there; see the review notes for forge).
+        log.info(
+          s"[HEAL-FRONTIER] Dropping ${entries.size} missing nodes from a walk of superseded root " +
+            s"${Hex.toHexString(walkRoot.take(4).toArray)} (current ${Hex.toHexString(stateRoot.take(4).toArray)})"
         )
-      else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
-      queueNodes(entries.map(e => (e.pathset, e.hash)))
-      lastHealedAtMs = System.currentTimeMillis()
-      tryRedispatchPendingTasks()
+      else
+        if entries.isEmpty then
+          log.warn(
+            "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
+          )
+        else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
+        queueNodes(entries.map(e => (e.pathset, e.hash)))
+        lastHealedAtMs = System.currentTimeMillis()
+        tryRedispatchPendingTasks()
 
       Behaviors.same
 
@@ -1324,8 +1335,11 @@ object TrieNodeHealingCoordinator:
   // Internal message for async flush completion
   private[actors] case class FlushComplete(count: Int) extends Command
 
-  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
-  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS).
+  // `walkRoot` is the root the emitting walk was launched on (captured on the actor thread at launch), as
+  // FrontierRebuildComplete and VerificationBFSComplete carry it: a re-peg does not cancel a running walk, so a batch
+  // can land after `stateRoot` moved, and under the Path scheme such a batch is dropped (spec 022 review W1).
+  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry], walkRoot: ByteString) extends Command
   // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
   // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
   // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the

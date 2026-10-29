@@ -78,6 +78,7 @@ private class StubFrontierRebuildState(
     with FrontierDrainApi:
 
   // FrontierRebuildBfsState
+  var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   val prunedSubtreeCount: AtomicLong = new AtomicLong(0L)
   val healingWriterEc: ExecutionContext = ExecutionContext.parasitic
@@ -166,7 +167,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     new StubFrontierRebuildState(trie, queue, scheme, pruned, store, batchSize) with FrontierRebuildBfs
 
   private def emitted(s: StubFrontierRebuildState): Seq[Seq[HealingEntry]] =
-    s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries) => entries }
+    s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries, _) => entries }
 
   "FrontierRebuildBfs" should "emit the missing node behind a shared branch once and hand its count to onComplete" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
@@ -258,6 +259,27 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
     completed shouldBe Some(1L)
     emitted(s).flatten shouldBe Seq(HealingEntry(Seq(compact(0, 0, 2)), fixture.missingNodeHash))
+  }
+
+  it should "tag its batches with the root the walk was launched on (spec 022 review W1)" taggedAs UnitTest in {
+    val fixture = HealingTrieFixtures.sharedAncestor()
+    def roots(s: StubFrontierRebuildState): Seq[ByteString] =
+      s.selfInbox.receiveAll().collect { case FrontierRebuilt(_, walkRoot) => walkRoot }
+
+    // A root walk carries its seed, whatever the coordinator's root is (a restart rebuild walks the root it was given).
+    val rootWalk = stub(fixture)
+    rootWalk.stateRoot = ByteString(Array.fill[Byte](32)(9))
+    rootWalk.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long) => ())
+    roots(rootWalk) shouldBe Seq(fixture.rootHash)
+
+    // A subtree walk (scoped verification) carries the walk root at launch.
+    val root = fixture.storage.get(fixture.rootHash.toArray).asInstanceOf[com.chipprbots.ethereum.mpt.BranchNode]
+    val seed = ByteString(root.children(0).asInstanceOf[com.chipprbots.ethereum.mpt.HashNode].hashNode)
+    val subtreeWalk = stub(fixture)
+    val atLaunch = ByteString(Array.fill[Byte](32)(5))
+    subtreeWalk.stateRoot = atLaunch
+    subtreeWalk.startFrontierBFS(Seq((seed, Seq(compact(0)), false)), (_: Long) => ())
+    roots(subtreeWalk) shouldBe Seq(atLaunch)
   }
 
   it should "read by path and de-dup by location under the Path scheme" taggedAs UnitTest in {
