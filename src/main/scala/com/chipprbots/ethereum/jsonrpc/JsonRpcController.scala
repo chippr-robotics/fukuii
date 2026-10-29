@@ -524,19 +524,40 @@ case class JsonRpcController(
 
   private def handleMcpRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "mcp_initialize", _, _) =>
-      handle[McpInitializeRequest, McpInitializeResponse](mcpService.initialize, req)
+      handle[McpInitializeRequest, McpInitializeResponse](mcpService.initialize, req)(using
+        mcpInitializeCodec,
+        mcpInitializeCodec
+      )
     case req @ JsonRpcRequest(_, "tools/list", _, _) =>
-      handle[McpToolsListRequest, McpToolsListResponse](mcpService.toolsList, req)
+      handle[McpToolsListRequest, McpToolsListResponse](mcpService.toolsList, req)(using
+        mcpToolsListCodec,
+        mcpToolsListCodec
+      )
     case req @ JsonRpcRequest(_, "tools/call", _, _) =>
-      handle[McpToolsCallRequest, McpToolsCallResponse](mcpService.toolsCall, req)
+      handle[McpToolsCallRequest, McpToolsCallResponse](mcpService.toolsCall, req)(using
+        mcpToolsCallCodec,
+        mcpToolsCallCodec
+      )
     case req @ JsonRpcRequest(_, "resources/list", _, _) =>
-      handle[McpResourcesListRequest, McpResourcesListResponse](mcpService.resourcesList, req)
+      handle[McpResourcesListRequest, McpResourcesListResponse](mcpService.resourcesList, req)(using
+        mcpResourcesListCodec,
+        mcpResourcesListCodec
+      )
     case req @ JsonRpcRequest(_, "resources/read", _, _) =>
-      handle[McpResourcesReadRequest, McpResourcesReadResponse](mcpService.resourcesRead, req)
+      handle[McpResourcesReadRequest, McpResourcesReadResponse](mcpService.resourcesRead, req)(using
+        mcpResourcesReadCodec,
+        mcpResourcesReadCodec
+      )
     case req @ JsonRpcRequest(_, "prompts/list", _, _) =>
-      handle[McpPromptsListRequest, McpPromptsListResponse](mcpService.promptsList, req)
+      handle[McpPromptsListRequest, McpPromptsListResponse](mcpService.promptsList, req)(using
+        mcpPromptsListCodec,
+        mcpPromptsListCodec
+      )
     case req @ JsonRpcRequest(_, "prompts/get", _, _) =>
-      handle[McpPromptsGetRequest, McpPromptsGetResponse](mcpService.promptsGet, req)
+      handle[McpPromptsGetRequest, McpPromptsGetResponse](mcpService.promptsGet, req)(using
+        mcpPromptsGetCodec,
+        mcpPromptsGetCodec
+      )
   }
 
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

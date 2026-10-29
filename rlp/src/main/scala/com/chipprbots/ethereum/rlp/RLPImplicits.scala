@@ -23,8 +23,6 @@ object RLPImplicits:
       case _ => throw RLPException("src is not an RLPValue", rlp)
 
   given byteEncDec: (RLPEncoder[Byte] & RLPDecoder[Byte]) = byteCodec
-  given RLPEncoder[Byte] = byteCodec
-  given RLPDecoder[Byte] = byteCodec
 
   private val shortCodec = new RLPEncoder[Short] with RLPDecoder[Short]:
     override def encode(obj: Short): RLPValue = RLPValue(shortToBigEndianMinLength(obj))
@@ -41,8 +39,6 @@ object RLPImplicits:
       case _ => throw RLPException("src is not an RLPValue", rlp)
 
   given shortEncDec: (RLPEncoder[Short] & RLPDecoder[Short]) = shortCodec
-  given RLPEncoder[Short] = shortCodec
-  given RLPDecoder[Short] = shortCodec
 
   private val intCodec = new RLPEncoder[Int] with RLPDecoder[Int]:
     override def encode(obj: Int): RLPValue = RLPValue(intToBigEndianMinLength(obj))
@@ -52,8 +48,6 @@ object RLPImplicits:
       case _               => throw RLPException("src is not an RLPValue", rlp)
 
   given intEncDec: (RLPEncoder[Int] & RLPDecoder[Int]) = intCodec
-  given RLPEncoder[Int] = intCodec
-  given RLPDecoder[Int] = intCodec
 
   // Used for decoding and encoding positive (or 0) BigInts
   private val bigIntCodec = new RLPEncoder[BigInt] with RLPDecoder[BigInt]:
@@ -68,8 +62,6 @@ object RLPImplicits:
       case _ => throw RLPException("src is not an RLPValue", rlp)
 
   given bigIntEncDec: (RLPEncoder[BigInt] & RLPDecoder[BigInt]) = bigIntCodec
-  given RLPEncoder[BigInt] = bigIntCodec
-  given RLPDecoder[BigInt] = bigIntCodec
 
   // Used for decoding and encoding positive (or 0) longs
   private val longCodec = new RLPEncoder[Long] with RLPDecoder[Long]:
@@ -81,8 +73,6 @@ object RLPImplicits:
       case _               => throw RLPException(s"src is not an RLPValue", rlp)
 
   given longEncDec: (RLPEncoder[Long] & RLPDecoder[Long]) = longCodec
-  given RLPEncoder[Long] = longCodec
-  given RLPDecoder[Long] = longCodec
 
   private val stringCodec = new RLPEncoder[String] with RLPDecoder[String]:
     override def encode(obj: String): RLPValue = RLPValue(obj.getBytes)
@@ -92,8 +82,6 @@ object RLPImplicits:
       case _               => throw RLPException("src is not an RLPValue", rlp)
 
   given stringEncDec: (RLPEncoder[String] & RLPDecoder[String]) = stringCodec
-  given RLPEncoder[String] = stringCodec
-  given RLPDecoder[String] = stringCodec
 
   private val byteArrayCodec = new RLPEncoder[Array[Byte]] with RLPDecoder[Array[Byte]]:
 
@@ -104,8 +92,6 @@ object RLPImplicits:
       case _               => throw RLPException("src is not an RLPValue", rlp)
 
   given byteArrayEncDec: (RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]]) = byteArrayCodec
-  given RLPEncoder[Array[Byte]] = byteArrayCodec
-  given RLPDecoder[Array[Byte]] = byteArrayCodec
 
   private val byteStringCodec = new RLPEncoder[ByteString] with RLPDecoder[ByteString]:
     override def encode(obj: ByteString): RLPEncodeable = byteArrayCodec.encode(obj.toArray[Byte])
@@ -113,8 +99,6 @@ object RLPImplicits:
     override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayCodec.decode(rlp))
 
   given byteStringEncDec: (RLPEncoder[ByteString] & RLPDecoder[ByteString]) = byteStringCodec
-  given RLPEncoder[ByteString] = byteStringCodec
-  given RLPDecoder[ByteString] = byteStringCodec
 
   private def seqCodec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]) = new RLPEncoder[Seq[T]]
     with RLPDecoder[Seq[T]]:
@@ -126,8 +110,6 @@ object RLPImplicits:
 
   given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) =
     seqCodec[T]
-  given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPEncoder[Seq[T]] = seqCodec[T]
-  given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPDecoder[Seq[T]] = seqCodec[T]
 
   given listEncDec[T: RLPEncoder: RLPDecoder]: RLPCodec[List[T]] =
     seqEncDec[T].xmap(_.toList, _.toSeq)
@@ -156,8 +138,6 @@ object RLPImplicits:
       else throw RLPException(s"$rlp should be 1 or 0", rlp)
 
   given booleanEncDec: (RLPEncoder[Boolean] & RLPDecoder[Boolean]) = booleanCodec
-  given RLPEncoder[Boolean] = booleanCodec
-  given RLPDecoder[Boolean] = booleanCodec
 
   given tuple2Codec[A: RLPCodec, B: RLPCodec]: RLPCodec[(A, B)] =
     RLPCodec.instance[(A, B)](
