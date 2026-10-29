@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.crypto.kec256
@@ -130,8 +131,9 @@ private class StubFrontierPersistenceState(
   val pendingBackpressure: AtomicInteger = new AtomicInteger(0)
   var crossRootHealCount: Long = 0L
   val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   var flushing: Boolean = false
+  var flushGeneration: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var totalNodesHealed: Int = 0
 
@@ -221,9 +223,10 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers:
 
     s.flushRawNodesAsync()
 
-    s.flushing shouldBe true // cleared by the core's FlushComplete arm, not by the module
-    s.rawNodeBuffer shouldBe empty
-    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2))
+    s.flushing shouldBe true // cleared when the core's FlushComplete arm calls flushCompleted
+    // spec 022 T026 (#1549): the nodes stay buffered until the write is reported done.
+    s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(1)._1, node(2)._1)
+    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2, 0L))
     s.mptStorage.events.toSeq shouldBe Seq("store:2", "persist")
     s.mptStorage.recordSeenAtPersist shouldBe false
     s.frontierStore.get.isSubtreeComplete(node(2)._1) shouldBe true
@@ -232,8 +235,25 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers:
     // while a flush is in flight, a second one does not start
     s.rawNodeBuffer += node(3)
     s.flushRawNodesAsync()
-    s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(3)._1)
     s.selfInbox.hasMessages shouldBe false
+
+    // the write returned: exactly what it wrote leaves the buffer, and its staged record is unstaged
+    s.flushCompleted(2, 0L)
+    s.flushing shouldBe false
+    s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(3)._1)
+    s.pendingSubtreeRecords shouldBe empty
+  }
+
+  it should "ignore the completion of an asynchronous flush a synchronous flush overtook (spec 022 T026)" taggedAs UnitTest in {
+    val s = stub()
+    s.rawNodeBuffer ++= Seq(node(1), node(2))
+    s.flushRawNodesAsync() // completes inline; its FlushComplete is not processed yet
+    s.rawNodeBuffer += node(3)
+    s.flushRawNodesSync() shouldBe true // writes all three and releases them
+    s.rawNodeBuffer += node(4)
+    s.flushCompleted(2, 0L) // the async flush's completion arrives late: it must not drop node(4)
+    s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(4)._1)
+    s.flushing shouldBe false
   }
 
   it should "clear the outstanding pending and in-flight entries and the completeness marker" taggedAs UnitTest in {

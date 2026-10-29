@@ -25,9 +25,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.RecordingDataSource
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.accountKey
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -91,8 +93,9 @@ private class StubHealResponseProcessingState(
   val pendingTasks: HealTaskQueue[HealingEntry] =
     new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val healRequests: HealRequestBook = new HealRequestBook()
+  val heldNodes: HeldNodeSet = new HeldNodeSet()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   var totalNodesHealed: Int = 0
   var crossRootHealCount: Long = 0L
   val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
@@ -262,7 +265,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     // A content mismatch (a node no task asked for) is dropped: never buffered, never counted.
     h.respond(1, p, Seq(task, skipped), Seq(bytes(served), bytes(leaf(4)("other"))))
 
-    m.rawNodeBuffer.map(_._1) shouldBe Seq(hashOf(served))
+    m.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(hashOf(served))
     m.rawNodeBuffer.head._2.toSeq shouldBe served.encode.toSeq
     m.totalNodesHealed shouldBe 1
     m.completedTaskCount shouldBe 1
@@ -390,7 +393,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.healRequests.isFetching(child.hash) shouldBe true
     m.persisted.toSeq shouldBe Seq(Seq(child))
     // spec 022 D2 (Hash): one edge from the branch to each missing child, the pending one included.
-    m.healRequests.outstandingChildren(task.hash) shouldBe 2
+    m.heldNodes.get(task.hash).map(_.outstanding) shouldBe Some(2) // held: two children missing
     m.healRequests.parentsOf(hashOf(pending)) shouldBe Seq(task.hash)
   }
 
@@ -532,19 +535,21 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     h.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
     (ds, m, childEntries, accountKey(Array[Byte](6)))
 
-  it should "under the Path scheme delete a stale child in the parent's batch, and leave a present child alone (item 7)" taggedAs UnitTest in {
+  // spec 022 slice 2 (D3): the branch waits on missing children, so it is held, not written. The stale child's position
+  // is deleted in the batch of the response that found it, before the child can be written there (geth's membatch
+  // orders a delNode before the later write); deferring it to the branch's own commit would delete the child.
+  it should "under the Path scheme delete a stale child in the batch of the response that found it, and leave a present child alone (item 7)" taggedAs UnitTest in {
     val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
       m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1) // [6,0]: present (right bytes)
       m.stalePaths += kids(1).pathset // [6,4]: stale bytes of another hash
       // [6,9]: absent
     }
-    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
-      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
-    )
+    ds.batches.map(_.toSet) shouldBe Seq(Set(Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4)))))
+    ds.batchesPutting(AccountNs, parentKey) shouldBe empty // held: two children missing
     m.pendingTasks.toSeq shouldBe Seq(kids(1), kids(2)) // the stale and the absent child are requested
   }
 
-  it should "under the Path scheme delete a stale child that is already requested, in the parent's batch (item 6)" taggedAs UnitTest in {
+  it should "under the Path scheme delete a stale child that is already requested, in the batch of the response that found it (item 6)" taggedAs UnitTest in {
     val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
       m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1)
       m.pathReads((kids(2).hash, kids(2).pathset)) = Array[Byte](1)
@@ -552,9 +557,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
       m.healRequests.add(m.healRequestFor(kids(1)))
       m.stalePaths += kids(1).pathset
     }
-    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
-      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
-    )
+    ds.batches.map(_.toSet) shouldBe Seq(Set(Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4)))))
+    ds.batchesPutting(AccountNs, parentKey) shouldBe empty // held: [6,4] missing
     m.pendingTasks shouldBe empty // already requested: an edge, no second fetch
     m.healRequests.parentsOf(m.healRequestFor(kids(1)).key) should have size 1
   }

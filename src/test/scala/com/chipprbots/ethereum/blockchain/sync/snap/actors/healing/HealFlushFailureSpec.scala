@@ -88,7 +88,7 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     s.mptStorage.stored shouldBe empty
     // Nothing was written, so nothing may be dropped: the nodes stay buffered for the next flush and the staged spec
     // 005 record stays staged (it is written only after its node is durable).
-    s.rawNodeBuffer.map(_._1) shouldBe nodes.map(_._1)
+    s.rawNodeBuffer.map(_._1).toSeq shouldBe nodes.map(_._1)
     s.pendingSubtreeRecords should contain(nodes.head._1)
     s.selfInbox.receiveAll().collect { case m: TrieNodeHealingCoordinator.FlushComplete => m } shouldBe empty
   }

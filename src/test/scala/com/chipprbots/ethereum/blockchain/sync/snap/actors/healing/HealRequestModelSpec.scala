@@ -236,7 +236,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
 
   private def hashOf(seed: String): ByteString = kec256(ByteString(seed))
 
-  "HealRequestBook under the Hash scheme" should "record a child shared by two parents once, count one edge per parent, and release both parents when it arrives (T009)" taggedAs UnitTest in {
+  "HealRequestBook under the Hash scheme" should "record a child shared by two parents once, keep one edge per parent, and hand both edges over when it arrives (T009, forge N5)" taggedAs UnitTest in {
     val book = new HealRequestBook()
     val (pa, pb) = (hashOf("parent-a"), hashOf("parent-b"))
     val c = hashOf("shared-child")
@@ -250,19 +250,17 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.size shouldBe 3
     book.waitingOn(c) shouldBe Seq(cUnderA) // one request for the node, fetched from where it was first found
     book.parentsOf(c) shouldBe Seq(pa, pb)
-    book.outstandingChildren(pa) shouldBe 2
-    book.outstandingChildren(pb) shouldBe 2
 
-    // C arrives: both parents' counts decrement; neither is done yet, each still waits on its own leaf.
-    book.satisfy(cUnderA) shouldBe empty
-    book.outstandingChildren(pa) shouldBe 1
-    book.outstandingChildren(pb) shouldBe 1
+    // C arrives: its request goes, and both parents' edges are handed over to it (held, or committed). Nothing is
+    // decremented here: a parent's count goes down when C's whole subtree is committed (forge N5, HeldNodeSet).
+    book.satisfy(cUnderA) shouldBe Seq(pa, pb)
     book.isFetching(c) shouldBe false
+    book.parentsOf(c) shouldBe empty
 
     book.satisfy(leafA) shouldBe Seq(pa)
     book.satisfy(leafB) shouldBe Seq(pb)
     book.isEmpty shouldBe true
-    book.outstandingChildren(pa) shouldBe 0
+    book.bytes shouldBe 0L
   }
 
   it should "count a child one parent references twice as two edges, fetched once" taggedAs UnitTest in {
@@ -271,9 +269,8 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val c = hashOf("twice")
     val atSlot2 = HealRequest.ofNode(accountPathset(2), c)
     book.addChildren(parent, Seq(atSlot2, HealRequest.ofNode(accountPathset(9), c))) shouldBe Seq(atSlot2)
-    book.outstandingChildren(parent) shouldBe 2
     book.parentsOf(c) shouldBe Seq(parent, parent)
-    book.satisfy(atSlot2) shouldBe Seq(parent)
+    book.satisfy(atSlot2) shouldBe Seq(parent, parent)
     book.isEmpty shouldBe true
   }
 
@@ -283,23 +280,38 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val child = HealRequest.ofNode(accountPathset(3), hashOf("child"))
     book.addChildren(parent, Seq(child)) shouldBe Seq(child)
     book.addChildren(parent, Seq(child)) shouldBe empty
-    book.outstandingChildren(parent) shouldBe 1
+    book.parentsOf(child.key) shouldBe Seq(parent)
     book.satisfy(child) shouldBe Seq(parent)
   }
 
-  it should "give a parent processed again an edge to a child neither live nor stored, but none to a live one (review item 5)" taggedAs UnitTest in {
+  it should "give a parent processed again an edge to a child no longer live, but no second one to a live one (review item 5)" taggedAs UnitTest in {
     val book = new HealRequestBook()
     val parent = hashOf("parent")
     val a = HealRequest.ofNode(accountPathset(3), hashOf("a"))
     val b = HealRequest.ofNode(accountPathset(4), hashOf("b"))
     book.addChildren(parent, Seq(a, b)) shouldBe Seq(a, b)
-    book.satisfy(b) shouldBe empty // b arrived; the parent still waits on a
-    // b was lost (say, with a failed buffered write): processed again, the parent finds a still live and b missing.
+    book.satisfy(b) shouldBe Seq(parent) // b arrived: its edge went with it
+    // Processed again, the parent finds a still live (it has the edge already) and b missing again.
     book.addChildren(parent, Seq(a, b)) shouldBe Seq(b)
-    book.outstandingChildren(parent) shouldBe 2
     book.parentsOf(a.key) shouldBe Seq(parent) // no second edge to the live child
-    book.satisfy(a) shouldBe empty
+    book.satisfy(a) shouldBe Seq(parent)
     book.satisfy(b) shouldBe Seq(parent)
+  }
+
+  it should "count each parent's edges to a shared child apart, never one parent's against another's (forge N1)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val (p1, p2) = (hashOf("p1"), hashOf("p2"))
+    val c = hashOf("shared")
+    val cAt = (i: Int) => HealRequest.ofNode(accountPathset(i), c)
+    book.addChildren(p1, Seq(cAt(1))) shouldBe Seq(cAt(1))
+    // p2 finds C live with p1's edge only: p2 still gets its own.
+    book.addChildren(p2, Seq(cAt(2))) shouldBe empty
+    book.parentsOf(c) shouldBe Seq(p1, p2)
+    // p2 processed again: no second edge. p1 processed again, now referencing C twice: one more edge, not two.
+    book.addChildren(p2, Seq(cAt(2))) shouldBe empty
+    book.addChildren(p1, Seq(cAt(1), cAt(3))) shouldBe empty
+    book.parentsOf(c) shouldBe Seq(p1, p2, p1)
+    book.satisfy(cAt(1)) shouldBe Seq(p1, p2, p1)
   }
 
   it should "keep a request live until it is satisfied, so a walk entry for a live hash is not fetched again" taggedAs UnitTest in {
@@ -308,12 +320,15 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.add(HealRequest.ofNode(accountPathset(1), h)) shouldBe HealRequestBook.Added.NewFetch
     book.add(HealRequest.ofNode(accountPathset(4), h)) shouldBe HealRequestBook.Added.Duplicate
     book.opensNewSubtree(h) shouldBe true
+    book.fetchFreesHeld(h) shouldBe false
     book.addChildren(hashOf("parent"), Seq(HealRequest.ofNode(accountPathset(1), h))) shouldBe empty
     book.opensNewSubtree(h) shouldBe false // a parent now waits on it
+    book.fetchFreesHeld(h) shouldBe true
+    book.bytes should be > 0L
     book.clear()
     book.isEmpty shouldBe true
     book.fetchingHashes shouldBe empty
-    book.outstandingChildren(hashOf("parent")) shouldBe 0
+    book.bytes shouldBe 0L
   }
 
   "HealRequestBook under the Path scheme" should "keep each position of one node as its own request, fetched once, each released to its own parent" taggedAs UnitTest in {
@@ -362,7 +377,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     // Another node for the same position: the live request is not touched.
     book.satisfy(HealRequest.atPosition(accountPathset(8), hashOf("other"))) shouldBe empty
     book.get(expected.key) shouldBe Some(expected)
-    book.outstandingChildren(parent) shouldBe 1
+    book.parentsOf(expected.key) shouldBe Seq(parent)
     book.satisfy(expected) shouldBe Seq(parent)
     book.satisfy(expected) shouldBe empty // already satisfied
   }
@@ -389,6 +404,33 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.add(HealRequest.atPosition(accountPathset(5), hOld)) shouldBe HealRequestBook.Added.NewFetch
     book.isRetired(hOld) shouldBe false
     book.satisfy(current) shouldBe Seq(parent)
+  }
+
+  it should "refuse a parentless request for a position a held parent waits on for another node (beacon N1)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val pos = accountPathset(3, 4)
+    val current = HealRequest.atPosition(pos, hashOf("current-root-node"))
+    val walkEntry = HealRequest.atPosition(pos, hashOf("walk-of-another-root"))
+    val parent = hashOf("current-parent")
+    book.addChildren(parent, Seq(current)) shouldBe Seq(current)
+    // Whichever arrives first, the parent's child stays: a parentless entry never replaces it.
+    book.add(walkEntry) shouldBe HealRequestBook.Added.Refused(current)
+    book.add(walkEntry).needsFetch shouldBe false
+    book.get(current.key) shouldBe Some(current)
+    book.parentsOf(current.key) shouldBe Seq(parent)
+    book.isFetching(walkEntry.hash) shouldBe false
+  }
+
+  it should "drop the replaced request's parent edges, so a node a parent does not reference never closes its count" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val pos = accountPathset(6)
+    val (p1, p2) = (hashOf("p1"), hashOf("p2"))
+    val forP1 = HealRequest.atPosition(pos, hashOf("node-p1-expects"))
+    val forP2 = HealRequest.atPosition(pos, hashOf("node-p2-expects"))
+    book.addChildren(p1, Seq(forP1)) shouldBe Seq(forP1)
+    book.addChildren(p2, Seq(forP2)) shouldBe Seq(forP2) // a conflict: last writer wins
+    book.parentsOf(forP2.key) shouldBe Seq(p2) // p1's edge went with the request it was for
+    book.satisfy(forP2) shouldBe Seq(p2)
   }
 
   it should "keep a fetch live for the other positions when the one it was queued for is replaced" taggedAs UnitTest in {

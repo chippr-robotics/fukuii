@@ -11,9 +11,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
@@ -34,8 +36,9 @@ private[actors] trait HealResponseProcessingState:
   def serveRoot: ByteString
   def pendingTasks: HealTaskQueue[HealingEntry]
   def healRequests: HealRequestBook
+  def heldNodes: HeldNodeSet
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
-  def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
+  def rawNodeBuffer: FlushBuffer
   var totalNodesHealed: Int
   var crossRootHealCount: Long
   def healAttempts: mutable.Map[ByteString, Int]
@@ -105,7 +108,10 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * position whose hash is already being fetched joins that fetch (an alias, filled when the node arrives).
     */
   def enqueueRequest(entry: HealingEntry): Boolean =
-    if healRequests.add(healRequestFor(entry)).needsFetch then
+    val request = healRequestFor(entry)
+    // A node already held (received, waiting on its children) is not fetched again: its children are being fetched.
+    if heldNodes.contains(HeldNodeSet.idOf(request)) then false
+    else if healRequests.add(request).needsFetch then
       pendingTasks += entry
       true
     else false
@@ -160,11 +166,16 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
         .partition(t => healRequests.isRetired(t.hash))
     if retiredTasks.nonEmpty then
       log.debug(s"[HEAL] ${retiredTasks.size} dispatched heal task(s) retired by a conflicting request — dropped")
+    // beacon N3: warn, not error. A hash retired by a conflict and then waited on again can come back on a duplicate
+    // carrier; that is stale bookkeeping, not a fault.
     if unvouched.nonEmpty then
-      log.error(
+      log.warn(
         s"[HEAL] ${unvouched.size} dispatched heal task(s) that no live request waits on, first " +
           s"${Hex.toHexString(unvouched.head.hash.take(4).toArray)} — not filled, not queued again"
       )
+    // beacon N4: a response to a request whose every task was retired or unvouched cannot fill anything; an empty
+    // answer to it is no fault of the peer.
+    val nothingVouched = retiredTasks.size + unvouched.size == tasksForRequest.size
 
     nodes.foreach { nodeData =>
       if nodeData.nonEmpty then
@@ -186,8 +197,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             // (an alias: identical subtrees under two accounts), under Hash the one request for the node — and only
             // those (review W2): each expects exactly this keccak.
             val filled = healRequests.waitingOn(nodeHash)
-            if storageScheme == StorageScheme.Hash && filled.nonEmpty then
-              rawNodeBuffer += ((nodeHash, nodeData.toArray))
             filled.foreach(request => fillRequest(request, nodeData))
             healedCount += filled.size
             totalNodesHealed += filled.size
@@ -202,6 +211,10 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           )
     }
 
+    // spec 022 D3: write what this response completed — every node whose subtree is now present, with every ancestor
+    // it completes, and the stale positions discovery found — in one atomic write.
+    commitHeld()
+
     // A healed account leaf brings an account that account-range sync never saw, so nothing else will ever fetch its
     // bytecode (the code-hash list is built from account-range responses). Hand the missing ones to the controller,
     // which fetches them before it finalises SNAP. Sent BEFORE any completion signal this actor emits afterwards
@@ -212,9 +225,12 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // requests stay live in `healRequests` (live = pending or in flight), so nothing else queues a second fetch of them
     // meanwhile (BUG-H1). The fetch goes out again from the path of the first request still waiting on the hash, which
     // in the normal case is the task's own; a hash nothing waits on any more is not queued again (review W2).
-    tasksForRequest.iterator.map(_.hash).distinct.foreach { hash =>
+    // beacon N2 and Q1: the next waiter after the carrier just used, O(1) when one request waits on the hash, so a fetch
+    // put back goes out from the next alias position.
+    tasksForRequest.distinctBy(_.hash).foreach { task =>
+      val hash = task.hash
       if !healedHashes.contains(hash) then
-        healRequests.waitingOn(hash).headOption.foreach { live =>
+        healRequests.nextWaiter(hash, task.pathset).foreach { live =>
           pendingTasks += HealingEntry(live.pathset, hash)
           // spec 004 T015/FR-006: an unsatisfied task (server skipped it / content-mismatch drop) bumps its
           // attempt counter and may surface if it stays unservable across the bounded threshold WITHOUT a
@@ -239,6 +255,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       statelessPeers -= peer.id.value
       emptyResponseStrikes.remove(peer.id.value)
       lastHealedAtMs = System.currentTimeMillis()
+    else if nothingVouched then
+      log.debug(s"[HEAL] Empty response from ${peer.id.value} to a request with nothing left to fill — no strike")
     else
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
@@ -283,20 +301,57 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
         s"responseBytes=${responseBytesTargetFor(peer)})"
     )
 
-    if healedCount > 0 then
-      snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-      // Flush immediately after every response rather than waiting for the 1000-node threshold.
-      // Sparse healing runs (small gap counts) would otherwise stall writes in the buffer
-      // indefinitely if they never hit the count gate.
-      flushRawNodesAsync()
+    if healedCount > 0 then snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
+    // Hash scheme: flush what `commitHeld` buffered after every response rather than waiting for the 1000-node
+    // threshold, so a sparse heal never leaves complete nodes sitting in the buffer.
+    if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
 
     // Dispatch more work to this peer if available (pipeline multiple requests)
     dispatchIfPossible(peer)
 
     self ! HealingCheckCompletion
 
+  /** Nothing pending, nothing in flight, and nothing held (spec 022 T017: a held node waits on a child, so healing is
+    * not done while one is).
+    */
   def isComplete: Boolean =
-    pendingTasks.isEmpty && activeRequests.isEmpty
+    pendingTasks.isEmpty && activeRequests.isEmpty && heldNodes.isEmpty
+
+  /** Commit what is ready (spec 022 D3): every held node whose subtree is present, with every ancestor it completes,
+    * and the stale positions found since the last commit, in one atomic write; then release them. Path: written now,
+    * one `PathNodeStorage` batch. Hash: moved to the flush buffer, which the flush writes in commit order (any prefix
+    * of it is complete). A write that throws loses nothing: the held nodes and deletes stay, and the next commit
+    * retries them (#1549); the error is logged.
+    */
+  def commitHeld(): Unit =
+    if heldNodes.hasPendingWrites then
+      val plan = heldNodes.planCommit()
+      storageScheme match
+        case StorageScheme.Path =>
+          stateIngest.pathNodes match
+            case None =>
+              log.error("[HEAL-COMMIT] Path scheme without a path-node store: nothing can be written")
+            case Some(pns) =>
+              val writes = plan.nodes.map { e =>
+                val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(e.request.pathset.last.toArray)._1
+                val owner = if e.request.pathset.size > 1 then Some(e.request.pathset.head) else None
+                (owner, nibbles, e.node.toArray)
+              }
+              try
+                pns.writeNodesWithDeletes(writes, plan.deletes)
+                heldNodes.applyCommit(plan)
+                // vault note 2: deletes per batch, to check the tombstone estimate (about 0.07 per extension).
+                log.debug(s"[HEAL-COMMIT] ${plan.nodes.size} node(s) and ${plan.deletes.size} delete(s) in one batch")
+              catch
+                case scala.util.control.NonFatal(e) =>
+                  log.error(
+                    s"[HEAL-COMMIT] Write of ${plan.nodes.size} node(s) and ${plan.deletes.size} delete(s) failed — " +
+                      "kept held, retried at the next commit",
+                    e
+                  )
+        case StorageScheme.Hash =>
+          rawNodeBuffer ++= plan.nodes.map(e => (e.request.hash, e.node.toArray))
+          heldNodes.applyCommit(plan)
 
   /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
   private def recordHealedCodeHash(account: Account): Unit =
@@ -312,27 +367,68 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       log.info(s"[HEAL-CODE] ${hashes.size} healed account(s) lack bytecode — reporting codeHashes to the controller")
       snapSyncController ! SNAPSyncController.HealedCodeHashes(hashes)
 
-  /** Fill `request` with the served node: find its missing children, store it (Path: at its position, together with the
-    * positions its write leaves dangling, FR-008), satisfy the request, record the children as requests with an edge
-    * from it (queueing a fetch for each hash not already fetched), and capture it for scoped verification. Under the
-    * Hash scheme the caller has already buffered the node for the flush.
+  /** Fill `request` with the served node (spec 022 D3): take its parent edges from the book, find its missing children,
+    * and hold it until they are all committed. With no missing child it is ready at once, and the response's commit
+    * writes it (with every ancestor it completes). Missing children are recorded as requests with an edge from it (a
+    * fetch queued for each hash not already fetched), or, when held already, gain the edge directly. Path: the stale
+    * positions discovery finds go to the next commit write, before anything can be written there.
     */
   private def fillRequest(request: HealRequest, nodeData: ByteString): Unit =
-    val (children, deletes) = discoverMissingChildren(nodeData, request)
-    if storageScheme == StorageScheme.Path then writeAtPosition(request, nodeData, deletes)
-    healRequests.satisfy(request)
-    val newEntries = healRequests.addChildren(request.key, children).map(c => HealingEntry(c.pathset, c.hash))
-    if newEntries.nonEmpty then
-      pendingTasks ++= newEntries
-      persistFrontier(newEntries) // Layer 2: inline-discovered children are new frontier entries
-      childrenDiscoveredTotal += newEntries.size
-      if childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20 then
-        log.info(
-          s"[HEAL-DISCOVER] Inline children queued: $childrenDiscoveredTotal total " +
-            s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
+    val id = HeldNodeSet.idOf(request)
+    val parents = healRequests.satisfy(request)
+    if heldNodes.contains(id) then
+      // Held already (a walk or controller entry fetched it again): its children are being fetched; it only gains the
+      // parents that waited on this request.
+      heldNodes.addParents(id, parents)
+    else
+      heldNodes.heldAt(request.key).foreach { other =>
+        // beacon N7: a position filled again with another node. The old node is dropped, never written; edges to it
+        // decrement nothing from now on, and its parents wait on it, not on this node.
+        log.error(
+          s"[HEAL-HELD-CONFLICT] Position ${Hex.toHexString(request.key.take(8).toArray)} held node " +
+            s"${Hex.toHexString(other.request.hash.take(4).toArray)} and is now filled with " +
+            s"${Hex.toHexString(request.hash.take(4).toArray)} — the held node is dropped"
         )
+        heldNodes.drop(other.id)
+      }
+      discoverMissingChildren(nodeData, request) match
+        case None =>
+          // vault note 5: a node that hashes right but does not decode is never written: its children are unknown, so
+          // it cannot be complete. Its parents stay held (dropped if nothing completes them); a walk finds it again.
+          log.error(
+            s"[HEAL] Healed node ${Hex.toHexString(request.hash.take(4).toArray)} does not decode — not stored"
+          )
+        case Some((children, deletes)) =>
+          if storageScheme == StorageScheme.Path then
+            // A parentless node's own position may hold a stale node nothing has deleted yet (a parent's discovery
+            // deletes a stale child's position): delete it before anything below it is written.
+            val own =
+              if parents.isEmpty && pathPresence(request.hash, request.pathset) == PathPresence.Mismatch then
+                val owner = if request.pathset.size > 1 then Some(request.pathset.head) else None
+                Seq((owner, com.chipprbots.ethereum.mpt.HexPrefix.decode(request.pathset.last.toArray)._1))
+              else Seq.empty
+            if own.nonEmpty || deletes.nonEmpty then heldNodes.addDeletes(own ++ deletes)
+          val (heldChildren, newChildren) = children.partition(c => heldNodes.contains(HeldNodeSet.idOf(c)))
+          heldChildren.groupBy(_.key).foreach { case (_, refs) =>
+            heldNodes.attachParent(HeldNodeSet.idOf(refs.head), id, refs.size)
+          }
+          val toFetch = healRequests.addChildren(id, newChildren)
+          // A child already live gained an edge: its queued fetch, if it opened a new subtree, now frees held memory.
+          if toFetch.size < newChildren.size then
+            newChildren.iterator.map(_.hash).distinct.foreach(pendingTasks.promote)
+          heldNodes.hold(request, nodeData, children.size, parents)
+          val newEntries = toFetch.map(c => HealingEntry(c.pathset, c.hash))
+          if newEntries.nonEmpty then
+            pendingTasks ++= newEntries
+            persistFrontier(newEntries) // Layer 2: inline-discovered children are new frontier entries
+            childrenDiscoveredTotal += newEntries.size
+            if childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20 then
+              log.info(
+                s"[HEAL-DISCOVER] Inline children queued: $childrenDiscoveredTotal total " +
+                  s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
+              )
     // spec 003 C1/FR-001: capture this healed request as a scoped-verification seed. This is the ONLY site that counts
-    // a network-served node as healed, so the accumulator is exactly {requests whose node was stored this round}. Tag
+    // a network-served node as healed, so the accumulator is exactly {requests whose node was received this round}. Tag
     // the round's root on first capture (F5), dedup by request key (a position under Path, so every alias is a seed),
     // and latch overflow at scopedHealMaxPaths (F4/FR-011).
     // spec 004 T017: healedPathsRoot is tagged with the WALK root `stateRoot` (NOT `serveRoot`), so the
@@ -342,28 +438,16 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       if healedPathsThisRound.size >= scopedHealMaxPaths then healedPathsOverflowed = true
       else healedPathsThisRound.update(request.key, HealingEntry(request.pathset, request.hash))
 
-  /** Path scheme: write the served node at `request`'s position and delete `deletes` in the same write batch (spec 022
-    * FR-008). pathset = [HP-path] for the account trie, [accountHash32, HP-path] for a storage trie.
-    */
-  private def writeAtPosition(
-      request: HealRequest,
-      nodeData: ByteString,
-      deletes: Seq[(Option[ByteString], Array[Byte])]
-  ): Unit =
-    stateIngest.pathNodes.foreach { pns =>
-      val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(request.pathset.last.toArray)._1
-      val owner = if request.pathset.size > 1 then Some(request.pathset.head) else None
-      pns.writeNodeWithDeletes(owner, nibbles, nodeData.toArray, deletes)
-    }
-
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node and
-    * returns its missing children, one request per child edge, and (Path scheme) the positions its write leaves
-    * dangling. Makes healing self-feeding: root → children → grandchildren top-down without a trie walk.
+    * returns its missing children, one request per child edge, and (Path scheme) the stale positions to delete. Makes
+    * healing self-feeding: root → children → grandchildren top-down without a trie walk. `None` when the node does not
+    * decode: its children are unknown, so it must never be written (vault note 5).
     *
-    * A child whose request is already live (queued or in flight) is missing by definition: under Hash it is the same
-    * node, so the parent gains an edge to the fetch already out without a storage read (spec 022 D2: a shared child is
-    * fetched once); under Path it is the same position, still read so that stale bytes there are deleted (review item
-    * 6).
+    * A child whose request is already live (queued or in flight), or that is held (received, waiting on its own
+    * children: not on disk), is missing by definition: under Hash it is the same node, so the parent gains an edge to
+    * it without a storage read (spec 022 D2: a shared child is fetched once); under Path it is the same position, still
+    * read so that stale bytes there are deleted (review item 6). Under Hash a child in the flush buffer is present: it
+    * was committed with its whole subtree, only not flushed yet.
     *
     * B3 FIX: under Hash, a branch's other children are checked with a single multiGetNodes call instead of up to 16
     * serial isNodeInStorage calls on the actor thread. The extension child uses the same pattern for consistency.
@@ -373,8 +457,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * and fetched with) and counts as present only when the bytes stored there hash to the child's hash — see
     * `pathPresence`. That is what lets a re-peg re-fetch only the delta instead of the whole trie.
     *
-    * FR-008 (Path, D10; geth `trie/sync.go` `children()` and `hasNode`), the positions the parent's write leaves
-    * dangling, deleted in that write's batch:
+    * FR-008 (Path, D10; geth `trie/sync.go` `children()` and `hasNode`), stale positions, deleted in the next commit
+    * write (spec 022 slice 2: before the child is written there, as geth's membatch orders a `delNode` before the later
+    * write; deferring them to the parent's own commit would delete the child written in between):
     *   - an extension with a hashed child skips the positions strictly inside its key (P ++ key[:i], 0 < i < len(key)):
     *     nothing may stay stored there;
     *   - a child position holding bytes of another hash (a stale node of an older root).
@@ -382,7 +467,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   private def discoverMissingChildren(
       nodeData: ByteString,
       parent: HealRequest
-  ): (Seq[HealRequest], Seq[(Option[ByteString], Array[Byte])]) =
+  ): Option[(Seq[HealRequest], Seq[(Option[ByteString], Array[Byte])])] =
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
@@ -390,7 +475,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
 
     val pathset = parent.pathset
     val nodeHash = parent.hash
-    if pathset.isEmpty then (Seq.empty, Seq.empty)
+    if pathset.isEmpty then Some((Seq.empty, Seq.empty))
     else
       try
         val decoded = MptTraversals.decodeNode(nodeData.toArray)
@@ -434,8 +519,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               branch.children.zipWithIndex.collect { case (hn: HashNode, i) => (i, ByteString(hn.hashNode)) }.toSeq
             storageScheme match
               case StorageScheme.Hash =>
-                // Hash scheme: one batched content-addressed multiGetNodes call for the children not already live.
-                val toCheck = hashed.filterNot { case (_, h) => healRequests.contains(h) }
+                // Hash scheme: one batched content-addressed multiGetNodes call for the children not already live,
+                // held (missing: an edge to them) or buffered for the flush (present: their subtree is committed).
+                val toCheck = hashed.filterNot { case (_, h) => knownLocally(h).isDefined }
                 val present: Map[Int, Boolean] =
                   if toCheck.isEmpty then Map.empty
                   else
@@ -444,7 +530,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                       .zip(mptStorage.multiGetNodes(toCheck.map(_._2.toArray)).map(_.isDefined))
                       .toMap
                 hashed.foreach { case (i, childHash) =>
-                  if !present.getOrElse(i, false) then
+                  if !knownLocally(childHash).getOrElse(present.getOrElse(i, false)) then
                     children += requestAt(childPathset(parentNibbles :+ i.toByte), childHash)
                 }
               case StorageScheme.Path =>
@@ -460,9 +546,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                 val childNibbles = parentNibbles ++ ext.sharedKey.toArray
                 storageScheme match
                   case StorageScheme.Hash =>
-                    val missing = healRequests.contains(childHash) ||
-                      mptStorage.multiGetNodes(Seq(childHash.toArray)).headOption.flatten.isEmpty
-                    if missing then children += requestAt(childPathset(childNibbles), childHash)
+                    if !hashChildPresent(childHash) then children += requestAt(childPathset(childNibbles), childHash)
                   case StorageScheme.Path =>
                     (1 until ext.sharedKey.length).foreach { i =>
                       deletes += ((owner, parentNibbles ++ ext.sharedKey.take(i).toArray))
@@ -495,8 +579,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                     case StorageScheme.Hash =>
                       // Content-addressed lookup by hash, exactly as before (the pathset is ignored).
                       val request = requestAt(storageRootSet, storageRoot)
-                      if healRequests.contains(request.key) then children += request
-                      else if !isNodeInStorage(storageRoot, storageRootSet) then
+                      if !hashChildPresent(storageRoot) then
                         children += request
                         log.debug(
                           s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(storageRoot.take(4).toArray)} " +
@@ -552,14 +635,25 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               s"[HEAL-VERIFY-PRUNED] Staged subtree-complete candidate ${Hex.toHexString(nodeHash.take(4).toArray)} " +
                 s"(${subtreeRoots.size} child subtree(s) present+recorded) — durable record written post-flush (D3)."
             )
-        (children.toSeq, deletes.toSeq)
+        Some((children.toSeq, deletes.toSeq))
       catch
         case NonFatal(e) =>
-          log.debug(
-            s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. " +
-              s"Skipping — trie walk will find these nodes."
-          )
-          (Seq.empty, Seq.empty)
+          log.error(s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}")
+          None
+
+  /** Hash scheme: what is known about `hash` without reading the store. `Some(false)` when it is live or held (missing:
+    * the parent gets an edge to it), `Some(true)` when it is in the flush buffer (committed, its subtree complete, only
+    * not flushed yet), `None` otherwise (the store decides).
+    */
+  private def knownLocally(hash: ByteString): Option[Boolean] =
+    if healRequests.contains(hash) || heldNodes.contains(hash) then Some(false)
+    else if rawNodeBuffer.contains(hash) then Some(true)
+    else None
+
+  /** Hash scheme: whether the child `hash` is present (its subtree complete): buffered for the flush, or in the store.
+    */
+  private def hashChildPresent(hash: ByteString): Boolean =
+    knownLocally(hash).getOrElse(mptStorage.multiGetNodes(Seq(hash.toArray)).headOption.flatten.isDefined)
 
   /** Presence check that gates healing queue/skip decisions.
     *

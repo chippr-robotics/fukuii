@@ -1373,6 +1373,12 @@ class TrieNodeHealingCoordinatorSpec
           if c >= 1L then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
         case _ => FishingOutcomes.continueAndIgnore
       }
+      // spec 022 D3: the root is written only once its subtree is present, so serve its one missing child too.
+      val send2 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](3.seconds)
+      val req2 = getTrieNodesOf(send2)
+      coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+        SNAP.TrieNodes(requestId = req2.requestId, nodes = Seq(fx.childNode.encoded))
+      )
       // The root is durably in storage before the re-peg (the node whose survival we assert).
       eventually(timeout(5.seconds), interval(100.millis))(isInStorage(fx.storage, fx.rootHash) shouldBe true)
 

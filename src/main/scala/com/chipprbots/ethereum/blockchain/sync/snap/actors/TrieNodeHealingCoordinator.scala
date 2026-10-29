@@ -17,9 +17,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -99,7 +101,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
     // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
-    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+    // spec 022 D1: the held-memory bound, in bytes (held nodes, the flush buffer and the live requests). At it, no new
+    // subtree is opened; fetches that let held nodes commit continue. `sync.snap-sync.healing.held-memory-limit`.
+    heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -256,6 +261,36 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // `pendingHashSet` de-dup set (pending only, by hash) and the Path `pathAliases` map.
   val healRequests: HealRequestBook = new HealRequestBook()
 
+  // spec 022 D3 (FR-001 to FR-004): served nodes whose subtree is not all present yet. Never on disk; committed with
+  // every ancestor they complete, in one atomic write, once their last child edge closes. Dropped on a re-peg or a
+  // force-complete, after what is ready has been committed.
+  val heldNodes: HeldNodeSet = new HeldNodeSet()
+
+  // spec 022 D1: the held-memory pause, with its last state for the transition log.
+  private var newSubtreesPausedLast: Boolean = false
+
+  /** Whether opening new subtrees is paused: something is held and the held nodes, the flush buffer and the live
+    * requests (forge N4) together reach `heldMemoryLimit`. Fetches that let held nodes commit are never paused, which
+    * is what keeps the bound from deadlocking; with nothing held, nothing is paused (a backlog of requests alone does
+    * not shrink by waiting). The bound is therefore soft: the subtrees already open run to completion, deepest first.
+    */
+  def newSubtreesPaused: Boolean =
+    val bytes = heldMemoryBytes
+    val paused = heldNodes.nonEmpty && bytes >= heldMemoryLimit
+    if paused != newSubtreesPausedLast then
+      newSubtreesPausedLast = paused
+      if paused then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB reached the ${heldMemoryLimit / 1024} KiB limit " +
+            s"(${heldNodes.size} held, ${rawNodeBuffer.size} buffered, ${healRequests.size} requests) — no new " +
+            s"subtree is opened until held nodes commit; their children are still fetched"
+        )
+      else log.info(s"[HEAL-HELD] Held memory ${bytes / 1024} KiB under the limit — new subtrees are opened again")
+    paused
+
+  /** Estimated heap of what healing holds before it is durable: held nodes, the flush buffer and the live requests. */
+  def heldMemoryBytes: Long = heldNodes.bytes + rawNodeBuffer.bytes + healRequests.bytes
+
   // --- spec 003: scoped post-heal verification (FR-001) ---
   // Bounded, per-round, in-memory accumulator of the nodes HEALED this round (their HealingEntry,
   // captured at the single heal site in handleResponse). Mirrors the pendingTasks/healRequests
@@ -344,9 +379,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   val peerCooldownUntilMs = mutable.Map[String, Long]()
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
-  val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  // spec 022 D3: nodes committed with their whole subtree, waiting for the asynchronous flush (Hash scheme).
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   val rawFlushThreshold = 1000
   var flushing: Boolean = false
+  // Bumped by every synchronous flush, so a completion of an asynchronous flush that started before it is ignored.
+  var flushGeneration: Long = 0L
 
   // spec 005 C3b/D2/T009/T012: heal-side subtree-complete seeding, DEFERRED until durable. discoverMissingChildren
   // identifies a candidate X (a just-healed node whose direct children are ALL present on disk AND themselves
@@ -580,6 +618,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
             s"Signaling completion with $totalNodesHealed healed nodes."
         )
+        // spec 022 T025: commit what is complete, flush it (it was never flushed before the stop), drop the rest. A
+        // held node's subtree is not all present, so it is never written.
+        commitHeld()
+        flushRawNodesSync()
+        val droppedHeld = heldNodes.size
+        heldNodes.clear()
+        if droppedHeld > 0 then
+          log.info(s"[HEAL-HELD] Force-complete: dropped $droppedHeld held node(s), never written")
         clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
@@ -612,7 +658,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
         )
         stateRoot = newStateRoot
-        flushRawNodesSync() // Flush any buffered nodes before clearing state
+        // spec 022 T025: commit what is complete (with the stale positions already found) and flush it, then drop every
+        // held node: its subtree is not all present, so it is never written. Discovery from the new root finds again
+        // whatever the new root still needs.
+        commitHeld()
+        flushRawNodesSync()
+        val droppedHeld = heldNodes.size
+        heldNodes.clear()
+        if droppedHeld > 0 then log.info(s"[HEAL-HELD] Re-peg: dropped $droppedHeld held node(s), never written")
         // spec 009 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
@@ -708,7 +761,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
       log.info(
         s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
-          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+          s"pending=${pendingTasks.size} active=${activeRequests.size} held=${heldNodes.size} " +
+          s"(${heldMemoryBytes / 1024} KiB) peers=${knownAvailablePeers.size} | " +
           s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
       )
       val (newM, crossed) =
@@ -1092,11 +1146,17 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   /** Async raw-node flush completion (C-H1 `FrontierPersistence`). Arm #14 (research.md R4c). */
   private[actors] lazy val frontierPersistenceArms: PartialFunction[Command, Behavior[Command]] = {
-    case FlushComplete(count) =>
-      flushing = false
+    case FlushComplete(count, generation) =>
+      flushCompleted(count, generation)
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
-      // Check if buffer filled up again during the flush
-      if rawNodeBuffer.size >= rawFlushThreshold then flushRawNodesAsync()
+      // Flush what was committed during the write.
+      if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
+      self ! HealingCheckCompletion
+
+      Behaviors.same
+
+    case FlushFailed(generation, cause) =>
+      flushFailed(generation, cause)
       self ! HealingCheckCompletion
 
       Behaviors.same
@@ -1109,14 +1169,25 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     */
   private[actors] lazy val healVerificationArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingCheckCompletion =>
-      if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
+      // spec 022 D3: retry a commit whose write failed.
+      if heldNodes.hasPendingWrites then commitHeld()
+      // A held node waits on a child; with nothing pending or in flight there is no child left to arrive. That is a
+      // bookkeeping fault: the held nodes can never commit. Drop them (never written, so nothing on disk is wrong); the
+      // verification walk finds them missing and they are fetched again.
+      if pendingTasks.isEmpty && activeRequests.isEmpty && heldNodes.nonEmpty && !heldNodes.hasPendingWrites then
+        log.error(
+          s"[HEAL-HELD] ${heldNodes.size} held node(s) wait on nothing pending or in flight — dropping them, " +
+            "never written; the verification walk finds them again"
+        )
+        heldNodes.clear()
+      if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && flushRawNodesSync() then
         // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
         // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
         // all nodes were already in local storage — either way the trie is complete from our
         // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
         // HealingPivotRefreshed calling startVerificationBFS directly, not through this gate.
+        // spec 022 T026: the gate's flushRawNodesSync() above wrote every buffered node, or the gate stays shut.
         if verificationPassComplete || totalNodesHealed == 0 then
-          flushRawNodesSync()
           log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
           // FR-002: mark the snapshot complete ONLY on the verified-complete path — a verification BFS
           // actually walked the trie and found zero missing nodes (verificationPassComplete == true).
@@ -1341,7 +1412,10 @@ object TrieNodeHealingCoordinator:
   // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
   // the Typed behavior can receive them. They were plain `Any` messages under Classic.
   // Internal message for async flush completion
-  private[actors] case class FlushComplete(count: Int) extends Command
+  // `generation` is the flush generation the write started in (FrontierPersistence.flushCompleted).
+  private[actors] case class FlushComplete(count: Int, generation: Long) extends Command
+  // spec 022 T026 (#1549): the asynchronous flush threw; nothing it was writing is released.
+  private[actors] case class FlushFailed(generation: Long, cause: Throwable) extends Command
 
   // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS).
   // `walkRoot` is the root the emitting walk was launched on (captured on the actor thread at launch), as
@@ -1411,6 +1485,11 @@ object TrieNodeHealingCoordinator:
     * Operator-tunable via `sync.snap-sync.decoupled-heal-max-attempts-no-refresh`.
     */
   val DefaultDecoupledHealMaxAttemptsNoRefresh: Int = 12
+
+  /** Default held-memory bound (spec 022 D1, FR-002): 128 MiB, about 250k held nodes. Operator-tunable via
+    * `sync.snap-sync.healing.held-memory-limit`.
+    */
+  val DefaultHeldMemoryLimit: Long = 128L * 1024 * 1024
 
   /** Operator-configurable ceiling for BFS level parallelism. Effective parallelism is `min(DefaultBfsParallelism,
     * max(1, availableProcessors - 2))` so large levels are split across sub-ranges on `healingWriterEc`. See
@@ -1504,7 +1583,8 @@ object TrieNodeHealingCoordinator:
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = DefaultHeldMemoryLimit
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1537,7 +1617,8 @@ object TrieNodeHealingCoordinator:
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
           healedCodeCheck = healedCodeCheck,
-          walkLocalOnly = walkLocalOnly
+          walkLocalOnly = walkLocalOnly,
+          heldMemoryLimit = heldMemoryLimit
         ).start()
       }
     }

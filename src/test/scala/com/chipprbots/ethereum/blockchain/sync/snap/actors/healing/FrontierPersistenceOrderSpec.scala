@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.crypto.kec256
@@ -128,8 +129,9 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
   val pendingBackpressure: AtomicInteger = new AtomicInteger(0)
   var crossRootHealCount: Long = 0L
   val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   var flushing: Boolean = false
+  var flushGeneration: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var totalNodesHealed: Int = 0
   val prunedEnabled: Boolean = true
@@ -189,7 +191,7 @@ class FrontierPersistenceOrderSpec extends AnyFlatSpec with Matchers:
     staged(s)
     s.flushRawNodesAsync()
 
-    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2))
+    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2, 0L))
     s.mptStorage.events.toSeq shouldBe Seq("store:2", "persist")
     s.mptStorage.frontierHeldAtPersist shouldBe Some(true)
     s.mptStorage.recordSeenAtPersist shouldBe Some(false)

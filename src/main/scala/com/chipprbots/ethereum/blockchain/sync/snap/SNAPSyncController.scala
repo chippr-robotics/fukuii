@@ -1511,6 +1511,10 @@ case class SNAPSyncConfig(
     // full-state walk (≈ cap × 80 B; 4,000,000 ≈ 320 MB) so the walk completes instead of OOM-looping.
     // Completeness is independent of this value. See docs/design/healing-frontier-scale.md.
     healingVisitedCap: Int = actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+    // spec 022 D1: the held-memory bound in bytes (held nodes, flush buffer, live requests); at it no new subtree is
+    // opened. Key: `sync.snap-sync.healing.held-memory-limit` (a HOCON size, e.g. `128 MiB`). Not in base/sync.conf
+    // yet: the SNAP-split verifier forbids src/main/resources changes on fix branches, so the default comes from here.
+    healingHeldMemoryLimit: Long = actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
     // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
     // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
     healingFrontierPersistence: Boolean = false,
@@ -1696,6 +1700,9 @@ object SNAPSyncConfig:
       healingVisitedCap =
         if snapConfig.hasPath("healing-visited-cap") then snapConfig.getInt("healing-visited-cap")
         else actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+      healingHeldMemoryLimit =
+        if snapConfig.hasPath("healing.held-memory-limit") then snapConfig.getBytes("healing.held-memory-limit")
+        else actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
         snapConfig.getBoolean("healing-frontier-persistence"),
       prunedHealVerification =

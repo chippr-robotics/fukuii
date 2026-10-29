@@ -316,7 +316,8 @@ final class RecordingChildFactories(
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
       healedCodeCheck: Boolean,
-      walkLocalOnly: Option[AtomicBoolean]
+      walkLocalOnly: Option[AtomicBoolean],
+      heldMemoryLimit: Long
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
     spawns ! ChildSpawn.Healing(

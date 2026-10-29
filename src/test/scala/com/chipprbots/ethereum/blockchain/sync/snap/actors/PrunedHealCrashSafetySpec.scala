@@ -200,15 +200,14 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
       coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(peer)
       coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(SNAP.TrieNodes(requestId = 1, nodes = Seq(encoded)))
 
-      // X's bytes get committed, but its subtree did NOT close (the child is missing). The missing child surfaces in
-      // the open frontier and X is NEVER recorded subtree-complete — so a later verification has no record to prune X
-      // by and MUST descend it (the descend-on-missing-record fallback, FR-006). We assert the record-absence
-      // directly (the precondition that forces descent; the descent itself is proven by T-2).
+      // X's subtree did NOT close (the child is missing). The missing child surfaces in the open frontier and X is NEVER
+      // recorded subtree-complete — so a later verification has no record to prune X by and MUST descend it (the
+      // descend-on-missing-record fallback, FR-006). We assert the record-absence directly (the precondition that
+      // forces descent; the descent itself is proven by T-2). spec 022 D3: X itself is held, not written, until its
+      // subtree is present.
       eventually(timeout(5.seconds), interval(100.millis))(openFrontier(coordinator) should be >= 1)
-      eventually(timeout(5.seconds), interval(100.millis))(
-        nodeInStorage(storage, hash) shouldBe true
-      ) // X bytes committed
-      store.isSubtreeComplete(hash) shouldBe false // … but X NOT recorded ⇒ descend-on-missing-record
+      nodeInStorage(storage, hash) shouldBe false // X held, never on disk while its child is missing (spec 022 D3)
+      store.isSubtreeComplete(hash) shouldBe false // … and X NOT recorded ⇒ descend-on-missing-record
       missingChild.length shouldBe 32
     }
   }
@@ -232,9 +231,10 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
           SNAP.TrieNodes(requestId = 1, nodes = Seq(encoded))
         )
 
-        // The child is enqueued (open frontier) and X's bytes flush, but the record must stay absent.
+        // The child is enqueued (open frontier); X is held (spec 022 D3: never on disk while its child is missing), and
+        // the record must stay absent.
         eventually(timeout(5.seconds), interval(100.millis))(openFrontier(coordinator) should be >= 1)
-        eventually(timeout(5.seconds), interval(100.millis))(nodeInStorage(storage, hash) shouldBe true)
+        nodeInStorage(storage, hash) shouldBe false
         store.isSubtreeComplete(hash) shouldBe false
         // Issue a progress query (a barrier on the single-thread actor: any earlier message — including a flush
         // completion — has been processed by the time the reply returns), then re-confirm the record is STILL absent.
