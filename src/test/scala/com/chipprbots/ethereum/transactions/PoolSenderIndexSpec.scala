@@ -71,3 +71,23 @@ class PoolSenderIndexSpec extends AnyFlatSpec with Matchers:
     index.add(alice, hash(0), tx(0))
     index.pooledFrom(alice) shouldBe Seq(tx(0))
   }
+
+  it should "not be built until a tx reaches the pool-state rules, and then once" taggedAs UnitTest in {
+    // The live pool, by hash, in insertion order.
+    val live = mutable.LinkedHashMap.from(pool(6).map((sender, h, t) => h -> (sender, t)))
+    var builds = 0
+    val deferred = PoolSenderIndex.Deferred { () =>
+      builds += 1
+      PoolSenderIndex(live.iterator.map { case (h, (sender, t)) => (sender, h, t) }, live.contains)
+    }
+
+    // admit puts a tx that no rule checked (its sender's state was not read), as it does on its post-put path.
+    live += hash(100) -> (alice, tx(100))
+    deferred.built.foreach(_.add(alice, hash(100), tx(100)))
+    builds shouldBe 0 // a batch in which no tx reaches the rules builds no index
+
+    // The first tx that reaches the rules builds it from the pool as it is then, so the earlier put is in it.
+    deferred.get.pooledFrom(alice) shouldBe Seq(tx(0), tx(2), tx(4), tx(100))
+    deferred.get
+    builds shouldBe 1
+  }

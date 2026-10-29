@@ -498,7 +498,7 @@ class PendingTransactionsManagerSpec
 
   // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7, 2026-09-23): `maxTxRetrievals = 256`, the most transactions it
   // asks for in one request, "a failsafe against malicious announces which might cause us to request more data than
-  // we'd expect". An announcement may carry up to announcement-max-entries hashes; every one is still requested.
+  // we'd expect". Every hash tracked from an announcement (up to maxTxAnnounces, below) is still requested.
   it should "request at most 256 announced hashes per GetPooledTransactions, and every hash once" taggedAs (
     UnitTest
   ) in new TestSetup:
@@ -516,6 +516,47 @@ class PendingTransactionsManagerSpec
     requests.map(_._2.size) shouldBe Seq(256, 256, 88)
     requests.flatMap(_._2) shouldBe hashes
     etcPeerManager.expectNoMessage(200.millis)
+
+  // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7): `maxTxAnnounces = 4096`, the most hashes tracked for one peer at
+  // once; the excess of an announcement is dropped. Without it an announcement is bounded only by the 16 MiB message
+  // size (MessageCodec.MaxDecompressedLength), and every hash it carries was requested.
+  it should "track at most 4096 announced hashes per peer, and drop an announcement at the cap" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    // No request times out (and frees its slot) while the test runs.
+    val noFetchTimeout: TxPoolConfig = new TxPoolConfig:
+      override val txPoolSize: Int = 300
+      override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = Timeouts.veryLongTimeout
+    val ptm = spawnPtm(config = noFetchTimeout)
+    def hashesFrom(first: Int, count: Int): Seq[ByteString] =
+      (first until first + count).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    def announce(peer: Peer, hashes: Seq[ByteString]): Unit =
+      ptm ! WrappedPeerEvent(
+        PeerEvent.MessageFromPeer(
+          ETHPackets
+            .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(100)), hashes),
+          peer.id
+        )
+      )
+
+    val hashes = hashesFrom(1, 5000)
+    announce(peer1, hashes)
+    val requests = Seq.fill(16)(requestedFrom(this))
+    requests.map(_._1).distinct shouldBe Seq(peer1.id)
+    requests.map(_._2.size) shouldBe Seq.fill(16)(256)
+    requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
+    etcPeerManager.expectNoMessage(200.millis) // the other 904 are dropped, not requested
+
+    // peer1 is at the cap: its next announcement is dropped whole.
+    val more = hashesFrom(10001, 10)
+    announce(peer1, more)
+    etcPeerManager.expectNoMessage(200.millis)
+    // The cap is per peer: another peer announcing the same hashes is asked for them.
+    announce(peer2, more)
+    requestedFrom(this) shouldBe ((peer2.id, more))
 
   // ---- one requester per announced hash, re-requested from another announcer on failure ---------------------
   //

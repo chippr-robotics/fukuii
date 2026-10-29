@@ -51,10 +51,21 @@ object PendingTransactionsManager:
 
   /** The most hashes one GetPooledTransactions asks for: go-ethereum's `maxTxRetrievals` (eth/fetcher/tx_fetcher.go,
     * 256 at c6e3a0d7, 2026-09-23), "a failsafe against malicious announces which might cause us to request more data
-    * than we'd expect". An announcement can carry up to `announcement-max-entries` hashes; they are all still
-    * requested, in batches of at most this many, so a reply (and the per-tx work on it) is bounded by our request.
+    * than we'd expect". The hashes a peer has announced (at most [[MaxTxAnnounces]] tracked at once) are all requested,
+    * in batches of at most this many, so a reply (and the per-tx work on it) is bounded by our request.
     */
   private[transactions] val MaxTxRetrievals: Int = 256
+
+  /** The most announced hashes tracked for one peer at a time: go-ethereum's `maxTxAnnounces`
+    * (eth/fetcher/tx_fetcher.go, 4096 at c6e3a0d7), "the maximum number of unique transaction a peer can announce in a
+    * short time". The excess of an announcement is dropped before it is tracked or requested.
+    *
+    * Without it, one announcement is bounded only by the message size (`MessageCodec.MaxDecompressedLength`, 16 MiB:
+    * hundreds of thousands of hashes), not by `announcement-max-entries`: [[PendingAnnouncements.announce]] asks for
+    * every new hash, including those a later hash of the same announcement then evicts. Counted as go-ethereum's `used`
+    * does ([[PendingAnnouncements.announcedBy]]): hashes requested from the peer and hashes it is an alternate for.
+    */
+  private[transactions] val MaxTxAnnounces: Int = 4096
 
   sealed trait Command
 
@@ -255,8 +266,8 @@ object PendingTransactionsManager:
       )
 
     /** What the pool holds that [[TxAdmission.poolRejection]] reads for a transaction from `sender` (hash `hash`), read
-      * from `index` — built once per batch by [[admit]] (once per local submission) — rather than from a copy of the
-      * whole pool per transaction (#1675).
+      * from `index` — built at most once per batch by [[admit]], when a tx first reaches the rules (once per local
+      * submission) — rather than from a copy of the whole pool per transaction (#1675).
       */
     def poolView(sender: Address, hash: ByteString, index: PoolSenderIndex): TxAdmission.PoolView =
       TxAdmission.PoolView(
@@ -380,6 +391,9 @@ object PendingTransactionsManager:
       * per hash, the other announcers are alternates). Shared by both wire shapes — ETH72's custody Mask is not
       * consulted here (fukuii has no PeerDAS cell storage to fetch selectively against; see
       * NewPooledTransactionHashes72's doc comment) — so fetching unknown hashes is identical either way.
+      *
+      * At most [[MaxTxAnnounces]] hashes are tracked for `peerId` at once: the excess of the hashes not in the pool is
+      * dropped before it is recorded, as go-ethereum's tx fetcher drops it.
       */
     def requestUnknownAnnouncedHashes(
         hashes: Seq[ByteString],
@@ -388,10 +402,24 @@ object PendingTransactionsManager:
         peerId: PeerId
     ): Unit =
       val pool = pendingTransactions.asMap()
-      val toRequest = hashes.zip(types).zip(sizes).collect {
-        case ((hash, txType), size)
-            if !pool.containsKey(hash) && pendingAnnouncements.announce(hash, txType, size, peerId) =>
-          hash
+      val unknown: Vector[(ByteString, Byte, BigInt)] = hashes.iterator
+        .zip(types)
+        .zip(sizes)
+        .collect { case ((hash, txType), size) if !pool.containsKey(hash) => (hash, txType, size) }
+        .toVector
+      val used = pendingAnnouncements.announcedBy(peerId)
+      val tracked = unknown.take(math.max(0, MaxTxAnnounces - used))
+      if tracked.size < unknown.size then
+        context.log.debug(
+          "Dropping {} of {} announced tx hash(es) from peer {}: {} already tracked (cap {})",
+          unknown.size - tracked.size,
+          unknown.size,
+          peerId,
+          used,
+          MaxTxAnnounces
+        )
+      val toRequest = tracked.collect {
+        case (hash, txType, size) if pendingAnnouncements.announce(hash, txType, size, peerId) => hash
       }
       if toRequest.nonEmpty then requestPooledTransactions(peerId, toRequest)
 
@@ -538,16 +566,20 @@ object PendingTransactionsManager:
       if transactionsToAdd.isEmpty then Set.empty
       else
         val timestamp = System.currentTimeMillis()
-        // The pool by sender, read once for the whole batch, and only where the pool-state rules read it (#1675).
-        val senderIndex: Option[PoolSenderIndex] = Option.when(TxAdmission.poolStateRulesApply)(poolSenderIndex())
+        // The pool by sender, read at most once for the whole batch: only where the pool-state rules apply, and only
+        // when the first tx reaches them (#1675).
+        val senderIndex: Option[PoolSenderIndex.Deferred] =
+          Option.when(TxAdmission.poolStateRulesApply)(PoolSenderIndex.Deferred(() => poolSenderIndex()))
         // One tx at a time, its sidecar right after its put: a later put can size-evict an earlier tx, and the removal
         // listener must then find that tx's sidecar already stored to drop it. In nonce order per sender, so the
-        // pool-state rules see each sender's earlier txs from this batch as pooled (each is indexed once it is in).
+        // pool-state rules see each sender's earlier txs from this batch as pooled (each is indexed once it is in, by
+        // `add` or by the build).
         transactionsToAdd.toSeq.sortBy(t => (t.senderAddress.toUnprefixedString, t.tx.tx.nonce)).foreach { t =>
           val hash = t.tx.hash.value
           if poolAdmits(t, checked, senderIndex) then
             putPooled(PendingTransaction(t, timestamp))
-            if pool.containsKey(hash) then senderIndex.foreach(_.add(t.senderAddress, hash, t.tx.tx))
+            // Not built yet: the build will read this tx from the pool.
+            if pool.containsKey(hash) then senderIndex.flatMap(_.built).foreach(_.add(t.senderAddress, hash, t.tx.tx))
             blobSidecars.get(hash).foreach(storeSidecar(hash, _))
         }
         val admitted = transactionsToAdd.filter(t => pool.containsKey(t.tx.hash.value))
@@ -558,14 +590,14 @@ object PendingTransactionsManager:
         admitted
 
     /** The pool-state rules ([[TxAdmission.poolRejection]]) for a peer's tx, as go-ethereum applies them to remote txs
-      * too. Only where they apply ([[TxAdmission.poolStateRulesApply]], exactly where [[admit]] builds `senderIndex`)
-      * and the head's state was read; a peer's tx with a pooled nonce never reaches here (the pending-nonce check
-      * refuses it), so no replacement is decided here.
+      * too. Only where they apply ([[TxAdmission.poolStateRulesApply]], exactly where [[admit]] defers a `senderIndex`)
+      * and the head's state was read, the one case that builds the index; a peer's tx with a pooled nonce never reaches
+      * here (the pending-nonce check refuses it), so no replacement is decided here.
       */
     def poolAdmits(
         t: SignedTransactionWithSender,
         checked: StateChecked,
-        senderIndex: Option[PoolSenderIndex]
+        senderIndex: Option[PoolSenderIndex.Deferred]
     ): Boolean =
       senderIndex match
         case None => true // the pool-state rules do not apply on this chain
@@ -576,7 +608,7 @@ object PendingTransactionsManager:
                 t.tx.tx,
                 alreadyKnown = false,
                 account,
-                poolView(t.senderAddress, t.tx.hash.value, index),
+                poolView(t.senderAddress, t.tx.hash.value, index.get),
                 head,
                 txPoolConfig.priceBump,
                 txPoolConfig.blobPriceBump

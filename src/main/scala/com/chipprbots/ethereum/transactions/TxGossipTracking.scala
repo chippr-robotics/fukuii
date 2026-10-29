@@ -123,6 +123,11 @@ final class PendingAnnouncements(
   /** The peer `hash` is currently being requested from, if any. */
   def requestedFrom(hash: ByteString): Option[PeerId] = liveEntry(hash).flatMap(_.requestedFrom)
 
+  /** How many hashes `peerId` has announced that are still tracked: those requested from it and those it is an
+    * alternate for (go-ethereum's `used` in the tx fetcher, checked against `maxTxAnnounces`). O(1).
+    */
+  def announcedBy(peerId: PeerId): Int = byPeer.get(peerId).fold(0)(_.size)
+
   /** Record that `peerId` announced `hash`. True iff the caller must request it from `peerId` now: nobody is being
     * asked for it yet. Otherwise `peerId` is an alternate, asked only if the current request fails.
     */

@@ -12,7 +12,8 @@ import com.chipprbots.ethereum.domain.Transaction
   *
   * The rules read, for each transaction admitted, the sender's pooled transactions (and, for a set-code transaction,
   * each authority's). Collecting those by copying and scanning the whole pool for every transaction made one batch
-  * O(batch x pool). This index is built from the pool once per batch, and stays exact while the batch is admitted:
+  * O(batch x pool). This index is built from the pool at most once per batch, when the first transaction reaches the
+  * rules ([[PoolSenderIndex.Deferred]]), and stays exact while the batch is admitted:
   *   - a transaction the batch puts in the pool is [[add]]ed, so a sender's later transactions in the batch see it;
   *   - a lookup skips every indexed transaction that `isPooled` no longer reports (a later put size-evicted it, its
   *     sidecar was dropped, or it expired), so nothing that has left the pool is read.
@@ -46,3 +47,22 @@ object PoolSenderIndex:
     val index = new PoolSenderIndex(isPooled)
     pooled.iterator.foreach { case (sender, hash, tx) => index.add(sender, hash, tx) }
     index
+
+  /** A [[PoolSenderIndex]] built on first use, so a batch in which no transaction reaches the pool-state rules (the
+    * head's state was not read for its sender) does not pay the O(pool) build.
+    *
+    * Built late, the index reads the pool as it is then, which already holds every transaction the batch has put; so a
+    * put needs [[PoolSenderIndex.add]] only once the index is [[built]].
+    */
+  final private[transactions] class Deferred(build: () => PoolSenderIndex):
+    private var index: Option[PoolSenderIndex] = None
+
+    /** The index, built on the first call. */
+    def get: PoolSenderIndex = index.getOrElse {
+      val fresh = build()
+      index = Some(fresh)
+      fresh
+    }
+
+    /** The index, if [[get]] has built it. */
+    def built: Option[PoolSenderIndex] = index
