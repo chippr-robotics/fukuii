@@ -110,12 +110,13 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [x] T018 [P] [US3] Test the #1549 regression on the heal path: a throw inside the node write leaves the held or buffered nodes intact and resets `flushing`. File: `test/.../blockchain/sync/snap/actors/healing/HealFlushFailureSpec.scala`. Today, `FrontierPersistence.flushRawNodesAsync:185-206` clears the buffer before the write. **[vault]**
 - [x] T019 [P] [US3] Test the bound and pause policy: at the held-memory cap, requests for children of held nodes are still dispatched, and requests that open a new subtree are not. There is no deadlock on a trie deeper than the bound allows. File: `HeldNodeSetSpec.scala`. **[vault]**
 - [x] T020 [P] [US3] Test that dispatch order is deepest first: with mixed-depth pending requests, the dispatched order is non-increasing in depth. File: `test/.../blockchain/sync/snap/actors/healing/HealDispatchOrderSpec.scala`. **[beacon]**
-- [ ] T021 [US3] Build the kill-point harness in `src/it/scala/com/chipprbots/ethereum/sync/HealCrashSafetyItSpec.scala` (the IntegrationTest module).
+- [x] T021 [US3] Build the kill-point harness in `src/it/scala/com/chipprbots/ethereum/sync/HealCrashSafetyItSpec.scala` (the IntegrationTest module).
   - It heals a synthetic trie in a child JVM on real RocksDB.
   - It sends `kill -9` at four points: after a node is held, mid-chain commit, mid-re-peg, and mid-excluded-set write.
   - It reopens the database and runs an audit asserting that no present node has an absent child.
   - Parameterise it over Path and Hash, and over `pruning.mode=basic` and `inmemory`.
   - **[vault]**
+  - **Done in slice 2 for three of the four points** (held, mid-chain before and after the write, mid-re-peg with nodes held and with the old trie healed), 20 runs. The fourth, mid-excluded-set write, lands with the excluded-account store in slice 3 (T032-T035).
 
 ### Implementation
 
