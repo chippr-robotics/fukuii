@@ -17,7 +17,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -125,10 +127,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Mutable state root — updated in-place when the controller refreshes the pivot (HealingPivotRefreshed).
   var stateRoot: ByteString = initialStateRoot
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
-  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
-  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification). One queued fetch per
+  // node hash (`healRequests` decides when one is needed). spec 022 D1: dispatched deepest first (the depth of the
+  // fetch's path), FIFO among equal depths; a fetch is classed when queued as freeing held memory (a request waiting
+  // on it has a parent edge, i.e. a held parent) or opening a new subtree, for the held-memory pause policy.
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](
+      e => HealRequest.depthOf(e.pathset),
+      _.hash,
+      e => healRequests.fetchFreesHeld(e.hash)
+    )
   // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
   // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
   // directly) to apply backpressure — it pauses emission when the healing backlog is large so a

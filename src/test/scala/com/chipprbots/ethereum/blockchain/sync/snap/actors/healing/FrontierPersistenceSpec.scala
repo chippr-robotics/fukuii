@@ -22,6 +22,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -122,7 +124,8 @@ private class StubFrontierPersistenceState(
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // FrontierPersistenceState
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val pendingBackpressure: AtomicInteger = new AtomicInteger(0)
   var crossRootHealCount: Long = 0L

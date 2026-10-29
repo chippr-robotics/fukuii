@@ -57,8 +57,7 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
   private def pathDisk(pns: PathNodeStorage): Disk = (n: Placed) =>
     readAtPath(pns, n).map(ByteString(_)).contains(n.encoded)
 
-  private def hashDisk(mpt: TestMptStorage): Disk = (n: Placed) =>
-    scala.util.Try(mpt.get(n.hash.toArray)).isSuccess
+  private def hashDisk(mpt: TestMptStorage): Disk = (n: Placed) => scala.util.Try(mpt.get(n.hash.toArray)).isSuccess
 
   private def withCoordinator[A](scheme: StorageScheme, root: ByteString, peer: ScriptedPeer)(
       body: (ActorRef[TrieNodeHealingCoordinator.Command], TestProbe[SNAPSyncController.Command], Disk) => A

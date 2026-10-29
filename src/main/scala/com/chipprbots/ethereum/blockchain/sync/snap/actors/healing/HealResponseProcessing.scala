@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
@@ -31,7 +32,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 private[actors] trait HealResponseProcessingState:
   def stateRoot: ByteString
   def serveRoot: ByteString
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
+  def pendingTasks: HealTaskQueue[HealingEntry]
   def healRequests: HealRequestBook
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]

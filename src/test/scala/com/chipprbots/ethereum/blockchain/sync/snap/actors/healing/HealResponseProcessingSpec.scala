@@ -25,7 +25,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.RecordingDataSource
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.accountKey
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -86,7 +88,8 @@ private class StubHealResponseProcessingState(
   // HealResponseProcessingState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val healRequests: HealRequestBook = new HealRequestBook()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty

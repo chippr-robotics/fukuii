@@ -109,7 +109,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [ ] T017 [P] [US3] Test: when a re-peg happens while nodes are held, none of the held nodes is on disk, and completion waits until their children arrive. File: `test/.../blockchain/sync/snap/actors/healing/HeldNodeSetSpec.scala`. **[vault]**
 - [ ] T018 [P] [US3] Test the #1549 regression on the heal path: a throw inside the node write leaves the held or buffered nodes intact and resets `flushing`. File: `test/.../blockchain/sync/snap/actors/healing/HealFlushFailureSpec.scala`. Today, `FrontierPersistence.flushRawNodesAsync:185-206` clears the buffer before the write. **[vault]**
 - [ ] T019 [P] [US3] Test the bound and pause policy: at the held-memory cap, requests for children of held nodes are still dispatched, and requests that open a new subtree are not. There is no deadlock on a trie deeper than the bound allows. File: `HeldNodeSetSpec.scala`. **[vault]**
-- [ ] T020 [P] [US3] Test that dispatch order is deepest first: with mixed-depth pending requests, the dispatched order is non-increasing in depth. File: `test/.../blockchain/sync/snap/actors/healing/HealDispatchOrderSpec.scala`. **[beacon]**
+- [x] T020 [P] [US3] Test that dispatch order is deepest first: with mixed-depth pending requests, the dispatched order is non-increasing in depth. File: `test/.../blockchain/sync/snap/actors/healing/HealDispatchOrderSpec.scala`. **[beacon]**
 - [ ] T021 [US3] Build the kill-point harness in `src/it/scala/com/chipprbots/ethereum/sync/HealCrashSafetyItSpec.scala` (the IntegrationTest module).
   - It heals a synthetic trie in a child JVM on real RocksDB.
   - It sends `kill -9` at four points: after a node is held, mid-chain commit, mid-re-peg, and mid-excluded-set write.
@@ -119,7 +119,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Implementation
 
-- [ ] T022 [US1] Make `pendingTasks` a priority queue on depth, deepest first, in `actors/healing/HealDispatch.scala:233-234` (today a FIFO `ArrayDeque`; children are appended at `HealResponseProcessing:409`). **[beacon] [forge]**
+- [x] T022 [US1] Make `pendingTasks` a priority queue on depth, deepest first, in `actors/healing/HealDispatch.scala:233-234` (today a FIFO `ArrayDeque`; children are appended at `HealResponseProcessing:409`). **[beacon] [forge]**
 - [ ] T023 [US3] Implement the held-node set in `blockchain/sync/snap/heal/HeldNodeSet.scala` (new file), following data-model.md "Held node".
   - Each entry holds the node bytes, its outstanding count and its parent edges.
   - Measure the bound in bytes, configured by `fukuii.sync.snap-sync.healing.held-memory-limit` (default 128 MiB) in `src/main/resources/conf/base/sync.conf`.

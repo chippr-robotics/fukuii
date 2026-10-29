@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingRequestTimeout
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
@@ -33,7 +34,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 private[actors] trait HealDispatchState:
   def stateRoot: ByteString
   def serveRoot: ByteString
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
+  def pendingTasks: HealTaskQueue[HealingEntry]
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def maxInFlightPerPeer: Int
   def maxConcurrentRequests: Int
@@ -228,10 +229,8 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     else if pivotRefreshRequested then None
     else if statelessPeers.contains(peer.id.value) then None
     else
-      val effectiveBatch = effectiveBatchSize
-      val takeCount = effectiveBatch.min(pendingTasks.size)
-      val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
-      pendingTasks.dropInPlace(takeCount)
+      // spec 022 D1: deepest first (the queue's order).
+      val batch: Seq[HealingEntry] = pendingTasks.dequeue(effectiveBatchSize, paused = false)
 
       val requestId = requestTracker.generateRequestId()
       val responseBytes = responseBytesTargetFor(peer)

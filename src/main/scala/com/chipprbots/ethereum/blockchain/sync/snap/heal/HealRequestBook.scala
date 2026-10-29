@@ -82,6 +82,17 @@ final class HealRequestBook:
       case Some(first) =>
         (Iterator.single(first) ++ moreWaiting.get(hash).iterator.flatMap(_.iterator)).flatMap(requests.get).toSeq
 
+  /** The first live request waiting on `hash` (the one its fetch is queued with), in O(1). */
+  def firstWaiter(hash: ByteString): Option[HealRequest] = firstWaiting.get(hash).flatMap(requests.get)
+
+  /** Whether a fetch of `hash` frees held memory: some request waiting on it has a parent edge, i.e. a held parent
+    * waits on it (spec 022 D1, the pause policy). False for a fetch whose every request opens a new subtree.
+    */
+  def fetchFreesHeld(hash: ByteString): Boolean =
+    firstWaiting.get(hash).exists { first =>
+      parentEdges.contains(first) || moreWaiting.get(hash).exists(_.exists(parentEdges.contains))
+    }
+
   /** The parents with an edge to request `key`, one entry per edge, in the order the edges were added. */
   def parentsOf(key: ByteString): Seq[ByteString] = parentEdges.get(key).fold(Seq.empty[ByteString])(_.reverse)
 

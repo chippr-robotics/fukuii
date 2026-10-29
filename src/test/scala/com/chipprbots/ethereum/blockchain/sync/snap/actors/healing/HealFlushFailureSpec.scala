@@ -56,8 +56,8 @@ final private class FailingWritesDataSource(failures: Int) extends EphemDataSour
   *
   * Method: the module test drives `flushRawNodesAsync` directly over a store that throws once. The coordinator tests
   * heal a small trie (`PathHealPresenceFixtures.accountTrieOld`, eight nodes, an extension included) through a real
-  * coordinator whose store throws on its first write; the oracle is that healing still completes and every node ends
-  * up stored.
+  * coordinator whose store throws on its first write; the oracle is that healing still completes and every node ends up
+  * stored.
   */
 class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
 
@@ -72,8 +72,12 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
 
   "The asynchronous healed-node flush" should "keep every buffered node and staged record when the write throws (T018)" taggedAs UnitTest in {
     val frontier = Some(new HealingFrontierStorage(EphemDataSource()))
-    val s = new StubFrontierPersistenceState(frontier, frontierPersistenceEnabled = false, prunedEnabled = true,
-      healingWriterEc = ExecutionContext.parasitic) with FrontierPersistence
+    val s = new StubFrontierPersistenceState(
+      frontier,
+      frontierPersistenceEnabled = false,
+      prunedEnabled = true,
+      healingWriterEc = ExecutionContext.parasitic
+    ) with FrontierPersistence
     val nodes = (1 to 3).map(node)
     s.rawNodeBuffer ++= nodes
     s.pendingSubtreeRecords += nodes.head._1

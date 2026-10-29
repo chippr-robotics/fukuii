@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 
 /** The coordinator state `FrontierPersistence` reads and writes (spec 016 C-H1, research.md R14b). The core's behaviour
   * arms and the code C-H2…C-H5 will move touch every one of them too, or rule (d) keeps them in the core
@@ -20,7 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
   * `rawNodeBuffer` and `pendingSubtreeRecords`.
   */
 private[actors] trait FrontierPersistenceState:
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
+  def pendingTasks: HealTaskQueue[HealingEntry]
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def pendingBackpressure: AtomicInteger
   def crossRootHealCount: Long
