@@ -221,8 +221,11 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
         decoupled
       ) with HealResponseProcessing
 
-    /** Put `tasks` in flight to `p` as request `id` and answer it with `nodes`. */
+    /** Put `tasks` in flight to `p` as request `id` and answer it with `nodes`. Each task is first recorded as a live
+      * request (a no-op when it already is one), as every dispatched fetch is in production (spec 022 review W2).
+      */
     def respond(id: Int, p: Peer, tasks: Seq[HealingEntry], nodes: Seq[ByteString]): Unit =
+      tasks.foreach(task => module.healRequests.add(module.healRequestFor(task)))
       module.activeRequests(BigInt(id)) = ActiveRequest(tasks, p, requestedBytes = BigInt(1024))
       module.handleResponse(SNAP.TrieNodes(requestId = BigInt(id), nodes = nodes))
 

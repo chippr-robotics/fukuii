@@ -254,13 +254,13 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.outstandingChildren(pb) shouldBe 2
 
     // C arrives: both parents' counts decrement; neither is done yet, each still waits on its own leaf.
-    book.satisfy(c) shouldBe empty
+    book.satisfy(cUnderA) shouldBe empty
     book.outstandingChildren(pa) shouldBe 1
     book.outstandingChildren(pb) shouldBe 1
     book.isFetching(c) shouldBe false
 
-    book.satisfy(leafA.key) shouldBe Seq(pa)
-    book.satisfy(leafB.key) shouldBe Seq(pb)
+    book.satisfy(leafA) shouldBe Seq(pa)
+    book.satisfy(leafB) shouldBe Seq(pb)
     book.isEmpty shouldBe true
     book.outstandingChildren(pa) shouldBe 0
   }
@@ -273,7 +273,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.addChildren(parent, Seq(atSlot2, HealRequest.ofNode(accountPathset(9), c))) shouldBe Seq(atSlot2)
     book.outstandingChildren(parent) shouldBe 2
     book.parentsOf(c) shouldBe Seq(parent, parent)
-    book.satisfy(c) shouldBe Seq(parent)
+    book.satisfy(atSlot2) shouldBe Seq(parent)
     book.isEmpty shouldBe true
   }
 
@@ -284,7 +284,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.addChildren(parent, Seq(child)) shouldBe Seq(child)
     book.addChildren(parent, Seq(child)) shouldBe empty
     book.outstandingChildren(parent) shouldBe 1
-    book.satisfy(child.key) shouldBe Seq(parent)
+    book.satisfy(child) shouldBe Seq(parent)
   }
 
   it should "keep a request live until it is satisfied, so a walk entry for a live hash is not fetched again" taggedAs UnitTest in {
@@ -315,9 +315,9 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.add(at1) shouldBe HealRequestBook.Added.Duplicate
     book.add(HealRequest.atPosition(accountPathset(7), s)) shouldBe HealRequestBook.Added.Joined
     book.waitingOn(s).map(_.key) shouldBe Seq(at0.key, at1.key, HealRequest.positionKey(accountPathset(7)))
-    book.satisfy(at0.key) shouldBe Seq(leaf0)
+    book.satisfy(at0) shouldBe Seq(leaf0)
     book.isFetching(s) shouldBe true // the other positions still wait on it
-    book.satisfy(at1.key) shouldBe Seq(leaf1)
+    book.satisfy(at1) shouldBe Seq(leaf1)
   }
 
   it should "keep the order of the positions still waiting on a hash when any of them is filled, the first included" taggedAs UnitTest in {
@@ -327,16 +327,29 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.add(at(0)) shouldBe HealRequestBook.Added.NewFetch
     at.drop(1).foreach(r => book.add(r) shouldBe HealRequestBook.Added.Joined)
 
-    book.satisfy(at(0).key) // the first: the next one takes its place
+    book.satisfy(at(0)) // the first: the next one takes its place
     book.waitingOn(s) shouldBe Seq(at(1), at(2), at(3))
     book.isFetching(s) shouldBe true
-    book.satisfy(at(2).key) // one in the middle
+    book.satisfy(at(2)) // one in the middle
     book.waitingOn(s) shouldBe Seq(at(1), at(3))
-    book.satisfy(at(3).key)
-    book.satisfy(at(1).key)
+    book.satisfy(at(3))
+    book.satisfy(at(1))
     book.isFetching(s) shouldBe false
     book.waitingOn(s) shouldBe empty
     book.isEmpty shouldBe true
+  }
+
+  it should "fill nothing when the node does not hash to what the position now expects (review W2)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val parent = hashOf("parent")
+    val expected = HealRequest.atPosition(accountPathset(8), hashOf("expected"))
+    book.addChildren(parent, Seq(expected)) shouldBe Seq(expected)
+    // Another node for the same position: the live request is not touched.
+    book.satisfy(HealRequest.atPosition(accountPathset(8), hashOf("other"))) shouldBe empty
+    book.get(expected.key) shouldBe Some(expected)
+    book.outstandingChildren(parent) shouldBe 1
+    book.satisfy(expected) shouldBe Seq(parent)
+    book.satisfy(expected) shouldBe empty // already satisfied
   }
 
   "HealRequest" should "key a 64-nibble account position apart from a storage-trie root of the same byte length, and give each its depth" taggedAs UnitTest in {

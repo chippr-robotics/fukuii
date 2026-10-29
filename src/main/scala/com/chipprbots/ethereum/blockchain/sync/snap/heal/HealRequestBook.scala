@@ -95,13 +95,17 @@ final class HealRequestBook:
         if added == Added.NewFetch then Some(child) else None
       }
 
-  /** Request `key` was satisfied (its node is stored, or for Hash buffered for the store): drop it and decrement each
-    * of its parent edges. Returns the parents whose outstanding count reached 0, each once, in edge order.
+  /** `request` was satisfied (its node is stored, or for Hash buffered for the store): drop it and decrement each of
+    * its parent edges. Returns the parents whose outstanding count reached 0, each once, in edge order.
+    *
+    * Acts only when the live request under `request.key` expects `request.hash`: a node fills only the request it
+    * hashes to, never a position now expecting another node (review W2). Otherwise nothing changes.
     */
-  def satisfy(key: ByteString): Seq[ByteString] =
-    requests.remove(key) match
-      case None => Seq.empty
-      case Some(request) =>
+  def satisfy(request: HealRequest): Seq[ByteString] =
+    val key = request.key
+    requests.get(key) match
+      case Some(live) if live.hash == request.hash =>
+        requests.remove(key)
         removeWaiting(request.hash, key)
         parentEdges.remove(key).fold(Seq.empty[ByteString]) { parents =>
           val done = mutable.ArrayBuffer.empty[ByteString]
@@ -115,6 +119,7 @@ final class HealRequestBook:
           }
           done.toSeq
         }
+      case _ => Seq.empty
 
   /** Drop everything: a pivot move or a force-complete (FR-010: discovery restarts from the new root). */
   def clear(): Unit =

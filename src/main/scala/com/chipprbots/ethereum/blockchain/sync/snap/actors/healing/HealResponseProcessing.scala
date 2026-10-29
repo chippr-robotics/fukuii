@@ -146,8 +146,18 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // omit entries for storage pathsets whose account is missing, returning sparse
     // responses. Positional zip would align later nodes against the wrong tasks.
     val keccak = new org.bouncycastle.jcajce.provider.digest.Keccak.Digest256()
-    val tasksByHash: Map[ByteString, Seq[HealingEntry]] = tasksForRequest.groupBy(_.hash)
+    val requestedHashes: Set[ByteString] = tasksForRequest.iterator.map(_.hash).toSet
     val healedHashes = mutable.Set[ByteString]()
+
+    // spec 022 review W2: a dispatched task is the fetch of live requests, and only those are filled. A task no live
+    // request waits on is a bookkeeping fault: nothing vouches for the positions it would write, so it is neither
+    // filled nor queued again.
+    val unvouched = tasksForRequest.filterNot(task => healRequests.isFetching(task.hash))
+    if unvouched.nonEmpty then
+      log.error(
+        s"[HEAL] ${unvouched.size} dispatched heal task(s) that no live request waits on, first " +
+          s"${Hex.toHexString(unvouched.head.hash.take(4).toArray)} — not filled, not queued again"
+      )
 
     nodes.foreach { nodeData =>
       if nodeData.nonEmpty then
@@ -160,28 +170,29 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
         // │ as healed). This is the single guardrail that makes decoupled (cross-root) fetching safe — it holds   │
         // │ identically on the coupled and decoupled paths. No decoupled branch may skip it.                      │
         // └──────────────────────────────────────────────────────────────────────────────────────────────────────┘
-        tasksByHash.get(nodeHash) match
-          case Some(tasks) =>
-            receivedBytes += nodeData.length
-            totalBytesReceived += nodeData.length
-            // A second copy of a node already taken from this response (one per requested path) fills nothing new.
-            if healedHashes.add(nodeHash) then
-              // spec 022 D2: the node fills every request waiting on its hash — under Path every position that needs it
-              // (an alias: identical subtrees under two accounts), under Hash the one request for the node.
-              val filled = requestsFilledBy(nodeHash, tasks)
-              if storageScheme == StorageScheme.Hash then rawNodeBuffer += ((nodeHash, nodeData.toArray))
-              filled.foreach(request => fillRequest(request, nodeData))
-              healedCount += filled.size
-              totalNodesHealed += filled.size
-              // spec 004 T019/FR-010: count a heal sourced from a serve root that differs from the walk root.
-              // Observation-only; never affects completion. (Equal roots ⇒ coupled-equivalent, not counted.)
-              if decoupledHealServeRoot && serveRoot != stateRoot then crossRootHealCount += filled.size
-              // T015 / FR-006: this task is satisfied — drop its attempt counter (bounded by pendingTasks).
-              healAttempts.remove(nodeHash)
-          case None =>
-            log.debug(
-              s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)}"
-            )
+        if requestedHashes.contains(nodeHash) then
+          receivedBytes += nodeData.length
+          totalBytesReceived += nodeData.length
+          // A second copy of a node already taken from this response (one per requested path) fills nothing new.
+          if healedHashes.add(nodeHash) then
+            // spec 022 D2: the node fills every request waiting on its hash — under Path every position that needs it
+            // (an alias: identical subtrees under two accounts), under Hash the one request for the node — and only
+            // those (review W2): each expects exactly this keccak.
+            val filled = healRequests.waitingOn(nodeHash)
+            if storageScheme == StorageScheme.Hash && filled.nonEmpty then
+              rawNodeBuffer += ((nodeHash, nodeData.toArray))
+            filled.foreach(request => fillRequest(request, nodeData))
+            healedCount += filled.size
+            totalNodesHealed += filled.size
+            // spec 004 T019/FR-010: count a heal sourced from a serve root that differs from the walk root.
+            // Observation-only; never affects completion. (Equal roots ⇒ coupled-equivalent, not counted.)
+            if decoupledHealServeRoot && serveRoot != stateRoot then crossRootHealCount += filled.size
+            // T015 / FR-006: this task is satisfied — drop its attempt counter (bounded by pendingTasks).
+            healAttempts.remove(nodeHash)
+        else
+          log.debug(
+            s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)}"
+          )
     }
 
     // A healed account leaf brings an account that account-range sync never saw, so nothing else will ever fetch its
@@ -190,16 +201,19 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // (same sender, ordered), so the controller always knows of them by the time it is told healing is done.
     flushHealedCodeHashes()
 
-    // Re-queue tasks not satisfied by this response (server skipped or didn't have them). Their requests stay live in
-    // `healRequests` (live = pending or in flight), so nothing else queues a second fetch of them meanwhile (BUG-H1).
-    tasksForRequest.foreach { task =>
-      if !healedHashes.contains(task.hash) then
-        healRequests.add(healRequestFor(task)) // no-op for a live request
-        pendingTasks += task
-        // spec 004 T015/FR-006: an unsatisfied task (server skipped it / content-mismatch drop) bumps its
-        // attempt counter and may surface if it stays unservable across the bounded threshold WITHOUT a
-        // serve-root advance (which clears the map). This NEVER force-completes — see noteUnservableAttempt.
-        noteUnservableAttempt(task.hash)
+    // Re-queue the fetches this response left unsatisfied (server skipped or didn't have them), one per hash. Their
+    // requests stay live in `healRequests` (live = pending or in flight), so nothing else queues a second fetch of them
+    // meanwhile (BUG-H1). The fetch goes out again from the path of the first request still waiting on the hash, which
+    // in the normal case is the task's own; a hash nothing waits on any more is not queued again (review W2).
+    tasksForRequest.iterator.map(_.hash).distinct.foreach { hash =>
+      if !healedHashes.contains(hash) then
+        healRequests.waitingOn(hash).headOption.foreach { live =>
+          pendingTasks += HealingEntry(live.pathset, hash)
+          // spec 004 T015/FR-006: an unsatisfied task (server skipped it / content-mismatch drop) bumps its
+          // attempt counter and may surface if it stays unservable across the bounded threshold WITHOUT a
+          // serve-root advance (which clears the map). This NEVER force-completes — see noteUnservableAttempt.
+          noteUnservableAttempt(hash)
+        }
     }
 
     completedTaskCount += healedCount
@@ -291,13 +305,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       log.info(s"[HEAL-CODE] ${hashes.size} healed account(s) lack bytecode — reporting codeHashes to the controller")
       snapSyncController ! SNAPSyncController.HealedCodeHashes(hashes)
 
-  /** The requests the served node `hash` fills (spec 022 D2): every live request waiting on it, plus this response's
-    * own tasks for it, each once. In production every dispatched task is a live request, so the second part adds
-    * nothing; it keeps a task the book does not hold from being dropped.
-    */
-  private def requestsFilledBy(hash: ByteString, tasks: Seq[HealingEntry]): Seq[HealRequest] =
-    (healRequests.waitingOn(hash) ++ tasks.map(healRequestFor)).distinctBy(_.key)
-
   /** Fill `request` with the served node: find its missing children, store it (Path: at its position, together with the
     * positions its write leaves dangling, FR-008), satisfy the request, record the children as requests with an edge
     * from it (queueing a fetch for each hash not already fetched), and capture it for scoped verification. Under the
@@ -306,7 +313,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   private def fillRequest(request: HealRequest, nodeData: ByteString): Unit =
     val (children, deletes) = discoverMissingChildren(nodeData, request)
     if storageScheme == StorageScheme.Path then writeAtPosition(request, nodeData, deletes)
-    healRequests.satisfy(request.key)
+    healRequests.satisfy(request)
     val newEntries = healRequests.addChildren(request.key, children).map(c => HealingEntry(c.pathset, c.hash))
     if newEntries.nonEmpty then
       pendingTasks ++= newEntries
