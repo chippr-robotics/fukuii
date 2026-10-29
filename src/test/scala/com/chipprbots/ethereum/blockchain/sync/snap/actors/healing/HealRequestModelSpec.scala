@@ -350,6 +350,20 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.satisfy(at1) shouldBe Seq(leaf1)
   }
 
+  it should "rotate the carrier of a fetch put back through the positions waiting on it (beacon Q1)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val s = hashOf("rotated")
+    val at = (1 to 3).map(i => HealRequest.atPosition(accountPathset(i), s))
+    at.foreach(book.add)
+    book.nextWaiter(s, at(0).pathset) shouldBe Some(at(1))
+    book.nextWaiter(s, at(2).pathset) shouldBe Some(at(0))
+    book.nextWaiter(s, accountPathset(9)) shouldBe Some(at(0)) // a carrier no longer waiting: the first
+    val single = HealRequest.atPosition(accountPathset(4), hashOf("alone"))
+    book.add(single)
+    book.nextWaiter(single.hash, single.pathset) shouldBe Some(single)
+    book.nextWaiter(hashOf("nothing"), single.pathset) shouldBe None
+  }
+
   it should "keep the order of the positions still waiting on a hash when any of them is filled, the first included" taggedAs UnitTest in {
     val book = new HealRequestBook()
     val s = hashOf("aliased")

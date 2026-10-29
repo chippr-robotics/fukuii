@@ -20,11 +20,13 @@ import com.chipprbots.ethereum.mpt.MptNode
   * keeps them in the core, so the Impl keeps them as fields. The verification launchers write the in-flight run's
   * observability (`scopedVerificationActive`, `scopedVerificationSeedCount`, `scopedVerificationStartMs`,
   * `prunedVerificationActive`, `prunedVerificationStartMs`), set `verificationBFSRunning`, reset `prunedSubtreeCount`,
-  * and `reverifyCurrentRoot` clears `verificationPassComplete`; they read the walk root `stateRoot` and the completion
-  * gate's `flushing` and `trieWalkInProgress`. `prunedEnabled` is an immutable val rule (d) keeps in the core.
+  * and `reverifyCurrentRoot` clears `verificationPassComplete`; they read the walk root `stateRoot`, the completion
+  * gate's `flushing` and `trieWalkInProgress`, and `healedPathsRoot` (the scoped walk's precondition). `prunedEnabled`
+  * is an immutable val rule (d) keeps in the core.
   */
 private[actors] trait HealVerificationState:
   var stateRoot: ByteString
+  def healedPathsRoot: ByteString
   var verificationBFSRunning: Boolean
   var verificationPassComplete: Boolean
   var trieWalkInProgress: Boolean
@@ -142,6 +144,13 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * `bfsQueue`, and `startFrontierBFS`.
     */
   def startScopedVerification(seeds: Seq[HealingEntry]): Unit =
+    // beacon contract (spec 022 slice 1 review): the scope is the nodes healed against the CURRENT walk root (F5). The
+    // gate checks it before calling; a scope of another root would verify the wrong subtrees.
+    require(
+      healedPathsRoot == stateRoot,
+      s"scoped verification of paths healed against ${Hex.toHexString(healedPathsRoot.take(4).toArray)} " +
+        s"on walk root ${Hex.toHexString(stateRoot.take(4).toArray)}"
+    )
     verificationBFSRunning = true
     val selfRef = self
     // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and

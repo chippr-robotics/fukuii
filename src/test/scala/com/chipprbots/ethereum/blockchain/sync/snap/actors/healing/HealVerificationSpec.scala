@@ -55,6 +55,7 @@ private class StubHealVerificationState(
 
   // HealVerificationState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
+  var healedPathsRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var verificationPassComplete: Boolean = true
   var trieWalkInProgress: Boolean = false
@@ -254,7 +255,15 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
       }
   }
 
-  "HealVerification.startScopedVerification" should "seed the walk from the healed entries and complete against its launch root" taggedAs UnitTest in {
+  "HealVerification.startScopedVerification" should "refuse healed paths captured against another root (beacon contract)" taggedAs UnitTest in {
+    val s = stub(None, StorageScheme.Hash)
+    s.healedPathsRoot = ByteString(Array.fill[Byte](32)(9))
+    an[IllegalArgumentException] should be thrownBy
+      s.startScopedVerification(Seq(HealingEntry(Seq(compact(2)), ByteString(Array.fill[Byte](32)(1)))))
+    s.multiSeedLaunches shouldBe empty
+  }
+
+  it should "seed the walk from the healed entries and complete against its launch root" taggedAs UnitTest in {
     val accountHash = ByteString(Array.fill[Byte](32)(5))
     val accountEntry = HealingEntry(Seq(compact(2)), ByteString(Array.fill[Byte](32)(1)))
     val storageEntry = HealingEntry(Seq(accountHash, emptyPath), ByteString(Array.fill[Byte](32)(2)))

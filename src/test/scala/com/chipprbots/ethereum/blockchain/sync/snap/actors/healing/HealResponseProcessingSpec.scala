@@ -345,6 +345,19 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.pendingTasks.count(_ == task) shouldBe 5
   }
 
+  it should "not strike, cool or shrink the budget of a peer that answers empty a request with nothing left to fill (beacon N4)" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val p = peer("innocent")
+    m.knownAvailablePeers += p
+    // Its one task was retired or never vouched for: nothing could fill it, whatever the peer sent.
+    val task = HealingEntry(Seq(compact(5)), ByteString(Array.fill[Byte](32)(5)))
+    h.respondUnbooked(1, p, Seq(task), Seq.empty)
+    m.emptyResponseStrikes.get(p.id.value) shouldBe None
+    m.calls.toSeq should not contain "cooldown:innocent"
+    m.calls.toSeq should not contain "budget-down:innocent"
+  }
+
   it should "under the Path scheme write a served node at the task's path and at every alias path" taggedAs UnitTest in {
     val pns = new PathNodeStorage(EphemDataSource())
     val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(pns))
