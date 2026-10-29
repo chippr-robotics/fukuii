@@ -133,6 +133,27 @@ class PathNodeStorage(val dataSource: DataSource):
     val prefix = storageKey(accountHash, nibblePrefix)
     deleteByPrefix(storageNs, prefix)
 
+  // ---- both tries ----
+
+  /** Write one healed node and delete the positions that write leaves dangling, in ONE write batch (spec 022 FR-008,
+    * D10; geth `trie/sync.go` `children()` and `hasNode`): one `dataSource.update`, so a crash keeps all of it or none.
+    *
+    * A position is `(owner, nibblePath)`: `owner` empty for the account trie, else the account hash whose storage trie
+    * it is in. The node goes to `(owner, nibblePath)` with the same key and value bytes as [[writeAccountNode]] /
+    * [[writeStorageNode]]. `deletes` may name either trie (an account leaf's write deletes a stale storage root in the
+    * other column family). The removals are applied first: a position in `deletes` that is also the written one keeps
+    * the written node. Healing never passes one, since every dangling position lies strictly below the written node.
+    */
+  def writeNodeWithDeletes(
+      owner: Option[ByteString],
+      nibblePath: Array[Byte],
+      rlp: Array[Byte],
+      deletes: Seq[(Option[ByteString], Array[Byte])]
+  ): Unit =
+    val removals = deletes.map { case (o, path) => o.fold(accountNodeRemoval(path))(storageNodeRemoval(_, path)) }
+    val upsert = owner.fold(accountNodeUpsert(nibblePath, rlp))(storageNodeUpsert(_, nibblePath, rlp))
+    dataSource.update(removals :+ upsert)
+
   /** True if the StateTriePathNamespace column family has at least one entry. Used by the startup guard. */
   def hasAccountData: Boolean = hasAnyEntry(acctNs)
 

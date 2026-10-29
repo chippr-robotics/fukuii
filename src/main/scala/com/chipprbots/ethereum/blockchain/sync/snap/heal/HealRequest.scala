@@ -71,3 +71,17 @@ object HealRequest:
   /** The Hash-scheme request for the node `hash`, fetched from `pathset`. */
   def ofNode(pathset: Seq[ByteString], hash: ByteString): HealRequest =
     HealRequest(hash, hash, pathset, depthOf(pathset))
+
+/** What the bytes stored at a Path-scheme position say about the node expected there (spec 022 FR-008, geth `hasNode`).
+  */
+enum PathPresence:
+  /** Nothing is stored at the position. */
+  case Absent
+
+  /** The bytes stored there hash to the expected node. */
+  case Present
+
+  /** Bytes are stored there, but they hash to another node: a stale node from an older root. The write that makes the
+    * position reference the expected node deletes them in its own batch.
+    */
+  case Mismatch

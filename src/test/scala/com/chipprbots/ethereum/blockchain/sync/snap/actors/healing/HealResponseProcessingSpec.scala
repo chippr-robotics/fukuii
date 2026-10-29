@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -55,10 +56,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 /** Everything `HealResponseProcessing` needs, as a stub (spec 016 FR-016 (b), C-H5): its `HealResponseProcessingState`,
   * the coordinator's `TrieNodeHealingEnv`, and the interfaces it calls (`FrontierGaugesApi`, `FrontierWriteApi`,
-  * `HealDispatchApi`, `PathVerifiedRlpApi`). State is plain fields; every interface call is recorded. `self` and the
-  * controller are test inboxes; the request tracker is real (a response completes its request). `stateIngest` hands out
-  * `pathNodes`, `healingFrontier` and `bytecode` (the last only when a code store is given: with the healed-code check
-  * off the module must never read it).
+  * `HealDispatchApi`, `PathVerifiedRlpApi`, `PathPresenceApi`). State is plain fields; every interface call is
+  * recorded. `self` and the controller are test inboxes; the request tracker is real (a response completes its
+  * request). `stateIngest` hands out `pathNodes`, `healingFrontier` and `bytecode` (the last only when a code store is
+  * given: with the healed-code check off the module must never read it).
   */
 private class StubHealResponseProcessingState(
     val requestTracker: SNAPRequestTracker,
@@ -75,7 +76,8 @@ private class StubHealResponseProcessingState(
     with FrontierGaugesApi
     with FrontierWriteApi
     with HealDispatchApi
-    with PathVerifiedRlpApi:
+    with PathVerifiedRlpApi
+    with PathPresenceApi:
 
   // HealResponseProcessingState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
@@ -163,6 +165,14 @@ private class StubHealResponseProcessingState(
   // PathVerifiedRlpApi
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
     pathReads.get((hash, pathset))
+
+  // PathPresenceApi: present exactly where `readPathVerifiedRlp` answers; stale bytes of another hash where
+  // `stalePaths` names the pathset.
+  val stalePaths: mutable.Set[Seq[ByteString]] = mutable.Set.empty
+  def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence =
+    if pathReads.contains((hash, pathset)) then PathPresence.Present
+    else if stalePaths.contains(pathset) then PathPresence.Mismatch
+    else PathPresence.Absent
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealResponseProcessing read $member")
