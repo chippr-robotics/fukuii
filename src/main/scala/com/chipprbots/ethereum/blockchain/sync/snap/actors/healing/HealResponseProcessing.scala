@@ -359,9 +359,10 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * returns its missing children, one request per child edge, and (Path scheme) the positions its write leaves
     * dangling. Makes healing self-feeding: root → children → grandchildren top-down without a trie walk.
     *
-    * A child whose request is already live (queued or in flight) is missing by definition and is returned without a
-    * storage read: under Hash it is the same node, so the parent gains an edge to the fetch already out (spec 022 D2: a
-    * shared child is fetched once); under Path it is the same position.
+    * A child whose request is already live (queued or in flight) is missing by definition: under Hash it is the same
+    * node, so the parent gains an edge to the fetch already out without a storage read (spec 022 D2: a shared child is
+    * fetched once); under Path it is the same position, still read so that stale bytes there are deleted (review item
+    * 6).
     *
     * B3 FIX: under Hash, a branch's other children are checked with a single multiGetNodes call instead of up to 16
     * serial isNodeInStorage calls on the actor thread. The extension child uses the same pattern for consistency.
@@ -408,22 +409,23 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
         def requestAt(childSet: Seq[ByteString], childHash: ByteString): HealRequest =
           healRequestFor(HealingEntry(childSet, childHash))
 
-        // Path scheme: one child, looked up at its own position. Live: missing, no read. Otherwise present, absent, or
-        // stale bytes of another hash, which `danglingAt` (the same position) deletes with the parent's write.
+        // Path scheme: one child, looked up at its own position (geth `hasNode` on every hash child): present, absent,
+        // or stale bytes of another hash, which `danglingAt` (the same position) deletes with the parent's write. A child
+        // already requested is missing whatever is stored there (an edge to its request); stale bytes there are still
+        // deleted (review item 6).
         def pathChild(
             childSet: Seq[ByteString],
             childHash: ByteString,
             danglingAt: (Option[ByteString], Array[Byte])
         ): Unit =
           val request = requestAt(childSet, childHash)
-          if healRequests.contains(request.key) then children += request
-          else
-            pathPresence(childHash, childSet) match
-              case PathPresence.Present => ()
-              case PathPresence.Absent  => children += request
-              case PathPresence.Mismatch =>
-                children += request
-                deletes += danglingAt
+          val live = healRequests.contains(request.key)
+          pathPresence(childHash, childSet) match
+            case PathPresence.Present => if live then children += request
+            case PathPresence.Absent  => children += request
+            case PathPresence.Mismatch =>
+              children += request
+              deletes += danglingAt
 
         decoded match
           case branch: BranchNode =>

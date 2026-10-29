@@ -287,6 +287,21 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     book.satisfy(child) shouldBe Seq(parent)
   }
 
+  it should "give a parent processed again an edge to a child neither live nor stored, but none to a live one (review item 5)" taggedAs UnitTest in {
+    val book = new HealRequestBook()
+    val parent = hashOf("parent")
+    val a = HealRequest.ofNode(accountPathset(3), hashOf("a"))
+    val b = HealRequest.ofNode(accountPathset(4), hashOf("b"))
+    book.addChildren(parent, Seq(a, b)) shouldBe Seq(a, b)
+    book.satisfy(b) shouldBe empty // b arrived; the parent still waits on a
+    // b was lost (say, with a failed buffered write): processed again, the parent finds a still live and b missing.
+    book.addChildren(parent, Seq(a, b)) shouldBe Seq(b)
+    book.outstandingChildren(parent) shouldBe 2
+    book.parentsOf(a.key) shouldBe Seq(parent) // no second edge to the live child
+    book.satisfy(a) shouldBe empty
+    book.satisfy(b) shouldBe Seq(parent)
+  }
+
   it should "keep a request live until it is satisfied, so a walk entry for a live hash is not fetched again" taggedAs UnitTest in {
     val book = new HealRequestBook()
     val h = hashOf("node")

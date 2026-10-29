@@ -100,14 +100,18 @@ final class HealRequestBook:
     * already live gains the edge; a new one is recorded. Returns the children that need a new fetch, in order.
     *
     * A parent already recorded with outstanding children (a node processed a second time, e.g. re-queued by a walk)
-    * adds nothing: its edges are counted once. A child whose position is live with another hash replaces that request
-    * (a conflict, see the class comment) and needs a fetch unless its hash is already being fetched.
+    * gains edges only to children that are not live: its live children already carry its edges, so they are counted
+    * once, while a child that is neither live nor stored (say, one lost with a failed buffered write, #1549) is
+    * requested again. A child whose position is live with another hash replaces that request (a conflict, see the class
+    * comment) and needs a fetch unless its hash is already being fetched.
     */
   def addChildren(parent: ByteString, children: Seq[HealRequest]): Seq[HealRequest] =
-    if children.isEmpty || outstanding.contains(parent) then Seq.empty
+    val fresh =
+      if outstanding.contains(parent) then children.filterNot(child => requests.contains(child.key)) else children
+    if fresh.isEmpty then Seq.empty
     else
-      outstanding(parent) = children.size
-      children.flatMap { child =>
+      outstanding(parent) = outstanding.getOrElse(parent, 0) + fresh.size
+      fresh.flatMap { child =>
         val added = record(child)
         parentEdges(child.key) = parent :: parentEdges.getOrElse(child.key, Nil)
         if added.needsFetch then Some(child) else None
