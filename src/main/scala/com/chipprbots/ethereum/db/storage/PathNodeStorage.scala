@@ -136,6 +136,8 @@ class PathNodeStorage(val dataSource: DataSource):
       rlp: Array[Byte],
       deletes: Seq[(Option[ByteString], Array[Byte])]
   ): Unit =
+    // Point deletes, not deleteRange: HP-encoded keys are not prefix-ordered (a position's key does not prefix its
+    // descendants'), and deleteRange is not part of the one atomic `update` batch.
     val removals = deletes.map { case (o, path) => o.fold(accountNodeRemoval(path))(storageNodeRemoval(_, path)) }
     val upsert = owner.fold(accountNodeUpsert(nibblePath, rlp))(storageNodeUpsert(_, nibblePath, rlp))
     dataSource.update(removals :+ upsert)
