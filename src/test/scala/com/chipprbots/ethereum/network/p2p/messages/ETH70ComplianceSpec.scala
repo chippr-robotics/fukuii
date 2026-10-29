@@ -253,7 +253,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
 
     "encoding and decoding" should {
       "round-trip with lastBlockIncomplete=false (complete response)" taggedAs UnitTest in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts70(
           requestId = BigInt(20),
           lastBlockIncomplete = false,
@@ -268,7 +267,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "round-trip with lastBlockIncomplete=true (server hit 2 MiB limit)" taggedAs UnitTest in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts70(
           requestId = BigInt(21),
           lastBlockIncomplete = true,
@@ -298,7 +296,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "carry bloom-absent four-item receipts (EIP-7642 — same as ETH69)" taggedAs UnitTest in {
-        import com.chipprbots.ethereum.rlp.*
         import ETHPackets.ReceiptBloomFreeEnc
         import com.chipprbots.ethereum.domain.*
         val receipt = LegacyReceipt(
@@ -330,7 +327,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
       // a Receipts70 response may contain multiple blocks where some blocks have no receipts
       // (empty transaction list). The decoder must handle the empty inner list without error.
       "round-trip with multiple blocks where one block has no receipts (empty block)" taggedAs UnitTest in {
-        import com.chipprbots.ethereum.rlp.*
         import ETHPackets.ReceiptBloomFreeEnc
         import com.chipprbots.ethereum.domain.*
         val receipt = LegacyReceipt(
@@ -396,7 +392,6 @@ class ETH70ComplianceSpec extends AnyWordSpec with Matchers:
 
     "the ETH70 decoder handles Receipts70" should {
       "return ETH70's own Receipts70 type (not Receipts69)" taggedAs UnitTest in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts70(BigInt(1), lastBlockIncomplete = false, RLPList())
         val encoded = msg.toBytes
         decoder(Capability.ETH70).fromBytes(Codes.ReceiptsCode, encoded) match

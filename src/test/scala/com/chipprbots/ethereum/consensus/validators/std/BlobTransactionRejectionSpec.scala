@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlymp
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
-import com.chipprbots.ethereum.utils.ForkTimestamps
 
 /** L1 — EIP-4844 blob (Type-3) transaction rejection on ETC.
   *

@@ -33,13 +33,13 @@ The standard CI pipeline runs:
 
 #### Artifacts
 
-1. **ethereum-tests-results-jdk25-scala-3.3.7**
+1. **ethereum-tests-results-jdk25-scala-3.9.0**
    - Test execution logs
    - Integration test class outputs
    - Application logs from `/tmp/fukuii-it-test/`
    - **Retention:** 7 days
 
-2. **test-results-jdk25-scala-3.3.7**
+2. **test-results-jdk25-scala-3.9.0**
    - Standard test reports
    - Test class outputs
    - **Retention:** 7 days
@@ -195,7 +195,7 @@ Integration tests are configured to run in separate subprocesses:
    - Look for test summary at end of output
 
 3. **Download Artifacts**
-   - Click on artifact name (e.g., `ethereum-tests-results-jdk25-scala-3.3.7`)
+   - Click on artifact name (e.g., `ethereum-tests-results-jdk25-scala-3.9.0`)
    - Download and extract to view logs
 
 4. **Review Failures**

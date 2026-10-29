@@ -56,7 +56,7 @@ canonical:
 # TARGET STATE. The live ruleset is NOT verifiable from inside the repository
 # (see the reconciliation note below) — this is what it SHOULD require.
 required_contexts:
-  - Test and Build (JDK 25, Scala 3.3.7)
+  - Test and Build (JDK 25, Scala 3.9.0)
   - Docker Build
   - Gate Integrity
 
@@ -103,7 +103,7 @@ gates:
 
   - id: ci-test-build
     workflow: ci.yml
-    context: Test and Build (JDK 25, Scala 3.3.7)
+    context: Test and Build (JDK 25, Scala 3.9.0)
     tier: required
     owner: realcodywburns
     covers: >-

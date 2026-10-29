@@ -47,7 +47,7 @@ crossPaths := true
 // patch for error on 'early-semver' problems
 ThisBuild / evictionErrorLevel := Level.Info
 
-val `scala-3` = "3.3.8" // 3.3.8 released 2026-06-11, latest 3.3 LTS patch
+val `scala-3` = "3.9.0" // 3.9.0 LTS (spec 020); the only 3.9 release on Maven Central at PR 3
 val supportedScalaVersions = List(`scala-3`) // Scala 3 only
 
 // Base scalac options
@@ -61,13 +61,12 @@ val baseScalacOptions = Seq(
 
 // Scala 3 warning and feature options
 val scala3Options = Seq(
-  "-source:future", // Enforce Scala 3 future syntax (import x.* required, not import x._)
+  "-source:3.4", // spec 020 DC-2 step 3.4; `import x.*` is enforced by scripts/ci/check_scala_imports.sh
   "-language:adhocExtensions", // Allow extending non-open classes (TestKit, Pekko test patterns)
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
   "-Wconf:id=E198:error", // Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)
   "-Wconf:cat=feature:s", // Suppress adhocExtensions feature warnings (extending non-open Pekko/library classes)
   "-Wconf:cat=unchecked:error", // Ratchet step 4/4: unchecked patterns are build errors
-  "-Ykind-projector", // Scala 3 replacement for kind-projector plugin
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
@@ -618,7 +617,7 @@ addCommandAlias("testOlympia", "testOnly -- -n OlympiaTest")
 addCommandAlias("testSync", "testOnly -- -n SyncTest")
 
 // Scapegoat configuration for Scala 3
-(ThisBuild / scapegoatVersion) := "3.3.6" // first cross-build for Scala 3.3.8
+(ThisBuild / scapegoatVersion) := "3.4.1" // scalac-scapegoat-plugin is published per full Scala version; 3.4.1 has _3.9.0
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")

@@ -222,7 +222,7 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
       val perAccount =
         pendingOrderedChunks.getOrElseUpdate(
           accountHash,
-          mutable.TreeMap.empty[ByteString, ReadyStorageChunk](ByteStringOrdering)
+          mutable.TreeMap.empty[ByteString, ReadyStorageChunk](using ByteStringOrdering)
         )
       perAccount.update(task.next, ReadyStorageChunk(peer, task, accountSlots, proofForThisTask))
       log.debug(

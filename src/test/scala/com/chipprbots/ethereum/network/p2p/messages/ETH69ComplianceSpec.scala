@@ -187,7 +187,6 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "decode from ETH68 decoder (not ETH69)" in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts68(BigInt(1), RLPList())
         val encoded = msg.toBytes
         decoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, encoded) match
@@ -224,7 +223,6 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "decode from ETH69 decoder (not ETH68)" in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts69(BigInt(1), RLPList())
         val encoded = msg.toBytes
         decoder(Capability.ETH69).fromBytes(Codes.ReceiptsCode, encoded) match

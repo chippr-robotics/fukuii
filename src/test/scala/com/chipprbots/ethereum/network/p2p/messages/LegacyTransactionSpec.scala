@@ -46,14 +46,14 @@ class LegacyTransactionSpec extends AnyFlatSpec with Matchers:
 
   val invalidTransactionSignatureNewSchema: SignedTransaction = SignedTransaction(
     validTx,
-    pointSign = -98.toByte,
+    pointSign = (-98).toByte,
     signatureRandom = ByteString(Hex.decode("cfe3ad31d6612f8d787c45f115cc5b43fb22bcc210b62ae71dc7cbf0a6bea8df")),
     signature = ByteString(Hex.decode("57db8998114fae3c337e99dbd8573d4085691880f4576c6c1f6c5bbfe67d6cf0"))
   )
 
   val invalidStx: SignedTransaction = SignedTransaction(
     validTx.copy(gasPrice = GasPrice.Zero),
-    pointSign = -98.toByte,
+    pointSign = (-98).toByte,
     signatureRandom = ByteString(Hex.decode("cfe3ad31d6612f8d787c45f115cc5b43fb22bcc210b62ae71dc7cbf0a6bea8df")),
     signature = ByteString(Hex.decode("57db8998114fae3c337e99dbd8573d4085691880f4576c6c1f6c5bbfe67d6cf0"))
   )
@@ -76,7 +76,7 @@ class LegacyTransactionSpec extends AnyFlatSpec with Matchers:
 
   val validSignedTransactionForNewSigningScheme: SignedTransaction = SignedTransaction(
     tx = validTransactionForNewSigningScheme,
-    pointSign = -98.toByte,
+    pointSign = (-98).toByte,
     signatureRandom = ByteString(Hex.decode("1af423b3608f3b4b35e191c26f07175331de22ed8f60d1735f03210388246ade")),
     signature = ByteString(Hex.decode("4d5b6b9e3955a0db8feec9c518d8e1aae0e1d91a143fbbca36671c3b89b89bc3"))
   )
