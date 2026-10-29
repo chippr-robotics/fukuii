@@ -167,6 +167,22 @@ Evidence for each decision is in research.md.
   - Use exact-position deletes in the same batch: the inner prefixes of an extension node's `sharedKey`, plus hash-mismatched bytes found at a position (geth `children()` and `hasNode`).
   - Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix`. HP-encoded keys don't preserve prefixes, and those methods scan the whole CF.
 
+## Implementation Constraints: the SNAP-split verifier (measured 2026-10-29)
+
+`snap-split-verify` (`scripts/snap-split/verify.sh`) is a required check on every PR that touches `blockchain/sync/snap/`. The design above was written without it in view. A dry run on a throwaway `fix/` branch measured what it allows. It ran against staging `925b6f693`, with one commit per kind of change.
+
+| Change | Result | What spec 022 does |
+|---|---|---|
+| A branch named other than `fix/*` (or `refactor\|test/snap-016-*`) that edits a module file | **fail** (kind "other") | Every slice branch is named `fix/022-s<N>-<topic>` |
+| A new file in a module directory (`controller/`, `actors/{account,storage,healing,bytecode}/`) | **fail**: a fix edits existing modules only | New components go in a new package `blockchain/sync/snap/heal/` (user decision 2026-10-29). This covers `HealRequest`, `HeldNodeSet` and `ExcludedAccountSeeding`. New files in `snap/`, `snap/actors/` and `snap/heal/` pass. |
+| A raw `DataSource`, `DataSourceBatchUpdate`, `WriteBatch` or RocksDB import in a measured file (`snap/controller/**`, `snap/actors/**`, `SNAPSyncController.scala`) | **fail**, with no justification route | Atomic multi-node commits (D3) and position deletes (D10) are methods on the storage classes in `db/storage/` (`PathNodeStorage`, the node storage behind `MptStorage`). Heal code calls them through existing capability members. |
+| One more `stateIngest.<handle>` reference in a measured file | +1 to `storage_refs`. Allowed with a `justifications["storage_refs.total"]` line and the per-file count updated in `scripts/snap-split/storage-baseline.json` | Reuse an already-bound handle where possible. Each slice PR budgets its rise and writes the justification, following the #1581 precedent. |
+| A new `StateIngest` member | Allowed with a `justifications["capabilities.StateIngest.members"]` line | Prefer methods on an existing member's storage class. For example, the excluded-account entries (D5) go on `SnapSyncProgressStorage`, reached as `stateIngest.snapProgress.<call>`. That is a call, not a new handle. |
+| A net deletion of more than 150 lines in module files in one commit | Needs a `# fix: #1671` trailer | Slices 4 and 5 (frontier retirement, gate removal) carry the trailer |
+| Member-level rules in module trait files (FR-016d) | No concrete non-lazy `val`, no `var` with a non-literal initializer, no top-level statement | New state goes in the `heal/` classes or the coordinator core |
+
+Each slice runs `scripts/snap-split/verify.sh --branch <branch> gh/staging HEAD` before its PR. The line numbers in this plan and in tasks.md predate #1673 and #1678. Re-grep each anchor before editing.
+
 ## Delivery Slices
 
 Each slice is one PR to staging, in order. All consensus-adjacent slices are bucket C.

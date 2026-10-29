@@ -33,6 +33,15 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - **Build in a full clone, not a linked worktree.** sbt-git's jgit fails in linked worktrees with `NoWorkTreeException`. Precedent: `/home/dontpanic/work/snap-linear-build`.
 - No build runs while a live sync gate is running.
 
+**SNAP-split verifier (amendment 2026-10-29, plan.md "Implementation Constraints"):**
+- Slice branches are `fix/022-s<N>-<topic>`.
+- New components go in `blockchain/sync/snap/heal/`, never in a module directory.
+- No raw `DataSource`/`WriteBatch` imports in `snap/controller`, `snap/actors` or `SNAPSyncController.scala`: batch writes are `db/storage` methods.
+- A storage-reference or `StateIngest` member rise needs a justification line in `scripts/snap-split/storage-baseline.json`.
+- Commits that delete more than 150 net lines of module code carry `# fix: #1671`.
+- Run `scripts/snap-split/verify.sh --branch <branch> gh/staging HEAD` before every PR.
+- Line numbers below predate #1673/#1678: re-grep each anchor.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: can run in parallel (different files, no dependency on an unfinished task).
@@ -44,11 +53,11 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 **Purpose**: settle the open facts that the design depends on before any code changes.
 
-- [ ] T001 Confirm #1672 (`fix/snap-range-checks-linear`) is merged to staging. Branch `spec/022-impl-slice1` from that commit in a full clone (not a linked worktree).
+- [x] T001 Confirm #1672 (`fix/snap-range-checks-linear`) is merged to staging. Branch `fix/022-s1-request-model` from that commit in a full clone (not a linked worktree). **Done 2026-10-29:** #1673 is in staging `925b6f693`; full clone `/home/dontpanic/work/s022-impl`.
 - [x] T002 [P] Find out whether the contract-storage task list outlives the storage phase. **Done: research.md R-5a.** The list survives, and markers survive force-complete but are wiped on clean completion, so the excluded set must be persisted at each decision point. Read `blockchain/sync/snap/DownloadSupervisor.scala:694,757-760`, `SyncLifecycle.scala:342` and `SnapResumePlanner.scala:325`. Record which file or key holds abandoned accounts, and whether `SnapStorageDone` markers survive force-complete. This resolves the conflict noted in research R-5. Write the answer into research.md as R-5a.
 - [x] T003 [P] List the spec 016 resume tests that assume the persisted heal frontier is restored on restart. **Done: research.md R-5b.** Grep `src/test/scala` for `persistFrontier`, `loadAll`, `CompleteMarkerKey`, `FrontierPersistence` and `healingFrontier`. Write the list into research.md as R-5b. These tests change in slice 4.
 - [ ] T004 [P] Record the regression baseline on the slice-1 base commit. Run `./scripts/fukuii-test essential` once, plus `sbt "testOnly *SnapHashTrieSpec *MerkleProofVerifier* *StateIngestDurabilitySpec *Checkpoint*"`. Save the counts to `.local/docs/continuations/s022-baseline.md`.
-- [ ] T005 [P] Write the dev-iteration runbook into quickstart.md under a new "§0 Dev loop" section:
+- [x] T005 [P] **Done 2026-10-29 (quickstart.md §0).** Write the dev-iteration runbook into quickstart.md under a new "§0 Dev loop" section:
   - **Local snap server**: `coregeth-mordor.service` (core-geth v1.12.23; enode `9e5d0ea7…602a@127.0.0.1:30313`).
   - **Run config template**: `/home/dontpanic/mordor-scarcity/B/conf/mordor.conf`. It sets discovery off, `dns-discovery-domains = []`, and the local peer as both bootstrap node and `snap-server-peers`.
   - **Profiling**: JFR. Run `jcmd <pid> JFR.start name=heal settings=profile filename=<dir>/heal.jfr` when healing starts, then `jcmd <pid> JFR.stop name=heal`, then summarise with `jfr print --events jdk.ExecutionSample`.
@@ -75,7 +84,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Implementation
 
-- [ ] T010 [US1] Introduce the request key type in `blockchain/sync/snap/actors/healing/HealRequest.scala` (new file), following data-model.md "Heal request".
+- [ ] T010 [US1] Introduce the request key type in `blockchain/sync/snap/heal/HealRequest.scala` (new file; not under `actors/healing/`, see the verifier amendment), following data-model.md "Heal request".
   - The key is a single `ByteString`: the HP-encoded path for Path, the node hash for Hash.
   - **Never key a map by `Seq[ByteString]`.** `MurmurHash3.seqHash` showed up in the Mordor walk profile.
   - Include `depth`, `parent` and `opensNewSubtree`.
@@ -111,13 +120,13 @@ Within each slice, **tests come before implementation**, and the tests must fail
 ### Implementation
 
 - [ ] T022 [US1] Make `pendingTasks` a priority queue on depth, deepest first, in `actors/healing/HealDispatch.scala:233-234` (today a FIFO `ArrayDeque`; children are appended at `HealResponseProcessing:409`). **[beacon] [forge]**
-- [ ] T023 [US3] Implement the held-node set in `actors/healing/HeldNodeSet.scala` (new file), following data-model.md "Held node".
+- [ ] T023 [US3] Implement the held-node set in `blockchain/sync/snap/heal/HeldNodeSet.scala` (new file), following data-model.md "Held node".
   - Each entry holds the node bytes, its outstanding count and its parent edges.
   - Measure the bound in bytes, configured by `fukuii.sync.snap-sync.healing.held-memory-limit` (default 128 MiB) in `src/main/resources/conf/base/sync.conf`.
   - Implement the pause policy from plan D1.
   - **[vault]**
 - [ ] T024 [US3] Change `actors/healing/HealResponseProcessing.scala:151-193` so that a healed node is **held**, not written, until its outstanding count is 0.
-  - A node whose children are all present is committed together with every ancestor whose count reaches 0, in one `dataSource.update(...)` WriteBatch. Include any T014 deletes in that batch.
+  - A node whose children are all present is committed together with every ancestor whose count reaches 0, in one atomic write. That write is a new `db/storage` method (on `PathNodeStorage`, and on the node storage behind `MptStorage` for Hash) that builds and applies the batch, because heal code may not import `DataSource`. Include any T014 deletes in that batch.
   - Release held entries only after the write returns.
   - **[vault] [beacon] [forge]**
 - [ ] T025 [US3] On a re-peg (`TrieNodeHealingCoordinator.scala:606-690`) and on `HealingForceComplete` (`:567-584`), drop the held set and pending requests, flush **only** complete nodes, and re-seed from the new root. **[beacon] [forge]**
@@ -141,7 +150,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Implementation
 
-- [ ] T032 [US1] Add the durable excluded-account store, following data-model.md "Excluded account", in `db/storage/SnapExcludedAccountsStorage.scala` (new file, AppState namespace `s`, versioned key). It is written before any action is taken on an entry. **[vault]**
+- [ ] T032 [US1] Add the durable excluded-account store, following data-model.md "Excluded account", as methods on `db/storage/SnapSyncProgressStorage` (AppState namespace `s`, versioned key), reached from coordinators as `stateIngest.snapProgress.<call>`, which adds no new capability member. It is written before any action is taken on an entry. **[vault]**
 - [ ] T033 [US1] Record excluded accounts at every source:
   - force-complete: `actors/StorageRangeCoordinator.scala:754-784`, replacing `abandonedAccounts.clear()` at `:776` with a persist;
   - max-empty skip: `actors/storage/StorageOrderedApply.scala:158-161`;
@@ -151,9 +160,9 @@ Within each slice, **tests come before implementation**, and the tests must fail
   Persist each entry **at the moment the decision is made**: give-up, max-empty skip and root mismatch end the phase cleanly, and `DownloadSupervisor:760` then wipes the `SnapStorageDone` markers (R-5a). Store entries as AppState `SnapExcluded/<accountHash>` → reason, written with `updateSync`.
 
   **[beacon] [forge]**
-- [ ] T034 [US1] On Path, at heal start, point-delete every account-trie position along each excluded account's 64-nibble key, depth 0 to 64, leaf slot included, in one batch (geth `pathTrie.delete`). Run this after the account range has committed. File: `actors/TrieNodeHealingCoordinator.scala`, or a new `actors/healing/ExcludedAccountSeeding.scala`. **[beacon] [vault]**
+- [ ] T034 [US1] On Path, at heal start, point-delete every account-trie position along each excluded account's 64-nibble key, depth 0 to 64, leaf slot included, in one batch (geth `pathTrie.delete`). Run this after the account range has committed. File: `actors/TrieNodeHealingCoordinator.scala`, or a new `blockchain/sync/snap/heal/ExcludedAccountSeeding.scala`. **[beacon] [vault]**
 - [ ] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
-- [ ] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `actors/healing/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
+- [ ] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `heal/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
 - [ ] T037 [US1] Remove `HealedCodeWaitTimeout` (`SNAPSyncController.scala:836-846`). If code is unavailable, log the account every 60 s. After 30 min with no progress, fall back to `StateHealingAbandoned`, which leads to the lazy handoff. **[beacon] [forge]**
 - [ ] T038 Run T029–T031 and all earlier slice tests, then do one dev-loop Mordor run. Open the slice-3 PR and request reviews from beacon and forge.
 
