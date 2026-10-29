@@ -16,8 +16,8 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
   *
   * Layout: a dedicated RocksDB column family ([[Namespaces.HealingFrontierNamespace]]) keyed by the node hash (32
   * bytes) with the node's `pathset` (the HP-encoded path segments needed to re-issue `GetTrieNodes`) as the value,
-  * RLP-encoded. Keying by hash mirrors the coordinator's `pendingHashSet` de-dup key and makes delete-on-heal an O(1)
-  * point-delete.
+  * RLP-encoded. Keying by hash mirrors the coordinator's Hash-scheme heal request key (the node hash) and makes
+  * delete-on-heal an O(1) point-delete.
   *
   * Lifecycle (driven by the coordinator):
   *   - write on every new enqueue (`queueNodes`, inline child discovery, pivot reseed),

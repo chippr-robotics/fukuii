@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -228,7 +229,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // 4M default is ~480-640 MB, NOT the 320 MB an 80 B/entry estimate would suggest. Completeness is
   // preserved: an evicted present node is only RE-WALKED if reached again via a shared reference
   // (extra work, never a skip), and any missing node it re-discovers is de-duplicated by
-  // `pendingHashSet`. See docs/design/healing-frontier-scale.md. Operator-tunable via
+  // `healRequests`. See docs/design/healing-frontier-scale.md. Operator-tunable via
   // `sync.snap-sync.healing-visited-cap`; raise it only from a measured `inflation_ratio` (US2) and
   // within the heap budget — do NOT set it to 20M (~2.4-3.2 GB) on a 6 GB heap (it OOMs).
   val HealingVisitedCap: Int = visitedCap
@@ -239,19 +240,19 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Track last known available peers for re-dispatch after failures
   val knownAvailablePeers = mutable.Set[Peer]()
 
-  // Dedup set for pending tasks — prevents the same missing node from being queued multiple times
-  val pendingHashSet = mutable.Set[ByteString]()
-
-  // Path scheme only: a node hash can be missing at MANY paths (identical subtrees / shared nodes). pendingHashSet
-  // dedups the queue by hash, so only one path per hash is requested; the others were previously dropped and the
-  // next verification walk found them missing again (fixed ~10/pass convergence). Remember the dropped paths here
-  // and write the one fetched node at every path when it arrives.
-  val pathAliases = mutable.Map[ByteString, mutable.LinkedHashMap[Seq[ByteString], HealingEntry]]()
+  // spec 022 D2: the live heal requests, queued or in flight, keyed by trie position (Path) or node hash (Hash). A
+  // node hash is fetched once however many requests wait on it, and the served node fills them all: under Path every
+  // position that needs it (identical subtrees under two accounts), so no position is lost to a de-dup by hash. A
+  // request stays live until its node arrives, so a parent that finds a child already in flight joins that fetch
+  // instead of queueing a second one; under Hash each such parent is one more edge to the child. Replaces the
+  // `pendingHashSet` de-dup set (pending only, by hash) and the Path `pathAliases` map.
+  val healRequests: HealRequestBook = new HealRequestBook()
 
   // --- spec 003: scoped post-heal verification (FR-001) ---
   // Bounded, per-round, in-memory accumulator of the nodes HEALED this round (their HealingEntry,
-  // captured at the single heal site in handleResponse). Mirrors the pendingTasks/pendingHashSet
-  // pairing: a LinkedHashMap keyed by node hash dedups re-served/re-queued nodes while preserving the
+  // captured at the single heal site in handleResponse). Mirrors the pendingTasks/healRequests
+  // pairing: a LinkedHashMap keyed by request key (the node hash; the position under Path, spec 022)
+  // dedups re-served/re-queued nodes while preserving the
   // authoritative HealingEntry value and a stable insertion order for deterministic seeding. The
   // completion gate uses this as the scope for the post-heal verification BFS (re-walking only the
   // healed subtrees) when the durable completeness marker proves full-trie coverage; otherwise it
@@ -500,10 +501,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // below already does for an absent re-pegged root — do NOT hand off to lazy healing. Persisted nodes are NOT
         // discarded (this only ADDS the root task). `discoverMissingChildren` then drives the top-down delta from here.
         // Start-of-heal and re-peg therefore seed an absent root IDENTICALLY (one moving-root mechanism).
-        if !pendingHashSet.contains(root) && !isNodeInStorage(root, Seq(emptyPath)) then
-          val seedEntry = HealingEntry(Seq(emptyPath), root)
-          pendingTasks += seedEntry
-          pendingHashSet += root
+        val seedEntry = HealingEntry(Seq(emptyPath), root)
+        if !healRequests.contains(healRequestFor(seedEntry).key) && !isNodeInStorage(root, Seq(emptyPath)) &&
+          enqueueRequest(seedEntry)
+        then
           persistFrontier(Seq(seedEntry)) // Layer 2: the absent heal root is a new frontier entry (mirror only)
           log.info(
             s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} absent locally — seeding it as a frontier task " +
@@ -575,8 +576,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
         pendingTasks.clear()
-        pendingHashSet.clear()
-        pathAliases.clear()
+        healRequests.clear()
         clearHealedPathsSet() // spec 003 C1: abandonment — drop the scoped-verification scope (hygiene)
         // Path scheme: the controller treats StateHealingComplete as a VERIFIED clean walk (it runs no walk of its own),
         // and a force-complete has not verified anything — signal abandonment so it hands off to lazy healing instead.
@@ -609,7 +609,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
-        // pendingHashSet / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
+        // healRequests / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
         // which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
         // records) and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes
         // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
@@ -617,8 +617,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
         clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
         pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
-        pendingHashSet.clear()
-        pathAliases.clear()
+        // spec 022 FR-007/FR-010: every request (and Path alias) of the old root goes; discovery from the new root finds
+        // each position that still needs a node again, each as its own request.
+        healRequests.clear()
         statelessPeers.clear()
         emptyResponseStrikes.clear() // fresh slate on the new root (mirrors statelessPeers clear)
         peerCooldownUntilMs.clear()
@@ -638,10 +639,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // top-down traversal of the updated trie.
         val pivotReseedPath =
           ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        if !pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot, Seq(pivotReseedPath)) then
-          val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
-          pendingTasks += reseedEntry
-          pendingHashSet += newStateRoot
+        val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        if !healRequests.contains(healRequestFor(reseedEntry).key) &&
+          !isNodeInStorage(newStateRoot, Seq(pivotReseedPath)) && enqueueRequest(reseedEntry)
+        then
           persistFrontier(Seq(reseedEntry)) // Layer 2: the new pivot root is a new frontier entry
           log.info(
             s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
@@ -969,11 +970,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         inFlight.foreach { reqId =>
           activeRequests.remove(reqId).foreach { req =>
             requestTracker.completeRequest(reqId, 0)
-            req.tasks.foreach { task =>
-              if !pendingHashSet.contains(task.hash) then
-                pendingHashSet += task.hash
-                pendingTasks += task
-            }
+            // Back to the queue: each entry is the one fetch of a live request (`healRequests`), out of the queue
+            // while it was in flight, so it is queued exactly once.
+            pendingTasks ++= req.tasks
           }
         }
       tryRedispatchPendingTasks()

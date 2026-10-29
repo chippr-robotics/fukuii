@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -80,8 +81,7 @@ private class StubHealResponseProcessingState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
   val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
-  val pendingHashSet: mutable.Set[ByteString] = mutable.Set.empty
-  val pathAliases: mutable.Map[ByteString, mutable.LinkedHashMap[Seq[ByteString], HealingEntry]] = mutable.Map.empty
+  val healRequests: HealRequestBook = new HealRequestBook()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
   var totalNodesHealed: Int = 0
@@ -242,7 +242,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.totalBytesReceived shouldBe served.encode.length.toLong
     m.activeRequests shouldBe empty
     m.pendingTasks.toSeq shouldBe Seq(skipped)
-    m.pendingHashSet shouldBe Set(skipped.hash)
+    // spec 022 D2: the served request is satisfied; the skipped one stays live (queued again, one fetch).
+    m.healRequests.fetchingHashes shouldBe Set(skipped.hash)
     m.unservable.toSeq shouldBe Seq(skipped.hash)
     // A heal from this peer clears its stateless mark and strikes and resets the stagnation timer.
     m.statelessPeers shouldBe empty
@@ -324,10 +325,10 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val owner = ByteString(Array.fill[Byte](32)(0x11))
     val storageAlias = Seq(owner, compact(7))
 
-    // The second and third paths of the same hash become aliases of the queued task.
+    // spec 022 D2: each path is its own request; the second and third join the first one's fetch of the same hash.
     m.queueNodes(Seq((account.pathset, account.hash), (alias, account.hash), (storageAlias, account.hash)))
     m.pendingTasks.toSeq shouldBe Seq(account)
-    m.pathAliases(account.hash).keys.toSeq shouldBe Seq(alias, storageAlias)
+    m.healRequests.waitingOn(account.hash).map(_.pathset) shouldBe Seq(account.pathset, alias, storageAlias)
 
     m.pendingTasks.clear()
     h.respond(1, peer("p1"), Seq(account), Seq(bytes(node)))
@@ -336,7 +337,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pns.readAccountNode(Array[Byte](1, 2)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
     pns.readAccountNode(Array[Byte](3, 4)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
     pns.readStorageNode(owner, Array[Byte](7)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
-    m.pathAliases shouldBe empty
+    m.healRequests.isEmpty shouldBe true
   }
 
   it should "queue a healed branch's absent children at their own paths, and persist them as frontier entries" taggedAs UnitTest in {
@@ -346,7 +347,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val absent = leaf(2)("absent")
     val pending = leaf(3)("pending")
     m.mptStorage.putNode(present)
-    m.pendingHashSet += hashOf(pending)
+    // A child already requested (queued or in flight): it is not queued again; the branch gains an edge to it.
+    m.healRequests.add(m.healRequestFor(HealingEntry(Seq(compact(6, 9)), hashOf(pending))))
     val children = Array.fill[MptNode](16)(NullNode)
     children(0) = HashNode(present.hash)
     children(4) = HashNode(absent.hash)
@@ -358,8 +360,11 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
 
     val child = HealingEntry(Seq(compact(6, 4)), hashOf(absent))
     m.pendingTasks.toSeq shouldBe Seq(child)
-    m.pendingHashSet should contain(child.hash)
+    m.healRequests.isFetching(child.hash) shouldBe true
     m.persisted.toSeq shouldBe Seq(Seq(child))
+    // spec 022 D2 (Hash): one edge from the branch to each missing child, the pending one included.
+    m.healRequests.outstandingChildren(task.hash) shouldBe 2
+    m.healRequests.parentsOf(hashOf(pending)) shouldBe Seq(task.hash)
   }
 
   it should "seed a healed account leaf's absent storage root, and report its absent code only with the check on" taggedAs UnitTest in {
@@ -431,13 +436,13 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val m = h.module
     val a = ByteString(Array.fill[Byte](32)(1))
     val b = ByteString(Array.fill[Byte](32)(2))
-    m.pendingHashSet += a
+    m.healRequests.add(m.healRequestFor(HealingEntry(Seq(compact(9)), a)))
 
     m.queueNodes(Seq((Seq(compact(1)), a), (Seq(compact(2)), b), (Seq(compact(3)), b)))
 
     m.pendingTasks.toSeq shouldBe Seq(HealingEntry(Seq(compact(2)), b))
-    m.pendingHashSet shouldBe Set(a, b)
-    m.pathAliases shouldBe empty // Hash scheme: no alias bookkeeping
+    m.healRequests.fetchingHashes shouldBe Set(a, b)
+    m.healRequests.waitingOn(b).map(_.pathset) shouldBe Seq(Seq(compact(2))) // Hash scheme: one request per hash
     m.calls.toSeq shouldBe Seq("persist", "gauges")
     m.isComplete shouldBe false
     m.pendingTasks.clear()

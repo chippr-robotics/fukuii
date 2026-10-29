@@ -101,7 +101,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // never enqueued, the queue drained early, and the walk reported "Complete" (and set the
     // Layer-2 completeness marker) having covered only `cap` of the trie. Eviction trades that
     // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
-    // pendingHashSet). Access is synchronized: worker threads only touch it via markIfNew, and
+    // the live heal requests). Access is synchronized: worker threads only touch it via markIfNew, and
     // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
     // What the set is keyed by depends on the storage scheme — see the `*VisitKey` helpers: the node hash under Hash,
     // the node's location under Path.
