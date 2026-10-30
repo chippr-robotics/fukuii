@@ -11,6 +11,7 @@ import io.circe.parser.decode as circeDecoder
 import io.circe.syntax.*
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** SNAP sync download progress persisted per state root.
@@ -45,6 +46,44 @@ object SnapSyncProgress:
       storageCursors <- c.downField("storageCursors").as[Map[String, String]]
     yield SnapSyncProgress(pivotBlock, accountCursors, storageCursors)
   }
+
+/** Why an account (or a bytecode) is in the durable excluded set (spec 022 D5, data-model.md "Excluded account"). */
+enum ExcludedReason(val code: Byte):
+  /** Its storage tasks were abandoned at a force-complete, or given up on after repeated stale-root failures. */
+  case StorageAbandoned extends ExcludedReason(1)
+
+  /** A storage task was skipped after the maximum number of empty replies. */
+  case StorageSkipped extends ExcludedReason(2)
+
+  /** The storage trie built from the download does not hash to the account's storage root. */
+  case StorageRootMismatch extends ExcludedReason(3)
+
+  /** The bytecode download gave up on this code hash. The downloader knows the hash, not the accounts that use it. */
+  case CodeMissing extends ExcludedReason(4)
+
+object ExcludedReason:
+  def fromCode(code: Byte): ExcludedReason =
+    values.find(_.code == code).getOrElse(StorageAbandoned)
+
+/** One entry of the durable excluded set. `subject` is the account hash, except under [[ExcludedReason.CodeMissing]],
+  * where it is the code hash (see that case). `claimedStorageRoot` and `claimedCodeHash` are what the decision saw, empty
+  * when it saw none: they are for the operator; what the entry needs at the current root is read from the account leaf.
+  */
+final case class ExcludedAccount(
+    subject: ByteString,
+    reason: ExcludedReason,
+    claimedStorageRoot: ByteString = ByteString.empty,
+    claimedCodeHash: ByteString = ByteString.empty
+):
+  def isCodeOnly: Boolean = reason == ExcludedReason.CodeMissing
+
+  /** The entry's place in the set: its kind byte and subject, the part of its key after the versioned prefix. */
+  def cursor: ByteString =
+    ByteString(if isCodeOnly then ExcludedAccount.CodeKind else ExcludedAccount.AccountKind) ++ subject
+
+object ExcludedAccount:
+  private[storage] val AccountKind: Byte = 'a'.toByte
+  private[storage] val CodeKind: Byte = 'c'.toByte
 
 class SnapSyncProgressStorage(val dataSource: DataSource)
     extends TransactionalKeyValueStorage[ByteString, SnapSyncProgress]:
@@ -101,3 +140,79 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       .unsafeRunSync()(IORuntime.global)
       .collect { case Right((k, _)) => k }
     if keys.nonEmpty then update(keys, Nil).commit()
+
+  // ---- spec 022 D5: the durable excluded set -------------------------------------------------------------------------
+  //
+  // In the app-state column family (`s`), not this store's own namespace `p`: `clearAll` and a new SNAP cycle's resume
+  // wipe `p`, and the set must outlive both until each entry is complete at the current root. Keys are `SnapExcluded/1/`,
+  // a kind byte and a 32-byte subject (the same reason for the column family as `SnapStorageDoneStorage`: no new one, so
+  // a downgrade still opens the database; the family's string keys never start with this prefix, and it is read only by
+  // this range). The set is written with `updateSync`: an entry is durable before anything is done on its strength, and
+  // the fsync syncs the WAL up to it. Every read is a page, so no caller ever holds the whole set.
+
+  /** Record `entries`, durably, before any action is taken on them. An entry already there is overwritten. */
+  def recordExcluded(entries: Seq[ExcludedAccount]): Unit =
+    if entries.nonEmpty then
+      dataSource.updateSync(
+        Seq(
+          DataSourceUpdateOptimized(
+            Namespaces.AppStateNamespace,
+            Nil,
+            entries.map(e => SnapSyncProgressStorage.excludedKey(e) -> SnapSyncProgressStorage.excludedValue(e))
+          )
+        )
+      )
+
+  /** Take `entries` out of the set, durably: only when they are complete at the current root (or the current root holds
+    * no such account).
+    */
+  def removeExcluded(entries: Seq[ExcludedAccount]): Unit =
+    if entries.nonEmpty then
+      dataSource.updateSync(
+        Seq(DataSourceUpdateOptimized(Namespaces.AppStateNamespace, entries.map(SnapSyncProgressStorage.excludedKey), Nil))
+      )
+
+  /** Up to `limit` entries in key order, starting after the entry whose [[ExcludedAccount.cursor]] is `after`. */
+  def excludedPage(after: Option[ByteString], limit: Int): Seq[ExcludedAccount] =
+    import SnapSyncProgressStorage.*
+    val from = after.fold(ExcludedPrefix)(c => ExcludedPrefix ++ c.toArray :+ 0.toByte)
+    dataSource
+      .scanRangeLimit(Namespaces.AppStateNamespace, from, ExcludedEnd, limit)
+      .map { case (k, v) => excludedEntry(k, v) }
+      .toSeq
+
+  /** Whether the set holds anything. One bounded read. */
+  def hasExcluded: Boolean = excludedPage(None, 1).nonEmpty
+
+  /** Empty the set (one range tombstone): SNAP has finalised, and no later cycle may read this one's decisions. */
+  def clearExcluded(): Unit =
+    dataSource.deleteRange(
+      Namespaces.AppStateNamespace,
+      SnapSyncProgressStorage.ExcludedPrefix,
+      SnapSyncProgressStorage.ExcludedEnd
+    )
+
+object SnapSyncProgressStorage:
+  private val ExcludedPrefix: Array[Byte] = "SnapExcluded/1/".getBytes(StorageStringCharset.UTF8Charset)
+  // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
+  private val ExcludedEnd: Array[Byte] = ExcludedPrefix :+ 0xff.toByte
+  private val AbsentHash: Array[Byte] = new Array[Byte](32)
+
+  private def excludedKey(e: ExcludedAccount): Array[Byte] = ExcludedPrefix ++ e.cursor.toArray
+
+  // One reason byte and two 32-byte hashes, zero for one the decision did not see.
+  private def excludedValue(e: ExcludedAccount): Array[Byte] =
+    def hash(h: ByteString): Array[Byte] = if h.length == 32 then h.toArray else AbsentHash
+    (e.reason.code +: hash(e.claimedStorageRoot)) ++ hash(e.claimedCodeHash)
+
+  // The key carries what the entry needs: a value that does not parse costs the claims, never the entry.
+  private def excludedEntry(key: Array[Byte], value: Array[Byte]): ExcludedAccount =
+    val kind = key(ExcludedPrefix.length)
+    val subject = ByteString(key.drop(ExcludedPrefix.length + 1))
+    def hash(from: Int): ByteString =
+      val h = value.slice(from, from + 32)
+      if h.length == 32 && !h.sameElements(AbsentHash) then ByteString(h) else ByteString.empty
+    if kind == ExcludedAccount.CodeKind then ExcludedAccount(subject, ExcludedReason.CodeMissing)
+    else
+      val reason = value.headOption.map(ExcludedReason.fromCode).filterNot(_ == ExcludedReason.CodeMissing)
+      ExcludedAccount(subject, reason.getOrElse(ExcludedReason.StorageAbandoned), hash(1), hash(33))

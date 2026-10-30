@@ -236,6 +236,14 @@ class RocksDbDataSource(
       fromKey: Array[Byte],
       toKeyExclusive: Array[Byte]
   ): Iterator[(Array[Byte], Array[Byte])] =
+    scanRangeLimit(namespace, fromKey, toKeyExclusive, Int.MaxValue)
+
+  override def scanRangeLimit(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExclusive: Array[Byte],
+      limit: Int
+  ): Iterator[(Array[Byte], Array[Byte])] =
     dbLock.readLock().lock()
     try
       assureNotClosed()
@@ -243,7 +251,7 @@ class RocksDbDataSource(
       try
         val buf = scala.collection.mutable.ArrayBuffer.empty[(Array[Byte], Array[Byte])]
         it.seek(fromKey)
-        while it.isValid && java.util.Arrays.compareUnsigned(it.key(), toKeyExclusive) < 0 do
+        while buf.size < limit && it.isValid && java.util.Arrays.compareUnsigned(it.key(), toKeyExclusive) < 0 do
           buf += ((it.key(), it.value()))
           it.next()
         buf.iterator
