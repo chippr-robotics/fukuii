@@ -133,7 +133,23 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [x] T025 [US3] On a re-peg (`TrieNodeHealingCoordinator.scala:606-690`) and on `HealingForceComplete` (`:567-584`), drop the held set and pending requests, flush **only** complete nodes, and re-seed from the new root. **[beacon] [forge]**
 - [x] T026 [US3] Remove the buffer-before-write ordering in `actors/healing/FrontierPersistence.scala:167-206`, so the #1549 heal-path bug is gone. If the Hash `rawNodeBuffer` path survives T024, it must clear only after a successful write and reset `flushing` on failure. **[vault]**
 - [x] T027 [US3] Write the completion flag with `updateSync`, following research R-3, wherever `StateHealingComplete` is persisted. **[vault]**
-- [ ] T028 Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
+- [x] T028 **Dev-loop run done 2026-10-29** (`/home/dontpanic/mordor-scarcity/S2`, jar `9b71bcd02`, sha256 `c69a841d…`).
+  - **Correctness:**
+    - SNAP completed and handed off at pivot 17,289,450.
+    - The second verification walk found **0 missing nodes**. The 2026-10-28 baseline's second walk found 1, which forced a third walk.
+    - Regular sync then imported 168 blocks in 10 min, with no missing-node or root errors.
+    - No `[HEAL-KEY-CONFLICT]`, `[HEAL-HELD-CONFLICT]` or bookkeeping-fault lines.
+  - **Timing, confounded by host IO:**
+    - Bootstrap → handoff: 28.9 min (baseline 25.6).
+    - Accounts + storage: 7.3 min (baseline about 16).
+    - Bytecode: 11.4 min (baseline 3.5).
+    - Healing → handoff: 10.3 min (baseline 5.7).
+    - JFR shows the slow stretch (19:10–19:17) was disk-bound: healing threads sat in native `RocksDB.multiGet` / iterator `next`, with almost no Java CPU samples. GC paused 7 s in total over 610 s, the longest pause 226 ms.
+    - Over the same window core-geth imported empty blocks at 15.5 s each on average (57 s at worst), so the SATA SSD was saturated for both processes. The slow bytecode phase has the same cause.
+  - **Held set:** Mordor healed only 649 nodes. The cap was never reached (no `[HEAL-HELD]` pause), and the 2-minute pulse sampled after the drain (held=0), so the peak was **not captured**. The expected peak of about 43k nodes (20–45 MB) needs a larger heal. Sepolia gate T063 measures it.
+  - Run the measured comparison again on a quiet host before slice 5's T057 timing.
+
+  Original task: Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
 
 **Checkpoint**: the invariant holds for everything healing writes, and is proven under kill points.
 
