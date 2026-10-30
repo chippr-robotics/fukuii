@@ -18,9 +18,11 @@ import scala.collection.mutable
   * '''Anything else.''' One clock for all of it, keyed by what the excluded set holds ([[SetSignature]]): it restarts
   * when the set's accounts change, and ends when nothing but code blocks.
   *
-  * '''Memory.''' The map holds the hashes blocking now, plus at most `maxOrphanedCode` that blocked earlier and are not
-  * stored yet, eldest dropped first. A dropped hash that blocks again only starts its wait again, which delays a
-  * hand-off and never hurries one.
+  * '''Memory.''' The map holds as many hashes as have ever blocked at once, plus at most `maxOrphanedCode` more that
+  * blocked earlier and are not stored yet, eldest dropped first. A dropped hash that blocks again only starts its wait
+  * again, which delays a hand-off and never hurries one. The first number matters: a re-peg starts the pass over the
+  * set from nothing, so a tick part way through it sees only a few of a stuck set blocking. Dropped as orphans, the
+  * eldest would start again at every re-peg and the hand-off would never come (review hunter BC-1).
   *
   * '''Restart.''' Not durable. A supervisor restart or a node restart starts every clock again: another 30 idle
   * minutes, and the durable set still holds completion meanwhile.
@@ -32,14 +34,15 @@ final class BlockerClock(maxOrphanedCode: Int = BlockerClock.DefaultMaxOrphanedC
 
   private var idleMinutes: Long = 0L
   private val codeSince = mutable.LinkedHashMap.empty[ByteString, Long]
+  private var mostBlocking: Int = 0
   private var otherSince: Option[(SetSignature, Long)] = None
 
   /** `blocking` is the code healing waits on now. A hash not seen before starts its wait here. */
   def observeCode(blocking: collection.Set[ByteString]): Unit =
     blocking.foreach(hash => if !codeSince.contains(hash) then codeSince(hash) = idleMinutes)
-    val orphaned = codeSince.size - blocking.size
-    if orphaned > maxOrphanedCode then
-      codeSince.keysIterator.filterNot(blocking).take(orphaned - maxOrphanedCode).toVector.foreach(codeSince.remove)
+    mostBlocking = mostBlocking.max(blocking.size)
+    val excess = codeSince.size - mostBlocking - maxOrphanedCode
+    if excess > 0 then codeSince.keysIterator.filterNot(blocking).take(excess).toVector.foreach(codeSince.remove)
 
   /** The code `hash` has been written. */
   def codeStored(hash: ByteString): Unit = codeSince.remove(hash): Unit

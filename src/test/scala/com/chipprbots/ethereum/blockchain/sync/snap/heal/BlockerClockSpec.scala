@@ -71,17 +71,36 @@ class BlockerClockSpec extends AnyFlatSpec with Matchers:
     clock.codeHasWaited(Set(h(1)), 1) shouldBe false
   }
 
-  "The map" should "hold what blocks now and a bounded number that blocked earlier, eldest going first" taggedAs UnitTest in {
+  "The map" should "hold the most that have blocked at once and a bounded number more, eldest going first" taggedAs UnitTest in {
     val clock = new BlockerClock(maxOrphanedCode = 2)
     clock.observeCode(Set(h(1), h(2), h(3)))
     minutes(clock, 30)
+    clock.observeCode(Set(h(7)))
+    clock.observeCode(Set(h(8)))
+    clock.trackedCode should have size 5
     clock.observeCode(Set(h(9)))
-    clock.trackedCode shouldBe Set(h(2), h(3), h(9))
+    clock.trackedCode shouldBe Set(h(2), h(3), h(7), h(8), h(9))
     withClue("what is blocking is never the one dropped: ") {
       clock.observeCode(Set(h(1), h(2), h(3), h(4), h(5), h(9)))
-      clock.trackedCode should have size 6
+      (clock.trackedCode should contain).allOf(h(1), h(2), h(3), h(4), h(5), h(9))
     }
     withClue("a dropped hash only starts again: ")(clock.codeHasWaited(Set(h(1)), 1) shouldBe false)
+  }
+
+  // Review hunter BC-1: a re-peg starts the pass over the set from nothing, so a tick part way through it sees only a
+  // few of the stuck hashes blocking. The rest are not orphans: a re-peg comes sooner than 30 idle minutes, so a stuck
+  // set over the cap, its eldest dropped at each one, would never reach the hand-off.
+  it should "not take a stuck set for orphans while a pass is part way through it" taggedAs UnitTest in {
+    val clock = new BlockerClock(maxOrphanedCode = 2)
+    val stuck = (1 to 10).map(h).toSet
+    clock.observeCode(stuck)
+    (1 to 3).foreach { _ =>
+      minutes(clock, 9)
+      clock.observeCode(Set(h(1))) // a re-peg, and a tick with one page of the pass done
+      minutes(clock, 1)
+      clock.observeCode(stuck)
+    }
+    clock.codeHasWaited(stuck, 30) shouldBe true
   }
 
   private val sigA = BlockerClock.SetSignature.Empty.and(h(1))
