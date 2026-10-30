@@ -82,10 +82,11 @@ private[actors] trait FrontierPersistence
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
   // When `healingFrontierStorage` is defined, the outstanding frontier is mirrored to a dedicated RocksDB
   // CF so a restart resumes (O(frontier)) instead of re-walking the full state. Invariant: the persisted
-  // set equals `pendingTasks ∪ in-flight ∪ held` (spec 022: a held node is received but not on disk, so a restart must
+  // set covers `pendingTasks ∪ in-flight ∪ held` (spec 022: a held node is received but not on disk, so a restart must
   // fetch it again) — write on every new enqueue (queueNodes / inline child discovery / pivot reseed), delete on
-  // heal-flush (NOT on dispatch, NOT on hold) and when a held node is dropped unwritten (Hash, `unpersistDroppedHeld`),
-  // clear on force-complete / pivot-refresh.
+  // heal-flush (NOT on dispatch, NOT on hold) and when a re-peg or force-complete drops a held node unwritten (Hash,
+  // `unpersistDroppedHeld`), clear on force-complete / pivot-refresh. A node the orphan guard drops keeps its entry (same
+  // root, the marker may stand: spec 022 review vault R2), so the set may hold more than that union, never less.
   // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (the common default).
 
   /** Persist newly-queued frontier entries (hash -> pathset). Idempotent: re-persisting an existing entry overwrites it
@@ -125,10 +126,11 @@ private[actors] trait FrontierPersistence
         store.clearComplete()
       }
 
-  /** Hash scheme: the held nodes `hashes` were dropped unwritten (a re-peg, a force-complete, the orphan guard), so
-    * they leave the persisted frontier; nothing else would ever remove their entries (spec 022 review vault V5). A held
-    * node keeps its entry while held: it is not on disk, and the entry is what lets a resume fetch it again. Path
-    * scheme: its entries are never removed on heal (research R-5); slice 4 retires the CF.
+  /** Hash scheme: the held nodes `hashes` were dropped unwritten by a re-peg or a force-complete, so they leave the
+    * persisted frontier, whose marker those clear too; nothing else would ever remove their entries (spec 022 review
+    * vault V5). A held node keeps its entry while held, and when the orphan guard drops it under the same root (vault
+    * R2): it is not on disk, and the entry is what lets a resume fetch it again. Path scheme: its entries are never
+    * removed on heal (research R-5); slice 4 retires the CF.
     */
   def unpersistDroppedHeld(hashes: Seq[ByteString]): Unit =
     if storageScheme == StorageScheme.Hash then unpersistFrontier(hashes)

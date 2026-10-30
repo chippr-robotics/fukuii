@@ -500,6 +500,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * them keep new subtrees paused at the cap (beacon W1); so they are dropped as soon as nothing can free them, never
     * written (nothing on disk is wrong), and the verification walk finds them missing again. With nothing queued
     * either, every live request is orphaned too (live means queued or in flight), and the book is cleared.
+    *
+    * Their persisted frontier entries stay (vault R2, hunter N3, forge F3): the root has not moved, so the completeness
+    * marker may stand, and an entry is what lets a resume from it fetch a dropped node again. The walk persists them
+    * again anyway (idempotent), and a flush removes each once its node is written. Only a re-peg or a force-complete,
+    * which clear the marker too, remove the entries of the held nodes they drop (`dropHeld`).
     */
   private def dropOrphanedHeld(): Unit =
     if heldNodes.nonEmpty && !heldNodes.hasPendingWrites && activeRequests.isEmpty &&
@@ -512,7 +517,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           "walk finds them again"
       )
       heldNodes.clear()
-      unpersistDroppedHeld(dropped)
       if pendingTasks.isEmpty && !healRequests.isEmpty then
         log.error(s"[HEAL-HELD] ${healRequests.size} live request(s) are neither queued nor in flight — dropping them")
         healRequests.clear()
