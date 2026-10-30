@@ -7,6 +7,7 @@ import scala.collection.mutable
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -89,6 +90,12 @@ final class ExcludedAccountSeeding(
     */
   def onlyCodeOutstanding: Boolean =
     lastPass.exists { case (seeds, failedReads) => seeds == 0 && failedReads == 0 } && store.hasExcluded
+
+  /** Record `codeHashes` as bytecode the held chains are going to be written without (plan D4). Durable when it
+    * returns.
+    */
+  def recordMissingCode(codeHashes: Seq[ByteString]): Unit =
+    store.recordExcluded(codeHashes.map(ExcludedAccount(_, ExcludedReason.CodeMissing)))
 
   /** Hand `delete` the positions of every account in the set (T034), a batch at a time: every position of an account in
     * one batch, each position once. Returns how many accounts there were. Throws if a page cannot be read or a batch

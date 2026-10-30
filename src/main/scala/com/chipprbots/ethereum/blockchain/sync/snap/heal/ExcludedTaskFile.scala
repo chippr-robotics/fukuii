@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
-import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 
 /** Spec 022 review hunter C1: the storage phase's list of what it owes, read back at a force-complete.
@@ -49,10 +48,10 @@ object ExcludedTaskFile:
   def recordUnfinished(
       path: Path,
       done: SnapStorageDoneStorage,
-      store: SnapSyncProgressStorage,
+      record: Seq[ExcludedAccount] => Unit,
       chunkEntries: Int = GatedTaskFileReplay.DefaultChunkEntries
   ): Outcome =
-    def record(entries: Vector[Array[Byte]]): Int =
+    def recordChunk(entries: Vector[Array[Byte]]): Int =
       val tasks = entries.flatMap { entry =>
         val account = ByteString(java.util.Arrays.copyOfRange(entry, 0, 32))
         val root = ByteString(java.util.Arrays.copyOfRange(entry, 32, 64))
@@ -61,7 +60,7 @@ object ExcludedTaskFile:
         )
       }
       val unfinished = done.unfinished(tasks)(t => (t.subject, t.claimedStorageRoot))
-      store.recordExcluded(unfinished)
+      if unfinished.nonEmpty then record(unfinished)
       unfinished.size
 
     Try(Files.size(path) / StorageTaskFile.EntrySize) match
@@ -78,7 +77,7 @@ object ExcludedTaskFile:
             Try(replay.step(chunk = _)) match
               case Failure(e) => Outcome.Unreadable(e)
               case Success(_) =>
-                Try(record(chunk)) match
+                Try(recordChunk(chunk)) match
                   case Failure(e) => Outcome.StoreFailed(e)
                   case Success(n) => loop(total + n)
 

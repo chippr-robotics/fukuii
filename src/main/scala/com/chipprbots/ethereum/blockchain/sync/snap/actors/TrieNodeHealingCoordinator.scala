@@ -25,8 +25,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
-import com.chipprbots.ethereum.db.storage.ExcludedAccount
-import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -326,7 +324,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // in bare construction, which never reads the store.
   private val excludedSeeding: Option[ExcludedAccountSeeding] =
     Option.when(excludedAccounts)(
-      new ExcludedAccountSeeding(stateIngest.snapProgress, readForExcluded, h => stateIngest.bytecode.get(h).isDefined)
+      new ExcludedAccountSeeding(stateIngest.snapProgress, readForExcluded, codeStored)
     )
   // Whether the completion gate last stayed shut on the set. What a tick looks at, with `heldNodes.awaitingCode`.
   private var excludedBlocking: Boolean = false
@@ -360,6 +358,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     if verificationBFSRunning then invalidatedWalk = currentWalk
 
   private def walkInvalidated: Boolean = invalidatedWalk.isDefined && invalidatedWalk == currentWalk
+
+  private def codeStored(codeHash: ByteString): Boolean = stateIngest.bytecode.get(codeHash).isDefined
 
   /** The node a walk of the current root would read: by hash under Hash, at its own position, hash-checked, under Path.
     * A read that fails throws: the entry stays, and the next pass tries again.
@@ -494,7 +494,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def armCodeHandOff(): Unit =
     val awaited = heldNodes.awaitedCode.keys.toSeq
     try
-      stateIngest.snapProgress.recordExcluded(awaited.map(ExcludedAccount(_, ExcludedReason.CodeMissing)))
+      excludedSeeding.foreach(_.recordMissingCode(awaited))
       log.warn(
         s"[HEAL-CODE] Only bytecode has blocked healing for $blockedTicks minutes: writing ${heldNodes.size} node(s) " +
           s"waiting only on ${awaited.size} bytecode(s), then a walk of the rest, then a lazy hand-off. Healing does " +
@@ -546,8 +546,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // Any lost acknowledgement (a bytecode coordinator that a supervisor restarted, say).
     if heldNodes.awaitingCode || excludedCodeAsked.nonEmpty then
       try
-        val stored =
-          (heldNodes.awaitedCode.keys ++ excludedCodeAsked).filter(h => stateIngest.bytecode.get(h).isDefined)
+        val stored = (heldNodes.awaitedCode.keys ++ excludedCodeAsked).filter(codeStored)
         if stored.nonEmpty then onCodeStored(stored.toSeq)
       catch
         case scala.util.control.NonFatal(e) =>

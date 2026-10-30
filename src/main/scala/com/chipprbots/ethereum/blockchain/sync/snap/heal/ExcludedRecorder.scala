@@ -35,6 +35,9 @@ final class ExcludedRecorder(store: => SnapSyncProgressStorage, enabled: Boolean
   def stage(entries: Iterable[ExcludedAccount]): Unit =
     if enabled then entries.foreach(e => staged(e.cursor) = e)
 
+  /** Write `entries` at once, on the calling thread, which need not be the actor's: nothing here is touched. */
+  def recordNow(entries: Seq[ExcludedAccount]): Unit = store.recordExcluded(entries)
+
   /** Whether a decision has not been written yet. */
   def pending: Boolean = staged.nonEmpty
 

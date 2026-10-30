@@ -695,10 +695,9 @@ private[actors] class StorageRangeCoordinatorImpl(
       case None => false
       case Some((file, done)) =>
         taskFileSweepRunning = true
-        val progress = stateIngest.snapProgress
         val selfRef = self
         scala.concurrent
-          .Future(ExcludedTaskFile.recordUnfinished(file, done, progress))(flatBatchEc)
+          .Future(ExcludedTaskFile.recordUnfinished(file, done, excludedRecorder.recordNow))(flatBatchEc)
           .onComplete {
             case Success(outcome) => selfRef ! TaskFileSwept(outcome)
             case Failure(e)       => selfRef ! TaskFileSwept(ExcludedTaskFile.Outcome.StoreFailed(e))

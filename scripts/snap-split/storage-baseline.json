@@ -14,7 +14,7 @@
     "storage_members": []
   },
   "counter": 2,
-  "storage_refs_total": 555,
+  "storage_refs_total": 552,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 93,
     "SNAPSyncController.scala": 72,
@@ -22,9 +22,9 @@
     "controller/SnapFinalization.scala": 43,
     "controller/DownloadSupervisor.scala": 42,
     "controller/ChildFactories.scala": 38,
-    "actors/StorageRangeCoordinator.scala": 37,
+    "actors/StorageRangeCoordinator.scala": 36,
     "controller/HealingOrchestrator.scala": 28,
-    "actors/TrieNodeHealingCoordinator.scala": 23,
+    "actors/TrieNodeHealingCoordinator.scala": 21,
     "controller/SyncLifecycle.scala": 18,
     "actors/AccountRangeCoordinator.scala": 14,
     "actors/storage/StorageOrderedApply.scala": 13,
