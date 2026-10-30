@@ -717,6 +717,29 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash)
   }
 
+  // Spec 022 review item 1 (hunter C1): a supervisor restart empties the queue, and nothing asks for these again.
+  it should "record the hashes it still owes when a supervisor restarts it" taggedAs UnitTest in {
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = testKit.spawn(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors
+        .supervise(
+          ByteCodeCoordinator(
+            stateIngest = bytecodeIngest(new TestEvmCodeStorage()),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            batchSize = 4,
+            snapSyncController = snapSyncController.ref,
+            recordExcluded = true
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    val hash = kec256(ByteString("restart-owed"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+    eventually(progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash))
+  }
+
   it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
     val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = false)
     val hash = kec256(ByteString("force-complete-recovery"))

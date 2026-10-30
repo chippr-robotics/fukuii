@@ -9,6 +9,8 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
@@ -17,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -625,17 +628,19 @@ private[actors] class StorageRangeCoordinatorImpl(
         onPostStop()
         Behaviors.same
       case (_, org.apache.pekko.actor.typed.PreRestart) =>
+        // spec 022 review hunter C1: the restart empties every collection below, and nothing downloads these again. Best
+        // effort: the write may be why this is restarting, and the force-complete reads what it loses from the task file.
+        stageUndecidedAccounts()
+        excludedRecorder.flush()
         // A supervisor restart builds a new instance (and pool); this one's workers must not linger.
         shutdownProcessingPool()
         Behaviors.same
     }
 
-  /** spec 022 T033, at a force-complete: every account whose storage is left incomplete goes into the durable excluded
-    * set before anything is dropped: queued, in flight, answered but not applied, waiting in the ordering gate, or with
-    * a partial trie and no task left. False when the write failed: nothing is dropped and nothing is reported (a
-    * force-complete that reported without its record could never be told from a clean one), and it tries again.
+  /** spec 022 T033: every account in memory whose storage is not complete: queued, in flight, answered but not applied,
+    * waiting in the ordering gate, or with a partial trie and no task left.
     */
-  private def recordAbandonedAtForceComplete(): Boolean =
+  private def stageUndecidedAccounts(): Unit =
     val entries = mutable.LinkedHashMap.empty[ByteString, ExcludedAccount]
     def abandon(task: StorageTask): Unit =
       entries(task.accountHash) =
@@ -648,14 +653,57 @@ private[actors] class StorageRangeCoordinatorImpl(
       .filterNot(entries.contains)
       .foreach(account => entries(account) = ExcludedAccount(account, ExcludedReason.StorageAbandoned))
     excludedRecorder.stage(entries.values)
+
+  /** spec 022 T033, at a force-complete: every account whose storage is left incomplete goes into the durable excluded
+    * set before anything is dropped. False when the write failed: nothing is dropped and nothing is reported (a
+    * force-complete that reported without its record could never be told from a clean one), and it tries again.
+    */
+  private def recordAbandonedAtForceComplete(): Boolean =
+    stageUndecidedAccounts()
     val recorded = excludedRecorder.flush()
     if !recorded then
       log.error(
-        s"[STORAGE-FORCE-COMPLETE] Could not record the ${entries.size} account(s) it would abandon — not " +
-          "force-completing; trying again shortly"
+        "[STORAGE-FORCE-COMPLETE] Could not record the accounts it would abandon — not force-completing; trying again " +
+          "shortly"
       )
       timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
     recorded
+
+  // spec 022 review hunter C1: the task file's part of a force-complete, once per incarnation.
+  private var taskFileSwept: Boolean = false
+  private var taskFileSweepRunning: Boolean = false
+
+  /** Start reading the task file back into the excluded set (`ExcludedTaskFile`), off this actor: its end sends
+    * `TaskFileSwept`, and that brings the force-complete back. False when there is nothing to read: no record is kept;
+    * or no done markers, without which the file would name every account; or no file yet, which means the account phase
+    * has not ended and what was lost to a restart was recorded (at best) as it went.
+    */
+  private def taskFilePath: Option[java.nio.file.Path] =
+    try stateIngest.appState.getSnapSyncStorageFilePath().filter(_.nonEmpty).map(java.nio.file.Paths.get(_))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        log.error("[STORAGE-FORCE-COMPLETE] Could not read where the task file is; going on without it", e)
+        None
+
+  private def startTaskFileSweep(): Boolean =
+    val sweep =
+      for
+        done <- storageDoneStorage.filter(_ => recordExcluded)
+        file <- taskFilePath
+      yield (file, done)
+    sweep match
+      case None => false
+      case Some((file, done)) =>
+        taskFileSweepRunning = true
+        val progress = stateIngest.snapProgress
+        val selfRef = self
+        scala.concurrent
+          .Future(ExcludedTaskFile.recordUnfinished(file, done, progress))(flatBatchEc)
+          .onComplete {
+            case Success(outcome) => selfRef ! TaskFileSwept(outcome)
+            case Failure(e)       => selfRef ! TaskFileSwept(ExcludedTaskFile.Outcome.StoreFailed(e))
+          }(flatBatchEc)
+        true
 
   private def handleCommand(msg: Command): Behavior[Command] =
     msg match
@@ -788,8 +836,27 @@ private[actors] class StorageRangeCoordinatorImpl(
           snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
         Behaviors.same
 
+      case TaskFileSwept(outcome) =>
+        taskFileSweepRunning = false
+        outcome match
+          case ExcludedTaskFile.Outcome.Recorded(accounts) =>
+            taskFileSwept = true
+            log.info(s"[STORAGE-FORCE-COMPLETE] Recorded $accounts unfinished account(s) from the task file")
+            self ! ForceCompleteStorage
+          case ExcludedTaskFile.Outcome.Unreadable(cause) =>
+            // The walk still finds what it would have named; slice 5 may not remove the walk over this (T051, T052).
+            taskFileSwept = true
+            log.error("[STORAGE-FORCE-COMPLETE] Could not read the task file; going on with what is in memory", cause)
+            self ! ForceCompleteStorage
+          case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
+            log.error("[STORAGE-FORCE-COMPLETE] Could not record the task file's accounts; trying again shortly", cause)
+            timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
+        Behaviors.same
+
       case ForceCompleteStorage =>
         if forceCompleteExecuted then log.debug("ForceCompleteStorage: already executed — ignoring duplicate")
+        else if taskFileSweepRunning then log.debug("ForceCompleteStorage: reading the task file — ignoring duplicate")
+        else if !taskFileSwept && startTaskFileSweep() then ()
         else if recordAbandonedAtForceComplete() then
           forceCompleteExecuted = true
           // Responses received but not applied are abandoned with the in-flight requests (healing recovers them).
@@ -1141,6 +1208,9 @@ object StorageRangeCoordinator:
     * deferred writes and reports StorageRangeSyncForceCompleted.
     */
   case object ForceCompleteStorage extends Command
+
+  /** The force-complete's read of the task file has ended (`ExcludedTaskFile`). */
+  final private[actors] case class TaskFileSwept(outcome: ExcludedTaskFile.Outcome) extends Command
 
   /** Dynamically adjust per-peer concurrency budget. Sent by SNAPSyncController at phase transitions (Geth-aligned:
     * total 5 requests per peer across all coordinators).
