@@ -294,6 +294,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"(${heldNodes.size} held, ${rawNodeBuffer.size} buffered, ${healRequests.size} requests) — no new " +
             s"subtree is opened until held nodes commit; their children are still fetched"
         )
+      else if bytes >= heldMemoryLimit && heldNodes.nonEmpty then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB is still at the limit, but nothing queued or in flight can " +
+            "complete the held nodes — new subtrees are opened again (the orphan guard drops the held nodes)"
+        )
       else log.info(s"[HEAL-HELD] Held memory ${bytes / 1024} KiB under the limit — new subtrees are opened again")
     paused
 
