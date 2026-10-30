@@ -260,7 +260,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       val rig = storageRig(StorageScheme.Hash, reason, stale)
       rig.serve(rig.trie)
       rig.peerAvailable()
-      rig.start() // the walk of the resume stays queued on the writer executor
+      rig.start() // the rebuild walk stays queued on the writer executor
       rig.settle()
       withClue("the seed goes out without any walk having run: ")(rig.requested should contain(rig.trie("s0").pathset))
       withClue("no completion while the entry stands: ")(
@@ -299,6 +299,9 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       val rig = new Rig(scheme, oldTrie, absent = Set("sRoot", "sLeaf1"), excluded = Nil)
       rig.seed(Seq(newTrie.root)) // the new root's leaf is on disk too: it is the storage below it that is missing
       rig.start()
+      // The old root's walk ends before the re-peg. One the re-peg overtook would, on Hash, queue a node only the old root
+      // holds, and no peer at the new root serves it until the next re-peg clears it: that is T051a, not this case.
+      rig.drive()
       rig.progress.recordExcluded(
         Seq(
           ExcludedAccount(
@@ -521,9 +524,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)),
       progressSource = source
     )
-    rig.start()
-    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
-    rig.settle()
+    rig.start() // the rebuild walk is queued, and so running
     withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
     val afterAdoption = source.pageReads
     afterAdoption should be > 0
@@ -541,9 +542,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       absent = Set.empty,
       Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
     )
-    rig.start()
-    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
-    rig.settle()
+    rig.start() // the rebuild walk is queued, and so running
     withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
     (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
       rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
