@@ -4,9 +4,12 @@
 
 **Created**: 2026-06-19
 
-**Status**: Draft
-
+**Status**: Superseded by 022 (2026-10-30). Shipped (28 of 32 tasks; CON-011), then replaced: spec 022 FR-001/FR-003 make subtree completeness a write-order invariant instead of a verification pass (022 FR-019).
 **Input**: User description: "Make post-SNAP heal verification O(missing-frontier) instead of O(whole trie) via a per-subtree-completeness invariant + descend-and-stop pruning, eliminating the ~16-20h full-trie verification walk."
+
+**Closed** (2026-10-30):
+- Reason: spec 022 FR-019 names this spec superseded.
+- Lives on in: 022 slice 2's held set and atomic chain commit (#1684).
 
 ## Overview
 

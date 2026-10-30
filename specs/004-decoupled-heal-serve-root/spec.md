@@ -4,9 +4,12 @@
 
 **Created**: 2026-06-17
 
-**Status**: Draft
-
+**Status**: Done (2026-10-30). Implemented; 13 main-source sites cite it and ADR CON-010 records the decision. One tasks.md box was never ticked.
 **Input**: User description: "Decouple the local rebuild/verification walk from the serve-window-bound heal so the post-SNAP heal can complete on a slow / peer-scarce node."
+
+**Closed** (2026-10-30):
+- Reason: shipped. Decoupling the heal root from the serve root is in `blockchain/sync/snap/` (see `docs/adr/consensus/CON-010-decoupled-heal-serve-root.md`).
+- Note: spec 022 keeps the decoupling and changes only how completion is declared.
 
 ## Overview
 

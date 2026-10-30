@@ -4,9 +4,11 @@
 
 **Created**: 2026-10-28
 
-**Status**: Draft
-
+**Status**: Active (2026-10-30). Slices 1–3 merged (#1682, #1684, #1685); slice 4 in review, slice 5 (completion switch) lands last, then slice 6 and the Mordor and Sepolia release gates. 0.11.0 blocker (#1671).
 **Tracking**: issue #1671. Release 0.11.0 (#1659). The release waits on this (user decision 2026-10-28).
+
+**In flight**: `dev-node` (local build-host session), branch `fix/022-s4-invariant-marker`
+**Release**: 0.11.0
 
 **Input**: SNAP state healing must converge on a live chain for both ETH (Path scheme) and ETC (Hash scheme). The node declares state complete when healing has nothing left to fetch from the current root, not after a full-trie verification walk. The full walk becomes a non-blocking background audit. The spec also evaluates retiring the Hash scheme. Full input: issue #1671 and its comments.
 

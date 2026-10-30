@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-3.** Companion of spec 023 (fleet topology); independent
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-3. Companion of spec 023 (fleet topology); independent
 of 025 and 026 and of spec 018. Can start now.
 
 **Input**: Spec 023 Goal 2 and the user decision D-6 (MESS off by default): adding a network whose consensus type fukuii

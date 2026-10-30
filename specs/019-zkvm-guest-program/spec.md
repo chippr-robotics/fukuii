@@ -5,7 +5,7 @@
 
 **Created**: 2026-10-11
 
-**Status**: **Draft (stub, revised 2026-10-17).** Not yet started. Gated by a two-track Phase 0 feasibility spike (SP-1)
+**Status**: Draft (2026-10-30). (stub, revised 2026-10-17). Not yet started. Gated by a two-track Phase 0 feasibility spike (SP-1)
 and by a constitution amendment (CG-1). To be fleshed out with `/speckit-specify` and `/speckit-clarify` once the spike
 has reported, then `/speckit-plan` and `/speckit-tasks`. The Gates and Design constraints sections are binding on that
 later work. **Revised 2026-10-17**: renumbered from 018 to 019; spec 018 (storage engine consolidation) now precedes it;

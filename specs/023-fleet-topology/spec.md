@@ -4,9 +4,11 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-4 below.** The Evidence figures from
+**Status**: Draft (2026-10-30). Decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-5 below. The Evidence figures from
 the originating notes were re-measured on `staging` 0f1a904 (0.10.17) and corrected in [research.md](./research.md) §1;
-the T-001 retirement inventory is done ([research.md](./research.md) §2). Nothing here is implemented.
+the T-001 retirement inventory is done ([research.md](./research.md) §2). **Revised 2026-10-30**: the cross-spec
+[alignment review](./alignment-review.md) added FR-010 (transaction ingress), OQ-5 (`relay` role), the Engine API
+clause of FR-005, and a sequenced plan for 013 and 017–026. Nothing here is implemented.
 
 **Input**: User direction, 2026-10-30: "the eventual goal will be to have a scalable fukuii 'cluster' running that is
 capable of syncing and managing multiple EVM networks", feeding a larger pipeline for **analytics and transactional
@@ -306,7 +308,9 @@ T-002.
   `--chain <network> --role ingest` with RPC serving enabled (the single-node operator profile). The role and
   `chainKey` MUST be available to every component through `InstanceConfig`, not through a new global.
 - **FR-002** Role defaults MUST be documented per role: which servers listen, which RPC namespaces are served, which
-  sync mode runs, and what readiness means (table in `quickstart.md`, produced by `/speckit-plan`).
+  sync mode runs (017 `SyncMode`, with `Follow` for followers), what readiness means, and how transactions are admitted
+  (FR-010) (table in `quickstart.md`, produced by `/speckit-plan`). ETC PoW mining is a single-node-profile option on
+  `ingest` only; no fleet role mines.
 - **FR-003** `sim` MUST run every request on bounded executors with per-method concurrency caps, gas caps and
   timeouts, MUST cancel work whose client has gone, and MUST reject with an explicit error when full. It MUST reuse
   018 FR-027's executor mechanism, not add a second one.
@@ -315,10 +319,11 @@ T-002.
   stream for followers, the follower for `sim`), `ready` (boolean) and `fenced` (boolean), plus the same as metrics.
   Readiness MUST be defined per role (FR-002) and MUST NOT require P2P peers for roles that have none (DC-9).
 - **FR-005** `ingest` MUST implement lifecycle signals `drain`, `fence`, `unfence` and `stop`. On `fence` it stops
-  importing and exporting, persists its export position, records the fenced state **durably in its own store**, and
-  reports `fenced = true`; it MUST refuse to import or export after a restart until an explicit `unfence`. `drain`
-  stops accepting new work and turns readiness off while in-flight work completes within a configured timeout.
-  Followers and `sim` implement `drain` and `stop`.
+  importing and exporting, stops accepting transactions (FR-010), **closes the Engine API listener** on ETH-family
+  chains so the consensus client's reconnect fails loudly and Orbita can repoint it, persists its export position,
+  records the fenced state **durably in its own store**, and reports `fenced = true`; it MUST refuse to import or
+  export after a restart until an explicit `unfence`. `drain` stops accepting new work and turns readiness off while
+  in-flight work completes within a configured timeout. Followers and `sim` implement `drain` and `stop`.
 - **FR-006** The in-process multi-instance runtime MUST be removed per research §2: `runtime/`,
   `conf/multi-instance.conf`, the `fukuii runtime` command, the `instanceId` constructor argument, the per-instance
   metrics registry (`Metrics.instances`, `forInstance`, `closeInstance`, the Bug 29 WARN) and
@@ -331,6 +336,11 @@ T-002.
   Engine API or miner ports; methods a role does not serve MUST return a defined error code.
 - **FR-009** The fence and drain signals MUST be reachable without the JSON-RPC port being public: the transport is
   OQ-2, but the spec requires that it be bindable to localhost or a Unix socket independently of RPC.
+- **FR-010** **Transaction ingress.** `eth_sendRawTransaction` (and `eth_sendTransaction` where enabled) is admitted
+  only by the chain's `ingest` txpool. `replica`, `archive` and `sim` MUST forward raw transactions to the `ingest`
+  admission endpoint configured for the chain, never to peers, with a per-process rate cap and the ingest's admission
+  result returned to the caller unchanged; with no endpoint configured they MUST return the DC-9 role error. A fenced
+  `ingest` MUST refuse forwarded transactions (FR-005). Whether a dedicated `relay` role is needed at scale is OQ-5.
 
 ### Success criteria
 
@@ -361,6 +371,11 @@ T-002.
   ingest share a host without collision).
 - **OQ-4: `sim` read path.** Whether `sim` reads a co-located follower's store read-only (needs 018 GT-1's engine to
   allow it) or always goes through the follower's RPC. Default until 018 GT-1 reports: RPC.
+- **OQ-5: A `relay` role.** FR-010 makes the single `ingest` txpool the admission point for every user's transactions,
+  which is a throughput and denial-of-service exposure on the single writer. A `relay` role (own txpool, admission
+  checks against follower state, gossip to peers on ETC or forwarding to the builder path on ETH) would take that load
+  off `ingest`. Recommended: forward first, measure ingest admission under the harness load, and open spec 027 only if
+  it is the bottleneck (alignment review D-F).
 
 ---
 
@@ -407,7 +422,8 @@ for `vault` and the user to accept or reject. 025 and 026 cite the ones they dep
 - **016 / 017**: the `StateIngest` / `StateAccess` gateways under which records are produced.
 - **018 Storage engine consolidation**: changesets, flat state, Track R executors, DC-16; six amendment requests above.
 - **019 zkVM guest**: unaffected.
-- **024, 025, 026**: companions (table above).
+- **024, 025, 026**: companions (table above). **[alignment-review.md](./alignment-review.md)** (2026-10-30): every
+  spec after 016 read against this end state, with the pending amendments on 013, 017 and 018 and the sequenced plan.
 - **Chain Intelligence** (separate service, Scala 3 on Kafka/Flink): the primary consumer of 025 records.
 - **Orbita** (separate project): the control plane.
 

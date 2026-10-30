@@ -220,7 +220,14 @@ For comprehensive changes, cycle through:
 New features are built through the Spec Kit workflow, not ad hoc:
 `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`
 (use `/speckit-clarify` and `/speckit-analyze` to de-risk). Spec artifacts live
-under `specs/<NNN-feature-name>/`.
+under `specs/<NNN-feature-name>/`. **Every spec carries a lifecycle header**
+(`**Status**: <Word> (<date>). …`, optional `**In flight**` and `**Release**`);
+the vocabulary, closure procedure and index rules are in
+`docs/development/spec-lifecycle.md`, and `specs/README.md` is the generated
+index of all specs by status (`python3 -I scripts/specs/index.py`; CI checks it).
+Read the index's Open rows before trusting any "current plan" paragraph, and set
+`**In flight**` before editing a spec another session may hold. Spec directories
+are never moved or renumbered.
 
 **The project constitution at `.specify/memory/constitution.md` is binding.**
 Read it before planning or implementing. Highlights:

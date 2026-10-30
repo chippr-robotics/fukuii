@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-11
 
-**Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
+**Status**: Draft (2026-10-30). (stub). Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
 review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
 the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover.
 **Revised again 2026-10-11 (Ethereum roadmap alignment)**: ETH mainnet is the design driver. The witness is now
@@ -518,3 +518,16 @@ After SNAP reaches head, an operator schedules backfill to produce witnesses for
   `vm.external.*` (`VmMode.External`, `VmConfig.ExternalConfig`, `parseExternalConfig` in `utils/Config.scala`), while
   `VmSetup` accepts only `internal`. Small, separate PR; not part of this docs PR. Keep `vm.mode = internal` parsing,
   and fail loudly on `external`, as `VmSetup` does today.
+
+## Fleet alignment (2026-10-30) — pending acceptance
+
+*Added by the alignment review in `specs/023-fleet-topology/alignment-review.md` §3. Nothing here changes a DC or FR
+above until the user accepts it; when accepted, edit the item named and mark the row.*
+
+| # | Target | Request | Needed by |
+| --- | --- | --- | --- |
+| 1 | DC-16, FR-014, G-6 | **Role mapping.** On the fleet (spec 023), `debug_executionWitness` is served by `archive` for **any** N (it holds every parent state, so regeneration is unbounded) and by `replica` within its retention window; `ingest` serves it only in the single-node profile. The ~64-block bound is a property of `ingest`'s pruning, not of the RPC. | 026 FR-005 |
+| 2 | G-3, FR-008 backfill | Backfill runs on `archive`, never on `ingest`. Capture-during-import remains an `ingest` option for operators without an archive. | 023 DC-8 |
+| 3 | FR-007 `SyncMode` | Add `Follow` (or derive the mode from the 023 role): followers are never `Snap`; capture is constructible in `Follow` on an `archive`. | 026 FR-002 |
+| 4 | FR-004 witness store | On the fleet the store is the archive's own store, or witnesses are published as an **optional record type** on the 025 topic (025 OQ-6). The node writes no analytics store (025 DC-7). | 025 OQ-6 |
+| 5 | FR-020 executor | Unchanged in substance; it is the same mechanism as 018 FR-027 and 023 DC-8. Reference them so one executor family exists. | 023 FR-003 |

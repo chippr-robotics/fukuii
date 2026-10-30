@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: **Draft, ready for `/speckit-clarify`.** The Phase 0 evaluation is done ([research.md](./research.md)); the
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify`. The Phase 0 evaluation is done ([research.md](./research.md)); the
 plan ([plan.md](./plan.md)) is drafted to the point where `/speckit-tasks` can run once the gates below report. The
 Design constraints and Gates sections are binding on that later work. **Revised 2026-10-17 (same day)** after the user's
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the
@@ -792,8 +792,11 @@ row here.*
 | # | Target in this spec | Request | Needed by | Status |
 | --- | --- | --- | --- | --- |
 | 1 | GT-1 harness (FR-021, FR-028) | Add a **read-fleet profile**: N reader processes plus one writer, concurrency 8–64, larger host class; record whether the engine supports safe **multi-process read-only access** (DC-5 reader discipline across processes). | 023 OQ-4 (`sim` reading a follower's store) | Pending |
-| 2 | F2 changeset format (FR-010, `data-model.md`) | Store the **post-value** beside the previous value; prefix every record with a **schema version** and `chainKey`. One record then serves rollback, follower replay, export and balance derivation. | 025 GT-1 / DC-9 (must land before F2 freezes) | Pending |
+| 2 | F2 changeset format (FR-010, `data-model.md`) | *(Refined 2026-10-30, alignment review §2.)* The changeset has two parts. The **exportable part** is the block's semantic write set, accounts, slots and code by hashed key, with **previous and new value**, a **schema version** and `chainKey`; it is byte-identical to the 025 record and is the only part any consumer outside `db/` sees. The **local part**, trie-node undo records for hot-tier rollback, stays engine-specific and is never exported. | 025 GT-1 / DC-9 (must land before F2 freezes) | Pending |
 | 3 | Track H slice H3 (FR-025) | **The node does not write ClickHouse.** The `ColdStore` write side publishes to Kafka (025 FR-002); the indexer owns analytics tables; H4's `eth_getLogs` routing reads them through the `ColdStore` read adapter. | 025 DC-7 | Pending |
 | 4 | T-010 close-fence (FR-031) | Schedule early (it is independent of GT-1 and merge-able on RocksDB). | 026 (followers and `sim` read concurrently) | Pending — already the intent of OQ-7 / FR-031; the request is only about ordering |
 | 5 | Pruning decisions (OQ-3, OQ-5; FR-010 archive) | Leave a mode that **retains every changeset**, so the `archive` role needs no second storage layout. | 026 GT-2 / FR-005 | Pending |
 | 6 | FR-018 runbook list | Drop `multi-instance.conf`: retired by 023 FR-006 (one process, one chain). | 023 T-002 | Pending |
+| 7 | New capability in `db/` (beside `StateIngest`, `StateAccess`) | **`StateReplay`**: applies a semantic diff forward or backward to flat state, updates the commitment trie from the changed keys, returns the root; fully durable; held only by follower roles. v1 on today's layout (trie update over changed keys), v2 on the unified layout (F6 flat reads, F11 parallel root) behind the same contract. The follower write path is neither SNAP nor EVM, so neither existing capability fits. | 026 FR-002 (phase C of the alignment plan) | Pending |
+| 8 | Track H (H3, H4; FR-025) | **Demote.** With 025 DC-7 the node writes only Kafka: H3 (ClickHouse writer) is superseded by the indexer. H4 (`eth_getLogs` beyond the hot window through the `ColdStore` read adapter) is a **single-node-profile convenience**: on the fleet, Orbita's gateway routes long-range log queries to the indexer. GT-3 decides whether H4 ships; H2 (era files) stays for `ingest` history expiry. | 025 DC-7; 023 DC-2 | Pending |
+| 9 | DC-9 resync path, FR-016 message | "ETC resyncs from a checkpoint archive" becomes "ETC re-seeds from a 013 v2 snapshot" once 013 covers ETC (013 pending section); checkpoint archive v1 (hash-keyed) is retired with the Hash scheme. | 026 FR-001, 013 | Pending |

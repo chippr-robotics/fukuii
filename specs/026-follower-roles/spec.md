@@ -4,9 +4,13 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-4.** Companion of spec 023. Depends on spec 013 (seed),
-spec 018 F2 (changesets on the unified layout) and spec 025 (the record stream). Its two gates (GT-1, GT-2) are
-measurements that can start as soon as a file-sink record stream exists (025 T-003).
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-4. Companion of spec 023. Depends on spec 013 (seed)
+and spec 025 (the record stream); on spec 018 only for the `archive` basis (GT-2) and for the later move to the
+unified layout. **Revised 2026-10-30 (alignment review,
+[023/alignment-review.md](../023-fleet-topology/alignment-review.md)
+§2)**: followers apply the **semantic diff** of 025 through a `StateReplay` capability (018 amendment request 7) and
+update their own commitment trie from the changed keys, so a `replica` MVP exists on today's storage layout before 018
+Track F. Its two gates (GT-1, GT-2) can start as soon as a file-sink record stream exists (025 T-003).
 
 **Input**: Spec 023 Goals "replica bootstrap and following so initial sync happens once per chain, not once per
 replica" and user decision D-5 (an archive-capable role is sufficient for historical state).
@@ -52,7 +56,12 @@ process with import. There is no role that:
 - **Retention window**: for `replica`, the range `[head − W, head]` for which it holds state and changesets; outside
   it the defined error is returned.
 - **Verified root**: a state root the follower computed itself and matched to the header; the only kind it serves.
-- **Follow method**: apply change records (025) or re-execute canonical blocks; GT-1 picks the default.
+- **Follow method**: apply change records (025) or re-execute canonical blocks; GT-1 picks the default. The prior is
+  apply.
+- **`StateReplay`**: the capability (018 amendment request 7; `vault`) that applies a semantic diff forward or
+  backward to flat state, updates the commitment trie from the changed keys, and returns the root. On today's layout
+  the trie update is `MerklePatriciaTrie.put`/`remove` over the changed accounts and slots (what import does after
+  execution); under 018 F6/F11 it is the flat read path and the parallel root. The follower never sees the difference.
 
 ---
 
@@ -82,9 +91,11 @@ or Engine API server (023 DC-9).
 **DC-3: The retention window is explicit; outside it is an error, never a guess.** `replica` reports its window in
 023 FR-004 and returns a defined "outside retention window" error for any block below it. `archive` has no lower bound.
 
-**DC-4: Rollback is by changesets.** A reorg (025 retractions) is applied by rolling back changesets newest-first to
-the fork point, then applying the new records. `archive` can always roll back. A `replica` whose window is shorter
-than the reorg depth **halts and reports that it must be re-seeded**; it does not serve across the gap.
+**DC-4: Rollback is by records.** A reorg (025 retractions) is applied by replaying the retracted blocks' records
+**backward** (previous values) newest-first to the fork point, then applying the new records forward; the follower
+keeps the records for its window so it needs no second undo log. `archive` can always roll back. A `replica` whose
+window is shorter than the reorg depth **halts and reports that it must be re-seeded**; it does not serve across the
+gap.
 
 **DC-5: Seed once per chain.** A follower never SNAP-syncs. It starts from a seed artifact produced by `ingest` (or an
 `archive`), verified per 013 §5.4 (root recomputed, anchor checked), then follows. SNAP code paths are not reachable
@@ -162,8 +173,11 @@ configured lag bound of the source head it observes in the record stream and its
 - **FR-001** Followers MUST bootstrap from a seed artifact: a 013 snapshot for ETH-family chains; for ETC, the
   artifact OQ-3 selects (checkpoint archive v1 or a 013 snapshot v2 extended to ETC). `archive` MAY start from genesis
   if GT-2 requires it. The seed MUST be verified per 013 §5.4 before following starts.
-- **FR-002** Followers MUST follow by the method GT-1 selects per family (apply records, or re-execute canonical
-  blocks fetched by hash from the record stream), verifying per DC-1 on every block.
+- **FR-002** Followers MUST follow by the method GT-1 selects per family (apply records through `StateReplay`, or
+  re-execute canonical blocks fetched by hash from the record stream), verifying per DC-1 on every block. The apply path
+  MUST work on today's storage layout (Hash and Path) and on the 018 unified layout behind the same capability; no
+  follower code names a layout. Followers MUST run in a `SyncMode.Follow` (017 FR-007 amendment) in which SNAP and
+  execution-driven import are unreachable.
 - **FR-003** On any verification failure a follower MUST halt applying, set `ready = false` with a named fault, keep the
   last verified state, and refuse reads at any unverified root (DC-1).
 - **FR-004** `replica` MUST serve `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount`,
@@ -208,23 +222,26 @@ configured lag bound of the source head it observes in the record stream and its
   (013 §2). Options: extend 013 v2 to ETC (flat state, root-verified; aligns with 018 DC-9 "ETC on the unified
   layout"), or accept v1 for the first release. Recommended: extend 013 v2; it is the format followers verify.
 - **OQ-4: Follow method.** Decided by GT-1; the prior is "apply records" (no execution, so a follower is cheap), with
-  re-execution kept as the fallback if record application cannot meet the bound.
+  re-execution kept as the fallback if record application cannot meet the bound. On today's layout the per-block cost
+  of apply is the trie update over the changed keys, the same work import does minus execution; GT-1 records it.
 
 ---
 
 ## Related specs
 
 - **013 State snapshots**: the seed (FR-001); OQ-3 may extend it to ETC.
-- **018 Storage engine consolidation**: changesets (FR-010), archive mode (amendment request 5), close-fence (request
-  4), multi-process read-only access (request 1), Track R executors (FR-027).
+- **018 Storage engine consolidation**: `StateReplay` capability (amendment request 7), archive mode (request 5),
+  close-fence (request 4), multi-process read-only access (request 1), Track R executors (FR-027), the later move of
+  followers onto the unified layout (Track F).
 - **023 fleet-topology**: roles, health shape, DC-9 subsystem gating, DC-6 block pinning.
 - **025 change-record-export**: the stream followed; DC-2 there makes DC-1 here possible.
 
 ## Known tasks (seed for `/speckit-tasks`)
 
 - **T-001** GT-1 measurement on Mordor and Platåberget using the 025 file sink; publish the bound.
-- **T-002** Follower apply loop: ordered queue (FR-008), changeset apply/rollback over 018 F2, root and receipt-root
-  verification (DC-1), halt semantics (FR-003); `vault` and `forge`/`beacon` review the apply path.
+- **T-002** Follower apply loop: ordered queue (FR-008), forward/backward apply through `StateReplay` on today's
+  layout (018 request 7 v1), root and receipt-root verification (DC-1), halt semantics (FR-003); `vault` and
+  `forge`/`beacon` review the apply path.
 - **T-003** `replica` RPC: window, DC-3 error, block pinning (FR-004, FR-010); `conduit` owns.
 - **T-004** GT-2 archive measurement; OQ-1 decision recorded.
 - **T-005** `archive` serving (FR-005) on 018 FR-027 executors.
