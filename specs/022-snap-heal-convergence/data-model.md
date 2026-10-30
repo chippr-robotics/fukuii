@@ -47,7 +47,7 @@ These are the logical entities. Field names are indicative, and the final names 
 
 *Keys (slice 3):* `SnapExcluded/1/` + a kind byte + the subject, in AppState `s`, read and written by `SnapSyncProgressStorage`. A "code missing" entry is keyed by the code hash because the bytecode download, where that decision is made, knows the hash and not the accounts that use it; it leaves the set when the code is stored, with no root in play, and on Path it deletes no positions.
 
-- **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding. Each with `updateSync`.
+- **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding. The decisions of one coordinator message share one write, at most 5,000 keys a batch with `updateSync` on the last. A failed write stays staged and is retried by the next message, and the phase cannot end cleanly over it. Only the SNAP controller's spawns write; the recovery actors do not. A force-complete also reads the task file back, minus the done markers, for what a supervisor restart lost. Before the code-only hand-off writes its chains, it records every awaited code hash here.
 - **Removed:** when, at the current root, the account's storage root and code are both present. A "code missing" entry: when the code is stored.
 - **Dormant:** when the current root holds no such account, the entry moves to kind `d` instead of leaving: the decision still stands for that account's storage, and a later root can hold it again (A to B to A, or a reorg). A dormant entry does not count against a root, gets no position delete, and is looked at again by the first pass at each adopted root, so completion waits for that one pass. If that root holds the account incomplete it counts again, with its seeds; complete, it is removed.
 - **Cleared:** only where a cycle starts from nothing, because a later cycle may not read an earlier one's decisions: at `restartSnapSync`, and where the account phase starts with no carried task files, no held checkpoint and no resumed cursors. Never at finalisation: after a lazy hand-off the set is the only record of those accounts.
@@ -57,7 +57,7 @@ These are the logical entities. Field names are indicative, and the final names 
 **Per-scheme handling (D5):**
 - Path: delete the account-trie positions on the account's key, depth 0 to 64, at heal start.
 - Hash: on every adopted root, resolve the account against the current root and seed its storage root or code if absent.
-- Both: the same resolution runs, a page at a time, whenever healing has drained, and the completion gate stays shut until the set is empty. A node the lookup finds absent is seeded too (T035 says skip): on a datadir that keeps the invariant it is already being healed, so the seed joins that request; on one that does not, nothing else would reach it once slice 5 removes the walk.
+- Both: the same resolution runs, a page at a time, whenever healing has drained, and the completion gate stays shut until no entry counts. A node the lookup finds absent is seeded too (T035, as amended): on a datadir that keeps the invariant it is already being healed, so the seed joins that request; on one that does not, nothing else would reach it once slice 5 removes the walk.
 
 ## Invariant marker (durable, AppState `s`)
 

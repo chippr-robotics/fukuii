@@ -128,15 +128,20 @@ Evidence for each decision is in research.md.
   - The completion flag is written with `updateSync`.
 - **D4. Code is a dependency of its account leaf** (geth `AddCodeEntry`).
   - `ByteCodeCoordinator` acknowledges each code write to the heal coordinator. This is a new message.
-  - `HealedCodeWaitTimeout` is **removed**. If code stays unavailable, healing stays incomplete, logs the account every 60 s, and after 30 min with no progress falls back to `StateHealingAbandoned`, which leads to the lazy handoff. Finalising with code missing is not allowed.
+  - `HealedCodeWaitTimeout` is **removed**. If code stays unavailable, healing stays incomplete and logs the account every 60 s.
+  - **After 30 idle minutes (user decision, 2026-10-30):** idle time is counted across re-pegs, heals and walks, stops only for a fetch that could still help, and resets only when a blocker shrinks (code stored, or an entry removed or gone dormant). What the node then does depends on what is blocking:
+    - **Only bytecode is blocking:** it records every awaited code hash durably, writes the chains waiting only on that code, verifies the rest of the trie with a walk, and takes a lazy hand-off with `bytecodeRecoveryDone` unset. Healing never reports complete in this case: `StateHealingComplete` and the completeness marker stay off. The node reaches the head and fetches missing code on demand, and the recovery scan runs at next start. On Path the root is present once the chains are written, so the hand-off is possible. If the code arrives before the hand-off, the set empties and it is a normal completion. A re-peg disarms this, and the count acts again at the next idle minute.
+    - **"Only code" means:** nothing queued or in flight, no commit or flush failing, every held node would commit if its code waits closed (none waits on an absent child), and a pass over the excluded set has reached its end at the current root with nothing seeded and everything read. A pass not ended yet is not known either way, so the next tick looks again.
+    - **Anything else is blocking:** today's behaviour. No such commit, and the existing paths: `StateHealingAbandoned`, then a lazy hand-off, or a re-peg on Path while the root is absent.
 - **D5. V2 uses a durable excluded set** (R-2; FR-005 wording amended, see the Decisions section).
   - **Sources:** storage abandoned at force-complete (today's list is cleared at `:776` and must instead be persisted), the max-empty skip, root mismatches (today logged and accepted), and missing code.
   - The excluded set is persisted in app state **before** any action is taken on it.
   - **Path:** at heal start, point-delete every account-trie position on each excluded account's 64-nibble key, depth 0 to 64, leaf slot included (geth `pathTrie.delete`). Healing reaches the account from the root, and the invariant holds structurally.
   - **Hash:** branches already flushed cannot be recalled, and content addressing makes deletion meaningless. Instead, on every adopted pivot root, resolve each excluded account against the current root:
-    - lookup hits a missing node: skip it, because healing will reach the account through that path;
-    - storage root or code absent: seed a heal task for it.
-  - **Both schemes:** an account leaves the excluded set only when its storage root and code are present at the current root. Completion (FR-011) requires an empty set.
+    - lookup hits a missing node: seed that node (beacon and forge approved this over skipping it in the slice 3 review). On a datadir that keeps the invariant it is already being healed, so the seed joins that request; on one that does not, nothing else would reach it once slice 5 removes the walk;
+    - storage root or code absent: seed a heal task for it, or ask for the code;
+    - the root holds no such account: the entry goes dormant and stays, because a later root can hold the account again (A to B to A, or a reorg). It does not count against the root, and each adopted root's first pass looks at it again.
+  - **Both schemes:** an account leaves the excluded set only when its storage root and code are present at the current root. Completion (FR-011) requires no entry that counts, and a finished pass at the current root if any entry is dormant. The set is cleared only where a cycle starts from nothing, never at finalisation (data-model.md).
 - **D6. The persisted frontier is retired as a correctness mechanism** (R-3, R-5).
   - Held nodes are never durable, so a restart re-seeds from the current root.
   - On the first start of the new version, CF `g` is cleared with one `deleteRange`. This drops the frontier and spec 005's subtree-complete records, which are untrusted under the new invariant.
