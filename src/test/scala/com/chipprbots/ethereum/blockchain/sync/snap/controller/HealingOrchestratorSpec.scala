@@ -140,7 +140,7 @@ private[snap] class StubHealingOrchestratorState(
   lazy val bfsQueueStore: Option[BfsQueueStorage] = Some(new InMemoryBfsQueueStorage())
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
-  val stateIngest: StateIngest = new ForwardingStateIngest(
+  val stateIngest: ForwardingStateIngest = new ForwardingStateIngest(
     appStateStorage,
     stateStorage,
     flatSlotStorage,
@@ -421,6 +421,31 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       h.module.healingValidatedRoot shouldBe None
       coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
     }
+
+  it should "not complete on a clean trie walk when the excluded set cannot be read" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress = new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def scanRangeLimit(
+            namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+            fromKey: Array[Byte],
+            toKeyExclusive: Array[Byte],
+            limit: Int
+        ): Iterator[(Array[Byte], Array[Byte])] = throw new RuntimeException("excluded set unreadable")
+    )
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
+    h.module.healingValidatedRoot shouldBe None
+    coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
 
   it should "set the current heal root as a re-peg goes out, for a coordinator a supervisor restarts (T038b)" taggedAs UnitTest in {
     val h = new Harness()

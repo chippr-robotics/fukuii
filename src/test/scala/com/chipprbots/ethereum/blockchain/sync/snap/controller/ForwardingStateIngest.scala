@@ -43,8 +43,9 @@ final private[snap] class ForwardingStateIngest(
   // The derived stores (spec 016 T060d): `trieStore` forwards as the production capability does; no module reaches the
   // other two through the capability yet, so they fail loudly.
   def trieStore(pivot: BigInt): MptStorage = tries.getBackingStorage(pivot)
-  // spec 022 D5: the heal gate's excluded set; one store per capability, empty unless a test records in it.
-  lazy val snapProgress: SnapSyncProgressStorage =
+  // spec 022 D5: the heal gate's excluded set; one store per capability, empty unless a test records in it. A test that
+  // needs a store that fails replaces it.
+  var snapProgress: SnapSyncProgressStorage =
     new SnapSyncProgressStorage(new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty))
   def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
   // The healing stores (spec 016 C-H1): the healing spawn reads them; by-name like the rest.

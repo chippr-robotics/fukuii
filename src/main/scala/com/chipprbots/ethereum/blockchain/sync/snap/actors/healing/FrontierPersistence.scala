@@ -240,7 +240,11 @@ private[actors] trait FrontierPersistence
           toRecord.foreach(pendingSubtreeRecords.remove)
           writeDurableSubtreeRecords(toRecord) // post-persist (D3) — bytes durable before the record
           unpersistFrontier(flushed.map(_._1)) // Layer 2: healed nodes leave the persisted frontier
-          rawNodeBuffer.dropWritten(flushed): Unit
+          // spec 022 review vault: the entries are the buffer's own head, so this drops all of them. If it ever dropped
+          // none the loop would write the same nodes forever on the actor's thread; the gate stays shut instead.
+          if rawNodeBuffer.dropWritten(flushed) == 0 then
+            log.error(s"Healed-node flush of ${flushed.size} node(s) wrote them, but the buffer's head had moved")
+            written = false
           log.info(s"Flushed ${flushed.size} healed nodes to disk (total: $totalNodesHealed)")
       written
     }

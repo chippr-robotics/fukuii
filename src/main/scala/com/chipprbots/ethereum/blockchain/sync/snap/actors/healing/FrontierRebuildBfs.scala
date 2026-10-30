@@ -501,7 +501,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // VerificationBFSComplete / FrontierWalkFailed of this walk.
     verificationBFSRunning = true
     currentWalk = Some(walk)
-    Future {
+    val running = Future {
       val missingEmitted =
         try
           Some(
@@ -531,6 +531,13 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
         case Some(missing) => onComplete(walk, missing)
         case None          => selfRef ! FrontierWalkFailed(walk)
     }(healingWriterEc)
+    // spec 022 review vault: an executor that refuses the body (it is shutting down) fails this Future without running a
+    // line of it, and the lease would stay taken for the life of the process. Parasitic: that executor refuses this too.
+    running.failed.foreach { e =>
+      asyncLog.error(s"[HEAL-BFS] Frontier walk $walk did not run", e)
+      walkLease.release(walk)
+      selfRef ! FrontierWalkFailed(walk)
+    }(ExecutionContext.parasitic)
 
   // ---- frontier-walk de-dup keys -----------------------------------------------------------------------------------
   // `rebuildFrontierBFS` de-dups the nodes it enqueues in a bounded `visited` set, so a subtrie reachable by two

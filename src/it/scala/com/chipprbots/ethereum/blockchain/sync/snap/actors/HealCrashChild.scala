@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.HeapEntry
@@ -75,6 +76,12 @@ import com.chipprbots.ethereum.utils.NodeCacheConfig
   *     deletes (the stale positions of the old root, found before anything new is written there);
   *   - `excluded-write` / `excluded-written`: the trie is healed, and the kill lands inside the fsynced write of an
   *     excluded-account entry, before or after it is applied;
+  *   - `excluded-resolved` / `excluded-removed`: an account on disk with its storage abandoned and an entry that says
+  *     so; the kill lands right after the first chain committed under it (the seed, or a walk, can have asked for it),
+  *     or right after the resolver takes the entry out;
+  *   - `code-recorded` / `code-committed` (the `contract` fixture): only bytecode blocks, 30 idle minutes are ticked
+  *     by, and the kill lands right after the awaited hashes are recorded, or right after the chains waiting on them
+  *     are written;
   *   - `excluded-delete` (Path only): as `excluded-written`, then a coordinator starts over the entry, and the kill
   *     lands right after it has deleted every account-trie position on the entry's key (T034).
   *
@@ -111,6 +118,24 @@ object HealCrashChild:
     val pathNodes = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
 
     val (oldTrie, newTrie) = HealCrashChild.fixture(fixture)
+    val progress = new SnapSyncProgressStorage(dataSource)
+    // `excluded-resolved`: an account was committed, its storage was abandoned and the entry says so: the resolver seeds
+    // the storage root, and the first chain it commits is what the kill lands after.
+    val resolving = point == "excluded-resolved" || point == "excluded-removed"
+    if resolving then
+      val onDisk = oldTrie.nodes.filterNot(n => Set("sRoot", "sLeaf1")(n.label))
+      pathNodes match
+        case Some(_) => PathHealPresenceFixtures.seedPath(new PathNodeStorage(rocks), onDisk)
+        case None =>
+          val backing = stateStorage.getBackingStorage(1)
+          backing.storeRawNodes(onDisk.map(n => (n.hash, n.encoded.toArray)))
+          backing.persist()
+      progress.recordExcluded(
+        Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
+      )
+      gate.armExcludedDelete() // the next write to the set is the resolver's
+    // `code-*`: the contract fixture's code is never served; the coordinator is told 30 idle minutes have passed.
+    val codeHandOff = point.startsWith("code-")
     // `repeg-partial`: one node of the old trie is never served, so the nodes above it stay held.
     val withheld: Set[Seq[ByteString]] =
       if point == "repeg-partial" then HealCrashChild.withheldLabels(fixture).map(oldTrie(_).pathset).toSet
@@ -150,7 +175,9 @@ object HealCrashChild:
       healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
       storageScheme = scheme,
       pathNodeStorageOpt = pathNodes,
-      movingRootDeltaHeal = true
+      movingRootDeltaHeal = true,
+      evmCodeStorage = Option.when(codeHandOff)(new EvmCodeStorage(dataSource)),
+      excludedStore = Option.when(resolving || codeHandOff)(progress)
     )(using testKit)
     coordinatorRef.set(coordinator)
     def peerAvailable(): Unit =
@@ -161,12 +188,24 @@ object HealCrashChild:
     coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(oldTrie.root.hash)
     peerAvailable()
 
-    if point.startsWith("excluded") then
+    if codeHandOff then
+      val awaited = oldTrie.nodes.flatMap(HealCrashChild.contractCode).toSet
+      var reported = Set.empty[ByteString]
+      controller.fishForMessage(60.seconds) {
+        case SNAPSyncController.HealedCodeHashes(hashes) =>
+          reported ++= hashes
+          if reported == awaited then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+      (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach(_ =>
+        coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      )
+
+    if point.startsWith("excluded") && !resolving then
       controller.fishForMessage(60.seconds) {
         case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
         case _                                       => FishingOutcomes.continueAndIgnore
       }
-      val progress = new SnapSyncProgressStorage(dataSource)
       // The excluded-write points land inside this call, on the writing thread: this one.
       progress.recordExcluded(
         Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
@@ -238,7 +277,42 @@ object HealCrashChild:
       case "account" => (PathHealPresenceFixtures.accountTrieOld(), PathHealPresenceFixtures.accountTrieNew())
       case "storage" => (PathHealPresenceFixtures.storageTrieOld(), PathHealPresenceFixtures.storageTrieNew())
       case "twin"    => (healing.HealRequestFixtures.twinStorageTrie(1), healing.HealRequestFixtures.twinStorageTrie(2))
-      case other     => throw new IllegalArgumentException(s"unknown fixture $other")
+      case "contract" => (contractTrie, contractTrie)
+      case other      => throw new IllegalArgumentException(s"unknown fixture $other")
+
+  private val contractRest: Seq[Array[Byte]] =
+    Seq(5 -> 1, 3 -> 7).map { case (m, a) => (0 until 63).map(i => ((i * m + a) % 16).toByte).toArray }
+
+  /** A root over two contract accounts whose bytecode no peer has. */
+  private lazy val contractTrie: PathHealPresenceFixtures.Trie =
+    def leaf(i: Int): com.chipprbots.ethereum.mpt.LeafNode =
+      val account = com.chipprbots.ethereum.domain.Account(
+        nonce = com.chipprbots.ethereum.domain.UInt256(i.toLong + 1),
+        balance = com.chipprbots.ethereum.domain.UInt256(1L),
+        codeHash = com.chipprbots.ethereum.domain.CodeHash(
+          com.chipprbots.ethereum.crypto.kec256(ByteString(s"heal-crash/contract-code-$i"))
+        )
+      )
+      com.chipprbots.ethereum.mpt.LeafNode(
+        ByteString(contractRest(i)),
+        ByteString(com.chipprbots.ethereum.domain.Account.accountSerializer.toBytes(account))
+      )
+    val (acct0, acct1) = (leaf(0), leaf(1))
+    val root = healing.HealRequestFixtures.branch(0 -> acct0, 1 -> acct1)
+    PathHealPresenceFixtures.Trie(
+      Seq(
+        PathHealPresenceFixtures.Placed("root", None, Array.empty[Byte], root),
+        PathHealPresenceFixtures.Placed("acct0", None, Array[Byte](0), acct0),
+        PathHealPresenceFixtures.Placed("acct1", None, Array[Byte](1), acct1)
+      )
+    )
+
+  /** The code hash an account leaf of the contract fixture names. */
+  def contractCode(n: PathHealPresenceFixtures.Placed): Option[ByteString] =
+    n.node match
+      case l: com.chipprbots.ethereum.mpt.LeafNode =>
+        com.chipprbots.ethereum.domain.Account(l.value).toOption.map(_.codeHash.value)
+      case _ => None
 
   /** The positions `repeg-partial` never serves, so the nodes above them stay held across the re-peg. Under `twin` one
     * node at both of its positions: a fetch of it may go out from either.
@@ -274,7 +348,11 @@ final class KillGate(point: String):
       case "excluded-write" if !signalled.get() =>
         signal(point)
         park()
-      case "excluded-written" if !signalled.get() =>
+      case "excluded-written" | "code-recorded" if !signalled.get() =>
+        apply()
+        signal(point)
+        park()
+      case "excluded-removed" if excludedDeleteArmed.get() && !signalled.get() =>
         apply()
         signal(point)
         park()
@@ -286,7 +364,7 @@ final class KillGate(point: String):
       case "chain-before" if nodes >= 2 && !signalled.get() =>
         signal(point)
         park()
-      case "chain-after" if nodes >= 2 && !signalled.get() =>
+      case "chain-after" | "excluded-resolved" | "code-committed" if nodes >= 2 && !signalled.get() =>
         apply()
         signal(point)
         park()

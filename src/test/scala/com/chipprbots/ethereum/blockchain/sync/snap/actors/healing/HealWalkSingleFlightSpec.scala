@@ -103,7 +103,8 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       persistence: Boolean = false,
       otherOnDisk: Boolean = false,
       sharedQueue: Option[com.chipprbots.ethereum.db.storage.BfsQueueStorage] = None,
-      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      writerEc: Option[scala.concurrent.ExecutionContext] = None
   ):
     val ec = new ManualExecutionContext
     val trie: PathHealPresenceFixtures.Trie = PathHealPresenceFixtures.accountTrieOld()
@@ -126,7 +127,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       batchSize = 16,
       snapSyncController = controller.ref,
       stateIngest = HealingTrieFixtures.healingIngest(frontier, Some(sharedQueue.getOrElse(queue))),
-      healingWriterEcOverride = Some(ec),
+      healingWriterEcOverride = Some(writerEc.getOrElse(ec)),
       frontierPersistenceEnabled = persistence,
       currentRoot = currentRoot
     )
@@ -363,6 +364,24 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     withClue("generation 2 walks without any further message: ")(rig.ec.pending shouldBe 1)
     rig.drive(gen2)
     rig.awaitComplete()
+  }
+
+  // Spec 022 review vault: the walk's executor is shutting down, so its body never runs and could not give the lease back.
+  it should "give the lease back when the executor refuses the walk" taggedAs UnitTest in {
+    val refusing = new scala.concurrent.ExecutionContext:
+      def execute(runnable: Runnable): Unit =
+        throw new java.util.concurrent.RejectedExecutionException("shutting down")
+      def reportFailure(cause: Throwable): Unit = ()
+    val rig = new Rig(writerEc = Some(refusing))
+    val c = rig.spawnGeneration()
+    c ! HealingCheckCompletion
+    rig.settle(c)
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease.of(rig.queue).held shouldBe false
+    withClue("the walk is not left looking as if it runs: a later check can start one: ") {
+      c ! HealingCheckCompletion
+      rig.settle(c)
+      com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease.of(rig.queue).held shouldBe false
+    }
   }
 
   it should "share the lease between controller instances: another queue wrapper over the same column family (T038a)" taggedAs UnitTest in {

@@ -502,6 +502,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       )
       codeHandOffArmed = true
       excludedBlocking = true
+      verificationPassComplete = false // the walk is part of the decision: no earlier pass stands in for it
       awaited.foreach(heldNodes.codeArrived)
       excludedCodeAsked ++= awaited
       commitHeld()

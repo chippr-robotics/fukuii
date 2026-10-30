@@ -111,7 +111,8 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       withSet: Boolean = false,
       val t: Trie = trie(),
       served: Option[Map[Seq[ByteString], ByteString]] = None,
-      awaited: Set[ByteString] = Set(hash0, hash1)
+      awaited: Set[ByteString] = Set(hash0, hash1),
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
   ):
     val ec = new ManualExecutionContext
     val hashStore = new TestMptStorage()
@@ -137,7 +138,8 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       evmCodeStorage = Some(codes),
       excludedStore = Option.when(withSet)(progress),
       healingFrontierStorage = Option.when(withSet)(frontier),
-      frontierPersistenceEnabled = withSet
+      frontierPersistenceEnabled = withSet,
+      heldMemoryLimit = heldMemoryLimit
     )
     peer.coordinator.set(coordinator)
     peer.serveFrom.set(Some(served.getOrElse(t.served)))
@@ -460,6 +462,28 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       end should contain(SNAPSyncController.StateHealingAbandoned)
       end should not contain SNAPSyncController.StateHealingComplete
       rig.onDisk("root") shouldBe false
+    }
+
+    it should s"count a minute with only paused new-subtree fetches queued as idle, and treat them as more than code, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, withSet = true, heldMemoryLimit = 1L)
+      rig.begin()
+      rig.seen()
+      val elsewhere = plainLeaf(nibbles(0x0a), "code-dependency/new-subtree")
+      rig.coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(
+        Seq(
+          (
+            Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(nibbles(0x0a), isLeaf = false))),
+            ByteString(elsewhere.hash)
+          )
+        )
+      )
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      withClue("no commit: a queued fetch is not code: ") {
+        rig.onDisk("root") shouldBe false
+        rig.progress.hasAnyExcluded shouldBe false
+      }
     }
 
     if scheme == StorageScheme.Path then

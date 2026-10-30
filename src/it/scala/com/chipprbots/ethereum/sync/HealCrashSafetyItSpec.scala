@@ -90,7 +90,19 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
       point <- points
     yield (scheme, fixture, pruning, point)
 
-  for (scheme, fixture, pruning, point) <- cells do
+  // Spec 022 review: these exercise slice 3's own logic, the resolver and the code-only hand-off, on a real RocksDB.
+  private val sliceThreeCells: Seq[(String, String, String, String)] =
+    for
+      scheme <- Seq("path", "hash")
+      (fixture, point) <- Seq(
+        ("storage", "excluded-resolved"),
+        ("storage", "excluded-removed"),
+        ("contract", "code-recorded"),
+        ("contract", "code-committed")
+      )
+    yield (scheme, fixture, "basic", point)
+
+  for (scheme, fixture, pruning, point) <- cells ++ sliceThreeCells do
     val claim =
       if pruning == "inmemory" then "evict nodes to disk (the invariant is not claimed under in-memory pruning)"
       else "leave no present node with an absent child"
@@ -110,14 +122,24 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
       if point.startsWith("excluded") then
         val entries = excludedEntries(dir)
         withClue(s"the excluded set after a kill at $point: ") {
-          if point == "excluded-write" then entries shouldBe empty
+          if point == "excluded-write" || point == "excluded-removed" then entries shouldBe empty
           else entries.map(_.subject) shouldBe Seq(HealCrashChild.excludedSubject(fixture, oldTrie))
+        }
+      if point.startsWith("code-") then
+        withClue(s"the excluded set after a kill at $point: every awaited hash, durable before anything is written: ") {
+          excludedEntries(dir).map(_.subject).toSet shouldBe oldTrie.nodes.flatMap(HealCrashChild.contractCode).toSet
+        }
+        if point == "code-recorded" then withClue("nothing of the chains is on disk yet: ")(audit.nodes shouldBe 0)
+        else withClue("the chains are on disk, root included: ")(audit.present should contain(oldTrie.root.hash))
+      if point == "excluded-removed" then
+        withClue("an entry leaves only with the account's storage on disk: ") {
+          audit.present should contain(oldTrie("sRoot").hash)
         }
       withClue(s"${audit.nodes} node(s) on disk; violations:\n${audit.violations.mkString("\n")}\n") {
         // Where the kill lands after a write that put nodes on disk, the audit had nodes to check (eye F10: the
         // re-peg-with-held-nodes point included, whose earlier subtree commit is on disk).
-        if Set("chain-after", "repeg-partial", "repeg-full")(point) || point.startsWith("excluded") then
-          audit.nodes should be > 0
+        if Set("chain-after", "repeg-partial", "repeg-full", "code-committed")(point) || point.startsWith("excluded")
+        then audit.nodes should be > 0
         if point == "excluded-delete" then
           // Every position on the key went in one batch: the root with the rest, and the audit above holds without it.
           audit.present should not contain oldTrie.root.hash
