@@ -43,6 +43,8 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -494,6 +496,30 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.resumedStaleCursors shouldBe true
     h.module.preservedAtPivotBlock shouldBe Some(BigInt(1_000))
     h.module.storageDoneStorage.isDone(account, storageRoot) shouldBe false
+  }
+
+  // spec 022 review item 3: where a cycle starts from nothing, and only there.
+  private val excludedEntry =
+    ExcludedAccount(ByteString(Array.fill[Byte](32)(7)), ExcludedReason.StorageAbandoned)
+
+  it should "clear the excluded set when the account phase starts from nothing" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.snapProgressStorage.recordExcluded(Seq(excludedEntry))
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    h.module.snapProgressStorage.hasAnyExcluded shouldBe false
+  }
+
+  it should "keep the excluded set when account cursors are resumed: the accounts behind them are not downloaded again" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.preservedRangeProgress = Map(ByteString(Array.fill[Byte](32)(1)) -> ByteString(Array.fill[Byte](32)(2)))
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+    h.module.snapProgressStorage.recordExcluded(Seq(excludedEntry))
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    h.module.snapProgressStorage.excludedPage(None, 10) shouldBe Seq(excludedEntry)
   }
 
   it should "drop preserved account cursors that drifted past the cap, with their progress record and checkpoint" taggedAs UnitTest in {

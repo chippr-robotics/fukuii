@@ -343,6 +343,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
       .and(stateIngest.appState.putSnapSyncStorageFileCount(None))
       .and(stateIngest.appState.putSnapSyncCodeHashesCount(None))
       .commit()
+    stateIngest.snapProgress.clearExcluded() // spec 022 D5: a cycle from nothing; no earlier decision still stands
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None

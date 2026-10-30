@@ -287,10 +287,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
           // hold accounts with a codeHash and no code, forever.
           dropHealedCodeNowPresent()
-          // spec 022 D5: an entry left in the excluded set (a lazy hand-off) may be bytecode the download gave up on.
+          // spec 022 D5: what the excluded set still says at a lazy hand-off. Each flag claims only its own kind of entry,
+          // and a set that cannot be read claims nothing.
+          val progress = stateIngest.snapProgress
+          val (accountsExcluded, codeExcluded) =
+            try (progress.hasExcludedAccounts, progress.hasExcludedCode)
+            catch
+              case scala.util.control.NonFatal(e) =>
+                ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
+                (true, true)
           val bytecodeComplete =
-            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
-              !stateIngest.snapProgress.hasExcluded
+            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) && !codeExcluded
           if !bytecodeComplete then
             ctx.log.warn(
               s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
@@ -302,15 +309,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
           // A no-op under archive and basic pruning, which write through. The WAL is on, so no memtable flush is needed.
           stateIngest.stateTries.forcePersist(StateStorage.SnapSyncFinalization)
-          val doneFlags = stateIngest.appState.snapSyncDone().and(stateIngest.appState.storageRecoveryDone())
-          (if bytecodeComplete then doneFlags.and(stateIngest.appState.bytecodeRecoveryDone()) else doneFlags)
+          if accountsExcluded then
+            ctx.log.warn(
+              "[HEAL-EXCLUDED] Accounts in the excluded set at finalisation: storage incomplete, or not shown complete — " +
+                "storageRecoveryDone NOT set"
+            )
+          // The set stays: it is the only record of those accounts, and only a cycle that starts from nothing wipes it.
+          val snapDone = stateIngest.appState.snapSyncDone()
+          val storageFlag =
+            if accountsExcluded then snapDone else snapDone.and(stateIngest.appState.storageRecoveryDone())
+          (if bytecodeComplete then storageFlag.and(stateIngest.appState.bytecodeRecoveryDone()) else storageFlag)
             .commitSync()
-          // SNAP is done: no later cycle may read this one's decisions (one left behind by a crash here would only be
-          // resolved against that cycle's root).
-          try stateIngest.snapProgress.clearExcluded()
-          catch
-            case scala.util.control.NonFatal(e) =>
-              ctx.log.warn(s"[HEAL-EXCLUDED] Could not clear the excluded set after finalisation: ${e.getMessage}")
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 

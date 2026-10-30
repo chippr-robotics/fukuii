@@ -49,7 +49,8 @@ These are the logical entities. Field names are indicative, and the final names 
 
 - **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding. Each with `updateSync`.
 - **Removed:** when, at the current root, the account's storage root and code are both present, or the root holds no such account. A "code missing" entry: when the code is stored.
-- **Cleared:** at SNAP finalisation, after the done flags: a lazy hand-off can leave entries, and no later cycle may read them.
+- **Cleared:** only where a cycle starts from nothing, because a later cycle may not read an earlier one's decisions: at `restartSnapSync`, and where the account phase starts with no carried task files, no held checkpoint and no resumed cursors. Never at finalisation: after a lazy hand-off the set is the only record of those accounts.
+- **Read at finalisation:** `storageRecoveryDone` is set only with no account-kind entry left, `bytecodeRecoveryDone` only with no code entry left (and its other conditions). A set that cannot be read sets neither.
 - **Completion** requires the set to be empty.
 
 **Per-scheme handling (D5):**

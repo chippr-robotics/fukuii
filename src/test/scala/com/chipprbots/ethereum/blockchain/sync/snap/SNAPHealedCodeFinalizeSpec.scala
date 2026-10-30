@@ -39,6 +39,12 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
+import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** SNAP must not claim bytecode recovery is done while the bytecode of healed accounts is missing. (Devnet-8 block
@@ -57,10 +63,21 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   private val code = ByteString(Array[Byte](0x60, 0x00, 0x60, 0x00, 0xf3.toByte))
   private val codeHash = kec256(code)
 
-  class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
+  class Fixture(failExcludedRead: Boolean = false) extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPHealedCodeFinalizeSpec.this.system.classicSystem
 
-    val appStateStorage = storagesInstance.storages.appStateStorage
+    val appStateStorage: AppStateStorage =
+      if failExcludedRead then
+        new AppStateStorage(
+          new EphemDataSource(Map.empty):
+            override def scanRangeLimit(
+                namespace: DataSource.Namespace,
+                fromKey: Array[Byte],
+                toKeyExclusive: Array[Byte],
+                limit: Int
+            ): Iterator[(Array[Byte], Array[Byte])] = throw new RuntimeException("excluded set unreadable")
+        )
+      else storagesInstance.storages.appStateStorage
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     private val pollsAnswered = new AtomicInteger(0)
     private val networkPeerManager: TestProbe = TestProbe()
@@ -120,6 +137,14 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       snap ! SNAPSyncController.Start
       snap
 
+    def awaitFinalized(): Unit =
+      parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
+        case SyncProtocol.HealingImpossible                        => FishingOutcomes.fail("finalisation aborted")
+        case _                                                     => FishingOutcomes.continueAndIgnore
+      }
+      ()
+
     def awaitProcessed(snap: TypedActorRef[SNAPSyncController.Command]): Unit =
       snap ! SNAPSyncController.GetProgress(progressProbe.ref)
       progressProbe.receiveMessage(5.seconds)
@@ -165,23 +190,64 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     }
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
-  it should "leave bytecodeRecoveryDone UNSET at a lazy hand-off with an excluded entry left, and clear the set (spec 022 D5)" taggedAs UnitTest in new Fixture:
-    val progress = new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(appStateStorage.dataSource)
-    progress.recordExcluded(
-      Seq(
-        com.chipprbots.ethereum.db.storage
-          .ExcludedAccount(ByteString(codeHash), com.chipprbots.ethereum.db.storage.ExcludedReason.CodeMissing)
-      )
-    )
+  // spec 022 review item 3 (vault F1, hunter W3, beacon N-3, forge F3): the set outlives finalisation, and each flag
+  // claims only what its own kind of entry says.
+  private def excluded(subject: ByteString, reason: ExcludedReason, dormant: Boolean = false): ExcludedAccount =
+    ExcludedAccount(subject, reason, dormant = dormant)
+
+  it should "leave bytecodeRecoveryDone UNSET for a code entry, set storageRecoveryDone, and keep the entry (spec 022 D5)" taggedAs UnitTest in new Fixture:
+    val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
+    val entry = excluded(codeHash, ExcludedReason.CodeMissing)
+    progress.recordExcluded(Seq(entry))
     val snap = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
 
-    parent.fishForMessage(10.seconds) {
-      case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
-      case _                                                     => FishingOutcomes.continueAndIgnore
-    }
     appStateStorage.isBytecodeRecoveryDone() shouldBe false
-    progress.hasExcluded shouldBe false
+    appStateStorage.isStorageRecoveryDone() shouldBe true
+    progress.excludedPage(None, 10) shouldBe Seq(entry)
+
+  it should "leave storageRecoveryDone UNSET for an account entry, set bytecodeRecoveryDone, and keep the entry (spec 022 D5)" taggedAs UnitTest in new Fixture:
+    val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
+    val entry = excluded(codeHash, ExcludedReason.StorageAbandoned)
+    progress.recordExcluded(Seq(entry))
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
+    progress.excludedPage(None, 10) shouldBe Seq(entry)
+
+  it should "count a dormant entry for storageRecoveryDone: nothing has shown that account complete" taggedAs UnitTest in new Fixture:
+    val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
+    progress.recordExcluded(Seq(excluded(codeHash, ExcludedReason.StorageSkipped, dormant = true)))
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
+
+  it should "set both flags with an empty set" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
+
+  it should "set neither recovery flag when the excluded set cannot be read (forge N3)" taggedAs UnitTest in new Fixture(
+    failExcludedRead = true
+  ):
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
   "SNAPSyncController.bytecodeRecoveryComplete" should
     "be false after a force-completed bytecode phase, or while healed-account code is missing" taggedAs UnitTest in {
