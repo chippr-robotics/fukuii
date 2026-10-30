@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.Trie
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.readAtPath
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.crypto.kec256
@@ -30,6 +31,7 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
@@ -55,6 +57,17 @@ final private class FailingWritesOfMptStorage(hash: ByteString, failures: Int) e
     if failed.getCount > 0 && rawNodes.exists(_._1 == hash) then
       failed.countDown()
       throw new RuntimeException("injected node write failure")
+    super.storeRawNodes(rawNodes)
+
+/** A trie store whose node writes that include `hash` throw while `failing` is set; `attempts` counts those writes. */
+final private class GatedWritesMptStorage(hash: ByteString) extends TestMptStorage:
+  @volatile var failing: Boolean = false
+  private val tries = new AtomicInteger(0)
+  def attempts: Int = tries.get()
+  override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+    if rawNodes.exists(_._1 == hash) then
+      tries.incrementAndGet()
+      if failing then throw new RuntimeException("injected node write failure")
     super.storeRawNodes(rawNodes)
 
 /** A data source whose write batches that put `key` in `namespace` throw, the first `failures` times; `failed` counts
@@ -240,4 +253,172 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
 
   it should "retry a failed last flush on the next pulse when nothing is pending or in flight, under the Hash scheme (hunter W1)" taggedAs UnitTest in {
     lastWriteFailsTwice(StorageScheme.Hash)
+  }
+
+  // ---- spec 022 review forge F1, hunter W1 (Hash): no verification walk over an unwritten flush buffer --------------
+
+  /** A Hash coordinator healing `trie` over `store`, with a writer executor that runs only when the test says (flushes
+    * and walks both run on it) and a peer the test answers by hand, so every step is ordered by the test.
+    */
+  final private class FlushGateRig(val trie: Trie, val store: GatedWritesMptStorage):
+    val ec = new ManualExecutionContext
+    val peer = new ScriptedPeer(testKit)
+    val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
+    val coordinator: org.apache.pekko.actor.typed.ActorRef[TrieNodeHealingCoordinator.Command] =
+      HealingTrieFixtures.spawnCoordinator(
+        stateRoot = trie.root.hash,
+        networkPeerManager = peer.ref,
+        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        mptStorage = store,
+        batchSize = 16,
+        snapSyncController = controller.ref,
+        healingWriterEcOverride = Some(ec),
+        storageScheme = StorageScheme.Hash,
+        movingRootDeltaHeal = true
+      )
+    peer.coordinator.set(coordinator)
+
+    def start(): Unit =
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("flush-gate-peer", createTestProbe[Any]().ref.toClassic)
+      )
+
+    /** Answer the next request with the nodes of `labels` it names, the others omitted. */
+    def answerNext(labels: String*): Unit =
+      val served = trie.nodes.filter(n => labels.contains(n.label)).map(n => n.pathset -> n.encoded).toMap
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], served)
+
+    /** Mailbox barrier, three deep: a message sent before the call, the completion check it sends, and what that check
+      * sends have all been handled.
+      */
+    def settle(): Unit =
+      (1 to 3).foreach { _ =>
+        val probe = createTestProbe[com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics]()
+        coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
+        probe.receiveMessage(30.seconds)
+      }
+
+    /** Run the writer executor's next task (a flush, its completion callback, or a walk), then let the coordinator
+      * handle what it sent.
+      */
+    def step(): Unit =
+      ec.runNext()
+      settle()
+
+    /** Run what waits on the writer executor and what follows from it, one task at a time, at most `steps` tasks (a
+      * walk that restarts itself forever ends here, not in a hang).
+      */
+    def drive(steps: Int = 24): Unit =
+      settle()
+      var left = steps
+      while left > 0 && ec.pending > 0 do
+        step()
+        left -= 1
+
+    def pulse(): Unit =
+      coordinator ! TrieNodeHealingCoordinator.HealingStagnationCheck
+      drive()
+
+    /** Healing completes, and the controller is never asked to move the pivot on the way. */
+    def awaitCompleteWithoutRepeg(): Unit =
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case m @ (_: SNAPSyncController.HealingStagnated | SNAPSyncController.HealingAllPeersStateless) =>
+          FishingOutcomes.fail(s"asked the controller to move the pivot: $m")
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+    def everyNodeStored(): Unit =
+      trie.nodes.foreach(n => withClue(s"${n.label}: ")(noException should be thrownBy store.get(n.hash.toArray)))
+
+    def stop(): Unit =
+      testKit.stop(coordinator)
+      testKit.stop(peer.ref)
+
+  /** Put every node of `trie` except `except` in `store` directly, as earlier download phases would have. */
+  private def seed(store: TestMptStorage, trie: Trie, except: Set[String]): Unit =
+    trie.nodes.filterNot(n => except(n.label)).foreach(n => store.storeRawNodes(Seq(n.hash -> n.encoded.toArray)))
+
+  it should "write a buffer whose flush failed while a verification walk ran before walking again, under the Hash scheme (forge F1, trigger A)" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val store = new GatedWritesMptStorage(trie("leafY0").hash)
+    seed(store, trie, Set("root", "leafY0")) // brY is on disk over an absent leafY0: a hole only a walk finds
+    val rig = new FlushGateRig(trie, store)
+    try
+      rig.start()
+      rig.answerNext("root") // its children are on disk, so it commits at once
+      rig.settle()
+      withClue("the root's flush waits: ")(rig.ec.pending shouldBe 1)
+      rig.step() // its flush writes it
+      rig.step() // ... its completion arrives, and the completion check starts a verification walk
+      withClue("the verification walk waits: ")(rig.ec.pending shouldBe 1)
+      // While the walk runs, the controller's own walk reports leafY0 missing. It is healed, and its flush fails.
+      store.failing = true
+      rig.coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq(trie("leafY0").pathset -> trie("leafY0").hash))
+      rig.answerNext("leafY0")
+      rig.settle()
+      withClue("the walk, then leafY0's flush: ")(rig.ec.pending shouldBe 2)
+      rig.ec.runNewest() // the flush throws ...
+      rig.ec.runNewest() // ... and its FlushFailed reaches the coordinator while the walk is still running
+      rig.settle()
+      // The walk now reads the store: leafY0 is not on it, so the walk ends dirty, with nothing pending.
+      withClue("the walk is all that waits: ")(rig.ec.pending shouldBe 1)
+      rig.step()
+      // The disk works again. The next pulse must write the buffer; a clean walk then completes healing.
+      store.failing = false
+      val attemptsBefore = store.attempts
+      rig.pulse()
+      withClue("the failed flush is attempted again: ")(store.attempts should be > attemptsBefore)
+      rig.awaitCompleteWithoutRepeg()
+      rig.everyNodeStored()
+    finally rig.stop()
+  }
+
+  it should "not let the dead-pulse watchdog walk over a buffer whose flushes keep failing, under the Hash scheme (forge F1 trigger B, hunter W1)" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val store = new GatedWritesMptStorage(trie.root.hash)
+    seed(store, trie, Set("root"))
+    val rig = new FlushGateRig(trie, store)
+    try
+      rig.start()
+      store.failing = true
+      rig.answerNext("root") // committed, and every write of it fails
+      rig.drive() // its flush fails, and so does the completion check's synchronous flush
+      // Nothing is pending or in flight. Four pulses: the first counts the heal, the next three are dead, and the
+      // third dead one is the watchdog's.
+      (1 to 4).foreach(_ => rig.pulse())
+      store.failing = false
+      val attemptsBefore = store.attempts
+      rig.pulse()
+      withClue("the failed flush is attempted again: ")(store.attempts should be > attemptsBefore)
+      rig.awaitCompleteWithoutRepeg()
+      rig.everyNodeStored()
+    finally rig.stop()
+  }
+
+  it should "not walk a re-pegged root that is on disk while the flush buffer cannot be written, under the Hash scheme (forge F1, trigger C)" taggedAs UnitTest in {
+    val before = PathHealPresenceFixtures.accountTrieOld()
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    // brY and leafY0 are in both tries. The new trie is on disk without them.
+    val store = new GatedWritesMptStorage(after("leafY0").hash)
+    seed(store, after, Set("brY", "leafY0"))
+    val rig = new FlushGateRig(before, store)
+    try
+      rig.start()
+      rig.answerNext("root")
+      rig.answerNext("brY") // ext is left unanswered: the old root waits on it
+      store.failing = true
+      rig.answerNext("leafY0") // brY's subtree commits; its flush will fail
+      rig.drive()
+      // The pivot moves to the new root, which is on disk. The re-peg's synchronous flush fails too.
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+      rig.drive()
+      store.failing = false
+      val attemptsBefore = store.attempts
+      rig.pulse()
+      withClue("the failed flush is attempted again: ")(store.attempts should be > attemptsBefore)
+      rig.awaitCompleteWithoutRepeg()
+      after.nodes.foreach(n => withClue(s"${n.label}: ")(noException should be thrownBy store.get(n.hash.toArray)))
+    finally rig.stop()
   }

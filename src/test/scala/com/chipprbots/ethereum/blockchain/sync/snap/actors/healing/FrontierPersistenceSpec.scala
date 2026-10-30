@@ -100,6 +100,16 @@ final private class ManualExecutionContext extends ExecutionContext:
       next.foreach(_.run())
       next = queue.synchronized(Option.when(queue.nonEmpty)(queue.dequeue()))
 
+  /** Run only the runnable queued first. A test whose actor queues more work as it reacts runs one at a time and lets
+    * the actor settle in between ([[runAll]] would race it).
+    */
+  def runNext(): Unit =
+    queue.synchronized(Option.when(queue.nonEmpty)(queue.dequeue())).foreach(_.run())
+
+  /** Run only the runnable queued last (a test that must run a flush queued behind a walk before that walk). */
+  def runNewest(): Unit =
+    queue.synchronized(Option.when(queue.nonEmpty)(queue.removeLast())).foreach(_.run())
+
 /** The coordinator state and environment `FrontierPersistence` reads (spec 016 C-H1), as plain fields over a recording
   * trie store and an in-memory frontier store. `stateIngest` hands out only `healingFrontier`.
   */
