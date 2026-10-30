@@ -30,7 +30,7 @@ private[actors] trait HealVerificationState:
   var verificationBFSRunning: Boolean
   var verificationPassComplete: Boolean
   var trieWalkInProgress: Boolean
-  var flushing: Boolean
+  def flushing: Boolean
   var scopedVerificationActive: Boolean
   var scopedVerificationSeedCount: Int
   var scopedVerificationStartMs: Long

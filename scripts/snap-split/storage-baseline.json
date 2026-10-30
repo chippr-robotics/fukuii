@@ -14,7 +14,7 @@
     "storage_members": []
   },
   "counter": 2,
-  "storage_refs_total": 540,
+  "storage_refs_total": 538,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 92,
     "SNAPSyncController.scala": 72,
@@ -28,7 +28,7 @@
     "controller/SyncLifecycle.scala": 17,
     "actors/AccountRangeCoordinator.scala": 14,
     "actors/storage/StorageOrderedApply.scala": 13,
-    "actors/healing/FrontierPersistence.scala": 11,
+    "actors/healing/FrontierPersistence.scala": 9,
     "actors/storage/StorageDoneMarkers.scala": 10,
     "controller/PivotRefresher.scala": 8,
     "actors/healing/FrontierRebuildBfs.scala": 7,

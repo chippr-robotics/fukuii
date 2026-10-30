@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
@@ -382,9 +383,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // spec 022 D3: nodes committed with their whole subtree, waiting for the asynchronous flush (Hash scheme).
   val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   val rawFlushThreshold = 1000
-  var flushing: Boolean = false
-  // Bumped by every synchronous flush, so a completion of an asynchronous flush that started before it is ignored.
-  var flushGeneration: Long = 0L
+  // spec 022 review forge C1: the asynchronous flush in flight, by its ticket (a token unique in the process, so a late
+  // completion from another flush, or from the instance a supervisor restart replaced, matches nothing). `flushing` is
+  // whether it is set.
+  var flushInFlight: Option[FlushTicket] = None
 
   // spec 005 C3b/D2/T009/T012: heal-side subtree-complete seeding, DEFERRED until durable. discoverMissingChildren
   // identifies a candidate X (a just-healed node whose direct children are ALL present on disk AND themselves
@@ -1146,8 +1148,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   /** Async raw-node flush completion (C-H1 `FrontierPersistence`). Arm #14 (research.md R4c). */
   private[actors] lazy val frontierPersistenceArms: PartialFunction[Command, Behavior[Command]] = {
-    case FlushComplete(count, generation) =>
-      flushCompleted(count, generation)
+    case FlushComplete(token, count) =>
+      flushCompleted(token, count)
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
       // Flush what was committed during the write.
       if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
@@ -1155,8 +1157,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FlushFailed(generation, cause) =>
-      flushFailed(generation, cause)
+    case FlushFailed(token, cause) =>
+      flushFailed(token, cause)
       self ! HealingCheckCompletion
 
       Behaviors.same
@@ -1412,10 +1414,11 @@ object TrieNodeHealingCoordinator:
   // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
   // the Typed behavior can receive them. They were plain `Any` messages under Classic.
   // Internal message for async flush completion
-  // `generation` is the flush generation the write started in (FrontierPersistence.flushCompleted).
-  private[actors] case class FlushComplete(count: Int, generation: Long) extends Command
-  // spec 022 T026 (#1549): the asynchronous flush threw; nothing it was writing is released.
-  private[actors] case class FlushFailed(generation: Long, cause: Throwable) extends Command
+  // `token` is the flush's ticket token (FlushTicket, spec 022 review forge C1): only the flush in flight with that
+  // token releases anything (FrontierPersistence.flushCompleted).
+  private[actors] case class FlushComplete(token: Long, count: Int) extends Command
+  // spec 022 T026 (#1549): the asynchronous flush `token` threw; nothing it was writing is released.
+  private[actors] case class FlushFailed(token: Long, cause: Throwable) extends Command
 
   // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS).
   // `walkRoot` is the root the emitting walk was launched on (captured on the actor thread at launch), as

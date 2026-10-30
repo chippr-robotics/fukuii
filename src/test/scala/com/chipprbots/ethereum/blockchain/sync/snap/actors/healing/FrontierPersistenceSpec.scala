@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.crypto.kec256
@@ -158,8 +159,7 @@ private class StubFrontierPersistenceState(
   var crossRootHealCount: Long = 0L
   val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   val rawNodeBuffer: FlushBuffer = new FlushBuffer()
-  var flushing: Boolean = false
-  var flushGeneration: Long = 0L
+  var flushInFlight: Option[FlushTicket] = None
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var totalNodesHealed: Int = 0
 
@@ -252,7 +252,8 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
     s.flushing shouldBe true // cleared when the core's FlushComplete arm calls flushCompleted
     // spec 022 T026 (#1549): the nodes stay buffered until the write is reported done.
     s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(1)._1, node(2)._1)
-    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2, 0L))
+    val completion = s.selfInbox.receiveAll().loneElement
+    completion should matchPattern { case FlushComplete(_, 2) => }
     s.mptStorage.events.toSeq shouldBe Seq("store:2", "persist")
     s.mptStorage.recordSeenAtPersist shouldBe false
     s.frontierStore.get.isSubtreeComplete(node(2)._1) shouldBe true
@@ -264,7 +265,7 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
     s.selfInbox.hasMessages shouldBe false
 
     // the write returned: exactly what it wrote leaves the buffer, and its staged record is unstaged
-    s.flushCompleted(2, 0L)
+    deliver(s, completion)
     s.flushing shouldBe false
     s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(3)._1)
     s.pendingSubtreeRecords shouldBe empty
@@ -277,7 +278,7 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
     s.rawNodeBuffer += node(3)
     s.flushRawNodesSync() shouldBe true // writes all three and releases them
     s.rawNodeBuffer += node(4)
-    s.flushCompleted(2, 0L) // the async flush's completion arrives late: it must not drop node(4)
+    s.selfInbox.receiveAll().foreach(deliver(s, _)) // the async flush's late completion: it must not drop node(4)
     s.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(node(4)._1)
     s.flushing shouldBe false
   }
@@ -324,9 +325,9 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
   /** Hand `message`, one of the flush messages a coordinator sends itself, to `s`, as the core's arm does. */
   private def deliver(s: StubFrontierPersistenceState & FrontierPersistence, message: Any): Unit =
     message match
-      case FlushComplete(count, generation) => s.flushCompleted(count, generation)
-      case FlushFailed(generation, cause)   => s.flushFailed(generation, cause)
-      case other                            => fail(s"not a flush message: $other")
+      case FlushComplete(token, count) => s.flushCompleted(token, count)
+      case FlushFailed(token, cause)   => s.flushFailed(token, cause)
+      case other                       => fail(s"not a flush message: $other")
 
   it should "ignore the completion or failure of a flush that a previous coordinator instance started (forge C1)" taggedAs UnitTest in {
     // A supervisor restart builds a new coordinator on the same ActorRef: the previous instance's late flush messages

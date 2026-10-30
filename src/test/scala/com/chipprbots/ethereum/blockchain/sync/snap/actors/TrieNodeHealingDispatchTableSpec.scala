@@ -117,7 +117,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
     Row("HealingServeRootRefresh", HealingServeRootRefresh(OtherRoot), 11, Some(Dispatch)),
     Row("HealingResumeDispatch", HealingResumeDispatch, 12, Some(Dispatch)),
     Row("TrieNodesResponseMsg", TrieNodesResponseMsg(SNAP.TrieNodes(BigInt(1), Seq.empty)), 13, Some(Response)),
-    Row("FlushComplete", FlushComplete(0, 0L), 14, Some(Persistence)),
+    Row("FlushComplete", FlushComplete(0L, 0), 14, Some(Persistence)),
     Row("FlushFailed", FlushFailed(0L, new RuntimeException("c-h0 table")), 14, Some(Persistence)),
     Row("HealingTaskComplete", HealingTaskComplete(BigInt(1), Right(1)), 15, Some(Response)),
     Row("HealingCheckCompletion", HealingCheckCompletion, 16, Some(Verification)),
