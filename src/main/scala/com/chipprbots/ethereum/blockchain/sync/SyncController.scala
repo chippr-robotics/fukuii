@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -25,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegu
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -649,7 +651,7 @@ object SyncController:
             // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
             // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
             // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
-            appStateStorage.clearSnapSyncDone().commit()
+            appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
             appStateStorage.clearFastSyncDone().commit()
             startSnapSync()
 
@@ -900,7 +902,7 @@ object SyncController:
             missingHash
           )
           ctx.stop(regularSync)
-          appStateStorage.clearSnapSyncDone().commit()
+          appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
           appStateStorage.clearFastSyncDone().commit()
           startSnapSync(minPivotBlock = Some(blockNumber))
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
@@ -1332,6 +1334,28 @@ object SyncController:
         else Some(floor)
       }
 
+    /** spec 022 D6: the one-time clear of CF `g`, whatever this start goes on to do, since a node past SNAP holds the
+      * old records too. A failure costs disk space, and the next start tries again. Nothing writes to the family
+      * afterwards, so no flush would ever trigger its compaction: it is run here, off this actor's thread, or the space
+      * stays taken. Lost to a crash, it costs that space until something else compacts the family.
+      */
+    private def retireHealingFrontier(): Unit =
+      val frontier = new HealingFrontierStorage(flatSlotStorage.dataSource)
+      try
+        if HealInvariant.retireFrontierOnce(appStateStorage, frontier) then
+          log.info("[HEAL-INVARIANT] Persisted healing frontier (CF g) cleared; compacting it in the background")
+          val ec = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+          scala.concurrent
+            .Future(scala.concurrent.blocking(frontier.compact()))(ec)
+            .failed
+            .foreach(e => log.warn("Compacting the cleared healing frontier failed: {}", e.getMessage))(ec)
+      catch
+        case NonFatal(e) =>
+          log.error(
+            "[HEAL-INVARIANT] Could not clear the persisted healing frontier (CF g); the next start tries again",
+            e
+          )
+
     /** Whether the chain here came from a fast sync that finished, with nothing of SNAP's at stake.
       *
       * Such a node goes to regular sync, as it did before fast sync was removed. Starting SNAP there would leave it
@@ -1434,10 +1458,11 @@ object SyncController:
           "Persisted best block {} not found in storage — clearing sync-done flags so SNAP can resume from persisted progress",
           persistedBest
         )
-        appStateStorage.clearSnapSyncDone().commit()
+        appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
         appStateStorage.clearFastSyncDone().commit()
 
       appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
+      retireHealingFrontier()
 
       // Load bootstrap checkpoints if enabled and DB is fresh (best block = 0).
       // The highest checkpoint becomes the bootstrap pivot — SNAPSyncController uses it
@@ -1519,10 +1544,10 @@ object SyncController:
 
       // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
       // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
+      // spec 022 D7: this also takes the invariant marker, done or not, so the next SNAP run is a repair pass.
       if syncConfig.doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean then
-        if appStateStorage.isSnapSyncDone() then
+        if HealInvariant.clearDoneOnStart(appStateStorage) then
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
-          appStateStorage.clearSnapSyncDone().commit()
 
       // FastSyncDone is a legacy flag; nothing sets it any more, and the recovery paths below still clear it. With SNAP
       // on and not done, it sends the node to regular sync only when SNAP has no stake here (see

@@ -114,7 +114,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // spawn passes true; false (bare construction, most specs) never reads the store.
     excludedAccounts: Boolean = false,
     // spec 022 round 2 review hunter N1: where this coordinator says at which root its pass over the set last ended.
-    excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+    excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+    // spec 022 T043: where this coordinator says which root its last clean full walk, reported as completion, covered.
+    cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -1732,6 +1734,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
                 "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
               )
           }
+          // spec 022 T043: this is the one place that knows a clean walk of the whole of `stateRoot` is what completes
+          // (not the code-only hand-off above, and not a force-complete). Set before the signal it backs goes out.
+          cleanWalkRoot.foreach(_.set(stateRoot))
           snapSyncController ! SNAPSyncController.StateHealingComplete
           clearHealedPathsSet() // spec 003 C1: round closed — next round starts with a fresh scope
         else
@@ -2186,7 +2191,8 @@ object TrieNodeHealingCoordinator:
       // spec 022 T038b: the controller's current heal root, which it sets before it sends a re-peg. A supervisor restart
       // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -2224,7 +2230,8 @@ object TrieNodeHealingCoordinator:
           walkLocalOnly = walkLocalOnly,
           heldMemoryLimit = heldMemoryLimit,
           excludedAccounts = excludedAccounts,
-          excludedPassRoot = excludedPassRoot
+          excludedPassRoot = excludedPassRoot,
+          cleanWalkRoot = cleanWalkRoot
         ).start()
       }
     }

@@ -10,7 +10,12 @@ import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
-/** Crash-durable copy of the post-SNAP healing frontier — the set of still-missing trie nodes the
+/** '''Retired by spec 022 (D6): nothing in the node writes or reads this column family any more,''' apart from its
+  * one-time clear ([[clearAll]]). What follows describes what datadirs written before that hold; the class stays for
+  * the clear and for the format pins, and `g` stays listed in `Namespaces.nsSeq` because RocksDB will not open a
+  * database with an unlisted column family.
+  *
+  * Crash-durable copy of the post-SNAP healing frontier — the set of still-missing trie nodes the
   * `TrieNodeHealingCoordinator` is healing. Persisting it lets a restart resume in O(frontier) instead of re-walking
   * the full state trie (O(full state) — days on ETC mainnet). See docs/design/healing-frontier-scale.md (Layer 2).
   *
@@ -33,6 +38,18 @@ class HealingFrontierStorage(val dataSource: DataSource)
   def keyDeserializer: IndexedSeq[Byte] => ByteString = k => ByteString.fromArrayUnsafe(k.toArray)
   def valueSerializer: Seq[ByteString] => IndexedSeq[Byte] = ps => ArraySeq.unsafeWrapArray(rlp.encode(ps))
   def valueDeserializer: IndexedSeq[Byte] => Seq[ByteString] = bytes => rlp.decode[Seq[ByteString]](bytes.toArray)
+
+  /** Empty the column family with one range tombstone (spec 022 D6): frontier entries, the completeness sentinel and
+    * the spec 005 subtree-complete records all sort inside the range, and writing it is O(1) whatever the family holds.
+    */
+  def clearAll(): Unit =
+    dataSource.deleteRange(namespace, HealingFrontierStorage.LowestKey, HealingFrontierStorage.AboveHighestKey)
+
+  /** Reclaim the space [[clearAll]] tombstoned: nothing writes to this column family afterwards, so no flush would ever
+    * trigger a compaction of it. BLOCKING (I/O about the size of the family), so run it off actor threads.
+    */
+  def compact(): Unit =
+    dataSource.compactRange(namespace, HealingFrontierStorage.LowestKey, HealingFrontierStorage.AboveHighestKey)
 
   /** Drain the entire persisted frontier (hash -> pathset), excluding the completeness sentinel. Called once on
     * `[HEAL-RESTART]` to resume healing without the full-state DFS. Throws if iteration errors or a stored value fails
@@ -114,6 +131,10 @@ class HealingFrontierStorage(val dataSource: DataSource)
         .toSet
 
 object HealingFrontierStorage:
+  // Every key is at most 33 bytes (a 21-byte sentinel, a 32-byte frontier hash, a 33-byte subtree record), so the empty
+  // key and 34 bytes of 0xff bound them all, whatever their bytes.
+  private val LowestKey: Array[Byte] = Array.emptyByteArray
+  private val AboveHighestKey: Array[Byte] = Array.fill(34)(0xff.toByte)
 
   /** Reserved sentinel key for the completeness marker. 21 bytes — deliberately NOT 32, so it can never collide with a
     * keccak-256 node hash, and `loadAll` filters it out of the frontier.

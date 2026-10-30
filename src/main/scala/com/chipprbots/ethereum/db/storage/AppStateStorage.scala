@@ -113,9 +113,76 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Clear the SNAP-sync-done flag. Used by the regular-sync stuck escape valve to force a SNAP re-sync from a recent
     * pivot when post-SNAP regular sync hits permanently-unfetchable state nodes (e.g., stuck many blocks behind
     * canonical tip with no peer able to serve our parent stateRoot).
+    *
+    * The heal invariant marker goes in the same write (spec 022 D7): every caller re-enters SNAP on state that regular
+    * sync has written to, or that was found wanting (a stuck import, a failed hand-off, `clearDoneOnStart`), so what is
+    * present there is not vouched for any more. Here, so that no caller can forget it.
     */
   def clearSnapSyncDone(): DataSourceBatchUpdate =
-    remove(Keys.SnapSyncDone)
+    update(toRemove = Seq(Keys.SnapSyncDone, Keys.SnapHealInvariant), toUpsert = Nil)
+
+  // ========================================
+  // Heal invariant marker (spec 022 D7, data-model.md "Invariant marker")
+  // ========================================
+
+  /** Whether the marker stands: "everything present here was written under present implies complete". It does NOT mean
+    * complete. A value of another version does not stand.
+    */
+  def hasSnapHealInvariant(): Boolean =
+    get(Keys.SnapHealInvariant).contains(SnapHealInvariantVersion)
+
+  /** Stamp the marker. One write with the removal of the checkpoint key, since the stamp means whatever an interrupted
+    * import left has been repaired. Commit with `commitSync` (T042).
+    */
+  def stampSnapHealInvariant(): DataSourceBatchUpdate =
+    update(
+      toRemove = Seq(Keys.CheckpointImportInProgress),
+      toUpsert = Seq(Keys.SnapHealInvariant -> SnapHealInvariantVersion)
+    )
+
+  /** Remove the marker. Commit with `commitSync` (T042). */
+  def clearSnapHealInvariant(): DataSourceBatchUpdate =
+    remove(Keys.SnapHealInvariant)
+
+  /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
+    * is pre-invariant, whatever else it holds.
+    */
+  def getCheckpointImportInProgress(): Option[String] =
+    get(Keys.CheckpointImportInProgress)
+
+  /** A checkpoint import is about to write: the importer writes parent-first, so a present node can sit over an absent
+    * child until it ends. The marker goes in the same write, so no crash can leave it standing over that. Commit with
+    * `commitSync`, before the first node (T042).
+    */
+  def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
+    update(
+      toRemove = Seq(Keys.SnapHealInvariant),
+      toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
+    )
+
+  /** The import's CRC checked: it goes in the batch that writes the import's done flags. */
+  def endCheckpointImport(): DataSourceBatchUpdate =
+    remove(Keys.CheckpointImportInProgress)
+
+  /** Whether CF `g` has had its one-time clear (spec 022 D6). */
+  def isHealingFrontierRetired(): Boolean =
+    get(Keys.SnapHealFrontierRetired).exists(_.toBoolean)
+
+  /** The one-time clear of CF `g` is done. Commit with `commitSync`: that also makes the range delete before it
+    * durable, the WAL being one log.
+    */
+  def markHealingFrontierRetired(): DataSourceBatchUpdate =
+    put(Keys.SnapHealFrontierRetired, true.toString)
+
+  /** Whether this datadir's genesis was first stored by a binary that writes under the invariant, so that no older
+    * binary's state can be in it unless a sync's own keys say so (see `HealInvariant.isEmpty`).
+    */
+  def isDatadirCreatedUnderInvariant(): Boolean =
+    get(Keys.SnapHealDatadirCreated).contains(SnapHealInvariantVersion)
+
+  /** The genesis has just been stored for the first time. */
+  def markDatadirCreatedUnderInvariant(): DataSourceBatchUpdate =
+    put(Keys.SnapHealDatadirCreated, SnapHealInvariantVersion)
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -541,6 +608,9 @@ object AppStateStorage:
   type Key = String
   type Value = String
 
+  /** The value of `snap.heal.invariant`. A later version of the rule writes another, and older marks do not stand. */
+  val SnapHealInvariantVersion: Value = "2"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -572,3 +642,7 @@ object AppStateStorage:
     val BackfillBestHeader = "BackfillBestHeader"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
+    val SnapHealInvariant = "snap.heal.invariant"
+    val CheckpointImportInProgress = "checkpoint.import.inProgress"
+    val SnapHealFrontierRetired = "snap.heal.frontierRetired"
+    val SnapHealDatadirCreated = "snap.heal.datadirCreated"

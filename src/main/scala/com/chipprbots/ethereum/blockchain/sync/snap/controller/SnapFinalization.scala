@@ -309,6 +309,13 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
           // A no-op under archive and basic pruning, which write through. The WAL is on, so no memtable flush is needed.
           stateIngest.stateTries.forcePersist(StateStorage.SnapSyncFinalization)
+          // spec 022 T043: a hand-off with no clean full walk of this root behind it, whichever route brought it here, takes
+          // a marker stamped earlier. From here regular sync fetches what is missing on demand, one node at a time, each
+          // present over children that may be absent. Before the flags: a crash in between only resumes SNAP unmarked.
+          if !stateRoot.exists(_.value == healingCleanWalkRoot.get()) && stateIngest.appState.hasSnapHealInvariant()
+          then
+            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean full walk of this root: marker removed")
+            stateIngest.appState.clearSnapHealInvariant().commitSync()
           if accountsExcluded then
             ctx.log.warn(
               "[HEAL-EXCLUDED] Accounts in the excluded set at finalisation: storage incomplete, or not shown complete — " +

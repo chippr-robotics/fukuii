@@ -166,6 +166,9 @@ class PathNodeStorage(val dataSource: DataSource):
   /** True if the StateTriePathNamespace column family has at least one entry. Used by the startup guard. */
   def hasAccountData: Boolean = hasAnyEntry(acctNs)
 
+  /** True when neither column family holds a node: one seek each. Part of `HealInvariant.isEmpty` (spec 022 D7). */
+  def isEmpty: Boolean = !hasAnyEntry(acctNs) && !hasAnyEntry(storageNs)
+
   /** Stream every stored `(key, rlp)` of the account-trie CF (`key` = HP-encoded path) in key order, in chunks of
     * `chunkSize`, calling `f` once per chunk. Used to publish a Path-scheme trie to the hash-keyed store.
     */

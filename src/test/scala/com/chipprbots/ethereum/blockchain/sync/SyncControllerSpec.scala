@@ -93,6 +93,28 @@ class SyncControllerSpec
     storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
   }
 
+  it should "clear the retired frontier column family once, at its first start (spec 022 T040)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    seedSnapDoneWithRecovery(appState, needBytecode = false, needStorage = false)
+    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(
+      storagesInstance.storages.flatSlotStorage.dataSource
+    )
+    frontier.markComplete()
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    frontier.isComplete shouldBe false
+    appState.isHealingFrontierRetired() shouldBe true
+  }
+
   it should "transition to regular sync when only bytecode recovery is needed (storage pre-done)" taggedAs (
     UnitTest,
     SyncTest
