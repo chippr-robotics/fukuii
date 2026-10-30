@@ -778,17 +778,32 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   // Spec 022 round 2 review B (hunter W1): the restart's own record can fail for the same reason the actor restarted.
   it should "read the code-hash file back before a clean end when it has been restarted, minus the code that is stored" taggedAs UnitTest in {
+    val (recorded, lost, storedHash) = cleanEndAfterRestart(pointerCount = Some(2L))
+    recorded should contain(lost)
+    recorded should not contain storedHash
+  }
+
+  // Review vault W3: a reset blanks the count and leaves the path, which is then the last cycle's file.
+  it should "not read back a code-hash file with no count: it is an earlier cycle's" taggedAs UnitTest in {
+    val (recorded, lost, _) = cleanEndAfterRestart(pointerCount = None)
+    recorded should not contain lost
+  }
+
+  /** A coordinator holding one hash is restarted with the record of that failing, and the phase then ends. Returns what
+    * the excluded set holds, the lost hash, and the hash whose code is stored.
+    */
+  private def cleanEndAfterRestart(pointerCount: Option[Long]): (Seq[ByteString], ByteString, ByteString) =
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val codes = new TestEvmCodeStorage()
     val stored = ByteString("restart-stored-code")
     val storedHash = kec256(stored)
     codes.put(storedHash, stored).commit()
-    val lost = kec256(ByteString("restart-file-lost"))
+    val lost = kec256(ByteString(s"restart-file-lost-$pointerCount")) // the excluded set is shared between tests
     val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
     file.toFile.deleteOnExit()
     java.nio.file.Files.write(file, (storedHash ++ lost).toArray)
     val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
-    appState.putSnapSyncCodeHashesPath(file.toString).commit()
+    appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(pointerCount)).commit()
     codeFilePointer = Some(appState)
     try
       val coordinator = testKit.spawn(
@@ -819,16 +834,16 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         progressStore.excludedPage(None, 1000).map(_.subject) should not contain lost
       }
       coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      // Each check looks for the pointer again, standing in for the 30-second pulse.
+      (1 to ByteCodeCoordinator.MaxCodeFilePointerWaits)
+        .foreach(_ => coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion)
       snapSyncController.fishForMessage(30.seconds) {
         case SNAPSyncController.ByteCodeSyncComplete =>
           org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
         case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
       }
-      val recorded = progressStore.excludedPage(None, 1000).map(_.subject)
-      recorded should contain(lost)
-      recorded should not contain storedHash
+      (progressStore.excludedPage(None, 1000).map(_.subject), lost, storedHash)
     finally codeFilePointer = None
-  }
 
   it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
     val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = false)

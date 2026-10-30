@@ -133,7 +133,8 @@ object HealingTrieFixtures:
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
       heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       // Where the excluded set lives; Some(_) makes the coordinator work it (spec 022 D5).
-      excludedStore: Option[SnapSyncProgressStorage] = None
+      excludedStore: Option[SnapSyncProgressStorage] = None,
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -166,7 +167,8 @@ object HealingTrieFixtures:
         healedCodeCheck = evmCodeStorage.isDefined,
         walkLocalOnly = walkLocalOnly,
         heldMemoryLimit = heldMemoryLimit,
-        excludedAccounts = excludedStore.isDefined
+        excludedAccounts = excludedStore.isDefined,
+        excludedPassRoot = excludedPassRoot
       )
     )
 

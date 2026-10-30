@@ -415,6 +415,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def adoptRootForExcluded(): Unit =
     excludedSeeding.foreach { seeding =>
       seeding.restart()
+      excludedPassRoot.foreach(_.set(null)) // a pass that ended earlier, even at this same root, is not this one's
       excludedCodeAsked.clear()
       try
         if seeding.blocking then

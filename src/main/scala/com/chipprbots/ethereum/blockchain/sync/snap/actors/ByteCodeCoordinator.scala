@@ -178,14 +178,16 @@ private[actors] class ByteCodeCoordinatorImpl(
 
   private def codeFileSweepDue: Boolean = restartedIncarnation && recordExcluded && !codeFileSwept
 
-  /** The code-hash file and the entries it was recorded as holding, if it was. */
-  private def codeFile: Option[(java.nio.file.Path, Option[Long])] =
+  /** The code-hash file and the entries it was recorded as holding. The two are written together and a reset blanks
+    * only the count, so a path with no count is an earlier cycle's, not this phase's list (review vault W3).
+    */
+  private def codeFile: Option[(java.nio.file.Path, Long)] =
     try
       val appState = stateIngest.appState
-      appState
-        .getSnapSyncCodeHashesPath()
-        .filter(_.nonEmpty)
-        .map(path => (java.nio.file.Paths.get(path), appState.getSnapSyncCodeHashesCount()))
+      for
+        path <- appState.getSnapSyncCodeHashesPath().filter(_.nonEmpty)
+        count <- appState.getSnapSyncCodeHashesCount()
+      yield (java.nio.file.Paths.get(path), count)
     catch
       case scala.util.control.NonFatal(e) =>
         log.error("Could not read where the code-hash file is; going on without it", e)
@@ -202,7 +204,7 @@ private[actors] class ByteCodeCoordinatorImpl(
         val selfRef = context.self
         val ec = context.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
         val token = codeFileSweep.start(ec)(cancelled =>
-          ExcludedTaskFile.recordMissingCode(file, expected, hash => code.get(hash).isDefined, record, cancelled)
+          ExcludedTaskFile.recordMissingCode(file, Some(expected), hash => code.get(hash).isDefined, record, cancelled)
         )((t, outcome) => selfRef ! CodeFileSwept(t, outcome))
         timers.startSingleTimer(CodeFileSweepTimedOut(token), CodeFileSweepTimeout)
         true
