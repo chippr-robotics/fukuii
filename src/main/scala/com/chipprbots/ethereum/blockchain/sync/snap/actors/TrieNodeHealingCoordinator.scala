@@ -385,13 +385,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     */
   private def stepExcluded(seeding: ExcludedAccountSeeding): Unit =
     val step = seeding.step(stateRoot)
-    if step.removed > 0 then blockedProgress = true
+    if step.removed > 0 || step.demoted > 0 then blockedProgress = true
     if step.seeds.nonEmpty then
       queueNodes(step.seeds)
       tryRedispatchPendingTasks()
     val newCode = step.missingCode.filter(excludedCodeAsked.add)
     if newCode.nonEmpty then snapSyncController ! SNAPSyncController.HealedCodeHashes(newCode)
-    if pendingTasks.isEmpty && activeRequests.isEmpty && (step.more || step.changed) then self ! HealingCheckCompletion
+    if pendingTasks.isEmpty && activeRequests.isEmpty && (step.more || step.changed || !seeding.blocking) then
+      self ! HealingCheckCompletion
 
   /** spec 022 T035, on every adopted root: start the pass over, against it. A failure is logged, and the gate tries
     * again.
@@ -401,7 +402,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       seeding.restart()
       excludedCodeAsked.clear()
       try
-        if seeding.outstanding then
+        if seeding.blocking then
           excludedBlocking = true
           stepExcluded(seeding)
       catch
@@ -421,7 +422,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def excludedBlocksCompletion(): Boolean =
     excludedSeeding.exists { seeding =>
       try
-        excludedBlocking = seeding.outstanding
+        excludedBlocking = seeding.blocking
         if excludedBlocking then stepExcluded(seeding)
         excludedBlocking
       catch

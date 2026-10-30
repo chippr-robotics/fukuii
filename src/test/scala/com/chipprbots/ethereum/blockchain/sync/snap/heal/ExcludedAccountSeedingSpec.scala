@@ -154,7 +154,154 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     seeding(store, (_, _) => throw new RuntimeException("a code entry reads no node")).step(root).removed shouldBe 1
   }
 
-  it should "seed the node a lookup finds absent, not the account's storage" taggedAs UnitTest in {
+  // Spec 022 review item 4 (hunter W2): A to B to A, or a reorg. The decision stands for the account's storage whatever
+  // this root holds, so "no such account" must not forget it.
+  private val elsewhere: BranchNode = branch(((key(0) + 1) % 16) -> leafAtDepth3)
+  private val elsewhereRoot: ByteString = ByteString(elsewhere.hash)
+  private def withElsewhere(
+      read: (ByteString, Seq[ByteString]) => Option[MptNode]
+  ): (ByteString, Seq[ByteString]) => Option[MptNode] =
+    (hash, path) => if hash == elsewhereRoot then Some(elsewhere) else read(hash, path)
+
+  "An account the root does not hold" should "stay in the set, dormant, and stop counting against the root" taggedAs UnitTest in {
+    val store = freshStore()
+    val entry = ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = storageRoot)
+    store.recordExcluded(Seq(entry))
+    val step = seeding(store, withElsewhere(reader())).step(elsewhereRoot)
+    step.removed shouldBe 0
+    step.demoted shouldBe 1
+    step.seeds shouldBe empty
+    step.changed shouldBe true
+    store.hasExcluded shouldBe false
+    store.excludedPage(None, 10) shouldBe Seq(entry.copy(dormant = true))
+  }
+
+  it should "count again, with its seed, at a root that holds it incomplete" taggedAs UnitTest in {
+    val store = freshStore()
+    val entry = ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = storageRoot)
+    store.recordExcluded(Seq(entry.copy(dormant = true)))
+    val step = seeding(store, reader()).step(root)
+    step.promoted shouldBe 1
+    step.seeds should have size 1
+    step.changed shouldBe true
+    store.excludedPage(None, 10) shouldBe Seq(entry)
+  }
+
+  it should "count again when the walk to it hits a missing node: the root may hold it" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, dormant = true)))
+    val step = seeding(store, reader(Set(ByteString(ext.hash)))).step(root)
+    step.promoted shouldBe 1
+    step.seeds.map(_._2) shouldBe Seq(ByteString(ext.hash))
+    store.hasExcluded shouldBe true
+  }
+
+  it should "leave the set at a root that holds it complete" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, dormant = true)))
+    seeding(store, present(storageRoot)).step(root).removed shouldBe 1
+    store.hasAnyExcluded shouldBe false
+  }
+
+  it should "stay dormant, without a write or a change, at another root that does not hold it" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, dormant = true)))
+    val step = seeding(store, withElsewhere(reader())).step(elsewhereRoot)
+    step.changed shouldBe false
+    store.excludedPage(None, 10).map(_.dormant) shouldBe Seq(true)
+  }
+
+  it should "survive A to B to A: back at A it is seeded again" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val s = seeding(store, withElsewhere(reader()))
+    s.step(root).seeds should have size 1 // A: incomplete
+    s.restart()
+    s.step(elsewhereRoot).demoted shouldBe 1 // B: no such account
+    s.restart()
+    s.step(root).seeds should have size 1 // A again
+    store.hasExcluded shouldBe true
+  }
+
+  "blocking" should "hold for a dormant entry only until a pass has looked at it from this root" taggedAs UnitTest in {
+    val store = freshStore()
+    val s = seeding(store, withElsewhere(reader()))
+    s.blocking shouldBe false
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, dormant = true)))
+    s.blocking shouldBe true
+    s.step(elsewhereRoot)
+    s.blocking shouldBe false
+    s.restart() // a new root: it may hold the account
+    s.blocking shouldBe true
+  }
+
+  it should "hold for any active entry, whatever the pass" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)))
+    val s = seeding(store, reader(), code = _ => false)
+    s.blocking shouldBe true
+    s.step(root)
+    s.blocking shouldBe true
+  }
+
+  // Spec 022 review (the user's decision, 2026-10-30): what "only code" means for the set.
+  "onlyCodeOutstanding" should "be unknown, so false, until a pass has ended at this root" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(
+      Seq(
+        ExcludedAccount(codeHash, ExcludedReason.CodeMissing),
+        ExcludedAccount(storageRoot, ExcludedReason.CodeMissing)
+      )
+    )
+    val s = seeding(store, reader(), code = _ => false, pageSize = 1)
+    s.onlyCodeOutstanding shouldBe false
+    s.step(root).more shouldBe true
+    withClue("the pass has a page left: ")(s.onlyCodeOutstanding shouldBe false)
+    s.step(root).more shouldBe true
+    s.step(root).more shouldBe false
+    s.onlyCodeOutstanding shouldBe true
+    s.restart()
+    withClue("a new root is unknown again: ")(s.onlyCodeOutstanding shouldBe false)
+  }
+
+  it should "be true for an account that needs nothing but its code" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val s = seeding(store, present(storageRoot), code = _ => false)
+    s.step(root).seeds shouldBe empty
+    s.onlyCodeOutstanding shouldBe true
+  }
+
+  it should "be false after a pass that seeded a node or could not read one" taggedAs UnitTest in {
+    val seeded = freshStore()
+    seeded.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val a = seeding(seeded, reader(), code = _ => false)
+    a.step(root).seeds should not be empty
+    a.onlyCodeOutstanding shouldBe false
+
+    val failing = freshStore()
+    failing.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val b = seeding(failing, (_, _) => throw new RuntimeException("read failed"), code = _ => false)
+    b.step(root).failedReads shouldBe 1
+    b.onlyCodeOutstanding shouldBe false
+  }
+
+  it should "be false with nothing outstanding: there is nothing for it to be only" taggedAs UnitTest in {
+    val store = freshStore()
+    val s = seeding(store, reader())
+    s.step(root)
+    s.onlyCodeOutstanding shouldBe false
+  }
+
+  "A code entry of the empty code hash" should "leave at once: there is no such code to fetch (beacon)" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(Account.EmptyCodeHash.value, ExcludedReason.CodeMissing)))
+    val step = seeding(store, reader(), code = _ => false).step(root)
+    step.removed shouldBe 1
+    step.missingCode shouldBe empty
+  }
+
+  "A step" should "seed the node a lookup finds absent, not the account's storage" taggedAs UnitTest in {
     val store = freshStore()
     store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
     val step = seeding(store, reader(Set(ByteString(ext.hash)))).step(root)
@@ -175,8 +322,8 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
       if hash == storageRoot then throw new RuntimeException("injected read failure") else reader()(hash, path)
     val step = seeding(store, failing).step(root)
     step.failedReads shouldBe 1
-    step.removed shouldBe 1
-    store.excludedPage(None, 10).map(_.subject) shouldBe Seq(accountHash)
+    step.demoted shouldBe 1
+    store.excludedPage(None, 10).map(e => (e.subject, e.dormant)) shouldBe Seq((accountHash, false), (gone, true))
   }
 
   it should "walk the set in pages: more until the last, then a new pass from the start" taggedAs UnitTest in {
@@ -257,6 +404,37 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     }
     val codeKey = ExcludedAccountSeeding.accountNibbles(codeHash)
     batches.flatten.exists(_._2.sameElements(codeKey)) shouldBe false
+  }
+
+  // Between two batches a write can fail, and more than one batch needs more than 128 accounts (beacon N-2, vault).
+  it should "leave what it deleted deleted and throw when a later batch fails, with more than 128 accounts" taggedAs UnitTest in {
+    val store = freshStore()
+    val accounts = (0 until 130).map(i => ByteString(Array.fill[Byte](31)(0x11) :+ i.toByte))
+    store.recordExcluded(accounts.map(ExcludedAccount(_, ExcludedReason.StorageAbandoned)))
+    var batches = 0
+    val failure = intercept[RuntimeException] {
+      seeding(store, reader()).deleteAccountPositions { _ =>
+        batches += 1
+        if batches == 2 then throw new RuntimeException("second batch failed")
+      }
+    }
+    failure.getMessage shouldBe "second batch failed"
+    batches shouldBe 2
+    withClue("the set is what a later run deletes from: ")(store.excludedPage(None, 1000) should have size 130)
+
+    var deleted = Seq.empty[Int]
+    seeding(store, reader()).deleteAccountPositions(batch => deleted = deleted :+ batch.size) shouldBe 130
+    withClue("each account's 65 positions in one batch: ") {
+      deleted.size shouldBe 2
+    }
+  }
+
+  it should "not delete the positions of a dormant entry: the root does not hold that account" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, dormant = true)))
+    var deleted = 0
+    seeding(store, reader()).deleteAccountPositions(_ => deleted += 1) shouldBe 0
+    deleted shouldBe 0
   }
 
   it should "do nothing with no account in the set" taggedAs UnitTest in {

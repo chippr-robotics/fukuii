@@ -48,10 +48,11 @@ These are the logical entities. Field names are indicative, and the final names 
 *Keys (slice 3):* `SnapExcluded/1/` + a kind byte + the subject, in AppState `s`, read and written by `SnapSyncProgressStorage`. A "code missing" entry is keyed by the code hash because the bytecode download, where that decision is made, knows the hash and not the accounts that use it; it leaves the set when the code is stored, with no root in play, and on Path it deletes no positions.
 
 - **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding. Each with `updateSync`.
-- **Removed:** when, at the current root, the account's storage root and code are both present, or the root holds no such account. A "code missing" entry: when the code is stored.
+- **Removed:** when, at the current root, the account's storage root and code are both present. A "code missing" entry: when the code is stored.
+- **Dormant:** when the current root holds no such account, the entry moves to kind `d` instead of leaving: the decision still stands for that account's storage, and a later root can hold it again (A to B to A, or a reorg). A dormant entry does not count against a root, gets no position delete, and is looked at again by the first pass at each adopted root, so completion waits for that one pass. If that root holds the account incomplete it counts again, with its seeds; complete, it is removed.
 - **Cleared:** only where a cycle starts from nothing, because a later cycle may not read an earlier one's decisions: at `restartSnapSync`, and where the account phase starts with no carried task files, no held checkpoint and no resumed cursors. Never at finalisation: after a lazy hand-off the set is the only record of those accounts.
 - **Read at finalisation:** `storageRecoveryDone` is set only with no account-kind entry left, `bytecodeRecoveryDone` only with no code entry left (and its other conditions). A set that cannot be read sets neither.
-- **Completion** requires the set to be empty.
+- **Completion** requires no entry that counts, and a finished pass at the current root if any entry is dormant.
 
 **Per-scheme handling (D5):**
 - Path: delete the account-trie positions on the account's key, depth 0 to 64, at heal start.

@@ -22,19 +22,27 @@ import com.chipprbots.ethereum.mpt.NullNode
   * An account in the set was committed to the account trie while its storage (or code) was left incomplete, so it must
   * not count as complete until proven otherwise. For each entry [[step]] looks the account up from `root`, reading the
   * store only:
-  *   - the store shows the current root holds no such account: the entry leaves the set;
+  *   - the store shows the current root holds no such account: the entry goes dormant. The decision still stands for
+  *     the account's storage, and a later root can hold it again (A to B to A, a reorg; review hunter W2). A dormant
+  *     entry does not hold completion, except that each new root has to look at it once ([[blocking]]);
   *   - the lookup hits a node that is not stored: that node is a seed. On a datadir that keeps the invariant it is
   *     already being healed (the seed joins its request); on one that does not, it is what no discovery would reach;
   *   - the account's storage root or code is absent: a seed, or a code hash to fetch;
   *   - both are present: the entry leaves the set (under Path "present" means right hash at the right position, and by
-  *     the invariant a present node's subtree is complete).
+  *     the invariant a present node's subtree is complete; under Hash with `pruning.mode = inmemory` a node read as
+  *     present may be only in the node cache, so a crash can take it back after the entry is gone: one of the reasons
+  *     the walk stays there, T051 and T052).
+  *
+  * A dormant entry a later root brings back counts again, with its seeds, but gets no Path position delete: those run
+  * only at heal start ([[deleteAccountPositions]]). That costs the structural guarantee for that account, not the
+  * resolution.
   *
   * A code-only entry has no account to look up (the bytecode download knows only the hash): it leaves when the code is
-  * stored. Nothing here decides that healing is complete; the caller's gate does, from an empty set.
+  * stored. Nothing here decides that healing is complete; the caller's gate does.
   *
   * Resolving holds no entry in memory beyond a page, and a page is read and resolved on the caller's thread: `pageSize`
   * bounds both the time the coordinator's thread is taken and the seeds a step can add to its queue. A read that fails
-  * leaves its entry in the set, for the next pass. An entry is removed durably before the step returns.
+  * leaves its entry as it is, for the next pass. A change to an entry is durable before the step returns.
   *
   * Actor-confined: not thread-safe.
   */
@@ -49,14 +57,32 @@ final class ExcludedAccountSeeding(
   // Where the pass stands, as the last entry it has resolved; none at the start of a pass.
   private var cursor: Option[ByteString] = None
   private var changedInPass: Boolean = false
+  private var seedsInPass: Int = 0
+  private var failedReadsInPass: Int = 0
+  // What the last pass to reach its end found, since the root last changed: (seeds, failed reads).
+  private var lastPass: Option[(Int, Int)] = None
 
   /** Start the next [[step]] at the first entry: the root changed. */
   def restart(): Unit =
     cursor = None
     changedInPass = false
+    seedsInPass = 0
+    failedReadsInPass = 0
+    lastPass = None
 
-  /** Whether the durable set holds anything. */
+  /** Whether the durable set holds anything that counts against a root. */
   def outstanding: Boolean = store.hasExcluded
+
+  /** Whether the set stands against the current root: an entry that counts, or a dormant one no pass has looked at from
+    * this root yet (it may hold the account).
+    */
+  def blocking: Boolean = store.hasExcluded || (lastPass.isEmpty && store.hasAnyExcluded)
+
+  /** Whether all the set still wants at the current root is bytecode: a pass has reached its end at this root, found
+    * nothing to seed and read everything, and an entry still counts. Unknown is false.
+    */
+  def onlyCodeOutstanding: Boolean =
+    lastPass.exists { case (seeds, failedReads) => seeds == 0 && failedReads == 0 } && store.hasExcluded
 
   /** Hand `delete` the positions of every account in the set (T034), a batch at a time: every position of an account in
     * one batch, each position once. Returns how many accounts there were. Throws if a page cannot be read or a batch
@@ -66,26 +92,31 @@ final class ExcludedAccountSeeding(
     @tailrec
     def loop(after: Option[ByteString], accounts: Int): Int =
       val page = store.excludedPage(after, DeleteBatchAccounts)
-      val keys = page.filterNot(_.isCodeOnly).map(_.subject)
+      val keys = page.filterNot(e => e.isCodeOnly || e.dormant).map(_.subject)
       if keys.nonEmpty then delete(keys.flatMap(accountPathPositions).distinctBy(p => ByteString(p._2)))
       if page.size == DeleteBatchAccounts then loop(page.lastOption.map(_.cursor), accounts + keys.size)
       else accounts + keys.size
     loop(None, 0)
 
-  /** Resolve the next page against `root`. Throws only if the page cannot be read or its completed entries cannot be
-    * removed, and then changes nothing here: the same page is resolved again.
+  /** Resolve the next page against `root`. Throws only if the page cannot be read or its changes cannot be written, and
+    * then changes nothing here: the same page is resolved again.
     */
   def step(root: ByteString): Step =
     val page = store.excludedPage(cursor, pageSize)
     val seeds = mutable.LinkedHashSet.empty[(Seq[ByteString], ByteString)]
     val code = mutable.LinkedHashSet.empty[ByteString]
     val complete = mutable.ArrayBuffer.empty[ExcludedAccount]
+    val toDormant = mutable.ArrayBuffer.empty[ExcludedAccount]
+    val toActive = mutable.ArrayBuffer.empty[ExcludedAccount]
     var failedReads = 0
     page.foreach { entry =>
       try
         resolve(root, entry) match
-          case Resolution.Complete => complete += entry
+          case Resolution.Complete                => complete += entry
+          case Resolution.Absent if entry.dormant => ()
+          case Resolution.Absent                  => toDormant += entry
           case Resolution.Needs(ns, cs) =>
+            if entry.dormant then toActive += entry
             seeds ++= ns
             code ++= cs
       catch
@@ -93,20 +124,28 @@ final class ExcludedAccountSeeding(
           failedReads += 1
           log.warn(s"[HEAL-EXCLUDED] Could not resolve ${hex(entry.subject)}, kept for the next pass: ${e.getMessage}")
     }
-    store.removeExcluded(complete.toSeq)
+    store.updateExcluded(
+      (complete ++ toDormant ++ toActive).toSeq,
+      toDormant.map(_.copy(dormant = true)).toSeq ++ toActive.map(_.copy(dormant = false))
+    )
     val more = page.size == pageSize
-    val changed = changedInPass || complete.nonEmpty
+    val changed = changedInPass || complete.nonEmpty || toDormant.nonEmpty || toActive.nonEmpty
+    val seededInPass = seedsInPass + seeds.size
+    val failedInPass = failedReadsInPass + failedReads
     cursor = if more then page.lastOption.map(_.cursor) else None
     changedInPass = more && changed
-    Step(seeds.toSeq, code.toSeq, complete.size, failedReads, more, changed)
+    seedsInPass = if more then seededInPass else 0
+    failedReadsInPass = if more then failedInPass else 0
+    if !more then lastPass = Some((seededInPass, failedInPass))
+    Step(seeds.toSeq, code.toSeq, complete.size, toDormant.size, toActive.size, failedReads, more, changed)
 
   private def resolve(root: ByteString, entry: ExcludedAccount): Resolution =
     if entry.isCodeOnly then
-      if codePresent(entry.subject) then Resolution.Complete
+      if entry.subject == Account.EmptyCodeHash.value || codePresent(entry.subject) then Resolution.Complete
       else Resolution.Needs(Nil, Seq(entry.subject))
     else
       lookup(root, entry.subject, readNode) match
-        case Lookup.Absent              => Resolution.Complete
+        case Lookup.Absent              => Resolution.Absent
         case Lookup.Missing(path, hash) => Resolution.Needs(Seq((path, hash)), Nil)
         case Lookup.Found(account) =>
           val storageSeed = Option
@@ -136,13 +175,16 @@ object ExcludedAccountSeeding:
   private val EmptyPath: ByteString = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
 
   /** What one [[ExcludedAccountSeeding.step]] did. `seeds`: heal tasks to queue, `(pathset, hash)`; `missingCode`: code
-    * hashes to fetch; `removed`: entries now out of the set; `failedReads`: entries that could not be resolved; `more`:
-    * the pass has further pages; `changed`: some step of this pass removed an entry.
+    * hashes to fetch; `removed`: entries now out of the set; `demoted`: entries now dormant (this root holds no such
+    * account); `promoted`: dormant entries that count again; `failedReads`: entries that could not be resolved; `more`:
+    * the pass has further pages; `changed`: some step of this pass changed an entry.
     */
   final case class Step(
       seeds: Seq[(Seq[ByteString], ByteString)],
       missingCode: Seq[ByteString],
       removed: Int,
+      demoted: Int,
+      promoted: Int,
       failedReads: Int,
       more: Boolean,
       changed: Boolean
@@ -150,6 +192,7 @@ object ExcludedAccountSeeding:
 
   private enum Resolution:
     case Complete
+    case Absent
     case Needs(seeds: Seq[(Seq[ByteString], ByteString)], code: Seq[ByteString])
 
   enum Lookup:

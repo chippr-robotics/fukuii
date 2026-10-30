@@ -302,7 +302,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.progress.hasExcluded shouldBe false
     }
 
-    it should s"drop an entry whose account the current root does not hold, on $scheme" taggedAs UnitTest in {
+    it should s"complete over an entry whose account the current root does not hold, and keep it dormant, on $scheme" taggedAs UnitTest in {
       val trie = PathHealPresenceFixtures.storageTrieOld()
       val gone = ByteString(Array.fill(32)(0x7a.toByte))
       val rig = new Rig(scheme, trie, absent = Set.empty, Seq(ExcludedAccount(gone, ExcludedReason.StorageSkipped)))
@@ -311,6 +311,9 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.start()
       rig.awaitComplete()
       rig.progress.hasExcluded shouldBe false
+      withClue("a later root may hold it again (hunter W2): ") {
+        rig.progress.excludedPage(None, 10).map(e => (e.subject, e.dormant)) shouldBe Seq((gone, true))
+      }
     }
 
     it should s"not complete while the excluded set cannot be read, complete once it can, and hand off after 30 minutes of it, on $scheme (P3)" taggedAs UnitTest in {
