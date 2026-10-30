@@ -168,14 +168,15 @@ final class HealRequestBook:
 
   /** Put back `request`, satisfied a moment ago, with the parent edges [[satisfy]] returned for it (`parents`, in that
     * order): its node arrived, but its children could not be looked up because a storage read failed, so it is fetched
-    * again (spec 022 review forge W1). Its parents still wait on it. Returns whether its hash needs a fetch.
+    * again (spec 022 review forge W1). Its parents still wait on it. The caller queues the fetch, once per hash, after
+    * every request the served node filled has been processed: a Path alias put back while another alias still waits
+    * only joins the fetch that just came back, which is spent (spec 022 review hunter W1-r2).
     */
-  def restore(request: HealRequest, parents: Seq[ByteString]): Boolean =
-    val added = record(request)
+  def restore(request: HealRequest, parents: Seq[ByteString]): Unit =
+    record(request): Unit
     if parents.nonEmpty then
       parentEdges(request.key) = parents.reverse.toList ++ parentEdges.getOrElse(request.key, Nil)
       heldBytes += EdgeBytes * parents.size
-    added.needsFetch
 
   /** The waiter after the one whose pathset is `carrier` among the live requests waiting on `hash`, cycling back to the
     * first (beacon Q1: a fetch put back goes out from the next alias position, so a peer that cannot serve one path

@@ -1448,6 +1448,12 @@ object TrieNodeHealingCoordinator:
     */
   val MinInFlightPerPeer: Int = 2
 
+  /** spec 022 review forge F2: fills in a row whose stored children could not be read before a healed node is given up
+    * on (not fetched again; its parents are left to the orphan guard). The first failures are fetched again: a read can
+    * fail once and work the next time.
+    */
+  val MaxConsecutiveReadFailures: Int = 3
+
   sealed trait Command
   case class StartTrieNodeHealing(stateRoot: ByteString) extends Command
   case class QueueMissingNodes(nodes: Seq[(Seq[ByteString], ByteString)]) extends Command

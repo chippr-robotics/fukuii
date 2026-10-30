@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
@@ -84,6 +85,12 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
+  // spec 022 review forge F2: per node hash, how many fills in a row failed to read its children from storage. A node
+  // whose children cannot be read is fetched again, up to `MaxConsecutiveReadFailures` fills, then given up on. The
+  // entry goes when a fill reads them; it survives a re-peg and the orphan guard, so a stored child that never reads
+  // (corrupt bytes under Hash survive a re-peg) is not fetched in a tight loop again.
+  private lazy val readFailures: mutable.HashMap[ByteString, Int] = mutable.HashMap.empty
+
   /** Reset the scoped-verification healed-paths set (spec 003 C1). Called at the round-invalidation / round-close sites
     * — differing-root HealingPivotRefreshed, HealingForceComplete, and after a verified StateHealingComplete — NOT on a
     * same-root refresh (that round is still valid). Idempotent.
@@ -148,6 +155,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     val requestedBytes = activeReq.requestedBytes
 
     var healedCount = 0
+    // Nodes the peer delivered that filled a request, healed or not (a fill whose children could not be read is the
+    // node store's fault, not the peer's): what clears its strikes.
+    var deliveredCount = 0
     var receivedBytes: Long = 0
 
     // Hash-based matching — NOT positional. Servers (core-geth handler.go:546-547)
@@ -199,14 +209,29 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             // (an alias: identical subtrees under two accounts), under Hash the one request for the node — and only
             // those (review W2): each expects exactly this keccak.
             val filled = healRequests.waitingOn(nodeHash)
-            filled.foreach(request => fillRequest(request, nodeData))
-            healedCount += filled.size
-            totalNodesHealed += filled.size
+            val failuresBefore = readFailures.getOrElse(nodeHash, 0)
+            val giveUp = failuresBefore + 1 >= TrieNodeHealingCoordinator.MaxConsecutiveReadFailures
+            val readFailed = filled.count(request => !fillRequest(request, nodeData, giveUp))
+            if readFailed > 0 then readFailures(nodeHash) = failuresBefore + 1 else readFailures.remove(nodeHash): Unit
+            // spec 022 review hunter W1-r2, forge W1: every request that waited on the hash was just filled, so one still
+            // waiting was put back after a failed read. It needs a fetch of its own: the one that came back is spent, and
+            // a Path alias put back while another still waited only joined it. One fetch per hash, whatever the count.
+            healRequests.firstWaiter(nodeHash).foreach { waiter =>
+              val entry = HealingEntry(waiter.pathset, nodeHash)
+              pendingTasks += entry
+              persistFrontier(Seq(entry))
+            }
+            // forge F2, hunter N1: a fill whose children could not be read is not healed (it is fetched again or given
+            // up on); counting it would hide a node fetched again and again from the stagnation checks.
+            val healed = filled.size - readFailed
+            deliveredCount += filled.size
+            healedCount += healed
+            totalNodesHealed += healed
             // spec 004 T019/FR-010: count a heal sourced from a serve root that differs from the walk root.
             // Observation-only; never affects completion. (Equal roots ⇒ coupled-equivalent, not counted.)
-            if decoupledHealServeRoot && serveRoot != stateRoot then crossRootHealCount += filled.size
+            if decoupledHealServeRoot && serveRoot != stateRoot then crossRootHealCount += healed
             // T015 / FR-006: this task is satisfied — drop its attempt counter (bounded by pendingTasks).
-            healAttempts.remove(nodeHash)
+            if readFailed == 0 then healAttempts.remove(nodeHash): Unit
         else
           log.debug(
             s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)}"
@@ -250,13 +275,13 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     updateHealThrottle(healedCount, elapsedMs)
 
     // Adaptive byte budget + stateless tracking
-    if healedCount > 0 then
+    if deliveredCount > 0 then
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
       // Successful response — clear stateless marking + strikes and reset stagnation timer.
       // Any forward progress from this peer wipes its prior strikes (mirrors recordPeerSuccess).
       statelessPeers -= peer.id.value
       emptyResponseStrikes.remove(peer.id.value)
-      lastHealedAtMs = System.currentTimeMillis()
+      if healedCount > 0 then lastHealedAtMs = System.currentTimeMillis()
     else if nothingVouched then
       log.debug(s"[HEAL] Empty response from ${peer.id.value} to a request with nothing left to fill — no strike")
     else
@@ -375,10 +400,14 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * writes it (with every ancestor it completes). Missing children are recorded as requests with an edge from it (a
     * fetch queued for each hash not already fetched), or, when held already, gain the edge directly. Path: the stale
     * positions discovery finds go to the next commit write, before anything can be written there.
+    *
+    * False when a storage read failed while its children were looked up: the request is put back with its parents'
+    * edges (the caller queues the fetch), or, with `giveUpOnReadFailure`, dropped (forge F2).
     */
-  private def fillRequest(request: HealRequest, nodeData: ByteString): Unit =
+  private def fillRequest(request: HealRequest, nodeData: ByteString, giveUpOnReadFailure: Boolean): Boolean =
     val id = HeldNodeSet.idOf(request)
     val parents = healRequests.satisfy(request)
+    var childrenRead = true
     if heldNodes.contains(id) then
       // Held already (a walk or controller entry fetched it again): its children are being fetched; it only gains the
       // parents that waited on this request, each counted once per edge it does not have yet (beacon N3, forge N7).
@@ -402,19 +431,29 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           })
         catch case scala.util.control.NonFatal(e) => Left(e)
       discovered match
+        case Left(readFailure) if giveUpOnReadFailure =>
+          // spec 022 review forge F2: the children of this node could not be read on its last fills in a row: a stored
+          // child that does not decode, or a store that cannot read it. Fetching it again would loop. It is dropped like
+          // a node that does not decode: its parents stay held until the orphan guard drops them, and a walk finds them
+          // missing again (one more fetch of it per walk, not one per round trip).
+          log.error(
+            s"[HEAL] Reading the stored children of healed node ${Hex.toHexString(request.hash.take(4).toArray)} " +
+              s"failed on ${TrieNodeHealingCoordinator.MaxConsecutiveReadFailures} fills in a row — not fetched again; " +
+              s"its ${parents.size} parent(s) stay held until the orphan guard drops them",
+            readFailure
+          )
+          childrenRead = false
         case Left(readFailure) =>
           // spec 022 review forge W1: the node is fine, its children are unknown. Put its request back, with the edges of
           // the parents that wait on it, and fetch it again: dropping it would leave those parents waiting on an edge
-          // nothing closes.
+          // nothing closes. The caller queues the fetch (one per hash, hunter W1-r2).
           log.warn(
             s"[HEAL] A storage read failed while looking up the children of healed node " +
               s"${Hex.toHexString(request.hash.take(4).toArray)} — its request goes back with ${parents.size} parent " +
               s"edge(s) and it is fetched again: ${readFailure.getMessage}"
           )
-          if healRequests.restore(request, parents) then
-            val entry = HealingEntry(request.pathset, request.hash)
-            pendingTasks += entry
-            persistFrontier(Seq(entry))
+          healRequests.restore(request, parents)
+          childrenRead = false
         case Right(None) =>
           // vault note 5: a node that hashes right but does not decode is never written: its children are unknown, so
           // it cannot be complete. Every peer serves the same bytes, so it is not fetched again. Its parents' edges to
@@ -451,6 +490,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     if !healedPathsOverflowed && !healedPathsThisRound.contains(request.key) then
       if healedPathsThisRound.size >= scopedHealMaxPaths then healedPathsOverflowed = true
       else healedPathsThisRound.update(request.key, HealingEntry(request.pathset, request.hash))
+    childrenRead
 
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node and
     * returns its missing children, one request per child edge, and (Path scheme) the stale positions to delete. Makes
