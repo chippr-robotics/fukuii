@@ -220,6 +220,17 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - CF `g` entries survive a re-peg until slice 4.
   - **Triaged 2026-10-30:** what this slice fixed, and the target slice of each other note, are recorded at the end of the inputs file.
 - [ ] T038 Run T029–T031 and all earlier slice tests, then do one dev-loop Mordor run. Open the slice-3 PR and request reviews from beacon and forge.
+  - **Dev-loop runs, 2026-10-30** (Mordor from scratch against the local core-geth, on the healthy disk, in `/home/dontpanic/mordor-scarcity/`):
+
+    | Run | Build | Bootstrap to hand-off | Excluded |
+    |-----|-------|-----------------------|----------|
+    | S5 | first pass, `74ee2319a` | 5 min | none |
+    | S6 | round 1, `521e4aa16` | 6 min | none |
+    | S7 | round 2, `75012d9f8` | 4 min | none |
+    | F1 | round 1, core-geth stopped 22 min at storage 30%+ | 27 min | none |
+    | F2 | round 2, core-geth stopped 40 min at storage 76% | 45 min | none |
+
+    Every run handed off and followed head, with no ERROR lines in F1 or F2. The two outages show recovery, not exclusions: **with no peers nothing is asked, so no response comes back empty and nothing force-completes.** The excluded path has therefore not run live; T061a tracks that.
 
 **Checkpoint**: no excluded account can make healing declare completion early.
 
@@ -282,7 +293,16 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - [ ] **A restarted bytecode coordinator with no code-hash file** (none persisted yet, or the wait for its pointer ran out) goes on with what is in memory, said at WARN. Its hashes then have no entry, and without the walk healing could complete over them.
   - [ ] **A supervisor-restarted heal coordinator is not kicked:** it waits for a check (the dead-pulse watchdog, about 6 minutes) before it does anything.
   - [ ] **A supervisor restart after the code-only hand-off is armed:** the new incarnation is not armed. Its clean rebuild can set the frontier marker, and it waits a fresh 30 minutes before arming again. The entries still hold completion, so nothing false is claimed today, but the marker would be trusted once the walk is gone.
-  - [ ] **A dormant entry a Hash controller's clean walk runs past:** the controller's hold reads only entries that count, so a dormant entry the coordinator's pass has not looked at yet from this root does not hold it. A walk finds any storage gap, but not missing code.
+  - [ ] **A sweep that cannot be read or times out at a clean end goes on (fail-open), and for code the walk is no backstop:** a restarted bytecode coordinator whose sweep times out can let `bytecodeRecoveryDone` be set. The hard stop above has to cover the code-hash file as well as the storage task file (vault W2).
+  - [ ] **The 30-minute sweep cap is wall clock, and the code sweep is unmeasured:** one `code.get` per hash, so 2.5M hashes at 0.8 ms is about 33 minutes. Use "no chunk finished in N minutes", or a budget scaled by entries (vault W2).
+  - [ ] **The pointer waits count calls, not time** (`MaxTaskFilePointerWaits` has two call sites, so a burst can use them up early). Wait by the clock (vault, forge N-c).
+  - [ ] **`restartSnapSync` leaves the code-hash path behind.** `codeFile` ignores a path with no count, so the sweep is safe. Blanking the path as well is one line, but `SnapResumePlanner.scala:478` reads the path without filtering an empty one: settle that first (vault W3).
+  - [ ] **A restarted coordinator can over-record:** a healed-code bytecode coordinator sweeps the whole account-phase file (vault), and a storage sweep names accounts the Hash replay skipped for a present root (forge N-e). Both resolve at the first look, at a cost. At millions of code entries the asked set and `BlockerClock` each hold every hash in memory, and every tick reads each from the code store: measure before mainnet. The clock's eviction goes by when a hash was first seen, so over 4,096 true orphans (blocked once, unstored, never back) can still restart a stuck hash not yet visited: evict by last seen if that is ever observed (hunter BC-1 fix).
+  - [ ] **A set too big for one root epoch:** at 100k+ entries a pass may not end before the next re-peg, which starts it over, so the kind stays `Unknown` and neither clock fires. Measure the pass, then carry the cursor across a re-peg or add a time budget (beacon N-3).
+  - [ ] **The `Other` clock's signature at 256+ entries:** a demoted entry is read again later in the same pass under its dormant key, so it counts twice (the count rises by one and the XOR cancels), and the clock restarts on each flip. The obvious fix, skipping `toDormant` in the fold, is wrong: an entry on the pass's last page, or whose dormant key sorts before the cursor, is not read again, and would count no times. Skip it only when its dormant key sorts after the page's last entry and the pass has more pages, comparing bytes as unsigned (RocksDB's order), and test with `pageSize = 1`. It needs a multi-page pass that demotes an entry, and an `Other` blocker lasting 30 idle minutes, so it is rare (beacon N-1, hunter).
+  - [ ] **A hash that leaves and returns keeps its age,** so one back after 30 idle minutes arms at once, with its code asked for only a moment before. By design and rare; a reset for hashes absent over a tick is optional (beacon N-2, forge N-a).
+  - [ ] **A `StoreFailed` at a clean end retries forever:** fail loud, and bounded only by the store being broken (forge N-d).
+  - [ ] **Nothing tests that the dormant drop comes after `persistHealedAnchorSync()`:** the other order could heal an older anchored root with the entries gone (vault).
 
 - [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3 and R1: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; there the coordinator's full verification walk, unscoped and unpruned, with no frontier resume, stays the completion gate on every completion and every restart, and the pruned and scoped verifications and the frontier persistence stay off, as slice 2 set them):
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
@@ -319,6 +339,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 **Purpose**: the 0.11.0 gates on #1659, run from quickstart.md. All of slices 1–5 must be merged.
 
+- [ ] T061a **Exercise the excluded path live, before any release or any Sepolia or Platåberget jar rotation (forge and beacon, slice 3 round 3).** A core-geth outage cannot do it (T038): it takes a peer that answers but cannot serve what is asked. Needed: on Mordor (Hash) one exclusion and one unservable code hash, reaching the real hand-off; on a Path chain the code wait, and an induced force-complete if it can be had. Some way to induce this has to be built for the run.
 - [ ] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
   - Stop `coregeth-mordor.service` first, so it can't be discovered.
   - Use a fresh datadir; never `/home/dontpanic/mordor-data`.
