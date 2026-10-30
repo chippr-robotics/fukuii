@@ -256,7 +256,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - update the tests in research R-5b, including `CleanRebuildEarlyCompletionSpec` and `DecoupledHealSafetySpec`. Files: `actors/healing/FrontierPersistence.scala` and `actors/healing/HealResponseProcessing.scala`. **[vault]**
 - [ ] T045 Run T039–T041 and all earlier slice tests. Open the slice-4 PR and request reviews from vault and forge.
 
-**Checkpoint**: old datadirs are repaired once, new ones are never audited on the critical path, and CF `g` no longer grows.
+**Checkpoint**: a datadir with no holes, or whose walk can finish between re-pegs, is repaired once and stamped. A longer walk over holes finds and fills some, then abandons to a lazy hand-off with no stamp (T064, T050a). New datadirs are never audited on the critical path, and CF `g` no longer grows.
 
 ---
 
@@ -274,8 +274,9 @@ Within each slice, **tests come before implementation**, and the tests must fail
 ### Implementation
 
 - [ ] T050 [US1] Change `isComplete` (`TrieNodeHealingCoordinator.scala:290-291`) so that it also requires no held nodes, no outstanding code dependencies, and an empty excluded set. **[beacon] [forge]**
-- [ ] T051a [US2] (forge, slice-1 review) Two Hash changes, both needed **before** the gate goes:
-  - Drop the `storageScheme == Path &&` condition from the stale-walk filter in the `FrontierRebuilt` arm, so stale-root batches are dropped on Hash as well. Slice 1 added the filter for Path only. *Slice 4 raises the exposure:* a restart now always runs the rebuild walk, so a re-peg during it is the usual case on Hash, and it queues what only the old root holds; no peer at the new root serves that, and it holds completion until a later re-peg clears it. The one line alone was tried: the T030 case passes without its workaround, and 141 tests across `ExcludedAccountsSpec`, `StaleWalkEntrySpec`, `HealWalkSingleFlightSpec`, `TrieNodeHealingCoordinatorSpec`, `StaleVerificationWalkSpec`, `CleanRebuildEarlyCompletionSpec` and `InvariantMarkerSpec` stay green.
+- [ ] T051a [US2] (forge, slice-1 review) One Hash change is needed **before** the gate goes. A second was withdrawn:
+  - **Withdrawn (forge, slice-4 review F1, retracting forge's own slice-1 request): keep the `storageScheme == Path &&` condition on the stale-walk filter in the `FrontierRebuilt` arm.** The request was to drop stale-root batches on Hash as well. Dropping loses repair progress: a re-peg invalidates a long walk without cancelling it, so each walk would repair only its first hole-bearing BFS level, its later batches dropped, and the fourth stale end abandons (about 3.5-4 days at ETC mainnet's 16-20 h a walk). Keeping them costs at most one re-peg on an advancing chain: a node only the old root holds is asked for and holds completion until the next re-peg clears it (T030 pins that bound). The rest of such a batch is servable at the new root, since a node is keyed by its hash (forge's estimate is about 99.9%, converging geometrically; `HealWalkSingleFlightSpec` pins a shared node queued and healed at the new root). On a chain that does not advance the cost is unbounded, since no re-peg comes. The one line was tried in slice 4 and taken back: the tests that went green with it say nothing about a long walk.
+  - **For slice 5 (forge): the Path drop is safe against a false marker only if the marker is true.** Path keeps the drop, because a position there names one node, and the reason it is safe is that the current root's own discovery and walks find every position it needs. Once T051 takes the walk away on a marked datadir, nothing else finds what a dropped batch named, so a marker that lies would lose those holes in silence.
   - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
   **[forge]**
 - [ ] T050a [US1] **Prerequisites of T051 and T052 from the slice 3 review.** Each is safe today only because the walk catches it, so each is settled, or the walk stays for that case, before the walk goes:
@@ -307,6 +308,9 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - [ ] **The repair pass does not look at code (slice 4):** on a pre-invariant datadir a leaf's code can be missing with nothing saying so, and the walk never was a backstop for it. Decide: withhold `bytecodeRecoveryDone` on a repair run, so the recovery scan runs at the next start (a scan once per old datadir), or check code in the walk (one read per distinct code hash), or leave it to the import's bulk recovery.
   - [ ] **The marker proves what the walk reached (slice 4):** a present node from an older binary that no walked root reaches can sit over a hole, and a later root can reach it. The background audit (T053) covers this; say so in its tests.
   - [ ] **A downgrade (slice 4):** an older binary run on a marked datadir writes under no invariant and leaves the marker. An upgrade after that trusts it. Decide whether that needs more than a release note.
+  - [ ] **An unmarked datadir at Sepolia's scale has no way to a stamp (slice 4 review, beacon 1).** A walk longer than a re-peg cannot repair a datadir with holes. The first hole lifts `walkLocalOnly`, so the next re-peg goes ahead. That invalidates the walk without cancelling it. On Path its later batches are dropped, its end is discarded, and more than 3 stale ends abandon. Each run fills what it found first and hands off lazily, unmarked; a walk that finds no hole at all holds its root and can stamp. Hash keeps its batches, so it gets further under the same limit. Such a datadir needs another mechanism, and none is chosen. Candidates: hold the pivot through the walk even after a hole, up to what peers still serve; keep a walk's Path finds across a re-peg by resolving their positions against the new root; carry the walk's cursor across a re-peg; let the background audit (T053) be the repair, stamping when an audit ends clean; or give such a datadir no stamp at all, leaving it to on-demand fetches or a fresh sync.
+  - [ ] **What an interrupted import left, which a stamp covers without reaching (slice 4 review, vault F5, forge N3).** Nodes an import wrote before it stopped, for state that changed before the pivot P, are present over absent, and no walked root reaches them. A stamp at P vouches for them all the same, and it erases the import key, the one record that they exist. Slice 5's audit must cover them, and cannot rely on that key to find them.
+  - [ ] **On Hash the walk proves presence and decoding, not `keccak(bytes) = key` (slice 4 review, forge N2).** A node whose bytes are wrong but still decode passes the walk there, so it passes the stamp too. On Path the walk reads through `readPathVerifiedRlp`, which hashes the bytes, and a node that fails counts as missing. Decide whether the audit checks this on Hash.
   - [ ] **Dead wiring to take with a `# pins:` change (slice 4):** `scopedHealVerification`, `scopedHealMaxPaths`, `prunedHealVerification`, `frontierPersistenceEnabled` at the spawn, in `ChildFactories` and in `TrieNodeHealingCoordinator.apply`, `SNAPSyncConfig`'s fields for them, `StateIngest.healingFrontier`, `healingFrontierStorageOpt`, the multi-seed `startFrontierBFS` and the scoped and pruned gauges in `SNAPSyncMetrics`. Renaming `FrontierPersistence` (a fix cannot) goes on the same list.
 
 - [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3 and R1: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; there the coordinator's full verification walk, unscoped and unpruned, with no frontier resume, stays the completion gate on every completion and every restart, and the pruned and scoped verifications and the frontier persistence stay off, as slice 2 set them):
@@ -321,6 +325,8 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - It throttles itself so it doesn't compete with import.
   - It can be disabled with `fukuii.sync.snap-sync.background-audit.enabled`.
   - Gaps go to `BlockImporter.resolvingMissingNode` (`blockchain/sync/regular/BlockImporter.scala:446`).
+  - An unmarked datadir at Sepolia's scale needs a mechanism other than the walk at completion, which cannot finish over holes (T050a, beacon 1). This audit is one candidate, with holding the pivot through the walk, keeping a walk's Path finds across a re-peg, carrying its cursor across one, and no stamp at all. If it is chosen, say when it stamps.
+  - It must cover what a stamp vouches for without reaching: an interrupted import's leftovers (T050a, vault F5, forge N3), found with no help from the import key, which the stamp erases. Decide too whether it checks `keccak(bytes) = key` on Hash, which the walk does not there (forge N2).
   - **[beacon] [forge]**
 - [ ] T054 [US1] Replace the sample check in `PathToHashExporter` (`:14-29`; 1,000 leaves and 16 storage roots) with a root recompute over the exported hash store, or a much larger stratified sample. Choose by measured Mordor cost and record the choice in research.md. **[beacon] [vault]**
 - [ ] T055 [P] [US1] Add the FR-014, FR-017 and FR-018 metrics and the `[HEAL-COMPLETE]` log line, following data-model.md "Metrics and logs", in `SNAPSyncMetrics` and `TrieNodeHealingCoordinator.scala`.
@@ -347,19 +353,20 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [ ] T061a **Exercise the excluded path live, before any release or any Sepolia or Platåberget jar rotation (forge and beacon, slice 3 round 3).** A core-geth outage cannot do it (T038): it takes a peer that answers but cannot serve what is asked. Needed: on Mordor (Hash) one exclusion and one unservable code hash, reaching the real hand-off; on a Path chain the code wait, and an induced force-complete if it can be had. Some way to induce this has to be built for the run.
 - [ ] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
   - Stop `coregeth-mordor.service` first, so it can't be discovered.
-  - Use a fresh datadir; never `/home/dontpanic/mordor-data`.
+  - Use a fresh datadir; never `/home/dontpanic/mordor-data`. It must be created by this jar: one an older jar made has no `snap.heal.datadirCreated`, so it is not empty, and it pays a walk.
   - JFR during healing.
   - Root at handoff equals the pivot `stateRoot`.
   - 24 h following the head, with `state_ondemand_fetch_total{cause=hole}` = 0 or each case explained.
   - Record SC-002 (time from storage-done to handoff).
 - [ ] T063 [US1] **Gate 2, Sepolia fresh sync on public peers.**
   - Restart `sepolia-lighthouse`; it checkpoint-syncs.
-  - Fresh datadir; never `/home/dontpanic/sepolia-data`.
+  - Fresh datadir; never `/home/dontpanic/sepolia-data`. It must be created by this jar: one an older jar made has no `snap.heal.datadirCreated`, so it is not empty, and it pays a walk.
   - JFR during healing.
   - SC-001: storage-done to handoff in under 12 h.
   - SC-003/004: root match, then 24 h following the head with no holes.
   - SC-005: no walk before handoff.
-- [ ] T064 [US4] **Secondary: repair of the kept datadir.** Start the fixed build on `/home/dontpanic/sepolia-data` (no marker). Expect one repair pass, the marker stamped, then handoff. Record holes found and duration.
+  - Record the pending-task gauge, RSS and the RocksDB gauges (`db.rocksdb.*`, the `_bytes` series) through the storage phase, and the live set and fiber count spec 014 T016 names. This closes spec 014 T016 and spec 015 T011. T011's budget log line cannot print: the shipped `logback.xml` sets `RocksDbDataSource` to ERROR, so its evidence is the gauges.
+- [ ] T064 [US4] **Secondary: repair of the kept datadir.** Start the fixed build on `/home/dontpanic/sepolia-data` (no marker). **Success is holes found and filled, then a hand-off. A stamp is not expected on Sepolia:** a walk there outlasts a re-peg, so with holes in the datadir it abandons to a lazy hand-off (T050a, beacon 1). Record holes found and filled, walks run, whether it abandoned, and duration. If slice 5 settles that T050a entry another way, restate what this run should show.
 - [ ] T065 Get sign-off from beacon (Path), forge (Hash and the ETC suites), vault (write order) and eye (gates). Tick #1671 and the gates on #1659.
 
 ---
