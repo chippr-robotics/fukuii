@@ -1188,8 +1188,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // spec 022 review W1: a re-peg does not cancel a running walk, and its batches name positions of the root it was
         // launched on. Under Path a request is keyed by position alone, so such an entry would stand in for the current
         // root's request for the same position, whose node it is not. The current root's own discovery and walks find
-        // every position it needs. Nothing else changes here (no stagnation reset, no dispatch). Hash scheme:
-        // unchanged (a node is keyed by its hash there; see the review notes for forge).
+        // every position it needs. Nothing else changes here (no stagnation reset, no dispatch). Hash scheme: kept on
+        // purpose (T051a). A node is keyed by its hash, so a batch is mostly still wanted, and dropping it would cost a
+        // long walk its repair; keeping it costs at most one re-peg on a chain that advances.
         log.info(
           s"[HEAL-FRONTIER] Dropping ${entries.size} missing nodes from a walk of superseded root " +
             s"${Hex.toHexString(walkRoot.take(4).toArray)} (current ${Hex.toHexString(stateRoot.take(4).toArray)})"

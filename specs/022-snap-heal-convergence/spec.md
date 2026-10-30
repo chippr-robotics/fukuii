@@ -106,11 +106,11 @@ The node crashes or is killed (for example by the out-of-memory daemon) in the m
 
 ### User Story 4 - A node from before the fix can be repaired (Priority: P2)
 
-An operator has a datadir written by the old code, for example the kept Sepolia datadir with about 32.8 M healed nodes. That datadir contains holes nothing recorded. The operator can run one repair pass that finds and fills them, then hand off.
+An operator has a datadir written by the old code, for example the kept Sepolia datadir with about 32.8 M healed nodes. That datadir contains holes nothing recorded. On the fixed build a repair walk finds and fills them, as far as a walk can finish between re-pegs, and the node then hands off.
 
 **Why this priority**: Existing nodes are affected. This is a secondary test only: it exercises repair, not convergence, so it must never stand in for the fresh-sync acceptance tests.
 
-**Independent Test**: Resume the kept Sepolia datadir (`/home/dontpanic/sepolia-data`) on the fixed build. The walk finds old holes, healing fills them, and the node hands off, by a lazy hand-off when the walk cannot finish between re-pegs. A stamp is not expected at this scale (tasks.md T064, T050a). *(Slice 4 review, beacon 1: this rewords approved text, "A single audit and repair pass finds the old holes, healing fills them, and the node hands off." To be flagged to the user.)*
+**Independent Test**: Resume the kept Sepolia datadir (`/home/dontpanic/sepolia-data`) on the fixed build. The walk finds old holes, healing fills them, and the node hands off, by a lazy hand-off when the walk cannot finish between re-pegs. A stamp is not expected at this scale (tasks.md T064, T050a).
 
 **Acceptance Scenarios**:
 
