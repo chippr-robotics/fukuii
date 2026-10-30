@@ -357,6 +357,43 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.progress.hasExcludedCode shouldBe true
     }
 
+    // Spec 022 round 2 review A (beacon W-1b): at each re-peg a dormant entry is seen over the absent new root, promoted,
+    // then demoted once the root is written. That is no blocker shrinking.
+    it should s"hand off a stuck code hash across three re-pegs with a dormant entry going up and down, on $scheme" taggedAs UnitTest in {
+      val gone = ByteString(Array.fill(32)(0x7a.toByte))
+      val rig = new Rig(
+        scheme,
+        fixture(withCode = true),
+        absent = Set.empty,
+        Seq(
+          ExcludedAccount(codeHash, ExcludedReason.CodeMissing),
+          ExcludedAccount(gone, ExcludedReason.StorageSkipped, dormant = true)
+        )
+      )
+      rig.start()
+      rig.drive()
+      def ticks(n: Int): Unit =
+        (1 to n).foreach(_ => rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick)
+        rig.drive()
+      val window = TrieNodeHealingCoordinator.MaxBlockedTicks / 3 - 1
+      Seq(3L, 4L, 5L).foreach { nonce =>
+        ticks(window)
+        val next = fixture(withCode = true, acct1Nonce = nonce)
+        rig.serve(next)
+        rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+        rig.peerAvailable()
+        rig.awaitOnDisk(next("root"))
+        withClue("not before its 30 idle minutes: ") {
+          rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+        }
+      }
+      ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 3 * window)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      rig.progress.hasExcludedCode shouldBe true
+    }
+
     it should s"count idle minutes across a re-peg and a heal, and abandon, when the set cannot be read, on $scheme (W-1)" taggedAs UnitTest in {
       val source = new ScanFailingDataSource
       val rig = new Rig(scheme, fixture(), absent = Set.empty, excluded = Nil, progressSource = source)

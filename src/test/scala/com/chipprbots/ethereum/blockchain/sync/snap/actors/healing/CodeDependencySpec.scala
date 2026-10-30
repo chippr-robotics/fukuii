@@ -165,6 +165,17 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
         pause.expectNoMessage(10.millis)
       drive()
 
+    /** Run what comes until the controller has been told to fetch `code`. */
+    def awaitReported(code: ByteString): Unit =
+      val deadline = 30.seconds.fromNow
+      var reported = false
+      while !reported do
+        withClue("reported within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        controller.receiveMessage(deadline.timeLeft) match
+          case SNAPSyncController.HealedCodeHashes(h) => reported = h.contains(code)
+          case other                                  => heldBack ++= Seq(other)
+      drive()
+
     /** Start, and run until both account leaves have arrived and wait on their code (peer round trips included). */
     def begin(): Unit =
       coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(t.root.hash)
@@ -325,18 +336,6 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       withClue("nothing above the waiting leaf is on disk: ")(rig.onDisk("root") shouldBe false)
     }
 
-    it should s"count a code write as progress, on $scheme (T037)" taggedAs UnitTest in {
-      val rig = new Rig(scheme)
-      rig.begin()
-      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 1)
-      rig.ack(code0)
-      rig.settle()
-      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks) // the first of these sees the progress and resets the count
-      rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
-      rig.ticks(1)
-      rig.seen() should contain(SNAPSyncController.StateHealingAbandoned)
-    }
-
     // ---- The user's decision, 2026-10-30 (plan D4, FR-006, T037): when unservable bytecode is the only blocker ----------
 
     it should s"after ${TrieNodeHealingCoordinator.MaxBlockedTicks} idle minutes write the chains waiting only on code, walk, then hand off lazily: never a completion, on $scheme" taggedAs UnitTest in {
@@ -424,6 +423,69 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
         pause.expectNoMessage(10.millis)
       rig.drive()
       withClue("no held node is left waiting: ")(rig.seen() should contain(SNAPSyncController.StateHealingAbandoned))
+    }
+
+    // Spec 022 round 2 review A (beacon W-1b, forge W1, hunter W2): each blocker has its own clock.
+    it should s"not restart a stuck hash's wait when another hash's code arrives, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, withSet = true)
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 1)
+      rig.ack(code1) // served quickly, and nothing to do with hash0
+      rig.settle()
+      rig.ticks(1)
+      rig.drive()
+      withClue("hash0 has waited its 30 minutes, and hash1 is gone: ")(rig.onDisk("root") shouldBe true)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      rig.progress.excludedPage(None, 10).map(_.subject) shouldBe Seq(hash0)
+    }
+
+    it should s"not arm on a hash that has only just started waiting, however long another has, on $scheme" taggedAs UnitTest in {
+      val freshCode = kec256(ByteString("code-dependency/fresh"))
+      val fresh = LeafNode(ByteString(rest0.reverse), contract(freshCode, 8L))
+      val freshPath = Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(nibbles(6), isLeaf = false)))
+      val t = trie()
+      val rig =
+        new Rig(scheme, withSet = true, t = t, served = Some(t.served + (freshPath -> ByteString(fresh.encode))))
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 1)
+      rig.coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((freshPath, ByteString(fresh.hash))))
+      rig.available()
+      rig.awaitReported(freshCode)
+      rig.seen()
+      rig.ticks(1)
+      withClue("the old hashes have waited 30 minutes, the new one 1: nothing is written: ") {
+        rig.progress.hasAnyExcluded shouldBe false
+        rig.onDisk("root") shouldBe false
+      }
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 2)
+      withClue("one minute short for the new one: ")(rig.progress.hasAnyExcluded shouldBe false)
+      rig.ticks(1)
+      rig.drive()
+      rig.onDisk("root") shouldBe true
+      rig.progress.excludedPage(None, 10).map(_.subject).toSet shouldBe Set(hash0, hash1, freshCode)
+    }
+
+    it should s"not abandon on a long wait for code the moment something else blocks: that has its own 30 minutes, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, withSet = true)
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 1)
+      rig.progressSource.failScans = true
+      rig.ticks(1)
+      withClue("the code has waited 30 minutes, the unreadable set 1: ") {
+        rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+      }
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - 2)
+      rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+      rig.ticks(1)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      withClue("no commit: unknown is not only code: ")(rig.onDisk("root") shouldBe false)
     }
 
     it should s"go back to a normal completion if all the code arrives while it walks, on $scheme" taggedAs UnitTest in {

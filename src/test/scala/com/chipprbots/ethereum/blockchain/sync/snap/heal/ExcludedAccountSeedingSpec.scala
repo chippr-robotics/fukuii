@@ -308,6 +308,40 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     s.onlyCodeOutstanding shouldBe false
   }
 
+  // Round 2 review A: a dormant entry going up and down at each re-peg is not the set changing.
+  "accountSignature" should "not change when an entry goes dormant or comes back, or when the root moves" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val s = seeding(store, withElsewhere(reader()))
+    s.step(root)
+    val first = s.accountSignature
+    first should not be BlockerClock.SetSignature.Empty
+    s.restart()
+    s.accountSignature shouldBe first
+    s.step(elsewhereRoot).demoted shouldBe 1
+    s.accountSignature shouldBe first
+    s.restart()
+    s.step(root).promoted shouldBe 1
+    s.accountSignature shouldBe first
+  }
+
+  it should "change when an account leaves the set, and not for a code entry" taggedAs UnitTest in {
+    val store = freshStore()
+    val s = seeding(store, present(storageRoot))
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val withAccount =
+      val blocked = seeding(store, reader())
+      blocked.step(root)
+      blocked.accountSignature
+    s.step(root).removed shouldBe 1
+    s.accountSignature shouldBe BlockerClock.SetSignature.Empty
+    withAccount should not be BlockerClock.SetSignature.Empty
+    store.recordExcluded(Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)))
+    val c = seeding(store, reader(), code = _ => false)
+    c.step(root)
+    c.accountSignature shouldBe BlockerClock.SetSignature.Empty
+  }
+
   "A code entry of the empty code hash" should "leave at once: there is no such code to fetch (beacon)" taggedAs UnitTest in {
     val store = freshStore()
     store.recordExcluded(Seq(ExcludedAccount(Account.EmptyCodeHash.value, ExcludedReason.CodeMissing)))

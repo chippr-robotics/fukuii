@@ -66,6 +66,9 @@ final class ExcludedAccountSeeding(
   private var failedReadsInPass: Int = 0
   // What the last pass to reach its end found, since the root last changed: (seeds, failed reads).
   private var lastPass: Option[(Int, Int)] = None
+  // The accounts the last pass to end left in the set, whatever the root: a re-peg does not change them.
+  private var signatureInPass: BlockerClock.SetSignature = BlockerClock.SetSignature.Empty
+  private var signature: BlockerClock.SetSignature = BlockerClock.SetSignature.Empty
 
   /** Start the next [[step]] at the first entry: the root changed. */
   def restart(): Unit =
@@ -73,6 +76,7 @@ final class ExcludedAccountSeeding(
     changedInPass = false
     seedsInPass = 0
     failedReadsInPass = 0
+    signatureInPass = BlockerClock.SetSignature.Empty
     lastPass = None
 
   /** Whether the durable set holds anything that counts against a root. */
@@ -82,6 +86,9 @@ final class ExcludedAccountSeeding(
     * this root yet (it may hold the account).
     */
   def blocking: Boolean = store.hasExcluded || (lastPass.isEmpty && store.hasAnyExcluded)
+
+  /** The accounts the last pass to end left in the set (see [[BlockerClock.SetSignature]]). */
+  def accountSignature: BlockerClock.SetSignature = signature
 
   /** Whether a pass has reached its end since the root changed. */
   def passEnded: Boolean = lastPass.isDefined
@@ -148,6 +155,10 @@ final class ExcludedAccountSeeding(
       (complete ++ toDormant ++ toActive).toSeq,
       toDormant.map(_.copy(dormant = true)).toSeq ++ toActive.map(_.copy(dormant = false))
     )
+    val gone = complete.toSet
+    signatureInPass = page.foldLeft(signatureInPass) { (sig, entry) =>
+      if entry.isCodeOnly || gone(entry) then sig else sig.and(entry.subject)
+    }
     val more = page.size == pageSize
     val changed = changedInPass || complete.nonEmpty || toDormant.nonEmpty || toActive.nonEmpty
     val seededInPass = seedsInPass + seeds.size
@@ -156,7 +167,10 @@ final class ExcludedAccountSeeding(
     changedInPass = more && changed
     seedsInPass = if more then seededInPass else 0
     failedReadsInPass = if more then failedInPass else 0
-    if !more then lastPass = Some((seededInPass, failedInPass))
+    if !more then
+      lastPass = Some((seededInPass, failedInPass))
+      signature = signatureInPass
+      signatureInPass = BlockerClock.SetSignature.Empty
     Step(seeds.toSeq, code.toSeq, complete.size, toDormant.size, toActive.size, failedReads, more, changed)
 
   private def resolve(root: ByteString, entry: ExcludedAccount): Resolution =

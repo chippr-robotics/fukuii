@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.BlockerClock
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedAccountSeeding
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
@@ -337,13 +338,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var excludedBlocking: Boolean = false
   // Code hashes the set's entries asked for since the root last moved: asked for once a pass, and again each tick.
   private val excludedCodeAsked = mutable.LinkedHashSet.empty[ByteString]
-  // Minutes healing has spent blocked on the above with no fetch that could help, since a blocker last shrank. Not reset
-  // by a re-peg or by a heal, and a walk does not stop the count (review W-1): on a live chain those come far more often
-  // than this could ever fill up between them.
-  private var blockedTicks: Int = 0
-  private var blockedProgress: Boolean = false
-  // The user's decision, 2026-10-30 (plan D4): only code blocked for `MaxBlockedTicks`, so the chains waiting on it are
-  // written. From here until the root moves the gate walks and hands off lazily. It can still complete, but only if the
+  // How long each blocker has waited (round 2 review A): not reset by a re-peg or a heal, and not stopped by a walk.
+  private val blockerClock: BlockerClock = new BlockerClock()
+  // The user's decision, 2026-10-30 (plan D4): only code blocked, every hash for `MaxBlockedTicks`, so the chains waiting
+  // on it are written. From here until the root moves the gate walks and hands off lazily. It can still complete, but only if the
   // code turns up and the set empties. `codeHandOffSent` keeps it to one message per tick.
   private var codeHandOffArmed: Boolean = false
   private var codeHandOffSent: Boolean = false
@@ -403,7 +401,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def stepExcluded(seeding: ExcludedAccountSeeding): Unit =
     val step = seeding.step(stateRoot)
     if !step.more then excludedPassRoot.foreach(_.set(stateRoot))
-    if step.removed > 0 || step.demoted > 0 then blockedProgress = true
     if step.seeds.nonEmpty then
       queueNodes(step.seeds)
       tryRedispatchPendingTasks()
@@ -458,8 +455,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           ExcludedGate.Held
     }
 
-  /** What is blocking healing, looked at only once it has been blocked for `MaxBlockedTicks` idle minutes. `CodeOnly`
-    * means every one of these holds:
+  /** What is blocking healing, looked at each idle minute while it is blocked. `CodeOnly` means every one of these
+    * holds:
     *   - nothing is queued or in flight, no commit or flush is failing;
     *   - every held node would commit if its code waits closed (`HeldNodeSet.onlyCodeBlocks`): none waits on an absent
     *     child;
@@ -494,17 +491,17 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           log.error("[HEAL-EXCLUDED] Could not go on with the excluded set; the next tick tries again", e)
     }
 
-  /** The user's decision, 2026-10-30 (plan D4): only code has blocked healing for `MaxBlockedTicks` idle minutes.
-    * Record every code hash the held chains wait on, durably and first, so that from here the gate cannot open, even
-    * after a crash, a re-peg or a dropped node, until the code is really there. Then close those waits and write the
-    * chains. A record that cannot be written changes nothing, and the next tick tries again.
+  /** The user's decision, 2026-10-30 (plan D4): only code blocks healing, and every hash has waited `MaxBlockedTicks`
+    * idle minutes. Record every code hash the held chains wait on, durably and first, so that from here the gate cannot
+    * open, even after a crash, a re-peg or a dropped node, until the code is really there. Then close those waits and
+    * write the chains. A record that cannot be written changes nothing, and the next tick tries again.
     */
   private def armCodeHandOff(): Unit =
     val awaited = heldNodes.awaitedCode.keys.toSeq
     try
       excludedSeeding.foreach(_.recordMissingCode(awaited))
       log.warn(
-        s"[HEAL-CODE] Only bytecode has blocked healing for $blockedTicks minutes: writing ${heldNodes.size} node(s) " +
+        s"[HEAL-CODE] Only bytecode blocks healing, all of it for $MaxBlockedTicks idle minutes: writing ${heldNodes.size} node(s) " +
           s"waiting only on ${awaited.size} bytecode(s), then a walk of the rest, then a lazy hand-off. Healing does " +
           "not report complete; the head fetches the code on demand and the next start scans for it."
       )
@@ -529,33 +526,43 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       log.warn("[HEAL-CODE] The walk found nothing else missing: a lazy hand-off with the bytecode still missing")
       snapSyncController ! SNAPSyncController.StateHealingAbandoned
 
-  /** Blocked for `MaxBlockedTicks` idle minutes (FR-006, T037). */
-  private def actOnLongBlock(waitingOn: Int): Unit =
-    blockerKind() match
-      case BlockerKind.Unknown =>
-        log.info(s"[HEAL-CODE] Blocked for $blockedTicks minutes, and the set's pass has not ended at this root yet")
+  /** A minute in which no trie fetch could help (FR-006, T037): every blocker's clock runs, and what has waited long
+    * enough is acted on, each by its own clock (round 2 review A).
+    */
+  private def onIdleMinute(blocked: Boolean, codeBlockers: collection.Set[ByteString]): Unit =
+    blockerClock.observeCode(codeBlockers)
+    val kind = if blocked then blockerKind() else BlockerKind.Unknown
+    kind match
+      case BlockerKind.Other =>
+        blockerClock.otherBlocking(excludedSeeding.fold(BlockerClock.SetSignature.Empty)(_.accountSignature))
+      case BlockerKind.CodeOnly => blockerClock.otherGone()
+      case BlockerKind.Unknown  => if !blocked then blockerClock.otherGone()
+    blockerClock.idleMinutePassed()
+    kind match
       case BlockerKind.CodeOnly =>
         // Armed already, it acts again only for a chain the walk's own fetches brought in, waiting on code of its own.
-        if !codeHandOffArmed || heldNodes.awaitingCode then armCodeHandOff()
-      case BlockerKind.Other =>
+        if (!codeHandOffArmed || heldNodes.awaitingCode) && blockerClock.codeHasWaited(codeBlockers, MaxBlockedTicks)
+        then armCodeHandOff()
+      case BlockerKind.Other if blockerClock.otherHasWaited(MaxBlockedTicks) =>
         log.error(
-          s"[HEAL-CODE] $blockedTicks minutes with no progress and healing blocked ($waitingOn bytecode(s) missing, " +
-            s"excluded set blocking: $excludedBlocking) by more than bytecode — abandoning healing: the lazy hand-off, " +
-            "not a completion"
+          s"[HEAL-CODE] $MaxBlockedTicks idle minutes with healing blocked by more than bytecode " +
+            s"(${codeBlockers.size} bytecode(s) missing, excluded set blocking: $excludedBlocking) — abandoning " +
+            "healing: the lazy hand-off, not a completion"
         )
-        blockedTicks = 0
+        blockerClock.otherGone()
         snapSyncController ! SNAPSyncController.StateHealingAbandoned
+      case _ => ()
 
-  /** spec 022 T037: once a minute. If bytecode or the excluded set holds healing up: find any code whose
-    * acknowledgement was lost, log what it waits on and ask for it again, look at the set again (the gate cannot while
-    * a held chain or a walk keeps it shut), and count the minute unless a fetch could still help. Only a blocker
-    * shrinking resets the count: a re-peg and the heal after it do not, nor does a walk stop it (review W-1).
+  /** spec 022 T037: once a minute. Find any code whose acknowledgement was lost; if bytecode or the excluded set holds
+    * healing up, log what it waits on and ask for it again; look at the set (the gate cannot while a held chain or a
+    * walk keeps it shut); and, unless a fetch could still help, let an idle minute pass.
     */
   private def onBlockedTick(): Unit =
     // Any lost acknowledgement (a bytecode coordinator that a supervisor restarted, say).
-    if heldNodes.awaitingCode || excludedCodeAsked.nonEmpty then
+    if heldNodes.awaitingCode || excludedCodeAsked.nonEmpty || blockerClock.trackedCode.nonEmpty then
       try
-        val stored = (heldNodes.awaitedCode.keys ++ excludedCodeAsked).filter(codeStored)
+        val stored =
+          (heldNodes.awaitedCode.keySet ++ excludedCodeAsked ++ blockerClock.trackedCode).filter(codeStored)
         if stored.nonEmpty then onCodeStored(stored.toSeq)
       catch
         case scala.util.control.NonFatal(e) =>
@@ -567,10 +574,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       excludedSeeding.foreach { seeding =>
         try
           excludedBlocking = seeding.blocking
-          // One pass per root is enough while it found nothing to do: a set of 200k entries is about 2M node reads, and
-          // a walk can run for hours. Again if it found something, and once more right before the count is acted on.
-          if excludedBlocking && (!seeding.lastPassQuiet || blockedTicks == MaxBlockedTicks - 1) then
-            stepExcluded(seeding)
+          // One pass per root is enough while it found nothing to do: a set of 200k entries is about 2M node reads, and a
+          // walk can run for hours. Again only if it found something.
+          if excludedBlocking && !seeding.lastPassQuiet then stepExcluded(seeding)
           excludedTickFailed = false
         catch
           case scala.util.control.NonFatal(e) =>
@@ -578,37 +584,31 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             excludedTickFailed = true
             log.error("[HEAL-EXCLUDED] Could not look at the excluded set; the next tick tries again", e)
       }
-    if heldNodes.awaitingCode || excludedBlocking then
-      val waiting = heldNodes.awaitedCode
-      val askFor = (waiting.keys ++ excludedCodeAsked).toSeq.distinct
-      if askFor.nonEmpty then
-        val shown = waiting.iterator.take(16).map { case (code, accounts) =>
-          s"${Hex.toHexString(code.take(4).toArray)} of ${accounts.map(a => Hex.toHexString(a.take(8).toArray)).mkString(",")}"
-        }
-        log.warn(
-          s"[HEAL-CODE] Healing waits on ${askFor.size} bytecode(s), no-progress tick $blockedTicks/$MaxBlockedTicks: " +
-            shown.mkString("; ")
-        )
-        snapSyncController ! SNAPSyncController.HealedCodeHashes(askFor)
-      // A fetch that can still go out is the normal stagnation paths' business, not this one's.
-      val fetchCanHelp =
-        activeRequests.nonEmpty ||
-          (pendingTasks.nonEmpty && (!newSubtreesPaused || pendingTasks.hasDispatchable(paused = true)))
-      if blockedProgress then blockedTicks = 0
-      else if !fetchCanHelp then blockedTicks += 1
-      codeHandOffSent = false // a refresh that keeps the root answers nothing: the gate says it again
-      if blockedTicks >= MaxBlockedTicks && !fetchCanHelp then actOnLongBlock(askFor.size)
-      self ! HealingCheckCompletion // the look at the set, and at whether the wait has ended
-    else if wasBlocking then self ! HealingCheckCompletion // the set is out of the way: nothing else would say so
-    blockedProgress = false
+    val blocked = heldNodes.awaitingCode || excludedBlocking
+    val waiting = heldNodes.awaitedCode
+    val codeBlockers: collection.Set[ByteString] = waiting.keySet ++ excludedCodeAsked
+    if blocked && codeBlockers.nonEmpty then
+      val shown = waiting.iterator.take(16).map { case (code, accounts) =>
+        s"${Hex.toHexString(code.take(4).toArray)} of ${accounts.map(a => Hex.toHexString(a.take(8).toArray)).mkString(",")}"
+      }
+      log.warn(s"[HEAL-CODE] Healing waits on ${codeBlockers.size} bytecode(s): " + shown.mkString("; "))
+      snapSyncController ! SNAPSyncController.HealedCodeHashes(codeBlockers.toSeq)
+    // A fetch that can still go out is the normal stagnation paths' business, not this one's.
+    val fetchCanHelp =
+      activeRequests.nonEmpty ||
+        (pendingTasks.nonEmpty && (!newSubtreesPaused || pendingTasks.hasDispatchable(paused = true)))
+    if !fetchCanHelp then onIdleMinute(blocked, codeBlockers)
+    codeHandOffSent = false // a refresh that keeps the root answers nothing: the gate says it again
+    // The look at the set, and at whether the wait has ended; or the set is out of the way, and nothing else would say so.
+    if blocked || wasBlocking then self ! HealingCheckCompletion
 
   /** The bytecode of `codeHashes` has been written (D4). What waited on it commits; the set, on its next look, sees it.
     */
   private def onCodeStored(codeHashes: Seq[ByteString]): Unit =
+    codeHashes.foreach(blockerClock.codeStored)
     val released = codeHashes.map(heldNodes.codeArrived).sum
     val forTheSet = codeHashes.count(excludedCodeAsked.remove)
     if released > 0 || forTheSet > 0 then
-      blockedProgress = true
       commitHeld()
       if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
       self ! HealingCheckCompletion
@@ -1698,7 +1698,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // never know what it wants.
       if !mayDecide && pendingTasks.isEmpty && activeRequests.isEmpty && excludedSeeding.exists(_.midPass) then
         continueExcludedPass()
-      if gate == ExcludedGate.Clear then blockedTicks = 0
+      if gate == ExcludedGate.Clear then blockerClock.otherGone()
       if gate != ExcludedGate.Held then
         // spec 022 review hunter-r3 C1, forge F6, beacon W1-r3 and N3-r3: completion needs a clean walk of the current
         // root in this incarnation (verificationPassComplete: a verification walk, or the full rebuild walk, that found
