@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierWalkFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -80,6 +81,7 @@ private class StubFrontierRebuildState(
   // FrontierRebuildBfsState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
+  var currentWalk: Option[Long] = None
   val prunedSubtreeCount: AtomicLong = new AtomicLong(0L)
   val healingWriterEc: ExecutionContext = ExecutionContext.parasitic
   val healingReaderEc: ExecutionContext = ExecutionContext.parasitic
@@ -175,7 +177,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     var completed: Option[Long] = None
 
     s.verificationBFSRunning shouldBe false
-    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => completed = Some(n))
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     s.verificationBFSRunning shouldBe true // set by the launcher; the core's completion arm clears it
     completed shouldBe Some(1L)
@@ -192,7 +194,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     val s = stub(fixture)
     var completed: Option[Long] = None
 
-    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => completed = Some(n))
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     completed shouldBe Some(1L)
     // the extension's shared key is the single nibble 4
@@ -205,7 +207,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     val s = stub(fixture)
     var completed: Option[Long] = None
 
-    s.startFrontierBFS(root, emptyPath, isStor = false, (n: Long) => completed = Some(n))
+    s.startFrontierBFS(root, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     completed shouldBe Some(0L)
     emitted(s) shouldBe empty
@@ -217,10 +219,10 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     val s = stub(fixture, queue = new FailingBfsQueue())
     var completed: Option[Long] = None
 
-    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => completed = Some(n))
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     completed shouldBe None
-    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed)
+    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get))
     s.verificationBFSRunning shouldBe true // left for the core's FrontierWalkFailed arm
   }
 
@@ -231,14 +233,14 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
     val on = stub(fixture, pruned = true, store = Some(store))
     var onCompleted: Option[Long] = None
-    on.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => onCompleted = Some(n))
+    on.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => onCompleted = Some(n))
     onCompleted shouldBe Some(0L)
     emitted(on) shouldBe empty
     on.prunedSubtreeCount.get() shouldBe 1L // de-duped first, so the shared subtree is counted once
 
     val off = stub(fixture, pruned = false, store = Some(store))
     var offCompleted: Option[Long] = None
-    off.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => offCompleted = Some(n))
+    off.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => offCompleted = Some(n))
     offCompleted shouldBe Some(1L)
     emitted(off).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
     off.prunedSubtreeCount.get() shouldBe 0L
@@ -254,7 +256,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
     s.startFrontierBFS(
       Seq((child(0), Seq(compact(0)), false), (child(1), Seq(compact(1)), false)),
-      (n: Long) => completed = Some(n)
+      (_: Long, n: Long) => completed = Some(n)
     )
 
     completed shouldBe Some(1L)
@@ -269,7 +271,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     // A root walk carries its seed, whatever the coordinator's root is (a restart rebuild walks the root it was given).
     val rootWalk = stub(fixture)
     rootWalk.stateRoot = ByteString(Array.fill[Byte](32)(9))
-    rootWalk.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long) => ())
+    rootWalk.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, _: Long) => ())
     roots(rootWalk) shouldBe Seq(fixture.rootHash)
 
     // A subtree walk (scoped verification) carries the walk root at launch.
@@ -278,8 +280,51 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     val subtreeWalk = stub(fixture)
     val atLaunch = ByteString(Array.fill[Byte](32)(5))
     subtreeWalk.stateRoot = atLaunch
-    subtreeWalk.startFrontierBFS(Seq((seed, Seq(compact(0)), false)), (_: Long) => ())
+    subtreeWalk.startFrontierBFS(Seq((seed, Seq(compact(0)), false)), (_: Long, _: Long) => ())
     roots(subtreeWalk) shouldBe Seq(atLaunch)
+  }
+
+  it should "start no walk while its own runs or another walk holds the queue, and give the queue back as a walk ends (spec 022 fix round 4)" taggedAs UnitTest in {
+    val fixture = HealingTrieFixtures.sharedAncestor()
+    val queue = new InMemoryBfsQueueStorage()
+    val lease = WalkLease.of(queue)
+    val s = stub(fixture, queue = queue)
+    var ends: Seq[(Long, Long)] = Nil
+    def launch(): Unit =
+      s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (walk: Long, n: Long) => ends :+= (walk -> n))
+
+    // A replaced incarnation's walk holds the queue: nothing starts, nothing is set or sent.
+    val other = lease.tryAcquire().get
+    launch()
+    ends shouldBe empty
+    s.verificationBFSRunning shouldBe false
+    s.currentWalk shouldBe None
+    s.selfInbox.hasMessages shouldBe false
+
+    // Once it has ended, the walk starts, holds the queue while it runs, and gives it back before reporting its end.
+    lease.release(other)
+    launch()
+    s.verificationBFSRunning shouldBe true
+    s.currentWalk shouldBe defined
+    ends shouldBe Seq(s.currentWalk.get -> 1L)
+    lease.held shouldBe false
+
+    // Its own walk is flagged running until the core takes its end: no second walk.
+    s.selfInbox.receiveAll()
+    launch()
+    ends should have size 1
+    s.selfInbox.hasMessages shouldBe false
+  }
+
+  it should "give the queue back when a walk throws, and tag its failure with the walk's token" taggedAs UnitTest in {
+    val fixture = HealingTrieFixtures.sharedAncestor()
+    val queue = new FailingBfsQueue()
+    val s = stub(fixture, queue = queue)
+
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, _: Long) => fail("onComplete called"))
+
+    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get))
+    WalkLease.of(queue).held shouldBe false
   }
 
   it should "read by path and de-dup by location under the Path scheme" taggedAs UnitTest in {
@@ -287,7 +332,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     val s = stub(fixture, scheme = StorageScheme.Path, batchSize = 1)
     var completed: Option[Long] = None
 
-    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (n: Long) => completed = Some(n))
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     // the shared node sits at two locations, so each is walked and its missing child found at each
     completed shouldBe Some(2L)

@@ -210,6 +210,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // FrontierRebuildComplete / VerificationBFSComplete / FrontierWalkFailed message handlers. The Future bodies never
   // touch it; they communicate completion via `selfRef ! …`. So a plain var is correct (constraint #6).
   var verificationBFSRunning: Boolean = false
+  // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the token of the last walk this incarnation
+  // launched (its `WalkLease` token, set with `verificationBFSRunning`). A walk's end carries its token and is taken only
+  // when it matches: a walk another incarnation launched (a supervisor restart keeps the ActorRef, and a walk outlives
+  // its incarnation) says nothing about this incarnation's root or scope. Per incarnation: a restart forgets it.
+  var currentWalk: Option[Long] = None
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
 
@@ -469,7 +474,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * Each group keeps its arms in their original relative order. Every arm except the three `VerificationBFSComplete`
     * arms and the catch-all matches its own Command type and no other, so the first arm that matches a message is the
     * same arm as before for every message: the three `VerificationBFSComplete` arms sit together in
-    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm.
+    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm. Spec 022
+    * fix round 4 puts a replaced-walk arm first among the arms of each walk end (`FrontierRebuildComplete`,
+    * `FrontierWalkFailed`, `VerificationBFSComplete`), in the same group: it takes only an end whose walk this
+    * incarnation did not launch.
     */
   private def activeBehavior(): Behavior[Command] =
     Behaviors.receiveMessage[Command](
@@ -497,6 +505,18 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     heldNodes.clear()
     unpersistDroppedHeld(dropped)
     if dropped.nonEmpty then log.info(s"[HEAL-HELD] $reason: dropped ${dropped.size} held node(s), never written")
+
+  /** spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the end of a walk this incarnation did not
+    * launch, `walk`: a walk of an incarnation a supervisor restart replaced, which ran on in the shared BFS queue and
+    * reports to the same ActorRef. Its verdict says nothing about this incarnation's root or scope, so it changes
+    * nothing here: no flag, no clean pass, no marker. It gave the queue's lease back before reporting, so a walk this
+    * incarnation could not start meanwhile can start now: the completion check decides.
+    */
+  private def ignoreReplacedWalk(walk: Long, what: String): Unit =
+    log.info(
+      s"[HEAL-BFS] Ignoring the end of $what (walk $walk): a replaced incarnation of this coordinator launched it"
+    )
+    self ! HealingCheckCompletion
 
   /** spec 022 review (beacon W1, hunter W2, forge W1): drop the held nodes nothing can complete any more. A held node's
     * count goes down only when a child's subtree commits, and a child arrives only through a fetch queued below a held
@@ -987,7 +1007,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierRebuildComplete(missingEmitted, walkRoot) =>
+    case FrontierRebuildComplete(_, walkRoot, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"full-state rebuild of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case FrontierRebuildComplete(missingEmitted, walkRoot, _) =>
       // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
       // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
       verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
@@ -1045,7 +1069,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierWalkFailed =>
+    case FrontierWalkFailed(walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, "frontier walk (it failed)")
+      Behaviors.same
+
+    case FrontierWalkFailed(_) =>
       verificationBFSRunning = false
       trieWalkInProgress = false
       log.warn(
@@ -1063,12 +1091,27 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // spec 022 review forge F1: like every frontier walk, the rebuild starts on a written flush buffer. At a fresh start
       // the buffer is empty; if responses filled it meanwhile and its write fails, no rebuild runs: something was healed,
       // so once the write succeeds the completion check runs the full verification walk in its place.
-      if flushedForWalk() then
+      // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): no rebuild of a root a re-peg in the resume
+      // window has left (the re-peg seeded or walks the new root), and none while a walk runs (a completion check or a
+      // re-peg in the window started one, and two walks on the shared queue cut each other short). Without the rebuild
+      // no marker is set; this incarnation has no clean pass yet, so the completion check walks the root once that
+      // walk has ended.
+      if root != stateRoot then
+        log.info(
+          s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
+            s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
+        )
+      else if trieWalkInProgress || verificationBFSRunning then
+        log.info(
+          "[HEAL-RESTART] Full-state rebuild not started: a frontier walk is already running. The completion check " +
+            "walks the root once it has ended."
+        )
+      else if flushedForWalk() then
         startFrontierBFS(
           root,
           rootPath,
           isStor = false,
-          (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
+          (walk: Long, missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root, walk)
         )
       else
         log.warn(
@@ -1341,7 +1384,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case VerificationBFSComplete(walkRoot, _) if walkRoot != stateRoot =>
+    case VerificationBFSComplete(walkRoot, _, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"verification walk of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case VerificationBFSComplete(walkRoot, _, _) if walkRoot != stateRoot =>
       // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
       // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
       // observability flags, then verify the CURRENT root explicitly (`reverifyCurrentRoot` also clears the stale
@@ -1364,7 +1411,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       else reverifyCurrentRoot()
       Behaviors.same
 
-    case VerificationBFSComplete(_, missingEmitted) if missingEmitted > 0 =>
+    case VerificationBFSComplete(_, missingEmitted, _) if missingEmitted > 0 =>
       consecutiveStaleDiscards = 0
       // DIRTY pass: the walk found (and queued) missing nodes. They may all have been healed by now, so `isComplete`
       // can already be true, but the walk did not descend below any node that was missing when it reached it, and
@@ -1379,7 +1426,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       if isComplete then reverifyCurrentRoot() else tryRedispatchPendingTasks()
       Behaviors.same
 
-    case VerificationBFSComplete(_, _) =>
+    case VerificationBFSComplete(_, _, _) =>
       verificationBFSRunning = false
       consecutiveStaleDiscards = 0
       if isComplete then
@@ -1431,7 +1478,19 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case RestartResumeVerification(root, rootPath) =>
       // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
-      startVerificationBFS(root, rootPath)
+      // spec 022 review (forge W-r4-2, beacon W1-r4): as for the full rebuild, no walk of a root a re-peg in the resume
+      // window has left, and none while a walk runs; the completion check walks once that walk has ended.
+      if root != stateRoot then
+        log.info(
+          s"[HEAL-RESTART] Resume verification of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
+            s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
+        )
+      else if trieWalkInProgress || verificationBFSRunning then
+        log.info(
+          "[HEAL-RESTART] Resume verification not started: a frontier walk is already running. The completion check " +
+            "walks the root once it has ended."
+        )
+      else startVerificationBFS(root, rootPath)
       Behaviors.same
   }
 
@@ -1528,7 +1587,10 @@ object TrieNodeHealingCoordinator:
   // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
   // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
   // it reached it, so the healed node's present children (and their subtrees) were not verified.
-  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
+  // `walk` is the walk's lease token (spec 022 review hunter W1, beacon W1-r4): the end is taken only by the incarnation
+  // that launched that walk (`currentWalk`).
+  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long, walk: Long)
+      extends Command
 
   // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
   // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
@@ -1536,13 +1598,16 @@ object TrieNodeHealingCoordinator:
   //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
   //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
   //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
-  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
+  //   walk           = the walk's lease token: taken only by the incarnation that launched it (`currentWalk`).
+  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString, walk: Long)
+      extends Command
 
   // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
   // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
   // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
-  // permanently blocking every future walk (including the watchdog) until restart.
-  private[actors] case object FrontierWalkFailed extends Command
+  // permanently blocking every future walk (including the watchdog) until restart. `walk` is the walk's lease token: a
+  // failure of a walk another incarnation launched resets nothing here.
+  private[actors] case class FrontierWalkFailed(walk: Long) extends Command
 
   // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
   // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the

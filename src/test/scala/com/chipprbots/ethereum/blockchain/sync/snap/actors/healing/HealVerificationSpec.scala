@@ -108,15 +108,23 @@ private class StubHealVerificationState(
     def healingFrontier: Option[HealingFrontierStorage] = None
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
-  // FrontierRebuildApi: record each launch and keep its completion callback
+  // FrontierRebuildApi: record each launch, set the running flag as the real launcher does when a walk starts, and keep
+  // its completion callback (called with a walk token and the missing count)
   val singleSeedLaunches: mutable.Buffer[(ByteString, ByteString, Boolean)] = mutable.Buffer.empty
   val multiSeedLaunches: mutable.Buffer[Seq[(ByteString, Seq[ByteString], Boolean)]] = mutable.Buffer.empty
-  var lastOnComplete: Option[Long => Unit] = None
-  def startFrontierBFS(root: ByteString, rootPath: ByteString, isStor: Boolean, onComplete: Long => Unit): Unit =
+  var lastOnComplete: Option[(Long, Long) => Unit] = None
+  def startFrontierBFS(
+      root: ByteString,
+      rootPath: ByteString,
+      isStor: Boolean,
+      onComplete: (Long, Long) => Unit
+  ): Unit =
     singleSeedLaunches += ((root, rootPath, isStor))
+    verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
-  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: Long => Unit): Unit =
+  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Unit =
     multiSeedLaunches += seeds
+    verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
 
   // HealCompletionApi
@@ -219,8 +227,8 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.prunedSubtreeCount.get() shouldBe 0L
     s.selfInbox.hasMessages shouldBe false
 
-    s.lastOnComplete.foreach(_(3L))
-    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(s.stateRoot, 3L))
+    s.lastOnComplete.foreach(_(7L, 3L))
+    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(s.stateRoot, 3L, 7L))
   }
 
   it should "defer to the completion gate when work is pending, a flush is in flight or a walk is running" taggedAs UnitTest in {
@@ -293,8 +301,8 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
         s.prunedSubtreeCount.get() shouldBe 0L
         s.scopedVerificationActive shouldBe false
         s.verificationBFSRunning shouldBe true
-        s.lastOnComplete.foreach(_(0L))
-        s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(root, 0L))
+        s.lastOnComplete.foreach(_(7L, 0L))
+        s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(root, 0L, 7L))
       }
   }
 
@@ -326,6 +334,6 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.verificationBFSRunning shouldBe true
 
     s.stateRoot = ByteString(Array.fill[Byte](32)(8))
-    s.lastOnComplete.foreach(_(1L))
-    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(launchRoot, 1L))
+    s.lastOnComplete.foreach(_(7L, 1L))
+    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(launchRoot, 1L, 7L))
   }

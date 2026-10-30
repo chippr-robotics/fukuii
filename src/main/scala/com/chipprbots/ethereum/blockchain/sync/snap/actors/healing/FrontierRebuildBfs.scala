@@ -20,22 +20,26 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierRebuilt
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierWalkFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 
 /** The coordinator state `FrontierRebuildBfs` reads and writes (spec 016 C-H2, research.md R14b). The core's behaviour
   * arms and the code C-H3…C-H5 will move touch them too, or rule (d) keeps them in the core, so the Impl keeps them as
-  * fields. `verificationBFSRunning` is the one `var` the module writes (the walk launcher sets it on the actor thread;
-  * the core's completion and failure arms clear it); `stateRoot`, the walk root, is read by the multi-seed launcher on
-  * the actor thread to tag the walk's batches; `prunedSubtreeCount` is the `AtomicLong` the walk's sub-range threads
-  * bump and the verification entry and completion read. The rest are immutable vals rule (d) keeps in the core:
-  * `bfsQueue` (the walk's level queue, `stateIngest.bfsQueue` or an in-memory fallback, built once with the
-  * coordinator), the two dispatchers, `prunedEnabled`, the emission batch size and the walk's caps.
+  * fields. `verificationBFSRunning` and `currentWalk` are the `var`s the module writes (the walk launcher sets them on
+  * the actor thread when a walk starts; the core's completion and failure arms clear the flag, and take a walk's end
+  * only when it carries `currentWalk`, the token of the last walk this incarnation launched, spec 022 review hunter W1,
+  * beacon W1-r4); `stateRoot`, the walk root, is read by the multi-seed launcher on the actor thread to tag the walk's
+  * batches; `prunedSubtreeCount` is the `AtomicLong` the walk's sub-range threads bump and the verification entry and
+  * completion read. The rest are immutable vals rule (d) keeps in the core: `bfsQueue` (the walk's level queue,
+  * `stateIngest.bfsQueue` or an in-memory fallback, built once with the coordinator), the two dispatchers,
+  * `prunedEnabled`, the emission batch size and the walk's caps.
   */
 private[actors] trait FrontierRebuildBfsState:
   def stateRoot: ByteString
   var verificationBFSRunning: Boolean
+  var currentWalk: Option[Long]
   def prunedSubtreeCount: AtomicLong
   def bfsQueue: BfsQueueStorage
   def healingWriterEc: ExecutionContext
@@ -48,11 +52,12 @@ private[actors] trait FrontierRebuildBfsState:
   def HealingReservedCores: Int
 
 /** What the verification launchers (C-H3, `HealVerification`) call in `FrontierRebuildBfs`: the walk's two launchers,
-  * one seed or many. A separate trait, so the C-H2 interfaces stay as recorded.
+  * one seed or many. A separate trait, so the C-H2 interfaces stay as recorded. `onComplete` gets the walk's token (its
+  * [[WalkLease]] token, to tag the end the caller sends) and the number of missing nodes it found.
   */
 private[actors] trait FrontierRebuildApi:
-  def startFrontierBFS(root: ByteString, rootPath: ByteString, isStor: Boolean, onComplete: Long => Unit): Unit
-  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: Long => Unit): Unit
+  def startFrontierBFS(root: ByteString, rootPath: ByteString, isStor: Boolean, onComplete: (Long, Long) => Unit): Unit
+  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Unit
 
 /** TrieNodeHealingCoordinator's frontier-rebuild walk (spec 016 C-H2, coordinator-characterization.md §3.4): the
   * multi-seed level-order BFS over the locally stored trie (`rebuildFrontierBFS`), which reads each level from the BFS
@@ -391,7 +396,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
       root: ByteString,
       rootPath: ByteString,
       isStor: Boolean,
-      onComplete: Long => Unit
+      onComplete: (Long, Long) => Unit
   ): Unit =
     // spec 003 C2/C3: byte-identical thin wrapper over the multi-seed launcher for a single seed. The
     // full-root / crash-recovery / pivot-reseed callers reach the SAME walk (the kernel collapses one
@@ -406,17 +411,48 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     */
   def startFrontierBFS(
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
-      onComplete: Long => Unit
+      onComplete: (Long, Long) => Unit
   ): Unit =
     // The seeds are subtrees of the current walk root (spec 003 scoped verification): its batches carry `stateRoot`,
     // read here on the actor thread, never from the walk's own thread (spec 022 review W1).
     launchFrontierBFS(seeds, stateRoot, onComplete)
 
-  /** Both launchers: run the walk over `seeds` and tag its `FrontierRebuilt` batches with `walkRoot`. */
+  /** The shared BFS queue's lease (see [[WalkLease]]): one per queue instance, so every coordinator incarnation over it
+    * sees the walk any of them runs.
+    */
+  private lazy val walkLease: WalkLease = WalkLease.of(bfsQueue)
+
+  /** Both launchers: run the walk over `seeds` and tag its `FrontierRebuilt` batches with `walkRoot`. One walk at a
+    * time on the shared queue (spec 022 review hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): no walk starts
+    * while this incarnation's own walk runs, or while the queue's lease is held, which is then by a walk another
+    * incarnation launched (a supervisor restart, or a replacement generation, does not stop a running walk). A walk not
+    * started changes nothing and sends nothing; the completion check (or the dead-pulse watchdog) starts one later:
+    * this incarnation's `verificationPassComplete` is false until a walk of its own ends clean.
+    */
   private def launchFrontierBFS(
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
       walkRoot: ByteString,
-      onComplete: Long => Unit
+      onComplete: (Long, Long) => Unit
+  ): Unit =
+    if verificationBFSRunning then
+      log.warn("[HEAL-BFS] Frontier walk not started: this coordinator's own walk is still running on the BFS queue")
+    else
+      walkLease.tryAcquire() match
+        case None =>
+          log.warn(
+            "[HEAL-BFS] Frontier walk not started: a walk a replaced coordinator incarnation launched still holds the " +
+              "shared BFS queue. A completion check walks once it has ended."
+          )
+        case Some(walk) => runFrontierBFS(seeds, walkRoot, walk, onComplete)
+
+  /** Run walk `walk`, which holds the lease, on the healing writer executor. The lease is given back as the walk ends,
+    * before its end is reported: the end then carries `walk`, and the core takes it only from the walk it launched.
+    */
+  private def runFrontierBFS(
+      seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
+      walkRoot: ByteString,
+      walk: Long,
+      onComplete: (Long, Long) => Unit
   ): Unit =
     val selfRef = self
     // Effective parallelism floor (spec 002 R3 §1, T034): min(cfg, max(minParallelism, nproc − reservedCores)).
@@ -436,21 +472,24 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
         HealingReservedCores
       )
     // Guard BOTH walk kinds (rebuild + verification): the watchdog, HealingCheckCompletion and the
-    // pivot-refresh path gate on this flag, and the bfsQueue is shared (cleared on walk entry), so
-    // a second concurrent walk corrupts the first. Cleared by FrontierRebuildComplete /
-    // VerificationBFSComplete / FrontierWalkFailed.
+    // pivot-refresh path gate on this flag. Cleared by FrontierRebuildComplete /
+    // VerificationBFSComplete / FrontierWalkFailed of this walk.
     verificationBFSRunning = true
+    currentWalk = Some(walk)
     Future {
-      try
-        val missingEmitted = rebuildFrontierBFS(seeds, walkRoot, selfRef, bfsQueue, effectiveParallelism)
-        onComplete(missingEmitted)
-      catch
-        case scala.util.control.NonFatal(e) =>
-          // Never call onComplete() on failure — for the crash-recovery rebuild that would set the
-          // Layer-2 completeness marker on a walk that did NOT cover the full state. Reset flags
-          // through the actor instead so a fresh walk can be started.
-          asyncLog.error("[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed", e)
-          selfRef ! FrontierWalkFailed
+      val missingEmitted =
+        try Some(rebuildFrontierBFS(seeds, walkRoot, selfRef, bfsQueue, effectiveParallelism))
+        catch
+          case scala.util.control.NonFatal(e) =>
+            // Never call onComplete() on failure — for the crash-recovery rebuild that would set the
+            // Layer-2 completeness marker on a walk that did NOT cover the full state. Reset flags
+            // through the actor instead so a fresh walk can be started.
+            asyncLog.error("[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed", e)
+            None
+        finally walkLease.release(walk)
+      missingEmitted match
+        case Some(missing) => onComplete(walk, missing)
+        case None          => selfRef ! FrontierWalkFailed(walk)
     }(healingWriterEc)
 
   // ---- frontier-walk de-dup keys -----------------------------------------------------------------------------------

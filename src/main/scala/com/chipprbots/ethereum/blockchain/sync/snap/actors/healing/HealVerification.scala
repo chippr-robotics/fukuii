@@ -19,10 +19,11 @@ import com.chipprbots.ethereum.mpt.MptNode
   * arms (`healVerificationArms`, the completion gate) and the code C-H4 and C-H5 will move touch them too, or rule (d)
   * keeps them in the core, so the Impl keeps them as fields. The verification launchers write the in-flight run's
   * observability (`scopedVerificationActive`, `scopedVerificationSeedCount`, `scopedVerificationStartMs`,
-  * `prunedVerificationActive`, `prunedVerificationStartMs`), set `verificationBFSRunning`, reset `prunedSubtreeCount`,
-  * and `reverifyCurrentRoot` clears `verificationPassComplete`; they read the walk root `stateRoot`, the completion
-  * gate's `flushing` and `trieWalkInProgress`, and `healedPathsRoot` (the scoped walk's precondition). `prunedEnabled`
-  * is an immutable val rule (d) keeps in the core.
+  * `prunedVerificationActive`, `prunedVerificationStartMs`), reset `prunedSubtreeCount`, and `reverifyCurrentRoot`
+  * clears `verificationPassComplete` (the walk launcher they call sets `verificationBFSRunning`, and only when the walk
+  * starts: spec 022 review hunter W1); they read the walk root `stateRoot`, the completion gate's `flushing` and
+  * `trieWalkInProgress`, and `healedPathsRoot` (the scoped walk's precondition). `prunedEnabled` is an immutable val
+  * rule (d) keeps in the core.
   */
 private[actors] trait HealVerificationState:
   var stateRoot: ByteString
@@ -125,7 +126,6 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
       false
 
   private def launchVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
-    verificationBFSRunning = true
     val selfRef = self
     // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
     // distinguish the two paths, and mark the in-flight run as NOT scoped for the completion handler.
@@ -156,7 +156,7 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
       root,
       rootPath,
       isStor = false,
-      (missing: Long) => selfRef ! VerificationBFSComplete(root, missing)
+      (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(root, missing, walk)
     )
 
   /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
@@ -179,7 +179,6 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     if walkMayStart(s"Scoped verification walk of ${seeds.size} healed subtrees") then launchScopedVerification(seeds)
 
   private def launchScopedVerification(seeds: Seq[HealingEntry]): Unit =
-    verificationBFSRunning = true
     val selfRef = self
     // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and
     // emit the engagement signal on entry.
@@ -194,7 +193,10 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
     val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
     val walkRoot = stateRoot
-    startFrontierBFS(bfsSeeds, (missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing))
+    startFrontierBFS(
+      bfsSeeds,
+      (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing, walk)
+    )
 
   /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
     * keccak256 equals `hash` — otherwise `None`.
