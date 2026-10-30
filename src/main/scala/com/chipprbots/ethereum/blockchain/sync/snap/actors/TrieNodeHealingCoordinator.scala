@@ -779,6 +779,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
               s"— starting verification BFS to find missing children"
           )
+          // spec 022 review forge F1: not while the flush above failed. The old root's buffered nodes are mostly the new
+          // root's too, and a walk would read them as missing; startVerificationBFS retries the write first, and if it
+          // fails again defers the walk to the completion check (verificationPassComplete is false: it walks).
           startVerificationBFS(newStateRoot, pivotReseedPath)
 
       Behaviors.same
@@ -787,13 +790,15 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
       // spec 022 review hunter W1: a commit or flush whose write failed is retried by the next one, and the last one by
       // the completion check right after it; if that fails too and nothing is pending or in flight, no later commit or
-      // flush comes. Retry it here, every pulse, while unwritten nodes remain (a failure is logged each time).
+      // flush comes. Retry it here, every pulse, while unwritten nodes remain (a failure is logged each time). The
+      // asynchronous flush runs whether or not healing looks complete (forge F1): with nothing pending a verification
+      // walk may be the only other actor, and no walk starts over an unwritten buffer, so this is what writes it.
       if heldNodes.hasPendingWrites || (rawNodeBuffer.nonEmpty && !flushing) then
         log.warn(
           s"[HEAL-COMMIT] Retrying unwritten healed nodes: ${heldNodes.readyCount} ready to commit, " +
             s"${rawNodeBuffer.size} buffered for the flush"
         )
-        if !isComplete && rawNodeBuffer.nonEmpty && !flushing then flushRawNodesAsync()
+        if rawNodeBuffer.nonEmpty && !flushing then flushRawNodesAsync()
         self ! HealingCheckCompletion
       // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
       // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
@@ -852,6 +857,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         if consecutiveDeadPulses >= 3 then
           log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
           consecutiveDeadPulses = 0
+          // spec 022 review forge F1: started only once the flush buffer is written (startVerificationBFS); with a write
+          // that keeps failing it is deferred, and the retry above flushes again every pulse.
           val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
           startVerificationBFS(stateRoot, emptyPath)
       else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
@@ -1035,12 +1042,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // spec 006 C1/D3/FR-004: forward the walk's missing-node count (missingEmitted) and the root this walk
       // traversed (`root`, captured here) so the FrontierRebuildComplete handler can decide early completion and
       // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
-      startFrontierBFS(
-        root,
-        rootPath,
-        isStor = false,
-        (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
-      )
+      // spec 022 review forge F1: like every frontier walk, the rebuild starts on a written flush buffer. At a fresh start
+      // the buffer is empty; if responses filled it meanwhile and its write fails, no rebuild runs: something was healed,
+      // so once the write succeeds the completion check runs the full verification walk in its place.
+      if flushedForWalk() then
+        startFrontierBFS(
+          root,
+          rootPath,
+          isStor = false,
+          (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
+        )
+      else
+        log.warn(
+          "[HEAL-RESTART] Full-state rebuild not started: healed nodes waiting in the flush buffer could not be written. " +
+            "The completion check retries the write and then runs the full verification walk instead."
+        )
+        self ! HealingCheckCompletion
       Behaviors.same
   }
 

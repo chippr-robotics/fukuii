@@ -51,7 +51,8 @@ private class StubHealVerificationState(
 ) extends HealVerificationState
     with TrieNodeHealingEnv
     with FrontierRebuildApi
-    with HealCompletionApi:
+    with HealCompletionApi
+    with WalkFlushApi:
 
   // HealVerificationState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
@@ -120,6 +121,13 @@ private class StubHealVerificationState(
 
   // HealCompletionApi
   var isComplete: Boolean = true
+
+  // WalkFlushApi: whether the flush buffer is written (or empty) when a walk asks, and how often a walk asked
+  var bufferWritten: Boolean = true
+  var walkFlushes: Int = 0
+  def flushedForWalk(): Boolean =
+    walkFlushes += 1
+    bufferWritten
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealVerification read $member")
@@ -234,6 +242,41 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
         s.prunedVerificationActive shouldBe false
         s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
       }
+  }
+
+  it should "start no walk while the flush buffer cannot be written, and leave the retry to the completion gate (forge F1)" taggedAs UnitTest in {
+    val s = stub(None, StorageScheme.Hash)
+    s.bufferWritten = false
+
+    s.reverifyCurrentRoot()
+
+    s.walkFlushes shouldBe 1
+    s.singleSeedLaunches shouldBe empty
+    s.verificationBFSRunning shouldBe false
+    s.verificationPassComplete shouldBe false
+    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
+  }
+
+  "HealVerification's walk launchers" should "write the flush buffer before every verification walk, full or scoped, and start none while it cannot be written (forge F1)" taggedAs UnitTest in {
+    val s = stub(None, StorageScheme.Hash)
+    val seeds = Seq(HealingEntry(Seq(emptyPath), ByteString(Array.fill[Byte](32)(5))))
+    s.healedPathsRoot = s.stateRoot
+
+    s.bufferWritten = false
+    s.startVerificationBFS(s.stateRoot, emptyPath)
+    s.startScopedVerification(seeds)
+    s.walkFlushes shouldBe 2
+    s.singleSeedLaunches shouldBe empty
+    s.multiSeedLaunches shouldBe empty
+    s.verificationBFSRunning shouldBe false
+    s.scopedVerificationActive shouldBe true // untouched: no scoped run was started
+    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion, HealingCheckCompletion)
+
+    s.bufferWritten = true
+    s.startScopedVerification(seeds)
+    s.walkFlushes shouldBe 3
+    s.multiSeedLaunches.toSeq shouldBe Seq(Seq((seeds.head.hash, seeds.head.pathset, false)))
+    s.verificationBFSRunning shouldBe true
   }
 
   "HealVerification.startVerificationBFS" should "engage the pruned walk only when pruning is enabled" taggedAs UnitTest in {

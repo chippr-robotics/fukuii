@@ -71,12 +71,14 @@ private[actors] trait PathPresenceApi:
   * that call it and handle the verdict (`healVerificationArms`, the completion gate).
   */
 private[actors] trait HealVerification extends PathVerifiedReadApi with PathVerifiedRlpApi with PathPresenceApi:
-  this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi =>
+  this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi & WalkFlushApi =>
 
   /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
     * against a superseded root or found missing nodes. Starts the walk directly (not via HealingCheckCompletion): the
     * gate's `totalNodesHealed == 0` arm would declare completion without any walk. When work is still pending or a
     * flush is in flight the normal gate re-verifies once it drains (`verificationPassComplete == false` forces a walk).
+    * The walk itself starts only once the flush buffer is written (`startVerificationBFS`, spec 022 review forge F1); a
+    * buffer that holds anything means something was healed, so the gate that retries it walks too.
     */
   def reverifyCurrentRoot(): Unit =
     scopedVerificationActive = false
@@ -100,6 +102,29 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * descendant in O(levels × chunk_reads) instead of O(total_nodes) point-reads.
     */
   def startVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
+    if walkMayStart(s"Verification walk of root ${Hex.toHexString(root.take(4).toArray)}") then
+      launchVerificationBFS(root, rootPath)
+
+  /** spec 022 review forge F1: a frontier walk starts only on an empty flush buffer, or once a synchronous flush has
+    * written it (`flushedForWalk`). Every verification walk starts here: the completion gate, a re-verification after a
+    * dirty or stale pass, a re-peg onto a root already on disk, the dead-pulse watchdog and a restart's resume. A walk
+    * over an unwritten buffer reads the buffered nodes as missing and is refused their fetch (they are complete), so it
+    * ends dirty, and the next walk would too, with nothing writing the buffer: a stall no re-peg ends (the walk keeps
+    * `walkLocalOnly` set). When the write fails, no walk starts; the completion check retries the write at once and the
+    * 2-minute pulse after that, and the check's own walk follows a write that succeeds (a buffer that held anything
+    * means something was healed, so `totalNodesHealed > 0` and the check walks rather than completes).
+    */
+  private def walkMayStart(what: String): Boolean =
+    if flushedForWalk() then true
+    else
+      log.warn(
+        s"[HEAL-VERIFY] $what not started: healed nodes waiting in the flush buffer could not be written, and a walk " +
+          "would read them as missing. It starts once they are written (retried by the completion check and the pulse)."
+      )
+      self ! HealingCheckCompletion
+      false
+
+  private def launchVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
     verificationBFSRunning = true
     val selfRef = self
     // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
@@ -151,6 +176,9 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
       s"scoped verification of paths healed against ${Hex.toHexString(healedPathsRoot.take(4).toArray)} " +
         s"on walk root ${Hex.toHexString(stateRoot.take(4).toArray)}"
     )
+    if walkMayStart(s"Scoped verification walk of ${seeds.size} healed subtrees") then launchScopedVerification(seeds)
+
+  private def launchScopedVerification(seeds: Seq[HealingEntry]): Unit =
     verificationBFSRunning = true
     val selfRef = self
     // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and

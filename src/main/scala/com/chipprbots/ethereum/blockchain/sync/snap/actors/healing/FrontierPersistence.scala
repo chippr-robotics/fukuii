@@ -58,6 +58,13 @@ private[actors] trait FrontierWriteApi:
   def persistFrontier(entries: Seq[HealingEntry]): Unit
   def flushRawNodesAsync(): Unit
 
+/** What a walk launcher calls before it starts a frontier walk (the verification launchers in C-H3 `HealVerification`,
+  * the core's crash-recovery rebuild): `flushedForWalk`, which writes the flush buffer first if it holds anything (spec
+  * 022 review forge F1). A separate trait, so the C-H1 interfaces stay as recorded.
+  */
+private[actors] trait WalkFlushApi:
+  def flushedForWalk(): Boolean
+
 /** TrieNodeHealingCoordinator's frontier persistence and healed-node flush (spec 016 C-H1,
   * coordinator-characterization.md §3.4): the Layer-2 persisted-frontier mirror (persist on enqueue, unpersist after a
   * durable flush, clear on invalidation; CF `g`), the backlog gauges and the frontier walk's backpressure wait, and the
@@ -65,7 +72,11 @@ private[actors] trait FrontierWriteApi:
   * otherwise), which writes the staged spec 005 subtree-complete records only after the nodes are durable. The
   * coordinator core keeps the behaviour arms that call it (`frontierPersistenceArms` handles `FlushComplete`).
   */
-private[actors] trait FrontierPersistence extends FrontierDrainApi with FrontierGaugesApi with FrontierWriteApi:
+private[actors] trait FrontierPersistence
+    extends FrontierDrainApi
+    with FrontierGaugesApi
+    with FrontierWriteApi
+    with WalkFlushApi:
   this: FrontierPersistenceState & TrieNodeHealingEnv =>
 
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
@@ -223,6 +234,14 @@ private[actors] trait FrontierPersistence extends FrontierDrainApi with Frontier
           log.info(s"Flushed ${flushed.size} healed nodes to disk (total: $totalNodesHealed)")
         written
     }
+
+  /** Whether a frontier walk may start: true when the flush buffer is empty, or once a synchronous flush has written it
+    * (spec 022 review forge F1). A walk reads the store only, so a node committed with its whole subtree but still in
+    * the buffer reads as missing there, and the walk's entry for it is refused (it is complete, only not written): the
+    * walk ends dirty, and the next would too, while nothing writes the buffer. False means the write failed; the caller
+    * starts no walk, and the completion check and the 2-minute pulse retry the write.
+    */
+  def flushedForWalk(): Boolean = rawNodeBuffer.isEmpty || flushRawNodesSync()
 
   /** Async flush on the dedicated `healing-writer-dispatcher`, so the blocking RocksDB write doesn't compete with sync
     * actors on `sync-dispatcher`. It writes a snapshot of the buffer and does NOT clear it: the nodes leave the buffer
