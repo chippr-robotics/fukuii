@@ -198,6 +198,44 @@ class SNAPSyncControllerPinSpec
       viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe false
     }
 
+  it should
+    "spec 022 review (vault R1, V3): under in-memory pruning trust no persisted completeness: no frontier marker, no mirror, no scoped verification" taggedAs UnitTest in {
+      // A completeness marker is written after flushes whose persist does nothing under in-memory pruning, so a restart
+      // that resumed from it, or a scoped verification it enabled, could skip nodes lost with the cache. Configured on
+      // here, both must reach the coordinator off, and a marker an earlier run left must be gone before it starts.
+      def inMemoryWithStaleMarker(f: Fixture): com.chipprbots.ethereum.db.storage.HealingFrontierStorage =
+        f.stateStorageOverride = Some(
+          new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
+            f.storagesInstance.storages.nodeStorage,
+            10,
+            new com.chipprbots.ethereum.db.cache.LruCache[ByteString, com.chipprbots.ethereum.db.storage.HeapEntry](
+              new com.chipprbots.ethereum.utils.NodeCacheConfig:
+                override val maxSize: Long = 1000
+                override val maxHoldTime: FiniteDuration = 60.minutes
+            )
+          )
+        )
+        val store = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(
+          f.storagesInstance.storages.flatSlotStorage.dataSource
+        )
+        store.markComplete()
+        store
+      val cfg = healingConfig(frontierPersistence = true).copy(scopedHealVerification = true)
+      Seq("startStateHealing", "startStateHealingWithInterleave").foreach { route =>
+        val f = new Fixture
+        val store = inMemoryWithStaleMarker(f)
+        if route == "startStateHealing" then f.startHealingViaStartStateHealing(cfg)
+        else f.startHealingViaInterleave(cfg)
+        val spawn = f.expectHealingSpawn()
+        withClue(s"$route: ") {
+          spawn.prunedHealVerification shouldBe false
+          spawn.frontierPersistenceEnabled shouldBe false
+          spawn.scopedHealVerification shouldBe false
+          store.isComplete shouldBe false
+        }
+      }
+    }
+
   // ── #1371 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController download completion" should
