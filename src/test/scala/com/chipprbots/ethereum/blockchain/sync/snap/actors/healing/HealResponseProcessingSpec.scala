@@ -118,7 +118,7 @@ private class StubHealResponseProcessingState(
   val asyncLog: org.slf4j.Logger = log
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
-  val mptStorage: TestMptStorage = new TestMptStorage()
+  val mptStorage: ReadFailingMptStorage = new ReadFailingMptStorage()
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notReached("networkPeerManager")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
@@ -179,13 +179,25 @@ private class StubHealResponseProcessingState(
   // PathPresenceApi: present exactly where `readPathVerifiedRlp` answers; stale bytes of another hash where
   // `stalePaths` names the pathset.
   val stalePaths: mutable.Set[Seq[ByteString]] = mutable.Set.empty
+  // A read at one of these pathsets throws, once (a storage read failure, spec 022 review forge W1).
+  val failingReads: mutable.Set[Seq[ByteString]] = mutable.Set.empty
   def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence =
-    if pathReads.contains((hash, pathset)) then PathPresence.Present
+    if failingReads.remove(pathset) then throw new RuntimeException("injected path read failure")
+    else if pathReads.contains((hash, pathset)) then PathPresence.Present
     else if stalePaths.contains(pathset) then PathPresence.Mismatch
     else PathPresence.Absent
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealResponseProcessing read $member")
+
+/** A test trie store whose next `failReads` batched reads throw (a storage read failure, spec 022 review forge W1). */
+final private class ReadFailingMptStorage extends TestMptStorage:
+  @volatile var failReads: Int = 0
+  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+    if failReads > 0 then
+      failReads -= 1
+      throw new RuntimeException("injected node read failure")
+    super.multiGetNodes(hashes)
 
 /** Spec 016 C-H5 stub test (FR-016 (b), T075): `HealResponseProcessing` mixed into a stub of its state interface, the
   * coordinator environment and the interfaces it calls. The cases drive a served response through `handleResponse` and
@@ -594,4 +606,97 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pns.readAccountNode(Array[Byte](4)) shouldBe None // never written where the newer node is expected
     m.totalNodesHealed shouldBe 0
     m.pendingTasks.toSeq shouldBe Seq(current) // only the newer fetch
+  }
+
+  // ---- spec 022 slice 2 review: a served node whose children cannot be found (eye F2, forge W1, vault note 5) ------
+
+  /** A branch with hash children only, at `slots`. */
+  private def branchOf(slots: (Int, ByteString)*): BranchNode =
+    val children = Array.fill[MptNode](16)(NullNode)
+    slots.foreach { case (i, h) => children(i) = HashNode(h.toArray) }
+    BranchNode(children, None)
+
+  /** The task the module queued for `hash`, taken out of the queue as a dispatch takes it. */
+  private def dispatched(m: StubHealResponseProcessingState, hash: ByteString): HealingEntry =
+    val task = m.pendingTasks.find(_.hash == hash).getOrElse(fail(s"no queued task for ${hash.take(4)}"))
+    val rest = m.pendingTasks.toSeq.filterNot(_ eq task)
+    m.pendingTasks.clear()
+    m.pendingTasks ++= rest
+    task
+
+  private def undecodableChild(scheme: StorageScheme): Unit =
+    val source = new RecordingDataSource
+    val h =
+      new Harness(scheme = scheme, pathStore = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val undecodable = ByteString(Array.fill[Byte](40)(0x05)) // hashes right, is no node
+    val gHash = kec256(undecodable)
+    val parent = branchOf(0 -> gHash)
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1)
+    val gTask = dispatched(m, gHash)
+
+    h.respond(2, p, Seq(gTask), Seq(undecodable))
+
+    val gRequest = m.healRequestFor(gTask)
+    withClue("the node is not held: ")(m.heldNodes.contains(HeldNodeSet.idOf(gRequest)) shouldBe false)
+    withClue("not buffered: ")(m.rawNodeBuffer.contains(gHash) shouldBe false)
+    withClue("not written: ")(source.batchesPutting(AccountNs, accountKey(Array[Byte](0))) shouldBe empty)
+    withClue("its request is satisfied: ")(m.healRequests.contains(gRequest.key) shouldBe false)
+    withClue("and not fetched again (every peer serves the same bytes): ")(m.pendingTasks shouldBe empty)
+    withClue("its parent still waits on it: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+
+  it should "never hold, buffer or write a served node that hashes right but does not decode, under the Hash scheme (eye F2)" taggedAs UnitTest in {
+    undecodableChild(StorageScheme.Hash)
+  }
+
+  it should "never hold, buffer or write a served node that hashes right but does not decode, under the Path scheme (eye F2)" taggedAs UnitTest in {
+    undecodableChild(StorageScheme.Path)
+  }
+
+  /** P (held) waits on B; B arrives, and a storage read throws while B's children are looked up. B is fine: its request
+    * goes back, with P's edge, and is fetched again; once the read works B is held and the chain commits.
+    */
+  private def readFailsDuringDiscovery(scheme: StorageScheme): Unit =
+    val source = new RecordingDataSource
+    val h =
+      new Harness(scheme = scheme, pathStore = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/read-failure-leaf")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    val bTask = dispatched(m, hashOf(b))
+    val bRequest = m.healRequestFor(bTask)
+    if scheme == StorageScheme.Hash then m.mptStorage.failReads = 1
+    else m.failingReads += Seq(compact(0, 0))
+
+    h.respond(2, p, Seq(bTask), Seq(bytes(b)))
+
+    withClue("B is not held: ")(m.heldNodes.contains(HeldNodeSet.idOf(bRequest)) shouldBe false)
+    withClue("B's request is back: ")(m.healRequests.contains(bRequest.key) shouldBe true)
+    withClue("with P's edge: ")(m.healRequests.parentsOf(bRequest.key) shouldBe Seq(parentId))
+    withClue("and B is fetched again: ")(m.pendingTasks.toSeq.map(_.hash) shouldBe Seq(hashOf(b)))
+    withClue("P still waits on B: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+
+    // The read works now: B is held, its child fetched, and the chain commits whole.
+    h.respond(3, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    m.heldNodes.contains(HeldNodeSet.idOf(bRequest)) shouldBe true
+    h.respond(4, p, Seq(dispatched(m, hashOf(c))), Seq(bytes(c)))
+    m.heldNodes.isEmpty shouldBe true
+    if scheme == StorageScheme.Hash then
+      m.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(hashOf(c), hashOf(b), hashOf(parent))
+
+  it should "put a served node's request back, with its parent edges, when a storage read fails while its children are looked up, under the Hash scheme (forge W1)" taggedAs UnitTest in {
+    readFailsDuringDiscovery(StorageScheme.Hash)
+  }
+
+  it should "put a served node's request back, with its parent edges, when a storage read fails while its children are looked up, under the Path scheme (forge W1)" taggedAs UnitTest in {
+    readFailsDuringDiscovery(StorageScheme.Path)
   }

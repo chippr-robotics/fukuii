@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -45,6 +46,30 @@ final private class FailingWritesDataSource(failures: Int) extends EphemDataSour
   val remaining: AtomicInteger = new AtomicInteger(failures)
   override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
     if remaining.getAndDecrement() > 0 then throw new RuntimeException("injected write batch failure")
+    super.update(dataSourceUpdates)
+
+/** A trie store whose node writes that include `hash` throw, the first `failures` times; `failed` counts them down. */
+final private class FailingWritesOfMptStorage(hash: ByteString, failures: Int) extends TestMptStorage:
+  val failed: CountDownLatch = new CountDownLatch(failures)
+  override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+    if failed.getCount > 0 && rawNodes.exists(_._1 == hash) then
+      failed.countDown()
+      throw new RuntimeException("injected node write failure")
+    super.storeRawNodes(rawNodes)
+
+/** A data source whose write batches that put `key` in `namespace` throw, the first `failures` times; `failed` counts
+  * them down.
+  */
+final private class FailingWritesOfDataSource(namespace: IndexedSeq[Byte], key: ByteString, failures: Int)
+    extends EphemDataSource(Map.empty):
+  val failed: CountDownLatch = new CountDownLatch(failures)
+  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    val puts = dataSourceUpdates
+      .flatMap(HealRequestFixtures.Op.of)
+      .exists(op => !op.delete && op.namespace == namespace && op.key == key)
+    if failed.getCount > 0 && puts then
+      failed.countDown()
+      throw new RuntimeException("injected write batch failure")
     super.update(dataSourceUpdates)
 
 /** Spec 022 slice 2, T018 (#1549 on the heal path, plan D3): a node write that throws loses nothing.
@@ -153,4 +178,66 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         readAtPath(pns, n).map(ByteString(_)) shouldBe Some(n.encoded)
       }
     }
+  }
+
+  // ---- spec 022 review hunter W1, eye F1: the last write fails, and nothing pending or in flight retries it --------
+
+  /** Heal `accountTrieOld` with every node served at once, over a store whose writes of the root (the last commit,
+    * which completes the trie) fail twice: once at the response that completes it, once at the completion check's
+    * retry. Then nothing is pending or in flight; only the 2-minute pulse comes. It must retry the write.
+    */
+  private def lastWriteFailsTwice(scheme: StorageScheme): Unit =
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val hashStore = new FailingWritesOfMptStorage(trie.root.hash, failures = 2)
+    val pathSource = new FailingWritesOfDataSource(
+      HealRequestFixtures.AccountNs,
+      HealRequestFixtures.accountKey(Array.empty),
+      failures = 2
+    )
+    val pns = new PathNodeStorage(pathSource)
+    val failed = if scheme == StorageScheme.Hash then hashStore.failed else pathSource.failed
+    val peer = new ScriptedPeer(testKit)
+    peer.serveFrom.set(Some(trie.served))
+    val pool = Executors.newSingleThreadExecutor()
+    val controller = createTestProbe[SNAPSyncController.Command]()
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = trie.root.hash,
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = if scheme == StorageScheme.Hash then hashStore else new TestMptStorage(),
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
+      storageScheme = scheme,
+      pathNodeStorageOpt = Option.when(scheme == StorageScheme.Path)(pns),
+      movingRootDeltaHeal = true
+    )
+    peer.coordinator.set(coordinator)
+    try
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        PeerTestHelpers.createTestPeer("last-write-peer", createTestProbe[Any]().ref.toClassic)
+      )
+      failed.await(30, TimeUnit.SECONDS) shouldBe true
+      // Both writes failed. The pulse is the only thing still to come.
+      coordinator ! TrieNodeHealingCoordinator.HealingStagnationCheck
+      awaitHealingComplete(controller)
+      trie.nodes.foreach { n =>
+        withClue(s"${n.label}: ") {
+          if scheme == StorageScheme.Hash then noException should be thrownBy hashStore.get(n.hash.toArray)
+          else readAtPath(pns, n).map(ByteString(_)) shouldBe Some(n.encoded)
+        }
+      }
+    finally
+      testKit.stop(coordinator)
+      testKit.stop(peer.ref)
+      pool.shutdown()
+      pool.awaitTermination(5, TimeUnit.SECONDS)
+
+  it should "retry a failed last write on the next pulse when nothing is pending or in flight, under the Path scheme (hunter W1)" taggedAs UnitTest in {
+    lastWriteFailsTwice(StorageScheme.Path)
+  }
+
+  it should "retry a failed last flush on the next pulse when nothing is pending or in flight, under the Hash scheme (hunter W1)" taggedAs UnitTest in {
+    lastWriteFailsTwice(StorageScheme.Hash)
   }

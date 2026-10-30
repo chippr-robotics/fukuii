@@ -127,11 +127,13 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       withClue("root before the re-peg: ")(disk.holds(before("root")) shouldBe false)
       withClue("ext before the re-peg: ")(disk.holds(before("ext")) shouldBe false)
       coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
-      completionsWithin(controller, 300.millis) shouldBe empty
+      handled(coordinator)
+      completionsWithin(controller, Duration.Zero) shouldBe empty
 
       // The pivot moves. What was held is dropped, never written.
       peer.serveFrom.set(Some(after.served))
       coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+      handled(coordinator) // the re-peg, its commit and its flush are done
       withClue("old root after the re-peg: ")(disk.holds(before("root")) shouldBe false)
       withClue("old ext after the re-peg: ")(disk.holds(before("ext")) shouldBe false)
 
@@ -142,7 +144,18 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
         case _                                       => FishingOutcomes.continueAndIgnore
       }
       after.nodes.foreach(n => withClue(s"${n.label} after healing: ")(disk.holds(n) shouldBe true))
+      // Hash: content addressed, nothing overwrote them, so the old root and ext were never written at all.
+      if scheme == StorageScheme.Hash then
+        withClue("old root at the end: ")(disk.holds(before("root")) shouldBe false)
+        withClue("old ext at the end: ")(disk.holds(before("ext")) shouldBe false)
     }
+
+  /** Mailbox barrier: every message sent to `coordinator` before this call has been handled once it returns. */
+  private def handled(coordinator: ActorRef[TrieNodeHealingCoordinator.Command]): Unit =
+    val probe = createTestProbe[com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics]()
+    coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
+    probe.receiveMessage(30.seconds)
+    ()
 
   /** The `StateHealingComplete`s `controller` receives within `d` (other messages, such as progress, are skipped). */
   private def completionsWithin(
@@ -230,6 +243,10 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       }
       // Every fetch that went out while paused was below the held root, deepest first within each request.
       belowRoot.flatMap(_.paths).toSet shouldBe trie.nodes.filterNot(_.label == "root").map(_.pathset).toSet
+      belowRoot.foreach { r =>
+        val depths = r.paths.map(HealRequest.depthOf)
+        withClue(s"request ${r.requestId}: ")(depths shouldBe depths.sorted(using Ordering[Int].reverse))
+      }
       // No deadlock: the whole trie is on disk although the cap is smaller than one node.
       trie.nodes.foreach(n => withClue(s"${n.label}: ")(disk.holds(n) shouldBe true))
     finally
@@ -355,4 +372,236 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     held.contains(c.hash) shouldBe true
     held.clear()
     held.bytes shouldBe 0L
+  }
+
+  // ---- spec 022 slice 2 review: orphans, the pause, promote, the frontier mirror, force-complete --------------------
+
+  /** A coordinator over fresh stores, with the settings these cases vary; `body` gets it, the controller and the disk.
+    */
+  private def withHealer[A](
+      scheme: StorageScheme,
+      root: ByteString,
+      peer: ScriptedPeer,
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+      concurrency: Int = 16,
+      batchSize: Int = 16,
+      writerEc: Option[ExecutionContext] = None,
+      frontier: Option[com.chipprbots.ethereum.db.storage.HealingFrontierStorage] = None,
+      pathSource: com.chipprbots.ethereum.db.dataSource.DataSource = EphemDataSource()
+  )(
+      body: (ActorRef[TrieNodeHealingCoordinator.Command], TestProbe[SNAPSyncController.Command], Disk) => A
+  ): A =
+    val pool = Executors.newSingleThreadExecutor()
+    val controller = createTestProbe[SNAPSyncController.Command]()
+    val mpt = new TestMptStorage()
+    val pns = new PathNodeStorage(pathSource)
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = root,
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = mpt,
+      batchSize = batchSize,
+      concurrency = concurrency,
+      snapSyncController = controller.ref,
+      healingFrontierStorage = frontier,
+      frontierPersistenceEnabled = frontier.isDefined,
+      healingWriterEcOverride = Some(writerEc.getOrElse(ExecutionContext.fromExecutorService(pool))),
+      storageScheme = scheme,
+      pathNodeStorageOpt = Option.when(scheme == StorageScheme.Path)(pns),
+      movingRootDeltaHeal = true,
+      heldMemoryLimit = heldMemoryLimit
+    )
+    peer.coordinator.set(coordinator)
+    val disk = if scheme == StorageScheme.Path then pathDisk(pns) else hashDisk(mpt)
+    try body(coordinator, controller, disk)
+    finally
+      testKit.stop(coordinator)
+      testKit.stop(peer.ref)
+      pool.shutdown()
+      pool.awaitTermination(5, TimeUnit.SECONDS)
+
+  // Bytes that are no trie node (one byte below 0x80 repeated: an RLP single byte, then junk). A parent may still
+  // reference them by hash: a peer serving them passes the keccak check and fails to decode (vault note 5).
+  private val undecodable: ByteString = ByteString(Array.fill[Byte](40)(0x05))
+
+  /** root (branch) [] -> [0] the undecodable node, [1] a leaf. */
+  private def orphaningTrie(): Trie =
+    val leaf = HealRequestFixtures.plainLeaf(Array[Byte](0x0c), "s022/review/orphan-leaf")
+    val slots = Array.fill[com.chipprbots.ethereum.mpt.MptNode](16)(com.chipprbots.ethereum.mpt.NullNode)
+    slots(0) = com.chipprbots.ethereum.mpt.HashNode(com.chipprbots.ethereum.crypto.kec256(undecodable).toArray)
+    slots(1) = com.chipprbots.ethereum.mpt.HashNode(leaf.hash)
+    val root = com.chipprbots.ethereum.mpt.BranchNode(slots, None)
+    Trie(
+      Seq(
+        Placed("root", None, Array.empty[Byte], root),
+        Placed("leaf", None, Array[Byte](1), leaf)
+      )
+    )
+
+  private def walkEntry(seed: String): (Seq[ByteString], ByteString, ByteString) =
+    val node = HealRequestFixtures.plainLeaf(Array[Byte](1), seed)
+    val pathset = Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.fill[Byte](30)(7), isLeaf = false)))
+    (pathset, ByteString(node.hash), ByteString(node.encode))
+
+  /** beacon W1, hunter W2: a held node whose child can never commit (it does not decode) must not stop new subtrees
+    * from being opened at the held-memory cap. Before the fix the walk entry waited forever: the pause held it, and the
+    * orphan guard needed an empty queue.
+    */
+  private def orphanAtCap(scheme: StorageScheme): Unit =
+    val trie = orphaningTrie()
+    val peer = new ScriptedPeer(testKit)
+    val (walkPath, walkHash, _) = walkEntry("s022/review/orphan-walk-entry")
+    withHealer(scheme, trie.root.hash, peer, heldMemoryLimit = 1L) { (coordinator, _, disk) =>
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      peerAvailable(coordinator)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
+      // The root is held, its two children in flight: the cap is reached. A new subtree is queued now.
+      val level1 = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+      coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq(walkPath -> walkHash))
+      handled(coordinator)
+      // The leaf commits; the other child does not decode, so the root can never commit.
+      val undecodablePath =
+        Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](0), isLeaf = false)))
+      peer.answerFrom(level1, trie.served + (undecodablePath -> undecodable))
+      withClue("the new subtree is opened although a held node waits on a child that never commits: ") {
+        peer.manual.expectMessageType[SNAP.GetTrieNodes](10.seconds).paths shouldBe Seq(walkPath)
+      }
+      withClue("the root is never written: ")(disk.holds(trie.root) shouldBe false)
+    }
+
+  it should "open new subtrees at the held-memory cap when a held node waits on a child that never commits, under the Path scheme (beacon W1, hunter W2)" taggedAs UnitTest in {
+    orphanAtCap(StorageScheme.Path)
+  }
+
+  it should "open new subtrees at the held-memory cap when a held node waits on a child that never commits, under the Hash scheme (beacon W1, hunter W2)" taggedAs UnitTest in {
+    orphanAtCap(StorageScheme.Hash)
+  }
+
+  it should "fetch a queued walk entry first once a held parent finds it is its child, at the cap (promote, eye F5)" taggedAs UnitTest in {
+    val x = HealRequestFixtures.plainLeaf(Array[Byte](0x0a), "s022/review/promote-x")
+    val y = HealRequestFixtures.plainLeaf(Array[Byte](0x0b), "s022/review/promote-y")
+    val root = HealRequestFixtures.branch(0 -> x, 1 -> y)
+    val trie = Trie(
+      Seq(
+        Placed("root", None, Array.empty[Byte], root),
+        Placed("x", None, Array[Byte](0), x),
+        Placed("y", None, Array[Byte](1), y)
+      )
+    )
+    val peer = new ScriptedPeer(testKit)
+    // One request at a time, one path per request: the dispatch order is the order requests go out.
+    withHealer(StorageScheme.Hash, trie.root.hash, peer, heldMemoryLimit = 1L, concurrency = 1, batchSize = 1) {
+      (coordinator, controller, disk) =>
+        coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+        peerAvailable(coordinator)
+        val rootReq = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+        // While the root is in flight, a walk queues x: a new subtree, as far as it knows.
+        coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq(trie("x").pathset -> trie("x").hash))
+        handled(coordinator)
+        // The root arrives and is held (the cap is reached); x and y are its missing children. x was queued first, so
+        // once x frees held memory it goes before y; left as a new subtree it would be held back behind y.
+        peer.answerFrom(rootReq, trie.served)
+        val first = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+        first.paths shouldBe Seq(trie("x").pathset)
+        peer.answerFrom(first, trie.served)
+        val second = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+        second.paths shouldBe Seq(trie("y").pathset)
+        peer.answerFrom(second, trie.served)
+        controller.fishForMessage(30.seconds) {
+          case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+          case _                                       => FishingOutcomes.continueAndIgnore
+        }
+        trie.nodes.foreach(n => withClue(s"${n.label}: ")(disk.holds(n) shouldBe true))
+    }
+  }
+
+  it should "drop the persisted frontier entries of the held nodes a re-peg drops, under the Hash scheme (vault V5)" taggedAs UnitTest in {
+    val before = PathHealPresenceFixtures.accountTrieOld()
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    val peer = new ScriptedPeer(testKit)
+    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(EphemDataSource())
+    withHealer(StorageScheme.Hash, before.root.hash, peer, frontier = Some(frontier)) { (coordinator, _, _) =>
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
+      peerAvailable(coordinator)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+      answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], before, Set("leafY0", "leafY1"))
+      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(before("brX").pathset)
+      handled(coordinator)
+      withClue("held, so still a frontier entry: ")(frontier.get(before.root.hash).isDefined shouldBe true)
+      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+      handled(coordinator)
+      withClue("the old root, dropped by the re-peg: ")(frontier.get(before.root.hash) shouldBe None)
+      withClue("the old ext, dropped by the re-peg: ")(frontier.get(before("ext").hash) shouldBe None)
+      withClue("brX, in flight at the re-peg: ")(frontier.get(before("brX").hash) shouldBe None)
+    }
+  }
+
+  it should "on force-complete write what was committed and not flushed, and never the held nodes, under the Hash scheme (T025, eye F7)" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val peer = new ScriptedPeer(testKit)
+    // The asynchronous flushes never run: what is committed stays in the flush buffer until force-complete.
+    val never = new ExecutionContext:
+      def execute(runnable: Runnable): Unit = ()
+      def reportFailure(cause: Throwable): Unit = ()
+    withHealer(StorageScheme.Hash, trie.root.hash, peer, writerEc = Some(never)) { (coordinator, controller, disk) =>
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      peerAvailable(coordinator)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
+      // brY's leaves arrive and brY's subtree is committed (buffered); brX never arrives, so root and ext stay held.
+      answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], trie, Set("leafY0", "leafY1"))
+      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(trie("brX").pathset)
+      Seq("leafY0", "leafY1", "brY").foreach(l => withClue(s"$l, buffered: ")(disk.holds(trie(l)) shouldBe false))
+      coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      Seq("leafY0", "leafY1", "brY").foreach(l => withClue(s"$l, written: ")(disk.holds(trie(l)) shouldBe true))
+      Seq("root", "ext").foreach(l => withClue(s"$l, held: ")(disk.holds(trie(l)) shouldBe false))
+    }
+  }
+
+  it should "on a re-peg whose commit write throws, drop the ready nodes unwritten and heal the new root, under the Path scheme (eye F7)" taggedAs UnitTest in {
+    val before = PathHealPresenceFixtures.accountTrieOld()
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    val peer = new ScriptedPeer(testKit)
+    // Every batch that writes brY's position fails until the test lets it through.
+    val failing = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val brYKey = HealRequestFixtures.accountKey(Array[Byte](1))
+    val source = new EphemDataSource(Map.empty):
+      override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+        val writesBrY = updates
+          .flatMap(HealRequestFixtures.Op.of)
+          .exists(op => !op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == brYKey)
+        if failing.get() && writesBrY then throw new RuntimeException("injected write batch failure")
+        super.update(updates)
+    withHealer(StorageScheme.Path, before.root.hash, peer, pathSource = source) { (coordinator, controller, disk) =>
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
+      peerAvailable(coordinator)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+      answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], before, Set("leafY0", "leafY1"))
+      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(before("brX").pathset)
+      handled(coordinator)
+      // brY's subtree is ready but its write keeps failing: nothing of it is on disk.
+      Seq("leafY0", "leafY1", "brY").foreach(l =>
+        withClue(s"$l before the re-peg: ")(disk.holds(before(l)) shouldBe false)
+      )
+      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+      handled(coordinator)
+      Seq("leafY0", "leafY1", "brY", "root", "ext").foreach { l =>
+        withClue(s"$l after the re-peg: ")(disk.holds(before(l)) shouldBe false)
+      }
+      // The writes work again: the new root heals completely, brY's subtree fetched again.
+      failing.set(false)
+      peer.serveFrom.set(Some(after.served))
+      peerAvailable(coordinator)
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      after.nodes.foreach(n => withClue(s"${n.label} after healing: ")(disk.holds(n) shouldBe true))
+    }
   }

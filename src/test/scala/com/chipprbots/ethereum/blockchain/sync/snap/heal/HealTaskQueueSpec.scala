@@ -73,3 +73,19 @@ class HealTaskQueueSpec extends AnyFlatSpec with Matchers:
     q shouldBe empty
     q.dequeue(5, paused = false) shouldBe empty
   }
+
+  it should "when not paused, take both kinds of fetch strictly deepest first, ties in the order queued (eye F5)" taggedAs UnitTest in {
+    val freeing = mutable.Set(ByteString(Array[Byte](2)), ByteString(Array[Byte](4)), ByteString(Array[Byte](5)))
+    val q = queue(freeing)
+    q ++= Seq(
+      F("walk", 9, 1),
+      F("child", 9, 2),
+      F("shallow-child", 3, 4),
+      F("root", 0, 3),
+      F("deep-child", 12, 5),
+      F("mid-walk", 3, 6)
+    )
+    q.openingCount shouldBe 3
+    q.dequeue(10, paused = false).map(_.name) shouldBe
+      Seq("deep-child", "walk", "child", "shallow-child", "mid-walk", "root")
+  }
