@@ -184,7 +184,7 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
 
 **Existing datadirs and compatibility**
 
-- **FR-015**: The node MUST record, in the datadir, that its state was healed under this invariant. On a datadir without that record, healing in progress or state not yet declared complete, the node MUST run one audit-and-repair pass before declaring completion. Under in-memory pruning the invariant does not hold on disk (healed nodes reach it only as the node cache evicts them), so the record MUST NOT be written or trusted there and the pass runs at every start.
+- **FR-015**: The node MUST record, in the datadir, that its state was healed under this invariant. On a datadir without that record, healing in progress or state not yet declared complete, the node MUST run one audit-and-repair pass before declaring completion. Under in-memory pruning on the Hash scheme the invariant does not hold on disk (healed nodes reach it only as the node cache evicts them), so the record MUST NOT be written or trusted there and the pass runs at every start. (The Path scheme writes round the cache, so this does not apply to it: slice 4, V-N2 (4).)
 - **FR-016**: The persisted heal frontier MUST stay bounded on both schemes. Entries for nodes that have been persisted MUST be removed (today the Path scheme never removes them).
 
 **Observability**

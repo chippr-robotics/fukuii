@@ -52,6 +52,7 @@ Paths are relative to `src/main/scala/com/chipprbots/ethereum/blockchain/sync/sn
 - **Hash heal [V]:** `rawNodeBuffer` → `storeRawNodes` → `ArchiveNodeStorage.update`, CF `n`. Flushes hold at least 1000 nodes (`rawFlushThreshold`, `TrieNodeHealingCoordinator.scala:338`) and are not aligned to chains.
 - **Atomicity [V]:** `RocksDbDataSource.scala:257-276` puts every `DataSourceUpdateOptimized` passed to one `update()` into a single WriteBatch, across CFs. WAL is on everywhere. The default is `setSync(false)`; `updateSync` fsyncs. `max-total-wal-size` is 512 MiB.
 - **#1549 is live on the heal path [V].** `flushRawNodesAsync` (`FrontierPersistence.scala:185-206`) clears the buffer before the Future writes. If the write fails, `FlushComplete` is never sent, `flushing` stays true, and the nodes are lost. The earlier fix covered storage download only (`StorageOrderedApply:448`).
+- **WAL recovery [V, slice 4, vault V10]:** `RocksDbDataSource` sets no `walRecoveryMode`, so RocksDB's default `kPointInTimeRecovery` applies: replay stops at the first inconsistent record, which is the prefix-consistent tail the bullets below assume, and a Path batch spanning two column families is one WAL record. No code change.
 - **Crash windows after D3 [I]:**
   - a kill between chain batches is harmless;
   - a SIGKILL keeps WAL records already handed to the OS;
@@ -97,6 +98,16 @@ Paths are relative to `src/main/scala/com/chipprbots/ethereum/blockchain/sync/sn
   - abandoned accounts can perhaps be recovered from the contract-storage task file plus the absence of a `SnapStorageDone` marker. Markers are deliberately kept on force-complete (`DownloadSupervisor:757-759`), but forge reports that they are cleared at `DownloadSupervisor:760` [conflict: check in Slice 0];
   - the datadir therefore needs one full repair pass.
 
+## R-5c. What the walk costs once the records are gone (slice 4)
+
+**Verified in the code, not measured at scale. The Mordor dev loop will give the first number.**
+
+- **The walk is a full descent [V].** `FrontierRebuildBfs` enqueues every hash-referenced child of a present branch or extension, and the storage root of every account leaf; inline children cannot hold a hash reference; the bounded visited set evicts, so it re-walks and never truncates. Once the subtree records are gone nothing stops it. **It does not read code [V].**
+- **The Hash controller's trie walk is not one [V].** `StateValidator.walkAccountTrieDFS` reads a present `HashNode` and stops ("proven subtree"). `findMissingNodesStreaming` and `findMissingNodesWithPaths` are depth 1 under the root. Hence the stamp's proof is the coordinator's walk.
+- **The pruned oracle saved little [V].** Records were written only for heal-closed subtrees, and only where every child was recorded too. Nothing in the download phase wrote one, so on a heal after a download nearly all present nodes were descended anyway: it saved the healed part, and only on Hash.
+- **The scoped verification and the resume saved more, but only after a restart [V].** A completeness marker was set by a rebuild walk, or at a completion. A fresh sync's first gate had none, so it walked in full then too. After a restart, a marker let the resume skip the rebuild and let the gate walk only the healed subtrees.
+- **So:** a fresh sync's walks cost what they did, less the healed-subtree saving. A restart during healing costs what a fresh start's walk does, where a persisted frontier and a marker used to spare it, and the verification after it walks the whole root too: up to two full walks where a restart used to cost one scoped one. Each dirty pass is a full walk. Scale, from this spec's own figures: ETC mainnet 16-20 h a walk; Sepolia 787 M nodes, about 6 times that many (T057 measures it). All of this ends at slice 5 for marked datadirs. A release must not ship slice 4 without slice 5 on a chain where a walk takes hours and a node may restart.
+
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
 
 **Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**
@@ -120,26 +131,14 @@ Paths are relative to `src/main/scala/com/chipprbots/ethereum/blockchain/sync/sn
 
 `src/it/scala` has none. In production the frontier is on (`sync.conf:152`), and the store also exists whenever `pruned-heal-verification` is on. Paths below are under `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/`.
 
-- **Delete or rewrite in slice 4:**
-  - `HealingFrontierResumeSpec`:
-    - `:141` and `:177` (restore across restart): delete;
-    - `:150`, `:161`, `:171`: rewrite as "a restart re-seeds from the current root";
-    - `:189`, `:202`, `:215`, `:226`: delete.
-  - `healing/FrontierPersistenceSpec:160-230`: delete the persist, unpersist and clear halves.
-  - `healing/FrontierPersistenceOrderSpec:172,184`: delete.
-  - `healing/HealResponseProcessingSpec:342`: drop the `m.persisted` assertion.
-- **`store.isComplete` assertions that fail once the marker stops** (slice 4):
-  - `CleanRebuildEarlyCompletionSpec:158,213`
-  - `DecoupledHealSafetySpec:313`
-  - `ScopedVerificationParitySpec:143`
-  - `ScopedVerificationFallbackSpec:175,189`
-  - `PrunedHealParitySpec:147`
-- **Spec 005 subtree records** (slice 5, T056): `SubtreeCompleteSeedingSpec`, `PrunedHeal*`, `healing/FrontierRebuildBfsSpec:226`, `HealResponseProcessingSpec:399`.
+- **As done in slice 4** (the mechanism left then, not at T056):
+  - deleted: `PrunedHealVerificationSpec`, `PrunedHealFallbackSpec`, `PrunedHealCrashSafetySpec`, `PrunedHealParitySpec`, `SubtreeCompleteSeedingSpec`, `ScopedVerificationParitySpec`, `ScopedVerificationFallbackSpec`, `ScopedVerificationObservabilitySpec`, `TrieNodeHealingScopedVerificationSpec`, `TrieNodeHealingScopeCaptureSpec`;
+  - rewritten: `HealingFrontierResumeSpec` ("a restart walks from the current root, and CF `g` makes no difference"), `FrontierRebuildBfsSpec` (a recorded subtree is descended), `HealWalkSingleFlightSpec`, `DecoupledHealSafetySpec`, `CleanRebuildEarlyCompletionSpec`, `HeldNodeSetSpec`, `HealVerificationSpec`, `FrontierPersistenceSpec`, `FrontierPersistenceOrderSpec`, `HealResponseProcessingSpec`, `HealFlushFailureSpec`, `CodeDependencySpec`, `TrieNodeHealingDispatchTableSpec` (`RestartResumeVerification` went). A completeness assertion became the coordinator's clean walk root where one still applied.
 - **Keep:** the format pins `db/storage/HealingFrontierStorage*Spec` and `SnapFrozenFormatsGoldenSpec:234,366-389`. The storage class is still needed to clear `g`.
-- **Wiring, compile-only edits:** `SNAPSyncControllerPinSpec:100-160,320-335`, `HealingOrchestratorSpec:257-258`, about 13 `notReached("healingFrontier")` stubs, `TrieNodeHealingDispatchTableSpec:108`.
+- **Wiring:** `SNAPSyncControllerPinSpec:100-160,320-335` and `ChildFactoriesSpec` pin the spawn's four settings (`scopedHealVerification`, `scopedHealMaxPaths`, `prunedHealVerification`, `frontierPersistenceEnabled`) and `stateIngest.healingFrontier`. Slice 4 keeps them, unread, so those pins hold; they go together, in a `# pins:` change. It edits one pinned assertion: the spawn no longer clears a marker under in-memory pruning (T044).
 - **Other writers to `g` beyond `persistFrontier`/`unpersistFrontier`:**
   - `markComplete` (`TrieNodeHealingCoordinator:843,1124`);
-  - `clearComplete` (`FrontierPersistence:105`);
+  - `clearComplete` (`FrontierPersistence:105`, the spawn under in-memory pruning, and a restart's unreadable-frontier branch);
   - `markSubtreeComplete` (`FrontierPersistence:162`, `TrieNodeHealingCoordinator:1119`).
 
   All of them must stop for T040 to hold. Scoped verification gates on `isComplete` (`:1142`), so it goes dark with them.

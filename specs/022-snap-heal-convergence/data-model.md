@@ -64,19 +64,37 @@ These are the logical entities. Field names are indicative, and the final names 
 
 | Key | Value | Semantics |
 |-----|-------|-----------|
-| `snap.heal.invariant` | version (`2`) | Set only on an empty datadir at SNAP start, or after a repair pass finds zero holes. Means "everything present was written under present ⇒ complete". **Does not mean complete.** Never set (or trusted) under `pruning.mode = inmemory`, where healed nodes reach disk only as the node cache evicts them; the repair pass runs at every start there. |
-| `checkpoint.import.inProgress` | root plus start time | Set before a checkpoint import starts writing, and cleared on CRC success. If it is present at SNAP start, the datadir counts as pre-invariant. |
+| `snap.heal.invariant` | version (`2`) | Means "everything present was written under present ⇒ complete". **Does not mean complete.** A value of another version does not stand. |
+| `checkpoint.import.inProgress` | root hex, `:`, start ms | Set before a checkpoint import writes its first node, synced, in one write with the marker's removal. Cleared on CRC success, in the batch that writes the import's done flags, and by a stamp. While it is present the datadir is pre-invariant, whatever else it holds. |
+| `snap.heal.datadirCreated` | version (`2`) | Written when the genesis is first stored on a datadir that held none. A datadir created by an older binary never has it. The evidence that "empty" rests on. |
+| `snap.heal.frontierRetired` | `true` | CF `g` has had its one-time clear. |
 
-**Pre-invariant states:**
-- no marker but heal progress exists;
-- a checkpoint import in progress;
-- a `clearDoneOnStart` restart.
+Every write of these keys is one `updateSync` batch (the frontier key's write also makes the range delete before it durable: one WAL).
 
-Each of these leads to one repair pass (audit, then heal), and then the marker is stamped.
+**Stamped**, in a batch that also removes the import key, at exactly two points:
+- at a SNAP start, on an **empty** datadir. Empty is defined conservatively (`HealInvariant.isEmpty`): `snap.heal.datadirCreated` is there, no import key, best block 0, nothing done, none of the keys a sync writes before its first trie node (pivot, floor, bootstrap target, root, finalized root, progress, resume checkpoint, phase flags, task-file pointers), and both Path column families empty. The hash-keyed store cannot be asked: it holds the genesis trie on every datadir. A datadir that fails any of this costs one walk;
+- at a clean walk completion: the three exits from healing in `HealingOrchestrator` (`TrieWalkComplete(0)`, `TrieWalkResult(empty)`, `completeHealingWalkClean`), each only if the coordinator's clean full walk covered this root (`healingCleanWalkRoot`). The Hash controller's own trie walk reads a present hash node and stops, so it is not the repair pass, and its `TrieWalkComplete(0)` alone stamps nothing.
+
+**Removed:**
+- when a checkpoint import starts writing; a successful import does not bring it back;
+- at a finalisation with no clean full walk of the finalised root behind it, whatever the route: every lazy hand-off, since from there regular sync fetches what is missing a node at a time;
+- wherever `SnapSyncDone` is cleared, in the same batch: `clearDoneOnStart`, a stuck regular sync, a failed hand-off, a dangling best block. `clearDoneOnStart` removes it when SNAP was not done too;
+- at a SNAP start where the marker cannot hold, or where the import key is set.
+
+**Pre-invariant states:** no marker and not empty; a checkpoint import in progress; a `clearDoneOnStart` restart. A pre-invariant datadir gets one repair pass: **while the walk still runs at every completion (until slice 5), the repair pass is that walk**, and the marker records how it ended. No separate engine.
+
+**Where it cannot hold:** on the Hash scheme under `pruning.mode = inmemory`. The trie store there is the node cache, which writes healed nodes as it evicts them, so a crash can leave a present node over an absent child. Never stamped, and one found is removed. The verification walk stays at every start and completion, and that walk is the repair: one mechanism (V-N2 (3)). **The rule is scheme-aware (V-N2 (4)):** the Path scheme's account, storage and heal writes all go to the two Path column families through `PathNodeStorage`, in atomic batches, and never through the cache, so the marker holds on Path under any pruning mode.
+
+**What it does not claim:**
+- **Code.** The walk reads no code. On a datadir written by older binaries an account's code can be missing with nothing saying so, and a stamp does not change that. Missing code is found as before: by the recovery scan, or at import, where it throws and starts a bulk recovery. On a datadir written under the invariant, code is a dependency of its leaf (D4).
+- **What the walk did not reach.** A clean walk proves what is reachable from its root. A present node from an older binary that no walked root reaches can sit over a hole, and a later root can reach it (a state that comes back). Under slice 5 that is what the background audit and the on-demand path are for: a liveness fault (R-4).
+- **What a later older binary writes.** An older binary neither reads nor clears the marker. Run on a marked datadir, its writes are not vouched for, and nothing here can tell. A downgrade needs `clearDoneOnStart` or a new datadir.
 
 ## Persisted frontier (CF `g`): retired
 
-On the first start with marker support, CF `g` is cleared with one `deleteRange`. That removes frontier entries, `CompleteMarkerKey` and the spec 005 subtree-complete records. After that, CF `g` gets no new writes.
+On every node start until it has happened, CF `g` is cleared with one `deleteRange`, then `snap.heal.frontierRetired` is written, synced. That removes frontier entries, `CompleteMarkerKey` and the spec 005 subtree-complete records. A crash before the key clears again at the next start. The family is then compacted off the actor's thread, since with no more writes nothing else would compact it; a crash before that costs the space until something does.
+
+Nothing writes to CF `g` afterwards, under any pruning mode, and nothing reads it: not the resume, not the pruned oracle, not the scoped verification's precondition. `g` stays listed in `Namespaces.nsSeq`.
 
 ## Metrics and logs (FR-014, FR-017, FR-018)
 

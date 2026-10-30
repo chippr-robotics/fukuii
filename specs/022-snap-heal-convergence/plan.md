@@ -147,6 +147,7 @@ Evidence for each decision is in research.md.
   - On the first start of the new version, CF `g` is cleared with one `deleteRange`. This drops the frontier and spec 005's subtree-complete records, which are untrusted under the new invariant.
   - This fixes FR-016.
   - **Check first:** the spec 016 resume tests that assume frontier resume (task T0.3).
+  - *As built (slice 4):* every writer and every reader goes: the resume, the pruned oracle and the scoped verification, whose precondition was the retired marker. A restart always walks. Until slice 5 that raises what a restart costs: see research R-5c.
 - **D7. The invariant marker** (FR-015; R-5).
   - A versioned key in AppState `s`, written with `updateSync`.
   - Stamped only on an **empty** datadir at SNAP start, or after a repair pass finds zero holes.
@@ -155,6 +156,7 @@ Evidence for each decision is in research.md.
     - no marker;
     - a checkpoint import in progress (a new "import in progress" key, because the importer writes parent-first and a failed import falls through to SNAP on the same datadir: `SyncController:1510`);
     - a `clearDoneOnStart` restart (`:1516`).
+  - *As built (slice 4):* while the walk runs at every completion, the repair pass is that walk, the coordinator's clean full walk of the root that completes. Never stamped or trusted on the Hash scheme under `pruning.mode = inmemory`; the Path scheme writes round the node cache, so it holds there. The marker also goes at any finalisation with no such walk behind it, and wherever `SnapSyncDone` is cleared. What it does and does not claim is in data-model.md "Invariant marker".
 - **D8. Completion and audit.**
   - `isComplete` = no pending, in-flight or held requests, and an empty excluded set, for the current root.
   - **Removed:**
