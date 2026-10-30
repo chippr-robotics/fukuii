@@ -784,4 +784,12 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     withClue("nor waiting: ")(m.healRequests.contains(bRequest.key) shouldBe false)
     withClue("P stays held, for the orphan guard: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
     withClue("no put-back node counts as healed, so stagnation can fire: ")(m.totalNodesHealed shouldBe 1)
+    withClue("the give-up goes to the controller's stagnation path, once: ") {
+      h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } should have size 1
+      m.pivotRefreshRequested shouldBe true
+    }
+    // B found again (a walk entry, say) and given up on again while that escalation is pending: not sent twice.
+    h.respond(5, p, Seq(HealingEntry(Seq(compact(0)), hashOf(b))), Seq(bytes(b)))
+    m.pendingTasks shouldBe empty
+    h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } shouldBe empty
   }
