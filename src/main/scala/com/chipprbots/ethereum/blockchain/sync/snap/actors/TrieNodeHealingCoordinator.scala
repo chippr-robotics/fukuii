@@ -998,7 +998,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // conjunct holds — each excludes a specific false-completion path (research D2 + adversarial verdict):
       //   missingEmitted == 0    — the deciding walk found nothing missing (no gap discovered).
       //   totalNodesHealed == 0  — nothing healed during the walk (excludes heal-during-walk mutation;
-      //                            conservative `== 0`, D5; cumulative counter preserved across pivots).
+      //                            conservative `== 0`, D5; cumulative counter preserved across pivots). A fill
+      //                            put back or given up on writes nothing, so it is not counted and need not be:
+      //                            this arm rests on the clean full walk (missingEmitted == 0), not on the count.
       //   isComplete             — pendingTasks.isEmpty && activeRequests.isEmpty: no outstanding frontier
       //                            or in-flight request (excludes outstanding work).
       //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
@@ -1257,21 +1259,21 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       if heldNodes.hasPendingWrites then commitHeld()
       dropOrphanedHeld()
       if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && flushRawNodesSync() then
-        // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
-        // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
-        // all nodes were already in local storage — either way the trie is complete from our
-        // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
-        // HealingPivotRefreshed calling startVerificationBFS directly, not through this gate.
+        // spec 022 review hunter-r3 C1, forge F6, beacon W1-r3 and N3-r3: completion needs a clean walk of the current
+        // root in this incarnation (verificationPassComplete: a verification walk, or the full rebuild walk, that found
+        // nothing missing, each started only on a written flush buffer). There is no arm for "nothing was healed": a node
+        // given up on is not healed either, and a supervisor-restarted incarnation starts from zero, so in neither case
+        // does that count show that nothing is missing. With no clean pass yet, the check walks (the `else` below).
         // spec 022 T026: the gate's flushRawNodesSync() above wrote every buffered node, or the gate stays shut.
-        if verificationPassComplete || totalNodesHealed == 0 then
+        if verificationPassComplete then
           log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
           // FR-002: mark the snapshot complete ONLY on the verified-complete path — a verification BFS
           // actually walked the trie and found zero missing nodes (verificationPassComplete == true).
-          // FR-004: do NOT mark on the pure `totalNodesHealed == 0` idle arm: the coordinator was never
-          // given work, so the trie may be untraversed and we cannot assert completeness. Setting the
-          // marker here (gated on verificationPassComplete) is the single completion chokepoint for the
-          // verification path — VerificationBFSComplete routes through HealingCheckCompletion, so this is
-          // equivalent to (and cleaner than) writing the marker inside VerificationBFSComplete.
+          // FR-004: never mark without that walk. The unwalked `totalNodesHealed == 0` arm this rule used to exclude is
+          // gone, so every completion here marks; the guard below states the marker's own precondition. Setting the
+          // marker here is the single completion chokepoint for the verification path — VerificationBFSComplete
+          // routes through HealingCheckCompletion, so this is equivalent to (and cleaner than) writing the marker
+          // inside VerificationBFSComplete.
           if verificationPassComplete then
             stateIngest.healingFrontier.foreach { store =>
               // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — the
@@ -1330,8 +1332,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     case VerificationBFSComplete(walkRoot, _) if walkRoot != stateRoot =>
       // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
       // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
-      // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
-      // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
+      // observability flags, then verify the CURRENT root explicitly (`reverifyCurrentRoot` also clears the stale
+      // verdict, so the completion check cannot complete on it).
       verificationBFSRunning = false
       consecutiveStaleDiscards += 1
       log.warn(

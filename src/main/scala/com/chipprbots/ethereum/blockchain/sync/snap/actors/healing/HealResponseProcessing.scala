@@ -30,7 +30,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
   * stateless set and its strikes and the staged spec 005 subtree records; it writes the progress counters
   * (`totalNodesHealed`, `crossRootHealCount`, `totalBytesReceived`, `completedTaskCount`), the pivot-refresh latch and
   * its timestamp, and `lastHealedAtMs`; it reads the walk and serve roots and `knownAvailablePeers` (and evicts from
-  * it). `prunedEnabled` is an immutable val rule (d) keeps in the core.
+  * it). `prunedEnabled` is an immutable val rule (d) keeps in the core. A give-up clears `verificationPassComplete`.
   */
 private[actors] trait HealResponseProcessingState:
   def stateRoot: ByteString
@@ -56,6 +56,7 @@ private[actors] trait HealResponseProcessingState:
   var lastHealedAtMs: Long
   def prunedEnabled: Boolean
   def pendingSubtreeRecords: mutable.Set[ByteString]
+  var verificationPassComplete: Boolean
 
 /** What `reverifyCurrentRoot` calls: `isComplete`, nothing pending and nothing in flight. `HealResponseProcessing`
   * provides it (spec 016 C-H5).
@@ -442,6 +443,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               s"its ${parents.size} parent(s) stay held until the orphan guard drops them",
             readFailure
           )
+          // spec 022 review forge F6: a node known missing was dropped, so no earlier clean pass vouches for completion;
+          // the completion check walks again (and finds it, if the current root still needs it).
+          verificationPassComplete = false
           // Escalated once to the controller's stagnation path (as the pulse does, NB-11): afterwards nothing may be
           // pending, so the pulse's own stagnation count never starts. Its answer (hold: resume dispatch, which runs the
           // orphan guard; or a re-peg) resets the latch.

@@ -74,11 +74,11 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
   this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi & WalkFlushApi =>
 
   /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
-    * against a superseded root or found missing nodes. Starts the walk directly (not via HealingCheckCompletion): the
-    * gate's `totalNodesHealed == 0` arm would declare completion without any walk. When work is still pending or a
-    * flush is in flight the normal gate re-verifies once it drains (`verificationPassComplete == false` forces a walk).
-    * The walk itself starts only once the flush buffer is written (`startVerificationBFS`, spec 022 review forge F1); a
-    * buffer that holds anything means something was healed, so the gate that retries it walks too.
+    * against a superseded root or found missing nodes. Clears that verdict and starts the walk directly when nothing is
+    * pending or in flight; otherwise the completion check walks once the work drains (`verificationPassComplete ==
+    * false`: the check completes only on a clean pass, spec 022 review hunter-r3 C1). The walk itself starts only once
+    * the flush buffer is written (`startVerificationBFS`, spec 022 review forge F1); a buffer that holds anything means
+    * something was healed, so the gate that retries it walks too.
     */
   def reverifyCurrentRoot(): Unit =
     scopedVerificationActive = false
@@ -111,8 +111,8 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * over an unwritten buffer reads the buffered nodes as missing and is refused their fetch (they are complete), so it
     * ends dirty, and the next walk would too, with nothing writing the buffer: a stall no re-peg ends (the walk keeps
     * `walkLocalOnly` set). When the write fails, no walk starts; the completion check retries the write at once and the
-    * 2-minute pulse after that, and the check's own walk follows a write that succeeds (a buffer that held anything
-    * means something was healed, so `totalNodesHealed > 0` and the check walks rather than completes).
+    * 2-minute pulse after that, and the check's own walk follows a write that succeeds (the check completes only on a
+    * clean pass, so with none it walks).
     */
   private def walkMayStart(what: String): Boolean =
     if flushedForWalk() then true
