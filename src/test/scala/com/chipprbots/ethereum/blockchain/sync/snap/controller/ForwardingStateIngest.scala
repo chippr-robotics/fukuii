@@ -54,3 +54,22 @@ final private[snap] class ForwardingStateIngest(
 private[snap] object ForwardingStateIngest:
   def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"module stub read StateIngest.$member")
+
+/** A `StateIngest` that hands out the excluded set's store alone; a module stub that reaches anything else fails
+  * loudly.
+  */
+final private[snap] class ForwardingStateIngestForProgress(progress: SnapSyncProgressStorage) extends StateIngest:
+  def appState: AppStateStorage = ForwardingStateIngest.notReached("appState")
+  def stateTries: StateStorage = ForwardingStateIngest.notReached("stateTries")
+  def flatSlots: FlatSlotStorage = ForwardingStateIngest.notReached("flatSlots")
+  def pathNodes: Option[PathNodeStorage] = ForwardingStateIngest.notReached("pathNodes")
+  def bytecode: EvmCodeStorage = ForwardingStateIngest.notReached("bytecode")
+  def chainReader: BlockchainReader = ForwardingStateIngest.notReached("chainReader")
+  def chainWriter: BlockchainWriter = ForwardingStateIngest.notReached("chainWriter")
+  def validatorFactory: MptStorage => StateValidator = ForwardingStateIngest.notReached("validatorFactory")
+  def durability: StateIngest.Durability = StateIngest.Durability.Default
+  def trieStore(pivot: BigInt): MptStorage = ForwardingStateIngest.notReached("trieStore")
+  def snapProgress: SnapSyncProgressStorage = progress
+  def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
+  def healingFrontier: Option[HealingFrontierStorage] = ForwardingStateIngest.notReached("healingFrontier")
+  def bfsQueue: Option[BfsQueueStorage] = ForwardingStateIngest.notReached("bfsQueue")

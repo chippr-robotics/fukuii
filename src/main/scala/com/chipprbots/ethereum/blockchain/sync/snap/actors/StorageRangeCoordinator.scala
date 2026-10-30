@@ -10,12 +10,15 @@ import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -621,6 +624,36 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
     }
 
+  /** spec 022 T033, at a force-complete: every account whose storage is left incomplete goes into the durable excluded
+    * set before anything is dropped: queued, in flight, answered but not applied, waiting in the ordering gate, or with
+    * a partial trie and no task left. False when the write failed: nothing is dropped and nothing is reported (a
+    * force-complete that reported without its record could never be told from a clean one), and it tries again.
+    */
+  private def recordAbandonedAtForceComplete(): Boolean =
+    val entries = mutable.LinkedHashMap.empty[ByteString, ExcludedAccount]
+    def abandon(task: StorageTask): Unit =
+      entries(task.accountHash) =
+        ExcludedAccount(task.accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = task.storageRoot)
+    tasks.foreach(abandon)
+    activeTasks.values.foreach { case (_, batch, _) => batch.foreach(abandon) }
+    pendingResponses.foreach(_.tasks.foreach(abandon))
+    pendingOrderedChunks.values.foreach(_.values.foreach(chunk => abandon(chunk.task)))
+    pendingAccountTries.keysIterator
+      .filterNot(entries.contains)
+      .foreach(account => entries(account) = ExcludedAccount(account, ExcludedReason.StorageAbandoned))
+    try
+      stateIngest.snapProgress.recordExcluded(entries.values.toSeq)
+      true
+    catch
+      case NonFatal(e) =>
+        log.error(
+          s"[STORAGE-FORCE-COMPLETE] Could not record the ${entries.size} account(s) it would abandon — not " +
+            "force-completing; trying again shortly",
+          e
+        )
+        timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
+        false
+
   private def handleCommand(msg: Command): Behavior[Command] =
     msg match
       case StartStorageRangeSync(root) =>
@@ -754,7 +787,7 @@ private[actors] class StorageRangeCoordinatorImpl(
 
       case ForceCompleteStorage =>
         if forceCompleteExecuted then log.debug("ForceCompleteStorage: already executed — ignoring duplicate")
-        else
+        else if recordAbandonedAtForceComplete() then
           forceCompleteExecuted = true
           // Responses received but not applied are abandoned with the in-flight requests (healing recovers them).
           val droppedResponses = abandonPendingResponses()
@@ -774,6 +807,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           lastAppliedSlot.clear()
           pendingOrderedChunks.clear()
           staleRootFailuresByAccount.clear()
+          // spec 022 T033: recorded above, each at its give-up: this list only keeps late answers from applying.
           abandonedAccounts.clear()
           // The in-flight requests are abandoned with the tasks: cancel their tracker timers so a timeout cannot
           // re-count failures (and re-send ForceCompleteStorage) for work this coordinator no longer owns.
@@ -1124,6 +1158,9 @@ object StorageRangeCoordinator:
   /** Periodic: submit buffered flat slots that staged completion markers wait on, and every marker that may ride. */
   private[actors] case object FlushStorageDoneMarkers extends Command
   private[actors] val DoneMarkerFlushInterval: FiniteDuration = 10.seconds
+
+  /** spec 022 T033: how soon a force-complete whose excluded-set write failed tries again. */
+  private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
 
   /** Aggregated flat-slot batch failed to commit. Healing phase is expected to re-fetch the missing slots. */
   private[actors] case class FlatBatchFlushFailed(

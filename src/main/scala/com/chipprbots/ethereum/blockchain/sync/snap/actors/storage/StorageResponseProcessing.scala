@@ -9,6 +9,8 @@ import scala.concurrent.Future
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.*
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -79,6 +81,10 @@ private[actors] trait StorageResponseProcessing:
       distinctRoots: Int
   ): Unit =
     val accountHash = task.accountHash
+    // spec 022 T033: durable first; a clean end of the phase wipes the only other trace (R-5a).
+    stateIngest.snapProgress.recordExcluded(
+      Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = task.storageRoot))
+    )
     staleRootFailuresByAccount.remove(accountHash)
     // Give up the WHOLE account, not just the task that tripped the cap: a large account may be split into
     // parallel subtasks sharing one stale `storageRoot`; if only this subtask were dropped, each sibling would need K
@@ -301,6 +307,10 @@ private[actors] trait StorageResponseProcessing:
         emptyResponsesByTask.update(key, attempts)
 
         if attempts >= maxEmptyResponsesPerTask then
+          // spec 022 T033: durable first; a clean end of the phase wipes the only other trace (R-5a).
+          stateIngest.snapProgress.recordExcluded(
+            Seq(ExcludedAccount(task.accountHash, ExcludedReason.StorageSkipped, claimedStorageRoot = task.storageRoot))
+          )
           skipped += 1
           val doneTask = task.copy(done = true, pending = false)
           recordCompletedTask(doneTask)

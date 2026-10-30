@@ -99,7 +99,11 @@ private[actors] class StubStorageResponseProcessingState(
   def mptStorage: MptStorage = notReached("mptStorage")
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   val storageScheme: StorageScheme = StorageScheme.Hash
-  def stateIngest: StateIngest = notReached("stateIngest")
+  // spec 022 T033: the one store this module writes through the capability, the excluded set.
+  val progress: SnapSyncProgressStorage =
+    new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+  val stateIngest: StateIngest =
+    new com.chipprbots.ethereum.blockchain.sync.snap.controller.ForwardingStateIngestForProgress(progress)
   val flatBatchEntryThreshold: Int = 1000
 
   // The Apis (recorded)
@@ -375,6 +379,15 @@ class StorageResponseProcessingSpec extends AnyFlatSpec with Matchers:
     m.calls should contain(s"recordCompletedTask(${task.accountString})")
     m.calls should contain(s"resetAccountTrie(${task.accountString})")
     self.receiveAll() shouldBe Seq(StorageCheckCompletion)
+    withClue("spec 022 T033: recorded at the decision: ") {
+      m.progress.excludedPage(None, 10) shouldBe Seq(
+        com.chipprbots.ethereum.db.storage.ExcludedAccount(
+          task.accountHash,
+          com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped,
+          claimedStorageRoot = task.storageRoot
+        )
+      )
+    }
   }
 
   it should "route a proof-of-absence through the ordering gate with no slots" taggedAs UnitTest in {

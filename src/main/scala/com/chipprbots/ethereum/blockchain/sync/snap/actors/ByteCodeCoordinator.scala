@@ -12,6 +12,8 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.bytecode.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
@@ -296,6 +298,13 @@ private[actors] class ByteCodeCoordinatorImpl(
             "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
         )
         bytecodesAbandoned += abandonedTotal
+        // spec 022 T033: durable before they are dropped, and by hash: this download does not know the accounts that use
+        // them. Healing cannot complete until the code is there.
+        stateIngest.snapProgress.recordExcluded(
+          (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes))
+            .map(ExcludedAccount(_, ExcludedReason.CodeMissing))
+            .toSeq
+        )
         pendingTasks.clear()
         // Mark workers idle so they don't keep dispatching; drop active task tracking.
         activeTasks.values.foreach(active => markWorkerIdle(active.worker))

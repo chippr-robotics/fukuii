@@ -2165,7 +2165,8 @@ class StorageRangeCoordinatorSpec
     // A chunk waiting on an earlier sibling, in the ordering gate.
     impl.storageTrieCursor(chunked) = kec256(ByteString("excluded-earlier"))
     val peer = PeerTestHelpers.createTestPeer("excluded-peer", testKit.createTestProbe[Any]().ref.toClassic)
-    val late = StorageTask.createStorageTask(chunked, kec256(ByteString("excluded-chunked-root")))
+    val late = StorageTask
+      .createStorageTask(chunked, kec256(ByteString("excluded-chunked-root")))
       .copy(next = kec256(ByteString("excluded-later")))
     impl.applyOrderedStorageChunk(peer, late, doneSlots, Seq.empty)
     // A trie with no task left in any queue.
@@ -2224,23 +2225,6 @@ class StorageRangeCoordinatorSpec
     excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
   }
 
-  "A max-empty skip" should "record the account as skipped: the decision is durable before the task is dropped" taggedAs UnitTest in {
-    val (impl, _, _) = excludedFixture(deferred = true)
-    val account = kec256(ByteString("excluded-skip"))
-    val root = kec256(ByteString("excluded-skip-root"))
-    val task = StorageTask.createStorageTask(account, root)
-    val peer = PeerTestHelpers.createTestPeer("skip-peer", testKit.createTestProbe[Any]().ref.toClassic)
-    (1 to 5).foreach { i =>
-      excluded(account) shouldBe None
-      impl.activeTasks(BigInt(i)) = (peer, Seq(task), BigInt(1024))
-      impl.handleResponse(StorageRanges(requestId = i, slots = Seq.empty, proof = Seq.empty))
-      impl.tasks.clear()
-      impl.activeTasks.clear()
-    }
-    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped)
-    excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
-  }
-
   "A root mismatch" should "record the account: the computed trie is not the account's" taggedAs UnitTest in {
     val (impl, _, _, _) = doneMarkerFixture()
     val account = kec256(ByteString("excluded-mismatch"))
@@ -2256,4 +2240,3 @@ class StorageRangeCoordinatorSpec
     completeAccount(impl, account, storageRootOf(doneSlots))
     excluded(account) shouldBe None
   }
-

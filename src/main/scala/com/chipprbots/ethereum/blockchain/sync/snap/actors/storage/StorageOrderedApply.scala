@@ -15,6 +15,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PrebuiltStorageTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ReadyStorageChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.TrieNodeWrite
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -437,6 +439,18 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
             // max-empty skip, abandoned and force-complete paths never mark: a resume downloads those again. A root
             // mismatch is not marked either, so a restart retries it rather than leaving it all to healing.
             if rootVerified then stageDoneMarker(accountHash, task.storageRoot)
+            // spec 022 T033: the trie this download built is not the account's. Durable first: a clean end of the phase
+            // wipes the only other trace (R-5a).
+            else
+              stateIngest.snapProgress.recordExcluded(
+                Seq(
+                  ExcludedAccount(
+                    accountHash,
+                    ExcludedReason.StorageRootMismatch,
+                    claimedStorageRoot = task.storageRoot
+                  )
+                )
+              )
 
         task = task.copy(done = true, pending = false)
         recordCompletedTask(task)
