@@ -107,10 +107,11 @@ private[actors] trait FrontierPersistence
         if hashes.nonEmpty then store.update(hashes, Nil).commit()
       }
 
-  /** Clear the entire persisted frontier by deleting every outstanding hash. Because the persisted set equals
-    * `pendingTasks ∪ in-flight ∪ held`, deleting the pending and in-flight hashes here, and the held ones with
-    * [[unpersistDroppedHeld]] where they are dropped, empties the CF without a namespace-wipe primitive. MUST be called
-    * BEFORE the in-memory `pendingTasks`/`activeRequests` are cleared.
+  /** Invalidate the persisted frontier: drop the completeness marker, then delete the pending and in-flight hashes (the
+    * held ones go with [[unpersistDroppedHeld]] where they are dropped). Entries the orphan guard kept, and those of
+    * nodes given up on, can stay (the set may hold more than the outstanding union, never less); without the marker a
+    * restart rebuilds the frontier with a full walk and does not resume from them. MUST be called BEFORE the in-memory
+    * `pendingTasks`/`activeRequests` are cleared, and before any held node's entry is deleted.
     */
   def clearPersistedFrontier(): Unit =
     // FR/T013: a same-root HealingPivotRefreshed no longer reaches here — its early guard returns first.
@@ -118,12 +119,13 @@ private[actors] trait FrontierPersistence
     // abandonment), so dropping the completeness marker below is always correct.
     if frontierPersistenceEnabled then
       stateIngest.healingFrontier.foreach { store =>
+        // spec 022 review vault V-R5: the marker goes first, synced. A crash after it leaves a frontier without a marker,
+        // which a restart never trusts; a marker left over a frontier whose entries are gone would let it skip the walk.
+        store.clearComplete()
         val outstanding =
           pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator
             .flatMap(_.tasks.iterator.map(_.hash))
         if outstanding.nonEmpty then store.update(outstanding, Nil).commit()
-        // The snapshot is no longer valid/complete — drop the marker so a restart re-walks rather than resuming stale.
-        store.clearComplete()
       }
 
   /** Hash scheme: the held nodes `hashes` were dropped unwritten by a re-peg or a force-complete, so they leave the

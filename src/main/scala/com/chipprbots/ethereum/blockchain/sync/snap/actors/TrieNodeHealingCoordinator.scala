@@ -677,12 +677,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
             s"Signaling completion with $totalNodesHealed healed nodes."
         )
+        // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it. First, so the
+        // completeness marker is gone (synced) before any entry is deleted below (spec 022 review vault V-R5).
+        clearPersistedFrontier()
         // spec 022 T025: commit what is complete, flush it (it was never flushed before the stop), drop the rest. A
         // held node's subtree is not all present, so it is never written.
         commitHeld()
         flushRawNodesSync()
         dropHeld("Force-complete")
-        clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
         pendingTasks.clear()
@@ -714,6 +716,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
         )
         stateRoot = newStateRoot
+        // Layer 2: the old-root frontier is stale after the refresh (the reseed below repopulates it). Invalidated
+        // first, so the completeness marker is gone (synced) before the flush and `dropHeld` delete any entry (spec 022
+        // review vault V-R5). It reads only the pending and in-flight sets, which nothing before it here changes.
+        clearPersistedFrontier()
         // spec 022 T025: commit what is complete (with the stale positions already found) and flush it, then drop every
         // held node: its subtree is not all present, so it is never written. Discovery from the new root finds again
         // whatever the new root still needs.
@@ -724,12 +730,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
-        // healRequests / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
-        // which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
+        // healRequests / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier()
+        // (above), which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
         // records) and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes
         // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
         // fault).
-        clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
         clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
         pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
         // spec 022 FR-007/FR-010: every request (and Path alias) of the old root goes; discovery from the new root finds

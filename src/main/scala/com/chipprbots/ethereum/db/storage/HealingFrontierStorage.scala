@@ -64,8 +64,11 @@ class HealingFrontierStorage(val dataSource: DataSource)
     // (the restart simply descends that unrecorded subtree).
     put(HealingFrontierStorage.CompleteMarkerKey, Seq(ByteString(Array[Byte](1)))).commitSync()
 
-  /** Clear the completeness sentinel (the persisted frontier is no longer a trustworthy complete snapshot). */
-  def clearComplete(): Unit = remove(HealingFrontierStorage.CompleteMarkerKey).commit()
+  /** Clear the completeness sentinel (the persisted frontier is no longer a trustworthy complete snapshot). Synced,
+    * like [[markComplete]] (spec 022 review vault V-R5): it goes before any entry is deleted, and a power loss must not
+    * keep those deletes while losing it. It runs only on rare invalidations.
+    */
+  def clearComplete(): Unit = remove(HealingFrontierStorage.CompleteMarkerKey).commitSync()
 
   /** True iff a complete-snapshot marker is present. */
   def isComplete: Boolean = get(HealingFrontierStorage.CompleteMarkerKey).isDefined
