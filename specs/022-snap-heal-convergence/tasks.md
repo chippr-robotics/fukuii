@@ -150,6 +150,18 @@ Within each slice, **tests come before implementation**, and the tests must fail
     - Over the same window core-geth imported empty blocks at 15.5 s each on average (57 s at worst), so the SATA SSD was saturated for both processes. The slow bytecode phase has the same cause.
   - **Held set:** Mordor healed only 649 nodes. The cap was never reached (no `[HEAL-HELD]` pause), and the 2-minute pulse sampled after the drain (held=0), so the peak was **not captured**. The expected peak of about 43k nodes (20–45 MB) needs a larger heal. Sepolia gate T063 measures it.
   - Run the measured comparison again on a quiet host before slice 5's T057 timing.
+  - **Re-run on the reviewed head `c6768e799`** (2026-10-30, `/home/dontpanic/mordor-scarcity/S3`, jar sha256 `96cc4901…`):
+    - SNAP completed and handed off at pivot 17,292,570.
+    - Walk 1's result was **discarded as stale**, because a re-peg happened mid-walk; this is the round-4 current-root guard.
+    - Walk 2 found 41 missing nodes, which were healed. Walk 3 was clean, and healing declared 698 nodes healed.
+    - Regular sync followed the head to 17,292,725.
+    - No `[HEAL-KEY-CONFLICT]`, `[HEAL-HELD-CONFLICT]` or fault lines.
+    - Timings: bootstrap → handoff 27 min, storage-done → handoff 19 min, healing → handoff 10 min.
+    - About 80 s after handoff there was a burst of 16 `Could not get weight for parent` import errors that blacklisted the only peer. It also occurs on the pre-spec-022 run B, so it was filed as #1683 and is not slice-2.
+  - **Host disk finding (2026-10-30), which confounds both runs' timings:**
+    - TRIM never reaches the root SSD: `/etc/crypttab` has `luks` without `discard`, and `lsblk --discard` shows 0 B at `dm_crypt-0`.
+    - Under load the BX500 showed r_await 330–445 ms and w_await 235–320 ms at 3–7 IOPS.
+    - Redo the timing comparison after TRIM is enabled.
 
   Original task: Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
 
