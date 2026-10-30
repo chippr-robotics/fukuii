@@ -125,11 +125,9 @@ private[actors] trait ByteCodeResponseHandling:
                       s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
                         s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
                     )
-                    // spec 022 T033: durable before the hash is forgotten, and by hash: this download does not know the
+                    // spec 022 T033: durable when this message ends, and by hash: this download does not know the
                     // accounts that use it. Healing cannot complete until the code is there.
-                    stateIngest.snapProgress.recordExcluded(
-                      exhausted.map(ExcludedAccount(_, ExcludedReason.CodeMissing))
-                    )
+                    excludedRecorder.stage(exhausted.map(ExcludedAccount(_, ExcludedReason.CodeMissing)))
                     exhausted.foreach(hashFailureCounts.remove)
                   if retryable.nonEmpty then
                     log.info(

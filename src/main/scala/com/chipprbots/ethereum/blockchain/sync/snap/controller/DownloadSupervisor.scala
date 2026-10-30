@@ -135,7 +135,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
                 snapSyncController = ctx.self,
-                intakeBudget = Some(intakeBudget)
+                intakeBudget = Some(intakeBudget),
+                recordExcluded = true
               )
             )
             .onFailure[Throwable](
@@ -172,7 +173,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 storageScheme = snapSyncConfig.storageScheme,
                 stateIngest = stateIngest,
                 recordStorageDone = recordStorageDone,
-                intakeBudget = Some(intakeBudget)
+                intakeBudget = Some(intakeBudget),
+                recordExcluded = true
               )
             )
             .onFailure[Throwable](
@@ -855,7 +857,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 requestTracker = requestTracker,
                 batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
                 snapSyncController = ctx.self,
-                intakeBudget = Some(intakeBudget)
+                intakeBudget = Some(intakeBudget),
+                recordExcluded = true
               )
             )
             .onFailure[Throwable](
@@ -904,7 +907,8 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
                 storageScheme = snapSyncConfig.storageScheme,
                 stateIngest = stateIngest,
                 recordStorageDone = recordStorageDone,
-                intakeBudget = Some(intakeBudget)
+                intakeBudget = Some(intakeBudget),
+                recordExcluded = true
               )
             )
             .onFailure[Throwable](

@@ -86,7 +86,8 @@ object ChildSpawn:
       storageScheme: StorageScheme,
       pathNodeStorage: Option[PathNodeStorage],
       recordStorageDone: Boolean,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ) extends ChildSpawn
 
   final case class Healing(
@@ -131,7 +132,8 @@ object ChildSpawn:
       cooldownConfig: ByteCodePeerCooldownConfig,
       backpressureHighWatermark: Int,
       backpressureLowWatermark: Int,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ) extends ChildSpawn
 
   final case class Chain(
@@ -260,7 +262,8 @@ final class RecordingChildFactories(
       storageScheme: StorageScheme,
       stateIngest: StateIngest,
       recordStorageDone: Boolean,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ): Behavior[StorageRangeCoordinator.Command] =
     storageSpawns.incrementAndGet()
     spawns ! ChildSpawn.StorageRange(
@@ -286,7 +289,8 @@ final class RecordingChildFactories(
       storageScheme,
       stateIngest.pathNodes,
       recordStorageDone,
-      intakeBudget
+      intakeBudget,
+      recordExcluded
     )
     stub(ChildStopped.Storage, storageInbox)
 
@@ -373,7 +377,8 @@ final class RecordingChildFactories(
       cooldownConfig: ByteCodePeerCooldownConfig,
       backpressureHighWatermark: Int,
       backpressureLowWatermark: Int,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ): Behavior[ByteCodeCoordinator.Command] =
     byteCodeSpawns.incrementAndGet()
     spawns ! ChildSpawn.ByteCode(
@@ -385,7 +390,8 @@ final class RecordingChildFactories(
       cooldownConfig,
       backpressureHighWatermark,
       backpressureLowWatermark,
-      intakeBudget
+      intakeBudget,
+      recordExcluded
     )
     stub(ChildStopped.ByteCode, byteCodeInbox)
 

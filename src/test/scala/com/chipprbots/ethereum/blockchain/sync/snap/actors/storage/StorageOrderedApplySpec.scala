@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ReadyStorageChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.TrieNodeWrite
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -94,6 +95,7 @@ private[actors] class StubStorageOrderedApplyState(
   val processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline
   val mptStorage: TestMptStorage = new TestMptStorage()
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = true, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("StateIngest.appState")
     def stateTries: StateStorage = notReached("StateIngest.stateTries")

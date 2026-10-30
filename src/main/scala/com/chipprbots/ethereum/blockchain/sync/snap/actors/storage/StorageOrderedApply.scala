@@ -439,10 +439,10 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
             // max-empty skip, abandoned and force-complete paths never mark: a resume downloads those again. A root
             // mismatch is not marked either, so a restart retries it rather than leaving it all to healing.
             if rootVerified then stageDoneMarker(accountHash, task.storageRoot)
-            // spec 022 T033: the trie this download built is not the account's. Durable first: a clean end of the phase
-            // wipes the only other trace (R-5a).
+            // spec 022 T033: the trie this download built is not the account's. Durable when this message ends: a clean
+            // end of the phase wipes the only other trace (R-5a).
             else
-              stateIngest.snapProgress.recordExcluded(
+              excludedRecorder.stage(
                 Seq(
                   ExcludedAccount(
                     accountHash,

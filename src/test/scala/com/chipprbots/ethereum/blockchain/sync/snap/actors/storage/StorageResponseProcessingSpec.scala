@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.StorageTaskKey
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.VerifiedStorageResponse
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -104,6 +105,7 @@ private[actors] class StubStorageResponseProcessingState(
     new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
   val stateIngest: StateIngest =
     new com.chipprbots.ethereum.blockchain.sync.snap.controller.ForwardingStateIngestForProgress(progress)
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(progress, enabled = true, log)
   val flatBatchEntryThreshold: Int = 1000
 
   // The Apis (recorded)
@@ -379,7 +381,8 @@ class StorageResponseProcessingSpec extends AnyFlatSpec with Matchers:
     m.calls should contain(s"recordCompletedTask(${task.accountString})")
     m.calls should contain(s"resetAccountTrie(${task.accountString})")
     self.receiveAll() shouldBe Seq(StorageCheckCompletion)
-    withClue("spec 022 T033: recorded at the decision: ") {
+    withClue("spec 022 T033: recorded when the message ends: ") {
+      m.excludedRecorder.flush() shouldBe true
       m.progress.excludedPage(None, 10) shouldBe Seq(
         com.chipprbots.ethereum.db.storage.ExcludedAccount(
           task.accountHash,

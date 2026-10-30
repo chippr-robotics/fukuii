@@ -81,8 +81,8 @@ private[actors] trait StorageResponseProcessing:
       distinctRoots: Int
   ): Unit =
     val accountHash = task.accountHash
-    // spec 022 T033: durable first; a clean end of the phase wipes the only other trace (R-5a).
-    stateIngest.snapProgress.recordExcluded(
+    // spec 022 T033: durable when this message ends; a clean end of the phase wipes the only other trace (R-5a).
+    excludedRecorder.stage(
       Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = task.storageRoot))
     )
     staleRootFailuresByAccount.remove(accountHash)
@@ -307,8 +307,8 @@ private[actors] trait StorageResponseProcessing:
         emptyResponsesByTask.update(key, attempts)
 
         if attempts >= maxEmptyResponsesPerTask then
-          // spec 022 T033: durable first; a clean end of the phase wipes the only other trace (R-5a).
-          stateIngest.snapProgress.recordExcluded(
+          // spec 022 T033: durable when this message ends; a clean end of the phase wipes the only other trace (R-5a).
+          excludedRecorder.stage(
             Seq(ExcludedAccount(task.accountHash, ExcludedReason.StorageSkipped, claimedStorageRoot = task.storageRoot))
           )
           skipped += 1

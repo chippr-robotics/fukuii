@@ -89,8 +89,10 @@ class StorageRangeCoordinatorSpec
   // hashes are unique.
   final private class SyncFailingDataSource extends EphemDataSource(Map.empty):
     @volatile var failSync: Boolean = false
+    @volatile var syncs: Int = 0
     override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
       if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
+      syncs += 1
       super.updateSync(updates)
   private val progressSource = new SyncFailingDataSource
   private val progressStore = new SnapSyncProgressStorage(progressSource)
@@ -150,7 +152,8 @@ class StorageRangeCoordinatorSpec
       // builds a trie at all (flat-slot writes only).
       deferredMerkleization: Boolean = true,
       recordStorageDone: Boolean = false,
-      requestTimeout: FiniteDuration = 30.seconds
+      requestTimeout: FiniteDuration = 30.seconds,
+      recordExcluded: Boolean = true
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -172,7 +175,8 @@ class StorageRangeCoordinatorSpec
           backpressureLowWatermark = backpressureLowWatermark,
           deferredMerkleization = deferredMerkleization,
           stateIngest = hashSchemeIngest(flatSlotStorage),
-          recordStorageDone = recordStorageDone
+          recordStorageDone = recordStorageDone,
+          recordExcluded = recordExcluded
         )
         captured.start()
       }
@@ -2201,6 +2205,87 @@ class StorageRangeCoordinatorSpec
     excluded(account) shouldBe defined
   }
 
+  // Spec 022 review items 5, 6 and 7 (vault F2, F3, F4; beacon W-2; hunter W4).
+  private def emptyAnswers(
+      impl: StorageRangeCoordinatorImpl,
+      batch: Seq[StorageTask],
+      peerId: String,
+      times: Int
+  ): Unit =
+    val peer = PeerTestHelpers.createTestPeer(peerId, testKit.createTestProbe[Any]().ref.toClassic)
+    (1 to times).foreach { i =>
+      val response = StorageRanges(i, Seq.empty, Seq.empty)
+      val job =
+        new StorageRangeCoordinator.PendingResponse(i, 0L, peer, batch, BigInt(1024), response, 100L, System.nanoTime())
+      job.ready = true
+      impl.pendingResponses.enqueue(job)
+      impl.drainProcessedResponses()
+      impl.tasks.clear()
+    }
+
+  "One message's decisions" should "reach the disk under one fsync, when the message ends" taggedAs UnitTest in {
+    val (impl, kit, _) = excludedFixture()
+    val batch =
+      (0 until 128).map(i =>
+        StorageTask.createStorageTask(kec256(ByteString(s"excluded-batch-$i")), kec256(ByteString(s"r$i")))
+      )
+    emptyAnswers(impl, batch, "batch-peer", times = 4)
+    val before = progressSource.syncs
+    emptyAnswers(impl, batch, "batch-peer", times = 1) // the fifth empty answer: every task of the batch is skipped
+    withClue("nothing is written inside the handler: ")(progressSource.syncs shouldBe before)
+    impl.excludedRecorder.pending shouldBe true
+
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+
+    progressSource.syncs shouldBe before + 1
+    batch.foreach(t => excluded(t.accountHash) shouldBe defined)
+  }
+
+  it should "survive a failed write: the handler does not throw, the phase waits, and the next message writes them" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val task =
+      StorageTask.createStorageTask(kec256(ByteString("excluded-retry")), kec256(ByteString("excluded-retry-root")))
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+
+    progressSource.failSync = true
+    try
+      noException should be thrownBy emptyAnswers(impl, Seq(task), "retry-peer", times = 5)
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion) // its write fails, and it stays staged
+      kit.isAlive shouldBe true
+      impl.excludedRecorder.pending shouldBe true
+      excluded(task.accountHash) shouldBe None
+
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      withClue("no clean end of the phase over a decision not on disk: ") {
+        controller.expectNoMessage(50.millis)
+      }
+    finally progressSource.failSync = false
+
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the write succeeds as this message ends
+    excluded(task.accountHash) shouldBe defined
+    impl.excludedRecorder.pending shouldBe false
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  "A coordinator of a recovery actor" should "write nothing to the excluded set: nothing would read it (vault F4)" taggedAs UnitTest in {
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (_, kit) = newImpl(
+      stateRoot = kec256(ByteString("excluded-recovery-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = controller.ref,
+      recordExcluded = false
+    )
+    val account = kec256(ByteString("excluded-recovery"))
+    kit.run(
+      StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(account, kec256(ByteString("r")))))
+    )
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(account) shouldBe None
+  }
+
   "A give-up" should "record the account as abandoned before it drops its tasks" taggedAs UnitTest in {
     val (impl, _, _) = excludedFixture(deferred = true)
     val account = kec256(ByteString("excluded-give-up"))
@@ -2221,6 +2306,7 @@ class StorageRangeCoordinatorSpec
       impl.activeTasks.clear()
     }
     impl.abandonedAccounts should contain(account)
+    impl.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
     excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
     excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
   }
@@ -2230,6 +2316,7 @@ class StorageRangeCoordinatorSpec
     val account = kec256(ByteString("excluded-mismatch"))
     val claimed = kec256(ByteString("excluded-mismatch-root"))
     completeAccount(impl, account, claimed)
+    impl.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
     excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
     excluded(account).map(_.claimedStorageRoot) shouldBe Some(claimed)
   }

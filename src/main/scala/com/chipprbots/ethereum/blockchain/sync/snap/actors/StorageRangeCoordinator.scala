@@ -10,13 +10,13 @@ import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
-import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -92,6 +92,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     // unfinished storage tasks. Off by default: only SNAPSyncController's account-phase and recovery coordinators read
     // the markers back.
     recordStorageDone: Boolean = false,
+    // spec 022 T033: whether what this coordinator leaves incomplete goes into the durable excluded set. Only the SNAP
+    // controller's spawns: the set is read by SNAP healing, and a recovery actor runs after that (review vault F4).
+    recordExcluded: Boolean = false,
     // Spec 014: shared admission gate. This coordinator acknowledges received tasks and publishes its queue depth so the
     // producers can wait synchronously instead of through the mailbox-borne watermark signal. None = not wired (tests).
     val intakeBudget: Option[SnapIntakeBudget] = None,
@@ -430,6 +433,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   val storageDoneStorage: Option[SnapStorageDoneStorage] =
     Option.when(recordStorageDone)(new SnapStorageDoneStorage(stateIngest.flatSlots.dataSource))
 
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, recordExcluded, log)
+
   /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
     * tests.
     */
@@ -609,7 +614,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   def active(): Behavior[Command] = Behaviors
     .receiveMessage[Command] { msg =>
       val next = handleCommand(msg)
-      // Nothing buffered for RocksDB outlives the message that produced it.
+      // Nothing buffered for RocksDB outlives the message that produced it. A decision first: it explains the writes.
+      excludedRecorder.flush()
       flushTrieNodeWrites()
       next
     }
@@ -641,18 +647,15 @@ private[actors] class StorageRangeCoordinatorImpl(
     pendingAccountTries.keysIterator
       .filterNot(entries.contains)
       .foreach(account => entries(account) = ExcludedAccount(account, ExcludedReason.StorageAbandoned))
-    try
-      stateIngest.snapProgress.recordExcluded(entries.values.toSeq)
-      true
-    catch
-      case NonFatal(e) =>
-        log.error(
-          s"[STORAGE-FORCE-COMPLETE] Could not record the ${entries.size} account(s) it would abandon — not " +
-            "force-completing; trying again shortly",
-          e
-        )
-        timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
-        false
+    excludedRecorder.stage(entries.values)
+    val recorded = excludedRecorder.flush()
+    if !recorded then
+      log.error(
+        s"[STORAGE-FORCE-COMPLETE] Could not record the ${entries.size} account(s) it would abandon — not " +
+          "force-completing; trying again shortly"
+      )
+      timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
+    recorded
 
   private def handleCommand(msg: Command): Behavior[Command] =
     msg match
@@ -1057,7 +1060,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   private def isComplete: Boolean =
     noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty &&
       pendingAccountTries.isEmpty &&
-      pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
+      pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0 && !excludedRecorder.pending
 
   /** Update contract completion counts and send progress to controller. The counter is incremented exactly once per
     * account at the "no continuation needed" branch of `processStorageRanges`; we just broadcast its current value,
@@ -1444,7 +1447,8 @@ object StorageRangeCoordinator:
       storageScheme: StorageScheme = StorageScheme.Hash,
       stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[Command] =
     Behaviors.setup { context =>
       // Read from the node config here rather than taken as a parameter: the spec 016 seam pins this apply's defaults.
@@ -1480,6 +1484,7 @@ object StorageRangeCoordinator:
           storageScheme = storageScheme,
           stateIngest = stateIngest,
           recordStorageDone = recordStorageDone,
+          recordExcluded = recordExcluded,
           intakeBudget = intakeBudget,
           processing = processingSettings
         ).start()

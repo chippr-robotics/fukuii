@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.B
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.WorkerRef
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeWorker
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -83,6 +84,7 @@ private[actors] class StubByteCodeResponseHandlingState(
   def intakeBudget: Option[SnapIntakeBudget] = None
   def maxWorkers: Int = notUsed("maxWorkers")
   // Only `bytecode` is read; any other member fails loudly.
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(progressStore, enabled = true, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notUsed("appState")
     def stateTries: StateStorage = notUsed("stateTries")
@@ -308,6 +310,7 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.hashFailureCounts(exhausted) = 49
     inFlight(m, Seq(exhausted, retried), worker.ref, peer("p1"))
     m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq.empty))
+    m.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
     m.progressStore.excludedPage(None, 10) shouldBe Seq(
       com.chipprbots.ethereum.db.storage.ExcludedAccount(
         exhausted,

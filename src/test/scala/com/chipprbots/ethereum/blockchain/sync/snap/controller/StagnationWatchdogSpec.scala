@@ -387,6 +387,22 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.storageStagnationRefreshAttempted shouldBe false
   }
 
+  // spec 022 review hunter W4: the coordinator's retry timer does not survive a supervisor restart; this does.
+  it should "say force-complete again each minute while the phase has not ended" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.storagePhaseComplete = false
+    val noWork = StorageCoordinatorProgress(storageStats(completed = 5, active = 0, pending = 0))
+
+    h.call(_.byteCodeAndStorageArms(noWork))
+    h.call(_.byteCodeAndStorageArms(noWork))
+    withClue("not on every check: ")(h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage))
+
+    h.module.forceCompleteSentAtMs = 0L // a minute and more ago
+    h.call(_.byteCodeAndStorageArms(noWork))
+    h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage)
+  }
+
   it should "track bytecode progress, then force-complete bytecodes on a stall" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync

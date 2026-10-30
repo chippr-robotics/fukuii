@@ -51,6 +51,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
   // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
+  private lazy val ForceCompleteResendInterval: FiniteDuration = 1.minute
   private lazy val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private lazy val StorageStagnationThreshold: FiniteDuration =
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
@@ -184,9 +185,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                 s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
             )
             timers.cancel(RequestStorageRanges)
-            if !forceCompleteStorageSent then
-              forceCompleteStorageSent = true
-              storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
+            sendStorageForceComplete()
         else if workRemaining then
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
@@ -241,9 +240,22 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                   s"Promoting to healing phase (preserving downloaded state)."
               )
               timers.cancel(RequestStorageRanges)
-              if !forceCompleteStorageSent then
-                forceCompleteStorageSent = true
-                storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
+              sendStorageForceComplete()
+
+  // When the storage force-complete last went out. Read only with `forceCompleteStorageSent` set.
+  private[snap] var forceCompleteSentAtMs: Long = 0L
+
+  /** Tell the storage coordinator to force-complete, and tell it again each `ForceCompleteResendInterval` until the
+    * phase ends (spec 022 review hunter W4). Its retry after a failed record is a timer of that incarnation: a
+    * supervisor restart in between would lose it, and the phase would wait forever on the latch. A coordinator that has
+    * already acted ignores the repeat.
+    */
+  private def sendStorageForceComplete(): Unit =
+    val now = System.currentTimeMillis()
+    if !forceCompleteStorageSent || now - forceCompleteSentAtMs >= ForceCompleteResendInterval.toMillis then
+      forceCompleteStorageSent = true
+      forceCompleteSentAtMs = now
+      storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
 
   /** Force-complete bytecode sync if no progress for BytecodeStagnationThreshold.
     *

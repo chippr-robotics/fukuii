@@ -734,7 +734,8 @@ private[snap] trait HealingOrchestrator
                   requestTracker = requestTracker,
                   batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
                   snapSyncController = ctx.self,
-                  intakeBudget = Some(intakeBudget)
+                  intakeBudget = Some(intakeBudget),
+                  recordExcluded = true
                 )
               )
               .onFailure[Throwable](

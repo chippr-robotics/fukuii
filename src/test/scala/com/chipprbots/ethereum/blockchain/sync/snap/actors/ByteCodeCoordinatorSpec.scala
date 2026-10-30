@@ -63,7 +63,8 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig =
         ByteCodeCoordinator.ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
-      backpressureLowWatermark: Int = 25000
+      backpressureLowWatermark: Int = 25000,
+      recordExcluded: Boolean = true
   ): org.apache.pekko.actor.typed.ActorRef[ByteCodeCoordinator.Command] =
     testKit.spawn(
       ByteCodeCoordinator(
@@ -74,12 +75,20 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         snapSyncController = snapSyncController,
         cooldownConfig = cooldownConfig,
         backpressureHighWatermark = backpressureHighWatermark,
-        backpressureLowWatermark = backpressureLowWatermark
+        backpressureLowWatermark = backpressureLowWatermark,
+        recordExcluded = recordExcluded
       )
     )
 
   // spec 022 T033: where a force-complete records what it abandons.
-  private val progressStore = new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+  // spec 022 review vault F3: a store whose synced writes can fail.
+  final private class SyncFailingSource extends com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+    @volatile var failSync: Boolean = false
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
+      super.updateSync(updates)
+  private val progressSource = new SyncFailingSource
+  private val progressStore = new SnapSyncProgressStorage(progressSource)
 
   // ByteCodeCoordinator takes one `StateIngest` (spec 016 C-B1). It reads only `bytecode`; any other member fails
   // loudly, so a test that reaches one is a change in what the coordinator reads.
@@ -673,6 +682,48 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     // spec 022 T033: every hash it abandoned is in the durable excluded set by the time it reports.
     val recorded = progressStore.excludedPage(None, 1000).map(_.subject).toSet
     codeHashes.foreach(h => recorded should contain(h))
+  }
+
+  // Spec 022 review items 5, 7 (vault F3, F4; hunter W4).
+  private def forceCompleteFixture(recordExcluded: Boolean) =
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = bccProps(
+      evmCodeStorage = new TestEvmCodeStorage(),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      batchSize = 4,
+      snapSyncController = snapSyncController.ref,
+      cooldownConfig = testCooldownConfig,
+      recordExcluded = recordExcluded
+    )
+    (coordinator, snapSyncController)
+
+  it should "report nothing and keep its queue while a force-complete's record cannot be written" taggedAs UnitTest in {
+    val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = true)
+    val hash = kec256(ByteString("force-complete-write-failure"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+    progressSource.failSync = true
+    try
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      snapSyncController.expectNoMessage(200.millis)
+      withClue("nothing went onto disk, and the actor did not die of it: ") {
+        progressStore.excludedPage(None, 1000).map(_.subject) should not contain hash
+      }
+    finally progressSource.failSync = false
+
+    coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes // what its retry timer sends
+    snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+    progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash)
+  }
+
+  it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
+    val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = false)
+    val hash = kec256(ByteString("force-complete-recovery"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+    snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+    progressStore.excludedPage(None, 1000).map(_.subject) should not contain hash
   }
 
   // ForceCompleteByteCodes may fire while tasks are still in activeTasks (e.g. the 10-min stall

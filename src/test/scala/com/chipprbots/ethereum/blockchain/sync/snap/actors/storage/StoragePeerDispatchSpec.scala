@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PendingResponse
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -91,6 +92,7 @@ private[actors] class StubStoragePeerDispatchState(
   val storageScheme: StorageScheme = StorageScheme.Hash
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   def mptStorage: MptStorage = throw new UnsupportedOperationException("StoragePeerDispatch read mptStorage")
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = false, log)
   def stateIngest: StateIngest = throw new UnsupportedOperationException("StoragePeerDispatch read stateIngest")
   val flatBatchEntryThreshold: Int = 1000
 

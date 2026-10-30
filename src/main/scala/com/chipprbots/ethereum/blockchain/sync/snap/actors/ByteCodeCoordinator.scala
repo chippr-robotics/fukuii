@@ -12,6 +12,7 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.bytecode.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -42,7 +43,10 @@ private[actors] class ByteCodeCoordinatorImpl(
     backpressureHighWatermark: Int,
     backpressureLowWatermark: Int,
     // Spec 014: shared admission gate (counts codeHashes, not batched tasks). None = not wired (tests).
-    val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
+    val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None,
+    // spec 022 T033: whether what this coordinator gives up on goes into the durable excluded set. Only the SNAP
+    // controller's spawns: the set is read by SNAP healing, and a recovery actor runs after that (review vault F4).
+    recordExcluded: Boolean = false
 ) extends ByteCodeDispatch
     with ByteCodeResponseHandling
     with ByteCodeEnv
@@ -54,6 +58,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   import ByteCodeCoordinator.*
 
   val log = context.log
+
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, recordExcluded, log)
 
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
@@ -133,7 +139,36 @@ private[actors] class ByteCodeCoordinatorImpl(
   // caught by `WorkerTerminated` below via `context.watchWith`, which removes the dead worker and re-queues
   // its in-flight task. PostStop logs final stats (formerly `postStop`).
   def active(): Behavior[Command] = Behaviors
-    .receiveMessage[Command] {
+    .receiveMessage[Command] { msg =>
+      val next = handleCommand(msg)
+      // A decision is durable when its message ends. One that had to wait for this write may have held the completion.
+      if excludedRecorder.pending && excludedRecorder.flush() then checkCompletion()
+      next
+    }
+    .receiveSignal {
+      case (_, org.apache.pekko.actor.typed.PostStop) =>
+        // Formerly `postStop`: the recurring status timer auto-cancels with the behavior.
+        log.info(
+          s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
+            (if bytecodesAbandoned > 0 then s", abandoned $bytecodesAbandoned via force-complete" else "")
+        )
+        Behaviors.same
+      case (_, org.apache.pekko.actor.typed.PreRestart) =>
+        // spec 022 review hunter C1: a supervisor restart empties the queue, and nothing fetches these hashes again.
+        // Best effort (the write may be why this is restarting): the phase's force-complete leaves its flag unset anyway.
+        excludedRecorder.stage(undecidedCodeHashes)
+        excludedRecorder.flush()
+        Behaviors.same
+    }
+
+  /** The hashes this coordinator still owes, queued or in flight, as the entries a give-up on them makes. */
+  private def undecidedCodeHashes: Seq[ExcludedAccount] =
+    (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes))
+      .map(ExcludedAccount(_, ExcludedReason.CodeMissing))
+      .toSeq
+
+  private def handleCommand(msg: Command): Behavior[Command] =
+    msg match
       case StartByteCodeSync(codeHashes) =>
         log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
 
@@ -289,30 +324,30 @@ private[actors] class ByteCodeCoordinatorImpl(
         // the existing completion check is unreachable because pendingTasks doesn't drain. Mirrors
         // StorageRangeCoordinator.ForceCompleteStorage. Missing bytecodes can be recovered post-SNAP
         // via BytecodeRecoveryActor.
-        val abandonedPending = pendingTasks.size
-        val abandonedActive = activeTasks.size
-        val abandonedTotal = abandonedPending + abandonedActive
-        log.warn(
-          s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
-            s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
-            "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
-        )
-        bytecodesAbandoned += abandonedTotal
         // spec 022 T033: durable before they are dropped, and by hash: this download does not know the accounts that use
-        // them. Healing cannot complete until the code is there.
-        stateIngest.snapProgress.recordExcluded(
-          (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes))
-            .map(ExcludedAccount(_, ExcludedReason.CodeMissing))
-            .toSeq
-        )
-        pendingTasks.clear()
-        // Mark workers idle so they don't keep dispatching; drop active task tracking.
-        activeTasks.values.foreach(active => markWorkerIdle(active.worker))
-        activeTasks.clear()
-        // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
-        noMoreTasksExpected = true
-        log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
-        snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
+        // them. Healing cannot complete until the code is there. A failed write drops nothing and reports nothing.
+        excludedRecorder.stage(undecidedCodeHashes)
+        if !excludedRecorder.flush() then
+          log.error("Could not record the bytecode hashes a force-complete would abandon — trying again shortly")
+          timers.startSingleTimer(ForceCompleteByteCodes, ForceCompleteRetryDelay)
+        else
+          val abandonedPending = pendingTasks.size
+          val abandonedActive = activeTasks.size
+          val abandonedTotal = abandonedPending + abandonedActive
+          log.warn(
+            s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
+              s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
+              "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
+          )
+          bytecodesAbandoned += abandonedTotal
+          pendingTasks.clear()
+          // Mark workers idle so they don't keep dispatching; drop active task tracking.
+          activeTasks.values.foreach(active => markWorkerIdle(active.worker))
+          activeTasks.clear()
+          // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
+          noMoreTasksExpected = true
+          log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
+          snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
         Behaviors.same
 
       case WorkerTerminated(worker) =>
@@ -368,15 +403,6 @@ private[actors] class ByteCodeCoordinatorImpl(
       case other =>
         log.debug(s"ByteCodeCoordinator received unhandled command: $other")
         Behaviors.unhandled
-    }
-    .receiveSignal { case (_, org.apache.pekko.actor.typed.PostStop) =>
-      // Formerly `postStop`: the recurring status timer auto-cancels with the behavior.
-      log.info(
-        s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
-          (if bytecodesAbandoned > 0 then s", abandoned $bytecodesAbandoned via force-complete" else "")
-      )
-      Behaviors.same
-    }
 
   /** Pending work in codeHashes (each queued task batches up to `batchSize`). The queue is bounded by the intake gate,
     * so this walk stays a few thousand tasks long.
@@ -414,11 +440,15 @@ private[actors] class ByteCodeCoordinatorImpl(
       snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
 
   def checkCompletion(): Unit =
-    if noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty then
+    // A decision still to be written holds the completion: the phase's end may be the last trace of what it gave up on.
+    if noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty && excludedRecorder.flush() then
       log.info("Bytecode sync complete!")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
 object ByteCodeCoordinator:
+
+  /** How soon a force-complete tries again after its record could not be written. */
+  private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
 
   /** Command protocol for the Typed coordinator (Group S3). All subtypes live in this companion so the trait is sealed
     * — Scala 3 file-scope sealing enables exhaustive match checking at every call site.
@@ -536,7 +566,8 @@ object ByteCodeCoordinator:
       cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
       backpressureLowWatermark: Int = 25000,
-      intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
+      intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -551,7 +582,8 @@ object ByteCodeCoordinator:
           snapSyncController,
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
-          intakeBudget = intakeBudget
+          intakeBudget = intakeBudget,
+          recordExcluded = recordExcluded
         ).start()
       }
     }
