@@ -169,12 +169,17 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         settle()
         left -= 1
 
+    /** What the controller has received so far. The probe is an actor of its own: a barrier through it, sent after what
+      * is being looked for, shows it has all of that.
+      */
     def seen(): Seq[SNAPSyncController.Command] =
+      val barrier = SNAPSyncController.ProgressNodesHealed(Long.MinValue)
+      controller.ref ! barrier
       val out = Seq.newBuilder[SNAPSyncController.Command]
-      var open = true
-      while open do
-        try out += controller.receiveMessage(Duration.Zero)
-        catch case _: AssertionError => open = false
+      var next = controller.receiveMessage(30.seconds)
+      while next != barrier do
+        out += next
+        next = controller.receiveMessage(30.seconds)
       out.result()
 
     /** Run what comes, a peer round trip at a time, until the controller hears the completion. */

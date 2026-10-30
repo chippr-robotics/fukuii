@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
-import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
@@ -109,11 +108,17 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     peer.coordinator.set(coordinator)
     peer.serveFrom.set(Some(t.served))
 
+    /** Start, and run until both account leaves have arrived and wait on their code (peer round trips included). */
     def begin(): Unit =
       coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(t.root.hash)
       coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
         PeerTestHelpers.createTestPeer("code-peer", createTestProbe[Any]().ref.toClassic)
       )
+      val deadline = 30.seconds.fromNow
+      def reported = heldBack.collect { case SNAPSyncController.HealedCodeHashes(h) => h }.flatten.toSet
+      while reported != Set(hash0, hash1) do
+        withClue("both leaves within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        heldBack ++= Seq(controller.receiveMessage(deadline.timeLeft))
       drive()
 
     def settle(): Unit =
@@ -139,13 +144,23 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
         catch case _: Exception => false
       else readAtPath(pns, n).map(ByteString(_)).contains(n.encoded)
 
+    // What `begin` read while it waited for both leaves.
+    private var heldBack = Seq.empty[SNAPSyncController.Command]
+
+    /** What the controller has received so far. The probe is an actor of its own: a barrier through it, sent after what
+      * is being looked for, shows it has all of that.
+      */
     def seen(): Seq[SNAPSyncController.Command] =
+      val barrier = SNAPSyncController.ProgressNodesHealed(Long.MinValue)
+      controller.ref ! barrier
       val out = Seq.newBuilder[SNAPSyncController.Command]
-      var open = true
-      while open do
-        try out += controller.receiveMessage(Duration.Zero)
-        catch case _: AssertionError => open = false
-      out.result()
+      var next = controller.receiveMessage(30.seconds)
+      while next != barrier do
+        out += next
+        next = controller.receiveMessage(30.seconds)
+      val all = heldBack ++ out.result()
+      heldBack = Seq.empty
+      all
 
     def store(code: ByteString): Unit =
       codes.put(kec256(code), code).commit()
@@ -158,12 +173,15 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       (1 to n).foreach(_ => coordinator ! HealingBlockedTick)
       settle()
 
+    /** Run what comes until the controller hears the completion. */
     def awaitComplete(): Unit =
-      drive()
-      controller.fishForMessage(30.seconds) {
-        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
-      }
+      val deadline = 30.seconds.fromNow
+      var done = heldBack.contains(SNAPSyncController.StateHealingComplete)
+      while !done do
+        drive()
+        withClue("no completion within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        try done = controller.receiveMessage(100.millis) == SNAPSyncController.StateHealingComplete
+        catch case _: AssertionError => ()
 
   private val Schemes = Seq(StorageScheme.Hash, StorageScheme.Path)
 

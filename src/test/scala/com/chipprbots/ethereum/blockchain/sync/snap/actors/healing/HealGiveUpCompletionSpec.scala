@@ -296,13 +296,17 @@ class HealGiveUpCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       Seq((rig.trie("brX").pathset, rig.trie("brX").hash))
     )
 
+  /** The give-ups escalated so far. The probe is an actor of its own: a barrier through it, sent after them, shows it
+    * has them all.
+    */
   private def stagnated(rig: Rig): Int =
+    val barrier = SNAPSyncController.ProgressNodesHealed(Long.MinValue)
+    rig.controller.ref ! barrier
     var seen = 0
-    var open = true
-    while open do
-      try
-        if rig.controller.receiveMessage(Duration.Zero).isInstanceOf[SNAPSyncController.HealingStagnated] then seen += 1
-      catch case _: AssertionError => open = false
+    var next = rig.controller.receiveMessage(30.seconds)
+    while next != barrier do
+      if next.isInstanceOf[SNAPSyncController.HealingStagnated] then seen += 1
+      next = rig.controller.receiveMessage(30.seconds)
     seen
 
   /** forge N-r4-1: a walk running when a node is given up on may not cover it, so its clean end vouches for nothing. */
