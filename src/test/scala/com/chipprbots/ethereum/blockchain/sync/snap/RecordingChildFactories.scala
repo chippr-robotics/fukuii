@@ -118,7 +118,8 @@ object ChildSpawn:
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
       evmCodeStorage: Option[EvmCodeStorage],
-      walkLocalOnly: Option[AtomicBoolean]
+      walkLocalOnly: Option[AtomicBoolean],
+      excludedAccounts: Boolean
   ) extends ChildSpawn
 
   final case class ByteCode(
@@ -289,6 +290,12 @@ final class RecordingChildFactories(
     )
     stub(ChildStopped.Storage, storageInbox)
 
+  // spec 022 T038b: the current-root reference the last healing spawn got. Not on `ChildSpawn.Healing`: a spawn record is
+  // compared across controller instances, and each has its own reference.
+  val lastHealingCurrentRoot: java.util.concurrent.atomic.AtomicReference[
+    Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+  ] = new java.util.concurrent.atomic.AtomicReference(None)
+
   override def trieNodeHealingCoordinator(
       stateRoot: ByteString,
       networkPeerManager: ActorRef[NetworkPeerManagerActor.Command],
@@ -322,6 +329,7 @@ final class RecordingChildFactories(
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
+    lastHealingCurrentRoot.set(currentRoot)
     spawns ! ChildSpawn.Healing(
       stateRoot,
       networkPeerManager,
@@ -351,7 +359,8 @@ final class RecordingChildFactories(
       decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal,
       Option.when(healedCodeCheck)(stateIngest.bytecode),
-      walkLocalOnly
+      walkLocalOnly,
+      excludedAccounts
     )
     stub(ChildStopped.Healing, healingInbox)
 

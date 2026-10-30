@@ -165,6 +165,24 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     }
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
+  it should "leave bytecodeRecoveryDone UNSET at a lazy hand-off with an excluded entry left, and clear the set (spec 022 D5)" taggedAs UnitTest in new Fixture:
+    val progress = new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(appStateStorage.dataSource)
+    progress.recordExcluded(
+      Seq(
+        com.chipprbots.ethereum.db.storage
+          .ExcludedAccount(ByteString(codeHash), com.chipprbots.ethereum.db.storage.ExcludedReason.CodeMissing)
+      )
+    )
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+
+    parent.fishForMessage(10.seconds) {
+      case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
+      case _                                                     => FishingOutcomes.continueAndIgnore
+    }
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    progress.hasExcluded shouldBe false
+
   "SNAPSyncController.bytecodeRecoveryComplete" should
     "be false after a force-completed bytecode phase, or while healed-account code is missing" taggedAs UnitTest in {
       SNAPSyncController.bytecodeRecoveryComplete(0, bytecodePhaseForceCompleted = false) shouldBe true

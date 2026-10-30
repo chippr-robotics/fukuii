@@ -78,12 +78,19 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       )
     )
 
+  /** A code store whose reads throw while `failing` is set: a store the tick cannot look at. */
+  final private class ReadFailingCodes extends EvmCodeStorage(new EphemDataSource(Map.empty)):
+    @volatile var failing: Boolean = false
+    override def get(key: ByteString): Option[ByteString] =
+      if failing then throw new RuntimeException("injected code read failure")
+      super.get(key)
+
   final private class Rig(scheme: StorageScheme):
     val t: Trie = trie()
     val ec = new ManualExecutionContext
     val hashStore = new TestMptStorage()
     val pns = new PathNodeStorage(new EphemDataSource(Map.empty))
-    val codes = new EvmCodeStorage(new EphemDataSource(Map.empty))
+    val codes = new ReadFailingCodes
     val peer = new ScriptedPeer(testKit)
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
     val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
@@ -249,4 +256,16 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       withClue("no walk: nothing is missing that a walk could find, and a mainnet walk takes hours: ") {
         rig.ec.pending shouldBe 0
       }
+    }
+
+    it should s"keep waiting through a tick that cannot read the code store, on $scheme (P3)" taggedAs UnitTest in {
+      val rig = new Rig(scheme)
+      rig.begin()
+      rig.codes.failing = true
+      rig.ticks(1)
+      rig.codes.failing = false
+      withClue("still held: ")(rig.onDisk("root") shouldBe false)
+      rig.ack(code0)
+      rig.ack(code1)
+      rig.awaitComplete()
     }

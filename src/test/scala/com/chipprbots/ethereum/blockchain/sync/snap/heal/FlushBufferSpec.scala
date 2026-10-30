@@ -19,7 +19,7 @@ class FlushBufferSpec extends AnyFlatSpec with Matchers:
     val snapshot = buffer.firstEntries(2)
     snapshot.map(_._1) shouldBe Seq(a._1, b._1)
     buffer.dropWritten(snapshot) shouldBe 2
-    buffer.snapshot.map(_._1) shouldBe Seq(c._1)
+    buffer.firstEntries(10).map(_._1) shouldBe Seq(c._1)
     buffer.contains(a._1) shouldBe false
     buffer.contains(c._1) shouldBe true
   }
@@ -28,7 +28,7 @@ class FlushBufferSpec extends AnyFlatSpec with Matchers:
     val buffer = new FlushBuffer
     val a = entry(1)
     buffer += a
-    val stale = buffer.snapshot
+    val stale = buffer.firstEntries(10)
     buffer.clear()
     val other = entry(1) // the same hash, another object
     buffer += other
@@ -51,6 +51,6 @@ class FlushBufferSpec extends AnyFlatSpec with Matchers:
     buffer.bytes shouldBe 0L
     buffer += entry(1)
     buffer.bytes should be > 0L
-    buffer.dropWritten(buffer.snapshot)
+    buffer.dropWritten(buffer.firstEntries(10))
     buffer.bytes shouldBe 0L
   }

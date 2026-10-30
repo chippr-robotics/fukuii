@@ -370,3 +370,33 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     )
     keys should not contain accountKey(nibbles(1))
   }
+
+  "The blocked tick" should "not count while a fetch is in flight: that is the stagnation paths' business" taggedAs UnitTest in {
+    val rig = storageRig(StorageScheme.Hash, ExcludedReason.StorageAbandoned, staleRoot = false)
+    rig.peerAvailable()
+    rig.start() // the seed goes out, and nobody answers it
+    withClue("the seed is in flight: ")(rig.peer.manual.receiveMessages(1, 30.seconds) should have size 1)
+    (1 to 2 * TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+    }
+    rig.settle()
+    rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+  }
+
+  it should "not count while a walk runs: it may be hours, and the gate looks when it ends" taggedAs UnitTest in {
+    val rig = new Rig(
+      StorageScheme.Hash,
+      fixture(withCode = true),
+      absent = Set.empty,
+      Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
+    )
+    rig.start()
+    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
+    rig.settle()
+    withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
+    (1 to 2 * TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+    }
+    rig.settle()
+    rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+  }

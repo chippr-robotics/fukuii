@@ -268,6 +268,11 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawn.stateRoot shouldBe root.value
     (spawn.mptStorage should be).theSameInstanceAs(h.module.mptStorage)
     spawn.walkLocalOnly.exists(_ eq h.module.healingWalkLocalOnly) shouldBe true
+    withClue("spec 022 D5, T038b: production works the excluded set, and a restart finds the current root: ") {
+      spawn.excludedAccounts shouldBe true
+      h.factories.lastHealingCurrentRoot.get().exists(_ eq h.module.healingCurrentRoot) shouldBe true
+      h.module.healingCurrentRoot.get() shouldBe spawn.stateRoot
+    }
     spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
     spawn.healingFrontierStorage shouldBe defined
     spawn.bfsQueueStorageOpt shouldBe defined
@@ -416,6 +421,27 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       h.module.healingValidatedRoot shouldBe None
       coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
     }
+
+  it should "set the current heal root as a re-peg goes out, for a coordinator a supervisor restarts (T038b)" taggedAs UnitTest in {
+    val h = new Harness()
+    val moved = ByteString(Array.fill[Byte](32)(0x5b))
+    h.call(_.pivotRefreshed(moved))
+    h.module.healingCurrentRoot.get() shouldBe moved
+  }
+
+  it should "start a coordinator to work the excluded set when a clean trie walk finds none running" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
+  }
 
   it should "finish healing on a clean trie walk and enter validation" taggedAs UnitTest in {
     val h = new Harness()

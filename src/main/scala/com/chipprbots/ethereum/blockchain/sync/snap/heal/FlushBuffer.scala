@@ -47,10 +47,9 @@ final class FlushBuffer
     if entries.isEmpty then heldBytes = 0L
     i
 
-  /** The buffered entries in commit order, as a flush writes them: the very entry objects, for [[dropWritten]]. */
-  def snapshot: IndexedSeq[(ByteString, Array[Byte])] = entries.toIndexedSeq
-
-  /** The first `limit` entries of [[snapshot]]: a prefix, so complete (see the class comment). */
+  /** The first `limit` buffered entries in commit order, as a flush writes them: a prefix, so complete (see the class
+    * comment), and the very entry objects, for [[dropWritten]].
+    */
   def firstEntries(limit: Int): IndexedSeq[(ByteString, Array[Byte])] = entries.iterator.take(limit).toIndexedSeq
 
   /** Estimated heap of the buffered nodes, in bytes. */
