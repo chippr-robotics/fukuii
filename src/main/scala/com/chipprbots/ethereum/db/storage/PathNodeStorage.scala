@@ -53,10 +53,14 @@ class PathNodeStorage(val dataSource: DataSource):
     *   RLP-encoded node bytes
     */
   def writeAccountNode(nibblePath: Array[Byte], rlp: Array[Byte]): Unit =
-    val key = encodePath(nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = acctNs, toRemove = Nil, toUpsert = Seq(key -> rlp)))
-    )
+    dataSource.update(Seq(accountNodeUpsert(nibblePath, rlp)))
+
+  /** The single-node update [[writeAccountNode]] commits, for a caller that groups several updates into one write batch
+    * (`dataSource.update` applies the updates of one call in order, in one RocksDB WriteBatch). Same key and value
+    * bytes as [[writeAccountNode]]; the account-trie mirror of [[storageNodeUpsert]].
+    */
+  def accountNodeUpsert(nibblePath: Array[Byte], rlp: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(namespace = acctNs, toRemove = Nil, toUpsert = Seq(encodePath(nibblePath) -> rlp))
 
   /** Read an account-trie node by nibble path. Returns `None` if no node is stored at that path. */
   def readAccountNode(nibblePath: Array[Byte]): Option[Array[Byte]] =
@@ -65,19 +69,11 @@ class PathNodeStorage(val dataSource: DataSource):
 
   /** Delete the single account-trie node at exactly `nibblePath`. No-op if the path does not exist. */
   def deleteAccountNode(nibblePath: Array[Byte]): Unit =
-    val key = encodePath(nibblePath)
-    dataSource.update(
-      Seq(DataSourceUpdateOptimized(namespace = acctNs, toRemove = Seq(key), toUpsert = Nil))
-    )
+    dataSource.update(Seq(accountNodeRemoval(nibblePath)))
 
-  /** Delete all account-trie nodes whose path starts with `nibblePrefix`.
-    *
-    * Used by [[com.chipprbots.ethereum.blockchain.sync.snap.SnapPathTrie]] to prune left-boundary ancestor stubs after
-    * a subtree has been fully committed.
-    */
-  def deleteAccountNodesByPrefix(nibblePrefix: Array[Byte]): Unit =
-    val prefix = encodePath(nibblePrefix)
-    deleteByPrefix(acctNs, prefix)
+  /** The single-node update [[deleteAccountNode]] commits; see [[accountNodeUpsert]]. */
+  def accountNodeRemoval(nibblePath: Array[Byte]): DataSourceUpdateOptimized =
+    DataSourceUpdateOptimized(namespace = acctNs, toRemove = Seq(encodePath(nibblePath)), toUpsert = Nil)
 
   // ---- storage trie (STORAGE_TRIE_PATH column family) ----
 
@@ -123,10 +119,28 @@ class PathNodeStorage(val dataSource: DataSource):
       toUpsert = Nil
     )
 
-  /** Delete all storage-trie nodes for `accountHash` whose path starts with `nibblePrefix`. */
-  def deleteStorageNodesByPrefix(accountHash: ByteString, nibblePrefix: Array[Byte]): Unit =
-    val prefix = storageKey(accountHash, nibblePrefix)
-    deleteByPrefix(storageNs, prefix)
+  // ---- both tries ----
+
+  /** Write one healed node and delete the positions that write leaves dangling, in ONE write batch (spec 022 FR-008,
+    * D10; geth `trie/sync.go` `children()` and `hasNode`): one `dataSource.update`, so a crash keeps all of it or none.
+    *
+    * A position is `(owner, nibblePath)`: `owner` empty for the account trie, else the account hash whose storage trie
+    * it is in. The node goes to `(owner, nibblePath)` with the same key and value bytes as [[writeAccountNode]] /
+    * [[writeStorageNode]]. `deletes` may name either trie (an account leaf's write deletes a stale storage root in the
+    * other column family). The removals are applied first: a position in `deletes` that is also the written one keeps
+    * the written node. Healing never passes one, since every dangling position lies strictly below the written node.
+    */
+  def writeNodeWithDeletes(
+      owner: Option[ByteString],
+      nibblePath: Array[Byte],
+      rlp: Array[Byte],
+      deletes: Seq[(Option[ByteString], Array[Byte])]
+  ): Unit =
+    // Point deletes, not deleteRange: HP-encoded keys are not prefix-ordered (a position's key does not prefix its
+    // descendants'), and deleteRange is not part of the one atomic `update` batch.
+    val removals = deletes.map { case (o, path) => o.fold(accountNodeRemoval(path))(storageNodeRemoval(_, path)) }
+    val upsert = owner.fold(accountNodeUpsert(nibblePath, rlp))(storageNodeUpsert(_, nibblePath, rlp))
+    dataSource.update(removals :+ upsert)
 
   /** True if the StateTriePathNamespace column family has at least one entry. Used by the startup guard. */
   def hasAccountData: Boolean = hasAnyEntry(acctNs)
@@ -169,26 +183,6 @@ class PathNodeStorage(val dataSource: DataSource):
   private def storageKey(accountHash: ByteString, nibbles: Array[Byte]): Array[Byte] =
     accountHash.toArray ++ encodePath(nibbles)
 
-  private def deleteByPrefix(ns: IndexedSeq[Byte], prefix: Array[Byte]): Unit =
-    import cats.effect.unsafe.implicits.global
-
-    // Collect keys matching prefix, then batch-delete them.
-    val keys: Vector[Array[Byte]] = dataSource
-      .iterate(ns)
-      .collect { case Right((k, _)) if k.startsWith(prefix) => k }
-      .compile
-      .toVector
-      .unsafeRunSync()
-
-    if keys.nonEmpty then
-      dataSource.update(
-        Seq(DataSourceUpdateOptimized(namespace = ns, toRemove = keys, toUpsert = Nil))
-      )
-
   private def hasAnyEntry(ns: IndexedSeq[Byte]): Boolean =
     import cats.effect.unsafe.implicits.global
     dataSource.iterate(ns).take(1).compile.last.unsafeRunSync().isDefined
-
-  implicit private class ByteArrayOps(val a: Array[Byte]):
-    def startsWith(prefix: Array[Byte]): Boolean =
-      prefix.length <= a.length && java.util.Arrays.equals(a, 0, prefix.length, prefix, 0, prefix.length)

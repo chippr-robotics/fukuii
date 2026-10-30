@@ -23,17 +23,17 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
   * (`healDispatchArms`, the stagnation pulse, the pivot re-peg), the response processing C-H5 will move, or rule (d)
   * keeps them in the core, so the Impl keeps them as fields. The dispatch writes `pivotRefreshRequested` and
   * `pivotRefreshRequestedAt` (the stagnation escalation in `handleTimeout`), `lastHealedAtMs` (its re-fire guard),
-  * `healRate` and `lastThrottleAdjustMs` (the throttle update), and mutates the task queue, its dedup set, the
-  * in-flight map, the per-peer cooldown and `responseBytes` maps and the attempt counters; it reads the rest.
-  * `lastThrottleAdjustMs` is touched only by the dispatch, but its initializer is not a literal, so rule (d) keeps it
-  * in the core; `maxConcurrentRequests`, `rawFlushThreshold` and `healingStagnationTimeoutMs` are immutable vals rule
-  * (d) keeps in the core.
+  * `healRate` and `lastThrottleAdjustMs` (the throttle update), and mutates the task queue, the in-flight map, the
+  * per-peer cooldown and `responseBytes` maps and the attempt counters; it reads the rest. It does not touch the live
+  * heal requests (spec 022 D2): a request stays live while it is in flight, so dispatching or re-queueing it changes
+  * nothing there. `lastThrottleAdjustMs` is touched only by the dispatch, but its initializer is not a literal, so rule
+  * (d) keeps it in the core; `maxConcurrentRequests`, `rawFlushThreshold` and `healingStagnationTimeoutMs` are
+  * immutable vals rule (d) keeps in the core.
   */
 private[actors] trait HealDispatchState:
   def stateRoot: ByteString
   def serveRoot: ByteString
   def pendingTasks: mutable.ArrayDeque[HealingEntry]
-  def pendingHashSet: mutable.Set[ByteString]
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def maxInFlightPerPeer: Int
   def maxConcurrentRequests: Int
@@ -232,8 +232,6 @@ private[actors] trait HealDispatch extends HealDispatchApi:
       val takeCount = effectiveBatch.min(pendingTasks.size)
       val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
       pendingTasks.dropInPlace(takeCount)
-      // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
-      batch.foreach(e => pendingHashSet -= e.hash)
 
       val requestId = requestTracker.generateRequestId()
       val responseBytes = responseBytesTargetFor(peer)
@@ -293,7 +291,6 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     // stagnation → pivot-refresh path, not a per-node retry cap.
     var requeued = 0
     tasks.foreach { task =>
-      pendingHashSet += task.hash
       pendingTasks += task
       requeued += 1
       // spec 004 T015/FR-006: a timed-out task is unsatisfied — bump its attempt counter (surfacing only).

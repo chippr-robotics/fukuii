@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.VerificationBFSComplete
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt.MptNode
@@ -49,6 +50,14 @@ private[actors] trait PathVerifiedReadApi:
 private[actors] trait PathVerifiedRlpApi:
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]]
 
+/** What the response processing's Path-scheme child discovery calls (spec 022 FR-008): `pathPresence`, which tells an
+  * absent position from one holding a stale node with the wrong hash, so the write that references the position can
+  * delete the stale bytes in its own batch. `HealVerification` provides it, over the same read as
+  * `readPathVerifiedRlp`. A separate trait, so the C-H2 and C-H3 interfaces stay as recorded.
+  */
+private[actors] trait PathPresenceApi:
+  def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence
+
 /** TrieNodeHealingCoordinator's heal verification (spec 016 C-H3, coordinator-characterization.md §3.4): the
   * verification entry points that re-walk the trie before the heal may complete — `reverifyCurrentRoot` (discard the
   * last verdict and walk the current root again), `startVerificationBFS` (the full-root walk, with the spec 005 pruned
@@ -59,7 +68,7 @@ private[actors] trait PathVerifiedRlpApi:
   * which the walk and the core's presence check call. It writes no store. The coordinator core keeps the behaviour arms
   * that call it and handle the verdict (`healVerificationArms`, the completion gate).
   */
-private[actors] trait HealVerification extends PathVerifiedReadApi with PathVerifiedRlpApi:
+private[actors] trait HealVerification extends PathVerifiedReadApi with PathVerifiedRlpApi with PathPresenceApi:
   this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi =>
 
   /** Discard the verdict of the last verification pass and walk the CURRENT root again. Used when that pass was run
@@ -167,15 +176,30 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * path context ⇒ conservatively absent, never present).
     */
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
+    storedAtPath(pathset).filter(rlp => ByteString.fromArrayUnsafe(kec256(rlp)) == hash)
+
+  /** Path scheme only (spec 022 FR-008; geth `trie/sync.go` `hasNode`): `Present` when the bytes stored at `pathset`'s
+    * own position hash to `hash`, `Mismatch` when bytes are stored there but hash to something else (a stale node from
+    * an older root), `Absent` when nothing is stored there — and also with no `PathNodeStorage` or a pathset of an
+    * unexpected shape, exactly where `readPathVerifiedRlp` returns `None`. `Present` iff `readPathVerifiedRlp` is
+    * defined: one read, the same answer.
+    */
+  def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence =
+    storedAtPath(pathset) match
+      case None                                                         => PathPresence.Absent
+      case Some(rlp) if ByteString.fromArrayUnsafe(kec256(rlp)) == hash => PathPresence.Present
+      case Some(_)                                                      => PathPresence.Mismatch
+
+  /** The bytes stored at `pathset`'s own position in [[PathNodeStorage]], unverified (see `readPathVerifiedRlp`). */
+  private def storedAtPath(pathset: Seq[ByteString]): Option[Array[Byte]] =
     import com.chipprbots.ethereum.mpt.HexPrefix
     stateIngest.pathNodes.flatMap { pns =>
-      val stored: Option[Array[Byte]] = pathset match
+      pathset match
         case Seq(compactPath) =>
           pns.readAccountNode(HexPrefix.decode(compactPath.toArray)._1)
         case Seq(accountHash, compactPath) =>
           pns.readStorageNode(accountHash, HexPrefix.decode(compactPath.toArray)._1)
         case _ => None
-      stored.filter(rlp => ByteString.fromArrayUnsafe(kec256(rlp)) == hash)
     }
 
   /** `readPathVerifiedRlp` plus decode, for the frontier-rebuild walk, which must traverse the node's children. Bytes

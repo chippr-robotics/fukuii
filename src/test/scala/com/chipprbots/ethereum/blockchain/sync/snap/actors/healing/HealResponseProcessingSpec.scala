@@ -20,7 +20,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.AccountNs
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.Op
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.RecordingDataSource
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.accountKey
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -54,10 +60,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 /** Everything `HealResponseProcessing` needs, as a stub (spec 016 FR-016 (b), C-H5): its `HealResponseProcessingState`,
   * the coordinator's `TrieNodeHealingEnv`, and the interfaces it calls (`FrontierGaugesApi`, `FrontierWriteApi`,
-  * `HealDispatchApi`, `PathVerifiedRlpApi`). State is plain fields; every interface call is recorded. `self` and the
-  * controller are test inboxes; the request tracker is real (a response completes its request). `stateIngest` hands out
-  * `pathNodes`, `healingFrontier` and `bytecode` (the last only when a code store is given: with the healed-code check
-  * off the module must never read it).
+  * `HealDispatchApi`, `PathVerifiedRlpApi`, `PathPresenceApi`). State is plain fields; every interface call is
+  * recorded. `self` and the controller are test inboxes; the request tracker is real (a response completes its
+  * request). `stateIngest` hands out `pathNodes`, `healingFrontier` and `bytecode` (the last only when a code store is
+  * given: with the healed-code check off the module must never read it).
   */
 private class StubHealResponseProcessingState(
     val requestTracker: SNAPRequestTracker,
@@ -74,14 +80,14 @@ private class StubHealResponseProcessingState(
     with FrontierGaugesApi
     with FrontierWriteApi
     with HealDispatchApi
-    with PathVerifiedRlpApi:
+    with PathVerifiedRlpApi
+    with PathPresenceApi:
 
   // HealResponseProcessingState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
   val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
-  val pendingHashSet: mutable.Set[ByteString] = mutable.Set.empty
-  val pathAliases: mutable.Map[ByteString, mutable.LinkedHashMap[Seq[ByteString], HealingEntry]] = mutable.Map.empty
+  val healRequests: HealRequestBook = new HealRequestBook()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
   var totalNodesHealed: Int = 0
@@ -164,6 +170,14 @@ private class StubHealResponseProcessingState(
   def readPathVerifiedRlp(hash: ByteString, pathset: Seq[ByteString]): Option[Array[Byte]] =
     pathReads.get((hash, pathset))
 
+  // PathPresenceApi: present exactly where `readPathVerifiedRlp` answers; stale bytes of another hash where
+  // `stalePaths` names the pathset.
+  val stalePaths: mutable.Set[Seq[ByteString]] = mutable.Set.empty
+  def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence =
+    if pathReads.contains((hash, pathset)) then PathPresence.Present
+    else if stalePaths.contains(pathset) then PathPresence.Mismatch
+    else PathPresence.Absent
+
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealResponseProcessing read $member")
 
@@ -207,8 +221,18 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
         decoupled
       ) with HealResponseProcessing
 
-    /** Put `tasks` in flight to `p` as request `id` and answer it with `nodes`. */
+    /** Put `tasks` in flight to `p` as request `id` and answer it with `nodes`. Each task is first recorded as a live
+      * request (a no-op when it already is one), as every dispatched fetch is in production (spec 022 review W2).
+      */
     def respond(id: Int, p: Peer, tasks: Seq[HealingEntry], nodes: Seq[ByteString]): Unit =
+      tasks.foreach(task => module.healRequests.add(module.healRequestFor(task)))
+      module.activeRequests(BigInt(id)) = ActiveRequest(tasks, p, requestedBytes = BigInt(1024))
+      module.handleResponse(SNAP.TrieNodes(requestId = BigInt(id), nodes = nodes))
+
+    /** As [[respond]], for tasks the live requests (`healRequests`) do not hold: a dispatched entry nothing vouches
+      * for.
+      */
+    def respondUnbooked(id: Int, p: Peer, tasks: Seq[HealingEntry], nodes: Seq[ByteString]): Unit =
       module.activeRequests(BigInt(id)) = ActiveRequest(tasks, p, requestedBytes = BigInt(1024))
       module.handleResponse(SNAP.TrieNodes(requestId = BigInt(id), nodes = nodes))
 
@@ -242,7 +266,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.totalBytesReceived shouldBe served.encode.length.toLong
     m.activeRequests shouldBe empty
     m.pendingTasks.toSeq shouldBe Seq(skipped)
-    m.pendingHashSet shouldBe Set(skipped.hash)
+    // spec 022 D2: the served request is satisfied; the skipped one stays live (queued again, one fetch).
+    m.healRequests.fetchingHashes shouldBe Set(skipped.hash)
     m.unservable.toSeq shouldBe Seq(skipped.hash)
     // A heal from this peer clears its stateless mark and strikes and resets the stagnation timer.
     m.statelessPeers shouldBe empty
@@ -324,10 +349,10 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val owner = ByteString(Array.fill[Byte](32)(0x11))
     val storageAlias = Seq(owner, compact(7))
 
-    // The second and third paths of the same hash become aliases of the queued task.
+    // spec 022 D2: each path is its own request; the second and third join the first one's fetch of the same hash.
     m.queueNodes(Seq((account.pathset, account.hash), (alias, account.hash), (storageAlias, account.hash)))
     m.pendingTasks.toSeq shouldBe Seq(account)
-    m.pathAliases(account.hash).keys.toSeq shouldBe Seq(alias, storageAlias)
+    m.healRequests.waitingOn(account.hash).map(_.pathset) shouldBe Seq(account.pathset, alias, storageAlias)
 
     m.pendingTasks.clear()
     h.respond(1, peer("p1"), Seq(account), Seq(bytes(node)))
@@ -336,7 +361,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pns.readAccountNode(Array[Byte](1, 2)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
     pns.readAccountNode(Array[Byte](3, 4)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
     pns.readStorageNode(owner, Array[Byte](7)).map(_.toSeq) shouldBe Some(node.encode.toSeq)
-    m.pathAliases shouldBe empty
+    m.healRequests.isEmpty shouldBe true
   }
 
   it should "queue a healed branch's absent children at their own paths, and persist them as frontier entries" taggedAs UnitTest in {
@@ -346,7 +371,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val absent = leaf(2)("absent")
     val pending = leaf(3)("pending")
     m.mptStorage.putNode(present)
-    m.pendingHashSet += hashOf(pending)
+    // A child already requested (queued or in flight): it is not queued again; the branch gains an edge to it.
+    m.healRequests.add(m.healRequestFor(HealingEntry(Seq(compact(6, 9)), hashOf(pending))))
     val children = Array.fill[MptNode](16)(NullNode)
     children(0) = HashNode(present.hash)
     children(4) = HashNode(absent.hash)
@@ -358,8 +384,11 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
 
     val child = HealingEntry(Seq(compact(6, 4)), hashOf(absent))
     m.pendingTasks.toSeq shouldBe Seq(child)
-    m.pendingHashSet should contain(child.hash)
+    m.healRequests.isFetching(child.hash) shouldBe true
     m.persisted.toSeq shouldBe Seq(Seq(child))
+    // spec 022 D2 (Hash): one edge from the branch to each missing child, the pending one included.
+    m.healRequests.outstandingChildren(task.hash) shouldBe 2
+    m.healRequests.parentsOf(hashOf(pending)) shouldBe Seq(task.hash)
   }
 
   it should "seed a healed account leaf's absent storage root, and report its absent code only with the check on" taggedAs UnitTest in {
@@ -431,13 +460,13 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val m = h.module
     val a = ByteString(Array.fill[Byte](32)(1))
     val b = ByteString(Array.fill[Byte](32)(2))
-    m.pendingHashSet += a
+    m.healRequests.add(m.healRequestFor(HealingEntry(Seq(compact(9)), a)))
 
     m.queueNodes(Seq((Seq(compact(1)), a), (Seq(compact(2)), b), (Seq(compact(3)), b)))
 
     m.pendingTasks.toSeq shouldBe Seq(HealingEntry(Seq(compact(2)), b))
-    m.pendingHashSet shouldBe Set(a, b)
-    m.pathAliases shouldBe empty // Hash scheme: no alias bookkeeping
+    m.healRequests.fetchingHashes shouldBe Set(a, b)
+    m.healRequests.waitingOn(b).map(_.pathset) shouldBe Seq(Seq(compact(2))) // Hash scheme: one request per hash
     m.calls.toSeq shouldBe Seq("persist", "gauges")
     m.isComplete shouldBe false
     m.pendingTasks.clear()
@@ -459,4 +488,90 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pathed.module.isNodeInStorage(hashOf(node), Seq(compact(2))) shouldBe false
     pathed.module.mptStorage.putNode(node)
     pathed.module.isNodeInStorage(hashOf(node), Seq.empty) shouldBe false
+  }
+
+  // ---- spec 022 slice 1 review (beacon W2, item 6, item 7) -------------------------------------------------------
+
+  it should "fill nothing for a dispatched task no live request vouches for, and not queue it again (W2)" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val node = leaf(1, 2)("unbooked")
+    val task = HealingEntry(Seq(compact(1)), hashOf(node))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task), Seq(bytes(node)))
+
+    m.rawNodeBuffer shouldBe empty
+    m.totalNodesHealed shouldBe 0
+    m.completedTaskCount shouldBe 0
+    m.pendingTasks shouldBe empty
+    m.activeRequests shouldBe empty
+    m.healRequests.isEmpty shouldBe true
+  }
+
+  /** A branch at [6] whose children sit at [6,0], [6,4] and [6,9], healed under the Path scheme into a store whose
+    * write batches are recorded. `setUp` marks the children (present, stale, live) before the response.
+    */
+  private def healBranchUnderPath(
+      setUp: (StubHealResponseProcessingState & HealResponseProcessing, Seq[HealingEntry]) => Unit
+  ): (RecordingDataSource, StubHealResponseProcessingState & HealResponseProcessing, Seq[HealingEntry], ByteString) =
+    val ds = new RecordingDataSource
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(ds)))
+    val m = h.module
+    val kids = Seq(leaf(1)("c0"), leaf(2)("c4"), leaf(3)("c9"))
+    val slots = Seq(0, 4, 9)
+    val children = Array.fill[MptNode](16)(NullNode)
+    kids.zip(slots).foreach { case (k, i) => children(i) = HashNode(k.hash) }
+    val branch = BranchNode(children, None)
+    val task = HealingEntry(Seq(compact(6)), hashOf(branch))
+    val childEntries = kids.zip(slots).map { case (k, i) => HealingEntry(Seq(compact(6, i)), hashOf(k)) }
+    setUp(m, childEntries)
+    m.healRequests.add(m.healRequestFor(task))
+    h.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
+    (ds, m, childEntries, accountKey(Array[Byte](6)))
+
+  it should "under the Path scheme delete a stale child in the parent's batch, and leave a present child alone (item 7)" taggedAs UnitTest in {
+    val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
+      m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1) // [6,0]: present (right bytes)
+      m.stalePaths += kids(1).pathset // [6,4]: stale bytes of another hash
+      // [6,9]: absent
+    }
+    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
+      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
+    )
+    m.pendingTasks.toSeq shouldBe Seq(kids(1), kids(2)) // the stale and the absent child are requested
+  }
+
+  it should "under the Path scheme delete a stale child that is already requested, in the parent's batch (item 6)" taggedAs UnitTest in {
+    val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
+      m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1)
+      m.pathReads((kids(2).hash, kids(2).pathset)) = Array[Byte](1)
+      // [6,4] is already requested (queued by a walk, say) and holds stale bytes.
+      m.healRequests.add(m.healRequestFor(kids(1)))
+      m.stalePaths += kids(1).pathset
+    }
+    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
+      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
+    )
+    m.pendingTasks shouldBe empty // already requested: an edge, no second fetch
+    m.healRequests.parentsOf(m.healRequestFor(kids(1)).key) should have size 1
+  }
+
+  it should "fill nothing from a fetch whose position now expects another node, and not queue it again (review W1)" taggedAs UnitTest in {
+    val pns = new PathNodeStorage(EphemDataSource())
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(pns))
+    val m = h.module
+    val oldNode = leaf(1)("old")
+    val newNode = leaf(2)("new")
+    val stale = HealingEntry(Seq(compact(4)), hashOf(oldNode))
+    val current = HealingEntry(Seq(compact(4)), hashOf(newNode))
+    m.enqueueRequest(stale) shouldBe true
+    m.pendingTasks.clear() // dispatched
+    m.enqueueRequest(current) shouldBe true // the same position, another node: the newer request wins, its fetch queued
+    m.healRequests.isRetired(stale.hash) shouldBe true
+
+    h.respondUnbooked(1, peer("p1"), Seq(stale), Seq(bytes(oldNode))) // the old fetch comes back with its node
+
+    pns.readAccountNode(Array[Byte](4)) shouldBe None // never written where the newer node is expected
+    m.totalNodesHealed shouldBe 0
+    m.pendingTasks.toSeq shouldBe Seq(current) // only the newer fetch
   }

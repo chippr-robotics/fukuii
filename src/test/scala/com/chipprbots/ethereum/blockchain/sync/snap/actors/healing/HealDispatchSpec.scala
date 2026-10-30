@@ -48,7 +48,6 @@ private class StubHealDispatchState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
   val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
-  val pendingHashSet: mutable.Set[ByteString] = mutable.Set.empty
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   var maxInFlightPerPeer: Int = 2
   var maxConcurrentRequests: Int = 16
@@ -124,7 +123,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     def queue(n: Int, from: Int = 0): Seq[HealingEntry] =
       val entries = (from until from + n).map(i => HealingEntry(Seq(ByteString(Array(i.toByte))), node(i)))
       module.pendingTasks ++= entries
-      module.pendingHashSet ++= entries.map(_.hash)
       entries
 
     /** Stop the request tracker's timers for whatever is still in flight. */
@@ -145,7 +143,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     h.cancelInFlight()
     h.module.activeRequests.clear()
     h.module.pendingTasks.clear()
-    h.module.pendingHashSet.clear()
     size
 
   "HealDispatch" should "throttle the batch size up under flush backpressure, cap it, and recover to the full batch" taggedAs UnitTest in {
@@ -210,7 +207,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
       request.paths shouldBe entries.map(_.pathset)
       request.responseBytes shouldBe Initial
       m.pendingTasks shouldBe empty
-      m.pendingHashSet shouldBe empty
       m.activeRequests.keySet shouldBe Set(request.requestId)
       m.activeRequests(request.requestId).tasks shouldBe entries
       h.tracker.isPending(request.requestId) shouldBe true
@@ -274,7 +270,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     m.peerCooldownUntilMs.get(p.id.value).exists(_ > System.currentTimeMillis()) shouldBe true
     m.responseBytesTargetFor(p) shouldBe Initial / 2
     m.pendingTasks.toSeq shouldBe entries
-    m.pendingHashSet shouldBe entries.map(_.hash).toSet
     m.healAttempts shouldBe empty // surfacing counts only under decoupling
     h.sent() shouldBe empty // the only peer is cooling: no synchronous floor revive
     h.module.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
@@ -288,7 +283,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     val p = peer("p1")
     val entries = h.queue(1)
     m.pendingTasks.clear()
-    m.pendingHashSet.clear()
     m.totalNodesHealed = 17
     m.lastHealedAtMs = System.currentTimeMillis() - 6 * 60 * 1000
 

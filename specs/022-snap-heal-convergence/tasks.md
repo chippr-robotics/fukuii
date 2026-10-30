@@ -56,7 +56,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [x] T001 Confirm #1672 (`fix/snap-range-checks-linear`) is merged to staging. Branch `fix/022-s1-request-model` from that commit in a full clone (not a linked worktree). **Done 2026-10-29:** #1673 is in staging `925b6f693`; full clone `/home/dontpanic/work/s022-impl`.
 - [x] T002 [P] Find out whether the contract-storage task list outlives the storage phase. **Done: research.md R-5a.** The list survives, and markers survive force-complete but are wiped on clean completion, so the excluded set must be persisted at each decision point. Read `blockchain/sync/snap/DownloadSupervisor.scala:694,757-760`, `SyncLifecycle.scala:342` and `SnapResumePlanner.scala:325`. Record which file or key holds abandoned accounts, and whether `SnapStorageDone` markers survive force-complete. This resolves the conflict noted in research R-5. Write the answer into research.md as R-5a.
 - [x] T003 [P] List the spec 016 resume tests that assume the persisted heal frontier is restored on restart. **Done: research.md R-5b.** Grep `src/test/scala` for `persistFrontier`, `loadAll`, `CompleteMarkerKey`, `FrontierPersistence` and `healingFrontier`. Write the list into research.md as R-5b. These tests change in slice 4.
-- [ ] T004 [P] Record the regression baseline on the slice-1 base commit. Run `./scripts/fukuii-test essential` once, plus `sbt "testOnly *SnapHashTrieSpec *MerkleProofVerifier* *StateIngestDurabilitySpec *Checkpoint*"`. Save the counts to `.local/docs/continuations/s022-baseline.md`.
+- [x] T004 [P] **Done 2026-10-29** on staging `925b6f693` in an isolated clone: testEssential root 6,378/0 (611 suites), rlp 46/0, bytes 11/0, crypto 80/0; targeted 331/0. Record the regression baseline on the slice-1 base commit. Run `./scripts/fukuii-test essential` once, plus `sbt "testOnly *SnapHashTrieSpec *MerkleProofVerifier* *StateIngestDurabilitySpec *Checkpoint*"`. Save the counts to `.local/docs/continuations/s022-baseline.md`.
 - [x] T005 [P] **Done 2026-10-29 (quickstart.md §0).** Write the dev-iteration runbook into quickstart.md under a new "§0 Dev loop" section:
   - **Local snap server**: `coregeth-mordor.service` (core-geth v1.12.23; enode `9e5d0ea7…602a@127.0.0.1:30313`).
   - **Run config template**: `/home/dontpanic/mordor-scarcity/B/conf/mordor.conf`. It sets discovery off, `dns-discovery-domains = []`, and the local peer as both bootstrap node and `snap-server-peers`.
@@ -77,24 +77,24 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Tests (write first; they must fail)
 
-- [ ] T006 [P] [US1] Test: two accounts with an identical storage root on Path both get their full storage trie healed. Today the second owner's trie is dropped by the dedup at `HealResponseProcessing.scala:381`. File: `test/.../blockchain/sync/snap/actors/healing/HealAliasSpec.scala`. **[beacon]**
-- [ ] T007 [P] [US1] Test: an aliased path pending when a re-peg happens is re-discovered from the new root, and both positions are filled. Same file as T006. **[beacon]**
-- [ ] T008 [P] [US1] Test: writing a shorter node at path P on Path removes the deeper inner prefixes of an extension node's `sharedKey` from the same batch. A position whose stored bytes have the wrong hash is deleted. File: `test/.../blockchain/sync/snap/actors/healing/PathDanglingDeleteSpec.scala`. **[beacon] [vault]**
-- [ ] T009 [P] [US2] Test: on Hash, a child shared by two parents is requested once, and both parents' outstanding counts decrement when it arrives. File: `test/.../blockchain/sync/snap/actors/healing/HealRequestModelSpec.scala`. **[forge]**
+- [x] T006 [P] [US1] Test: two accounts with an identical storage root on Path both get their full storage trie healed. Today the second owner's trie is dropped by the dedup at `HealResponseProcessing.scala:381`. File: `test/.../blockchain/sync/snap/actors/healing/HealAliasSpec.scala`. **[beacon]**
+- [x] T007 [P] [US1] Test: an aliased path pending when a re-peg happens is re-discovered from the new root, and both positions are filled. Same file as T006. **[beacon]**
+- [x] T008 [P] [US1] Test: writing a shorter node at path P on Path removes the deeper inner prefixes of an extension node's `sharedKey` from the same batch. A position whose stored bytes have the wrong hash is deleted. File: `test/.../blockchain/sync/snap/actors/healing/PathDanglingDeleteSpec.scala`. **[beacon] [vault]**
+- [x] T009 [P] [US2] Test: on Hash, a child shared by two parents is requested once, and both parents' outstanding counts decrement when it arrives. File: `test/.../blockchain/sync/snap/actors/healing/HealRequestModelSpec.scala`. **[forge]**
 
 ### Implementation
 
-- [ ] T010 [US1] Introduce the request key type in `blockchain/sync/snap/heal/HealRequest.scala` (new file; not under `actors/healing/`, see the verifier amendment), following data-model.md "Heal request".
+- [x] T010 [US1] Introduce the request key type in `blockchain/sync/snap/heal/HealRequest.scala` (new file; not under `actors/healing/`, see the verifier amendment), following data-model.md "Heal request".
   - The key is a single `ByteString`: the HP-encoded path for Path, the node hash for Hash.
   - **Never key a map by `Seq[ByteString]`.** `MurmurHash3.seqHash` showed up in the Mordor walk profile.
   - Include `depth`, `parent` and `opensNewSubtree`.
   - **[beacon] [forge]**
-- [ ] T011 [US1] Replace `pendingHashSet` / `pathAliases` with maps from position key to request. Response matching becomes hash → `Seq[request]`. Files: `actors/healing/HealResponseProcessing.scala` (`:98-104`, `:347`, `:365`, `:381-382`) and `actors/TrieNodeHealingCoordinator.scala`. **[beacon]**
-- [ ] T012 [US2] On Hash, make the request model reference-counted per parent edge, in `actors/healing/HealResponseProcessing.scala` and `actors/TrieNodeHealingCoordinator.scala`. **[forge]**
-- [ ] T013 [US1] Add `accountNodeUpsert` / `accountNodeRemoval` helpers that return `DataSourceUpdateOptimized`, in `db/storage/PathNodeStorage.scala`, mirroring the existing storage-node helpers. **[vault]**
-- [ ] T014 [US1] Implement the FR-008 exact-position deletes, in the same batch as the write that makes them stale, in `actors/healing/HealResponseProcessing.scala` (extension-node arm `:361-375`) and in the path-verified presence check (`actors/healing/HealVerification.scala:169-178`). **[beacon] [vault]**
-- [ ] T015 [P] [US1] Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix` from `db/storage/PathNodeStorage.scala:172-186`. They have no callers, scan the whole CF, and HP-encoded keys don't preserve prefixes. Apply the dead-code-review protocol and record the verdict in the commit message. **[vault]**
-- [ ] T016 Run T006–T009 plus `sbt "testOnly *Heal* *SnapPathTrie* *SnapHashTrie*"` and confirm they pass. Open the slice-1 PR to staging and request reviews from beacon and forge.
+- [x] T011 [US1] Replace `pendingHashSet` / `pathAliases` with maps from position key to request. Response matching becomes hash → `Seq[request]`. Files: `actors/healing/HealResponseProcessing.scala` (`:98-104`, `:347`, `:365`, `:381-382`) and `actors/TrieNodeHealingCoordinator.scala`. **[beacon]**
+- [x] T012 [US2] On Hash, make the request model reference-counted per parent edge, in `actors/healing/HealResponseProcessing.scala` and `actors/TrieNodeHealingCoordinator.scala`. **[forge]**
+- [x] T013 [US1] Add `accountNodeUpsert` / `accountNodeRemoval` helpers that return `DataSourceUpdateOptimized`, in `db/storage/PathNodeStorage.scala`, mirroring the existing storage-node helpers. **[vault]**
+- [x] T014 [US1] Implement the FR-008 exact-position deletes, in the same batch as the write that makes them stale, in `actors/healing/HealResponseProcessing.scala` (extension-node arm `:361-375`) and in the path-verified presence check (`actors/healing/HealVerification.scala:169-178`). **[beacon] [vault]**
+- [x] T015 [P] [US1] Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix` from `db/storage/PathNodeStorage.scala:172-186`. They have no callers, scan the whole CF, and HP-encoded keys don't preserve prefixes. Apply the dead-code-review protocol and record the verdict in the commit message. **[vault]**
+- [x] T016 **Done 2026-10-29:** beacon, forge and vault approved after one round of fixes. Run T006–T009 plus `sbt "testOnly *Heal* *SnapPathTrie* *SnapHashTrie*"` and confirm they pass. Open the slice-1 PR to staging and request reviews from beacon and forge.
 
 **Checkpoint**: aliases and shared subtrees are tracked by position (Path) or by reference (Hash). Behaviour is otherwise unchanged.
 
@@ -208,6 +208,10 @@ Within each slice, **tests come before implementation**, and the tests must fail
 ### Implementation
 
 - [ ] T050 [US1] Change `isComplete` (`TrieNodeHealingCoordinator.scala:290-291`) so that it also requires no held nodes, no outstanding code dependencies, and an empty excluded set. **[beacon] [forge]**
+- [ ] T051a [US2] (forge, slice-1 review) Two Hash changes, both needed **before** the gate goes:
+  - Drop the `storageScheme == Path &&` condition from the stale-walk filter in the `FrontierRebuilt` arm, so stale-root batches are dropped on Hash as well. Slice 1 added the filter for Path only.
+  - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
+  **[forge]**
 - [ ] T051 [US1] Remove the completion gates:
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
   - the `VerificationBFSComplete` arms and `MaxConsecutiveStaleDiscards` (`:1164-1250`);
