@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -13,6 +14,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -28,7 +30,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtu
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -679,6 +684,94 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       after.nodes.foreach(n => withClue(s"${n.label} after healing: ")(disk.holds(n) shouldBe true))
       withClue("brY is fetched again for the new root: ") {
         peer.autoRequests.flatten should contain(after("brY").pathset)
+      }
+    }
+  }
+
+  // ---- spec 022 review vault V-R5: the completeness marker goes first, synced, then the frontier entries ------------
+
+  /** Records every write batch in order, with whether it was synced (`updateSync`). */
+  final private class SyncRecordingDataSource extends EphemDataSource(Map.empty):
+    private val writes = new ConcurrentLinkedQueue[(Boolean, Seq[HealRequestFixtures.Op])]()
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      writes.add((false, dataSourceUpdates.flatMap(HealRequestFixtures.Op.of)))
+      super.update(dataSourceUpdates)
+    override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      writes.add((true, dataSourceUpdates.flatMap(HealRequestFixtures.Op.of)))
+      super.update(dataSourceUpdates)
+    def forget(): Unit = writes.clear()
+
+    /** The writes to the frontier column family, in order. */
+    def frontierWrites: Seq[(Boolean, Seq[HealRequestFixtures.Op])] =
+      writes.asScala.toSeq
+        .map { case (synced, ops) => (synced, ops.filter(_.namespace == Namespaces.HealingFrontierNamespace)) }
+        .filter(_._2.nonEmpty)
+
+  /** Heal `accountTrieOld` until the root and ext are held, brY's subtree is committed but not flushed (the
+    * asynchronous flushes never run) and brX is in flight, all with frontier entries and a set completeness marker;
+    * then `invalidate` the frontier. Before any entry goes, the marker must: a crash between the two must not leave a
+    * marker vouching for a frontier missing the entries of nodes that are still not on disk (held root and ext,
+    * in-flight brX).
+    */
+  private def markerClearedFirst(
+      invalidate: (ActorRef[TrieNodeHealingCoordinator.Command], TestProbe[SNAPSyncController.Command]) => Unit
+  ): Unit =
+    val before = PathHealPresenceFixtures.accountTrieOld()
+    val peer = new ScriptedPeer(testKit)
+    val source = new SyncRecordingDataSource
+    val frontier = new HealingFrontierStorage(source)
+    val never = new ExecutionContext:
+      def execute(runnable: Runnable): Unit = ()
+      def reportFailure(cause: Throwable): Unit = ()
+    withHealer(StorageScheme.Hash, before.root.hash, peer, writerEc = Some(never), frontier = Some(frontier)) {
+      (coordinator, controller, _) =>
+        coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
+        peerAvailable(coordinator)
+        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
+        answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], before, Set("leafY0", "leafY1"))
+        peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(before("brX").pathset)
+        handled(coordinator)
+        frontier.markComplete()
+        source.forget()
+        invalidate(coordinator, controller) // returns once the coordinator has handled it
+        val writes = source.frontierWrites
+        withClue(s"the first frontier write is the marker's removal, synced (writes: $writes): ") {
+          writes.headOption shouldBe Some(
+            (
+              true,
+              Seq(
+                HealRequestFixtures.Op(
+                  Namespaces.HealingFrontierNamespace,
+                  delete = true,
+                  HealingFrontierStorage.CompleteMarkerKey
+                )
+              )
+            )
+          )
+        }
+        withClue("the entries of the nodes not on disk go, after it: ") {
+          val deleted = writes.drop(1).flatMap(_._2).filter(_.delete).map(_.key).toSet
+          Seq("root", "ext", "brX").foreach(l => withClue(s"$l: ")(deleted should contain(before(l).hash)))
+        }
+        frontier.isComplete shouldBe false
+    }
+
+  it should "on a re-peg, clear the completeness marker with a synced write before deleting any frontier entry, under the Hash scheme (vault V-R5)" taggedAs UnitTest in {
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    markerClearedFirst { (coordinator, _) =>
+      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+      handled(coordinator)
+    }
+  }
+
+  it should "on force-complete, clear the completeness marker with a synced write before deleting any frontier entry, under the Hash scheme (vault V-R5)" taggedAs UnitTest in {
+    markerClearedFirst { (coordinator, controller) =>
+      coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
+      // It stops after this message, so its completion signal is the barrier.
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
       }
     }
   }
