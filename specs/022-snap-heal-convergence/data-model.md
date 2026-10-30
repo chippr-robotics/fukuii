@@ -57,7 +57,7 @@ These are the logical entities. Field names are indicative, and the final names 
 
 | Key | Value | Semantics |
 |-----|-------|-----------|
-| `snap.heal.invariant` | version (`2`) | Set only on an empty datadir at SNAP start, or after a repair pass finds zero holes. Means "everything present was written under present ⇒ complete". **Does not mean complete.** |
+| `snap.heal.invariant` | version (`2`) | Set only on an empty datadir at SNAP start, or after a repair pass finds zero holes. Means "everything present was written under present ⇒ complete". **Does not mean complete.** Never set (or trusted) under `pruning.mode = inmemory`, where healed nodes reach disk only as the node cache evicts them; the repair pass runs at every start there. |
 | `checkpoint.import.inProgress` | root plus start time | Set before a checkpoint import starts writing, and cleared on CRC success. If it is present at SNAP start, the datadir counts as pre-invariant. |
 
 **Pre-invariant states:**
