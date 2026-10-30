@@ -60,8 +60,25 @@ Legend: **Aligned** (no change), **Amend** (text below; applied where this sprin
 
 ### 013 State snapshots — Amend (pending section added to the spec)
 
-Aligned: the flat-state v2 format is the follower seed (026 FR-001) and already matches 018's flat stores.
-Misaligned with the fleet in four places:
+Aligned: the flat-state v2 **format** is the follower seed (026 FR-001) and matches the flat stores 018 Track F will
+make authoritative.
+
+**Correction (2026-10-30, raised by the spec 022 session on the build host and verified here on 9e003ab): the format
+has no populated source on today's layout.** 013 §5.5 exports by `scanRange` over flat state. On staging:
+`FlatAccountStorage` is constructed (`db/components/Storages.scala`, `StoragesComponent.scala`) and **never written**;
+`FlatSlotStorage` is written only by the SNAP download (`snap/actors/StorageRangeCoordinator.scala`), with no writer in
+healing or under `ledger/`, so slots changed by healing or by any later block are stale; the Path CFs are frozen at the
+pivot too (018 research.md:69); live state on ETH is the hash-keyed CF `n`; ETC has no flat state at all (018
+research.md:72). An exporter built as §5.5 reads would produce snapshots that fail §5.4's root check on every import:
+safe, never usable. Until 018 Track F makes flat state authoritative, the exporter MUST walk the trie at a frozen root
+(the RocksDB checkpoint of §5.5 still gives the frozen view) and emit leaves in key order into the v2 format. That
+removes §5.5's "no visited-set, the flat scan has no DAG" argument and the AC5 export-impact assumption, and changes
+what Phase 0 measures (a trie walk, not a scan; the one figure in hand is Mordor's walk at 4,780,490 nodes in 36.6 s
+on an idle SSD, from the 022 session). For 026, the **first** seed of any follower therefore comes from a walk; only a
+follower that keeps flat state current from 025 records can later export by scanning. 013 §2 item 2 ("Path-scheme
+reads rely on flat state") is out of date for the same reason (018 spec.md:48: never read by execution).
+
+Misaligned with the fleet in four places, plus the correction above (013 pending §11 rows 6–9):
 1. §5.5 exports from the validating node with a rate limiter. In a fleet the exporter runs on a `replica` or `archive`
    (any role holding a verified root at the block); `ingest` exports only in the single-node profile. The rate-limiter
    design stays for that profile.
@@ -74,6 +91,12 @@ Misaligned with the fleet in four places:
 4. §5.7 incremental snapshots lose most of their value once followers apply records; keep as Phase 4, lowest priority.
 Also: Q2 (mainnet hosting budget) splits into fleet-internal artifacts (object store, no public egress) and the public
 publisher flow, which is a separate product decision.
+From spec 022, for 013 and the plan: Sepolia Phase 0 cannot use the kept datadir (known holes); it needs the fresh-sync
+datadir from 022's Sepolia gate, so 013 Phase 0 follows that gate (phase B placement holds). Import (§5.10) should
+reuse 022 slice 4's markers, `checkpoint.import.inProgress` and `snap.heal.invariant = 2` stamped only after the root
+check (022 `data-model.md` rows 67–68), rather than a separate "unfinished snapshot" record. §5.9(b) cites specs
+001–006 for healing; 022 replaces that mechanism. Slice 4 also retires the persisted frontier (CF `g`); nothing in
+023–026 assumes it (checked).
 
 ### 016 SNAP controller split — Aligned, one housekeeping item
 
@@ -176,7 +199,7 @@ Host windows (one build host, soak windows block builds) are 022's constraint an
 | Phase | Release | Work | Why here |
 | --- | --- | --- | --- |
 | **A** (now) | 0.11.0 | 022 slices 4–6 and both release gates. `/speckit-clarify` on 023–026 (docs; no host). 024 T-001 golden capture (test-only). 025 T-001 schema + T-002 hook table with `forge`/`beacon` (docs). 018 Phase 0 off-host items that need no code: R-5 prior art, R-9 cold-tier assessment with Track H demoted. | 0.11.0 waits only on 022. Everything else here is paper or test-only and touches none of 022's files. |
-| **B** | 0.12.0 | 020 PR 5–7 regenerated after 022; **then** 023 T-002 (runtime retirement), T-003 (`--chain/--role`), T-004 (role gating), T-005 (health); 024 T-002–T-005 (loader, `knownNetworks` removal, datadir check). 018 T-010 close-fence on RocksDB (independent of GT-1). 021 GT-1 impact analysis. 017 `/speckit-specify` + `/speckit-plan`. 013 Phase 0 measurement (offline copy). | Small code PRs on launcher/config/node wiring, sequenced around PR 5. The close-fence is the first thing followers and `sim` need from storage. |
+| **B** | 0.12.0 | 020 PR 5–7 regenerated after 022; **then** 023 T-002 (runtime retirement), T-003 (`--chain/--role`), T-004 (role gating), T-005 (health); 024 T-002–T-005 (loader, `knownNetworks` removal, datadir check). 018 T-010 close-fence on RocksDB (independent of GT-1). 021 GT-1 impact analysis. 017 `/speckit-specify` + `/speckit-plan`. 013 Phase 0 measurement as a **trie walk at a frozen root** (013 §11 row 6), on the fresh Sepolia datadir from 022's gate and on Mordor. | Small code PRs on launcher/config/node wiring, sequenced around PR 5. The close-fence is the first thing followers and `sim` need from storage. |
 | **C** (first fleet) | 0.13.0 | 025 T-003–T-007: exporter seam, file sink, reference consumer, Kafka, position + buffer, reorg fixtures, on **today's layout**. 018 request 7 `StateReplay` v1 on today's layout (vault). 026 T-001 GT-1 measurement, T-002 follower apply loop, T-003 `replica` RPC. 013 Phases 1–2 (ETH seed). 023 T-007/T-008 harness + isolation SCs. 018 Phase 0 GT-0/GT-1 with the read-fleet profile, in parallel. | Delivers `ingest` → Kafka → `replica` → indexer on one ETH-family chain (Platåberget) and ETC (Mordor) without waiting for the engine. |
 | **D** | 0.14.0 | 018 Track E (engine) then Track F (flat model, changesets with the flat diff as the shared part, parallel root); 026 followers move onto the unified layout; 026 T-004/T-005 `archive` (GT-2); 017 implementation with witness serving on `archive`; 013 ETC seed replaces checkpoint v1 (018 DC-9); 021 implementation after 020 PR 5; 023 T-006 `sim` on 018 Track R executors. | The engine and layout work lands under a running fleet, measured against it. |
 | **E** | later | 019 guest (SP-1 any time, off-host, with approval); 023 OQ-5 `relay` role as spec 027 if phase C shows ingest admission is the bottleneck; 013 Phase 4 incremental snapshots if still wanted. | Not on the fleet's critical path. |
@@ -190,7 +213,7 @@ Critical path to a first fleet: 022 gates → 020 PR 5 → 023 T-002/T-003 + 024
 | --- | --- | --- | --- |
 | D-A | State diff at the semantic (flat) level, never trie nodes, so 025/026 do not wait for 018 Track F | **Yes.** Applied to 025/026; 018 row 2 refined (pending). | §2 |
 | D-B | A `StateReplay` capability in `db/` (vault) as the follower write path | **Yes.** 018 row 7 (pending). | 026 FR-002 |
-| D-C | 013 covers both families, exports from followers, and replaces checkpoint v1 with 018 DC-9 | **Yes.** 013 pending section. | 026 FR-001, 018 row 9 |
+| D-C | 013 covers both families, exports from followers, and replaces checkpoint v1 with 018 DC-9; until 018 Track F the exporter walks the trie at a frozen root instead of scanning flat state | **Yes.** 013 pending section (rows 1–9). | 026 FR-001, 018 row 9 |
 | D-D | Witness serving and backfill on `archive`; `SyncMode.Follow` | **Yes.** 017 pending section. | 017 DC-16, FR-007 |
 | D-E | Track H demoted: node writes only Kafka; H4 is a single-node convenience decided at GT-3 | **Yes.** 018 row 8 (pending). | 018 Phase 4 |
 | D-F | Transaction ingress: forward to `ingest` now; `relay` role as spec 027 only if measured necessary | **Forward first.** 023 FR-010, OQ-5 (applied). | 023 |
@@ -204,4 +227,5 @@ No spec text of 019–022 was changed. 013, 017 and 018 received clearly marked 
 them binds until accepted. 023–026 were corrected directly because they are this sprint's unimplemented drafts. No
 code was touched. Figures in §2 about what `InMemoryWorldStateProxy` tracks were read from the tree at 9e003ab; the
 claim that previous values are readable before commit is a design statement to be confirmed by 025 GT-2's hook table,
-not a measurement.
+not a measurement. The flat-state correction in §3 (013) was raised by the spec 022 session (`dev-node`) and verified
+here by grep on the same tree; the Mordor walk figure is theirs, not re-measured.
