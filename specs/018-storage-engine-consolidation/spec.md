@@ -781,3 +781,19 @@ carries the full load.
   (FR-029); `conduit` owns, `flow` reviews the streams, `prism` reviews.
 - **T-013 (Phase 0, GT-1)** The RPC read-load arm of the harness (FR-028), with the four comparator clients provisioned
   on the same hardware and the fixture ranges of OQ-14.
+
+## Amendment requests from the fleet specs (023–026) — pending acceptance
+
+*Added 2026-10-30. Raised by [spec 023](../023-fleet-topology/spec.md) §"Amendment requests to spec 018" because the
+Phase 0 and Phase 1 decisions above lock them in. Owner: `vault`; the user accepts or rejects each. Nothing in this
+section changes a DC, FR or SC of this spec until accepted; when one is accepted, edit the item it names and mark the
+row here.*
+
+| # | Target in this spec | Request | Needed by | Status |
+| --- | --- | --- | --- | --- |
+| 1 | GT-1 harness (FR-021, FR-028) | Add a **read-fleet profile**: N reader processes plus one writer, concurrency 8–64, larger host class; record whether the engine supports safe **multi-process read-only access** (DC-5 reader discipline across processes). | 023 OQ-4 (`sim` reading a follower's store) | Pending |
+| 2 | F2 changeset format (FR-010, `data-model.md`) | Store the **post-value** beside the previous value; prefix every record with a **schema version** and `chainKey`. One record then serves rollback, follower replay, export and balance derivation. | 025 GT-1 / DC-9 (must land before F2 freezes) | Pending |
+| 3 | Track H slice H3 (FR-025) | **The node does not write ClickHouse.** The `ColdStore` write side publishes to Kafka (025 FR-002); the indexer owns analytics tables; H4's `eth_getLogs` routing reads them through the `ColdStore` read adapter. | 025 DC-7 | Pending |
+| 4 | T-010 close-fence (FR-031) | Schedule early (it is independent of GT-1 and merge-able on RocksDB). | 026 (followers and `sim` read concurrently) | Pending — already the intent of OQ-7 / FR-031; the request is only about ordering |
+| 5 | Pruning decisions (OQ-3, OQ-5; FR-010 archive) | Leave a mode that **retains every changeset**, so the `archive` role needs no second storage layout. | 026 GT-2 / FR-005 | Pending |
+| 6 | FR-018 runbook list | Drop `multi-instance.conf`: retired by 023 FR-006 (one process, one chain). | 023 T-002 | Pending |
