@@ -112,6 +112,7 @@ private class StubHealResponseProcessingState(
   var lastHealedAtMs: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var verificationPassComplete: Boolean = false
+  var giveUpEscalated: Boolean = false
 
   // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck, scopedHealMaxPaths and
   // decoupledHealServeRoot are constructor vals)
@@ -785,9 +786,10 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     withClue("nor waiting: ")(m.healRequests.contains(bRequest.key) shouldBe false)
     withClue("P stays held, for the orphan guard: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
     withClue("no put-back node counts as healed, so stagnation can fire: ")(m.totalNodesHealed shouldBe 1)
-    withClue("the give-up goes to the controller's stagnation path, once: ") {
+    withClue("the give-up goes to the controller's stagnation path, once, without stopping dispatch: ") {
       h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } should have size 1
-      m.pivotRefreshRequested shouldBe true
+      m.giveUpEscalated shouldBe true
+      m.pivotRefreshRequested shouldBe false
     }
     // B found again (a walk entry, say) and given up on again while that escalation is pending: not sent twice.
     h.respond(5, p, Seq(HealingEntry(Seq(compact(0)), hashOf(b))), Seq(bytes(b)))
@@ -809,4 +811,42 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     (1 to 3).foreach(attempt => h.respond(attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
     withClue("B is given up on: ")(m.healRequests.contains(m.healRequestFor(bTask).key) shouldBe false)
     withClue("the earlier pass no longer vouches for completion: ")(m.verificationPassComplete shouldBe false)
+  }
+
+  /** B, under a parent, fetched and filled three times while every read of its child fails: given up on at the third.
+    */
+  private def giveUpB(h: Harness, label: String): ByteString =
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)(s"s022/review/$label")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    h.respond(1, p, Seq(HealingEntry(Seq(emptyPath), hashOf(parent))), Seq(bytes(parent)))
+    m.mptStorage.failReads = 100
+    (1 to 3).foreach(attempt => h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    hashOf(b)
+
+  it should "not escalate a give-up while the pulse's own escalation waits for the controller (forge F2)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    m.pivotRefreshRequested = true
+    giveUpB(h, "give-up-under-pulse-escalation")
+    h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } shouldBe empty
+    m.giveUpEscalated shouldBe false
+  }
+
+  it should "drop the attempt counter of a node it gives up on, and keep it while the node is fetched again (hunter-r3 N2, forge N13)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/attempts-of-given-up")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    h.respond(1, p, Seq(HealingEntry(Seq(emptyPath), hashOf(parent))), Seq(bytes(parent)))
+    m.healAttempts(hashOf(b)) = 2 // B went unserved twice before
+    m.mptStorage.failReads = 100
+    (1 to 2).foreach(attempt => h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    withClue("put back, so still live: ")(m.healAttempts.get(hashOf(b)) shouldBe Some(2))
+    h.respond(4, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    withClue("given up on, so no longer live: ")(m.healAttempts.contains(hashOf(b)) shouldBe false)
   }

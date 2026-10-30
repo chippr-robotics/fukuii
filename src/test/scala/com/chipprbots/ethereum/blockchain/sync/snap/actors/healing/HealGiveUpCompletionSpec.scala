@@ -230,3 +230,56 @@ class HealGiveUpCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       rig.awaitComplete()
     }
   }
+
+  /** The give-up escalates to the controller once, without stopping dispatch, and again only after the controller has
+    * answered (spec 022 review beacon N2-r3, hunter-r3 N1, forge N13): the pulse's dispatch latch is not used, so an
+    * answer that never comes (a controller outside StateHealing) or one that leaves it set (a same-root refresh) cannot
+    * freeze every fetch for the 15-minute watchdog.
+    */
+  private def escalationDoesNotFreeze(scheme: StorageScheme, answer: Rig => Unit): Unit =
+    withRig(new Rig(scheme)) { rig =>
+      def stagnations(): Int =
+        var seen = 0
+        var open = true
+        while open do
+          try
+            rig.controller.receiveMessage(Duration.Zero) match
+              case _: SNAPSyncController.HealingStagnated => seen += 1
+              case _                                      => ()
+          catch case _: AssertionError => open = false
+        seen
+      rig.coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(rig.trie.root.hash)
+      rig.peerAvailable()
+      rig.drive()
+      (1 to 3).foreach(rig.serveBrX)
+      rig.settle()
+      withClue("the give-up is escalated: ")(stagnations() shouldBe 1)
+      // No answer yet. The walk the completion check started finds brX again, and its fetch goes out.
+      rig.drive()
+      val fourth = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](5.seconds)
+      withClue("dispatch goes on while the escalation waits: ")(fourth.paths shouldBe Seq(rig.trie("brX").pathset))
+      rig.peer.answerFrom(fourth, rig.trie.served) // given up on at once: three failures already
+      rig.settle()
+      withClue("not escalated again before the controller answers: ")(stagnations() shouldBe 0)
+      answer(rig)
+      rig.drive()
+      rig.serveBrX(5)
+      rig.settle()
+      withClue("escalated again once the controller has answered: ")(stagnations() shouldBe 1)
+      rig.fault(on = false)
+      rig.drive()
+      rig.serveBrX(6)
+      rig.drive()
+      rig.awaitComplete()
+    }
+
+  it should "keep dispatching while a give-up's escalation waits, and escalate again after the hold policy's answer, under the Hash scheme (beacon N2-r3, hunter-r3 N1)" taggedAs UnitTest in {
+    escalationDoesNotFreeze(StorageScheme.Hash, _.coordinator ! TrieNodeHealingCoordinator.HealingResumeDispatch)
+  }
+
+  it should "keep dispatching while a give-up's escalation waits, and escalate again after a same-root refresh, under the Path scheme (beacon N2-r3)" taggedAs UnitTest in {
+    escalationDoesNotFreeze(
+      StorageScheme.Path,
+      rig => rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(rig.trie.root.hash)
+    )
+  }
