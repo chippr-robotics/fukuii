@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.Op
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.ScriptedPeer
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
@@ -541,6 +542,24 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     peer.answerFrom(req, trie.served)
     awaitComplete(controller)
     cleanRoot.get() shouldBe trie.root.hash
+    testKit.stop(coordinator)
+  }
+
+  // spec 022 review beacon 2: real account leaves always decode; one that does not has a storage trie nobody looked at.
+  it should "complete as before, but prove nothing, after a walk that could not read an account leaf" taggedAs UnitTest in {
+    val unreadable = HealRequestFixtures.plainLeaf(Array[Byte](0x0c), "s022/review/beacon-2-unreadable")
+    val trie = PathHealPresenceFixtures.Trie(
+      Seq(
+        PathHealPresenceFixtures.Placed("root", None, Array.empty[Byte], HealRequestFixtures.branch(0 -> unreadable)),
+        PathHealPresenceFixtures.Placed("leaf", None, Array[Byte](0), unreadable)
+      )
+    )
+    val cleanRoot = new AtomicReference[ByteString](otherRoot)
+    val (coordinator, controller) =
+      spawnHealer(trie, trie.nodes.map(_.label).toSet, new ScriptedPeer(testKit), cleanRoot)
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    awaitComplete(controller)
+    withClue("no proof, and an earlier one does not stand either: ")(cleanRoot.get() shouldBe null)
     testKit.stop(coordinator)
   }
 

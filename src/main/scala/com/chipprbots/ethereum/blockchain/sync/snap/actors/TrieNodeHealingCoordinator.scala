@@ -210,6 +210,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // when it matches: a walk another incarnation launched (a supervisor restart keeps the ActorRef, and a walk outlives
   // its incarnation) says nothing about this incarnation's root or scope. Per incarnation: a restart forgets it.
   var currentWalk: Option[Long] = None
+  // spec 022 review beacon 2: what the walk that last ran could not follow.
+  val walkSkips: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
 
@@ -1524,8 +1526,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         else if verificationPassComplete then
           log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
           // spec 022 T043: this is the one place that knows a clean walk of the whole of `stateRoot` is what completes
-          // (not the code-only hand-off above, and not a force-complete). Set before the signal it backs goes out.
-          cleanWalkRoot.foreach(_.set(stateRoot))
+          // (not the code-only hand-off above, and not a force-complete). Set before the signal it backs goes out. A walk
+          // that could not follow something completes as before, and proves nothing (review beacon 2); a proof from an
+          // earlier walk of this root does not stand beside it.
+          cleanWalkRoot.foreach(_.set(if walkSkips.get() == 0L then stateRoot else null))
           snapSyncController ! SNAPSyncController.StateHealingComplete
         else
           // Inline tasks done with actual healing work — verify before declaring completion to catch

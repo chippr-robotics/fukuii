@@ -223,7 +223,12 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
     // A present, complete walk root (childless leaf in storage) so the verification walk finds 0 missing.
     val storage = new TestMptStorage()
-    val rootLeaf = LeafNode(ByteString(Array[Byte](0x01)), ByteString(Array[Byte](0x02)))
+    val rootLeaf = LeafNode(
+      ByteString(Array[Byte](0x01)),
+      ByteString(
+        com.chipprbots.ethereum.domain.Account.accountSerializer.toBytes(com.chipprbots.ethereum.domain.Account())
+      )
+    )
     storage.putNode(rootLeaf)
     val root = ByteString(rootLeaf.hash)
 
@@ -269,7 +274,12 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       // the invariant: the same stored leaf yields the same root regardless of the flag.
       val freshRoot =
         val s = new TestMptStorage()
-        val l = LeafNode(ByteString(Array[Byte](0x01)), ByteString(Array[Byte](0x02)))
+        val l = LeafNode(
+          ByteString(Array[Byte](0x01)),
+          ByteString(
+            com.chipprbots.ethereum.domain.Account.accountSerializer.toBytes(com.chipprbots.ethereum.domain.Account())
+          )
+        )
         s.putNode(l)
         ByteString(l.hash)
       root shouldBe freshRoot

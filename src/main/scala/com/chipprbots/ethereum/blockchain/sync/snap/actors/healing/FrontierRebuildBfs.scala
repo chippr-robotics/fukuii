@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
+import java.util.concurrent.atomic.AtomicLong
+
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
@@ -27,15 +29,17 @@ import com.chipprbots.ethereum.db.storage.BfsQueueStorage
   * fields. `verificationBFSRunning` and `currentWalk` are the `var`s the module writes (the walk launcher sets them on
   * the actor thread when a walk starts; the core's completion and failure arms clear the flag, and take a walk's end
   * only when it carries `currentWalk`, the token of the last walk this incarnation launched, spec 022 review hunter W1,
-  * beacon W1-r4); `stateRoot`, the walk root, is read by the multi-seed launcher on the actor thread to tag the walk's
-  * batches. The rest are immutable vals rule (d) keeps in the core: `bfsQueue` (the walk's level queue,
-  * `stateIngest.bfsQueue` or an in-memory fallback, built once with the coordinator), the two dispatchers, the emission
-  * batch size and the walk's caps.
+  * beacon W1-r4); `walkSkips` is the `AtomicLong` the walk's threads bump for what they could not follow, reset as a
+  * walk starts and read at the completion gate (spec 022 review beacon 2); `stateRoot`, the walk root, is read by the
+  * multi-seed launcher on the actor thread to tag the walk's batches. The rest are immutable vals rule (d) keeps in the
+  * core: `bfsQueue` (the walk's level queue, `stateIngest.bfsQueue` or an in-memory fallback, built once with the
+  * coordinator), the two dispatchers, the emission batch size and the walk's caps.
   */
 private[actors] trait FrontierRebuildBfsState:
   def stateRoot: ByteString
   var verificationBFSRunning: Boolean
   var currentWalk: Option[Long]
+  def walkSkips: AtomicLong
   def bfsQueue: BfsQueueStorage
   def healingWriterEc: ExecutionContext
   def healingReaderEc: ExecutionContext
@@ -135,7 +139,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
 
     // spec 022 T043: this walk descends every present child and the storage trie of every account leaf, with nothing to
     // stop it: the spec 005 subtree records went with CF `g` (D6). So a clean end is the repair pass the invariant marker
-    // records. It does not look at code.
+    // records, unless it could not follow something (`walkSkips`, review beacon 2). It does not look at code.
 
     // --- spec 002 US2 observability (observation-only, FR-006/FR-007/FR-008) ---
     // Per-level coarse-phase timers (nanos) accumulated across chunks/sub-ranges, and re-walk inflation
@@ -238,7 +242,9 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
                         case _ =>
 
                     case leaf: LeafNode if !entry.isStorage =>
-                      Account(leaf.value).foreach { account =>
+                      val decoded = Account(leaf.value)
+                      if decoded.isFailure then walkSkips.incrementAndGet() // its storage trie, if any, goes unseen
+                      decoded.foreach { account =>
                         // Observation-only (FR-008/FR-023): count the account-leaf storageRoot reference
                         // before the de-dup gate, when there is a non-empty storage root to follow.
                         if account.storageRoot != Account.EmptyStorageRootHash then childRefsSeen.incrementAndGet()
@@ -259,11 +265,13 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
                                 true
                               )
                             )
+                          else walkSkips.incrementAndGet() // a storage root with no account position to walk it from
                       }
 
                     case _ => // storage trie leaf, NullNode, inline HashNode
                 catch
                   case NonFatal(e) =>
+                    walkSkips.incrementAndGet()
                     asyncLog.debug(
                       s"[HEAL-BFS] Cannot traverse ${Hex.toHexString(entry.hash.take(4))}: ${e.getMessage} — skipping"
                     )
@@ -367,6 +375,12 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     asyncLog.info(
       s"[HEAL-BFS] Complete: ${visitedCount.get()} nodes across $levelIndex levels, $totalMissing missing nodes identified"
     )
+    val skips = walkSkips.get()
+    if skips > 0 then
+      asyncLog.warn(
+        s"[HEAL-BFS] This walk could not follow $skips node(s): what is below them went unseen, so it proves nothing for " +
+          "the invariant marker. Healing goes on as before."
+      )
     // spec 006 C1/D3/FR-004: return the count of missing nodes this walk emitted so the launcher
     // can pass it to onComplete (→ FrontierRebuildComplete.missingEmitted). The walk does NO state
     // writes; this is a pure read of the in-kernel AtomicLong.
@@ -475,6 +489,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // VerificationBFSComplete / FrontierWalkFailed of this walk.
     verificationBFSRunning = true
     currentWalk = Some(walk)
+    walkSkips.set(0L)
     val running = Future {
       val missingEmitted =
         try
