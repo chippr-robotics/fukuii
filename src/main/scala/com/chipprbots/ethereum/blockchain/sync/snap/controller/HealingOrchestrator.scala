@@ -679,7 +679,12 @@ private[snap] trait HealingOrchestrator
     */
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit =
     ctx.log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
-    healingCleanWalkRoot.set(null) // spec 022 T043: validation walks every node, so no earlier clean walk stands
+    // spec 022 T043 (review vault F2): validation walks every node, so no earlier clean walk stands, and a marker that says
+    // everything present is complete has just been contradicted. A clean full walk stamps again.
+    healingCleanWalkRoot.set(null)
+    if stateIngest.appState.isSnapHealInvariantPresent() then
+      ctx.log.warn("[HEAL-INVARIANT] Validation found nodes missing under a stamped datadir: marker removed")
+      stateIngest.appState.clearSnapHealInvariant().commitSync()
     currentPhase = StateHealing
     stateRoot.foreach { root =>
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))

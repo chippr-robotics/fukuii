@@ -86,6 +86,8 @@ private[snap] class StubHealingOrchestratorState(
   val syncedWrites: mutable.ArrayBuffer[(Boolean, Seq[ByteString])] = mutable.ArrayBuffer.empty
   // spec 022 T040: what was written to CF `g`, by any route.
   val frontierWrites: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  // The keys removed by a synced write (spec 022 review vault F2, F3).
+  val syncedRemovals: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
   // spec 022 T043: a synced write of this key fails (the disk is full, say).
   var failSyncedWritesOf: Option[String] = None
   private val dataSource = new EphemDataSource(Map.empty):
@@ -122,6 +124,12 @@ private[snap] class StubHealingOrchestratorState(
           throw new RuntimeException(s"cannot write $key")
       }
       syncedWrites += ((true, keys(updates)))
+      syncedRemovals ++= updates.flatMap {
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, removed, _) =>
+          removed.map(ByteString(_))
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, _) =>
+          removed.map(k => ByteString(k.toArray))
+      }
       recordFrontier(updates)
       super.update(updates)
 

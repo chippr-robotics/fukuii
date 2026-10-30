@@ -233,6 +233,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
     reset(PhaseFlags.ResetKind.Wake)
     bytecodesEstimatedTotal = 0L
     healingValidatedRoot = None
+    healingCleanWalkRoot.set(null) // spec 022 T043: as the line above, for what the invariant marker stands on
 
     pivotBlock = None
     stateRoot = None
@@ -333,6 +334,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
     // Root-equality alone would catch this (stateRoot is reset below) but we clear
     // explicitly so the field doesn't briefly hold a stale positive against a None root.
     healingValidatedRoot = None
+    healingCleanWalkRoot.set(null) // spec 022 T043: the same, for what the invariant marker stands on
     stateIngest.appState
       .putSnapSyncAccountsComplete(false)
       .and(stateIngest.appState.putSnapSyncStorageComplete(false))

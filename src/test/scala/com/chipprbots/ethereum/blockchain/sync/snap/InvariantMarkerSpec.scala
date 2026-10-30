@@ -205,12 +205,41 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     }
   }
 
-  it should "not take a marker of another version as standing" taggedAs UnitTest in {
+  // spec 022 review vault F3: nothing vouches for what this binary wrote under another version's rule, so removal goes by
+  // the key being there, and only `Stands` looks at the version.
+  private def markedThree(): (Recording, AppStateStorage) =
     val source = new Recording
     val appState = new AppStateStorage(source)
-    appState.put(Keys.SnapHealInvariant, "1").commit()
+    appState.put(Keys.SnapHealInvariant, "3").commit()
+    source.forget()
+    (source, appState)
+
+  it should "not take a marker of another version as standing, and remove it, synced" taggedAs UnitTest in {
+    val (source, appState) = markedThree()
     appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+    source.batches.toSeq shouldBe Seq((true, Seq(Op(AppNs, delete = true, key(Keys.SnapHealInvariant)))))
+  }
+
+  it should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
+    val (_, appState) = markedThree()
+    HealInvariant.atSnapStart(appState, None, canHold = false) shouldBe AtSnapStart.CannotHold(clearedOne = true)
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  it should "remove a marker of another version under an unfinished checkpoint import" taggedAs UnitTest in {
+    val (_, appState) = markedThree()
+    appState.put(Keys.CheckpointImportInProgress, "a:1").commit()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  it should "stamp over a marker of another version on an otherwise empty datadir" taggedAs UnitTest in {
+    val (_, appState) = created()
+    appState.put(Keys.SnapHealInvariant, "3").commit()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe AtSnapStart.StampedEmpty
+    appState.hasSnapHealInvariant() shouldBe true
   }
 
   // ---- pruning.mode = inmemory (V-N2 (2), (4), (5)) ---------------------------------------------------------------
@@ -387,6 +416,20 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     h.module.healingCleanWalkRoot.get() shouldBe null
     h.call(_.stateHealingArms(TrieWalkResult(Seq.empty)))
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
+  }
+
+  // spec 022 review vault F2: validation walks every node, so it can contradict a stamp, from a stamped start too.
+  Seq("2", "3").foreach { version =>
+    it should s"take a stamped marker (version $version), synced, when validation finds something missing" taggedAs UnitTest in {
+      val h = new Harness()
+      h.ready()
+      h.module.appStateStorage.put(Keys.SnapHealInvariant, version).commit()
+      h.module.healingCleanWalkRoot.set(root)
+      h.module.syncedRemovals.clear()
+      h.call(_.triggerHealingForMissingNodes(Seq(root)))
+      h.module.appStateStorage.get(Keys.SnapHealInvariant) shouldBe None
+      h.module.syncedRemovals.toSeq should contain(key(Keys.SnapHealInvariant))
+    }
   }
 
   it should "forget an earlier coordinator's clean walk when it spawns a new one" taggedAs UnitTest in {

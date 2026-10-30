@@ -1670,6 +1670,15 @@ object SyncController:
       syncGeneration += 1
       txGossipGate.stateSyncFinished()
 
+      // spec 022 D7 (review hunter): regular sync fetches a missing node on demand and stores it alone, present over
+      // children that may be absent. A clean hand-off has written SnapSyncDone by now, with the walk behind it. Every other
+      // route here (SNAP's `Done` with no finalisation, a finalisation that found no pivot header, do-snap-sync off) has
+      // not, so what is present is no longer vouched for. No catch: a marker that cannot be removed must not be left to
+      // look true while regular sync writes under it.
+      if !appStateStorage.isSnapSyncDone() && appStateStorage.isSnapHealInvariantPresent() then
+        log.warn("[HEAL-INVARIANT] Regular sync starting with SNAP not done: marker removed")
+        appStateStorage.clearSnapHealInvariant().commitSync()
+
       // Every route out of a bulk bytecode recovery ends here, so this is where its result is checked. The recovery
       // actor marks itself done on abandonment, a crashed coordinator, or a failed scan, so success is read from the
       // code store, not from that flag. FAIL LOUDLY: the importer will hit the same code again.

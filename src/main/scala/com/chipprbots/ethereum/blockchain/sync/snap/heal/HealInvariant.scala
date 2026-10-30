@@ -49,20 +49,23 @@ object HealInvariant:
     * is set, the datadir is pre-invariant whatever else it holds.
     */
   def atSnapStart(appState: AppStateStorage, pathNodes: Option[PathNodeStorage], canHold: Boolean): AtSnapStart =
-    val marked = appState.hasSnapHealInvariant()
+    val present = appState.isSnapHealInvariantPresent()
+    def removeFound(): Unit = if present then appState.clearSnapHealInvariant().commitSync()
     if !canHold then
-      if marked then appState.clearSnapHealInvariant().commitSync()
-      AtSnapStart.CannotHold(clearedOne = marked)
+      removeFound()
+      AtSnapStart.CannotHold(clearedOne = present)
     else
       appState.getCheckpointImportInProgress() match
         case Some(importing) =>
-          if marked then appState.clearSnapHealInvariant().commitSync()
+          removeFound()
           AtSnapStart.PreInvariant(s"a checkpoint import did not finish ($importing)")
-        case None if marked => AtSnapStart.Stands
+        case None if appState.hasSnapHealInvariant() => AtSnapStart.Stands
         case None if isEmpty(appState, pathNodes) =>
           appState.stampSnapHealInvariant().commitSync()
           AtSnapStart.StampedEmpty
-        case None => AtSnapStart.PreInvariant("no marker, and not an empty datadir")
+        case None =>
+          removeFound() // another version's, if any: it does not stand, so it does not stay
+          AtSnapStart.PreInvariant("no marker, and not an empty datadir")
 
   /** Whether this datadir is empty for the marker's purposes, conservatively: when in doubt it is not, since a stamp
     * over state an older binary wrote is the one thing that must not happen, and the doubt costs one walk.

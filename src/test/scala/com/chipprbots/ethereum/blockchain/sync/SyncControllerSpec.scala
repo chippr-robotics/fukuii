@@ -115,6 +115,61 @@ class SyncControllerSpec
     appState.isHealingFrontierRetired() shouldBe true
   }
 
+  // spec 022 review hunter: regular sync's on-demand fetches store a node alone, so whatever route starts it with SNAP not
+  // done, the invariant marker cannot stand.
+  private def regularSyncStarted(testSetup: TestSetup): Unit =
+    import testSetup.*
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+
+  it should "take the invariant marker when SNAP's Done starts regular sync with SNAP not done" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.stampSnapHealInvariant().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    withClue("it stands while SNAP runs: ")(appState.hasSnapHealInvariant() shouldBe true)
+
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.Done)
+    regularSyncStarted(testSetup)
+    appState.get(com.chipprbots.ethereum.db.storage.AppStateStorage.Keys.SnapHealInvariant) shouldBe None
+  }
+
+  it should "take the invariant marker when finalisation found no pivot header, whatever its version" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val markerKey = com.chipprbots.ethereum.db.storage.AppStateStorage.Keys.SnapHealInvariant
+    appState.put(markerKey, "3").commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+
+    // `SnapFinalization`'s `case None`: the done flags were not written, and regular sync starts all the same.
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+    regularSyncStarted(testSetup)
+    appState.get(markerKey) shouldBe None
+  }
+
+  it should "leave the invariant marker when regular sync starts with SNAP done: a clean hand-off keeps it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    seedSnapDoneWithRecovery(appState, needBytecode = false, needStorage = false)
+    appState.stampSnapHealInvariant().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncStarted(testSetup)
+    appState.hasSnapHealInvariant() shouldBe true
+  }
+
   it should "transition to regular sync when only bytecode recovery is needed (storage pre-done)" taggedAs (
     UnitTest,
     SyncTest

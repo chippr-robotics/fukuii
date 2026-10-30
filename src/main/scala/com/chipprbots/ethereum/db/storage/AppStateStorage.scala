@@ -131,6 +131,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def hasSnapHealInvariant(): Boolean =
     get(Keys.SnapHealInvariant).contains(SnapHealInvariantVersion)
 
+  /** Whether a marker of any version is there. What decides a removal: nothing vouches for what this binary writes
+    * under another version's rule, so that marker goes as this version's does. Only "it stands" looks at the version.
+    */
+  def isSnapHealInvariantPresent(): Boolean =
+    get(Keys.SnapHealInvariant).isDefined
+
   /** Stamp the marker. One write with the removal of the checkpoint key, since the stamp means whatever an interrupted
     * import left has been repaired. Commit with `commitSync` (T042).
     */
