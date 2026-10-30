@@ -361,8 +361,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // it — they key off `stateRoot` (the walk root) exclusively, preserving FR-007 parity by construction.
   var serveRoot: ByteString = stateRoot
   // T015 / FR-006: per-task count of fetch attempts that did not satisfy the task (content-mismatch drop, empty
-  // response, or timeout re-queue). Bounded by the pending-task set (an entry is only ever incremented for a hash
-  // that is being re-queued, and the whole map is cleared on every serve-root advance). A task that exceeds
+  // response, or timeout re-queue). Bounded by the live requests (an entry is only ever incremented for a hash that is
+  // being re-queued, dropped once the task is satisfied or given up on, and the whole map is cleared on every
+  // serve-root advance; a fill put back after a failed read keeps it, spec 022 review hunter-r3 N2). A task that exceeds
   // `decoupledHealMaxAttemptsNoRefresh` with no serve-root advance in between is surfaced (log + metric) — it is
   // NEVER force-completed: the content-hash check guarantees a wrong/missing node can never be accepted, so a stuck
   // node simply keeps the walk from finding zero, which is the correct (no-false-completion) behaviour.
@@ -386,6 +387,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
+  // spec 022 review beacon N2-r3, hunter-r3 N1: a read-failure give-up escalates once per controller answer. Its own
+  // latch, not `pivotRefreshRequested`: that one stops every dispatch, and an answer that never comes or leaves it set
+  // would freeze unrelated fetches until the watchdog above. Cleared when the controller answers (resume or refresh).
+  var giveUpEscalated: Boolean = false
 
   val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -700,6 +705,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         Behaviors.stopped
 
     case HealingPivotRefreshed(newStateRoot) =>
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       // FR-003: a same-root refresh is a no-op. ByteString `==` is full 32-byte value equality (NOT the
       // 4-byte log prefix). Returning here preserves a valid completeness marker and the persisted
       // frontier — the old body would clear both via clearPersistedFrontier(), wiping a good snapshot.
@@ -1208,6 +1214,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // fired HealingStagnated, give a fresh stagnation window, and resume dispatching the EXISTING pending tasks.
       // NOTHING is cleared (root, pendingTasks, frontier, verificationPassComplete all preserved) — that is the
       // whole point: a slow-but-servable verification pass must survive so it can converge against one stable root.
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       if pivotRefreshRequested then
         log.info(
           s"[HEAL] Resume dispatch on held root ${Hex.toHexString(stateRoot.take(4).toArray)} " +

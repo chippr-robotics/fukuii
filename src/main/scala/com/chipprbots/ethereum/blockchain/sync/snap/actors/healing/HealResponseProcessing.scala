@@ -29,8 +29,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
   * spec 003 scoped-verification accumulator (`healedPathsThisRound`, `healedPathsRoot`, `healedPathsOverflowed`), the
   * stateless set and its strikes and the staged spec 005 subtree records; it writes the progress counters
   * (`totalNodesHealed`, `crossRootHealCount`, `totalBytesReceived`, `completedTaskCount`), the pivot-refresh latch and
-  * its timestamp, and `lastHealedAtMs`; it reads the walk and serve roots and `knownAvailablePeers` (and evicts from
-  * it). `prunedEnabled` is an immutable val rule (d) keeps in the core. A give-up clears `verificationPassComplete`.
+  * its timestamp, the give-up escalation latch, and `lastHealedAtMs`; it reads the walk and serve roots and
+  * `knownAvailablePeers` (and evicts from it). `prunedEnabled` is an immutable val rule (d) keeps in the core. A
+  * give-up clears `verificationPassComplete`.
   */
 private[actors] trait HealResponseProcessingState:
   def stateRoot: ByteString
@@ -53,6 +54,7 @@ private[actors] trait HealResponseProcessingState:
   def knownAvailablePeers: mutable.Set[Peer]
   var pivotRefreshRequested: Boolean
   var pivotRefreshRequestedAt: Long
+  var giveUpEscalated: Boolean
   var lastHealedAtMs: Long
   def prunedEnabled: Boolean
   def pendingSubtreeRecords: mutable.Set[ByteString]
@@ -231,8 +233,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             // spec 004 T019/FR-010: count a heal sourced from a serve root that differs from the walk root.
             // Observation-only; never affects completion. (Equal roots ⇒ coupled-equivalent, not counted.)
             if decoupledHealServeRoot && serveRoot != stateRoot then crossRootHealCount += healed
-            // T015 / FR-006: this task is satisfied — drop its attempt counter (bounded by pendingTasks).
-            if readFailed == 0 then healAttempts.remove(nodeHash): Unit
+            // T015 / FR-006: this task is satisfied, or given up on (hunter-r3 N2) — drop its attempt counter (bounded by
+            // the live requests). A fill put back keeps it: that request is still live.
+            if readFailed == 0 || giveUp then healAttempts.remove(nodeHash): Unit
         else
           log.debug(
             s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)}"
@@ -446,12 +449,12 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           // spec 022 review forge F6: a node known missing was dropped, so no earlier clean pass vouches for completion;
           // the completion check walks again (and finds it, if the current root still needs it).
           verificationPassComplete = false
-          // Escalated once to the controller's stagnation path (as the pulse does, NB-11): afterwards nothing may be
-          // pending, so the pulse's own stagnation count never starts. Its answer (hold: resume dispatch, which runs the
-          // orphan guard; or a re-peg) resets the latch.
-          if !pivotRefreshRequested then
-            pivotRefreshRequested = true
-            pivotRefreshRequestedAt = System.currentTimeMillis()
+          // Escalated to the controller's stagnation path (as the pulse does, NB-11): afterwards nothing may be pending,
+          // so the pulse's own stagnation count never starts. Once per controller answer (hold: resume dispatch; or a
+          // refresh), which clears `giveUpEscalated`; not while the pulse's escalation waits. Dispatch goes on meanwhile
+          // (beacon N2-r3, hunter-r3 N1): the pulse's latch, which stops it, is not set here.
+          if !pivotRefreshRequested && !giveUpEscalated then
+            giveUpEscalated = true
             snapSyncController ! SNAPSyncController.HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           childrenRead = false
         case Left(readFailure) =>
