@@ -70,6 +70,9 @@ final private class NoEntriesFrontierStorage(dataSource: EphemDataSource) extend
   * completion check or a re-peg can start a walk), and any start in a new coordinator incarnation (a supervisor
   * restart, or a replacement the controller spawns) while the old one's walk still runs on the same queue.
   *
+  * And the completeness marker those walks leave (hunter W2, forge W-r4-1, vault-r3 W2 and W3): a walk of a root a
+  * re-peg has left must not set it, nor may a restart that could not read the persisted frontier keep it.
+  *
   * Fixture: `accountTrieOld` on a Hash store, complete or without `brX` (whose parent `ext` is on disk). Every
   * coordinator here shares one BFS queue and one manual writer executor, so walks, flushes and the resume run only when
   * the test runs them, one at a time and in the order it chooses.
@@ -81,15 +84,18 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   final private class Rig(
       hole: Boolean = false,
       frontier: Option[HealingFrontierStorage] = None,
-      persistence: Boolean = false
+      persistence: Boolean = false,
+      otherOnDisk: Boolean = false
   ):
     val ec = new ManualExecutionContext
     val trie: PathHealPresenceFixtures.Trie = PathHealPresenceFixtures.accountTrieOld()
+    private val otherTrie = PathHealPresenceFixtures.accountTrieNew()
 
-    /** Another root, not on disk: a re-peg to it seeds it and starts no walk. */
-    val otherRoot = PathHealPresenceFixtures.accountTrieNew().root.hash
+    /** Another root, on disk only with `otherOnDisk`; otherwise a re-peg to it seeds it and starts no walk. */
+    val otherRoot = otherTrie.root.hash
     val hashStore = new TestMptStorage()
     PathHealPresenceFixtures.seedHash(hashStore, trie.nodes.filterNot(n => hole && n.label == "brX"))
+    if otherOnDisk then PathHealPresenceFixtures.seedHash(hashStore, otherTrie.nodes)
     val queue = new InterleavingBfsQueue
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
     private val peers = createTestProbe[NetworkPeerManagerActor.Command]()
@@ -264,4 +270,28 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     rig.drive(gen2)
     withClue("generation 2's own walk found brX: ")(rig.progress(gen2).pendingTasks shouldBe 1)
     rig.completions() shouldBe 0
+  }
+
+  it should "not mark the frontier complete when a rebuild walk of a root a re-peg has left ends clean (hunter W2, forge W-r4-1, vault-r3 W2)" taggedAs UnitTest in {
+    val store = new NoEntriesFrontierStorage(EphemDataSource())
+    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true)
+    val c = rig.spawnGeneration()
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    rig.ec.runNext() // the resume: no persisted frontier, so the full rebuild of the root starts
+    rig.settle(c)
+    withClue("the rebuild is queued: ")(rig.ec.pending shouldBe 1)
+    c ! HealingPivotRefreshed(
+      rig.otherRoot
+    ) // a re-peg mid-walk, to a root on disk: its walk waits for the rebuild's end
+    rig.settle(c)
+    withClue("no second walk: ")(rig.ec.pending shouldBe 1)
+    rig.ec.runNext() // the rebuild of the root the heal has left ends clean
+    rig.settle(c)
+    withClue("no completeness marker from a walk of a superseded root: ")(store.isComplete shouldBe false)
+    withClue("no completion from it: ")(rig.completions() shouldBe 0)
+    c ! HealingCheckCompletion // the check after it: with no marker, a full walk of the current root
+    rig.drive(c)
+    rig.awaitComplete()
+    withClue("marked once a walk of the current root is clean: ")(store.isComplete shouldBe true)
   }
