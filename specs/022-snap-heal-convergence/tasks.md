@@ -162,6 +162,12 @@ Within each slice, **tests come before implementation**, and the tests must fail
     - TRIM never reaches the root SSD: `/etc/crypttab` has `luks` without `discard`, and `lsblk --discard` shows 0 B at `dm_crypt-0`.
     - Under load the BX500 showed r_await 330–445 ms and w_await 235–320 ms at 3–7 IOPS.
     - Redo the timing comparison after TRIM is enabled.
+  - **Timing after the disk fix (2026-10-30):** `crypttab` now has `luks,discard`, the host was rebooted, and the first `fstrim` released 376.7 GiB. Runs are from scratch against the local core-geth.
+    - Pre-spec-022 jar (R1): 5.1 min, 4 walks (507, 42, 1, 0 missing).
+    - Slice-2 jar (S4, R2): 4.9 and 4.5 min, 3 walks each (507, 1, 0 and 507, 116, 0).
+    - **The roughly 5× gain comes from the disk fix, not from slice 2.** The sample is too small to claim a slice-2 speed change on Mordor.
+    - Under load: reads median 0.8 ms, max 17 ms; writes median 9 ms, max 44 ms (were 330–445 and 235–320 ms).
+    - Measurements from before 2026-10-30 are not comparable with later ones. Mordor writes only about 1.2 GB, so these runs do not show how the drive handles sustained Sepolia-scale writes.
 
   Original task: Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
 
