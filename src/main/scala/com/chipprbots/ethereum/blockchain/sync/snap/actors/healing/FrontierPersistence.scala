@@ -87,7 +87,7 @@ private[actors] trait FrontierPersistence
   // heal-flush (NOT on dispatch, NOT on hold) and when a re-peg or force-complete drops a held node unwritten (Hash,
   // `unpersistDroppedHeld`), clear on force-complete / pivot-refresh. A node the orphan guard drops keeps its entry (same
   // root, the marker may stand: spec 022 review vault R2), so the set may hold more than that union, never less.
-  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (the common default).
+  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (sync.conf enables it; the spawn turns it off under in-memory pruning).
 
   /** Persist newly-queued frontier entries (hash -> pathset). Idempotent: re-persisting an existing entry overwrites it
     * identically, so re-queues and resume-loads are harmless.

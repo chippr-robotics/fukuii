@@ -157,7 +157,10 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     probe.receiveMessage(30.seconds)
     ()
 
-  /** The `StateHealingComplete`s `controller` receives within `d` (other messages, such as progress, are skipped). */
+  /** The `StateHealingComplete`s `controller` receives within `d` (other messages, such as progress, are skipped). It
+    * always drains what is already queued, so `Duration.Zero` after a mailbox barrier reads every message the
+    * coordinator sent before the barrier (spec 022 review eye F6: a zero deadline used to read nothing at all).
+    */
   private def completionsWithin(
       controller: TestProbe[SNAPSyncController.Command],
       d: FiniteDuration
@@ -166,11 +169,9 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     val seen = scala.collection.mutable.ArrayBuffer.empty[SNAPSyncController.Command]
     var open = true
     while open do
-      val left = deadline.timeLeft
-      if left <= Duration.Zero then open = false
-      else
-        try seen += controller.receiveMessage(left)
-        catch case _: AssertionError => open = false
+      // A zero wait polls the queue once without blocking.
+      try seen += controller.receiveMessage(deadline.timeLeft.max(Duration.Zero))
+      catch case _: AssertionError => open = false
     seen.filter(_ == SNAPSyncController.StateHealingComplete).toSeq
 
   "Healing" should "keep a node off disk while it waits on a child, across a re-peg, under the Path scheme (T017)" taggedAs UnitTest in {
