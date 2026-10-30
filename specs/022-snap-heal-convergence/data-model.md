@@ -40,18 +40,22 @@ These are the logical entities. Field names are indicative, and the final names 
 
 | Field | Notes |
 |-------|-------|
-| account hash | 32 bytes |
+| subject | 32 bytes: the account hash; under "code missing" the code hash |
 | reason | storage abandoned, storage skipped, storage root mismatch, or code missing |
-| claimed storage root | from the account leaf |
-| claimed code hash | from the account leaf |
+| claimed storage root | what the decision saw; not read back: the entry's needs are read from the account leaf at the current root |
+| claimed code hash | as above |
 
-- **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding.
-- **Removed:** when, at the current root, the account's storage root and code are both present.
+*Keys (slice 3):* `SnapExcluded/1/` + a kind byte + the subject, in AppState `s`, read and written by `SnapSyncProgressStorage`. A "code missing" entry is keyed by the code hash because the bytecode download, where that decision is made, knows the hash and not the accounts that use it; it leaves the set when the code is stored, with no root in play, and on Path it deletes no positions.
+
+- **Written:** before any action is taken on it: before the Path ancestor deletes, or before Hash seeding. Each with `updateSync`.
+- **Removed:** when, at the current root, the account's storage root and code are both present, or the root holds no such account. A "code missing" entry: when the code is stored.
+- **Cleared:** at SNAP finalisation, after the done flags: a lazy hand-off can leave entries, and no later cycle may read them.
 - **Completion** requires the set to be empty.
 
 **Per-scheme handling (D5):**
-- Path: delete the account-trie positions on the account's key, depth 0 to 64.
+- Path: delete the account-trie positions on the account's key, depth 0 to 64, at heal start.
 - Hash: on every adopted root, resolve the account against the current root and seed its storage root or code if absent.
+- Both: the same resolution runs, a page at a time, whenever healing has drained, and the completion gate stays shut until the set is empty. A node the lookup finds absent is seeded too (T035 says skip): on a datadir that keeps the invariant it is already being healed, so the seed joins that request; on one that does not, nothing else would reach it once slice 5 removes the walk.
 
 ## Invariant marker (durable, AppState `s`)
 

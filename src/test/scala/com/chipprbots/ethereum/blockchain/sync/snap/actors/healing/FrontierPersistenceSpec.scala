@@ -336,8 +336,9 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
   it should "end the drain wait at once for a cancelled walk: nothing refreshes a replaced incarnation's gauge (T038a)" taggedAs UnitTest in {
     val s = stub(maxWaitMs = 3600000L)
     s.pendingBackpressure.set(1000)
-    var cancelled = false
+    @volatile var cancelled = false
     val waiter = new Thread(() => s.awaitFrontierDrain(() => cancelled))
+    waiter.setDaemon(true)
     waiter.start()
     cancelled = true
     waiter.join(30000L)

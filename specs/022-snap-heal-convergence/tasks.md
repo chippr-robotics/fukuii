@@ -117,7 +117,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - Parameterise it over Path and Hash, and over `pruning.mode=basic` and `inmemory`.
   - *Scope (slice 2 review, vault V3/V4, eye F10):* the invariant is claimed for archive and basic pruning only (spec.md, after FR-004). Under `inmemory` the Hash cells run with a node cache small enough to evict and audit what eviction wrote, without asserting the invariant; the Path cells ignore the pruning mode (the path store is written directly), so they run once.
   - **[vault]**
-  - **Done in slice 2 for three of the four points** (held, mid-chain before and after the write, mid-re-peg with nodes held and with the old trie healed), 20 runs. The fourth, mid-excluded-set write, lands with the excluded-account store in slice 3 (T032-T035).
+  - **Done in slice 2 for three of the four points** (held, mid-chain before and after the write, mid-re-peg with nodes held and with the old trie healed), 20 runs. The fourth, mid-excluded-set write, landed with the excluded-account store in slice 3: `excluded-write` and `excluded-written` (inside the fsynced write of an entry, before and after it applies; the audit also reads the set: an entry whole or absent), and on Path `excluded-delete` (right after a heal start's position deletes). Slice 3 also added the `twin` fixture (two accounts with one storage trie) that slice 2 deferred.
   - *Widened after the slice-2 review (vault V4, eye F10), 32 runs:* two fixtures (the account trie, and an account leaf over a storage trie, so a Path chain commit and a re-peg delete span both trie column families and the audit checks a storage root); the re-peg points count only writes that put a node, `repeg-full` must find the new root on disk, and Path adds `repeg-delete` (the first, delete-only write after a re-peg); the Path cells run under basic pruning only (12), the Hash cells under basic (10, invariant asserted) and inmemory (10, a two-entry node cache that evicts to disk; the audit is reported, not asserted: 0 violations in the run of 2026-10-29); the writer pool has two threads. Not done: the restart-after-kill step (SC-006, slice 4), the twin-storage alias fixture (slice 3), `repeg-k` points (beacon N5, slice 4); see `.local/docs/continuations/s022-slice3-inputs.md`.
 
 ### Implementation
@@ -175,14 +175,14 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Tests (write first; they must fail)
 
-- [ ] T029 [P] [US1] Test on Path: accounts whose storage was abandoned at force-complete, skipped after max-empty, rejected for a root mismatch, or missing code are each reached from the current root and completed before completion is declared. File: `test/.../blockchain/sync/snap/ExcludedAccountsSpec.scala`. **[beacon]**
-- [ ] T030 [P] [US2] Test the same four cases on Hash, through seeding resolved against the current root. Include the case where a re-peg happens between the exclusion and the seed, so the seed must resolve against the new root and must not stall. File: `ExcludedAccountsSpec.scala`. **[forge]**
-- [ ] T031 [P] [US1] Test that an account leaf whose code is missing is held until `ByteCodeCoordinator` acknowledges the code write. File: `test/.../blockchain/sync/snap/actors/healing/CodeDependencySpec.scala`. **[beacon]**
+- [x] T029 [P] [US1] Test on Path: accounts whose storage was abandoned at force-complete, skipped after max-empty, rejected for a root mismatch, or missing code are each reached from the current root and completed before completion is declared. File: `test/.../blockchain/sync/snap/ExcludedAccountsSpec.scala`. **[beacon]**
+- [x] T030 [P] [US2] Test the same four cases on Hash, through seeding resolved against the current root. Include the case where a re-peg happens between the exclusion and the seed, so the seed must resolve against the new root and must not stall. File: `ExcludedAccountsSpec.scala`. **[forge]**
+- [x] T031 [P] [US1] Test that an account leaf whose code is missing is held until `ByteCodeCoordinator` acknowledges the code write. File: `test/.../blockchain/sync/snap/actors/healing/CodeDependencySpec.scala`. **[beacon]**
 
 ### Implementation
 
-- [ ] T032 [US1] Add the durable excluded-account store, following data-model.md "Excluded account", as methods on `db/storage/SnapSyncProgressStorage` (AppState namespace `s`, versioned key), reached from coordinators as `stateIngest.snapProgress.<call>`, which adds no new capability member. It is written before any action is taken on an entry. **[vault]**
-- [ ] T033 [US1] Record excluded accounts at every source:
+- [x] T032 [US1] Add the durable excluded-account store, following data-model.md "Excluded account", as methods on `db/storage/SnapSyncProgressStorage` (AppState namespace `s`, versioned key), reached from coordinators as `stateIngest.snapProgress.<call>`, which adds no new capability member. It is written before any action is taken on an entry. **[vault]**
+- [x] T033 [US1] Record excluded accounts at every source:
   - force-complete: `actors/StorageRangeCoordinator.scala:754-784`, replacing `abandonedAccounts.clear()` at `:776` with a persist;
   - max-empty skip: `actors/storage/StorageOrderedApply.scala:158-161`;
   - root mismatch: `StorageOrderedApply.scala:123-148`, which today logs and accepts;
@@ -191,25 +191,26 @@ Within each slice, **tests come before implementation**, and the tests must fail
   Persist each entry **at the moment the decision is made**: give-up, max-empty skip and root mismatch end the phase cleanly, and `DownloadSupervisor:760` then wipes the `SnapStorageDone` markers (R-5a). Store entries as AppState `SnapExcluded/<accountHash>` → reason, written with `updateSync`.
 
   **[beacon] [forge]**
-- [ ] T034 [US1] On Path, at heal start, point-delete every account-trie position along each excluded account's 64-nibble key, depth 0 to 64, leaf slot included, in one batch (geth `pathTrie.delete`). Run this after the account range has committed. File: `actors/TrieNodeHealingCoordinator.scala`, or a new `blockchain/sync/snap/heal/ExcludedAccountSeeding.scala`. **[beacon] [vault]**
-- [ ] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
-- [ ] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `heal/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
-- [ ] T037 [US1] Remove `HealedCodeWaitTimeout` (`SNAPSyncController.scala:836-846`). If code is unavailable, log the account every 60 s. After 30 min with no progress, fall back to `StateHealingAbandoned`, which leads to the lazy handoff. **[beacon] [forge]**
-- [ ] T038a [US3] **(slice-2 sign-off condition: hunter, forge, vault, beacon)** Make the frontier walk exclusive across SNAP controller instances, not just across coordinator incarnations.
+- [x] T034 [US1] On Path, at heal start, point-delete every account-trie position along each excluded account's 64-nibble key, depth 0 to 64, leaf slot included, in one batch (geth `pathTrie.delete`). Run this after the account range has committed. File: `actors/TrieNodeHealingCoordinator.scala`, or a new `blockchain/sync/snap/heal/ExcludedAccountSeeding.scala`. **[beacon] [vault]**
+- [x] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
+- [x] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `heal/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
+- [x] T037 [US1] Remove `HealedCodeWaitTimeout` (`SNAPSyncController.scala:836-846`). If code is unavailable, log the account every 60 s. After 30 min with no progress, fall back to `StateHealingAbandoned`, which leads to the lazy handoff. **[beacon] [forge]**
+- [x] T038a [US3] **(slice-2 sign-off condition: hunter, forge, vault, beacon)** Make the frontier walk exclusive across SNAP controller instances, not just across coordinator incarnations.
   - Slice 2's `WalkLease` belongs to one `BfsQueueStorage` wrapper instance, but the shared resource is the BFS column family. A walk left running by a stopped controller (after a `HealingImpossible` restart, for example) can still cut short the next controller's walk, which then reports clean (P1b).
   - Key the lease to the column family, process-wide, and **cancel** orphaned walks rather than waiting them out. Today the next walk waits out the orphan's remaining runtime, which on ETH mainnet Path can be hours.
   - Fix the orphan's backpressure, which reads the replaced incarnation's frozen gauge.
   - Close the refused-launch observability gap: run flags and gauges stay set, and 'engaged' is logged for a walk that never ran.
   - The stale-root end of a rebuild walk must start the completion check.
   - **[vault] [forge] [beacon]**
-- [ ] T038b [US3] **(slice-2 sign-off condition, beacon N3-r3 / W2-r4)** A supervisor-restarted heal coordinator must get the controller's **current** root. Today it walks its spawn-time root, because no `StartTrieNodeHealing` or re-peg is replayed. **[beacon] [forge]**
-- [ ] T038c Work through the remaining slice-2 review notes. They are recorded in the git-ignored `.local/docs/continuations/s022-slice3-inputs.md`. Highlights:
+- [x] T038b [US3] **(slice-2 sign-off condition, beacon N3-r3 / W2-r4)** A supervisor-restarted heal coordinator must get the controller's **current** root. Today it walks its spawn-time root, because no `StartTrieNodeHealing` or re-peg is replayed. **[beacon] [forge]**
+- [x] T038c Work through the remaining slice-2 review notes. They are recorded in the git-ignored `.local/docs/continuations/s022-slice3-inputs.md`. Highlights:
   - the A→B→A re-peg marker ABA;
   - a scoped gate walk replacing a dropped RestartResumeVerification;
   - the four-fault loadAll fallback;
   - `readFailures` stays unbounded and keyed per hash;
   - the give-up latch has no watchdog;
   - CF `g` entries survive a re-peg until slice 4.
+  - **Triaged 2026-10-30:** what this slice fixed, and the target slice of each other note, are recorded at the end of the inputs file.
 - [ ] T038 Run T029–T031 and all earlier slice tests, then do one dev-loop Mordor run. Open the slice-3 PR and request reviews from beacon and forge.
 
 **Checkpoint**: no excluded account can make healing declare completion early.
