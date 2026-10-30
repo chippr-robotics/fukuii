@@ -51,7 +51,11 @@ final class ExcludedAccountSeeding(
     store: SnapSyncProgressStorage,
     readNode: (ByteString, Seq[ByteString]) => Option[MptNode],
     codePresent: ByteString => Boolean,
-    pageSize: Int = ExcludedAccountSeeding.DefaultPageSize
+    pageSize: Int = ExcludedAccountSeeding.DefaultPageSize,
+    // Whether a seed's node is already here and only not on disk yet: held, or in the flush buffer. A read goes to the
+    // store only, so such a node looks absent, but it is no fetch to make and no sign that anything but its chain is
+    // wanted. The next pass after the chain is written reads the account itself.
+    seedNeedsNoFetch: ((Seq[ByteString], ByteString)) => Boolean = _ => false
 ):
   import ExcludedAccountSeeding.*
 
@@ -130,7 +134,7 @@ final class ExcludedAccountSeeding(
           case Resolution.Absent                  => toDormant += entry
           case Resolution.Needs(ns, cs) =>
             if entry.dormant then toActive += entry
-            seeds ++= ns
+            seeds ++= ns.filterNot(seedNeedsNoFetch)
             code ++= cs
       catch
         case NonFatal(e) =>

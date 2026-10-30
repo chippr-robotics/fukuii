@@ -324,7 +324,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // in bare construction, which never reads the store.
   private val excludedSeeding: Option[ExcludedAccountSeeding] =
     Option.when(excludedAccounts)(
-      new ExcludedAccountSeeding(stateIngest.snapProgress, readForExcluded, codeStored)
+      new ExcludedAccountSeeding(
+        stateIngest.snapProgress,
+        readForExcluded,
+        codeStored,
+        seedNeedsNoFetch = { case (pathset, hash) => nodeNeedsNoFetch(HealingEntry(pathset, hash)) }
+      )
     )
   // Whether the completion gate last stayed shut on the set. What a tick looks at, with `heldNodes.awaitingCode`.
   private var excludedBlocking: Boolean = false
@@ -527,7 +532,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       case BlockerKind.Unknown =>
         log.info(s"[HEAL-CODE] Blocked for $blockedTicks minutes, and the set's pass has not ended at this root yet")
       case BlockerKind.CodeOnly =>
-        if !codeHandOffArmed then armCodeHandOff()
+        // Armed already, it acts again only for a chain the walk's own fetches brought in, waiting on code of its own.
+        if !codeHandOffArmed || heldNodes.awaitingCode then armCodeHandOff()
       case BlockerKind.Other =>
         log.error(
           s"[HEAL-CODE] $blockedTicks minutes with no progress and healing blocked ($waitingOn bytecode(s) missing, " +

@@ -386,6 +386,46 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       rig.progress.excludedPage(None, 10).map(_.subject).toSet shouldBe Set(hash0, hash1, other)
     }
 
+    // An account entry's own chain is held, so a read of the store finds its root missing. That is no fetch to make, and
+    // it must not read as "more than code": on Path, with a heal start's position deletes, it would be the usual case.
+    it should s"hand off with an account entry whose chain is the held one, on $scheme" taggedAs UnitTest in {
+      val account = packNibbles(0.toByte +: rest0)
+      val rig = new Rig(scheme, withSet = true)
+      rig.progress.recordExcluded(Seq(ExcludedAccount(account, ExcludedReason.StorageAbandoned)))
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks)
+      rig.drive()
+      withClue("the chains are written: ")(rig.onDisk("root") shouldBe true)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      withClue("it needs its code still, so it stays: ")(rig.progress.hasExcludedAccounts shouldBe true)
+    }
+
+    it should s"write a chain its walk brings in that waits on code too, not stall on it, on $scheme (P3)" taggedAs UnitTest in {
+      val lateCode = kec256(ByteString("code-dependency/late"))
+      val late = LeafNode(ByteString(rest0.reverse), contract(lateCode, 7L))
+      val latePath = Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(nibbles(5), isLeaf = false)))
+      val t = trie()
+      val rig = new Rig(scheme, withSet = true, t = t, served = Some(t.served + (latePath -> ByteString(late.encode))))
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks) // armed
+      // What a dirty walk does: a missing node found, fetched, and its code not here either.
+      rig.coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((latePath, ByteString(late.hash))))
+      rig.available()
+      val pause = createTestProbe[Any]()
+      val deadline = 30.seconds.fromNow
+      while !rig.progress.excludedPage(None, 10).map(_.subject).contains(lateCode) do
+        withClue("the late chain's code is recorded within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        rig.ticks(1)
+        rig.drive()
+        pause.expectNoMessage(10.millis)
+      rig.drive()
+      withClue("no held node is left waiting: ")(rig.seen() should contain(SNAPSyncController.StateHealingAbandoned))
+    }
+
     it should s"go back to a normal completion if all the code arrives while it walks, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme, withSet = true)
       rig.begin()

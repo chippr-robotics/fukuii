@@ -272,6 +272,21 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     s.onlyCodeOutstanding shouldBe true
   }
 
+  it should "not count a seed whose node is already here, only not on disk: its chain is held" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))
+    val s = new ExcludedAccountSeeding(
+      store,
+      reader(Set(root)), // the root is held, so a read of the store does not find it
+      _ => false,
+      seedNeedsNoFetch = _._2 == root
+    )
+    val step = s.step(root)
+    step.seeds shouldBe empty
+    withClue("the entry stays: nothing has shown it complete: ")(store.hasExcluded shouldBe true)
+    s.onlyCodeOutstanding shouldBe true
+  }
+
   it should "be false after a pass that seeded a node or could not read one" taggedAs UnitTest in {
     val seeded = freshStore()
     seeded.recordExcluded(Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned)))

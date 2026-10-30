@@ -125,20 +125,24 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       case StorageScheme.Path => HealRequest.atPosition(entry.pathset, entry.hash)
       case StorageScheme.Hash => HealRequest.ofNode(entry.pathset, entry.hash)
 
+  /** Whether a fetch of `entry`'s node would be refused because of what is already here. */
+  def nodeNeedsNoFetch(entry: HealingEntry): Boolean =
+    val request = healRequestFor(entry)
+    // A node already held (received, waiting on its children) is not fetched again: its children are being fetched.
+    heldNodes.contains(HeldNodeSet.idOf(request)) ||
+    // spec 022 review beacon N2 (mirrors HealRequestBook.Added.Refused): a parentless entry never displaces a node a
+    // parent waits on, held at this position for another hash.
+    heldNodes.heldAt(request.key).exists(h => h.request.hash != request.hash && h.parents.nonEmpty) ||
+    // Hash: a node in the flush buffer was committed with its whole subtree, only not flushed yet (forge N2).
+    (storageScheme == StorageScheme.Hash && rawNodeBuffer.contains(request.hash))
+
   /** Record `entry` as a heal request with no parent (a root, a re-seed, a walk or controller entry) and queue a fetch
     * when its hash has none live. True when a fetch was queued. A request already live is not recorded twice; a Path
     * position whose hash is already being fetched joins that fetch (an alias, filled when the node arrives).
     */
   def enqueueRequest(entry: HealingEntry): Boolean =
-    val request = healRequestFor(entry)
-    // A node already held (received, waiting on its children) is not fetched again: its children are being fetched.
-    if heldNodes.contains(HeldNodeSet.idOf(request)) then false
-    // spec 022 review beacon N2 (mirrors HealRequestBook.Added.Refused): a parentless entry never displaces a node a
-    // parent waits on, held at this position for another hash.
-    else if heldNodes.heldAt(request.key).exists(h => h.request.hash != request.hash && h.parents.nonEmpty) then false
-    // Hash: a node in the flush buffer was committed with its whole subtree, only not flushed yet (forge N2).
-    else if storageScheme == StorageScheme.Hash && rawNodeBuffer.contains(request.hash) then false
-    else if healRequests.add(request).needsFetch then
+    if nodeNeedsNoFetch(entry) then false
+    else if healRequests.add(healRequestFor(entry)).needsFetch then
       pendingTasks += entry
       true
     else false
