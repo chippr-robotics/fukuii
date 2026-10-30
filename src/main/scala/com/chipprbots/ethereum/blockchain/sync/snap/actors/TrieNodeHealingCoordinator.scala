@@ -1020,11 +1020,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // keeps the marker unwritten then (FR-005 parity; the marker also gates the spec-003 scoped path). Under
       // in-memory pruning the controller passes persistence off and clears any marker before the spawn (spec 022
       // review vault R1): no marker is trusted there.
+      // spec 022 review (hunter W2, forge W-r4-1, vault-r3 W2): only for the current root. A re-peg does not stop this
+      // walk; it clears the marker and drops the outstanding frontier the walk had found (pending, in flight, held), so
+      // a walk of the root it left must not set the marker again: a restart would trust it, and so would the
+      // completion gate's scoped walk.
       if frontierPersistenceEnabled then
-        stateIngest.healingFrontier.foreach { store =>
-          store.markComplete()
-          log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
-        }
+        if walkRoot == stateRoot then
+          stateIngest.healingFrontier.foreach { store =>
+            store.markComplete()
+            log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
+          }
+        else
+          log.info(
+            s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
+              s"complete — the persisted frontier is not marked complete (the heal has re-pegged to " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)})"
+          )
       // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
       // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
       // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
