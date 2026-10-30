@@ -235,3 +235,34 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     source.failing = false
     s.step(root).missingCode shouldBe Seq(codeHash)
   }
+
+  "The heal start's position deletes" should "go in batches of whole keys, each position once, skipping code-only entries (T034)" taggedAs UnitTest in {
+    val store = freshStore()
+    val accounts = (0 to ExcludedAccountSeeding.DeleteBatchAccounts).map { i =>
+      ExcludedAccount(ByteString(Array.fill[Byte](31)(0x11) :+ i.toByte), ExcludedReason.StorageAbandoned)
+    }
+    store.recordExcluded(accounts :+ ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
+    val batches = scala.collection.mutable.ArrayBuffer.empty[Seq[(Option[ByteString], Array[Byte])]]
+    seeding(store, reader()).deleteAccountPositions(batches += _) shouldBe accounts.size
+    batches should have size 2
+    batches.foreach { batch =>
+      batch.map(p => ByteString(p._2)).distinct should have size batch.size.toLong
+    }
+    accounts.foreach { account =>
+      val key = ExcludedAccountSeeding.accountNibbles(account.subject)
+      val holding = batches.filter(_.exists(_._2.sameElements(key)))
+      withClue("the deepest position of each key is in one batch: ")(holding should have size 1)
+      val positions = holding.head.map(p => ByteString(p._2)).toSet
+      (0 to key.length).foreach(depth => positions should contain(ByteString(key.take(depth))))
+    }
+    val codeKey = ExcludedAccountSeeding.accountNibbles(codeHash)
+    batches.flatten.exists(_._2.sameElements(codeKey)) shouldBe false
+  }
+
+  it should "do nothing with no account in the set" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)))
+    val batches = scala.collection.mutable.ArrayBuffer.empty[Seq[(Option[ByteString], Array[Byte])]]
+    seeding(store, reader()).deleteAccountPositions(batches += _) shouldBe 0
+    batches shouldBe empty
+  }

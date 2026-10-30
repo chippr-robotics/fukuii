@@ -129,9 +129,9 @@ object ExcludedAccountSeeding:
   val DefaultPageSize: Int = 256
 
   /** How many accounts a heal start's position deletes (T034) carry in one write batch. Every position of one account
-    * stays in one batch; 1024 accounts × 65 positions keep the batch in the size vault's storage protocol names.
+    * stays in one batch; 128 accounts × 65 positions is at most about 8k keys, the size `storage-rocksdb.md` names.
     */
-  val DeleteBatchAccounts: Int = 1024
+  val DeleteBatchAccounts: Int = 128
 
   private val EmptyPath: ByteString = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
 
