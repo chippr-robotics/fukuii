@@ -78,13 +78,13 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val full = if withCode then base.copy(codeHash = com.chipprbots.ethereum.domain.CodeHash(codeHash)) else base
     ByteString(Account.accountSerializer.toBytes(full))
 
-  private def fixture(withCode: Boolean = false): Trie =
+  private def fixture(withCode: Boolean = false, acct1Nonce: Long = 2L): Trie =
     val s0a = plainLeaf(nibbles(0x0a), "excluded/s0a")
     val s0b = plainLeaf(nibbles(0x0b), "excluded/s0b")
     val s0 = branch(0 -> s0a, 1 -> s0b)
     val s1 = plainLeaf(nibbles(0x0c), "excluded/s1")
     val acct0 = LeafNode(ByteString(rest0), account(ByteString(s0.hash), 1L, withCode))
-    val acct1 = LeafNode(ByteString(rest1), account(ByteString(s1.hash), 2L, withCode = false))
+    val acct1 = LeafNode(ByteString(rest1), account(ByteString(s1.hash), acct1Nonce, withCode = false))
     val root = branch(0 -> acct0, 1 -> acct1)
     Trie(
       Seq(
@@ -181,6 +181,16 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         out += next
         next = controller.receiveMessage(30.seconds)
       out.result()
+
+    /** Run what comes, a peer round trip at a time, until `n` is on disk. */
+    def awaitOnDisk(n: Placed): Unit =
+      val deadline = 30.seconds.fromNow
+      val pause = createTestProbe[Any]()
+      while !onDisk(n) do
+        withClue(s"${n.label} on disk within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        drive()
+        pause.expectNoMessage(10.millis)
+      drive()
 
     /** Run what comes, a peer round trip at a time, until the controller hears the completion. */
     def awaitComplete(): Unit =
@@ -316,6 +326,60 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       }
     }
 
+    // Spec 022 review W-1: on a live chain a re-peg comes every 14 to 26 minutes and heals the spine. Neither a re-peg nor
+    // that heal is a blocker shrinking, so the count goes on through both.
+    it should s"count idle minutes across a re-peg and a heal, and hand off, when only code blocks, on $scheme (W-1)" taggedAs UnitTest in {
+      val rig = new Rig(
+        scheme,
+        fixture(withCode = true),
+        absent = Set.empty,
+        Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
+      )
+      rig.start()
+      rig.drive()
+      val half = TrieNodeHealingCoordinator.MaxBlockedTicks / 2
+      def ticks(n: Int): Unit =
+        (1 to n).foreach(_ => rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick)
+        rig.drive()
+      ticks(half)
+      val next = fixture(withCode = true, acct1Nonce = 3L)
+      rig.serve(next)
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+      rig.peerAvailable()
+      rig.awaitOnDisk(next("root"))
+      rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+      ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - half)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      rig.progress.hasExcludedCode shouldBe true
+    }
+
+    it should s"count idle minutes across a re-peg and a heal, and abandon, when the set cannot be read, on $scheme (W-1)" taggedAs UnitTest in {
+      val source = new ScanFailingDataSource
+      val rig = new Rig(scheme, fixture(), absent = Set.empty, excluded = Nil, progressSource = source)
+      source.failing = true
+      rig.start()
+      rig.drive()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+      rig.drive()
+      val half = TrieNodeHealingCoordinator.MaxBlockedTicks / 2
+      def ticks(n: Int): Unit =
+        (1 to n).foreach(_ => rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick)
+        rig.drive()
+      ticks(half)
+      val next = fixture(acct1Nonce = 3L)
+      rig.serve(next)
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+      rig.peerAvailable()
+      rig.awaitOnDisk(next("root"))
+      rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+      ticks(TrieNodeHealingCoordinator.MaxBlockedTicks - half)
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+    }
+
     it should s"not complete while the excluded set cannot be read, complete once it can, and hand off after 30 minutes of it, on $scheme (P3)" taggedAs UnitTest in {
       val source = new ScanFailingDataSource
       val rig = new Rig(scheme, fixture(), absent = Set.empty, excluded = Nil, progressSource = source)
@@ -391,7 +455,9 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
   }
 
-  it should "not count while a walk runs: it may be hours, and the gate looks when it ends" taggedAs UnitTest in {
+  // Spec 022 review W-1 (beacon W-1, forge F1/F2, hunter W1): a walk may take hours, and on Hash the controller's walks
+  // nearly fill the window, so a walk does not stop the count. The gate acts when the walk ends.
+  it should "count while a walk runs, and hand off when it ends" taggedAs UnitTest in {
     val rig = new Rig(
       StorageScheme.Hash,
       fixture(withCode = true),
@@ -402,9 +468,12 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
     rig.settle()
     withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
-    (1 to 2 * TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
+    (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
       rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
     }
     rig.settle()
-    rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+    rig.drive()
+    val end = rig.seen()
+    end should contain(SNAPSyncController.StateHealingAbandoned)
+    end should not contain SNAPSyncController.StateHealingComplete
   }

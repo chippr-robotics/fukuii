@@ -161,6 +161,14 @@ private[actors] class ByteCodeCoordinatorImpl(
         Behaviors.same
     }
 
+  /** `received` without the hashes already queued or in flight. One pass over the queue, so only for a small ask, not
+    * the account phase's stream: healing asks for what it waits on again every minute (spec 022 review hunter N5).
+    */
+  private def notQueuedCodeHashes(received: Seq[ByteString]): Seq[ByteString] =
+    val owed =
+      (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes)).toSet
+    received.filterNot(owed)
+
   /** The hashes this coordinator still owes, queued or in flight, as the entries a give-up on them makes. */
   private def undecidedCodeHashes: Seq[ExcludedAccount] =
     (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes))
@@ -178,9 +186,10 @@ private[actors] class ByteCodeCoordinatorImpl(
         log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
         Behaviors.same
 
-      case AddByteCodeTasks(received, skipPresent) =>
-        val codeHashes = skipPresentCodeHashes(received, skipPresent)
-        val alreadyPresent = received.size - codeHashes.size
+      case AddByteCodeTasks(received, skipPresent, skipQueued) =>
+        val wanted = if skipQueued then notQueuedCodeHashes(received) else received
+        val codeHashes = skipPresentCodeHashes(wanted, skipPresent)
+        val alreadyPresent = wanted.size - codeHashes.size
         if alreadyPresent > 0 then
           // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
           snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(alreadyPresent.toLong)
@@ -462,7 +471,8 @@ object ByteCodeCoordinator:
   /** Incrementally add bytecode download tasks (geth-aligned: inline dispatch from account responses). Coordinator
     * deduplicates and batches these into ByteCodeTasks.
     */
-  case class AddByteCodeTasks(codeHashes: Seq[ByteString], skipPresent: Boolean = false) extends Command
+  case class AddByteCodeTasks(codeHashes: Seq[ByteString], skipPresent: Boolean = false, skipQueued: Boolean = false)
+      extends Command
 
   /** Signal that no more bytecode tasks will arrive (all accounts downloaded). Coordinator may now report completion
     * when pending + active tasks drain.

@@ -747,7 +747,7 @@ private[snap] trait HealingOrchestrator
         )
         bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
       bytecodeCoordinator.foreach { coordinator =>
-        coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
+        coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing, skipQueued = true)
         // Answers `ByteCodeSyncComplete` when the queue drains, and keeps the coordinator from waiting for more.
         coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
       }

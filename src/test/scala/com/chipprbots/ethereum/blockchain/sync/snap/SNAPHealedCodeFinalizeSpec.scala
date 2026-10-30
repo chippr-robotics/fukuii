@@ -230,6 +230,20 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.isStorageRecoveryDone() shouldBe false
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
+  // The user's decision, 2026-10-30: the code-only hand-off's end, as the controller sees it.
+  it should "finalise on an abandonment with only code entries left: bytecodeRecoveryDone UNSET, the entries kept" taggedAs UnitTest in new Fixture:
+    val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
+    val entry = excluded(codeHash, ExcludedReason.CodeMissing)
+    progress.recordExcluded(Seq(entry))
+    val snap = start()
+    snap ! SNAPSyncController.StateHealingAbandoned
+    awaitFinalized()
+
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    appStateStorage.isStorageRecoveryDone() shouldBe true
+    progress.excludedPage(None, 10) shouldBe Seq(entry)
+
   it should "set both flags with an empty set" taggedAs UnitTest in new Fixture:
     val snap = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)

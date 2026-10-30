@@ -118,6 +118,29 @@ final class HeldNodeSet:
         }
         ids.size
 
+  /** Whether bytecode is all that keeps the held nodes off disk: something waits on code, and with every code wait
+    * closed every entry would commit, ancestors included. False if any entry waits on a child that is not itself held,
+    * which is a node absent from disk: writing its parent would leave a present node over an absent child. Changes
+    * nothing.
+    */
+  def onlyCodeBlocks: Boolean =
+    awaitingCode && {
+      val decrements = mutable.HashMap.empty[ByteString, Int]
+      val committed = mutable.HashSet.empty[ByteString]
+      def closes(e: Entry): Boolean = e.outstanding - e.code.size - decrements.getOrElse(e.id, 0) <= 0
+      val queue = mutable.ArrayDeque.from(entries.valuesIterator.filter(closes).map(_.id))
+      while queue.nonEmpty do
+        val id = queue.removeHead()
+        if committed.add(id) then
+          entries(id).parents.foreach { p =>
+            entries.get(p).foreach { parent =>
+              decrements(p) = decrements.getOrElse(p, 0) + 1
+              if closes(parent) then queue += p
+            }
+          }
+      committed.size == entries.size
+    }
+
   /** Give the held `child` an edge from each of `parents` (a re-processed node's request was satisfied again, or a
     * parent found the child held). Returns how many edges were added.
     */

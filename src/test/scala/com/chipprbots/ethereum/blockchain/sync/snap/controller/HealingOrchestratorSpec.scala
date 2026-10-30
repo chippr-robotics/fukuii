@@ -353,7 +353,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     scheduledTimers(effects) shouldBe Seq((RequestByteCodes, RequestByteCodes, 1.second))
     h.kit.childInbox[ByteCodeCoordinator.Command]("bytecode-coordinator-4").receiveAll() shouldBe Seq(
       ByteCodeCoordinator.StartByteCodeSync(Seq.empty),
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
 
@@ -377,7 +377,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.coordinatorGeneration shouldBe 3L
     spawnedNames(h.effects()) shouldBe empty
     coordinator.receiveAll() shouldBe Seq(
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
   }

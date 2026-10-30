@@ -78,6 +78,12 @@ final class ExcludedAccountSeeding(
     */
   def blocking: Boolean = store.hasExcluded || (lastPass.isEmpty && store.hasAnyExcluded)
 
+  /** Whether a pass has reached its end since the root changed. */
+  def passEnded: Boolean = lastPass.isDefined
+
+  /** Whether a pass is part way through its pages. */
+  def midPass: Boolean = cursor.isDefined
+
   /** Whether all the set still wants at the current root is bytecode: a pass has reached its end at this root, found
     * nothing to seed and read everything, and an entry still counts. Unknown is false.
     */

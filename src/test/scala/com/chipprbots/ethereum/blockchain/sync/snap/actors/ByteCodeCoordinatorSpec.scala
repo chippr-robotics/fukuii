@@ -717,6 +717,40 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash)
   }
 
+  // Spec 022 review hunter N5: healing asks again every minute, and the queue must not grow by a task each time.
+  it should "not queue a hash a second time when asked to skip what is queued" taggedAs UnitTest in {
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    var captured: ByteCodeCoordinatorImpl = null
+    val kit = org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors.setup[ByteCodeCoordinator.Command] { ctx =>
+        org.apache.pekko.actor.typed.scaladsl.Behaviors.withTimers { timers =>
+          captured = new ByteCodeCoordinatorImpl(
+            ctx,
+            timers,
+            bytecodeIngest(new TestEvmCodeStorage()),
+            testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            new SNAPRequestTracker()(classicSystem.scheduler),
+            4,
+            testCooldownConfig,
+            controller.ref,
+            backpressureHighWatermark = 50000,
+            backpressureLowWatermark = 25000
+          )
+          captured.start()
+        }
+      }
+    )
+    val hash = kec256(ByteString("asked-every-minute"))
+    val other = kec256(ByteString("asked-once"))
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash), skipQueued = true))
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash, other), skipQueued = true))
+    captured.pendingTasks.flatMap(_.codeHashes).toSeq should contain theSameElementsAs Seq(hash, other)
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash)))
+    withClue("the account phase's stream is not filtered: ") {
+      captured.pendingTasks.flatMap(_.codeHashes).count(_ == hash) shouldBe 2
+    }
+  }
+
   // Spec 022 review item 1 (hunter C1): a supervisor restart empties the queue, and nothing asks for these again.
   it should "record the hashes it still owes when a supervisor restarts it" taggedAs UnitTest in {
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()

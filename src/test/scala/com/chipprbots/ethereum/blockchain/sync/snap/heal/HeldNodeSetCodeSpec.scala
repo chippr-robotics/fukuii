@@ -49,7 +49,55 @@ class HeldNodeSetCodeSpec extends AnyFlatSpec with Matchers:
     set.planCommit().nodes.map(_.id) shouldBe Seq(request(2).key, parent.id)
   }
 
-  it should "wake every leaf waiting on one code hash, each once" taggedAs UnitTest in {
+  // The user's decision, 2026-10-30: what "only code" means for the held nodes.
+  "onlyCodeBlocks" should "hold when closing the code waits commits every entry, ancestors included" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    val root = set.hold(request(1), node, 2, Nil)
+    val mid = set.hold(request(2), node, 1, Seq(root.id))
+    set.hold(request(3), node, 0, Seq(mid.id), dep)
+    set.hold(request(4), node, 0, Seq(root.id), Some(HeldNodeSet.CodeDependency(h(0x79), account)))
+    set.onlyCodeBlocks shouldBe true
+  }
+
+  it should "not hold with nothing waiting on code, or nothing held" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    set.onlyCodeBlocks shouldBe false
+    set.hold(request(1), node, 1, Nil)
+    set.onlyCodeBlocks shouldBe false
+  }
+
+  it should "not hold when an entry waits on a child that is not held: that child is absent from disk" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    val root = set.hold(request(1), node, 2, Nil) // two children: one held below, one nowhere
+    set.hold(request(2), node, 0, Seq(root.id), dep)
+    set.onlyCodeBlocks shouldBe false
+  }
+
+  it should "not hold when a leaf waiting on code also waits on a child that is not held" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    set.hold(request(1), node, 1, Nil, dep) // its storage root is missing as well
+    set.onlyCodeBlocks shouldBe false
+  }
+
+  it should "count both edges of a parent that references one child twice" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    val parent = set.hold(request(1), node, 2, Nil)
+    set.hold(request(2), node, 0, Seq(parent.id, parent.id), dep)
+    set.onlyCodeBlocks shouldBe true
+  }
+
+  it should "count a ready entry as closed, and change nothing" taggedAs UnitTest in {
+    val set = new HeldNodeSet
+    val parent = set.hold(request(1), node, 2, Nil)
+    set.hold(request(2), node, 0, Seq(parent.id))
+    set.hold(request(3), node, 0, Seq(parent.id), dep)
+    set.onlyCodeBlocks shouldBe true
+    set.awaitingCode shouldBe true
+    set.get(parent.id).map(_.outstanding) shouldBe Some(2)
+    set.planCommit().nodes.map(_.id) shouldBe Seq(request(2).key)
+  }
+
+  "A held leaf" should "wake every leaf waiting on one code hash, each once" taggedAs UnitTest in {
     val set = new HeldNodeSet
     set.hold(request(1), node, 0, Nil, dep)
     set.hold(request(2), node, 0, Nil, dep)
