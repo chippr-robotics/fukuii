@@ -60,6 +60,17 @@ final private class SyncWriteFailingDataSource extends EphemDataSource(Map.empty
 final private class NoEntriesFrontierStorage(dataSource: EphemDataSource) extends HealingFrontierStorage(dataSource):
   override def loadAll(): Seq[(ByteString, Seq[ByteString])] = Seq.empty
 
+/** A frontier store whose `loadAll` throws (a column family that cannot be read at a restart), and whose marker clear
+  * throws too while `clearFails` is set.
+  */
+final private class LoadFailingFrontierStorage(dataSource: EphemDataSource) extends HealingFrontierStorage(dataSource):
+  @volatile var clearFails: Boolean = false
+  override def loadAll(): Seq[(ByteString, Seq[ByteString])] =
+    throw new RuntimeException("injected frontier read failure")
+  override def clearComplete(): Unit =
+    if clearFails then throw new RuntimeException("injected marker clear failure")
+    super.clearComplete()
+
 /** Spec 022 slice 2, fix round 4 (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): one frontier walk at a time on
   * the shared BFS queue, whoever starts it.
   *
@@ -294,4 +305,33 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     rig.drive(c)
     rig.awaitComplete()
     withClue("marked once a walk of the current root is clean: ")(store.isComplete shouldBe true)
+  }
+
+  /** A restart over a persisted frontier it cannot read, with the completeness marker set: the resume falls back to the
+    * full rebuild. Returns the store, checked right after the resume, before the rebuild runs.
+    */
+  private def unreadableFrontierRestart(clearFails: Boolean): (Rig, ActorRef[Command], LoadFailingFrontierStorage) =
+    val store = new LoadFailingFrontierStorage(EphemDataSource())
+    store.markComplete()
+    store.clearFails = clearFails
+    val rig = new Rig(frontier = Some(store), persistence = true)
+    val c = rig.spawnGeneration()
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    rig.ec.runNext() // the resume: the frontier load throws
+    rig.settle(c)
+    withClue("the resume falls back to the full rebuild: ")(rig.ec.pending shouldBe 1)
+    (rig, c, store)
+
+  it should "remove the completeness marker when a restart cannot read the persisted frontier and falls back to the full rebuild (vault-r3 W3)" taggedAs UnitTest in {
+    val (rig, c, store) = unreadableFrontierRestart(clearFails = false)
+    withClue("no marker over a frontier the restart could not read: ")(store.isComplete shouldBe false)
+    rig.drive(c)
+    rig.awaitComplete()
+  }
+
+  it should "still fall back to the full rebuild when that marker cannot be removed either (vault-r3 W3)" taggedAs UnitTest in {
+    val (rig, c, _) = unreadableFrontierRestart(clearFails = true)
+    rig.drive(c)
+    rig.awaitComplete()
   }
