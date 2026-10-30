@@ -989,7 +989,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   }
 
   /** Frontier-rebuild BFS results and the crash-recovery full rebuild (C-H2 `FrontierRebuildBfs`). Arms #2, #3, #4, #25
-    * (research.md R4c).
+    * (research.md R4c), and before #3 and before #4 the replaced-walk arm of each (spec 022 fix round 4): the end of a
+    * walk this incarnation did not launch.
     */
   private[actors] lazy val frontierRebuildArms: PartialFunction[Command, Behavior[Command]] = {
     case FrontierRebuilt(entries, walkRoot) =>
@@ -1325,9 +1326,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   }
 
   /** The completion gate, the verification-walk results and the crash-recovery verification launch (C-H3
-    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The three `VerificationBFSComplete` arms (#17 stale
-    * root, #18 dirty pass, #19 clean pass) are the only Command with more than one arm; they stay together, in this
-    * order, so their guards fall through exactly as before.
+    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The `VerificationBFSComplete` arms (the replaced-walk
+    * arm spec 022 fix round 4 added, then #17 stale root, #18 dirty pass, #19 clean pass) stay together, in this order,
+    * so their guards fall through as before for the end of a walk this incarnation launched.
     */
   private[actors] lazy val healVerificationArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingCheckCompletion =>

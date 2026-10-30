@@ -39,6 +39,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   *   - guard order: each `VerificationBFSComplete` sample runs the arm its guards select (#17 stale root first, then
   *     #18 missing nodes, then #19 clean), read from the arm's own log line.
   *
+  * Spec 022 fix round 4 put a replaced-walk arm before #3, #4 and #17: a walk's end carries the walk's token and only
+  * the walk the incarnation launched last counts. The harness sets that walk, and the samples carry it, so the R4c arms
+  * above are what they select; the last case pins the replaced-walk arms (a foreign token changes nothing).
+  *
   * The coordinator runs in a `BehaviorTestKit`, with an execution context that never runs a task, so the walk and flush
   * Futures some arms launch never start: only the arm itself runs.
   */
