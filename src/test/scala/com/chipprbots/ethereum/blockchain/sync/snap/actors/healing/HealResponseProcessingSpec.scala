@@ -111,6 +111,7 @@ private class StubHealResponseProcessingState(
   var pivotRefreshRequestedAt: Long = 0L
   var lastHealedAtMs: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
+  var verificationPassComplete: Boolean = false
 
   // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck, scopedHealMaxPaths and
   // decoupledHealServeRoot are constructor vals)
@@ -792,4 +793,20 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     h.respond(5, p, Seq(HealingEntry(Seq(compact(0)), hashOf(b))), Seq(bytes(b)))
     m.pendingTasks shouldBe empty
     h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } shouldBe empty
+  }
+
+  it should "make the next completion check walk after a give-up, whatever an earlier verification pass found (forge F6)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/unreadable-child-after-clean-pass")
+    val b = branchOf(0 -> hashOf(c))
+    val bTask = HealingEntry(Seq(compact(0)), hashOf(b))
+    // A clean pass ran earlier; B came in afterwards (a controller walk's QueueMissingNodes, say).
+    m.verificationPassComplete = true
+    m.queueNodes(Seq(bTask.pathset -> bTask.hash))
+    m.mptStorage.failReads = 100
+    (1 to 3).foreach(attempt => h.respond(attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    withClue("B is given up on: ")(m.healRequests.contains(m.healRequestFor(bTask).key) shouldBe false)
+    withClue("the earlier pass no longer vouches for completion: ")(m.verificationPassComplete shouldBe false)
   }
