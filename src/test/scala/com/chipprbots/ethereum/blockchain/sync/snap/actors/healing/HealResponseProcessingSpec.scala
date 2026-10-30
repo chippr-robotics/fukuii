@@ -73,11 +73,9 @@ private class StubHealResponseProcessingState(
     val requestTracker: SNAPRequestTracker,
     val snapSyncController: ActorRef[SNAPSyncController.Command],
     val storageScheme: StorageScheme,
-    val prunedEnabled: Boolean,
     val healedCodeCheck: Boolean,
     codeStore: Option[EvmCodeStorage],
     pathStore: Option[PathNodeStorage],
-    val scopedHealMaxPaths: Int,
     val decoupledHealServeRoot: Boolean
 ) extends HealResponseProcessingState
     with TrieNodeHealingEnv
@@ -99,9 +97,6 @@ private class StubHealResponseProcessingState(
   var totalNodesHealed: Int = 0
   var crossRootHealCount: Long = 0L
   val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
-  val healedPathsThisRound: mutable.LinkedHashMap[ByteString, HealingEntry] = mutable.LinkedHashMap.empty
-  var healedPathsRoot: ByteString = ByteString.empty
-  var healedPathsOverflowed: Boolean = false
   var totalBytesReceived: Long = 0L
   var completedTaskCount: Int = 0
   val statelessPeers: mutable.Set[String] = mutable.Set.empty
@@ -110,14 +105,13 @@ private class StubHealResponseProcessingState(
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   var lastHealedAtMs: Long = 0L
-  val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var verificationPassComplete: Boolean = false
   var consecutiveCommitFailures: Int = 0
   var runningWalkInvalidated: Int = 0
   def invalidateRunningWalk(): Unit = runningWalkInvalidated += 1
   var giveUpEscalated: Boolean = false
 
-  // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck, scopedHealMaxPaths and
+  // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck and
   // decoupledHealServeRoot are constructor vals)
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[HealResponseProcessingSpec])
   val asyncLog: org.slf4j.Logger = log
@@ -127,15 +121,11 @@ private class StubHealResponseProcessingState(
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notReached("networkPeerManager")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
-  val prunedHealVerification: Boolean = prunedEnabled
-  val frontierPersistenceEnabled: Boolean = false
   val decoupledHealMaxAttemptsNoRefresh: Int = 3
   val frontierHighWater: Int = 100
   val frontierLowWater: Int = 10
   val frontierBackpressureMaxWaitMs: Long = 0L
 
-  /** The subtree-complete records the spec 005 seed consults (`isSubtreeComplete`). */
-  val frontierStore: HealingFrontierStorage = new HealingFrontierStorage(EphemDataSource())
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("appState")
     def stateTries: StateStorage = notReached("stateTries")
@@ -149,12 +139,11 @@ private class StubHealResponseProcessingState(
     def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = Some(frontierStore)
+    def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // The interfaces the module calls, each call recorded in order.
   val calls: mutable.Buffer[String] = mutable.Buffer.empty
-  val persisted: mutable.Buffer[Seq[HealingEntry]] = mutable.Buffer.empty
   val unservable: mutable.Buffer[ByteString] = mutable.Buffer.empty
   val pathReads: mutable.Map[(ByteString, Seq[ByteString]), Array[Byte]] = mutable.Map.empty
 
@@ -162,9 +151,6 @@ private class StubHealResponseProcessingState(
   def emitHealingFrontierGauges(): Unit = calls += "gauges"
 
   // FrontierWriteApi
-  def persistFrontier(entries: Seq[HealingEntry]): Unit =
-    persisted += entries
-    calls += "persist"
   def flushRawNodesAsync(): Unit = calls += "flush"
 
   // HealDispatchApi
@@ -208,10 +194,10 @@ final private class ReadFailingMptStorage extends TestMptStorage:
   * coordinator environment and the interfaces it calls. The cases drive a served response through `handleResponse` and
   * assert on the stub's state afterwards: the hash-matched accept and the dropped content mismatch (the spec 004
   * consensus-safety invariant), the re-queue of an unsatisfied task, the Hash-scheme buffer and the Path-scheme write
-  * at the task's path and every alias, the spec 003 capture and its overflow latch, the throttle, budget, flush and
-  * dispatch feedback, the stateless strikes and the all-peers-stateless pivot refresh, the inline child discovery (a
-  * branch's absent children, the account-leaf storage-root seed), the healed-code report on and off, the spec 005
-  * subtree-complete seed, and `queueNodes`, `isNodeInStorage`, `isComplete` and `clearHealedPathsSet`.
+  * at the task's path and every alias, the cross-root count, the throttle, budget, flush and dispatch feedback, the
+  * stateless strikes and the all-peers-stateless pivot refresh, the inline child discovery (a branch's absent children,
+  * the account-leaf storage-root seed), the healed-code report on and off, and `queueNodes`, `isNodeInStorage` and
+  * `isComplete`.
   */
 class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
@@ -222,11 +208,9 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
   /** The module on its stub and the inbox the controller listens on. */
   final private class Harness(
       scheme: StorageScheme = StorageScheme.Hash,
-      pruned: Boolean = false,
       codeCheck: Boolean = false,
       codeStore: Option[EvmCodeStorage] = None,
       pathStore: Option[PathNodeStorage] = None,
-      scopedMax: Int = 200_000,
       decoupled: Boolean = false
   ):
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
@@ -236,11 +220,9 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
         tracker,
         controller.ref,
         scheme,
-        pruned,
         codeCheck,
         codeStore,
         pathStore,
-        scopedMax,
         decoupled
       ) with HealResponseProcessing
 
@@ -314,8 +296,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     h.module.selfInbox.hasMessages shouldBe false
   }
 
-  it should "capture healed paths against the walk root, latch the overflow at the cap, and count cross-root heals" taggedAs UnitTest in {
-    val h = new Harness(scopedMax = 1, decoupled = true)
+  it should "count cross-root heals, and clear the attempts of what they healed" taggedAs UnitTest in {
+    val h = new Harness(decoupled = true)
     val m = h.module
     m.serveRoot = ByteString(Array.fill[Byte](32)(8))
     val a = leaf(1)("a")
@@ -326,16 +308,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
 
     h.respond(1, peer("p1"), Seq(ta, tb), Seq(bytes(a), bytes(b)))
 
-    m.healedPathsRoot shouldBe m.stateRoot
-    m.healedPathsThisRound.values.toSeq shouldBe Seq(ta)
-    m.healedPathsOverflowed shouldBe true
     m.crossRootHealCount shouldBe 2L
     m.healAttempts shouldBe empty
-
-    m.clearHealedPathsSet()
-    m.healedPathsThisRound shouldBe empty
-    m.healedPathsRoot shouldBe ByteString.empty
-    m.healedPathsOverflowed shouldBe false
   }
 
   it should "strike a peer on an empty response, and at the fifth mark it stateless and request a pivot refresh" taggedAs UnitTest in {
@@ -400,7 +374,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.healRequests.isEmpty shouldBe true
   }
 
-  it should "queue a healed branch's absent children at their own paths, and persist them as frontier entries" taggedAs UnitTest in {
+  it should "queue a healed branch's absent children at their own paths" taggedAs UnitTest in {
     val h = new Harness()
     val m = h.module
     val present = leaf(1)("present")
@@ -421,7 +395,6 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val child = HealingEntry(Seq(compact(6, 4)), hashOf(absent))
     m.pendingTasks.toSeq shouldBe Seq(child)
     m.healRequests.isFetching(child.hash) shouldBe true
-    m.persisted.toSeq shouldBe Seq(Seq(child))
     // spec 022 D2 (Hash): one edge from the branch to each missing child, the pending one included.
     m.heldNodes.get(task.hash).map(_.outstanding) shouldBe Some(2) // held: two children missing
     m.healRequests.parentsOf(hashOf(pending)) shouldBe Seq(task.hash)
@@ -461,36 +434,6 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     off.module.pendingTasks should have size 1
   }
 
-  it should "stage a healed node as subtree-complete only when pruning is on and every child is present and recorded" taggedAs UnitTest in {
-    val child = leaf(1)("child")
-    val children = Array.fill[MptNode](16)(NullNode)
-    children(2) = HashNode(child.hash)
-    val branch = BranchNode(children, None)
-    val task = HealingEntry(Seq(compact(5)), hashOf(branch))
-
-    // Present but not recorded: not closed.
-    val unrecorded = new Harness(pruned = true)
-    unrecorded.module.mptStorage.putNode(child)
-    unrecorded.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
-    unrecorded.module.pendingSubtreeRecords shouldBe empty
-
-    // Present and recorded: staged.
-    val closed = new Harness(pruned = true)
-    closed.module.mptStorage.putNode(child)
-    closed.module.frontierStore.markSubtreeComplete(hashOf(child))
-    closed.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
-    closed.module.pendingSubtreeRecords shouldBe Set(hashOf(branch))
-
-    // A leaf closes vacuously; with pruning off nothing is staged.
-    val leafTask = HealingEntry(Seq(compact(6)), hashOf(child))
-    val on = new Harness(pruned = true)
-    on.respond(1, peer("p1"), Seq(leafTask), Seq(bytes(child)))
-    on.module.pendingSubtreeRecords shouldBe Set(hashOf(child))
-    val off = new Harness(pruned = false)
-    off.respond(1, peer("p1"), Seq(leafTask), Seq(bytes(child)))
-    off.module.pendingSubtreeRecords shouldBe empty
-  }
-
   it should "queue only hashes not already pending, then report the gauges" taggedAs UnitTest in {
     val h = new Harness()
     val m = h.module
@@ -503,7 +446,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.pendingTasks.toSeq shouldBe Seq(HealingEntry(Seq(compact(2)), b))
     m.healRequests.fetchingHashes shouldBe Set(a, b)
     m.healRequests.waitingOn(b).map(_.pathset) shouldBe Seq(Seq(compact(2))) // Hash scheme: one request per hash
-    m.calls.toSeq shouldBe Seq("persist", "gauges")
+    m.calls.toSeq shouldBe Seq("gauges")
     m.isComplete shouldBe false
     m.pendingTasks.clear()
     m.isComplete shouldBe true

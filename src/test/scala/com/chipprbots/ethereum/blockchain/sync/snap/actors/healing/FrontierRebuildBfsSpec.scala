@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
-import java.util.concurrent.atomic.AtomicLong
-
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.util.ByteString
@@ -70,7 +68,6 @@ private class StubFrontierRebuildState(
     val mptStorage: CountingMptStorage,
     val bfsQueue: BfsQueueStorage,
     val storageScheme: StorageScheme,
-    val prunedEnabled: Boolean,
     frontierStore: Option[HealingFrontierStorage],
     val FrontierBatchSize: Int
 ) extends FrontierRebuildBfsState
@@ -82,7 +79,6 @@ private class StubFrontierRebuildState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var currentWalk: Option[Long] = None
-  val prunedSubtreeCount: AtomicLong = new AtomicLong(0L)
   val healingWriterEc: ExecutionContext = ExecutionContext.parasitic
   val healingReaderEc: ExecutionContext = ExecutionContext.parasitic
   val HealingVisitedCap: Int = 1000
@@ -93,7 +89,6 @@ private class StubFrontierRebuildState(
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[FrontierRebuildBfsSpec])
   val asyncLog: org.slf4j.Logger = log
-  val prunedHealVerification: Boolean = true
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] =
     throw new UnsupportedOperationException("FrontierRebuildBfs read networkPeerManager")
   def requestTracker: SNAPRequestTracker = throw new UnsupportedOperationException(
@@ -103,7 +98,6 @@ private class StubFrontierRebuildState(
     throw new UnsupportedOperationException("FrontierRebuildBfs read snapSyncController")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
-  val scopedHealMaxPaths: Int = 200_000
   val healedCodeCheck: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
@@ -160,13 +154,12 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
   private def stub(
       fixture: HealingTrieFixtures.SharedAncestorFixture,
       scheme: StorageScheme = StorageScheme.Hash,
-      pruned: Boolean = false,
       store: Option[HealingFrontierStorage] = None,
       queue: BfsQueueStorage = new InMemoryBfsQueueStorage(),
       batchSize: Int = 1000
   ): StubFrontierRebuildState & FrontierRebuildBfs =
     val trie = new CountingMptStorage(fixture.storage)
-    new StubFrontierRebuildState(trie, queue, scheme, pruned, store, batchSize) with FrontierRebuildBfs
+    new StubFrontierRebuildState(trie, queue, scheme, store, batchSize) with FrontierRebuildBfs
 
   private def emitted(s: StubFrontierRebuildState): Seq[Seq[HealingEntry]] =
     s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries, _) => entries }
@@ -226,24 +219,18 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.verificationBFSRunning shouldBe true // left for the core's FrontierWalkFailed arm
   }
 
-  it should "prune a recorded-complete subtree only when pruning is enabled" taggedAs UnitTest in {
+  // spec 022 D6, T043: this is what makes the walk a repair pass. An older binary's records say nothing it can trust.
+  it should "descend a present subtree an older binary recorded as complete, and find the hole in it" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
     val store = new HealingFrontierStorage(EphemDataSource())
     store.markSubtreeComplete(fixture.sharedAncestorHash)
+    store.markSubtreeComplete(fixture.rootHash)
 
-    val on = stub(fixture, pruned = true, store = Some(store))
-    var onCompleted: Option[Long] = None
-    on.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => onCompleted = Some(n))
-    onCompleted shouldBe Some(0L)
-    emitted(on) shouldBe empty
-    on.prunedSubtreeCount.get() shouldBe 1L // de-duped first, so the shared subtree is counted once
-
-    val off = stub(fixture, pruned = false, store = Some(store))
-    var offCompleted: Option[Long] = None
-    off.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => offCompleted = Some(n))
-    offCompleted shouldBe Some(1L)
-    emitted(off).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
-    off.prunedSubtreeCount.get() shouldBe 0L
+    val s = stub(fixture, store = Some(store))
+    var completed: Option[Long] = None
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+    completed shouldBe Some(1L)
+    emitted(s).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
   }
 
   it should "share one visited set across several seeds" taggedAs UnitTest in {

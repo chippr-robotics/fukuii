@@ -82,13 +82,10 @@ private class StubHealDispatchState(
   def mptStorage: MptStorage = throw new UnsupportedOperationException("HealDispatch read mptStorage")
   def stateIngest: StateIngest = throw new UnsupportedOperationException("HealDispatch read stateIngest")
   val storageScheme: StorageScheme = StorageScheme.Hash
-  val prunedHealVerification: Boolean = true
-  val frontierPersistenceEnabled: Boolean = false
   val decoupledHealMaxAttemptsNoRefresh: Int = 2
   val frontierHighWater: Int = 100
   val frontierLowWater: Int = 10
   val frontierBackpressureMaxWaitMs: Long = 0L
-  val scopedHealMaxPaths: Int = 200_000
   val healedCodeCheck: Boolean = false
 
   // FrontierGaugesApi

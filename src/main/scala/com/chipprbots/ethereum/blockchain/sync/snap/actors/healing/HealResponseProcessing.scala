@@ -26,11 +26,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
   * behaviour arms (the lifecycle arms' reseeds and re-pegs, the completion gate, the stagnation pulse), the other
   * modules, or rule (d) keep them in the core, so the Impl keeps them as fields. The response processing mutates the
   * task queue, the live heal requests (spec 022 D2), the in-flight map, the raw-node buffer, the attempt counters, the
-  * spec 003 scoped-verification accumulator (`healedPathsThisRound`, `healedPathsRoot`, `healedPathsOverflowed`), the
-  * stateless set and its strikes and the staged spec 005 subtree records; it writes the progress counters
-  * (`totalNodesHealed`, `crossRootHealCount`, `totalBytesReceived`, `completedTaskCount`), the pivot-refresh latch and
-  * its timestamp, the give-up escalation latch, and `lastHealedAtMs`; it reads the walk and serve roots and
-  * `knownAvailablePeers` (and evicts from it). `prunedEnabled` is an immutable val rule (d) keeps in the core. A
+  * stateless set and its strikes; it writes the progress counters (`totalNodesHealed`, `crossRootHealCount`,
+  * `totalBytesReceived`, `completedTaskCount`), the pivot-refresh latch and its timestamp, the give-up escalation
+  * latch, and `lastHealedAtMs`; it reads the walk and serve roots and `knownAvailablePeers` (and evicts from it). A
   * give-up clears `verificationPassComplete`.
   */
 private[actors] trait HealResponseProcessingState:
@@ -44,9 +42,6 @@ private[actors] trait HealResponseProcessingState:
   var totalNodesHealed: Int
   var crossRootHealCount: Long
   def healAttempts: mutable.Map[ByteString, Int]
-  def healedPathsThisRound: mutable.LinkedHashMap[ByteString, HealingEntry]
-  var healedPathsRoot: ByteString
-  var healedPathsOverflowed: Boolean
   var totalBytesReceived: Long
   var completedTaskCount: Int
   def statelessPeers: mutable.Set[String]
@@ -56,8 +51,6 @@ private[actors] trait HealResponseProcessingState:
   var pivotRefreshRequestedAt: Long
   var giveUpEscalated: Boolean
   var lastHealedAtMs: Long
-  def prunedEnabled: Boolean
-  def pendingSubtreeRecords: mutable.Set[ByteString]
   var verificationPassComplete: Boolean
   var consecutiveCommitFailures: Int
   def invalidateRunningWalk(): Unit
@@ -72,12 +65,11 @@ private[actors] trait HealCompletionApi:
   * served `TrieNodes` response matched to its request by node hash (never by position), each node accepted only when
   * its keccak256 equals a requested task hash (the spec 004 consensus-safety invariant), buffered for the Hash-scheme
   * flush or written by path under the Path scheme (at every position waiting on it, spec 022 D2, with the positions the
-  * write leaves dangling deleted in the same batch, FR-008), the spec 003 healed-paths capture, the re-queue of
-  * unsatisfied tasks, the throttle and `responseBytes` feedback, the stateless-peer strikes and the all-peers-stateless
-  * pivot refresh; the inline child discovery that makes healing self-feeding (with the account-leaf storage-root seed,
-  * the spec 005 subtree-complete seed and the healed-code report), the enqueue (`queueNodes`), the presence check
-  * (`isNodeInStorage`), `isComplete` and the scoped-verification reset (`clearHealedPathsSet`). The coordinator core
-  * keeps the behaviour arms that call it (`healResponseArms`, the lifecycle arms, the completion gate).
+  * write leaves dangling deleted in the same batch, FR-008), the re-queue of unsatisfied tasks, the throttle and
+  * `responseBytes` feedback, the stateless-peer strikes and the all-peers-stateless pivot refresh; the inline child
+  * discovery that makes healing self-feeding (with the account-leaf storage-root seed and the healed-code report), the
+  * enqueue (`queueNodes`), the presence check (`isNodeInStorage`) and `isComplete`. The coordinator core keeps the
+  * behaviour arms that call it (`healResponseArms`, the lifecycle arms, the completion gate).
   */
 private[actors] trait HealResponseProcessing extends HealCompletionApi:
   this: HealResponseProcessingState & TrieNodeHealingEnv & FrontierGaugesApi & FrontierWriteApi & HealDispatchApi &
@@ -96,15 +88,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   // (`pruneFetchCounters`): so the map stays as small as the set of stored children that do not read, and a child that
   // never reads (corrupt bytes under Hash survive a re-peg) is not fetched in a tight loop again.
   private lazy val readFailures: mutable.HashMap[ByteString, Int] = mutable.HashMap.empty
-
-  /** Reset the scoped-verification healed-paths set (spec 003 C1). Called at the round-invalidation / round-close sites
-    * — differing-root HealingPivotRefreshed, HealingForceComplete, and after a verified StateHealingComplete — NOT on a
-    * same-root refresh (that round is still valid). Idempotent.
-    */
-  def clearHealedPathsSet(): Unit =
-    healedPathsThisRound.clear()
-    healedPathsRoot = ByteString.empty
-    healedPathsOverflowed = false
 
   private lazy val EmptyResponseStrikeThreshold: Int = 5
 
@@ -153,7 +136,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       if enqueueRequest(entry) then Some(entry) else None
     }
     val deduped = pathsAndHashes.size - entries.size
-    persistFrontier(entries) // Layer 2: mirror new frontier entries to the persisted CF
     val dedupStr = if deduped > 0 then s" ($deduped already requested or joined a fetch)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
     emitHealingFrontierGauges()
@@ -241,7 +223,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             healRequests.firstWaiter(nodeHash).foreach { waiter =>
               val entry = HealingEntry(waiter.pathset, nodeHash)
               pendingTasks += entry
-              persistFrontier(Seq(entry))
             }
             // forge F2, hunter N1: a fill whose children could not be read is not healed (it is fetched again or given
             // up on); counting it would hide a node fetched again and again from the stagnation checks.
@@ -524,23 +505,12 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           val newEntries = toFetch.map(c => HealingEntry(c.pathset, c.hash))
           if newEntries.nonEmpty then
             pendingTasks ++= newEntries
-            persistFrontier(newEntries) // Layer 2: inline-discovered children are new frontier entries
             childrenDiscoveredTotal += newEntries.size
             if childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20 then
               log.info(
                 s"[HEAL-DISCOVER] Inline children queued: $childrenDiscoveredTotal total " +
                   s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
               )
-    // spec 003 C1/FR-001: capture this healed request as a scoped-verification seed. This is the ONLY site that counts
-    // a network-served node as healed, so the accumulator is exactly {requests whose node was received this round}. Tag
-    // the round's root on first capture (F5), dedup by request key (a position under Path, so every alias is a seed),
-    // and latch overflow at scopedHealMaxPaths (F4/FR-011).
-    // spec 004 T017: healedPathsRoot is tagged with the WALK root `stateRoot` (NOT `serveRoot`), so the
-    // scoped-verification F5 predicate `healedPathsRoot == stateRoot` is unaffected by decoupling.
-    if healedPathsThisRound.isEmpty then healedPathsRoot = stateRoot
-    if !healedPathsOverflowed && !healedPathsThisRound.contains(request.key) then
-      if healedPathsThisRound.size >= scopedHealMaxPaths then healedPathsOverflowed = true
-      else healedPathsThisRound.update(request.key, HealingEntry(request.pathset, request.hash))
     childrenRead
 
   /** No earlier clean pass, nor a walk running now, vouches for completion any more: a node known missing was dropped.
@@ -718,49 +688,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               }
 
             case _ => // storage trie LeafNode, NullNode, HashNode — no children to discover
-          // spec 005 C3b/D2/T009/T012 — heal-side subtree-complete SEED (consensus-load-bearing; the single highest
-          // chain-split risk of this port). Stage this just-healed node's OWN hash as a subtree-complete candidate IFF
-          // its subtree is durably closed by INDUCTION: every hash-referenced child is PRESENT on disk AND itself
-          // recorded subtree-complete (isSubtreeComplete). The isSubtreeComplete clause is load-bearing — mere PRESENCE is
-          // NEVER enough: a download-mosaic node can be present yet its subtree incomplete, so seeding on presence alone
-          // would write a false record → the pruned descent would skip a real hole → false completion → divergent
-          // finalized state. "present AND recorded" SUBSUMES "no missing child" and "no pending child": a still-pending /
-          // in-flight child is either absent (fails isNodeInStorage) or present-but-unrecorded (fails isSubtreeComplete).
-          // For a leaf (no hash children) the closure is VACUOUS — the inductive BASE (PrunedHealCrashSafetySpec T-3).
-          // Inline children carry NO hash references (a 32-byte hash makes a node ≥32 bytes, so it is never inlined), so
-          // direct HashNode children + the account-leaf storage root are the COMPLETE set of subtree roots under this
-          // node. Gated on prunedEnabled (else inert ⇒ OFF-path byte-identical). STAGED only — the durable record is
-          // written by writeDurableSubtreeRecords strictly AFTER mptStorage.persist() (D3 record-after-persist); a crash
-          // before the flush drops the in-memory candidate ⇒ safe descend. The `children.isEmpty` pre-gate is a cheap
-          // necessary short-circuit (a missing or live child means not closed); the forall over actual
-          // storage+record state is the AUTHORITATIVE gate and can never false-record regardless of pending/filter state.
-          if prunedEnabled && children.isEmpty then
-            val subtreeRoots: Seq[ByteString] = decoded match
-              case branch: BranchNode =>
-                branch.children.collect { case hn: HashNode => ByteString(hn.hashNode) }.toSeq
-              case ext: ExtensionNode =>
-                ext.next match
-                  case hn: HashNode => Seq(ByteString(hn.hashNode))
-                  case _            => Seq.empty
-              case leaf: LeafNode if !isStorageTrie =>
-                Account(leaf.value).toOption match
-                  case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
-                    Seq(account.storageRoot.value)
-                  case _ => Seq.empty
-              case _ => Seq.empty
-            // `prunedEnabled` (this block's guard) requires the Hash scheme, so `isNodeInStorage` here is always the
-            // content-addressed lookup and takes no path. If pruning is ever enabled under Path, the empty pathset makes
-            // it conservatively false — no record is staged, the walk descends — never a false "closed".
-            val subtreeClosed =
-              subtreeRoots.forall(c =>
-                isNodeInStorage(c, Seq.empty) && stateIngest.healingFrontier.exists(_.isSubtreeComplete(c))
-              )
-            if subtreeClosed then
-              pendingSubtreeRecords += nodeHash
-              log.debug(
-                s"[HEAL-VERIFY-PRUNED] Staged subtree-complete candidate ${Hex.toHexString(nodeHash.take(4).toArray)} " +
-                  s"(${subtreeRoots.size} child subtree(s) present+recorded) — durable record written post-flush (D3)."
-              )
           Some((children.toSeq, deletes.toSeq, codeDependency))
 
   /** Path scheme: a parentless node's own position may hold a stale node nothing has deleted yet (a parent's discovery

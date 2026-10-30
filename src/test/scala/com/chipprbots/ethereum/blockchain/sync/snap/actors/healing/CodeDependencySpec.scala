@@ -121,7 +121,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     val codes = new ReadFailingCodes
     val progressSource = new FailingSource
     val progress = new SnapSyncProgressStorage(progressSource)
-    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(new EphemDataSource(Map.empty))
+    val cleanWalkRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
     val peer = new ScriptedPeer(testKit)
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
     val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
@@ -137,9 +137,8 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       movingRootDeltaHeal = true,
       evmCodeStorage = Some(codes),
       excludedStore = Option.when(withSet)(progress),
-      healingFrontierStorage = Option.when(withSet)(frontier),
-      frontierPersistenceEnabled = withSet,
-      heldMemoryLimit = heldMemoryLimit
+      heldMemoryLimit = heldMemoryLimit,
+      cleanWalkRoot = Some(cleanWalkRoot)
     )
     peer.coordinator.set(coordinator)
     peer.serveFrom.set(Some(served.getOrElse(t.served)))
@@ -363,9 +362,9 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       }
       val end = rig.seen()
       end should contain(SNAPSyncController.StateHealingAbandoned)
-      withClue("never a completion, and no marker: ") {
+      withClue("never a completion, and nothing the invariant marker could stand on: ") {
         end should not contain SNAPSyncController.StateHealingComplete
-        rig.frontier.isComplete shouldBe false
+        rig.cleanWalkRoot.get() shouldBe null
       }
       rig.progress.hasExcludedCode shouldBe true
     }

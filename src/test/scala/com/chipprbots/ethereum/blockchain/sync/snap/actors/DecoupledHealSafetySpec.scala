@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import java.io.File
-import java.nio.file.Files
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -20,10 +18,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
-import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
-import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -64,11 +58,6 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     val probe = testKit.createTestProbe[HealingStatistics]()
     coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
     probe.expectMessageType[HealingStatistics]
-
-  private def deleteRecursively(f: File): Unit =
-    Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
-    f.delete()
-    ()
 
   /** Assert the controller is NOT sent StateHealingComplete within `window`. Other controller messages (e.g.
     * HealingAllPeersStateless from a stateless peer, ProgressNodesHealed) are allowed — the SC-002 guarantee is
@@ -223,31 +212,14 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   // ── T-5: byte-for-byte completion parity, decoupled vs coupled ────────────────────────────────
 
-  /** Drive the same clean healed state to completion with the given decoupling setting; return the CF `g`
-    * completeness-marker bytes observed via `isComplete` after StateHealingComplete (true ⇒ the 0x01 sentinel is
-    * present). Mirrors `ScopedVerificationParitySpec.runToCompletion`: a RocksDB-backed marker pre-set as the shared
-    * full-coverage precondition, a single-thread EC, safe teardown.
+  /** Drive the same clean healed state to completion with the given decoupling setting, and return the root the
+    * coordinator says its clean full walk covered (spec 022 T043, which replaced the CF `g` completeness marker here):
+    * a single-thread EC, safe teardown.
     */
-  private def runToCompletion(decoupled: Boolean): Boolean =
+  private def runToCompletion(decoupled: Boolean): ByteString =
     val pool = Executors.newSingleThreadExecutor()
     val ec = ExecutionContext.fromExecutorService(pool)
-    val dbPath = Files.createTempDirectory("decoupled-parity-rocksdb").toAbsolutePath.toString
-    val dataSource = RocksDbDataSource(
-      new RocksDbConfig:
-        override val createIfMissing: Boolean = true
-        override val paranoidChecks: Boolean = true
-        override val path: String = dbPath
-        override val maxThreads: Int = 1
-        override val maxOpenFiles: Int = 32
-        override val verifyChecksums: Boolean = true
-        override val levelCompaction: Boolean = true
-        override val blockSize: Long = 16384
-        override val blockCacheSize: Long = 33554432
-      ,
-      Namespaces.nsSeq
-    )
-    val store = new HealingFrontierStorage(dataSource)
-    store.markComplete() // both modes share the SAME proven full-coverage precondition
+    val cleanRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
 
     // A present, complete walk root (childless leaf in storage) so the verification walk finds 0 missing.
     val storage = new TestMptStorage()
@@ -264,9 +236,9 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       mptStorage = storage,
       batchSize = 64,
       snapSyncController = controller.ref,
-      healingFrontierStorage = Some(store),
       healingWriterEcOverride = Some(ec),
-      decoupledHealServeRoot = decoupled
+      decoupledHealServeRoot = decoupled,
+      cleanWalkRoot = Some(cleanRoot)
     )
     try
       // Under decoupling, advancing the serve root must not change the completion outcome (it supplies node
@@ -292,7 +264,7 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       // NOTE: the decoupled-engaged gauge is a global singleton and would race other specs running in
       // parallel, so it is NOT asserted here — the engaged-vs-disabled path distinction is covered by the
       // per-coordinator DecoupledHealObservabilitySpec (T-7). T-5's parity claim is the COMPLETION outcome:
-      // the same StateHealingComplete signal (above), the same CF `g` marker (returned below), and the same
+      // the same StateHealingComplete signal (above), the same clean walk (returned below), and the same
       // unchanged state root. The state root is never recomputed by verification (a pure local read) — assert
       // the invariant: the same stored leaf yields the same root regardless of the flag.
       val freshRoot =
@@ -301,21 +273,18 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         s.putNode(l)
         ByteString(l.hash)
       root shouldBe freshRoot
-      store.isComplete
+      cleanRoot.get()
     finally
       testKit.stop(coordinator)
       pool.shutdown()
       pool.awaitTermination(5, TimeUnit.SECONDS)
-      dataSource.destroy()
-      deleteRecursively(new File(dbPath))
 
   "Decoupled vs coupled completion (T-5)" should
-    "reach an identical completion (StateHealingComplete + CF `g` marker + state root) under both settings (FR-007)" taggedAs UnitTest in {
-      val decoupledMarker = runToCompletion(decoupled = true)
-      val coupledMarker = runToCompletion(decoupled = false)
-      // Both paths declare completion via the single verificationPassComplete chokepoint and set the SAME
-      // completeness marker. The state root is never recomputed by either path (asserted inside runToCompletion).
-      decoupledMarker shouldBe true
-      coupledMarker shouldBe true
-      decoupledMarker shouldBe coupledMarker
+    "reach an identical completion (StateHealingComplete + clean walk + state root) under both settings (FR-007)" taggedAs UnitTest in {
+      val decoupled = runToCompletion(decoupled = true)
+      val coupled = runToCompletion(decoupled = false)
+      // Both paths declare completion via the single verificationPassComplete chokepoint. The state root is never
+      // recomputed by either path (asserted inside runToCompletion).
+      decoupled should not be null
+      decoupled shouldBe coupled
     }

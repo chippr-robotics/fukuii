@@ -409,15 +409,11 @@ private[snap] trait HealingOrchestrator
       }
   // end if !trieWalkInProgress && currentPhase == StateHealing
 
-  /** Layer 2: shared, lazily-built persisted-frontier handle for the healing coordinator. `None` (the default,
-    * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full BFS on restart. Reuses
-    * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open. Handed to the healing
-    * spawn as `stateIngest.healingFrontier` (spec 016 C-H1), by-name, so it is still built on the first spawn.
+  /** The handle `stateIngest.healingFrontier` hands out (spec 016 C-H1), by-name, so it is still built on the first
+    * spawn. Nothing reads or writes through it since CF `g` was retired (spec 022 D6); `SNAPSyncControllerPinSpec` pins
+    * when it exists, so it goes with a `# pins:` change, with the settings above.
     */
   private[snap] lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
-    // #4 (restored, spec-005): the pruned post-heal verification also needs the frontier store
-    // (prunedHealVerification default true) — without it the first verification reverts to a full
-    // ~90M-node trie walk. Dropped by #1384's stale base.
     if snapSyncConfig.healingFrontierPersistence || snapSyncConfig.prunedHealVerification then
       Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
     else None
@@ -434,32 +430,30 @@ private[snap] trait HealingOrchestrator
     * peers, and (re)starts the 1 s peer-availability timer. Each route keeps its own guard, logs and follow-up around
     * the call. The `pruned-heal-verification` setting is still not forwarded (#1502).
     *
-    * Under in-memory pruning (spec 022 review vault V3, R1) healed nodes reach the node cache, not disk: the cache
-    * writes them as it evicts them, one by one, least recently used first (parents before children after a top-down
-    * walk), and its persist is a no-op. "Present implies complete" and "flushed means durable" therefore do not hold on
-    * disk, and nothing persisted after such a flush may stand for completeness: not a spec 005 subtree-complete record,
-    * not the spec 002 completeness marker, not the persisted frontier. So, as with the storage-task markers
-    * (`recordStorageDone`), the pruned verification, the frontier mirror and its marker, and the scoped verification
-    * are all off there, and a marker an earlier run left is cleared before the coordinator starts (its resume would
-    * trust it). Every coordinator completion then follows a clean full walk of the current root in that coordinator
+    * Under in-memory pruning on the Hash scheme (spec 022 review vault V3, R1) healed nodes reach the node cache, not
+    * disk: the cache writes them as it evicts them, one by one, least recently used first (parents before children
+    * after a top-down walk), and its persist is a no-op. "Present implies complete" and "flushed means durable"
+    * therefore do not hold on disk, so the invariant marker cannot hold (`HealInvariant.canHold`): none is stamped or
+    * trusted there. Every coordinator completion then follows a clean full walk of the current root in that coordinator
     * incarnation (a verification walk, or the clean rebuild walk), and every restart rebuilds the frontier with a full
     * walk; both read the store and so find whatever a crash lost with the cache. That walk is the completion guarantee
     * for this mode; slice 5 must keep it (tasks.md T051, T052). Not covered by it, as before: the Hash controller's own
     * trie walk, whose TrieWalkComplete(0) completes healing without a coordinator walk, and the Hash force-complete
     * (tasks.md T051, T052).
+    *
+    * Four settings forwarded here no longer do anything: `scopedHealVerification`, `scopedHealMaxPaths`,
+    * `prunedHealVerification`, `frontierPersistenceEnabled` (CF `g` is retired, spec 022 D6). They stay in the
+    * factory's signature because `SNAPSyncControllerPinSpec` pins this call; they go with a `# pins:` change.
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
     healingCurrentRoot.set(root.value)
     healingCleanWalkRoot.set(null) // spec 022 T043: this coordinator has walked nothing yet
-    if trieNodesCachedInMemory then
+    if !HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory) then
       ctx.log.warn(
         "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can leave " +
-          "a present node over an absent child. No persisted completeness is trusted: the pruned and scoped " +
-          "verifications and the frontier persistence are off, and the full verification walk decides completion."
+          "a present node over an absent child. The full verification walk decides completion."
       )
-      // vault R1: a completeness marker from an earlier run (or binary) would let the resume skip the full walk.
-      healingFrontierStorageOpt.foreach(_.clearComplete())
 
     trieNodeHealingCoordinator = Some(
       ctx.spawn(

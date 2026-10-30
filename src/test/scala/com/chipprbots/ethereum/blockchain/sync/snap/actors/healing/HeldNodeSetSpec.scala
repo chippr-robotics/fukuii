@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -14,7 +13,6 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
-import scala.jdk.CollectionConverters.*
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -32,8 +30,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
-import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -395,7 +391,7 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     pausesNewSubtrees(held = false, bytes = 5000, limit = 100, canFree = true) shouldBe false
   }
 
-  // ---- spec 022 slice 2 review: orphans, the pause, promote, the frontier mirror, force-complete --------------------
+  // ---- spec 022 slice 2 review: orphans, the pause, promote, force-complete -----------------------------------------
 
   /** A coordinator over fresh stores, with the settings these cases vary; `body` gets it, the controller and the disk.
     */
@@ -407,7 +403,6 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       concurrency: Int = 16,
       batchSize: Int = 16,
       writerEc: Option[ExecutionContext] = None,
-      frontier: Option[com.chipprbots.ethereum.db.storage.HealingFrontierStorage] = None,
       pathSource: com.chipprbots.ethereum.db.dataSource.DataSource = EphemDataSource()
   )(
       body: (ActorRef[TrieNodeHealingCoordinator.Command], TestProbe[SNAPSyncController.Command], Disk) => A
@@ -424,8 +419,6 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       batchSize = batchSize,
       concurrency = concurrency,
       snapSyncController = controller.ref,
-      healingFrontierStorage = frontier,
-      frontierPersistenceEnabled = frontier.isDefined,
       healingWriterEcOverride = Some(writerEc.getOrElse(ExecutionContext.fromExecutorService(pool))),
       storageScheme = scheme,
       pathNodeStorageOpt = Option.when(scheme == StorageScheme.Path)(pns),
@@ -499,45 +492,39 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
   }
 
   /** eye F7, vault R2, hunter N3: the orphan guard itself. The root waits on a child that never commits (it does not
-    * decode); nothing is queued and nothing is in flight, so the guard drops the root, unwritten. It keeps the root's
-    * persisted frontier entry: the completeness marker may stand (same root), and that entry is what lets a resume
-    * fetch the root again. Then the completion check walks, finds the root missing and fetches it again. The writer
-    * executor runs only when the test says, so every check below comes before the walk.
+    * decode); nothing is queued and nothing is in flight, so the guard drops the root, unwritten. Then the completion
+    * check walks, finds the root missing and fetches it again. The writer executor runs only when the test says, so
+    * every check below comes before the walk.
     */
-  it should "drop held nodes nothing can complete, keep their persisted frontier entries, and fetch them again after a walk, under the Hash scheme (eye F7, vault R2)" taggedAs UnitTest in {
+  it should "drop held nodes nothing can complete, and fetch them again after a walk, under the Hash scheme (eye F7, vault R2)" taggedAs UnitTest in {
     val trie = orphaningTrie()
     val peer = new ScriptedPeer(testKit)
     val writer = new ManualExecutionContext
-    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(EphemDataSource())
-    withHealer(StorageScheme.Hash, trie.root.hash, peer, writerEc = Some(writer), frontier = Some(frontier)) {
-      (coordinator, _, disk) =>
-        def settle(): Unit = (1 to 3).foreach(_ => handled(coordinator))
-        coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
-        peerAvailable(coordinator)
-        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
-        // The leaf commits; the other child does not decode. Nothing is queued or in flight: the guard drops the root.
-        val undecodablePath =
-          Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](0), isLeaf = false)))
-        peer.answerFrom(
-          peer.manual.expectMessageType[SNAP.GetTrieNodes],
-          trie.served + (undecodablePath -> undecodable)
-        )
+    withHealer(StorageScheme.Hash, trie.root.hash, peer, writerEc = Some(writer)) { (coordinator, _, disk) =>
+      def settle(): Unit = (1 to 3).foreach(_ => handled(coordinator))
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      peerAvailable(coordinator)
+      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
+      // The leaf commits; the other child does not decode. Nothing is queued or in flight: the guard drops the root.
+      val undecodablePath =
+        Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](0), isLeaf = false)))
+      peer.answerFrom(
+        peer.manual.expectMessageType[SNAP.GetTrieNodes],
+        trie.served + (undecodablePath -> undecodable)
+      )
+      settle()
+      withClue("the root is never written: ")(disk.holds(trie.root) shouldBe false)
+      // The leaf's flush runs; the completion check then walks, finds the root missing and fetches it again (a held
+      // node is never fetched again, so this request proves the guard dropped it).
+      var steps = 0
+      while writer.pending > 0 && steps < 10 do
+        writer.runNext()
         settle()
-        withClue("the root is never written: ")(disk.holds(trie.root) shouldBe false)
-        withClue("the dropped root keeps its persisted frontier entry: ") {
-          frontier.get(trie.root.hash) shouldBe defined
-        }
-        // The leaf's flush runs; the completion check then walks, finds the root missing and fetches it again (a held
-        // node is never fetched again, so this request proves the guard dropped it).
-        var steps = 0
-        while writer.pending > 0 && steps < 10 do
-          writer.runNext()
-          settle()
-          steps += 1
-        withClue("the walk fetches the dropped root again: ") {
-          peer.manual.expectMessageType[SNAP.GetTrieNodes](10.seconds).paths shouldBe Seq(trie.root.pathset)
-        }
-        withClue("still never written: ")(disk.holds(trie.root) shouldBe false)
+        steps += 1
+      withClue("the walk fetches the dropped root again: ") {
+        peer.manual.expectMessageType[SNAP.GetTrieNodes](10.seconds).paths shouldBe Seq(trie.root.pathset)
+      }
+      withClue("still never written: ")(disk.holds(trie.root) shouldBe false)
     }
   }
 
@@ -576,28 +563,6 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
           case _                                       => FishingOutcomes.continueAndIgnore
         }
         trie.nodes.foreach(n => withClue(s"${n.label}: ")(disk.holds(n) shouldBe true))
-    }
-  }
-
-  it should "drop the persisted frontier entries of the held nodes a re-peg drops, under the Hash scheme (vault V5)" taggedAs UnitTest in {
-    val before = PathHealPresenceFixtures.accountTrieOld()
-    val after = PathHealPresenceFixtures.accountTrieNew()
-    val peer = new ScriptedPeer(testKit)
-    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(EphemDataSource())
-    withHealer(StorageScheme.Hash, before.root.hash, peer, frontier = Some(frontier)) { (coordinator, _, _) =>
-      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
-      peerAvailable(coordinator)
-      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
-      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
-      answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], before, Set("leafY0", "leafY1"))
-      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(before("brX").pathset)
-      handled(coordinator)
-      withClue("held, so still a frontier entry: ")(frontier.get(before.root.hash).isDefined shouldBe true)
-      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
-      handled(coordinator)
-      withClue("the old root, dropped by the re-peg: ")(frontier.get(before.root.hash) shouldBe None)
-      withClue("the old ext, dropped by the re-peg: ")(frontier.get(before("ext").hash) shouldBe None)
-      withClue("brX, in flight at the re-peg: ")(frontier.get(before("brX").hash) shouldBe None)
     }
   }
 
@@ -684,94 +649,6 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       after.nodes.foreach(n => withClue(s"${n.label} after healing: ")(disk.holds(n) shouldBe true))
       withClue("brY is fetched again for the new root: ") {
         peer.autoRequests.flatten should contain(after("brY").pathset)
-      }
-    }
-  }
-
-  // ---- spec 022 review vault V-R5: the completeness marker goes first, synced, then the frontier entries ------------
-
-  /** Records every write batch in order, with whether it was synced (`updateSync`). */
-  final private class SyncRecordingDataSource extends EphemDataSource(Map.empty):
-    private val writes = new ConcurrentLinkedQueue[(Boolean, Seq[HealRequestFixtures.Op])]()
-    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
-      writes.add((false, dataSourceUpdates.flatMap(HealRequestFixtures.Op.of)))
-      super.update(dataSourceUpdates)
-    override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
-      writes.add((true, dataSourceUpdates.flatMap(HealRequestFixtures.Op.of)))
-      super.update(dataSourceUpdates)
-    def forget(): Unit = writes.clear()
-
-    /** The writes to the frontier column family, in order. */
-    def frontierWrites: Seq[(Boolean, Seq[HealRequestFixtures.Op])] =
-      writes.asScala.toSeq
-        .map { case (synced, ops) => (synced, ops.filter(_.namespace == Namespaces.HealingFrontierNamespace)) }
-        .filter(_._2.nonEmpty)
-
-  /** Heal `accountTrieOld` until the root and ext are held, brY's subtree is committed but not flushed (the
-    * asynchronous flushes never run) and brX is in flight, all with frontier entries and a set completeness marker;
-    * then `invalidate` the frontier. Before any entry goes, the marker must: a crash between the two must not leave a
-    * marker vouching for a frontier missing the entries of nodes that are still not on disk (held root and ext,
-    * in-flight brX).
-    */
-  private def markerClearedFirst(
-      invalidate: (ActorRef[TrieNodeHealingCoordinator.Command], TestProbe[SNAPSyncController.Command]) => Unit
-  ): Unit =
-    val before = PathHealPresenceFixtures.accountTrieOld()
-    val peer = new ScriptedPeer(testKit)
-    val source = new SyncRecordingDataSource
-    val frontier = new HealingFrontierStorage(source)
-    val never = new ExecutionContext:
-      def execute(runnable: Runnable): Unit = ()
-      def reportFailure(cause: Throwable): Unit = ()
-    withHealer(StorageScheme.Hash, before.root.hash, peer, writerEc = Some(never), frontier = Some(frontier)) {
-      (coordinator, controller, _) =>
-        coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
-        peerAvailable(coordinator)
-        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
-        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], before.served)
-        answerOnly(peer, peer.manual.expectMessageType[SNAP.GetTrieNodes], before, Set("leafY0", "leafY1"))
-        peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(before("brX").pathset)
-        handled(coordinator)
-        frontier.markComplete()
-        source.forget()
-        invalidate(coordinator, controller) // returns once the coordinator has handled it
-        val writes = source.frontierWrites
-        withClue(s"the first frontier write is the marker's removal, synced (writes: $writes): ") {
-          writes.headOption shouldBe Some(
-            (
-              true,
-              Seq(
-                HealRequestFixtures.Op(
-                  Namespaces.HealingFrontierNamespace,
-                  delete = true,
-                  HealingFrontierStorage.CompleteMarkerKey
-                )
-              )
-            )
-          )
-        }
-        withClue("the entries of the nodes not on disk go, after it: ") {
-          val deleted = writes.drop(1).flatMap(_._2).filter(_.delete).map(_.key).toSet
-          Seq("root", "ext", "brX").foreach(l => withClue(s"$l: ")(deleted should contain(before(l).hash)))
-        }
-        frontier.isComplete shouldBe false
-    }
-
-  it should "on a re-peg, clear the completeness marker with a synced write before deleting any frontier entry, under the Hash scheme (vault V-R5)" taggedAs UnitTest in {
-    val after = PathHealPresenceFixtures.accountTrieNew()
-    markerClearedFirst { (coordinator, _) =>
-      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
-      handled(coordinator)
-    }
-  }
-
-  it should "on force-complete, clear the completeness marker with a synced write before deleting any frontier entry, under the Hash scheme (vault V-R5)" taggedAs UnitTest in {
-    markerClearedFirst { (coordinator, controller) =>
-      coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
-      // It stops after this message, so its completion signal is the barrier.
-      controller.fishForMessage(30.seconds) {
-        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
       }
     }
   }

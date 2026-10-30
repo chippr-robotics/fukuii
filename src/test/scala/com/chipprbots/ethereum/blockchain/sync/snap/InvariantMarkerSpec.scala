@@ -613,6 +613,76 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     Namespaces.nsSeq should contain(FrontierNs)
   }
 
+  /** A whole heal through the production spawn, every setting of the retired persistence on: a walk finds a hole, it is
+    * healed and flushed, a clean walk ends it, and a re-peg follows. None of that may reach CF `g`.
+    */
+  private def healWritesNothingToFrontier(scheme: StorageScheme): Unit =
+    val source = new Recording
+    val store = new HealingFrontierStorage(source)
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    val peer = new ScriptedPeer(testKit)
+    val controller = createTestProbe[Command]()
+    val mpt = new TestMptStorage()
+    val pns = new PathNodeStorage(new EphemDataSource(Map.empty))
+    val hole = "leafY0"
+    trie.nodes.filterNot(_.label == hole).foreach { n =>
+      if scheme == StorageScheme.Hash then mpt.storeRawNodes(Seq(n.hash -> n.encoded.toArray))
+      else pns.writeNodesWithDeletes(Seq((n.accountHash, n.nibbles, n.encoded.toArray)), Nil)
+    }
+    val ingest = HealingTrieFixtures.healingIngest(
+      Some(store),
+      pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns)
+    )
+    val coordinator = testKit.spawn(
+      new ChildFactories {}.trieNodeHealingCoordinator(
+        stateRoot = trie.root.hash,
+        networkPeerManager = peer.ref,
+        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        mptStorage = mpt,
+        batchSize = 16,
+        snapSyncController = controller.ref,
+        stateIngest = ingest,
+        storageScheme = scheme,
+        movingRootDeltaHeal = true,
+        scopedHealVerification = true,
+        prunedHealVerification = true,
+        frontierPersistenceEnabled = true
+      )
+    )
+    peer.coordinator.set(coordinator)
+    source.forget()
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      PeerTestHelpers.createTestPeer("frontier-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds), trie.served)
+    awaitComplete(controller)
+    coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+    val probe = createTestProbe[actors.HealingStatistics]()
+    coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
+    probe.receiveMessage(30.seconds)
+    source.frontierWrites shouldBe empty
+    testKit.stop(coordinator)
+
+  it should "get no write from a whole heal, under the Hash scheme" taggedAs UnitTest in {
+    healWritesNothingToFrontier(StorageScheme.Hash)
+  }
+
+  it should "get no write from a whole heal, under the Path scheme" taggedAs UnitTest in {
+    healWritesNothingToFrontier(StorageScheme.Path)
+  }
+
+  it should "get no write from a coordinator spawn under in-memory pruning (the old spawn-time clear)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.trieNodesCachedInMemory = true
+    h.ready()
+    h.module.frontierWrites.clear()
+    h.call(_.startStateHealing())
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    h.module.frontierWrites shouldBe empty
+  }
+
   // ---- the stamp and the import key: every step of a crash ---------------------------------------------------------
 
   it should "not be what a crash can tear: stamp and key are one batch, as are the import's start and the marker's removal" taggedAs UnitTest in {

@@ -6,7 +6,6 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.SupervisorStrategy
-import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
@@ -25,10 +24,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingGetProgress
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingPivotRefreshed
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.QueueMissingNodes
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.RestartFullRebuild
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.StartTrieNodeHealing
-import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -49,49 +48,23 @@ final private class InterleavingBfsQueue extends InMemoryBfsQueueStorage:
     afterFirstLevel = None
     hook.foreach(_())
 
-/** A data source whose synced writes throw while `failing` is set: a frontier store whose marker write or clear fails,
-  * which throws out of the coordinator's handler and has its supervisor restart it.
-  */
-final private class SyncWriteFailingDataSource extends EphemDataSource(Map.empty):
-  @volatile var failing: Boolean = false
-  override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
-    if failing then throw new RuntimeException("injected synced-write failure")
-    super.updateSync(dataSourceUpdates)
-
-/** A frontier store with no entries. `loadAll` is overridden because the in-memory data source returns its keys with
-  * the namespace prefix, so the real one would take the completeness marker for an entry; RocksDB returns bare keys
-  * (see `HealingFrontierStorageSpec`).
-  */
-final private class NoEntriesFrontierStorage(dataSource: EphemDataSource) extends HealingFrontierStorage(dataSource):
-  override def loadAll(): Seq[(ByteString, Seq[ByteString])] = Seq.empty
-
-/** A frontier store whose `loadAll` throws (a column family that cannot be read at a restart), and whose marker clear
-  * throws too while `clearFails` is set.
-  */
-final private class LoadFailingFrontierStorage(dataSource: EphemDataSource) extends HealingFrontierStorage(dataSource):
-  @volatile var clearFails: Boolean = false
-  override def loadAll(): Seq[(ByteString, Seq[ByteString])] =
-    throw new RuntimeException("injected frontier read failure")
-  override def clearComplete(): Unit =
-    if clearFails then throw new RuntimeException("injected marker clear failure")
-    super.clearComplete()
-
 /** Spec 022 slice 2, fix round 4 (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): one frontier walk at a time on
   * the shared BFS queue, whoever starts it.
   *
   * Every walk clears the queue when it starts and when it ends, and reads its next level's end from the queue's
   * counter. A second walk on the same queue therefore cuts the first short, and the cut walk reports the missing nodes
   * it found so far, possibly none: a clean pass over a trie no walk covered. The starts that did not check for a
-  * running walk are the restart's full rebuild and resume verification (in the window before the resume's message, a
-  * completion check or a re-peg can start a walk), and any start in a new coordinator incarnation (a supervisor
-  * restart, or a replacement the controller spawns) while the old one's walk still runs on the same queue.
+  * running walk are the restart's full rebuild (between its start and its message, a completion check or a re-peg can
+  * start a walk), and any start in a new coordinator incarnation (a supervisor restart, or a replacement the controller
+  * spawns) while the old one's walk still runs on the same queue.
   *
-  * And the completeness marker those walks leave (hunter W2, forge W-r4-1, vault-r3 W2 and W3): a walk of a root a
-  * re-peg has left must not set it, nor may a restart that could not read the persisted frontier keep it.
+  * And what a clean walk may vouch for (hunter W2, forge W-r4-1): a walk of a root a re-peg has left vouches for
+  * nothing.
   *
   * Fixture: `accountTrieOld` on a Hash store, complete or without `brX` (whose parent `ext` is on disk). Every
-  * coordinator here shares one BFS queue and one manual writer executor, so walks, flushes and the resume run only when
-  * the test runs them, one at a time and in the order it chooses.
+  * coordinator here shares one BFS queue and one manual writer executor, so walks and flushes run only when the test
+  * runs them, one at a time and in the order it chooses. A crash is a malformed message: its arm throws, as a failed
+  * write could, and the supervisor restarts the coordinator.
   */
 class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
 
@@ -99,8 +72,6 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
   final private class Rig(
       hole: Boolean = false,
-      frontier: Option[HealingFrontierStorage] = None,
-      persistence: Boolean = false,
       otherOnDisk: Boolean = false,
       sharedQueue: Option[com.chipprbots.ethereum.db.storage.BfsQueueStorage] = None,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
@@ -126,11 +97,23 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       mptStorage = hashStore,
       batchSize = 16,
       snapSyncController = controller.ref,
-      stateIngest = HealingTrieFixtures.healingIngest(frontier, Some(sharedQueue.getOrElse(queue))),
+      stateIngest = HealingTrieFixtures.healingIngest(None, Some(sharedQueue.getOrElse(queue))),
       healingWriterEcOverride = Some(writerEc.getOrElse(ec)),
-      frontierPersistenceEnabled = persistence,
-      currentRoot = currentRoot
+      currentRoot = currentRoot,
+      cleanWalkRoot = Some(cleanWalkRoot)
     )
+
+    /** Which root the coordinator last said a clean full walk covered (spec 022 T043). */
+    val cleanWalkRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+
+    val emptyPath: ByteString = ByteString(
+      com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false)
+    )
+
+    /** The coordinator's arm throws: its supervisor restarts it. */
+    def crash(c: ActorRef[Command]): Unit =
+      c ! QueueMissingNodes(null)
+      settle(c)
 
     /** A coordinator generation, as the controller spawns one. */
     def spawnGeneration(): ActorRef[Command] = spawn(coordinator)
@@ -171,105 +154,62 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         case _                                       => FishingOutcomes.continueAndIgnore
       }
 
-  /** A frontier store holding only the completeness marker: the resume skips the rebuild and verifies. */
-  private def completeEmptyFrontier(): HealingFrontierStorage =
-    val store = new NoEntriesFrontierStorage(EphemDataSource())
-    store.markComplete()
-    store
-
-  /** The restart's own walk (a full rebuild, or a verification after a complete persisted frontier) arrives while a
-    * walk a completion check started in the resume window runs: it must not start a second one.
-    */
-  private def restartWalkWhileWalking(frontier: Option[HealingFrontierStorage]): Unit =
-    val rig = new Rig(frontier = frontier, persistence = frontier.isDefined)
+  "A healing coordinator" should "not start the restart's full rebuild while a walk runs (hunter W1, vault-r3 W1)" taggedAs UnitTest in {
+    val rig = new Rig()
     val c = rig.spawnGeneration()
-    c ! StartTrieNodeHealing(rig.trie.root.hash) // the root is on disk: the resume runs on the writer executor
+    c ! HealingCheckCompletion // nothing pending and no clean pass yet, so the check walks
     rig.settle(c)
-    withClue("the resume is queued: ")(rig.ec.pending shouldBe 1)
-    c ! HealingCheckCompletion // in the window: nothing pending and no clean pass yet, so the check walks
-    rig.settle(c)
-    withClue("the resume and the check's walk are queued: ")(rig.ec.pending shouldBe 2)
-    rig.ec.runNext() // the resume: it sends the restart's own walk start
+    withClue("the check's walk is queued: ")(rig.ec.pending shouldBe 1)
+    c ! RestartFullRebuild(rig.trie.root.hash, rig.emptyPath) // and the restart's own walk start arrives
     rig.settle(c)
     withClue("one walk at a time on the shared queue: ")(rig.ec.pending shouldBe 1)
     rig.drive(c)
     rig.awaitComplete()
-
-  "A healing coordinator" should "not start the restart's full rebuild while a walk runs (hunter W1, vault-r3 W1)" taggedAs UnitTest in {
-    restartWalkWhileWalking(frontier = None)
   }
-
-  it should "not start the restart's resume verification while a walk runs (forge W-r4-2)" taggedAs UnitTest in {
-    restartWalkWhileWalking(frontier = Some(completeEmptyFrontier()))
-  }
-
-  /** A re-peg inside the resume window, to a root not on disk, seeds the new root; the restart's walk of the old root,
-    * arriving after it, would walk a superseded root (and hold the queue for it).
-    */
-  private def restartWalkOfSupersededRoot(frontier: Option[HealingFrontierStorage]): Unit =
-    // Persistence off, so the re-peg leaves a persisted marker in place and the resume still sees it.
-    val rig = new Rig(frontier = frontier)
-    val c = rig.spawnGeneration()
-    c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    c ! HealingPivotRefreshed(rig.otherRoot)
-    rig.settle(c)
-    withClue("the re-peg to a root not on disk seeds it and starts no walk: ")(rig.ec.pending shouldBe 1)
-    rig.ec.runNext() // the resume, for the root the coordinator has left
-    rig.settle(c)
-    withClue("no walk of the superseded root: ")(rig.ec.pending shouldBe 0)
 
   it should "drop the restart's full rebuild of a root a re-peg has superseded (beacon W1-r4)" taggedAs UnitTest in {
-    restartWalkOfSupersededRoot(frontier = None)
-  }
-
-  it should "drop the restart's resume verification of a root a re-peg has superseded (beacon W1-r4)" taggedAs UnitTest in {
-    restartWalkOfSupersededRoot(frontier = Some(completeEmptyFrontier()))
+    val rig = new Rig()
+    val c = rig.spawnGeneration()
+    c ! HealingPivotRefreshed(rig.otherRoot)
+    rig.settle(c)
+    withClue("the re-peg to a root not on disk seeds it and starts no walk: ")(rig.ec.pending shouldBe 0)
+    c ! RestartFullRebuild(rig.trie.root.hash, rig.emptyPath) // for the root the coordinator has left
+    rig.settle(c)
+    withClue("no walk of the superseded root: ")(rig.ec.pending shouldBe 0)
   }
 
   /** A supervisor restart while incarnation 1's walk is queued: incarnation 2 must not start a walk of its own on the
     * same queue until that walk has ended, and that walk's end (a clean pass here) must not count for incarnation 2.
-    * `startWalk` starts incarnation 1's walk; the crash is a failed synced marker clear at a re-peg.
+    * `startWalk` starts incarnation 1's walk.
     */
-  private def walkAcrossSupervisorRestart(
-      startWalk: (Rig, ActorRef[Command]) => Unit,
-      store: HealingFrontierStorage,
-      failing: SyncWriteFailingDataSource
-  ): Unit =
-    val rig = new Rig(frontier = Some(store), persistence = true)
+  private def walkAcrossSupervisorRestart(startWalk: (Rig, ActorRef[Command]) => Unit): Unit =
+    val rig = new Rig()
     val c = rig.spawnSupervised()
     startWalk(rig, c)
     withClue("incarnation 1's walk is queued: ")(rig.ec.pending shouldBe 1)
-    failing.failing = true
-    c ! HealingPivotRefreshed(rig.otherRoot) // the marker clear throws: the supervisor restarts the coordinator
-    rig.settle(c)
-    failing.failing = false
+    rig.crash(c)
     c ! HealingCheckCompletion // incarnation 2: nothing pending, no clean pass of its own, so it would walk
     rig.settle(c)
     withClue("one walk at a time across incarnations: ")(rig.ec.pending shouldBe 1)
     rig.ec.runNext() // incarnation 1's walk ends clean
     rig.settle(c)
     withClue("no completion from a replaced incarnation's walk: ")(rig.completions() shouldBe 0)
-    withClue("no completeness marker from a replaced incarnation's walk: ")(store.isComplete shouldBe false)
+    withClue("nothing vouched for by a replaced incarnation's walk: ")(rig.cleanWalkRoot.get() shouldBe null)
     rig.drive(c) // incarnation 2's own walk
     rig.awaitComplete()
 
   it should "ignore the clean verification of a replaced incarnation's walk, and walk itself after it (beacon W1-r4)" taggedAs UnitTest in {
-    val failing = new SyncWriteFailingDataSource
     val startWalk: (Rig, ActorRef[Command]) => Unit = (rig, c) =>
       c ! HealingCheckCompletion // incarnation 1 walks
       rig.settle(c)
-    walkAcrossSupervisorRestart(startWalk, new NoEntriesFrontierStorage(failing), failing)
+    walkAcrossSupervisorRestart(startWalk)
   }
 
-  it should "ignore the clean full rebuild of a replaced incarnation's walk: no marker, no completion (beacon W1-r4)" taggedAs UnitTest in {
-    val failing = new SyncWriteFailingDataSource
+  it should "ignore the clean full rebuild of a replaced incarnation's walk: no completion (beacon W1-r4)" taggedAs UnitTest in {
     val startWalk: (Rig, ActorRef[Command]) => Unit = (rig, c) =>
-      c ! StartTrieNodeHealing(rig.trie.root.hash)
+      c ! StartTrieNodeHealing(rig.trie.root.hash) // the root is on disk: the full rebuild starts
       rig.settle(c)
-      rig.ec.runNext() // the resume: no persisted frontier, so the full rebuild starts
-      rig.settle(c)
-    walkAcrossSupervisorRestart(startWalk, new NoEntriesFrontierStorage(failing), failing)
+    walkAcrossSupervisorRestart(startWalk)
   }
 
   it should "not let a replaced generation's walk cut short the new generation's walk (hunter W1, beacon W1-r4)" taggedAs UnitTest in {
@@ -292,13 +232,10 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     rig.completions() shouldBe 0
   }
 
-  it should "not mark the frontier complete when a rebuild walk of a root a re-peg has left ends clean (hunter W2, forge W-r4-1, vault-r3 W2)" taggedAs UnitTest in {
-    val store = new NoEntriesFrontierStorage(EphemDataSource())
-    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true)
+  it should "not complete, nor vouch, when a rebuild walk of a root a re-peg has left ends clean (hunter W2, forge W-r4-1, vault-r3 W2)" taggedAs UnitTest in {
+    val rig = new Rig(otherOnDisk = true)
     val c = rig.spawnGeneration()
     c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    rig.ec.runNext() // the resume: no persisted frontier, so the full rebuild of the root starts
     rig.settle(c)
     withClue("the rebuild is queued: ")(rig.ec.pending shouldBe 1)
     c ! HealingPivotRefreshed(
@@ -308,41 +245,12 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     withClue("no second walk: ")(rig.ec.pending shouldBe 1)
     rig.ec.runNext() // the rebuild of the root the heal has left ends clean
     rig.settle(c)
-    withClue("no completeness marker from a walk of a superseded root: ")(store.isComplete shouldBe false)
+    withClue("nothing vouched for by a walk of a superseded root: ")(rig.cleanWalkRoot.get() shouldBe null)
     withClue("no completion from it: ")(rig.completions() shouldBe 0)
-    c ! HealingCheckCompletion // the check after it: with no marker, a full walk of the current root
+    c ! HealingCheckCompletion // the check after it: a full walk of the current root
     rig.drive(c)
     rig.awaitComplete()
-    withClue("marked once a walk of the current root is clean: ")(store.isComplete shouldBe true)
-  }
-
-  /** A restart over a persisted frontier it cannot read, with the completeness marker set: the resume falls back to the
-    * full rebuild. Returns the store, checked right after the resume, before the rebuild runs.
-    */
-  private def unreadableFrontierRestart(clearFails: Boolean): (Rig, ActorRef[Command], LoadFailingFrontierStorage) =
-    val store = new LoadFailingFrontierStorage(EphemDataSource())
-    store.markComplete()
-    store.clearFails = clearFails
-    val rig = new Rig(frontier = Some(store), persistence = true)
-    val c = rig.spawnGeneration()
-    c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    rig.ec.runNext() // the resume: the frontier load throws
-    rig.settle(c)
-    withClue("the resume falls back to the full rebuild: ")(rig.ec.pending shouldBe 1)
-    (rig, c, store)
-
-  it should "remove the completeness marker when a restart cannot read the persisted frontier and falls back to the full rebuild (vault-r3 W3)" taggedAs UnitTest in {
-    val (rig, c, store) = unreadableFrontierRestart(clearFails = false)
-    withClue("no marker over a frontier the restart could not read: ")(store.isComplete shouldBe false)
-    rig.drive(c)
-    rig.awaitComplete()
-  }
-
-  it should "still fall back to the full rebuild when that marker cannot be removed either (vault-r3 W3)" taggedAs UnitTest in {
-    val (rig, c, _) = unreadableFrontierRestart(clearFails = true)
-    rig.drive(c)
-    rig.awaitComplete()
+    withClue("vouched for once a walk of the current root is clean: ")(rig.cleanWalkRoot.get() shouldBe rig.otherRoot)
   }
 
   // ---- spec 022 T038a: one walk per column family, process-wide; orphans are cancelled ------------------------------------
@@ -409,23 +317,18 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   }
 
   it should "stop a supervisor-restarted incarnation's old walk when the restart happens (T038a)" taggedAs UnitTest in {
-    val failing = new SyncWriteFailingDataSource
-    val store = new NoEntriesFrontierStorage(failing)
-    val rig = new Rig(frontier = Some(store), persistence = true)
+    val rig = new Rig()
     val c = rig.spawnSupervised()
     c ! HealingCheckCompletion // incarnation 1 walks
     rig.settle(c)
-    failing.failing = true
-    c ! HealingPivotRefreshed(rig.otherRoot) // the marker clear throws: the supervisor restarts the coordinator
-    rig.settle(c)
-    failing.failing = false
+    rig.crash(c)
     rig.ec.runNext() // incarnation 1's walk stops at once
     withClue("the replaced walk did not walk: ")(rig.queue.enqueued shouldBe 0)
     rig.settle(c)
   }
 
-  it should "not log 'engaged' nor set a pruned or scoped flag for a walk that was refused (T038a)" taggedAs UnitTest in {
-    val rig = new Rig(frontier = Some(new NoEntriesFrontierStorage(EphemDataSource())))
+  it should "say a walk was refused, and start none (T038a)" taggedAs UnitTest in {
+    val rig = new Rig()
     val gen1 = rig.spawnGeneration()
     gen1 ! HealingCheckCompletion
     rig.settle(gen1)
@@ -435,7 +338,6 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       gen2 ! HealingCheckCompletion
       rig.settle(gen2)
       withClue("the refusal is said: ")(capture.count("Frontier walk not started") shouldBe 1)
-      withClue("no walk was engaged: ")(capture.count("engaged") shouldBe 0)
       rig.completions() shouldBe 0
       testKit.stop(gen2)
     finally capture.close()
@@ -444,9 +346,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   it should "start the completion check when a rebuild of a root a re-peg has left ends: the deferred verification runs (T038a)" taggedAs UnitTest in {
     val rig = new Rig(otherOnDisk = true)
     val c = rig.spawnGeneration()
-    c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    rig.ec.runNext() // the resume: no persisted frontier, so the rebuild starts
+    c ! StartTrieNodeHealing(rig.trie.root.hash) // the rebuild starts
     rig.settle(c)
     c ! HealingPivotRefreshed(rig.otherRoot) // to a root on disk: its verification is deferred behind the rebuild
     rig.settle(c)
@@ -460,37 +360,24 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   // ---- spec 022 T038b: a supervisor-restarted coordinator takes the controller's current root ------------------------------
 
   it should "walk the controller's current root after a supervisor restart, not its spawn-time root (T038b)" taggedAs UnitTest in {
-    val failing = new SyncWriteFailingDataSource
-    val store = new NoEntriesFrontierStorage(failing)
     val current = new java.util.concurrent.atomic.AtomicReference[ByteString]()
-    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true, currentRoot = Some(current))
+    val rig = new Rig(otherOnDisk = true, currentRoot = Some(current))
     current.set(rig.trie.root.hash)
     val c = rig.spawnSupervised()
-    failing.failing = true
     current.set(rig.otherRoot) // as the controller does, before it sends the re-peg
-    c ! HealingPivotRefreshed(rig.otherRoot) // the marker clear throws: the re-peg is lost with incarnation 1
-    rig.settle(c)
-    failing.failing = false
+    rig.crash(c) // the re-peg never reaches incarnation 1: it is lost with it
     c ! HealingCheckCompletion // incarnation 2 walks
     rig.drive(c)
     rig.awaitComplete()
-    withClue("the marker is of the current root: the walk's batches and its verdict named it: ") {
-      // A walk of the spawn-time root ends with `walkRoot` != the new root in incarnation 2 only if it was given the
-      // new root; with the old one it would have completed on the old root. So: the frontier store's root record.
-      store.isSubtreeComplete(rig.otherRoot) shouldBe true
-      store.isSubtreeComplete(rig.trie.root.hash) shouldBe false
-    }
+    withClue("what the clean walk covered is the current root: ")(rig.cleanWalkRoot.get() shouldBe rig.otherRoot)
   }
 
   // ---- spec 022 T038c, slice-2 notes ----------------------------------------------------------------------------------
 
-  it should "not count a walk across A -> B -> A as a walk of A: no marker, no clean verdict (T038c, A-B-A)" taggedAs UnitTest in {
-    val store = new NoEntriesFrontierStorage(EphemDataSource())
-    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true)
+  it should "not count a walk across A -> B -> A as a walk of A: no clean verdict (T038c, A-B-A)" taggedAs UnitTest in {
+    val rig = new Rig(otherOnDisk = true)
     val c = rig.spawnGeneration()
-    c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    rig.ec.runNext() // the resume: the rebuild of A starts
+    c ! StartTrieNodeHealing(rig.trie.root.hash) // the rebuild of A starts
     rig.settle(c)
     c ! HealingPivotRefreshed(rig.otherRoot)
     rig.settle(c)
@@ -498,44 +385,11 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     rig.settle(c)
     rig.ec.runNext() // the rebuild, started before both re-pegs, ends clean
     rig.settle(c)
-    withClue("its frontier was dropped under it: no complete snapshot: ")(store.isComplete shouldBe false)
+    withClue("its frontier was dropped under it: it vouches for nothing: ") {
+      rig.cleanWalkRoot.get() shouldBe null
+      rig.completions() shouldBe 0
+    }
     rig.drive(c) // the check walks A again
     rig.awaitComplete()
-    withClue("marked by the walk that started after the last re-peg: ")(store.isComplete shouldBe true)
-  }
-
-  it should "not let a scoped walk stand in for the full verification a resume asked for (T038c)" taggedAs UnitTest in {
-    val rig = new Rig(hole = true, frontier = Some(completeEmptyFrontier()))
-    val c = rig.spawnGeneration()
-    val brX = rig.trie("brX")
-    c ! StartTrieNodeHealing(rig.trie.root.hash)
-    rig.settle(c)
-    withClue("the resume is queued: ")(rig.ec.pending shouldBe 1)
-    c ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((brX.pathset, brX.hash)))
-    c ! TrieNodeHealingCoordinator.HealingPeerAvailable(
-      com.chipprbots.ethereum.testing.PeerTestHelpers
-        .createTestPeer("scoped-peer", createTestProbe[Any]().ref.toClassic)
-    )
-    val request = rig.peers
-      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
-      .message
-      .underlyingMsg
-      .asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes]
-    c ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
-      com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes(request.requestId, Seq(brX.encoded))
-    )
-    rig.settle(c)
-    rig.ec.runNewest() // brX's flush
-    rig.ec.runNewest() // its completion: then the completion check starts its walk, scoped by the marker and the heal
-    rig.settle(c)
-    withClue("the resume and the scoped walk are queued: ")(rig.ec.pending shouldBe 2)
-    rig.ec.runNext() // the resume: its full verification is dropped, a walk is running
-    rig.settle(c)
-    withClue("the scoped walk, alone: ")(rig.ec.pending shouldBe 1)
-    rig.ec.runNext() // the scoped walk ends clean
-    rig.settle(c)
-    withClue("it does not count: ")(rig.completions() shouldBe 0)
-    withClue("a full walk follows: ")(rig.ec.pending shouldBe 1)
-    rig.drive(c)
-    rig.awaitComplete()
+    withClue("the walk that started after the last re-peg does: ")(rig.cleanWalkRoot.get() shouldBe rig.trie.root.hash)
   }

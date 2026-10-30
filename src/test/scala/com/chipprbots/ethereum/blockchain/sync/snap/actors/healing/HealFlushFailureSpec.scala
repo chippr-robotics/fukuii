@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -108,26 +107,17 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val bytes = Array.fill[Byte](8)(i.toByte)
     kec256(ByteString(bytes)) -> bytes
 
-  "The asynchronous healed-node flush" should "keep every buffered node and staged record when the write throws (T018)" taggedAs UnitTest in {
-    val frontier = Some(new HealingFrontierStorage(EphemDataSource()))
-    val s = new StubFrontierPersistenceState(
-      frontier,
-      frontierPersistenceEnabled = false,
-      prunedEnabled = true,
-      healingWriterEc = ExecutionContext.parasitic
-    ) with FrontierPersistence
+  "The asynchronous healed-node flush" should "keep every buffered node when the write throws (T018)" taggedAs UnitTest in {
+    val s = new StubFrontierPersistenceState(ExecutionContext.parasitic) with FrontierPersistence
     val nodes = (1 to 3).map(node)
     s.rawNodeBuffer ++= nodes
-    s.pendingSubtreeRecords += nodes.head._1
     s.mptStorage.failWrites = 1
 
     s.flushRawNodesAsync() // the Future runs inline (parasitic) and fails
 
     s.mptStorage.stored shouldBe empty
-    // Nothing was written, so nothing may be dropped: the nodes stay buffered for the next flush and the staged spec
-    // 005 record stays staged (it is written only after its node is durable).
+    // Nothing was written, so nothing may be dropped: the nodes stay buffered for the next flush.
     s.rawNodeBuffer.map(_._1).toSeq shouldBe nodes.map(_._1)
-    s.pendingSubtreeRecords should contain(nodes.head._1)
     s.selfInbox.receiveAll().collect { case m: TrieNodeHealingCoordinator.FlushComplete => m } shouldBe empty
   }
 

@@ -156,7 +156,6 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
     Row("HealingStagnationCheck", HealingStagnationCheck, 21, Some(Lifecycle)),
     Row("HealingGetProgress", HealingGetProgress(TestInbox[HealingStatistics]().ref), 22, Some(Lifecycle)),
     Row("HealingRequestTimeout", HealingRequestTimeout(BigInt(1)), 23, Some(Dispatch)),
-    Row("RestartResumeVerification", RestartResumeVerification(Root, EmptyPath), 24, Some(Verification)),
     Row("RestartFullRebuild", RestartFullRebuild(Root, EmptyPath), 25, Some(Rebuild)),
     // No arm: falls through every group to the catch-all.
     Row("HealingTaskFailed", HealingTaskFailed(BigInt(1), "c-h0 table"), 26, None)

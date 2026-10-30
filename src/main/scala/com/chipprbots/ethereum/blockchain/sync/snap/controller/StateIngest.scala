@@ -136,9 +136,11 @@ private[sync] trait StateIngest:
     */
   def storageDone: SnapStorageDoneStorage
 
-  /** The persisted healing frontier and subtree-complete records (CF `g`): `HealingOrchestrator`'s
-    * `healingFrontierStorageOpt`, `Some` only when frontier persistence or pruned heal verification is on. A by-name
-    * parameter of `apply`, fed by that lazy val, so each read returns its one instance, built on the first read.
+  /** The persisted healing frontier and subtree-complete records (CF `g`), retired by spec 022 D6: nothing reads or
+    * writes through this member any more. `HealingOrchestrator`'s `healingFrontierStorageOpt`, `Some` only when
+    * frontier persistence or pruned heal verification is on, both settings now without effect. A by-name parameter of
+    * `apply`, fed by that lazy val, so each read returns its one instance, built on the first read. It goes with the
+    * pinned spawn settings, in a `# pins:` change.
     */
   def healingFrontier: Option[HealingFrontierStorage]
 

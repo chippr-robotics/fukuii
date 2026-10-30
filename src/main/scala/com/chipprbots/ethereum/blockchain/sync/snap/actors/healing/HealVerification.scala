@@ -1,14 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
-import java.util.concurrent.atomic.AtomicLong
-
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.VerificationBFSComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
@@ -17,28 +13,16 @@ import com.chipprbots.ethereum.mpt.MptNode
 
 /** The coordinator state `HealVerification` reads and writes (spec 016 C-H3, research.md R14b). The core's behaviour
   * arms (`healVerificationArms`, the completion gate) and the code C-H4 and C-H5 will move touch them too, or rule (d)
-  * keeps them in the core, so the Impl keeps them as fields. The verification launchers write the in-flight run's
-  * observability (`scopedVerificationActive`, `scopedVerificationSeedCount`, `scopedVerificationStartMs`,
-  * `prunedVerificationActive`, `prunedVerificationStartMs`), reset `prunedSubtreeCount`, and `reverifyCurrentRoot`
-  * clears `verificationPassComplete` (the walk launcher they call sets `verificationBFSRunning`, and only when the walk
-  * starts: spec 022 review hunter W1); they read the walk root `stateRoot`, the completion gate's `flushing` and
-  * `trieWalkInProgress`, and `healedPathsRoot` (the scoped walk's precondition). `prunedEnabled` is an immutable val
-  * rule (d) keeps in the core.
+  * keeps them in the core, so the Impl keeps them as fields. `reverifyCurrentRoot` clears `verificationPassComplete`
+  * (the walk launcher it calls sets `verificationBFSRunning`, and only when the walk starts: spec 022 review hunter
+  * W1); they read the walk root `stateRoot` and the completion gate's `flushing` and `trieWalkInProgress`.
   */
 private[actors] trait HealVerificationState:
   var stateRoot: ByteString
-  def healedPathsRoot: ByteString
   var verificationBFSRunning: Boolean
   var verificationPassComplete: Boolean
   var trieWalkInProgress: Boolean
   def flushing: Boolean
-  var scopedVerificationActive: Boolean
-  var scopedVerificationSeedCount: Int
-  var scopedVerificationStartMs: Long
-  var prunedVerificationActive: Boolean
-  var prunedVerificationStartMs: Long
-  def prunedSubtreeCount: AtomicLong
-  def prunedEnabled: Boolean
 
 /** What the frontier-rebuild walk calls for a Path-scheme read: `readPathVerifiedNode`, the bytes at the entry's own
   * path, counted present only when they hash to the entry's hash. `HealVerification` provides it (spec 016 C-H3).
@@ -63,13 +47,12 @@ private[actors] trait PathPresenceApi:
 
 /** TrieNodeHealingCoordinator's heal verification (spec 016 C-H3, coordinator-characterization.md §3.4): the
   * verification entry points that re-walk the trie before the heal may complete — `reverifyCurrentRoot` (discard the
-  * last verdict and walk the current root again), `startVerificationBFS` (the full-root walk, with the spec 005 pruned
-  * descend-and-stop engagement and its `[HEAL-VERIFY-PRUNED]` entry log) and `startScopedVerification` (the spec 003
-  * walk seeded from the healed paths, `[HEAL-VERIFY-SCOPED]`), all three on the frontier-rebuild walk's launchers and
-  * all completing through `VerificationBFSComplete`; and the Path-scheme verified reads `readPathVerifiedRlp` and
-  * `readPathVerifiedNode` (the bytes at an entry's own path, counted present only when they hash to the entry's hash),
-  * which the walk and the core's presence check call. It writes no store. The coordinator core keeps the behaviour arms
-  * that call it and handle the verdict (`healVerificationArms`, the completion gate).
+  * last verdict and walk the current root again) and `startVerificationBFS` (the full-root walk), both on the
+  * frontier-rebuild walk's launchers and completing through `VerificationBFSComplete`; and the Path-scheme verified
+  * reads `readPathVerifiedRlp` and `readPathVerifiedNode` (the bytes at an entry's own path, counted present only when
+  * they hash to the entry's hash), which the walk and the core's presence check call. It writes no store. The
+  * coordinator core keeps the behaviour arms that call it and handle the verdict (`healVerificationArms`, the
+  * completion gate).
   */
 private[actors] trait HealVerification extends PathVerifiedReadApi with PathVerifiedRlpApi with PathPresenceApi:
   this: HealVerificationState & TrieNodeHealingEnv & FrontierRebuildApi & HealCompletionApi & WalkFlushApi =>
@@ -82,8 +65,6 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * something was healed, so the gate that retries it walks too.
     */
   def reverifyCurrentRoot(): Unit =
-    scopedVerificationActive = false
-    prunedVerificationActive = false
     verificationPassComplete = false
     if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
       startVerificationBFS(
@@ -104,16 +85,22 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     */
   def startVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
     if walkMayStart(s"Verification walk of root ${Hex.toHexString(root.take(4).toArray)}") then
-      launchVerificationBFS(root, rootPath)
+      val selfRef = self
+      startFrontierBFS(
+        root,
+        rootPath,
+        isStor = false,
+        (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(root, missing, walk)
+      )
 
   /** spec 022 review forge F1: a frontier walk starts only on an empty flush buffer, or once a synchronous flush has
     * written it (`flushedForWalk`). Every verification walk starts here: the completion gate, a re-verification after a
-    * dirty or stale pass, a re-peg onto a root already on disk, the dead-pulse watchdog and a restart's resume. A walk
-    * over an unwritten buffer reads the buffered nodes as missing and is refused their fetch (they are complete), so it
-    * ends dirty, and the next walk would too, with nothing writing the buffer: a stall no re-peg ends (the walk keeps
-    * `walkLocalOnly` set). When the write fails, no walk starts; the completion check retries the write at once and the
-    * 2-minute pulse after that, and the check's own walk follows a write that succeeds (the check completes only on a
-    * clean pass, so with none it walks).
+    * dirty or stale pass, a re-peg onto a root already on disk, and the dead-pulse watchdog. A walk over an unwritten
+    * buffer reads the buffered nodes as missing and is refused their fetch (they are complete), so it ends dirty, and
+    * the next walk would too, with nothing writing the buffer: a stall no re-peg ends (the walk keeps `walkLocalOnly`
+    * set). When the write fails, no walk starts; the completion check retries the write at once and the 2-minute pulse
+    * after that, and the check's own walk follows a write that succeeds (the check completes only on a clean pass, so
+    * with none it walks).
     */
   private def walkMayStart(what: String): Boolean =
     if flushedForWalk() then true
@@ -124,85 +111,6 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
       )
       self ! HealingCheckCompletion
       false
-
-  private def launchVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
-    val selfRef = self
-    // Reset before the walk can bump it.
-    prunedSubtreeCount.set(0L)
-    // spec 022 T038a: the run's flags, gauges and engagement log only once the walk has started: a walk the lease refused
-    // never ran.
-    val started = startFrontierBFS(
-      root,
-      rootPath,
-      isStor = false,
-      (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(root, missing, walk)
-    )
-    if started then
-      // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
-      // distinguish the two paths, and mark the in-flight run as NOT scoped for the completion handler.
-      scopedVerificationActive = false
-      SNAPSyncMetrics.setHealingScopedVerification(0L)
-      // spec 005 C2/C8/T024: this full-root walk is the SAME traversal whether or not pruning is engaged — the
-      // descend-and-stop oracle (pruneIfSubtreeComplete) is inert unless `prunedEnabled`. Record engagement so the
-      // completion handler can emit the [HEAL-VERIFY-PRUNED] savings, and surface the engaged/disabled path here at the
-      // verification entry (FR-009/FR-007).
-      prunedVerificationActive = prunedEnabled
-      prunedVerificationStartMs = System.currentTimeMillis()
-      SNAPSyncMetrics.setHealingPrunedVerification(if prunedEnabled then 1L else 0L)
-      SNAPSyncMetrics.setHealingPrunedSubtrees(0L)
-      if prunedEnabled then
-        log.info(
-          s"[HEAL-VERIFY-PRUNED] Pruned (descend-and-stop) verification engaged on root " +
-            s"${Hex.toHexString(root.take(4).toArray)} — present, recorded-complete subtrees are pruned " +
-            s"(O(missing-frontier)); present-but-unrecorded and missing nodes are descended"
-        )
-      else
-        log.info(
-          s"[HEAL-VERIFY-PRUNED] Pruning disabled (flag=$prunedHealVerification scheme=$storageScheme " +
-            s"store=${stateIngest.healingFrontier.isDefined}) — full-trie verification on root " +
-            s"${Hex.toHexString(root.take(4).toArray)}"
-        )
-
-  /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
-    * subtree is re-walked to completion; any missing descendant is emitted via `FrontierRebuilt`. Sends
-    * `VerificationBFSComplete` on done — the SAME completion path the full-root verification uses, so completion flows
-    * through the single `verificationPassComplete` chokepoint (no new completion message, no new marker set-point).
-    * Each `HealingEntry` maps to `(hash, pathset, pathset.size > 1)`: a `pathset.size > 1` entry is a storage-trie seed
-    * `(storageRootHash, Seq(accountHash32, compactStoragePath), isStorage = true)`, mirroring
-    * `discoverMissingChildren`'s `pathset.size > 1` storage test. Reuses `verificationBFSRunning`, the shared
-    * `bfsQueue`, and `startFrontierBFS`.
-    */
-  def startScopedVerification(seeds: Seq[HealingEntry]): Unit =
-    // beacon contract (spec 022 slice 1 review): the scope is the nodes healed against the CURRENT walk root (F5). The
-    // gate checks it before calling; a scope of another root would verify the wrong subtrees.
-    require(
-      healedPathsRoot == stateRoot,
-      s"scoped verification of paths healed against ${Hex.toHexString(healedPathsRoot.take(4).toArray)} " +
-        s"on walk root ${Hex.toHexString(stateRoot.take(4).toArray)}"
-    )
-    if walkMayStart(s"Scoped verification walk of ${seeds.size} healed subtrees") then launchScopedVerification(seeds)
-
-  private def launchScopedVerification(seeds: Seq[HealingEntry]): Unit =
-    val selfRef = self
-    val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
-    val walkRoot = stateRoot
-    val started = startFrontierBFS(
-      bfsSeeds,
-      (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing, walk)
-    )
-    // spec 022 T038a: only once the walk has started.
-    if started then
-      // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and
-      // emit the engagement signal on entry.
-      scopedVerificationActive = true
-      scopedVerificationSeedCount = seeds.size
-      scopedVerificationStartMs = System.currentTimeMillis()
-      log.info(
-        s"[HEAL-VERIFY-SCOPED] Scoped verification engaged — ${seeds.size} healed subtrees " +
-          s"(root ${Hex.toHexString(stateRoot.take(4).toArray)}); skipping full-root re-walk"
-      )
-      SNAPSyncMetrics.setHealingScopedVerification(1L)
-      SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
 
   /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
     * keccak256 equals `hash` — otherwise `None`.
