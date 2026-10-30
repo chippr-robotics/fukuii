@@ -492,6 +492,46 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     orphanAtCap(StorageScheme.Hash)
   }
 
+  /** eye F7, vault R2, hunter N3: the orphan guard itself. The root waits on a child that never commits (it does not
+    * decode); nothing is queued and nothing is in flight, so the guard drops the root, unwritten. It keeps the root's
+    * persisted frontier entry: the completeness marker may stand (same root), and that entry is what lets a resume fetch
+    * the root again. Then the completion check walks, finds the root missing and fetches it again. The writer executor
+    * runs only when the test says, so every check below comes before the walk.
+    */
+  it should "drop held nodes nothing can complete, keep their persisted frontier entries, and fetch them again after a walk, under the Hash scheme (eye F7, vault R2)" taggedAs UnitTest in {
+    val trie = orphaningTrie()
+    val peer = new ScriptedPeer(testKit)
+    val writer = new ManualExecutionContext
+    val frontier = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(EphemDataSource())
+    withHealer(StorageScheme.Hash, trie.root.hash, peer, writerEc = Some(writer), frontier = Some(frontier)) {
+      (coordinator, _, disk) =>
+        def settle(): Unit = (1 to 3).foreach(_ => handled(coordinator))
+        coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+        peerAvailable(coordinator)
+        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served)
+        // The leaf commits; the other child does not decode. Nothing is queued or in flight: the guard drops the root.
+        val undecodablePath =
+          Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](0), isLeaf = false)))
+        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served + (undecodablePath -> undecodable))
+        settle()
+        withClue("the root is never written: ")(disk.holds(trie.root) shouldBe false)
+        withClue("the dropped root keeps its persisted frontier entry: ") {
+          frontier.get(trie.root.hash) shouldBe defined
+        }
+        // The leaf's flush runs; the completion check then walks, finds the root missing and fetches it again (a held
+        // node is never fetched again, so this request proves the guard dropped it).
+        var steps = 0
+        while writer.pending > 0 && steps < 10 do
+          writer.runNext()
+          settle()
+          steps += 1
+        withClue("the walk fetches the dropped root again: ") {
+          peer.manual.expectMessageType[SNAP.GetTrieNodes](10.seconds).paths shouldBe Seq(trie.root.pathset)
+        }
+        withClue("still never written: ")(disk.holds(trie.root) shouldBe false)
+    }
+  }
+
   it should "fetch a queued walk entry first once a held parent finds it is its child, at the cap (promote, eye F5)" taggedAs UnitTest in {
     val x = HealRequestFixtures.plainLeaf(Array[Byte](0x0a), "s022/review/promote-x")
     val y = HealRequestFixtures.plainLeaf(Array[Byte](0x0b), "s022/review/promote-y")
@@ -578,20 +618,25 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     }
   }
 
-  it should "on a re-peg whose commit write throws, drop the ready nodes unwritten and heal the new root, under the Path scheme (eye F7)" taggedAs UnitTest in {
+  it should "on a re-peg whose commit write throws, drop the ready nodes and the pending deletes unwritten and heal the new root, under the Path scheme (eye F7)" taggedAs UnitTest in {
     val before = PathHealPresenceFixtures.accountTrieOld()
     val after = PathHealPresenceFixtures.accountTrieNew()
     val peer = new ScriptedPeer(testKit)
-    // Every batch that writes brY's position fails until the test lets it through.
+    // Every batch that writes brY's position, or deletes the position inside ext's key ([0,5], found when ext
+    // arrives), fails until the test lets it through: the delete stays pending and rides with brY's subtree.
     val failing = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val applied = new java.util.concurrent.atomic.AtomicInteger(0)
     val brYKey = HealRequestFixtures.accountKey(Array[Byte](1))
+    val insideExtKey = HealRequestFixtures.accountKey(Array[Byte](0, 5))
     val source = new EphemDataSource(Map.empty):
       override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
-        val writesBrY = updates
-          .flatMap(HealRequestFixtures.Op.of)
-          .exists(op => !op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == brYKey)
-        if failing.get() && writesBrY then throw new RuntimeException("injected write batch failure")
+        val ops = updates.flatMap(HealRequestFixtures.Op.of)
+        val writesBrY = ops.exists(op => !op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == brYKey)
+        val deletesInsideExt =
+          ops.exists(op => op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == insideExtKey)
+        if failing.get() && (writesBrY || deletesInsideExt) then throw new RuntimeException("injected write batch failure")
         super.update(updates)
+        applied.incrementAndGet(): Unit
     withHealer(StorageScheme.Path, before.root.hash, peer, pathSource = source) { (coordinator, controller, disk) =>
       coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
       peerAvailable(coordinator)
@@ -609,8 +654,16 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       Seq("leafY0", "leafY1", "brY", "root", "ext").foreach { l =>
         withClue(s"$l after the re-peg: ")(disk.holds(before(l)) shouldBe false)
       }
-      // The writes work again: the new root heals completely, brY's subtree fetched again.
+      // The writes work again. A commit retry now (the completion check makes one when writes are pending) must write
+      // nothing: the ready nodes and the delete went with the re-peg; kept, they would be written here.
       failing.set(false)
+      val appliedAtRepeg = applied.get()
+      coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+      handled(coordinator)
+      withClue("nothing is written after the re-peg until the new root is served: ") {
+        applied.get() shouldBe appliedAtRepeg
+      }
+      // The new root heals completely, brY's subtree fetched again (a node kept and written would be found present).
       peer.serveFrom.set(Some(after.served))
       peerAvailable(coordinator)
       controller.fishForMessage(30.seconds) {
@@ -618,5 +671,8 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
         case _                                       => FishingOutcomes.continueAndIgnore
       }
       after.nodes.foreach(n => withClue(s"${n.label} after healing: ")(disk.holds(n) shouldBe true))
+      withClue("brY is fetched again for the new root: ") {
+        peer.autoRequests.flatten should contain(after("brY").pathset)
+      }
     }
   }
