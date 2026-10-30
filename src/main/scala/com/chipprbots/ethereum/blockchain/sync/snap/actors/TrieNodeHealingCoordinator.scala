@@ -607,6 +607,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             catch
               case NonFatal(e) =>
                 asyncLog.error("[HEAL-RESTART] Failed to load persisted frontier — falling back to full-state BFS", e)
+                // spec 022 review vault-r3 W3: the fallback is marker-absent, as every other fallback here is. A marker
+                // left over entries nobody read would let the completion gate scope its walk by it if the rebuild does
+                // not run (a failed flush defers it). Removed synced, before the rebuild is sent (as at a re-peg, V-R5).
+                // If the removal fails too, the rebuild still runs: a stalled restart is worse, and the store is failing.
+                try store.clearComplete()
+                catch
+                  case NonFatal(c) =>
+                    asyncLog.error("[HEAL-RESTART] Could not remove the completeness marker of that frontier either", c)
                 None
           }
           // Route the resume decision back to the actor thread: the start*BFS launchers mutate verificationBFSRunning
@@ -1101,7 +1109,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
       // spec 022 review forge F1: like every frontier walk, the rebuild starts on a written flush buffer. At a fresh start
       // the buffer is empty; if responses filled it meanwhile and its write fails, no rebuild runs: something was healed,
-      // so once the write succeeds the completion check runs the full verification walk in its place.
+      // so once the write succeeds the completion check runs the full verification walk in its place (full: the resume
+      // sends this only when the store holds no completeness marker, or after removing one over a frontier it could not
+      // read, vault-r3 W3; one stays only if that removal fails too).
       // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): no rebuild of a root a re-peg in the resume
       // window has left (the re-peg seeded or walks the new root), and none while a walk runs (a completion check or a
       // re-peg in the window started one, and two walks on the shared queue cut each other short). Without the rebuild
