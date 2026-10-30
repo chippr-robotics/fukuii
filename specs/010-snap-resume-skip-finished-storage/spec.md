@@ -4,9 +4,12 @@
 
 **Created**: 2026-10-07
 
-**Status**: Implemented (task #96)
-
+**Status**: Done (2026-10-30). Implemented (task #96); SNAP resume skips storage tries already marked done.
 ## Problem
+
+**Closed** (2026-10-30):
+- Reason: shipped.
+- Lives on in: the storage done markers under `blockchain/sync/snap/`.
 
 A SNAP account-phase resume (AccountResumeCheckpoint, #1487) replays the carried storage-task file to the storage
 coordinator. Nothing records which of those tasks already finished, so every carried task is downloaded again. The

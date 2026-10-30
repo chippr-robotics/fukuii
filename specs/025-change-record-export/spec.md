@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-6.** Companion of spec 023. **Time-critical part**: the
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-6. Companion of spec 023. **Time-critical part**: the
 record schema (GT-1) must be agreed with spec 018's `data-model.md` owner before 018 slice F2 freezes the changeset
 format. **Revised 2026-10-30 (alignment review, [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
 §2)**: the state diff is the **semantic write set** (accounts, slots, code by address), never trie nodes, so the

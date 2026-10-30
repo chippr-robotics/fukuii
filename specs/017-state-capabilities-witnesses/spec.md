@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-11
 
-**Status**: **Draft (stub).** Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
+**Status**: Draft (2026-10-30). (stub). Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
 review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
 the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover.
 **Revised again 2026-10-11 (Ethereum roadmap alignment)**: ETH mainnet is the design driver. The witness is now

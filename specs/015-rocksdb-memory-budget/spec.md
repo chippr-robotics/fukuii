@@ -4,9 +4,12 @@
 
 **Created**: 2026-10-08
 
-**Status**: Implemented (PR against staging)
-
+**Status**: Done (2026-10-30). Implemented: `db.rocksdb.memory-budget` and the write-buffer/partitioned-filter options in `conf/base/db.conf`; superseded in the long run by spec 018 DC-10 once RocksDB is removed.
 ## Problem
+
+**Closed** (2026-10-30):
+- Reason: shipped.
+- Lives on in: `utils/InstanceConfig.scala` RocksDb config and `conf/base/db.conf`; spec 018 DC-10 replaces it with engine-neutral memory gauges.
 
 RocksDB's native memory had two separate caps and no gauges. The block cache (`block-cache-size`, 512 MiB) and the
 memtables (`db-write-buffer-size`, 512 MiB) were sized on their own. `db_write_buffer_size` only triggers flushes, so

@@ -1,6 +1,6 @@
 # Spec 013: State Snapshots for Fast ETH-Family Sync
 
-**Status**: Draft
+**Status**: Draft (2026-10-30).
 **Date**: 2026-10-07
 **Scope**: ETH-family chains (Sepolia now, Ethereum mainnet next). ETC/Mordor behaviour is unchanged.
 **Owners**: `vault` (storage), `beacon` (ETH trust model), `forge` (ETC-untouched sign-off), `herald` (distribution)

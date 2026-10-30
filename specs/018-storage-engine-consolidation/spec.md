@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: **Draft, ready for `/speckit-clarify`.** The Phase 0 evaluation is done ([research.md](./research.md)); the
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify`. The Phase 0 evaluation is done ([research.md](./research.md)); the
 plan ([plan.md](./plan.md)) is drafted to the point where `/speckit-tasks` can run once the gates below report. The
 Design constraints and Gates sections are binding on that later work. **Revised 2026-10-17 (same day)** after the user's
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the

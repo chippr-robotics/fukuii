@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Superseded by 022; boxes below are as they were at closure.
+
 ---
 description: "Task list for Subtree-Complete Heal Verification (descend-and-stop, O(missing) completeness proof)"
 ---

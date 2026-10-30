@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-5 below.** The Evidence figures from
+**Status**: Draft (2026-10-30). Decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-5 below. The Evidence figures from
 the originating notes were re-measured on `staging` 0f1a904 (0.10.17) and corrected in [research.md](./research.md) §1;
 the T-001 retirement inventory is done ([research.md](./research.md) §2). **Revised 2026-10-30**: the cross-spec
 [alignment review](./alignment-review.md) added FR-010 (transaction ingress), OQ-5 (`relay` role), the Engine API

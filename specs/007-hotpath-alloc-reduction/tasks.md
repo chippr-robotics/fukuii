@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Parked; boxes below are as they were at closure.
+
 ---
 description: "Dependency-ordered tasks for spec 007 — hot-path allocation reduction"
 ---

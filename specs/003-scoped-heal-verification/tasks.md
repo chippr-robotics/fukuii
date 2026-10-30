@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Superseded by 022; boxes below are as they were at closure.
+
 # Tasks: Scoped Post-Heal Verification
 
 **Input**: Design documents from `/specs/003-scoped-heal-verification/`

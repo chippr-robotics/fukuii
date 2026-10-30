@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Done; boxes below are as they were at closure.
+
 # Tasks: SNAP Memory Bounds (spec 014)
 
 - [x] T001 Root-cause the 190k live fibers. Found 35,612 `ChannelImpl` and 31,543 `DiscoveryNetwork` handlers in a live

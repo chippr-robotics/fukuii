@@ -1,0 +1,34 @@
+# Specs index check
+#
+# Every spec under specs/ carries a lifecycle header (docs/development/spec-lifecycle.md), and specs/README.md is
+# generated from those headers by scripts/specs/index.py. This job fails when a header is invalid (no status line,
+# a word outside the vocabulary, no date, a superseder that does not exist) or when the README is stale.
+# Fix: `python3 -I scripts/specs/index.py` and commit specs/README.md.
+
+name: Specs Index
+
+on:
+  pull_request:
+    paths:
+      - 'specs/**'
+      - 'scripts/specs/**'
+      - '.github/workflows/specs-index.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  specs-index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check spec headers and index
+        run: python3 -I scripts/specs/index.py --check

@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: **Draft (stub).** Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
+**Status**: Draft (2026-10-30). (stub). Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
 request on 2026-10-17, because it is pure consensus code under the consensus-change protocol and should not be
 scheduled behind a storage gate. To be fleshed out with `/speckit-specify` and `/speckit-clarify` once the impact
 analysis (GT-1) has reported, then `/speckit-plan` and `/speckit-tasks`. The Gates and Design constraints sections are

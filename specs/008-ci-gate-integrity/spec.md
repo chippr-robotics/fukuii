@@ -4,8 +4,7 @@
 
 **Created**: 2026-09-20
 
-**Status**: Draft
-
+**Status**: Active (2026-10-30). The Gate Integrity workflow (`.github/workflows/gate-integrity.yml`, FR-029) is a required check and #1404 (enforce the constitution on merge) is closed; #1402 (Hive + comprehensive as a hard release gate) and #1403 (one public truth) are open, so this stays Active until they close.
 **Input**: Issues #1402 (Make Hive + comprehensive a hard release gate), #1403 (One public truth), #1404 (Enforce the constitution on merge)
 
 ## Context & Motivation

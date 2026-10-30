@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-4.** Companion of spec 023. Depends on spec 013 (seed)
+**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-4. Companion of spec 023. Depends on spec 013 (seed)
 and spec 025 (the record stream); on spec 018 only for the `archive` basis (GT-2) and for the later move to the
 unified layout. **Revised 2026-10-30 (alignment review,
 [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
