@@ -400,7 +400,11 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
       Seq(ExcludedAccount(ByteString(Array.fill[Byte](32)(7)), ExcludedReason.StorageAbandoned))
     )
     h.become(_.restartSnapSync("stalled"))
-    withClue("a restart is a cycle from nothing: ")(m.stateIngest.snapProgress.hasAnyExcluded shouldBe false)
+    withClue(
+      "a restart may resume cursors, and accounts behind them are not re-fed: only the planner wipes the set: "
+    ) {
+      m.stateIngest.snapProgress.hasAnyExcluded shouldBe true
+    }
     m.pendingPivotRefresh shouldBe None
     m.pivotProbeRequestId shouldBe None
     m.proactiveRollNeedsProbe shouldBe false

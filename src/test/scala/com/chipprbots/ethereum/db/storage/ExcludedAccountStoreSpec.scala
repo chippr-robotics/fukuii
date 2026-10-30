@@ -120,6 +120,15 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
     store.hasExcluded shouldBe true
   }
 
+  it should "be dropped alone at a clean completion" taggedAs UnitTest in {
+    val store = new SnapSyncProgressStorage(EphemDataSource())
+    val account = ExcludedAccount(h(1), ExcludedReason.StorageAbandoned)
+    val code = ExcludedAccount(h(2), ExcludedReason.CodeMissing)
+    store.recordExcluded(Seq(account, code, ExcludedAccount(h(3), ExcludedReason.StorageSkipped, dormant = true)))
+    store.clearDormantExcluded()
+    store.excludedPage(None, 10) shouldBe Seq(account, code)
+  }
+
   "The kind reads" should "tell account entries and code entries apart" taggedAs UnitTest in {
     val store = new SnapSyncProgressStorage(EphemDataSource())
     store.hasExcluded shouldBe false

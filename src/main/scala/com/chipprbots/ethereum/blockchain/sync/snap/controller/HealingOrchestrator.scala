@@ -161,8 +161,9 @@ private[snap] trait HealingOrchestrator
 
     case StateHealingAbandoned =>
       ctx.log.warn(
-        "[HEAL-ABANDONED] Healing coordinator gave up without a verification walk. The trie is " +
-          "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
+        "[HEAL-ABANDONED] Healing coordinator gave up, so healing is not complete and this is not a clean walk: handing " +
+          "off to lazy on-demand healing via completeSnapSync(). (When only bytecode blocked it has walked the rest; " +
+          "otherwise the trie is not verified.)"
       )
       anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
       completeSnapSync()
@@ -220,6 +221,7 @@ private[snap] trait HealingOrchestrator
         ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
         persistHealedAnchorSync()
+        dropDormantExcluded()
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -249,6 +251,7 @@ private[snap] trait HealingOrchestrator
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
         if pivotBlock.isDefined && stateRoot.isDefined then persistHealedAnchorSync()
+        dropDormantExcluded()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -287,7 +290,10 @@ private[snap] trait HealingOrchestrator
     */
   private def excludedHoldsCompletion(): Boolean =
     val held =
-      try stateIngest.snapProgress.hasExcluded
+      try
+        val progress = stateIngest.snapProgress
+        progress.hasExcluded ||
+        (progress.hasAnyExcluded && !stateRoot.exists(_.value == healingExcludedPassRoot.get()))
       catch
         case scala.util.control.NonFatal(e) =>
           ctx.log.error(
@@ -297,12 +303,21 @@ private[snap] trait HealingOrchestrator
           true
     if held then
       ctx.log.info(
-        "[HEAL-EXCLUDED] Clean trie walk, but the excluded set is not empty: the coordinator goes on with it"
+        "[HEAL-EXCLUDED] Clean trie walk, but the excluded set still counts against this root: the coordinator goes on with it"
       )
       trieNodeHealingCoordinator match
         case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
         case None              => startStateHealing()
     held
+
+  /** Healing has completed clean at this root, and a pass has looked at every dormant entry from it: none is held by
+    * this root, and none should cost the next start a recovery scan. A write that fails leaves them, at that cost only.
+    */
+  private def dropDormantExcluded(): Unit =
+    try stateIngest.snapProgress.clearDormantExcluded()
+    catch
+      case scala.util.control.NonFatal(e) =>
+        ctx.log.warn(s"[HEAL-EXCLUDED] Could not drop the dormant entries at a clean completion: ${e.getMessage}")
 
   /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
     * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
@@ -314,6 +329,7 @@ private[snap] trait HealingOrchestrator
     )
     healingRoundCount = 0
     persistHealedAnchorSync()
+    dropDormantExcluded()
     healingValidatedRoot = stateRoot
     timers.cancel(RequestTrieNodeHealing)
     progressMonitor.startPhase(StateValidation)
@@ -446,7 +462,8 @@ private[snap] trait HealingOrchestrator
               heldMemoryLimit = snapSyncConfig.healingHeldMemoryLimit,
               prunedHealVerification = !trieNodesCachedInMemory,
               excludedAccounts = true,
-              currentRoot = Some(healingCurrentRoot)
+              currentRoot = Some(healingCurrentRoot),
+              excludedPassRoot = Some(healingExcludedPassRoot)
             )
           )
           .onFailure[Throwable](

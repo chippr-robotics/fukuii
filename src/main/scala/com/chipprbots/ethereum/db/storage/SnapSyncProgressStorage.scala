@@ -229,6 +229,17 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       .scanRangeLimit(Namespaces.AppStateNamespace, ExcludedPrefix :+ from, ExcludedPrefix :+ untilKind, 1)
       .nonEmpty
 
+  /** Drop the dormant entries (one range tombstone): healing completed clean, and a pass has looked at each from the
+    * root it completed at. Never at a lazy hand-off: nothing has shown that account complete there.
+    */
+  def clearDormantExcluded(): Unit =
+    import SnapSyncProgressStorage.*
+    dataSource.deleteRange(
+      Namespaces.AppStateNamespace,
+      ExcludedPrefix :+ ExcludedAccount.DormantKind,
+      ExcludedPrefix :+ (ExcludedAccount.DormantKind + 1).toByte
+    )
+
   /** Empty the set (one range tombstone): a SNAP cycle is starting from nothing, and may not read an earlier one's
     * decisions.
     */

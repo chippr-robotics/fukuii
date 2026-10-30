@@ -38,6 +38,12 @@ private[snap] trait CoordinatorHandles:
     */
   lazy val healingCurrentRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
+  /** spec 022 round 2 review hunter N1: the root at which the healing coordinator's pass over the excluded set last
+    * ended. What the Hash controller's clean walk reads before it treats a dormant entry as nothing: a later page may
+    * hold an entry this root revives, and a walk does not see missing code.
+    */
+  lazy val healingExcludedPassRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)
 

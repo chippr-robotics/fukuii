@@ -111,7 +111,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
     // spec 022 D5: whether this coordinator works the durable excluded set (`stateIngest.snapProgress`). The production
     // spawn passes true; false (bare construction, most specs) never reads the store.
-    excludedAccounts: Boolean = false
+    excludedAccounts: Boolean = false,
+    // spec 022 round 2 review hunter N1: where this coordinator says at which root its pass over the set last ended.
+    excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -400,6 +402,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     */
   private def stepExcluded(seeding: ExcludedAccountSeeding): Unit =
     val step = seeding.step(stateRoot)
+    if !step.more then excludedPassRoot.foreach(_.set(stateRoot))
     if step.removed > 0 || step.demoted > 0 then blockedProgress = true
     if step.seeds.nonEmpty then
       queueNodes(step.seeds)
@@ -2181,7 +2184,8 @@ object TrieNodeHealingCoordinator:
       excludedAccounts: Boolean = false,
       // spec 022 T038b: the controller's current heal root, which it sets before it sends a re-peg. A supervisor restart
       // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
-      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -2218,7 +2222,8 @@ object TrieNodeHealingCoordinator:
           healedCodeCheck = healedCodeCheck,
           walkLocalOnly = walkLocalOnly,
           heldMemoryLimit = heldMemoryLimit,
-          excludedAccounts = excludedAccounts
+          excludedAccounts = excludedAccounts,
+          excludedPassRoot = excludedPassRoot
         ).start()
       }
     }

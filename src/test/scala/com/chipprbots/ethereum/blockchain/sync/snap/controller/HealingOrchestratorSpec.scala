@@ -422,6 +422,57 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
     }
 
+  // Spec 022 review hunter N1 (P1b, Hash): a clean walk does not see code, and a dormant entry may be revived by this root.
+  it should "not complete on a clean trie walk over a dormant entry no pass has looked at from this root" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
+    coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
+  it should "complete on a clean trie walk over a dormant entry once a pass has ended at this root, and drop it" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+    h.module.healingExcludedPassRoot.set(root.value)
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.validations shouldBe 1
+    withClue("it would otherwise cost the next start a recovery scan: ") {
+      h.module.stateIngest.snapProgress.hasAnyExcluded shouldBe false
+    }
+  }
+
+  it should "not drop anything but dormant entries at a clean walk, and not complete over one that counts" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+    h.module.healingExcludedPassRoot.set(root.value)
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.validations shouldBe 0
+    h.module.stateIngest.snapProgress.excludedPage(None, 10) shouldBe Seq(excludedEntry)
+  }
+
   it should "not complete on a clean trie walk when the excluded set cannot be read" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
