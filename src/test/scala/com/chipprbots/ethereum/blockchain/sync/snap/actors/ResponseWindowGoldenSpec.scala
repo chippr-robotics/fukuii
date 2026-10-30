@@ -192,10 +192,9 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       def stored(p: Peer): Option[BigInt] = module.peerResponseBytesTarget.get(p.id.value)
       def seed(p: Peer, value: BigInt): Unit = module.peerResponseBytesTarget(p.id.value) = value
 
-  /** A storage whose raw-node flush fails. The healing actor flushes healed nodes on a Future and only a successful one
-    * sends `FlushComplete`; until it does, `flushing` stays set and `HealingCheckCompletion` cannot start the
-    * verification BFS, which would walk the (absent) root and send further `GetTrieNodes` into the window under test.
-    * Failing here, by construction, makes that so rather than leaving it to what a test blob happens to decode to.
+  /** A storage whose raw-node flush fails, so nothing a test serves reaches the store. (It used to be what kept the
+    * completion gate shut: a failed flush left `flushing` set. Since spec 022 T026 a failed flush ends, and since slice
+    * 2 an undecodable blob is never buffered, so `Healing` shuts the gate with `WalkStateChanged(true)` instead.)
     */
   final private class FlushFailsStorage extends TestMptStorage:
     override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
@@ -376,6 +375,10 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     )
     // Not needed for dispatch (the root is passed to the constructor); kept as the entry the other healing specs use.
     coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(stateRoot)
+    // The controller's trie walk is running: the completion gate stays shut, so no verification walk of the (absent)
+    // root sends further GetTrieNodes into the window under test. Since spec 022 slice 2 a served node that does not
+    // decode (the test blobs) is never buffered, so the failing flush below no longer keeps the gate shut on its own.
+    coordinator ! TrieNodeHealingCoordinator.WalkStateChanged(true)
     coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(healer)
 
     /** Queue the given contents as missing nodes, each at its own path; the hash is the content's keccak. */
