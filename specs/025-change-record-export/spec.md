@@ -4,9 +4,12 @@
 
 **Created**: 2026-10-30
 
-**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-5.** Companion of spec 023. **Time-critical part**: the
+**Status**: **Draft, ready for `/speckit-clarify` on OQ-1..OQ-6.** Companion of spec 023. **Time-critical part**: the
 record schema (GT-1) must be agreed with spec 018's `data-model.md` owner before 018 slice F2 freezes the changeset
-format; the exporter code waits for F2.
+format. **Revised 2026-10-30 (alignment review, [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
+§2)**: the state diff is the **semantic write set** (accounts, slots, code by address), never trie nodes, so the
+exporter is built on today's storage layout and does **not** wait for 018 Track F. 018 F2 shares the exportable part of
+the format and keeps its trie-node undo records local.
 
 **Input**: Spec 023 Goal "define the change-record contract on Kafka that replicas, the archive role, the indexer and
 history tables all consume, with reorg and finality semantics". User decisions D-3 (Kafka) and D-6 (ETC finality is
@@ -26,10 +29,15 @@ Four consumers need the same per-block facts and none can get them today:
 - **Rollback** inside the node (018 FR-010) needs the previous value of every key a block changed.
 
 What exists: a Pekko pub-sub topic `NewBlockImported` that fires on *import* (not canonical commit), carries the
-block only, and is fire-and-forget (`NodeBuilder.scala:135-139`, `BlockImporter.scala:172`); and 018's planned
-changeset store, which records **previous** values only, without `chainKey` or a schema version. Spec 018 Track H
+block only, and is fire-and-forget (`NodeBuilder.scala:135-139`, `BlockImporter.scala:172`); the per-block write set in
+execution's in-memory world (`InMemoryWorldStateProxy.scala:184-196`: pending account writes, per-address storage,
+codes, touched accounts), which is discarded after persist; and 018's planned changeset store, which records
+**previous** values of trie nodes and flat keys for rollback, without `chainKey` or a schema version. Spec 018 Track H
 also plans a `ColdStore` whose first adapter writes ClickHouse directly from the node, which would make the node a
 second writer to the analytics schema.
+
+The write set is the record. Because it exists on today's storage layout, the exporter does not wait for spec 018's
+engine or flat-layout work (alignment review §2).
 
 ---
 
@@ -56,9 +64,12 @@ second writer to the analytics schema.
 ## Key entities
 
 - **Block record**: header, transactions' receipts and logs, and the **state diff** of one canonical block.
-- **State diff**: for every touched `(namespace, key)`: previous value (or absent) and new value (or deleted).
-  Namespaces are 018's flat and trie namespaces (`a` accounts, `d` slots, `t`/`u` trie nodes, code), so the same
-  record is a rollback unit.
+- **State diff**: the block's **semantic write set**: for every touched account (`address` → account fields), every
+  touched slot (`(address, slot)` → value) and every new code blob (`codeHash` → bytes), the previous value (or
+  absent) and the new value (or deleted). Keys are hashed the way 018's flat stores hash them (`keccak(address)`,
+  `keccak(address) ++ keccak(slot)`) so a follower on the 018 layout applies the record directly, and a follower on
+  today's layout derives the trie update from the same keys. **Trie nodes never appear in a record**: they are a
+  property of one storage layout, not of the chain.
 - **Retraction record**: states that a previously exported `(blockNumber, blockHash)` is no longer canonical.
 - **Finality watermark**: `(chainKey, finalizedNumber, finalizedHash)`; advances independently of block records.
 - **Export position**: the last `(blockNumber, blockHash)` the exporter has durably handed to the transport, stored in
@@ -71,10 +82,12 @@ second writer to the analytics schema.
 
 ## Gates *(mandatory)*
 
-- **GT-1: Record format agreed with spec 018.** The DC-2 record and 018's changeset record are **one format**, agreed
-  with `vault` before 018 F2 freezes `data-model.md`. Output: the schema (OQ-3 decides the encoding) with a version
-  byte, `chainKey`, previous and new values, plus a golden-bytes test vector per record type. 018 amendment request 2
-  is the ask; this gate records the answer.
+- **GT-1: Record format agreed with spec 018.** The DC-2 record and the **exportable part** of 018's changeset record
+  are **one format**, agreed with `vault` before 018 F2 freezes `data-model.md`: the flat diff (prev + new) with a
+  version byte and `chainKey`. 018's trie-node undo records, which exist for local rollback on the hot tier, are
+  engine-specific and are **not** part of this format. Output: the schema (OQ-3 decides the encoding) plus a
+  golden-bytes test vector per record type. 018 amendment request 2 (refined 2026-10-30) is the ask; this gate records
+  the answer.
 - **GT-2: Canonical-commit hook located.** Before any exporter code, the implementing thread names the exact call
   sites where a block becomes canonical on each family (ETC: `BlockImporter` / `ReorgStateHandler` paths; ETH:
   `EngineApiController` forkchoice application) and confirms with `forge` and `beacon` that observing them changes no
@@ -88,10 +101,12 @@ second writer to the analytics schema.
 `parentHash`, and a record type (`block`, `retraction`, `finality`). `chainKey` is the partitioning identity;
 `chainId` is informational (024 DC-3).
 
-**DC-2: The block record is complete and self-contained.** It contains the header, every receipt with its logs, and
-the state diff with **both previous and new values** for every touched `(namespace, key)`, including code. A consumer
-can (a) apply it forward to reach the post-state, (b) apply it backward to reach the pre-state, and (c) recompute the
-post-state root and compare with `header.stateRoot` (026 DC-1), with no other input than the pre-state.
+**DC-2: The block record is complete, self-contained and layout-independent.** It contains the header, every receipt
+with its logs, and the semantic state diff with **both previous and new values** for every touched account, slot and
+code blob. A consumer can (a) apply it forward to reach the post-state, (b) apply it backward to reach the pre-state,
+and (c) recompute the post-state root from its own commitment trie and compare with `header.stateRoot` (026 DC-1),
+with no other input than the pre-state. The record MUST NOT contain trie nodes or any key that names a storage
+namespace; a record produced on the Hash scheme, the Path scheme or the 018 unified layout is byte-identical.
 
 **DC-3: Idempotent and ordered per chain.** Records for one `chainKey` are totally ordered by `blockNumber` and
 consumers never infer order from arrival time. A duplicate record (same `blockNumber`, `blockHash`, type) is a no-op
@@ -196,9 +211,12 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
   `exportBufferBytes` and `exportLastError` as metrics and in the 023 FR-004 health shape.
 - **FR-007** Retractions MUST be emitted newest-first before the replacement block records, and MUST never target a
   block at or below the current finality watermark (US-1 scenario 3).
-- **FR-008** The state diff MUST be keyed by 018's namespaces and keys so a follower on the 018 layout applies it
-  without translation (GT-1); code MUST be a dependency of the account leaf that references it (the diff includes new
-  code bytes keyed by code hash).
+- **FR-008** The state diff MUST be the semantic write set of DC-2, keyed by hashed address and hashed slot as 018's
+  flat stores key them, so a follower on the 018 layout applies it without translation and a follower on today's
+  layout derives its trie update from the same keys (GT-1). It MUST NOT contain trie nodes. Code MUST be a dependency
+  of the account leaf that references it (the diff includes new code bytes keyed by code hash). The producer reads the
+  write set from execution's in-memory world (`InMemoryWorldStateProxy`: pending account writes, per-address storage
+  writes, codes, touched accounts) before the block is persisted; GT-2 names the exact site.
 - **FR-009** The repository MUST provide a **reorg fixture set**: a two-block and a deep (≥ 100 block) ETC reorg, an
   ETH-family reorg above finality, an injected below-finality attempt, and a restart-mid-export case; replayable in the
   023 harness and in a unit-level file-sink test.
@@ -240,6 +258,9 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **OQ-5: Backfill.** Whether an `ingest` whose datadir predates the exporter can export history (needs 018's
   changesets or archive mode), or whether the stream starts at the export position and history is seeded through 026's
   snapshot. Recommended: start at position; backfill is an `archive` feature if ever needed.
+- **OQ-6: Witnesses on the topic.** Whether spec 017's `ExecutionWitness` (read set with proofs) is published as an
+  optional record type on the same topic, so the indexer and provers get it without a second transport, or stays an
+  RPC-only artifact of `archive`. Recommended: optional record type, off by default, decided with 017's plan.
 
 ---
 

@@ -292,3 +292,16 @@ Measured on the reference 4-core / 16 GB / SATA SSD host with a CL attached.
 - **[NEEDS CLARIFICATION] Q3 Optional trie-node profile**: ship Path-native node sections in v2.0 to avoid the
   rebuild, accepting a larger file and tighter coupling to the Path layout, or defer until Phase 0 measures the
   rebuild cost?
+
+## 11. Fleet alignment (2026-10-30) — pending acceptance
+
+*Added by the alignment review in `specs/023-fleet-topology/alignment-review.md` §3. Nothing here changes a section
+above until the user accepts it; when accepted, edit the section named and mark the row.*
+
+| # | Section | Request | Needed by |
+| --- | --- | --- | --- |
+| 1 | §5.5 export on a running node | In a fleet the exporter runs on a `replica` or `archive` (any role with a verified root at block N); `ingest` exports only in the single-node operator profile, where the rate-limiter design above applies. | 023 DC-8 (keep `ingest` unloaded) |
+| 2 | §Scope, §5.4, §5.11 | Extend v2 to the **ETC family**: same flat format, anchor = the fleet's own `ingest` head (ETC has no CL; finality is genesis-only per 025 DC-5), content check = §5.4's root recomputation unchanged. v2 becomes the one seed format for both families; checkpoint archive v1 (hash-keyed, host-trusted) is retired with the Hash scheme under 018 DC-9. | 026 FR-001, OQ-3; 018 row 9 |
+| 3 | §5.9 catch-up | Add the third strategy: apply 025 change records from N+1 to head (the follower default 026 GT-1 measures). Re-execution and healing remain for the single-node profile. | 026 GT-1 |
+| 4 | §5.7 incremental snapshots | Lowest priority once followers apply records; keep as Phase 4 only. | §8 |
+| 5 | Q2 mainnet budget | Split: fleet-internal seeds live in the operator's object store (no public egress); the public publisher flow is a separate product decision. | §10 |
