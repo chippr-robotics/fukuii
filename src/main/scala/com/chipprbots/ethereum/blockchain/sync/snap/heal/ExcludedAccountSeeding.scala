@@ -89,11 +89,14 @@ final class ExcludedAccountSeeding(
   /** Whether a pass is part way through its pages. */
   def midPass: Boolean = cursor.isDefined
 
+  /** Whether the last pass to end at this root found nothing to seed and read everything. */
+  def lastPassQuiet: Boolean = lastPass.exists { case (seeds, failedReads) => seeds == 0 && failedReads == 0 }
+
   /** Whether all the set still wants at the current root is bytecode: a pass has reached its end at this root, found
-    * nothing to seed and read everything, and an entry still counts. Unknown is false.
+    * nothing to seed and read everything, no later pass is part way through, and an entry still counts. Unknown is
+    * false.
     */
-  def onlyCodeOutstanding: Boolean =
-    lastPass.exists { case (seeds, failedReads) => seeds == 0 && failedReads == 0 } && store.hasExcluded
+  def onlyCodeOutstanding: Boolean = !midPass && lastPassQuiet && store.hasExcluded
 
   /** Record `codeHashes` as bytecode the held chains are going to be written without (plan D4). Durable when it
     * returns.

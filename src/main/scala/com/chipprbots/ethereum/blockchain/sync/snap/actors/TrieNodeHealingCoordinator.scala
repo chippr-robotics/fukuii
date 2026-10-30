@@ -474,7 +474,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       excludedSeeding.fold(BlockerKind.Other) { seeding =>
         try
           if !seeding.blocking then if heldNodes.awaitingCode then BlockerKind.CodeOnly else BlockerKind.Unknown
-          else if !seeding.passEnded then BlockerKind.Unknown
+          else if !seeding.passEnded || seeding.midPass then BlockerKind.Unknown
           else if seeding.onlyCodeOutstanding then BlockerKind.CodeOnly
           else BlockerKind.Other
         catch
@@ -564,7 +564,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       excludedSeeding.foreach { seeding =>
         try
           excludedBlocking = seeding.blocking
-          if excludedBlocking then stepExcluded(seeding)
+          // One pass per root is enough while it found nothing to do: a set of 200k entries is about 2M node reads, and
+          // a walk can run for hours. Again if it found something, and once more right before the count is acted on.
+          if excludedBlocking && (!seeding.lastPassQuiet || blockedTicks == MaxBlockedTicks - 1) then
+            stepExcluded(seeding)
           excludedTickFailed = false
         catch
           case scala.util.control.NonFatal(e) =>

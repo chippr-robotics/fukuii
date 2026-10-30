@@ -40,8 +40,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 /** A data source whose range reads throw while `failing` is set: an excluded set that cannot be read. */
 final private class ScanFailingDataSource extends EphemDataSource(Map.empty):
   @volatile var failing: Boolean = false
+  @volatile var pageReads: Int = 0 // reads of a page, not the one-entry reads that ask whether there is anything
   override def scanRangeLimit(ns: IndexedSeq[Byte], from: Array[Byte], to: Array[Byte], limit: Int) =
     if failing then throw new RuntimeException("injected excluded-set read failure")
+    if limit > 1 then pageReads += 1
     super.scanRangeLimit(ns, from, to, limit)
 
 /** Spec 022 T029 (Path) and T030 (Hash), amended FR-005 and FR-006: an account whose storage or code was left
@@ -453,6 +455,27 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     }
     rig.settle()
     rig.seen() should not contain SNAPSyncController.StateHealingAbandoned
+  }
+
+  // A walk can run for hours with the set's page reads on the actor's thread: a set of 200k entries is about 2M node reads.
+  it should "not read the whole set again every minute of a walk once a pass has found nothing to do" taggedAs UnitTest in {
+    val source = new ScanFailingDataSource
+    val rig = new Rig(
+      StorageScheme.Hash,
+      fixture(withCode = true),
+      absent = Set.empty,
+      Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)),
+      progressSource = source
+    )
+    rig.start()
+    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
+    rig.settle()
+    withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
+    val afterAdoption = source.pageReads
+    afterAdoption should be > 0
+    (1 to 5).foreach(_ => rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick)
+    rig.settle()
+    source.pageReads shouldBe afterAdoption
   }
 
   // Spec 022 review W-1 (beacon W-1, forge F1/F2, hunter W1): a walk may take hours, and on Hash the controller's walks
