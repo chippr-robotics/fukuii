@@ -734,7 +734,8 @@ private[actors] class StorageRangeCoordinatorImpl(
         self ! resume
       case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
         log.error("[STORAGE-FORCE-COMPLETE] Could not record the task file's accounts; trying again shortly", cause)
-        timers.startSingleTimer(resume, ForceCompleteRetryDelay)
+        // At a clean end the periodic check comes back here. Not a timer of its own: that key is the periodic check's.
+        if forceCompleteWanted then timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
       case ExcludedTaskFile.Outcome.Cancelled => ()
 
   /** The phase's clean end. The controller wipes the done markers on it, so a restarted incarnation, which does not

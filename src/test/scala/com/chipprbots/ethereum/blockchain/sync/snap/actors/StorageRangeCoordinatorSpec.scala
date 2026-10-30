@@ -155,7 +155,8 @@ class StorageRangeCoordinatorSpec
       deferredMerkleization: Boolean = true,
       recordStorageDone: Boolean = false,
       requestTimeout: FiniteDuration = 30.seconds,
-      recordExcluded: Boolean = true
+      recordExcluded: Boolean = true,
+      restartedIncarnation: Boolean = false
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -178,7 +179,8 @@ class StorageRangeCoordinatorSpec
           deferredMerkleization = deferredMerkleization,
           stateIngest = hashSchemeIngest(flatSlotStorage),
           recordStorageDone = recordStorageDone,
-          recordExcluded = recordExcluded
+          recordExcluded = recordExcluded,
+          restartedIncarnation = restartedIncarnation
         )
         captured.start()
       }
@@ -2384,6 +2386,31 @@ class StorageRangeCoordinatorSpec
     finally taskFilePointer = None
   }
 
+  // A retry must not take the liveness timer's key: that timer is what brings any stalled coordinator back.
+  it should "leave the periodic check running when the task file's accounts cannot be written at a clean end" taggedAs UnitTest in {
+    val account = fileAccount("clean-store-failed")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("clean-store-failed")), restartedIncarnation = true)
+    try
+      rig.kit.retrieveAllEffects()
+      progressSource.failSync = true
+      try
+        rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+        drainSelf(rig.kit)
+      finally progressSource.failSync = false
+      val timersStarted =
+        rig.kit.retrieveAllEffects().collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] =>
+          t.msg
+        }
+      timersStarted should not contain StorageRangeCoordinator.StorageCheckCompletion
+      rig.controller.expectNoMessage(50.millis)
+
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the periodic one
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      excluded(account) shouldBe defined
+    finally taskFilePointer = None
+  }
+
   // Spec 022 round 2 review B, vault N2: storage-writer-dispatcher has one thread.
   "A healthy coordinator" should "not read the task file for a clean end of the phase" taggedAs UnitTest in {
     val rig = new TaskFileRig(Seq(fileAccount("healthy-clean") -> fileRoot("healthy-clean")))
@@ -2484,7 +2511,8 @@ class StorageRangeCoordinatorSpec
   final private class TaskFileRig(
       entries: Seq[(ByteString, ByteString)],
       recordStorageDone: Boolean = true,
-      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
+      restartedIncarnation: Boolean = false
   ):
     val file: java.nio.file.Path = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
     file.toFile.deleteOnExit()
@@ -2499,7 +2527,8 @@ class StorageRangeCoordinatorSpec
       flatSlotStorage = new FlatSlotStorage(source),
       snapSyncControllerRef = controller.ref,
       recordStorageDone = recordStorageDone,
-      flatBatchEcOverride = Some(flatBatchEc)
+      flatBatchEcOverride = Some(flatBatchEc),
+      restartedIncarnation = restartedIncarnation
     )
     val done = new SnapStorageDoneStorage(source)
 
