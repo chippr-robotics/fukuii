@@ -361,17 +361,32 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     held.get(HeldNodeSet.idOf(newNode)).map(_.outstanding) shouldBe Some(1)
   }
 
-  it should "on a re-peg keep only what is ready, and count its memory back to zero" taggedAs UnitTest in {
+  it should "on a re-peg drop everything, ready entries and pending deletes included, and count its memory back to zero (beacon N1)" taggedAs UnitTest in {
     val held = new HeldNodeSet()
     val (p, c) = (hashReq("p"), hashReq("c", 2))
     held.hold(p, node("p"), outstanding = 2, parents = Nil)
     held.hold(c, node("c"), outstanding = 0, parents = Seq(p.hash))
+    held.addDeletes(Seq((None, Array[Byte](3))))
     held.bytes should be > 0L
-    held.dropIncomplete() shouldBe 1
-    held.contains(p.hash) shouldBe false
-    held.contains(c.hash) shouldBe true
+    held.heldHashes.toSet shouldBe Set(p.hash, c.hash)
     held.clear()
+    held.isEmpty shouldBe true
+    held.hasPendingWrites shouldBe false
+    held.heldHashes shouldBe empty
     held.bytes shouldBe 0L
+  }
+
+  "The held-memory pause" should "hold back new subtrees only while something is held, the bound is reached and something can free memory (beacon W1, eye F5)" taggedAs UnitTest in {
+    import HeldNodeSet.pausesNewSubtrees
+    // below the bound: never
+    pausesNewSubtrees(held = true, bytes = 99, limit = 100, canFree = true) shouldBe false
+    // at or above it, with a fetch below a held node queued or one in flight: paused
+    pausesNewSubtrees(held = true, bytes = 100, limit = 100, canFree = true) shouldBe true
+    pausesNewSubtrees(held = true, bytes = 5000, limit = 100, canFree = true) shouldBe true
+    // nothing can free the held nodes (orphans): not paused, so the queue drains and the orphan guard can act
+    pausesNewSubtrees(held = true, bytes = 5000, limit = 100, canFree = false) shouldBe false
+    // nothing held: a backlog of requests alone never pauses
+    pausesNewSubtrees(held = false, bytes = 5000, limit = 100, canFree = true) shouldBe false
   }
 
   // ---- spec 022 slice 2 review: orphans, the pause, promote, the frontier mirror, force-complete --------------------

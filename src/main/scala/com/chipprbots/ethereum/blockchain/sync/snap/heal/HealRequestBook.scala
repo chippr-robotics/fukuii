@@ -166,6 +166,17 @@ final class HealRequestBook:
         dropEdges(key).reverse
       case _ => Seq.empty
 
+  /** Put back `request`, satisfied a moment ago, with the parent edges [[satisfy]] returned for it (`parents`, in that
+    * order): its node arrived, but its children could not be looked up because a storage read failed, so it is fetched
+    * again (spec 022 review forge W1). Its parents still wait on it. Returns whether its hash needs a fetch.
+    */
+  def restore(request: HealRequest, parents: Seq[ByteString]): Boolean =
+    val added = record(request)
+    if parents.nonEmpty then
+      parentEdges(request.key) = parents.reverse.toList ++ parentEdges.getOrElse(request.key, Nil)
+      heldBytes += EdgeBytes * parents.size
+    added.needsFetch
+
   /** The waiter after the one whose pathset is `carrier` among the live requests waiting on `hash`, cycling back to the
     * first (beacon Q1: a fetch put back goes out from the next alias position, so a peer that cannot serve one path
     * does not starve the others). O(1) when a single request waits on `hash`.

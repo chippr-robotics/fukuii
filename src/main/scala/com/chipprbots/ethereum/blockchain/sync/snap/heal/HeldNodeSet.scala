@@ -159,15 +159,15 @@ final class HeldNodeSet:
       heldBytes -= e.estimatedBytes
     }
 
-  /** Drop every entry that is not ready (a re-peg or a force-complete: incomplete nodes are never written). Ready
-    * entries and pending deletes stay for the commit the caller makes first.
+  /** The node hashes of the held entries, ready ones included (spec 022 review vault V5: the persisted frontier entries
+    * of the entries a caller is about to drop).
     */
-  def dropIncomplete(): Int =
-    val incomplete = entries.keysIterator.filterNot(ready.contains).toVector
-    incomplete.foreach(drop)
-    incomplete.size
+  def heldHashes: Seq[ByteString] = entries.valuesIterator.map(_.request.hash).toVector
 
-  /** Drop everything, ready entries and pending deletes included. */
+  /** Drop everything, ready entries and pending deletes included: a re-peg, a force-complete or the orphan guard. The
+    * pending deletes go too (beacon N1): they are positions stale for the old root, and a root change re-checks every
+    * position it still needs against the new root (hash-checked presence), deleting again what is still stale there.
+    */
   def clear(): Unit =
     entries.clear()
     byKey.clear()
@@ -176,6 +176,14 @@ final class HeldNodeSet:
     heldBytes = 0L
 
 object HeldNodeSet:
+
+  /** The pause policy (spec 022 plan D1; review beacon W1, hunter W2): opening new subtrees pauses while something is
+    * `held`, the held memory `bytes` reach `limit`, and something `canFree` it (a fetch below a held node queued, or a
+    * fetch in flight). Without the last condition, held nodes that nothing can complete would keep new subtrees paused
+    * forever: no fetch frees them, and the paused fetches keep the queue from draining.
+    */
+  def pausesNewSubtrees(held: Boolean, bytes: Long, limit: Long, canFree: Boolean): Boolean =
+    held && bytes >= limit && canFree
 
   /** The id of `request`'s node: its key under the Hash scheme (the node hash), its position key followed by its hash
     * under the Path scheme.

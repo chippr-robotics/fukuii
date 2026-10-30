@@ -111,6 +111,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     val request = healRequestFor(entry)
     // A node already held (received, waiting on its children) is not fetched again: its children are being fetched.
     if heldNodes.contains(HeldNodeSet.idOf(request)) then false
+    // Hash: a node in the flush buffer was committed with its whole subtree, only not flushed yet (forge N2).
+    else if storageScheme == StorageScheme.Hash && rawNodeBuffer.contains(request.hash) then false
     else if healRequests.add(request).needsFetch then
       pendingTasks += entry
       true
@@ -332,12 +334,13 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             case None =>
               log.error("[HEAL-COMMIT] Path scheme without a path-node store: nothing can be written")
             case Some(pns) =>
-              val writes = plan.nodes.map { e =>
-                val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(e.request.pathset.last.toArray)._1
-                val owner = if e.request.pathset.size > 1 then Some(e.request.pathset.head) else None
-                (owner, nibbles, e.node.toArray)
-              }
               try
+                // hunter N4: the positions are read inside the try, so a malformed one is a failed write, not a crash.
+                val writes = plan.nodes.map { e =>
+                  val nibbles = com.chipprbots.ethereum.mpt.HexPrefix.decode(e.request.pathset.last.toArray)._1
+                  val owner = if e.request.pathset.size > 1 then Some(e.request.pathset.head) else None
+                  (owner, nibbles, e.node.toArray)
+                }
                 pns.writeNodesWithDeletes(writes, plan.deletes)
                 heldNodes.applyCommit(plan)
                 // vault note 2: deletes per batch, to check the tombstone estimate (about 0.07 per extension).
@@ -346,7 +349,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                 case scala.util.control.NonFatal(e) =>
                   log.error(
                     s"[HEAL-COMMIT] Write of ${plan.nodes.size} node(s) and ${plan.deletes.size} delete(s) failed — " +
-                      "kept held, retried at the next commit",
+                      "kept held, retried at the next commit (or the next pulse)",
                     e
                   )
         case StorageScheme.Hash =>
@@ -378,8 +381,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     val parents = healRequests.satisfy(request)
     if heldNodes.contains(id) then
       // Held already (a walk or controller entry fetched it again): its children are being fetched; it only gains the
-      // parents that waited on this request.
-      heldNodes.addParents(id, parents)
+      // parents that waited on this request, each counted once per edge it does not have yet (beacon N3, forge N7).
+      parents.groupBy(identity).foreach { case (p, edges) => heldNodes.attachParent(id, p, edges.size) }
     else
       heldNodes.heldAt(request.key).foreach { other =>
         // beacon N7: a position filled again with another node. The old node is dropped, never written; edges to it
@@ -391,23 +394,34 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
         )
         heldNodes.drop(other.id)
       }
-      discoverMissingChildren(nodeData, request) match
-        case None =>
-          // vault note 5: a node that hashes right but does not decode is never written: its children are unknown, so
-          // it cannot be complete. Its parents stay held (dropped if nothing completes them); a walk finds it again.
-          log.error(
-            s"[HEAL] Healed node ${Hex.toHexString(request.hash.take(4).toArray)} does not decode — not stored"
+      // The children are looked up in storage; a read that throws is not the node's fault (forge W1).
+      val discovered =
+        try
+          Right(discoverMissingChildren(nodeData, request).map { case (children, deletes) =>
+            (children, ownPositionDelete(request, parents) ++ deletes)
+          })
+        catch case scala.util.control.NonFatal(e) => Left(e)
+      discovered match
+        case Left(readFailure) =>
+          // spec 022 review forge W1: the node is fine, its children are unknown. Put its request back, with the edges of
+          // the parents that wait on it, and fetch it again: dropping it would leave those parents waiting on an edge
+          // nothing closes.
+          log.warn(
+            s"[HEAL] A storage read failed while looking up the children of healed node " +
+              s"${Hex.toHexString(request.hash.take(4).toArray)} — its request goes back with ${parents.size} parent " +
+              s"edge(s) and it is fetched again: ${readFailure.getMessage}"
           )
-        case Some((children, deletes)) =>
-          if storageScheme == StorageScheme.Path then
-            // A parentless node's own position may hold a stale node nothing has deleted yet (a parent's discovery
-            // deletes a stale child's position): delete it before anything below it is written.
-            val own =
-              if parents.isEmpty && pathPresence(request.hash, request.pathset) == PathPresence.Mismatch then
-                val owner = if request.pathset.size > 1 then Some(request.pathset.head) else None
-                Seq((owner, com.chipprbots.ethereum.mpt.HexPrefix.decode(request.pathset.last.toArray)._1))
-              else Seq.empty
-            if own.nonEmpty || deletes.nonEmpty then heldNodes.addDeletes(own ++ deletes)
+          if healRequests.restore(request, parents) then
+            val entry = HealingEntry(request.pathset, request.hash)
+            pendingTasks += entry
+            persistFrontier(Seq(entry))
+        case Right(None) =>
+          // vault note 5: a node that hashes right but does not decode is never written: its children are unknown, so
+          // it cannot be complete. Every peer serves the same bytes, so it is not fetched again. Its parents' edges to
+          // it close nothing: they stay held until the orphan guard drops them (a walk then finds them again).
+          ()
+        case Right(Some((children, deletes))) =>
+          if deletes.nonEmpty then heldNodes.addDeletes(deletes)
           val (heldChildren, newChildren) = children.partition(c => heldNodes.contains(HeldNodeSet.idOf(c)))
           heldChildren.groupBy(_.key).foreach { case (_, refs) =>
             heldNodes.attachParent(HeldNodeSet.idOf(refs.head), id, refs.size)
@@ -471,183 +485,202 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
-    import scala.util.control.NonFatal
 
     val pathset = parent.pathset
     val nodeHash = parent.hash
     if pathset.isEmpty then Some((Seq.empty, Seq.empty))
     else
-      try
-        val decoded = MptTraversals.decodeNode(nodeData.toArray)
-        val parentCompact = pathset.last.toArray
-        val parentNibbles = HexPrefix.decode(parentCompact)._1
-        val isStorageTrie = pathset.size > 1 // Seq(accountHash, path) vs Seq(path)
-        val owner: Option[ByteString] = if isStorageTrie then Some(pathset.head) else None
+      // Only the decode is a node fault (vault note 5): it returns None. A storage read below throws to the caller
+      // (forge N1, W1), which puts the request back.
+      scala.util.Try(MptTraversals.decodeNode(nodeData.toArray)) match
+        case scala.util.Failure(e) =>
+          log.error(
+            s"[HEAL] Healed node ${Hex.toHexString(nodeHash.take(4).toArray)} hashes right but does not decode — " +
+              s"not stored, not fetched again: ${e.getMessage}"
+          )
+          None
+        case scala.util.Success(decoded) =>
+          val parentCompact = pathset.last.toArray
+          val parentNibbles = HexPrefix.decode(parentCompact)._1
+          val isStorageTrie = pathset.size > 1 // Seq(accountHash, path) vs Seq(path)
+          val owner: Option[ByteString] = if isStorageTrie then Some(pathset.head) else None
 
-        val children = mutable.ArrayBuffer.empty[HealRequest]
-        val deletes = mutable.ArrayBuffer.empty[(Option[ByteString], Array[Byte])]
+          val children = mutable.ArrayBuffer.empty[HealRequest]
+          val deletes = mutable.ArrayBuffer.empty[(Option[ByteString], Array[Byte])]
 
-        // The path a child at `childNibbles` is queued, fetched and (Path scheme) stored under.
-        def childPathset(childNibbles: Array[Byte]): Seq[ByteString] =
-          val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-          if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
+          // The path a child at `childNibbles` is queued, fetched and (Path scheme) stored under.
+          def childPathset(childNibbles: Array[Byte]): Seq[ByteString] =
+            val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+            if isStorageTrie then Seq(pathset.head, childCompact) else Seq(childCompact)
 
-        def requestAt(childSet: Seq[ByteString], childHash: ByteString): HealRequest =
-          healRequestFor(HealingEntry(childSet, childHash))
+          def requestAt(childSet: Seq[ByteString], childHash: ByteString): HealRequest =
+            healRequestFor(HealingEntry(childSet, childHash))
 
-        // Path scheme: one child, looked up at its own position (geth `hasNode` on every hash child): present, absent,
-        // or stale bytes of another hash, which `danglingAt` (the same position) deletes with the parent's write. A child
-        // already requested is missing whatever is stored there (an edge to its request); stale bytes there are still
-        // deleted (review item 6).
-        def pathChild(
-            childSet: Seq[ByteString],
-            childHash: ByteString,
-            danglingAt: (Option[ByteString], Array[Byte])
-        ): Unit =
-          val request = requestAt(childSet, childHash)
-          val live = healRequests.contains(request.key)
-          pathPresence(childHash, childSet) match
-            case PathPresence.Present => if live then children += request
-            case PathPresence.Absent  => children += request
-            case PathPresence.Mismatch =>
-              children += request
-              deletes += danglingAt
+          // Path scheme: one child, looked up at its own position (geth `hasNode` on every hash child): present, absent,
+          // or stale bytes of another hash, which `danglingAt` (the same position) deletes with the parent's write. A child
+          // already requested is missing whatever is stored there (an edge to its request); stale bytes there are still
+          // deleted (review item 6).
+          def pathChild(
+              childSet: Seq[ByteString],
+              childHash: ByteString,
+              danglingAt: (Option[ByteString], Array[Byte])
+          ): Unit =
+            val request = requestAt(childSet, childHash)
+            val live = healRequests.contains(request.key)
+            pathPresence(childHash, childSet) match
+              case PathPresence.Present => if live then children += request
+              case PathPresence.Absent  => children += request
+              case PathPresence.Mismatch =>
+                children += request
+                deletes += danglingAt
 
-        decoded match
-          case branch: BranchNode =>
-            val hashed: Seq[(Int, ByteString)] =
-              branch.children.zipWithIndex.collect { case (hn: HashNode, i) => (i, ByteString(hn.hashNode)) }.toSeq
-            storageScheme match
-              case StorageScheme.Hash =>
-                // Hash scheme: one batched content-addressed multiGetNodes call for the children not already live,
-                // held (missing: an edge to them) or buffered for the flush (present: their subtree is committed).
-                val toCheck = hashed.filterNot { case (_, h) => knownLocally(h).isDefined }
-                val present: Map[Int, Boolean] =
-                  if toCheck.isEmpty then Map.empty
-                  else
-                    toCheck
-                      .map(_._1)
-                      .zip(mptStorage.multiGetNodes(toCheck.map(_._2.toArray)).map(_.isDefined))
-                      .toMap
-                hashed.foreach { case (i, childHash) =>
-                  if !knownLocally(childHash).getOrElse(present.getOrElse(i, false)) then
-                    children += requestAt(childPathset(parentNibbles :+ i.toByte), childHash)
-                }
-              case StorageScheme.Path =>
-                hashed.foreach { case (i, childHash) =>
-                  val childNibbles = parentNibbles :+ i.toByte
-                  pathChild(childPathset(childNibbles), childHash, (owner, childNibbles))
-                }
-
-          case ext: ExtensionNode =>
-            ext.next match
-              case hash: HashNode =>
-                val childHash = ByteString(hash.hashNode)
-                val childNibbles = parentNibbles ++ ext.sharedKey.toArray
-                storageScheme match
-                  case StorageScheme.Hash =>
-                    if !hashChildPresent(childHash) then children += requestAt(childPathset(childNibbles), childHash)
-                  case StorageScheme.Path =>
-                    (1 until ext.sharedKey.length).foreach { i =>
-                      deletes += ((owner, parentNibbles ++ ext.sharedKey.take(i).toArray))
-                    }
-                    pathChild(childPathset(childNibbles), childHash, (owner, childNibbles))
-              case _ => // Already inline-encoded — no missing child
-          case leaf: LeafNode if !isStorageTrie =>
-            // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
-            // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
-            Account(leaf.value).foreach { account =>
-              recordHealedCodeHash(account)
-              if account.storageRoot != Account.EmptyStorageRootHash then
-                val leafNibbles = leaf.key.toArray
-                val allNibbles = parentNibbles ++ leafNibbles
-                if allNibbles.length == 64 then
-                  val accountHashBytes = allNibbles
-                    .grouped(2)
-                    .map { g =>
-                      ((g(0) << 4) | g(1)).toByte
-                    }
-                    .toArray
-                  val accountHash = ByteString(accountHashBytes)
-                  val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                  val storageRootSet = Seq(accountHash, emptyStoragePath)
-                  val storageRoot = account.storageRoot.value
-                  // Presence is checked here, once the account hash — hence the storage root's path — is known. Every
-                  // account is its own position, so two accounts with an identical storage root are two requests under
-                  // Path (spec 022 FR-007: neither storage trie is lost) and one shared node under Hash.
-                  storageScheme match
-                    case StorageScheme.Hash =>
-                      // Content-addressed lookup by hash, exactly as before (the pathset is ignored).
-                      val request = requestAt(storageRootSet, storageRoot)
-                      if !hashChildPresent(storageRoot) then
-                        children += request
-                        log.debug(
-                          s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(storageRoot.take(4).toArray)} " +
-                            s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
-                        )
-                    case StorageScheme.Path =>
-                      // The storage-trie root lives at (accountHash, empty path) and is checked THERE; stale bytes of
-                      // another root there are deleted with this leaf's write (another column family, same batch).
-                      pathChild(storageRootSet, storageRoot, (Some(accountHash), Array.empty[Byte]))
-            }
-
-          case _ => // storage trie LeafNode, NullNode, HashNode — no children to discover
-        // spec 005 C3b/D2/T009/T012 — heal-side subtree-complete SEED (consensus-load-bearing; the single highest
-        // chain-split risk of this port). Stage this just-healed node's OWN hash as a subtree-complete candidate IFF
-        // its subtree is durably closed by INDUCTION: every hash-referenced child is PRESENT on disk AND itself
-        // recorded subtree-complete (isSubtreeComplete). The isSubtreeComplete clause is load-bearing — mere PRESENCE is
-        // NEVER enough: a download-mosaic node can be present yet its subtree incomplete, so seeding on presence alone
-        // would write a false record → the pruned descent would skip a real hole → false completion → divergent
-        // finalized state. "present AND recorded" SUBSUMES "no missing child" and "no pending child": a still-pending /
-        // in-flight child is either absent (fails isNodeInStorage) or present-but-unrecorded (fails isSubtreeComplete).
-        // For a leaf (no hash children) the closure is VACUOUS — the inductive BASE (PrunedHealCrashSafetySpec T-3).
-        // Inline children carry NO hash references (a 32-byte hash makes a node ≥32 bytes, so it is never inlined), so
-        // direct HashNode children + the account-leaf storage root are the COMPLETE set of subtree roots under this
-        // node. Gated on prunedEnabled (else inert ⇒ OFF-path byte-identical). STAGED only — the durable record is
-        // written by writeDurableSubtreeRecords strictly AFTER mptStorage.persist() (D3 record-after-persist); a crash
-        // before the flush drops the in-memory candidate ⇒ safe descend. The `children.isEmpty` pre-gate is a cheap
-        // necessary short-circuit (a missing or live child means not closed); the forall over actual
-        // storage+record state is the AUTHORITATIVE gate and can never false-record regardless of pending/filter state.
-        if prunedEnabled && children.isEmpty then
-          val subtreeRoots: Seq[ByteString] = decoded match
+          decoded match
             case branch: BranchNode =>
-              branch.children.collect { case hn: HashNode => ByteString(hn.hashNode) }.toSeq
+              val hashed: Seq[(Int, ByteString)] =
+                branch.children.zipWithIndex.collect { case (hn: HashNode, i) => (i, ByteString(hn.hashNode)) }.toSeq
+              storageScheme match
+                case StorageScheme.Hash =>
+                  // Hash scheme: one batched content-addressed multiGetNodes call for the children not already live,
+                  // held (missing: an edge to them) or buffered for the flush (present: their subtree is committed).
+                  val toCheck = hashed.filterNot { case (_, h) => knownLocally(h).isDefined }
+                  val present: Map[Int, Boolean] =
+                    if toCheck.isEmpty then Map.empty
+                    else
+                      toCheck
+                        .map(_._1)
+                        .zip(mptStorage.multiGetNodes(toCheck.map(_._2.toArray)).map(_.isDefined))
+                        .toMap
+                  hashed.foreach { case (i, childHash) =>
+                    if !knownLocally(childHash).getOrElse(present.getOrElse(i, false)) then
+                      children += requestAt(childPathset(parentNibbles :+ i.toByte), childHash)
+                  }
+                case StorageScheme.Path =>
+                  hashed.foreach { case (i, childHash) =>
+                    val childNibbles = parentNibbles :+ i.toByte
+                    pathChild(childPathset(childNibbles), childHash, (owner, childNibbles))
+                  }
+
             case ext: ExtensionNode =>
               ext.next match
-                case hn: HashNode => Seq(ByteString(hn.hashNode))
-                case _            => Seq.empty
+                case hash: HashNode =>
+                  val childHash = ByteString(hash.hashNode)
+                  val childNibbles = parentNibbles ++ ext.sharedKey.toArray
+                  storageScheme match
+                    case StorageScheme.Hash =>
+                      if !hashChildPresent(childHash) then children += requestAt(childPathset(childNibbles), childHash)
+                    case StorageScheme.Path =>
+                      (1 until ext.sharedKey.length).foreach { i =>
+                        deletes += ((owner, parentNibbles ++ ext.sharedKey.take(i).toArray))
+                      }
+                      pathChild(childPathset(childNibbles), childHash, (owner, childNibbles))
+                case _ => // Already inline-encoded — no missing child
             case leaf: LeafNode if !isStorageTrie =>
-              Account(leaf.value).toOption match
-                case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
-                  Seq(account.storageRoot.value)
-                case _ => Seq.empty
-            case _ => Seq.empty
-          // `prunedEnabled` (this block's guard) requires the Hash scheme, so `isNodeInStorage` here is always the
-          // content-addressed lookup and takes no path. If pruning is ever enabled under Path, the empty pathset makes
-          // it conservatively false — no record is staged, the walk descends — never a false "closed".
-          val subtreeClosed =
-            subtreeRoots.forall(c =>
-              isNodeInStorage(c, Seq.empty) && stateIngest.healingFrontier.exists(_.isSubtreeComplete(c))
-            )
-          if subtreeClosed then
-            pendingSubtreeRecords += nodeHash
-            log.debug(
-              s"[HEAL-VERIFY-PRUNED] Staged subtree-complete candidate ${Hex.toHexString(nodeHash.take(4).toArray)} " +
-                s"(${subtreeRoots.size} child subtree(s) present+recorded) — durable record written post-flush (D3)."
-            )
-        Some((children.toSeq, deletes.toSeq))
-      catch
-        case NonFatal(e) =>
-          log.error(s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}")
-          None
+              // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
+              // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
+              Account(leaf.value).foreach { account =>
+                recordHealedCodeHash(account)
+                if account.storageRoot != Account.EmptyStorageRootHash then
+                  val leafNibbles = leaf.key.toArray
+                  val allNibbles = parentNibbles ++ leafNibbles
+                  if allNibbles.length == 64 then
+                    val accountHashBytes = allNibbles
+                      .grouped(2)
+                      .map { g =>
+                        ((g(0) << 4) | g(1)).toByte
+                      }
+                      .toArray
+                    val accountHash = ByteString(accountHashBytes)
+                    val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                    val storageRootSet = Seq(accountHash, emptyStoragePath)
+                    val storageRoot = account.storageRoot.value
+                    // Presence is checked here, once the account hash — hence the storage root's path — is known. Every
+                    // account is its own position, so two accounts with an identical storage root are two requests under
+                    // Path (spec 022 FR-007: neither storage trie is lost) and one shared node under Hash.
+                    storageScheme match
+                      case StorageScheme.Hash =>
+                        // Content-addressed lookup by hash, exactly as before (the pathset is ignored).
+                        val request = requestAt(storageRootSet, storageRoot)
+                        if !hashChildPresent(storageRoot) then
+                          children += request
+                          log.debug(
+                            s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(storageRoot.take(4).toArray)} " +
+                              s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
+                          )
+                      case StorageScheme.Path =>
+                        // The storage-trie root lives at (accountHash, empty path) and is checked THERE; stale bytes of
+                        // another root there are deleted with this leaf's write (another column family, same batch).
+                        pathChild(storageRootSet, storageRoot, (Some(accountHash), Array.empty[Byte]))
+              }
+
+            case _ => // storage trie LeafNode, NullNode, HashNode — no children to discover
+          // spec 005 C3b/D2/T009/T012 — heal-side subtree-complete SEED (consensus-load-bearing; the single highest
+          // chain-split risk of this port). Stage this just-healed node's OWN hash as a subtree-complete candidate IFF
+          // its subtree is durably closed by INDUCTION: every hash-referenced child is PRESENT on disk AND itself
+          // recorded subtree-complete (isSubtreeComplete). The isSubtreeComplete clause is load-bearing — mere PRESENCE is
+          // NEVER enough: a download-mosaic node can be present yet its subtree incomplete, so seeding on presence alone
+          // would write a false record → the pruned descent would skip a real hole → false completion → divergent
+          // finalized state. "present AND recorded" SUBSUMES "no missing child" and "no pending child": a still-pending /
+          // in-flight child is either absent (fails isNodeInStorage) or present-but-unrecorded (fails isSubtreeComplete).
+          // For a leaf (no hash children) the closure is VACUOUS — the inductive BASE (PrunedHealCrashSafetySpec T-3).
+          // Inline children carry NO hash references (a 32-byte hash makes a node ≥32 bytes, so it is never inlined), so
+          // direct HashNode children + the account-leaf storage root are the COMPLETE set of subtree roots under this
+          // node. Gated on prunedEnabled (else inert ⇒ OFF-path byte-identical). STAGED only — the durable record is
+          // written by writeDurableSubtreeRecords strictly AFTER mptStorage.persist() (D3 record-after-persist); a crash
+          // before the flush drops the in-memory candidate ⇒ safe descend. The `children.isEmpty` pre-gate is a cheap
+          // necessary short-circuit (a missing or live child means not closed); the forall over actual
+          // storage+record state is the AUTHORITATIVE gate and can never false-record regardless of pending/filter state.
+          if prunedEnabled && children.isEmpty then
+            val subtreeRoots: Seq[ByteString] = decoded match
+              case branch: BranchNode =>
+                branch.children.collect { case hn: HashNode => ByteString(hn.hashNode) }.toSeq
+              case ext: ExtensionNode =>
+                ext.next match
+                  case hn: HashNode => Seq(ByteString(hn.hashNode))
+                  case _            => Seq.empty
+              case leaf: LeafNode if !isStorageTrie =>
+                Account(leaf.value).toOption match
+                  case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
+                    Seq(account.storageRoot.value)
+                  case _ => Seq.empty
+              case _ => Seq.empty
+            // `prunedEnabled` (this block's guard) requires the Hash scheme, so `isNodeInStorage` here is always the
+            // content-addressed lookup and takes no path. If pruning is ever enabled under Path, the empty pathset makes
+            // it conservatively false — no record is staged, the walk descends — never a false "closed".
+            val subtreeClosed =
+              subtreeRoots.forall(c =>
+                isNodeInStorage(c, Seq.empty) && stateIngest.healingFrontier.exists(_.isSubtreeComplete(c))
+              )
+            if subtreeClosed then
+              pendingSubtreeRecords += nodeHash
+              log.debug(
+                s"[HEAL-VERIFY-PRUNED] Staged subtree-complete candidate ${Hex.toHexString(nodeHash.take(4).toArray)} " +
+                  s"(${subtreeRoots.size} child subtree(s) present+recorded) — durable record written post-flush (D3)."
+              )
+          Some((children.toSeq, deletes.toSeq))
+
+  /** Path scheme: a parentless node's own position may hold a stale node nothing has deleted yet (a parent's discovery
+    * deletes a stale child's position): it is deleted before anything below it is written. Reads storage, so it may
+    * throw (a read failure, handled with the children's lookup).
+    */
+  private def ownPositionDelete(
+      request: HealRequest,
+      parents: Seq[ByteString]
+  ): Seq[(Option[ByteString], Array[Byte])] =
+    if storageScheme == StorageScheme.Path && parents.isEmpty &&
+      pathPresence(request.hash, request.pathset) == PathPresence.Mismatch
+    then
+      val owner = if request.pathset.size > 1 then Some(request.pathset.head) else None
+      Seq((owner, com.chipprbots.ethereum.mpt.HexPrefix.decode(request.pathset.last.toArray)._1))
+    else Seq.empty
 
   /** Hash scheme: what is known about `hash` without reading the store. `Some(false)` when it is live or held (missing:
     * the parent gets an edge to it), `Some(true)` when it is in the flush buffer (committed, its subtree complete, only
     * not flushed yet), `None` otherwise (the store decides).
     */
   private def knownLocally(hash: ByteString): Option[Boolean] =
-    if healRequests.contains(hash) || heldNodes.contains(hash) then Some(false)
-    else if rawNodeBuffer.contains(hash) then Some(true)
+    // forge N2: the buffer first. A buffered node is complete, even if a walk asked for it again meanwhile.
+    if rawNodeBuffer.contains(hash) then Some(true)
+    else if healRequests.contains(hash) || heldNodes.contains(hash) then Some(false)
     else None
 
   /** Hash scheme: whether the child `hash` is present (its subtree complete): buffered for the flush, or in the store.

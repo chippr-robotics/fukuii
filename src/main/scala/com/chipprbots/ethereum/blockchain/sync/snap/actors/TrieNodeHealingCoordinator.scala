@@ -270,14 +270,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // spec 022 D1: the held-memory pause, with its last state for the transition log.
   private var newSubtreesPausedLast: Boolean = false
 
-  /** Whether opening new subtrees is paused: something is held and the held nodes, the flush buffer and the live
-    * requests (forge N4) together reach `heldMemoryLimit`. Fetches that let held nodes commit are never paused, which
-    * is what keeps the bound from deadlocking; with nothing held, nothing is paused (a backlog of requests alone does
-    * not shrink by waiting). The bound is therefore soft: the subtrees already open run to completion, deepest first.
+  /** Whether opening new subtrees is paused: something is held, the held nodes, the flush buffer and the live requests
+    * (forge N4) together reach `heldMemoryLimit`, and something can still free memory: a queued fetch below a held node
+    * or a fetch in flight (spec 022 review beacon W1, hunter W2). Fetches that let held nodes commit are never paused,
+    * which is what keeps the bound from deadlocking; with nothing held, nothing is paused (a backlog of requests alone
+    * does not shrink by waiting); and held nodes that nothing can complete any more (orphans) do not pause either: the
+    * new subtrees go out, and the orphan guard drops them. The bound is therefore soft: the subtrees already open run
+    * to completion, deepest first.
     */
   def newSubtreesPaused: Boolean =
     val bytes = heldMemoryBytes
-    val paused = heldNodes.nonEmpty && bytes >= heldMemoryLimit
+    val paused = HeldNodeSet.pausesNewSubtrees(
+      held = heldNodes.nonEmpty,
+      bytes = bytes,
+      limit = heldMemoryLimit,
+      canFree = pendingTasks.hasDispatchable(paused = true) || activeRequests.nonEmpty
+    )
     if paused != newSubtreesPausedLast then
       newSubtreesPausedLast = paused
       if paused then
@@ -464,6 +472,46 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         .orElse(unhandledCommandArms)
     )
 
+  /** Drop every held node, unwritten (a re-peg or a force-complete: its subtree is not all present), after the commit
+    * the caller made; Hash: their persisted frontier entries go too (spec 022 review vault V5). A commit that failed
+    * leaves ready nodes and pending deletes: they are dropped as well, unwritten (vault V6: said at WARN). Discovery
+    * from the root finds again whatever the root still needs, deletes included (hash-checked presence).
+    */
+  private def dropHeld(reason: String): Unit =
+    if heldNodes.hasPendingWrites then
+      log.warn(
+        s"[HEAL-HELD] $reason: the last commit write failed; ${heldNodes.readyCount} ready node(s) and the pending " +
+          "deletes are dropped unwritten (discovery finds again what the root still needs)"
+      )
+    val dropped = heldNodes.heldHashes
+    heldNodes.clear()
+    unpersistDroppedHeld(dropped)
+    if dropped.nonEmpty then log.info(s"[HEAL-HELD] $reason: dropped ${dropped.size} held node(s), never written")
+
+  /** spec 022 review (beacon W1, hunter W2, forge W1): drop the held nodes nothing can complete any more. A held node's
+    * count goes down only when a child's subtree commits, and a child arrives only through a fetch queued below a held
+    * node or one in flight. With neither (and no commit pending), the held nodes are orphans: a child was lost (it did
+    * not decode, or its edge was dropped), and no fetch is coming. Waiting for the whole queue to drain first would let
+    * them keep new subtrees paused at the cap (beacon W1); so they are dropped as soon as nothing can free them, never
+    * written (nothing on disk is wrong), and the verification walk finds them missing again. With nothing queued
+    * either, every live request is orphaned too (live means queued or in flight), and the book is cleared.
+    */
+  private def dropOrphanedHeld(): Unit =
+    if heldNodes.nonEmpty && !heldNodes.hasPendingWrites && activeRequests.isEmpty &&
+      !pendingTasks.hasDispatchable(paused = true)
+    then
+      val dropped = heldNodes.heldHashes
+      log.error(
+        s"[HEAL-HELD] ${dropped.size} held node(s) wait on children that nothing queued or in flight can supply — " +
+          s"dropping them, never written (${pendingTasks.size} new-subtree fetch(es) stay queued); the verification " +
+          "walk finds them again"
+      )
+      heldNodes.clear()
+      unpersistDroppedHeld(dropped)
+      if pendingTasks.isEmpty && !healRequests.isEmpty then
+        log.error(s"[HEAL-HELD] ${healRequests.size} live request(s) are neither queued nor in flight — dropping them")
+        healRequests.clear()
+
   /** Heal lifecycle (stays in the core): start, force-complete, walk-root re-peg, the 2-minute stagnation pulse and the
     * progress query. Arms #1, #9, #10, #21, #22 of the spec 016 C-H0 arm-order table (research.md R4c).
     */
@@ -624,10 +672,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // held node's subtree is not all present, so it is never written.
         commitHeld()
         flushRawNodesSync()
-        val droppedHeld = heldNodes.size
-        heldNodes.clear()
-        if droppedHeld > 0 then
-          log.info(s"[HEAL-HELD] Force-complete: dropped $droppedHeld held node(s), never written")
+        dropHeld("Force-complete")
         clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
@@ -665,9 +710,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // whatever the new root still needs.
         commitHeld()
         flushRawNodesSync()
-        val droppedHeld = heldNodes.size
-        heldNodes.clear()
-        if droppedHeld > 0 then log.info(s"[HEAL-HELD] Re-peg: dropped $droppedHeld held node(s), never written")
+        dropHeld("Re-peg")
         // spec 009 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
@@ -737,6 +780,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case HealingStagnationCheck =>
       emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
+      // spec 022 review hunter W1: a commit or flush whose write failed is retried by the next one, and the last one by
+      // the completion check right after it; if that fails too and nothing is pending or in flight, no later commit or
+      // flush comes. Retry it here, every pulse, while unwritten nodes remain (a failure is logged each time).
+      if heldNodes.hasPendingWrites || (rawNodeBuffer.nonEmpty && !flushing) then
+        log.warn(
+          s"[HEAL-COMMIT] Retrying unwritten healed nodes: ${heldNodes.readyCount} ready to commit, " +
+            s"${rawNodeBuffer.size} buffered for the flush"
+        )
+        if !isComplete && rawNodeBuffer.nonEmpty && !flushing then flushRawNodesAsync()
+        self ! HealingCheckCompletion
       // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
       // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
       // empty for the current root earlier may now be in its serve window. While there is residual work and
@@ -1133,6 +1186,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         consecutiveIdleChecks = 0
         lastHealedAtMs = System.currentTimeMillis() // give the held root a fresh healingStagnationTimeoutMs window
         tryRedispatchPendingTasks()
+        // spec 022 review beacon W1: the stall may be held nodes that nothing can complete; the check drops them.
+        self ! HealingCheckCompletion
       else log.debug("[HEAL] HealingResumeDispatch with no pending pivot-refresh latch — ignoring")
 
       Behaviors.same
@@ -1173,15 +1228,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     case HealingCheckCompletion =>
       // spec 022 D3: retry a commit whose write failed.
       if heldNodes.hasPendingWrites then commitHeld()
-      // A held node waits on a child; with nothing pending or in flight there is no child left to arrive. That is a
-      // bookkeeping fault: the held nodes can never commit. Drop them (never written, so nothing on disk is wrong); the
-      // verification walk finds them missing and they are fetched again.
-      if pendingTasks.isEmpty && activeRequests.isEmpty && heldNodes.nonEmpty && !heldNodes.hasPendingWrites then
-        log.error(
-          s"[HEAL-HELD] ${heldNodes.size} held node(s) wait on nothing pending or in flight — dropping them, " +
-            "never written; the verification walk finds them again"
-        )
-        heldNodes.clear()
+      dropOrphanedHeld()
       if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && flushRawNodesSync() then
         // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
         // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
