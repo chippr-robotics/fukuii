@@ -683,11 +683,11 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val after = PathHealPresenceFixtures.accountTrieNew()
     val peer = new ScriptedPeer(testKit)
     val controller = createTestProbe[Command]()
-    val mpt = new TestMptStorage()
+    val mpt = new TrieStoreSpy
     val pns = new PathNodeStorage(new EphemDataSource(Map.empty))
     val hole = "leafY0"
     trie.nodes.filterNot(_.label == hole).foreach { n =>
-      if scheme == StorageScheme.Hash then mpt.storeRawNodes(Seq(n.hash -> n.encoded.toArray))
+      if scheme == StorageScheme.Hash then mpt.seed(Seq(n.hash -> n.encoded.toArray))
       else pns.writeNodesWithDeletes(Seq((n.accountHash, n.nibbles, n.encoded.toArray)), Nil)
     }
     val ingest = HealingTrieFixtures.healingIngest(
@@ -723,7 +723,26 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
     probe.receiveMessage(30.seconds)
     source.frontierWrites shouldBe empty
+    // spec 022 review beacon: `HealInvariant.canHold` says the Path scheme holds under in-memory pruning because its heal
+    // writes round the node cache, which is what this store is under that mode.
+    if scheme == StorageScheme.Path then
+      withClue("a Path heal writes nothing through the trie store: ")(mpt.writes shouldBe 0)
     testKit.stop(coordinator)
+
+  /** The trie store, counting what is written through it. */
+  final private class TrieStoreSpy extends TestMptStorage:
+    private val written = new java.util.concurrent.atomic.AtomicInteger(0)
+    def writes: Int = written.get()
+    def seed(nodes: Seq[(ByteString, Array[Byte])]): Unit = super.storeRawNodes(nodes)
+    override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+      written.incrementAndGet()
+      super.storeRawNodes(rawNodes)
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] =
+      written.incrementAndGet()
+      super.updateNodesInStorage(newRoot, toRemove)
 
   it should "get no write from a whole heal, under the Hash scheme" taggedAs UnitTest in {
     healWritesNothingToFrontier(StorageScheme.Hash)

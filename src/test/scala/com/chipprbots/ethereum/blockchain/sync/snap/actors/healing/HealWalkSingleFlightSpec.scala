@@ -7,6 +7,7 @@ import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
@@ -73,6 +74,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   final private class Rig(
       hole: Boolean = false,
       otherOnDisk: Boolean = false,
+      absentFromBoth: Set[String] = Set.empty,
       sharedQueue: Option[com.chipprbots.ethereum.db.storage.BfsQueueStorage] = None,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       writerEc: Option[scala.concurrent.ExecutionContext] = None
@@ -84,8 +86,12 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     /** Another root, on disk only with `otherOnDisk`; otherwise a re-peg to it seeds it and starts no walk. */
     val otherRoot = otherTrie.root.hash
     val hashStore = new TestMptStorage()
-    PathHealPresenceFixtures.seedHash(hashStore, trie.nodes.filterNot(n => hole && n.label == "brX"))
-    if otherOnDisk then PathHealPresenceFixtures.seedHash(hashStore, otherTrie.nodes)
+    PathHealPresenceFixtures.seedHash(
+      hashStore,
+      trie.nodes.filterNot(n => (hole && n.label == "brX") || absentFromBoth(n.label))
+    )
+    if otherOnDisk then
+      PathHealPresenceFixtures.seedHash(hashStore, otherTrie.nodes.filterNot(n => absentFromBoth(n.label)))
     val queue = new InterleavingBfsQueue
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
     val peers: TestProbe[NetworkPeerManagerActor.Command] = createTestProbe[NetworkPeerManagerActor.Command]()
@@ -355,6 +361,42 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     withClue("nothing else would start it for minutes: ")(rig.ec.pending shouldBe 1)
     rig.drive(c)
     rig.awaitComplete()
+  }
+
+  // spec 022 review forge F4, F1: why stale-root batches stay queued on Hash. Most of what a walk of the old root finds the
+  // new root needs too, and it is served and healed there at once, not one level per walk.
+  it should "queue and heal at the new root a node both roots share, found by the old root's walk after the re-peg, on Hash" taggedAs UnitTest in {
+    val rig = new Rig(otherOnDisk = true, absentFromBoth = Set("brY"))
+    val shared = rig.trie("brY")
+    val c = rig.spawnGeneration()
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    withClue("the old root's rebuild is queued: ")(rig.ec.pending shouldBe 1)
+    c ! HealingPivotRefreshed(rig.otherRoot) // to a root on disk: its own walk waits for the old one's end
+    rig.settle(c)
+    withClue("no second walk: ")(rig.ec.pending shouldBe 1)
+    c ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      com.chipprbots.ethereum.testing.PeerTestHelpers
+        .createTestPeer("shared-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    rig.ec.runNext() // the old root's walk ends, having found the shared node
+    rig.settle(c)
+    val request = rig.peers
+      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+      .message
+      .underlyingMsg
+      .asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes]
+    withClue("asked for at the new root, by the old walk's find, before the new root's walk has run: ") {
+      request.paths shouldBe Seq(shared.pathset)
+      request.rootHash shouldBe rig.otherRoot
+    }
+    c ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+      com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes(request.requestId, Seq(shared.encoded))
+    )
+    rig.drive(c) // its flush, then the check's walk of the new root
+    rig.awaitComplete()
+    withClue("healed: ")(rig.hashStore.get(shared.hash.toArray).hash.toSeq shouldBe shared.hash.toSeq)
+    rig.cleanWalkRoot.get() shouldBe rig.otherRoot
   }
 
   // ---- spec 022 T038b: a supervisor-restarted coordinator takes the controller's current root ------------------------------

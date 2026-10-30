@@ -293,15 +293,12 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.progress.hasExcluded shouldBe false
     }
 
-    it should s"resolve an entry recorded before a re-peg against the new root, and not stall, on $scheme (T030)" taggedAs UnitTest in {
+    it should s"resolve an entry recorded before a re-peg against the new root, and not stall past the next re-peg, on $scheme (T030)" taggedAs UnitTest in {
       val oldTrie = PathHealPresenceFixtures.storageTrieOld()
       val newTrie = PathHealPresenceFixtures.storageTrieNew()
       val rig = new Rig(scheme, oldTrie, absent = Set("sRoot", "sLeaf1"), excluded = Nil)
       rig.seed(Seq(newTrie.root)) // the new root's leaf is on disk too: it is the storage below it that is missing
-      rig.start()
-      // The old root's walk ends before the re-peg. One the re-peg overtook would, on Hash, queue a node only the old root
-      // holds, and no peer at the new root serves it until the next re-peg clears it: that is T051a, not this case.
-      rig.drive()
+      rig.start() // the old root's walk is queued: the re-peg overtakes it
       rig.progress.recordExcluded(
         Seq(
           ExcludedAccount(
@@ -314,8 +311,24 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.serve(newTrie) // a peer at the new root: the old storage root is not served any more
       rig.peerAvailable()
       rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash)
+      val reached =
+        if scheme == StorageScheme.Path then newTrie // the old walk's batch is dropped: its position is another root's
+        else
+          // The bound, on Hash (T051a, forge F1): the old walk's batch is queued, since most of what such a walk finds the
+          // new root needs too. What only the old root holds no peer at the new root serves, so it holds completion...
+          rig.drive()
+          withClue("the node only the old root holds is asked for: ") {
+            rig.requested should contain(oldTrie("sRoot").pathset)
+          }
+          withClue("and holds completion: ")(rig.seen() should not contain SNAPSyncController.StateHealingComplete)
+          // ... until the next re-peg clears it.
+          val next = PathHealPresenceFixtures.storageTrie("path-heal-presence/storage/slot1-next")
+          rig.seed(Seq(next.root))
+          rig.serve(next)
+          rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+          next
       rig.awaitComplete()
-      Seq("sRoot", "sLeaf0", "sLeaf1").foreach(l => withClue(s"$l on disk: ")(rig.onDisk(newTrie(l)) shouldBe true))
+      Seq("sRoot", "sLeaf0", "sLeaf1").foreach(l => withClue(s"$l on disk: ")(rig.onDisk(reached(l)) shouldBe true))
       rig.progress.hasExcluded shouldBe false
     }
 
