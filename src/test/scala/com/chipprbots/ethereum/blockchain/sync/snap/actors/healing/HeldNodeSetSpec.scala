@@ -494,9 +494,9 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
 
   /** eye F7, vault R2, hunter N3: the orphan guard itself. The root waits on a child that never commits (it does not
     * decode); nothing is queued and nothing is in flight, so the guard drops the root, unwritten. It keeps the root's
-    * persisted frontier entry: the completeness marker may stand (same root), and that entry is what lets a resume fetch
-    * the root again. Then the completion check walks, finds the root missing and fetches it again. The writer executor
-    * runs only when the test says, so every check below comes before the walk.
+    * persisted frontier entry: the completeness marker may stand (same root), and that entry is what lets a resume
+    * fetch the root again. Then the completion check walks, finds the root missing and fetches it again. The writer
+    * executor runs only when the test says, so every check below comes before the walk.
     */
   it should "drop held nodes nothing can complete, keep their persisted frontier entries, and fetch them again after a walk, under the Hash scheme (eye F7, vault R2)" taggedAs UnitTest in {
     val trie = orphaningTrie()
@@ -512,7 +512,10 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
         // The leaf commits; the other child does not decode. Nothing is queued or in flight: the guard drops the root.
         val undecodablePath =
           Seq(ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](0), isLeaf = false)))
-        peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], trie.served + (undecodablePath -> undecodable))
+        peer.answerFrom(
+          peer.manual.expectMessageType[SNAP.GetTrieNodes],
+          trie.served + (undecodablePath -> undecodable)
+        )
         settle()
         withClue("the root is never written: ")(disk.holds(trie.root) shouldBe false)
         withClue("the dropped root keeps its persisted frontier entry: ") {
@@ -631,10 +634,12 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     val source = new EphemDataSource(Map.empty):
       override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
         val ops = updates.flatMap(HealRequestFixtures.Op.of)
-        val writesBrY = ops.exists(op => !op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == brYKey)
+        val writesBrY =
+          ops.exists(op => !op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == brYKey)
         val deletesInsideExt =
           ops.exists(op => op.delete && op.namespace == HealRequestFixtures.AccountNs && op.key == insideExtKey)
-        if failing.get() && (writesBrY || deletesInsideExt) then throw new RuntimeException("injected write batch failure")
+        if failing.get() && (writesBrY || deletesInsideExt) then
+          throw new RuntimeException("injected write batch failure")
         super.update(updates)
         applied.incrementAndGet(): Unit
     withHealer(StorageScheme.Path, before.root.hash, peer, pathSource = source) { (coordinator, controller, disk) =>
