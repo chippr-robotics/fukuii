@@ -27,9 +27,15 @@ import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
   *
   * Actor-confined: not thread-safe.
   */
-final class ExcludedRecorder(store: => SnapSyncProgressStorage, enabled: Boolean, log: org.slf4j.Logger):
+final class ExcludedRecorder(
+    store: => SnapSyncProgressStorage,
+    enabled: Boolean,
+    log: org.slf4j.Logger,
+    nowMs: () => Long = () => System.currentTimeMillis()
+):
   private val staged = mutable.LinkedHashMap.empty[ByteString, ExcludedAccount]
   private var failing: Boolean = false
+  private var lastFailureMs: Long = 0L
 
   /** Keep `entries` for the next [[flush]]. An entry of the same place replaces an earlier one. */
   def stage(entries: Iterable[ExcludedAccount]): Unit =
@@ -40,6 +46,12 @@ final class ExcludedRecorder(store: => SnapSyncProgressStorage, enabled: Boolean
 
   /** Whether a decision has not been written yet. */
   def pending: Boolean = staged.nonEmpty
+
+  /** [[flush]], as the end of every message calls it: after a failure, at most once a second, or a failing store would
+    * be written to, under its exclusive lock, for every message of a busy coordinator (review vault N1).
+    */
+  def flushThrottled(): Boolean =
+    if failing && nowMs() - lastFailureMs < ExcludedRecorder.RetryIntervalMs then staged.isEmpty else flush()
 
   /** Write what is staged, as one durable write. True when nothing is left unwritten. */
   def flush(): Boolean =
@@ -56,4 +68,8 @@ final class ExcludedRecorder(store: => SnapSyncProgressStorage, enabled: Boolean
         case NonFatal(e) =>
           if !failing then log.error(s"[HEAL-EXCLUDED] Could not record ${staged.size} entries; retrying", e)
           failing = true
+          lastFailureMs = nowMs()
           false
+
+object ExcludedRecorder:
+  private val RetryIntervalMs: Long = 1000L

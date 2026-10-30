@@ -2264,15 +2264,22 @@ class StorageRangeCoordinatorSpec
       }
     finally progressSource.failSync = false
 
-    kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the write succeeds as this message ends
-    excluded(task.accountHash) shouldBe defined
+    // The end of a message tries a failing store once a second.
+    eventually(timeout(5.seconds)) {
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      excluded(task.accountHash) shouldBe defined
+    }
     impl.excludedRecorder.pending shouldBe false
     kit.run(StorageRangeCoordinator.StorageCheckCompletion)
     controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
   }
 
   // Spec 022 review item 1 (hunter C1, vault F3): what a supervisor restart loses.
-  private def supervised(controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command]) =
+  private def supervised(
+      controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+      flatSlots: FlatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      recordStorageDone: Boolean = false
+  ) =
     testKit.spawn(
       Behaviors
         .supervise(
@@ -2286,12 +2293,183 @@ class StorageRangeCoordinatorSpec
             requestTimeout = 30.seconds,
             snapSyncController = controller,
             flatBatchEcOverride = Some(scala.concurrent.ExecutionContext.parasitic),
-            stateIngest = hashSchemeIngest(new FlatSlotStorage(EphemDataSource())),
+            stateIngest = hashSchemeIngest(flatSlots),
+            recordStorageDone = recordStorageDone,
             recordExcluded = true
           )
         )
-        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+        // As the controller's spawn sites supervise it, with a shorter backoff.
+        .onFailure[Throwable](
+          org.apache.pekko.actor.typed.SupervisorStrategy
+            .restartWithBackoff(1.millis, 10.millis, 0.0)
+            .withMaxRestarts(3)
+        )
     )
+
+  /** A coordinator that has been through a supervisor restart whose record could not be written: what it held is gone.
+    */
+  private def restartedWithoutARecord(
+      controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+      source: EphemDataSource,
+      lost: StorageTask
+  ) =
+    val coordinator = supervised(controller, new FlatSlotStorage(source), recordStorageDone = true)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(lost))
+    val alive = testKit.createTestProbe[StorageRangeCoordinator.SyncStatistics]()
+    coordinator ! StorageRangeCoordinator.StorageGetProgress(alive.ref)
+    alive.receiveMessage(30.seconds)
+    progressSource.failSync = true
+    try
+      coordinator ! StorageRangeCoordinator.StorageGetProgress(null) // the handler throws: a supervisor restart
+      coordinator ! StorageRangeCoordinator.StorageGetProgress(alive.ref) // answered by the new incarnation
+      alive.receiveMessage(30.seconds)
+    finally progressSource.failSync = false
+    withClue("the restart's own record failed, so only the file has it: ")(excluded(lost.accountHash) shouldBe None)
+    coordinator
+
+  private def writeTaskFile(entries: Seq[(ByteString, ByteString)]): java.nio.file.Path =
+    val file = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
+    file
+
+  // Spec 022 round 2 review B (hunter W1): a restart, then a clean end of the phase, whose controller then wipes the markers.
+  "A restarted coordinator" should "read the task file back before a clean end of the phase" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("clean-lost"), fileRoot("clean-lost"))
+    val finished = (fileAccount("clean-done"), fileRoot("clean-done"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot, finished))
+    appState.putSnapSyncStorageFilePath(file.toString).commit()
+    new SnapStorageDoneStorage(source).markDone(Seq(finished)).commit()
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      withClue("durable before the clean end that wipes the markers: ") {
+        excluded(lost.accountHash) shouldBe defined
+      }
+      excluded(finished._1) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  it should "wait for the task file's pointer: it is persisted just after the account phase's end reaches this actor" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("late-pointer"), fileRoot("late-pointer"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot))
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ controller.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      withClue("no clean end yet: ")(heard should not contain SNAPSyncController.StorageRangeSyncComplete)
+      appState.putSnapSyncStorageFilePath(file.toString).commit()
+      coordinator ! StorageRangeCoordinator.StorageCheckCompletion
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      excluded(lost.accountHash) shouldBe defined
+    finally taskFilePointer = None
+  }
+
+  // Spec 022 round 2 review B, vault N2: storage-writer-dispatcher has one thread.
+  "A healthy coordinator" should "not read the task file for a clean end of the phase" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("healthy-clean") -> fileRoot("healthy-clean")))
+    try
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      excluded(fileAccount("healthy-clean")) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  it should "not read the task file for a force-complete when it was given every task itself" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("healthy-forced") -> fileRoot("healthy-forced")))
+    try
+      val queued = fileAccount("healthy-queued")
+      rig.kit.run(
+        StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(queued, fileRoot("queued"))))
+      )
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(queued) shouldBe defined
+      withClue("all it was given is in memory, so the file adds nothing: ") {
+        excluded(fileAccount("healthy-forced")) shouldBe None
+      }
+    finally taskFilePointer = None
+  }
+
+  it should "treat a read of the task file that runs too long as unreadable, and take no later answer" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val account = fileAccount("hung")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("hung")), flatBatchEc = ec)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      val token = rig.kit
+        .retrieveAllEffects()
+        .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
+        .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
+        .get
+      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      while ec.pending > 0 do ec.runNext()
+      withClue("told to stop, so it found nothing: ")(excluded(account) shouldBe None)
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+    finally taskFilePointer = None
+  }
+
+  it should "take nothing from a read a replaced incarnation started" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("old-read") -> fileRoot("old-read")))
+    try
+      rig.kit.run(
+        StorageRangeCoordinator.TaskFileSwept(
+          -1L,
+          com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile.Outcome.Recorded(5L)
+        )
+      )
+      withClue("it is not the read this one is waiting for: ")(rig.kit.selfInbox().hasMessages shouldBe false)
+    finally taskFilePointer = None
+  }
+
+  it should "call a task file of another size than was recorded unreadable, and go on" taggedAs UnitTest in {
+    val account = fileAccount("wrong-size")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("wrong-size")))
+    try
+      rig.appState.putSnapSyncStorageFileCount(Some(99L)).commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(account) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  // Spec 022 round 2 review C (hunter W3, vault N3): after a restart of the cycle every entry of the file reads as unfinished.
+  it should "stop reading the task file when it stops" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val entries = (0 until 10).map(i => fileAccount(s"cancel-$i") -> fileRoot(s"cancel-$i"))
+    val rig = new TaskFileRig(entries, flatBatchEc = ec)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      rig.kit.signal(org.apache.pekko.actor.typed.PostStop)
+      while ec.pending > 0 do ec.runNext()
+      entries.foreach { case (account, _) => excluded(account) shouldBe None }
+    finally taskFilePointer = None
+  }
 
   "A supervisor restart" should "record what it is about to forget" taggedAs UnitTest in {
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
@@ -2303,7 +2481,11 @@ class StorageRangeCoordinatorSpec
     eventually(excluded(account).map(_.claimedStorageRoot) shouldBe Some(root))
   }
 
-  final private class TaskFileRig(entries: Seq[(ByteString, ByteString)], recordStorageDone: Boolean = true):
+  final private class TaskFileRig(
+      entries: Seq[(ByteString, ByteString)],
+      recordStorageDone: Boolean = true,
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic
+  ):
     val file: java.nio.file.Path = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
     file.toFile.deleteOnExit()
     java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
@@ -2316,7 +2498,8 @@ class StorageRangeCoordinatorSpec
       stateRoot = kec256(ByteString("excluded-file-root")),
       flatSlotStorage = new FlatSlotStorage(source),
       snapSyncControllerRef = controller.ref,
-      recordStorageDone = recordStorageDone
+      recordStorageDone = recordStorageDone,
+      flatBatchEcOverride = Some(flatBatchEc)
     )
     val done = new SnapStorageDoneStorage(source)
 

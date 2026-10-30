@@ -88,13 +88,15 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
       super.updateSync(updates)
   private val progressSource = new SyncFailingSource
+  // The app-state store a test points at a code-hash file; none means the coordinator may not read it.
+  private var codeFilePointer: Option[AppStateStorage] = None
   private val progressStore = new SnapSyncProgressStorage(progressSource)
 
   // ByteCodeCoordinator takes one `StateIngest` (spec 016 C-B1). It reads only `bytecode`; any other member fails
   // loudly, so a test that reaches one is a change in what the coordinator reads.
   private def bytecodeIngest(evmCodeStorage: EvmCodeStorage): StateIngest =
     new StateIngest:
-      def appState: AppStateStorage = notReached("appState")
+      def appState: AppStateStorage = codeFilePointer.getOrElse(notReached("appState"))
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = notReached("pathNodes")
@@ -772,6 +774,60 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
     coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
     eventually(progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash))
+  }
+
+  // Spec 022 round 2 review B (hunter W1): the restart's own record can fail for the same reason the actor restarted.
+  it should "read the code-hash file back before a clean end when it has been restarted, minus the code that is stored" taggedAs UnitTest in {
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val codes = new TestEvmCodeStorage()
+    val stored = ByteString("restart-stored-code")
+    val storedHash = kec256(stored)
+    codes.put(storedHash, stored).commit()
+    val lost = kec256(ByteString("restart-file-lost"))
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, (storedHash ++ lost).toArray)
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.putSnapSyncCodeHashesPath(file.toString).commit()
+    codeFilePointer = Some(appState)
+    try
+      val coordinator = testKit.spawn(
+        org.apache.pekko.actor.typed.scaladsl.Behaviors
+          .supervise(
+            ByteCodeCoordinator(
+              stateIngest = bytecodeIngest(codes),
+              networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+              requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+              batchSize = 4,
+              snapSyncController = snapSyncController.ref,
+              recordExcluded = true
+            )
+          )
+          .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+      )
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(lost))
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      progressSource.failSync = true
+      try
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+        alive.receiveMessage(30.seconds)
+      finally progressSource.failSync = false
+      withClue("the restart's own record failed: ") {
+        progressStore.excludedPage(None, 1000).map(_.subject) should not contain lost
+      }
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      snapSyncController.fishForMessage(30.seconds) {
+        case SNAPSyncController.ByteCodeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      val recorded = progressStore.excludedPage(None, 1000).map(_.subject)
+      recorded should contain(lost)
+      recorded should not contain storedHash
+    finally codeFilePointer = None
   }
 
   it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
