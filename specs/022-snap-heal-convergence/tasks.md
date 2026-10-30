@@ -231,13 +231,13 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - Drop the `storageScheme == Path &&` condition from the stale-walk filter in the `FrontierRebuilt` arm, so stale-root batches are dropped on Hash as well. Slice 1 added the filter for Path only.
   - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
   **[forge]**
-- [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; the verification walk stays the completion gate there, and the pruned verification stays off):
+- [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3 and R1: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; there the coordinator's full verification walk, unscoped and unpruned, with no frontier resume, stays the completion gate on every completion and every restart, and the pruned and scoped verifications and the frontier persistence stay off, as slice 2 set them):
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
   - the `VerificationBFSComplete` arms and `MaxConsecutiveStaleDiscards` (`:1164-1250`);
   - the BFS start on a re-pegged root that is already present (`:666-690`): with the marker present, that case is complete immediately.
 
   **[beacon] [forge]**
-- [ ] T052 [US2] On Hash, route completion to `completeHealingWalkClean` (`HealingOrchestrator.scala:271-286`), and remove the controller trie walk (`SNAPSyncController.scala:853-870` → `HealingOrchestrator.scala:203-315`) as a gate. Fix `HealingForceComplete` (`:584`). **[forge]**
+- [ ] T052 [US2] On Hash, route completion to `completeHealingWalkClean` (`HealingOrchestrator.scala:271-286`), and remove the controller trie walk (`SNAPSyncController.scala:853-870` → `HealingOrchestrator.scala:203-315`) as a gate. Fix `HealingForceComplete` (`:584`). *Carve-out (slice 2 review, vault R1):* under `pruning.mode = inmemory` the route to `completeHealingWalkClean` must still require the coordinator's clean full verification walk (T051's carve-out); the controller trie walk is no substitute to keep instead, since it does not descend into present hash nodes. **[forge]**
 - [ ] T053 [US1] Move the full-trie walk into a background audit owned by the regular-sync side, reusing the `FrontierRebuildBfs` engine.
   - It walks the hash store at a recent root that is still present.
   - It throttles itself so it doesn't compete with import.

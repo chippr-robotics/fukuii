@@ -976,10 +976,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
       // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
       verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
-      // spec 002/005 marker: gated on frontier persistence (default off). With it off, `FrontierRebuildComplete` is
-      // never reached via the resume path anyway (that path requires `frontierStore` defined), but guard defensively
-      // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
-      // the spec-003 scoped path, which must stay dark by default).
+      // spec 002/005 marker: gated on frontier persistence. The resume path (StartTrieNodeHealing) reads the store
+      // whenever it is present, which it also is for the spec 005 records with persistence off, so this guard is what
+      // keeps the marker unwritten then (FR-005 parity; the marker also gates the spec-003 scoped path). Under
+      // in-memory pruning the controller passes persistence off and clears any marker before the spawn (spec 022
+      // review vault R1): no marker is trusted there.
       if frontierPersistenceEnabled then
         stateIngest.healingFrontier.foreach { store =>
           store.markComplete()
