@@ -183,6 +183,21 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [ ] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
 - [ ] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `heal/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
 - [ ] T037 [US1] Remove `HealedCodeWaitTimeout` (`SNAPSyncController.scala:836-846`). If code is unavailable, log the account every 60 s. After 30 min with no progress, fall back to `StateHealingAbandoned`, which leads to the lazy handoff. **[beacon] [forge]**
+- [ ] T038a [US3] **(slice-2 sign-off condition: hunter, forge, vault, beacon)** Make the frontier walk exclusive across SNAP controller instances, not just across coordinator incarnations.
+  - Slice 2's `WalkLease` belongs to one `BfsQueueStorage` wrapper instance, but the shared resource is the BFS column family. A walk left running by a stopped controller (after a `HealingImpossible` restart, for example) can still cut short the next controller's walk, which then reports clean (P1b).
+  - Key the lease to the column family, process-wide, and **cancel** orphaned walks rather than waiting them out. Today the next walk waits out the orphan's remaining runtime, which on ETH mainnet Path can be hours.
+  - Fix the orphan's backpressure, which reads the replaced incarnation's frozen gauge.
+  - Close the refused-launch observability gap: run flags and gauges stay set, and 'engaged' is logged for a walk that never ran.
+  - The stale-root end of a rebuild walk must start the completion check.
+  - **[vault] [forge] [beacon]**
+- [ ] T038b [US3] **(slice-2 sign-off condition, beacon N3-r3 / W2-r4)** A supervisor-restarted heal coordinator must get the controller's **current** root. Today it walks its spawn-time root, because no `StartTrieNodeHealing` or re-peg is replayed. **[beacon] [forge]**
+- [ ] T038c Work through the remaining slice-2 review notes. They are recorded in the git-ignored `.local/docs/continuations/s022-slice3-inputs.md`. Highlights:
+  - the A→B→A re-peg marker ABA;
+  - a scoped gate walk replacing a dropped RestartResumeVerification;
+  - the four-fault loadAll fallback;
+  - `readFailures` stays unbounded and keyed per hash;
+  - the give-up latch has no watchdog;
+  - CF `g` entries survive a re-peg until slice 4.
 - [ ] T038 Run T029–T031 and all earlier slice tests, then do one dev-loop Mordor run. Open the slice-3 PR and request reviews from beacon and forge.
 
 **Checkpoint**: no excluded account can make healing declare completion early.
