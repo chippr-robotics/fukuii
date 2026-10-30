@@ -4,8 +4,8 @@
 
 The Engine API surface has been implemented and validated against the Sepolia network with healthy peers. This document defines the next architectural phase.
 
-> **Superseded in part (2026-10-30, user decision D-1 in
-> [spec 023](../../specs/023-fleet-topology/spec.md)).** The process model below — several chain instances in one JVM
+> **Superseded in part (2026-10-30, user decision D-1 in spec 023, `specs/023-fleet-topology/spec.md`).** The
+> process model below — several chain instances in one JVM
 > ("Multi-Network Runtime", "In-Process L2 Architecture", "Cross-Instance Communication", "Phase 2: Multi-Instance
 > Runtime") — is retired: fukuii runs **one process per chain per role**, and the in-process runtime (`runtime/`,
 > `conf/multi-instance.conf`, `fukuii runtime`) is removed by spec 023 FR-006. The name **Orbita** now denotes the
