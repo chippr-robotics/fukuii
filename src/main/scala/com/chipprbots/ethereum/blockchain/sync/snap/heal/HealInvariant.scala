@@ -98,10 +98,11 @@ object HealInvariant:
   /** The one-time clear of CF `g` (spec 022 D6), at every node start until it has happened. True when it ran.
     *
     * A crash at any step is safe. Before the range delete: nothing has happened, and the next start does it. After it,
-    * before the key: the next start does it again, one more tombstone on an empty family. After the key: done. The
-    * key's synced write syncs the WAL up to and including itself, and the range delete is in that WAL before it, so a
-    * key that survives a power loss implies the delete did. Nothing in the node reads `g` any more, so the worst a lost
-    * or failed clear can cost is disk space.
+    * before the key: the next start does it again, one more tombstone on an empty family. After the key: done. The key
+    * is synced, and it and the range delete go through the same WAL, so expect the delete to survive with it; nothing
+    * here depends on that. Nothing in the node reads `g` any more, so the worst a lost or failed clear can cost is disk
+    * space. That space stays taken until something compacts `g`: nothing here does (see
+    * `HealingFrontierStorage.clearAll`).
     */
   def retireFrontierOnce(appState: AppStateStorage, frontier: HealingFrontierStorage): Boolean =
     if appState.isHealingFrontierRetired() then false

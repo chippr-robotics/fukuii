@@ -168,9 +168,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def isHealingFrontierRetired(): Boolean =
     get(Keys.SnapHealFrontierRetired).exists(_.toBoolean)
 
-  /** The one-time clear of CF `g` is done. Commit with `commitSync`: that also makes the range delete before it
-    * durable, the WAL being one log.
-    */
+  /** The one-time clear of CF `g` is done. Commit with `commitSync`. */
   def markHealingFrontierRetired(): DataSourceBatchUpdate =
     put(Keys.SnapHealFrontierRetired, true.toString)
 

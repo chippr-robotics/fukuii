@@ -1335,20 +1335,14 @@ object SyncController:
       }
 
     /** spec 022 D6: the one-time clear of CF `g`, whatever this start goes on to do, since a node past SNAP holds the
-      * old records too. A failure costs disk space, and the next start tries again. Nothing writes to the family
-      * afterwards, so no flush would ever trigger its compaction: it is run here, off this actor's thread, or the space
-      * stays taken. Lost to a crash, it costs that space until something else compacts the family.
+      * old records too. A failure costs disk space, and the next start tries again. On an upgraded datadir the space
+      * stays taken until something compacts the family (see `HealingFrontierStorage.clearAll`).
       */
     private def retireHealingFrontier(): Unit =
       val frontier = new HealingFrontierStorage(flatSlotStorage.dataSource)
       try
         if HealInvariant.retireFrontierOnce(appStateStorage, frontier) then
-          log.info("[HEAL-INVARIANT] Persisted healing frontier (CF g) cleared; compacting it in the background")
-          val ec = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
-          scala.concurrent
-            .Future(scala.concurrent.blocking(frontier.compact()))(ec)
-            .failed
-            .foreach(e => log.warn("Compacting the cleared healing frontier failed: {}", e.getMessage))(ec)
+          log.info("[HEAL-INVARIANT] Persisted healing frontier (CF g) cleared")
       catch
         case NonFatal(e) =>
           log.error(

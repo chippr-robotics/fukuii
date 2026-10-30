@@ -41,15 +41,12 @@ class HealingFrontierStorage(val dataSource: DataSource)
 
   /** Empty the column family with one range tombstone (spec 022 D6): frontier entries, the completeness sentinel and
     * the spec 005 subtree-complete records all sort inside the range, and writing it is O(1) whatever the family holds.
+    * The space comes back only when something later compacts `g`, and with no more writes nothing is going to soon. It
+    * is not compacted here on purpose: `compactRange` holds the data source's read lock for the whole native call, so
+    * the first writer to queue behind it would stop every read too (spec 022 review vault F1).
     */
   def clearAll(): Unit =
     dataSource.deleteRange(namespace, HealingFrontierStorage.LowestKey, HealingFrontierStorage.AboveHighestKey)
-
-  /** Reclaim the space [[clearAll]] tombstoned: nothing writes to this column family afterwards, so no flush would ever
-    * trigger a compaction of it. BLOCKING (I/O about the size of the family), so run it off actor threads.
-    */
-  def compact(): Unit =
-    dataSource.compactRange(namespace, HealingFrontierStorage.LowestKey, HealingFrontierStorage.AboveHighestKey)
 
   /** Drain the entire persisted frontier (hash -> pathset), excluding the completeness sentinel. Called once on
     * `[HEAL-RESTART]` to resume healing without the full-state DFS. Throws if iteration errors or a stored value fails

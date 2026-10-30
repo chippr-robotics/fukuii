@@ -597,8 +597,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       store.loadAll().map(_._1).toSet shouldBe Set(entry(1), entry(0xff))
       HealInvariant.retireFrontierOnce(appState, store) shouldBe true
       holdsNothing(store)
-      store.compact()
-      holdsNothing(store)
     finally first.close()
     val second = open()
     try

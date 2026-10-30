@@ -212,7 +212,10 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"DataSource error while deleting range", error)
     finally dbLock.writeLock().unlock()
 
-  // Read lock: compaction runs concurrently with reads and writes inside RocksDB; the lock only fences close().
+  // Read lock, held for the whole native call. Inside RocksDB a compaction runs beside reads and writes, but this lock does
+  // not let them: a writer waiting for the write lock queues behind this call, and every later read queues behind that
+  // writer (`dbLock` is not fair, but a queued writer still blocks new readers), and close() waits too. So once anything
+  // writes, this stops the data source for as long as the compaction takes: keep the range small.
   override def compactRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
     dbLock.readLock().lock()
     try
