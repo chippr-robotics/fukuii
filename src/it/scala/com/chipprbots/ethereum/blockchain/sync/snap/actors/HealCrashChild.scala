@@ -51,24 +51,29 @@ import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 /** The child JVM of the spec 022 kill-point harness (T021, `HealCrashSafetyItSpec`).
   *
-  * It heals `PathHealPresenceFixtures.accountTrieOld` (eight nodes: branches, an extension, leaves) with a real
-  * `TrieNodeHealingCoordinator` over a real RocksDB at `dbPath`, against an in-process peer that serves the trie. When
-  * it reaches its kill point it prints `KP:<point>` on stdout and stops there: the writing thread parks, or the peer
-  * leaves the request unanswered. The parent then sends SIGKILL, reopens the database and audits it. Nothing here waits
-  * on time: every pause is a latch or a blocking read that only the kill ends.
+  * It heals a fixture trie with a real `TrieNodeHealingCoordinator` over a real RocksDB at `dbPath`, against an
+  * in-process peer that serves the trie: `account` is `PathHealPresenceFixtures.accountTrieOld` (eight nodes: branches,
+  * an extension, leaves), `storage` is `storageTrieOld` (an account leaf at the root over a storage trie, so a chain
+  * commit spans both trie column families and the audit checks a storage root). When it reaches its kill point it
+  * prints `KP:<point>` on stdout and stops there: the writing thread parks, or the peer leaves the request unanswered.
+  * The parent then sends SIGKILL, reopens the database and audits it. Nothing here waits on time: every pause is a
+  * latch or a blocking read that only the kill ends.
   *
-  * Arguments: `dbPath`, `path|hash`, `basic|inmemory`, and the kill point:
+  * Arguments: `dbPath`, `path|hash`, `basic|inmemory`, `account|storage`, and the kill point:
   *   - `held`: the root has arrived and is held (its children are requested; nothing below it has arrived);
   *   - `chain-before` / `chain-after`: inside the first commit write that carries two or more nodes (a node with the
   *     ancestors it completes), before or after the write is applied, i.e. before the coordinator releases the held
   *     entries;
-  *   - `repeg-partial`: the pivot moves while the root and the extension are held (one subtree committed), and the kill
-  *     lands in the first commit write after the re-peg;
-  *   - `repeg-full`: the old trie is healed completely, the pivot moves to `accountTrieNew` (four nodes changed, the
-  *     extension's subtree among them), and the kill lands in the first commit write after the re-peg.
+  *   - `repeg-partial`: the pivot moves while the upper nodes are held (one subtree committed), and the kill lands in
+  *     the first commit write after the re-peg that writes a node;
+  *   - `repeg-full`: the old trie is healed completely, the pivot moves to the new build of the fixture, and the kill
+  *     lands in the first commit write after the re-peg that writes a node;
+  *   - `repeg-delete` (Path only): as `repeg-full`, but the kill lands in the first write after the re-peg that only
+  *     deletes (the stale positions of the old root, found before anything new is written there).
   *
   * Commit writes are counted where healing makes them: Path, a write batch to the path-trie column families; Hash, a
-  * `storeRawNodes` call (under in-memory pruning it reaches the node cache, not disk).
+  * `storeRawNodes` call (under in-memory pruning it reaches the node cache, which here holds two entries, so most of a
+  * write is evicted to disk at once, one node at a time, as production's cache does when it is full).
   */
 object HealCrashChild:
 
@@ -82,7 +87,7 @@ object HealCrashChild:
         System.exit(2)
 
   private def run(args: Array[String]): Unit =
-    val Array(dbPath, schemeArg, pruningArg, point) = args: @unchecked
+    val Array(dbPath, schemeArg, pruningArg, fixture, point) = args: @unchecked
     val scheme = if schemeArg == "path" then StorageScheme.Path else StorageScheme.Hash
     val pruning: PruningMode = if pruningArg == "basic" then BasicPruning(1000) else InMemoryPruning(1000)
     val gate = new KillGate(point)
@@ -96,10 +101,10 @@ object HealCrashChild:
       if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate) else backing
     val pathNodes = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
 
-    val oldTrie = PathHealPresenceFixtures.accountTrieOld()
-    val newTrie = PathHealPresenceFixtures.accountTrieNew()
-    // `repeg-partial`: the old trie's brX is never served, so the root and the extension stay held.
-    val withheld: Set[Seq[ByteString]] = if point == "repeg-partial" then Set(oldTrie("brX").pathset) else Set.empty
+    val (oldTrie, newTrie) = HealCrashChild.fixture(fixture)
+    // `repeg-partial`: one node of the old trie is never served, so the nodes above it stay held.
+    val withheld: Set[Seq[ByteString]] =
+      if point == "repeg-partial" then Set(oldTrie(HealCrashChild.withheldLabel(fixture)).pathset) else Set.empty
     val served = new AtomicReference[Map[Seq[ByteString], ByteString]](oldTrie.served -- withheld)
     val requests = new AtomicInteger(0)
     val repegReady = new CountDownLatch(1)
@@ -123,7 +128,8 @@ object HealCrashChild:
       case _ => Behaviors.same
     })
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
-    val pool = Executors.newSingleThreadExecutor()
+    // Two writer threads, as production's pool has several (the coordinator keeps one healed-node write at a time).
+    val pool = Executors.newFixedThreadPool(2)
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = oldTrie.root.hash,
       networkPeerManager = peerManager,
@@ -146,12 +152,13 @@ object HealCrashChild:
     peerAvailable()
 
     if point.startsWith("repeg") then
-      if point == "repeg-full" then
+      if point == "repeg-full" || point == "repeg-delete" then
         controller.fishForMessage(60.seconds) {
           case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
           case _                                       => FishingOutcomes.continueAndIgnore
         }
-      else if !repegReady.await(60, TimeUnit.SECONDS) then throw new IllegalStateException("brX was never requested")
+      else if !repegReady.await(60, TimeUnit.SECONDS) then
+        throw new IllegalStateException("the withheld node was never requested alone")
       gate.armRepeg()
       served.set(newTrie.served)
       coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash)
@@ -177,15 +184,28 @@ object HealCrashChild:
       override val blockSize: Long = 16384
       override val blockCacheSize: Long = 33554432
 
-  /** The in-memory pruning node cache as production wires it (evicted entries are written one by one). */
+  /** The in-memory pruning node cache as production wires it (evicted entries are written one by one), but holding only
+    * two entries, so the harness's small tries are evicted to disk as production's cache is when full (vault V4). Below
+    * 20 entries Guava keeps one segment, so the eviction order is plain least-recently-used and deterministic.
+    */
   def nodeCache(nodeStorage: NodeStorage): LruCache[NodeHash, HeapEntry] =
     new LruCache[NodeHash, HeapEntry](
       new NodeCacheConfig:
-        override val maxSize: Long = 1_280_000
+        override val maxSize: Long = 2
         override val maxHoldTime: FiniteDuration = 60.minutes
       ,
       Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
     )
+
+  /** The old and new builds of the fixture named `name`. */
+  def fixture(name: String): (PathHealPresenceFixtures.Trie, PathHealPresenceFixtures.Trie) =
+    name match
+      case "account" => (PathHealPresenceFixtures.accountTrieOld(), PathHealPresenceFixtures.accountTrieNew())
+      case "storage" => (PathHealPresenceFixtures.storageTrieOld(), PathHealPresenceFixtures.storageTrieNew())
+      case other     => throw new IllegalArgumentException(s"unknown fixture $other")
+
+  /** The node `repeg-partial` never serves, so the nodes above it stay held across the re-peg. */
+  def withheldLabel(fixture: String): String = if fixture == "storage" then "sLeaf1" else "brX"
 
 /** Decides, at each commit write, whether this is the kill point; prints `KP:<point>` and parks the writing thread. */
 final class KillGate(point: String):
@@ -204,7 +224,12 @@ final class KillGate(point: String):
         apply()
         signal(point)
         park()
-      case "repeg-partial" | "repeg-full" if repegArmed.get() && !signalled.get() =>
+      // vault V4 (e): the re-peg points count only writes that put a node; a write that only deletes is its own point.
+      case "repeg-partial" | "repeg-full" if repegArmed.get() && nodes >= 1 && !signalled.get() =>
+        apply()
+        signal(point)
+        park()
+      case "repeg-delete" if repegArmed.get() && nodes == 0 && !signalled.get() =>
         apply()
         signal(point)
         park()

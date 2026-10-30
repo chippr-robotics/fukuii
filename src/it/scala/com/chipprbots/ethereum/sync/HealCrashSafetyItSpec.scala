@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.sync
 
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.nio.file.Files
 import java.nio.file.Path
@@ -18,6 +19,7 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealCrashChild
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
@@ -46,55 +48,84 @@ import com.chipprbots.ethereum.testing.Tags.*
   * stops at a kill point, printing `KP:<point>`. This JVM then sends SIGKILL (`destroyForcibly`; the exit status 137
   * proves the signal), reopens the database and audits every node stored in it: each hash-referenced child must be
   * present (Path: at its own position, with the right hash; Hash: by hash, under the pruning mode's encoding), and an
-  * account leaf's storage root likewise. Parameterised over the storage scheme and `pruning.mode` (basic, inmemory).
-  * Nothing waits on time: the child signals on stdout, which this JVM reads line by line.
+  * account leaf's storage root likewise. Nothing waits on time: the child signals on stdout, which this JVM reads line
+  * by line.
+  *
+  * Parameters: the storage scheme; the fixture (`account`: branches, an extension and leaves; `storage`: an account
+  * leaf over a storage trie, so a Path chain commit spans both trie column families and the audit checks the storage
+  * root); and `pruning.mode`, for the Hash scheme only (the Path scheme writes the path store directly whatever the
+  * pruning mode, so a Path `inmemory` run would repeat the `basic` one, vault V4 (a)).
   *
   * Kill points (see `HealCrashChild`): after a node is held, inside a commit write before and after it is applied, and
-  * in the first commit write after a re-peg, with nodes held (`repeg-partial`) or the old trie healed (`repeg-full`).
+  * in the first commit write after a re-peg that writes a node, with nodes held (`repeg-partial`) or the old trie
+  * healed (`repeg-full`); under Path also in the first write after a re-peg that only deletes (`repeg-delete`).
   *
   * Not here: the fourth kill point of tasks.md, "mid-excluded-set write". The excluded-account store is slice 3
   * (T032-T035); its kill point is added with it.
   *
-  * Under in-memory pruning the Hash-scheme writes reach the node cache, not disk, before a forced persist, so those
-  * runs audit an empty store; they still prove a kill loses nothing that was durable. (The cache's eviction handler
-  * writes evicted nodes one by one in recency order: a storage-layer property this harness does not exercise, reported
-  * to vault.)
+  * Under in-memory pruning (Hash) the invariant is NOT claimed (spec.md, after FR-004; vault V3): the node cache, two
+  * entries here, writes what it evicts one node at a time, least recently used first, so a kill can leave a present
+  * node over an absent child. Those runs check that the kill point is reached and that eviction put nodes on disk, and
+  * report the audit's result without asserting it; the pruned verification is off under that mode, and the full
+  * verification walk decides completion.
   */
 class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
 
-  private val schemes = Seq("path", "hash")
-  private val prunings = Seq("basic", "inmemory")
-  private val points = Seq("held", "chain-before", "chain-after", "repeg-partial", "repeg-full")
+  private val fixtures = Seq("account", "storage")
+  private val basePoints = Seq("held", "chain-before", "chain-after", "repeg-partial", "repeg-full")
 
-  for
-    scheme <- schemes
-    pruning <- prunings
-    point <- points
-  do
-    "Healing under kill -9" should s"leave no present node with an absent child: $scheme, pruning $pruning, kill at $point" taggedAs (
+  private val cells: Seq[(String, String, String, String)] =
+    for
+      (scheme, prunings, points) <- Seq(
+        ("path", Seq("basic"), basePoints :+ "repeg-delete"),
+        ("hash", Seq("basic", "inmemory"), basePoints)
+      )
+      fixture <- fixtures
+      pruning <- prunings
+      point <- points
+    yield (scheme, fixture, pruning, point)
+
+  for (scheme, fixture, pruning, point) <- cells do
+    val claim =
+      if pruning == "inmemory" then "evict nodes to disk (the invariant is not claimed under in-memory pruning)"
+      else "leave no present node with an absent child"
+    "Healing under kill -9" should s"$claim: $scheme, $fixture trie, pruning $pruning, kill at $point" taggedAs (
       IntegrationTest,
       DatabaseTest,
       SlowTest
     ) in {
-      val dir = Files.createTempDirectory(s"heal-crash-$scheme-$pruning-$point")
-      val (signal, output, exit) = runAndKill(dir, scheme, pruning, point)
+      val dir = Files.createTempDirectory(s"heal-crash-$scheme-$fixture-$pruning-$point")
+      val (signal, output, exit) = runAndKill(dir, scheme, pruning, fixture, point)
       withClue(s"child output:\n${output.mkString("\n")}\n") {
         signal shouldBe s"KP:$point"
         exit shouldBe 137 // SIGKILL
       }
       val audit = auditStore(dir, scheme, pruning)
+      val (_, newTrie) = HealCrashChild.fixture(fixture)
       withClue(s"${audit.nodes} node(s) on disk; violations:\n${audit.violations.mkString("\n")}\n") {
-        audit.violations shouldBe empty
-        // Where the kill lands after a write that put nodes on disk, the audit had nodes to check.
-        val durable = !(scheme == "hash" && pruning == "inmemory")
-        if durable && (point == "chain-after" || point == "repeg-full") then audit.nodes should be > 0
+        // Where the kill lands after a write that put nodes on disk, the audit had nodes to check (eye F10: the
+        // re-peg-with-held-nodes point included, whose earlier subtree commit is on disk).
+        if Set("chain-after", "repeg-partial", "repeg-full")(point) then audit.nodes should be > 0
+        if pruning == "inmemory" then
+          info(s"in-memory pruning: ${audit.violations.size} present node(s) over an absent child (not asserted)")
+        else
+          audit.violations shouldBe empty
+          // vault V4 (e): repeg-full is killed right after the first write of new nodes; old nodes alone would satisfy
+          // `nodes > 0`, so the new root itself must be on disk.
+          if point == "repeg-full" then audit.present should contain(newTrie.root.hash)
       }
     }
 
   // ---- the child ------------------------------------------------------------------------------------------------------
 
   /** Start the child, wait for its kill-point line, SIGKILL it. Returns the line, all output, and the exit status. */
-  private def runAndKill(dir: Path, scheme: String, pruning: String, point: String): (String, Seq[String], Int) =
+  private def runAndKill(
+      dir: Path,
+      scheme: String,
+      pruning: String,
+      fixture: String,
+      point: String
+  ): (String, Seq[String], Int) =
     val java = Paths.get(System.getProperty("java.home"), "bin", "java").toString
     val command = Seq(
       java,
@@ -108,6 +139,7 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
       dir.toAbsolutePath.toString,
       scheme,
       pruning,
+      fixture,
       point
     )
     val process = new ProcessBuilder(command*).redirectErrorStream(true).start()
@@ -115,7 +147,9 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
     val EndOfOutput = "\u0000EOF"
     val reader = new Thread(() =>
       val in = new BufferedReader(new InputStreamReader(process.getInputStream))
-      Iterator.continually(in.readLine()).takeWhile(_ != null).foreach(lines.put)
+      // The kill closes the stream under the reader: that is the end of the output, not an error (vault V4 (i)).
+      try Iterator.continually(in.readLine()).takeWhile(_ != null).foreach(lines.put)
+      catch case _: IOException => ()
       lines.put(EndOfOutput)
     )
     reader.setDaemon(true)
@@ -139,7 +173,8 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
 
   // ---- the audit ------------------------------------------------------------------------------------------------------
 
-  final private case class Audit(nodes: Int, violations: Seq[String])
+  /** `present`: the hashes of the well-formed nodes on disk. */
+  final private case class Audit(nodes: Int, violations: Seq[String], present: Set[ByteString])
 
   private def auditStore(dir: Path, scheme: String, pruning: String): Audit =
     val source = RocksDbDataSource(rocksConfig(dir.toAbsolutePath.toString), Namespaces.nsSeq)
@@ -186,6 +221,7 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
 
   private def auditPath(pns: PathNodeStorage): Audit =
     val violations = mutable.ArrayBuffer.empty[String]
+    val present = mutable.Set.empty[ByteString]
     var nodes = 0
     def presentAt(owner: Option[ByteString], nibbles: Array[Byte], hash: ByteString): Boolean =
       owner
@@ -198,6 +234,7 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
       Try(MptTraversals.decodeNode(rlp)).toOption match
         case None => violations += s"$where: does not decode"
         case Some(node) =>
+          present += ByteString(kec256(rlp))
           val (kids, storageRoot) = children(node, nibbles)
           kids.foreach { case (childNibbles, hash) =>
             if !presentAt(owner, childNibbles, hash) then
@@ -211,7 +248,7 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
     pns.foreachStorageNodeChunk(1000)(_.foreach { case (k, v) =>
       check(Some(ByteString(k.take(32))), k.drop(32), v)
     })
-    Audit(nodes, violations.toSeq)
+    Audit(nodes, violations.toSeq, present.toSet)
 
   private def auditHash(source: RocksDbDataSource, pruning: String): Audit =
     val nodeStorage = new NodeStorage(source)
@@ -231,10 +268,12 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
       .collect { case Right((k, _)) => ByteString(k) }
       .filter(_.length == 32)
     val violations = mutable.ArrayBuffer.empty[String]
+    val present = mutable.Set.empty[ByteString]
     var nodes = 0
     keys.foreach { key =>
       nodeBytes(key).foreach { rlp =>
         nodes += 1
+        present += key
         Try(MptTraversals.decodeNode(rlp)).toOption.foreach { node =>
           val (kids, storageRoot) = children(node, Array.empty, positioned = false)
           (kids.map(_._2) ++ storageRoot.map(_._2)).foreach { hash =>
@@ -243,7 +282,7 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
         }
       }
     }
-    Audit(nodes, violations.toSeq)
+    Audit(nodes, violations.toSeq, present.toSet)
 
   private def rocksConfig(dbPath: String): RocksDbConfig =
     new RocksDbConfig:
