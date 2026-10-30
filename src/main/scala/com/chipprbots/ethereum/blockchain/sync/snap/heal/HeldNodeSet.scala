@@ -30,6 +30,11 @@ import scala.collection.mutable
   * before the node later written there. They are not deferred to the parent's commit: by then the child has been
   * written at its position, and the delete would remove it.
   *
+  * '''Code (spec 022 D4, geth `AddCodeEntry`).''' An account leaf whose bytecode is not in the code store waits on it:
+  * one more outstanding count, closed by [[codeArrived]] only once the bytecode coordinator has written it. So a leaf
+  * reaches disk only with its code, and everything above it waits too. [[awaitingCode]] tells the orphan guard that such
+  * a node is not an orphan: something is still expected to complete it.
+  *
   * '''Memory.''' [[bytes]] estimates the heap the entries use. The bound and the pause it drives are the caller's.
   *
   * Actor-confined: not thread-safe.
@@ -42,6 +47,8 @@ final class HeldNodeSet:
   // Ids of the entries whose count is 0 and that are not committed yet, in the order they became ready.
   private val ready = mutable.LinkedHashSet.empty[ByteString]
   private val deletes = mutable.ArrayBuffer.empty[(Option[ByteString], Array[Byte])]
+  // code hash -> the ids of the entries waiting on it, one wait per entry.
+  private val codeWaiters = mutable.HashMap.empty[ByteString, mutable.LinkedHashSet[ByteString]]
   private var heldBytes: Long = 0L
 
   /** Held entries, ready ones included. */
@@ -65,18 +72,51 @@ final class HeldNodeSet:
   /** The entry held at `request`'s key (a position under Path, the node under Hash), whatever node it is. */
   def heldAt(key: ByteString): Option[Entry] = byKey.get(key).flatMap(entries.get)
 
-  /** Hold `request`'s node, `node`, waiting on `outstanding` child edges, closing `parents` when committed. With
-    * `outstanding` 0 it is ready at once. Any node held at the same key is dropped first (see [[drop]]).
+  /** Hold `request`'s node, `node`, waiting on `outstanding` child edges, and on `code` when its bytecode is missing,
+    * closing `parents` when committed. With neither it is ready at once. Any node held at the same key is dropped first
+    * (see [[drop]]).
     */
-  def hold(request: HealRequest, node: ByteString, outstanding: Int, parents: Seq[ByteString]): Entry =
+  def hold(
+      request: HealRequest,
+      node: ByteString,
+      outstanding: Int,
+      parents: Seq[ByteString],
+      code: Option[CodeDependency] = None
+  ): Entry =
     val id = idOf(request)
     byKey.get(request.key).foreach(drop)
-    val entry = new Entry(id, request, node, outstanding, parents.toList)
+    val entry = new Entry(id, request, node, outstanding + code.size, parents.toList, code)
     entries(id) = entry
     byKey(request.key) = id
     heldBytes += entry.estimatedBytes
-    if outstanding <= 0 then ready += id
+    code.foreach(c => codeWaiters.getOrElseUpdate(c.codeHash, mutable.LinkedHashSet.empty) += id)
+    if entry.outstanding <= 0 then ready += id
     entry
+
+  /** Whether a held node waits on bytecode. */
+  def awaitingCode: Boolean = codeWaiters.nonEmpty
+
+  /** The bytecode the held nodes wait on: each code hash with the accounts waiting on it. */
+  def awaitedCode: Map[ByteString, Seq[ByteString]] =
+    codeWaiters.iterator.map { case (hash, ids) =>
+      hash -> ids.iterator.flatMap(entries.get).flatMap(_.code).map(_.account).toVector
+    }.toMap
+
+  /** The bytecode `codeHash` has been written: every entry waiting on it loses that count, and is ready if it was the
+    * last. Returns how many waited. A hash nothing waits on changes nothing.
+    */
+  def codeArrived(codeHash: ByteString): Int =
+    codeWaiters.remove(codeHash) match
+      case None => 0
+      case Some(ids) =>
+        ids.foreach { id =>
+          entries.get(id).foreach { e =>
+            e.code = None
+            e.outstanding -= 1
+            if e.outstanding <= 0 then ready += id
+          }
+        }
+        ids.size
 
   /** Give the held `child` an edge from each of `parents` (a re-processed node's request was satisfied again, or a
     * parent found the child held). Returns how many edges were added.
@@ -156,6 +196,12 @@ final class HeldNodeSet:
     entries.remove(id).foreach { e =>
       if byKey.get(e.request.key).contains(id) then byKey.remove(e.request.key)
       ready -= id
+      e.code.foreach { c =>
+        codeWaiters.get(c.codeHash).foreach { ids =>
+          ids -= id
+          if ids.isEmpty then codeWaiters.remove(c.codeHash)
+        }
+      }
       heldBytes -= e.estimatedBytes
     }
 
@@ -173,6 +219,7 @@ final class HeldNodeSet:
     byKey.clear()
     ready.clear()
     deletes.clear()
+    codeWaiters.clear()
     heldBytes = 0L
 
 object HeldNodeSet:
@@ -191,17 +238,26 @@ object HeldNodeSet:
   def idOf(request: HealRequest): ByteString =
     if request.key == request.hash then request.key else request.key ++ request.hash
 
-  /** One held node. `outstanding` and `parents` change as children commit and parents attach. */
+  /** What a held account leaf waits on besides its children: the bytecode `codeHash` of `account` (empty when the
+    * leaf's position does not give a full 64-nibble account hash).
+    */
+  final case class CodeDependency(codeHash: ByteString, account: ByteString)
+
+  /** One held node. `outstanding` and `parents` change as children commit and parents attach. `outstanding` counts the
+    * bytecode wait, if any.
+    */
   final class Entry private[HeldNodeSet] (
       val id: ByteString,
       val request: HealRequest,
       val node: ByteString,
       var outstanding: Int,
-      var parents: List[ByteString]
+      var parents: List[ByteString],
+      private[HeldNodeSet] var code: Option[CodeDependency] = None
   ):
     private[HeldNodeSet] var estimatedBytes: Long =
       EntryBytes + node.length + id.length + request.key.length + request.hash.length +
-        request.pathset.iterator.map(_.length + 16L).sum + EdgeBytes * parents.size
+        request.pathset.iterator.map(_.length + 16L).sum + EdgeBytes * parents.size +
+        code.fold(0L)(c => CodeWaitBytes + c.codeHash.length + c.account.length)
 
   /** One commit write: `nodes` children first, the parent decrements it applies, and the deletes it carries. */
   final case class CommitPlan(
@@ -216,3 +272,4 @@ object HeldNodeSet:
   private val EntryBytes: Long = 240L
   private val EdgeBytes: Long = 24L
   private val DeleteBytes: Long = 80L
+  private val CodeWaitBytes: Long = 96L

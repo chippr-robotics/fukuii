@@ -85,6 +85,19 @@ class StorageRangeCoordinatorSpec
       )
     )
 
+  // spec 022 T033: where the coordinator records what it leaves incomplete. Shared by the spec's tests, whose account
+  // hashes are unique.
+  final private class SyncFailingDataSource extends EphemDataSource(Map.empty):
+    @volatile var failSync: Boolean = false
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
+      super.updateSync(updates)
+  private val progressSource = new SyncFailingDataSource
+  private val progressStore = new SnapSyncProgressStorage(progressSource)
+
+  private def excluded(account: ByteString): Option[com.chipprbots.ethereum.db.storage.ExcludedAccount] =
+    progressStore.excludedPage(None, 100000).find(_.subject == account)
+
   // The coordinator's StateIngest (spec 016 C-S2, C-S3): these tests run the Hash scheme, so the coordinator reads only
   // `pathNodes` (None) and `flatSlots` (the test's flat-slot store) from it; every other member throws.
   private def hashSchemeIngest(flatSlotStore: FlatSlotStorage): StateIngest =
@@ -99,7 +112,7 @@ class StorageRangeCoordinatorSpec
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progressStore
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
@@ -2129,3 +2142,118 @@ class StorageRangeCoordinatorSpec
     off.completedAccountCount shouldBe 1L
     off.pendingDoneMarkers shouldBe empty
   }
+
+  // ---- spec 022 T033: every decision that leaves an account incomplete is recorded durably as it is made ----------------
+
+  private def excludedFixture(deferred: Boolean = false) =
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("excluded-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = controller.ref,
+      deferredMerkleization = deferred
+    )
+    (impl, kit, controller)
+
+  "A force-complete" should "record every account it abandons before it reports, whatever state its tasks were in" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val queued = kec256(ByteString("excluded-queued"))
+    val queuedRoot = kec256(ByteString("excluded-queued-root"))
+    val chunked = kec256(ByteString("excluded-chunked"))
+    val partial = kec256(ByteString("excluded-partial"))
+    kit.run(StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(queued, queuedRoot))))
+    // A chunk waiting on an earlier sibling, in the ordering gate.
+    impl.storageTrieCursor(chunked) = kec256(ByteString("excluded-earlier"))
+    val peer = PeerTestHelpers.createTestPeer("excluded-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val late = StorageTask.createStorageTask(chunked, kec256(ByteString("excluded-chunked-root")))
+      .copy(next = kec256(ByteString("excluded-later")))
+    impl.applyOrderedStorageChunk(peer, late, doneSlots, Seq.empty)
+    // A trie with no task left in any queue.
+    impl.pendingAccountTries(partial) = new com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie(_ => ())
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(queued).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
+    excluded(queued).map(_.claimedStorageRoot) shouldBe Some(queuedRoot)
+    excluded(chunked) shouldBe defined
+    excluded(partial) shouldBe defined
+  }
+
+  it should "report nothing, keep its work and try again when the record cannot be written (P3)" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val account = kec256(ByteString("excluded-failed-write"))
+    kit.run(
+      StorageRangeCoordinator.AddStorageTasks(
+        Seq(StorageTask.createStorageTask(account, kec256(ByteString("excluded-failed-write-root"))))
+      )
+    )
+    progressSource.failSync = true
+    try kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    finally progressSource.failSync = false
+    controller.expectNoMessage(50.millis)
+    impl.tasks.map(_.accountHash) should contain(account)
+    excluded(account) shouldBe None
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage) // the retry its timer sends
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(account) shouldBe defined
+  }
+
+  "A give-up" should "record the account as abandoned before it drops its tasks" taggedAs UnitTest in {
+    val (impl, _, _) = excludedFixture(deferred = true)
+    val account = kec256(ByteString("excluded-give-up"))
+    val root = kec256(ByteString("excluded-give-up-root"))
+    val task = StorageTask.createStorageTask(account, root)
+    val peers = Seq("gu-a", "gu-b", "gu-a").map(id =>
+      PeerTestHelpers.createTestPeer(id, testKit.createTestProbe[Any]().ref.toClassic)
+    )
+    peers.zipWithIndex.foreach { case (p, i) =>
+      impl.processServedTasks(
+        p,
+        Seq(task),
+        BigInt(1024),
+        StorageRanges(requestId = i + 1, slots = Seq(Seq(slotKey(0x10) -> ByteString("bad-value"))), proof = Seq.empty),
+        servedCount = 1
+      )
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+    }
+    impl.abandonedAccounts should contain(account)
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
+  }
+
+  "A max-empty skip" should "record the account as skipped: the decision is durable before the task is dropped" taggedAs UnitTest in {
+    val (impl, _, _) = excludedFixture(deferred = true)
+    val account = kec256(ByteString("excluded-skip"))
+    val root = kec256(ByteString("excluded-skip-root"))
+    val task = StorageTask.createStorageTask(account, root)
+    val peer = PeerTestHelpers.createTestPeer("skip-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    (1 to 5).foreach { i =>
+      excluded(account) shouldBe None
+      impl.activeTasks(BigInt(i)) = (peer, Seq(task), BigInt(1024))
+      impl.handleResponse(StorageRanges(requestId = i, slots = Seq.empty, proof = Seq.empty))
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+    }
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
+  }
+
+  "A root mismatch" should "record the account: the computed trie is not the account's" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    val account = kec256(ByteString("excluded-mismatch"))
+    val claimed = kec256(ByteString("excluded-mismatch-root"))
+    completeAccount(impl, account, claimed)
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(claimed)
+  }
+
+  it should "record nothing when the computed root matches" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    val account = kec256(ByteString("excluded-match"))
+    completeAccount(impl, account, storageRootOf(doneSlots))
+    excluded(account) shouldBe None
+  }
+

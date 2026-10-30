@@ -691,6 +691,8 @@ private class SNAPSyncControllerImpl(
           Behaviors.same
         case _: HealedCodeHashes =>
           ctx.log.debug("Dropping stale HealedCodeHashes in idle"); Behaviors.same
+        case _: ByteCodesStored =>
+          ctx.log.debug("Dropping stale ByteCodesStored in idle"); Behaviors.same
         case HealedCodeWaitTimeout =>
           ctx.log.debug("Dropping stale HealedCodeWaitTimeout in idle"); Behaviors.same
         case HealingAllPeersStateless =>
@@ -1287,6 +1289,11 @@ object SNAPSyncController:
 
   /** TrieNodeHealingCoordinator -> controller: healed account leaves whose bytecode is not in `EvmCodeStorage`. */
   final case class HealedCodeHashes(codeHashes: Seq[ByteString]) extends Command
+
+  /** spec 022 D4: the bytecode coordinator's write of `codeHashes` has returned. Forwarded to the healing coordinator,
+    * where an account leaf waits on its code.
+    */
+  final case class ByteCodesStored(codeHashes: Seq[ByteString]) extends Command
 
   /** The bounded wait for that bytecode ran out. */
   private[snap] case object HealedCodeWaitTimeout extends Command

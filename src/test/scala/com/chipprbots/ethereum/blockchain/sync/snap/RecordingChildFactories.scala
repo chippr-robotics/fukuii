@@ -317,7 +317,9 @@ final class RecordingChildFactories(
       movingRootDeltaHeal: Boolean,
       healedCodeCheck: Boolean,
       walkLocalOnly: Option[AtomicBoolean],
-      heldMemoryLimit: Long
+      heldMemoryLimit: Long,
+      excludedAccounts: Boolean,
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
     spawns ! ChildSpawn.Healing(

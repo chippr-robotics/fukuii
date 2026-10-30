@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.blockchain.sync.snap.heal
 
 import java.util.concurrent.atomic.AtomicLong
 
+import scala.collection.mutable
+
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 
 /** The right to run a frontier walk on one BFS queue (spec 022 review hunter W1, forge W-r4-2, vault-r3 W1, beacon
@@ -21,20 +23,48 @@ import com.chipprbots.ethereum.db.storage.BfsQueueStorage
   * Thread-safe: taken on a coordinator's actor thread, given back on the walk's thread.
   */
 final class WalkLease private ():
-  private val holder = new AtomicLong(WalkLease.Free)
+  private var holder: Long = WalkLease.Free
+  @volatile private var cancelled: Long = WalkLease.Free
+  private val waiters = mutable.LinkedHashSet.empty[() => Unit]
 
-  /** Take the lease for a new walk: its token, or `None` while another walk holds it. */
-  def tryAcquire(): Option[Long] =
+  /** Take the lease for a new walk: its token, or `None` while another walk holds it. A refused caller's `onFree`, if
+    * any, runs once when the walk holding the lease gives it back (see [[release]]).
+    */
+  def tryAcquire(onFree: Option[() => Unit] = None): Option[Long] =
     val token = WalkLease.tokens.incrementAndGet()
-    Option.when(holder.compareAndSet(WalkLease.Free, token))(token)
+    synchronized {
+      if holder == WalkLease.Free then
+        holder = token
+        Some(token)
+      else
+        onFree.foreach(waiters += _)
+        None
+    }
 
-  /** Give the lease back: only the walk holding it, by its token, can (a stale token changes nothing). */
+  /** Give the lease back: only the walk holding it, by its token, can (a stale token changes nothing). Wakes whoever it
+    * refused meanwhile, on this thread, after the lease is free.
+    */
   def release(token: Long): Unit =
-    holder.compareAndSet(token, WalkLease.Free)
-    ()
+    val woken = synchronized {
+      if holder == token then
+        holder = WalkLease.Free
+        val refused = waiters.toList
+        waiters.clear()
+        refused
+      else Nil
+    }
+    woken.foreach(_())
+
+  /** Ask the walk `token` to stop: it checks [[isCancelled]] as it goes, and holds the lease until it has stopped. A
+    * walk that no longer holds the lease is not affected.
+    */
+  def cancel(token: Long): Unit =
+    synchronized(if holder == token then cancelled = token)
+
+  def isCancelled(token: Long): Boolean = cancelled == token
 
   /** Whether a walk holds the lease. */
-  def held: Boolean = holder.get() != WalkLease.Free
+  def held: Boolean = synchronized(holder != WalkLease.Free)
 
 object WalkLease:
   private val Free = 0L

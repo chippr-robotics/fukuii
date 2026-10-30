@@ -60,6 +60,10 @@ private[actors] class StubByteCodeResponseHandlingState(
     with ByteCodeDispatchApi
     with ByteCodeCompletionApi:
 
+  // spec 022 T033: where a give-up is recorded.
+  val progressStore: SnapSyncProgressStorage =
+    new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+
   // ByteCodeResponseHandlingState
   val activeTasks: mutable.Map[BigInt, ActiveByteCodeRequest] = mutable.Map.empty
   var bytecodesDownloaded: Long = 0L
@@ -90,7 +94,7 @@ private[actors] class StubByteCodeResponseHandlingState(
     def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
     def durability: StateIngest.Durability = StateIngest.Durability.Default
     def trieStore(pivot: BigInt): MptStorage = notUsed("trieStore")
-    def snapProgress: SnapSyncProgressStorage = notUsed("snapProgress")
+    def snapProgress: SnapSyncProgressStorage = progressStore
     def storageDone: SnapStorageDoneStorage = notUsed("storageDone")
     def healingFrontier: Option[HealingFrontierStorage] = notUsed("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notUsed("bfsQueue")
@@ -167,7 +171,10 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.bytesDownloaded shouldBe codes.map(_.size.toLong).sum
     m.consecutiveTaskFailures shouldBe 0
     m.hashFailureCounts shouldBe empty
-    controller.receiveAll() shouldBe Seq(SNAPSyncController.ProgressBytecodesDownloaded(2L))
+    controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.ByteCodesStored(codes.map(kec256(_))),
+      SNAPSyncController.ProgressBytecodesDownloaded(2L)
+    )
     worker.receiveAll() shouldBe Seq(ByteCodeWorkerRelease(BigInt(7)))
     m.idled.toSeq shouldBe Seq(worker.ref)
     m.calls.toSeq shouldBe Seq(s"grow p1 1000 ${codes.map(_.size).sum}", "clear p1")
@@ -190,7 +197,10 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.completedTaskCount shouldBe 0L
     m.bytecodesDownloaded shouldBe 1L
     m.activeTasks shouldBe empty
-    controller.receiveAll() shouldBe Seq(SNAPSyncController.ProgressBytecodesDownloaded(1L))
+    controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.ByteCodesStored(Seq(kec256(served))),
+      SNAPSyncController.ProgressBytecodesDownloaded(1L)
+    )
     m.completionChecks shouldBe 1
   }
 
@@ -275,3 +285,35 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
       Seq(h1, ByteString(Array[Byte](1, 2, 3)), Account.EmptyCodeHash.value, h2, h1)
     ) shouldBe Seq(h1, h2)
   }
+
+  // ---- spec 022 T033, T036 ---------------------------------------------------------------------------------------------
+
+  it should "acknowledge nothing when the write fails: the bytecode is not there to depend on (T036)" taggedAs UnitTest in {
+    val controller = TestInbox[SNAPSyncController.Command]()
+    val failingCodes = new TestEvmCodeStorage():
+      override def put(key: ByteString, value: ByteString) = throw new RuntimeException("injected code write failure")
+    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref) with ByteCodeResponseHandling
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val c = code(1)
+    inFlight(m, Seq(kec256(c)), worker.ref, peer("p1"))
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq(c)))
+    controller.receiveAll().collect { case a: SNAPSyncController.ByteCodesStored => a } shouldBe empty
+  }
+
+  it should "record a hash it gives up on, durably, before it forgets it (T033)" taggedAs UnitTest in {
+    val (m, _) = newModule()
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val exhausted = kec256(code(1))
+    val retried = kec256(code(2))
+    m.hashFailureCounts(exhausted) = 49
+    inFlight(m, Seq(exhausted, retried), worker.ref, peer("p1"))
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq.empty))
+    m.progressStore.excludedPage(None, 10) shouldBe Seq(
+      com.chipprbots.ethereum.db.storage.ExcludedAccount(
+        exhausted,
+        com.chipprbots.ethereum.db.storage.ExcludedReason.CodeMissing
+      )
+    )
+    m.pendingTasks.toSeq shouldBe Seq(ByteCodeTask(Seq(retried)))
+  }
+

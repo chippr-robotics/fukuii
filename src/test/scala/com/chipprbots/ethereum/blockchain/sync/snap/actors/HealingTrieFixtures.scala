@@ -64,7 +64,8 @@ object HealingTrieFixtures:
       frontier: Option[HealingFrontierStorage],
       bfsQueueStore: Option[BfsQueueStorage] = None,
       pathNodeStore: Option[PathNodeStorage] = None,
-      codeStore: Option[EvmCodeStorage] = None
+      codeStore: Option[EvmCodeStorage] = None,
+      progressStore: Option[SnapSyncProgressStorage] = None
   ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = notReached("appState")
@@ -77,7 +78,7 @@ object HealingTrieFixtures:
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progressStore.getOrElse(notReached("snapProgress"))
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = frontier
       def bfsQueue: Option[BfsQueueStorage] = bfsQueueStore
@@ -130,7 +131,9 @@ object HealingTrieFixtures:
       // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.
       evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
-      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+      // Where the excluded set lives; Some(_) makes the coordinator work it (spec 022 D5).
+      excludedStore: Option[SnapSyncProgressStorage] = None
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -142,7 +145,8 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest = healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage),
+        stateIngest =
+          healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage, excludedStore),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
@@ -161,7 +165,8 @@ object HealingTrieFixtures:
         movingRootDeltaHeal = movingRootDeltaHeal,
         healedCodeCheck = evmCodeStorage.isDefined,
         walkLocalOnly = walkLocalOnly,
-        heldMemoryLimit = heldMemoryLimit
+        heldMemoryLimit = heldMemoryLimit,
+        excludedAccounts = excludedStore.isDefined
       )
     )
 

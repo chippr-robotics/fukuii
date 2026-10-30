@@ -78,6 +78,9 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       )
     )
 
+  // spec 022 T033: where a force-complete records what it abandons.
+  private val progressStore = new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+
   // ByteCodeCoordinator takes one `StateIngest` (spec 016 C-B1). It reads only `bytecode`; any other member fails
   // loudly, so a test that reaches one is a change in what the coordinator reads.
   private def bytecodeIngest(evmCodeStorage: EvmCodeStorage): StateIngest =
@@ -92,7 +95,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progressStore
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
@@ -666,6 +669,10 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     // Force-complete drains the queue and signals the parent.
     coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
     snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+
+    // spec 022 T033: every hash it abandoned is in the durable excluded set by the time it reports.
+    val recorded = progressStore.excludedPage(None, 1000).map(_.subject).toSet
+    codeHashes.foreach(h => recorded should contain(h))
   }
 
   // ForceCompleteByteCodes may fire while tasks are still in activeTasks (e.g. the 10-min stall

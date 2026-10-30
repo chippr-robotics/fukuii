@@ -89,7 +89,7 @@ final private class RecordingMptStorage(frontier: => Option[HealingFrontierStora
 /** An execution context that runs nothing until the test says so ([[runAll]]): a flush's Future, and its completion
   * callback, wait in its queue, so a test decides exactly when an asynchronous write happens.
   */
-final private class ManualExecutionContext extends ExecutionContext:
+final private[snap] class ManualExecutionContext extends ExecutionContext:
   private val queue = mutable.Queue.empty[Runnable]
   def execute(runnable: Runnable): Unit = queue.synchronized(queue.enqueue(runnable))
   def reportFailure(cause: Throwable): Unit = throw cause

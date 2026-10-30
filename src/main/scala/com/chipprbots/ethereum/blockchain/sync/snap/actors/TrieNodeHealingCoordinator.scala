@@ -105,7 +105,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
     // spec 022 D1: the held-memory bound, in bytes (held nodes, the flush buffer and the live requests). At it, no new
     // subtree is opened; fetches that let held nodes commit continue. `sync.snap-sync.healing.held-memory-limit`.
-    heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
+    heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+    // spec 022 D5: whether this coordinator works the durable excluded set (`stateIngest.snapProgress`). The production
+    // spawn passes true; false (bare construction, most specs) never reads the store.
+    excludedAccounts: Boolean = false
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -121,6 +124,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   import TrieNodeHealingCoordinator.*
 
   val log = context.log
+  locally(excludedAccounts) // SCAFFOLD
   // `self` was a Classic field; under Typed it is `context.self`. Captured here so the Future continuations,
   // scheduled timers and the request-tracker timeout callback reference the same value the old code expected.
   val self: org.apache.pekko.actor.typed.ActorRef[Command] = context.self
@@ -1543,6 +1547,11 @@ object TrieNodeHealingCoordinator:
     */
   val MinInFlightPerPeer: Int = 2
 
+  /** spec 022 T037: minutes (ticks of [[HealingBlockedTick]]) with bytecode or the excluded set holding healing up and
+    * no progress at all before healing falls back to `StateHealingAbandoned`.
+    */
+  val MaxBlockedTicks: Int = 30
+
   /** spec 022 review forge F2: fills in a row whose stored children could not be read before a healed node is given up
     * on (not fetched again; its parents are left to the orphan guard). The first failures are fetched again: a read can
     * fail once and work the next time.
@@ -1564,6 +1573,11 @@ object TrieNodeHealingCoordinator:
   case object HealingForceComplete extends Command
   case class WalkStateChanged(inProgress: Boolean) extends Command
   case class UpdateMaxInFlightPerPeer(newLimit: Int) extends Command
+
+  /** spec 022 D4: the bytecode of `codeHashes` has been written (the bytecode coordinator's acknowledgement, through the
+    * controller). Each is sent only after its write returned.
+    */
+  final case class HealedCodeStored(codeHashes: Seq[ByteString]) extends Command
   sealed trait WorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends WorkerMessage
   case class TrieNodesResponseMsg(response: TrieNodes) extends WorkerMessage with Command
@@ -1580,6 +1594,10 @@ object TrieNodeHealingCoordinator:
       sentAtMs: Long = System.currentTimeMillis()
   )
   private[actors] case object HealingStagnationCheck extends Command
+
+  // spec 022 T037: once a minute, while bytecode or the excluded set holds healing up: log, ask again, and give up after
+  // MaxBlockedTicks with no progress.
+  private[snap] case object HealingBlockedTick extends Command
 
   // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
   // the Typed behavior can receive them. They were plain `Any` messages under Classic.
@@ -1763,9 +1781,14 @@ object TrieNodeHealingCoordinator:
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
-      heldMemoryLimit: Long = DefaultHeldMemoryLimit
+      heldMemoryLimit: Long = DefaultHeldMemoryLimit,
+      excludedAccounts: Boolean = false,
+      // spec 022 T038b: the controller's current heal root, which it sets before it sends a re-peg. A supervisor restart
+      // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
+      locally(currentRoot) // SCAFFOLD
       Behaviors.withTimers { timers =>
         new TrieNodeHealingCoordinatorImpl(
           context,
@@ -1797,7 +1820,8 @@ object TrieNodeHealingCoordinator:
           movingRootDeltaHeal = movingRootDeltaHeal,
           healedCodeCheck = healedCodeCheck,
           walkLocalOnly = walkLocalOnly,
-          heldMemoryLimit = heldMemoryLimit
+          heldMemoryLimit = heldMemoryLimit,
+          excludedAccounts = excludedAccounts
         ).start()
       }
     }
