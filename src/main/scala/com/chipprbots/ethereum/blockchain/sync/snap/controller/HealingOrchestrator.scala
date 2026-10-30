@@ -39,6 +39,7 @@ private[snap] trait HealingOrchestratorState:
   def healedCodeHashes: mutable.LinkedHashSet[ByteString]
   def isPoSChain: Boolean
   def ec: ExecutionContext
+  def trieNodesCachedInMemory: Boolean
 
 private[snap] trait HealingApi:
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit
@@ -283,9 +284,13 @@ private[snap] trait HealingOrchestrator
     validateState()
 
   /** Persist the pivot block and state root healing completed against, in ONE write, synced (spec 022 T027, research
-    * R-3): this is the record that healing is complete for that root. Every healed node went to RocksDB before it, and
-    * the WAL is prefix-consistent, so a synced flag implies those nodes survive a power loss too; an unsynced flag
-    * could be lost while the node acts on it.
+    * R-3): this is the record that healing is complete for that root. Under archive and basic pruning every healed node
+    * went to RocksDB before it, and the WAL is prefix-consistent, so a synced flag implies those nodes survive a power
+    * loss too; an unsynced flag could be lost while the node acts on it. Under in-memory pruning the healed nodes may
+    * still be in the node cache (spec 022 review vault V3, V9): the finalization barrier persists the cache before the
+    * done flags (#1581), not before this anchor. The anchor (pivot, then root) goes in one batch after the
+    * coordinator's completion; the lazy-handoff anchor (`anchorPivotBeforeLazyHandoff`) stays unsynced by design: it
+    * claims no completion (eye F12).
     */
   private def persistHealedAnchorSync(): Unit =
     val anchors = pivotBlock.map(stateIngest.appState.putSnapSyncPivotBlock).toSeq ++
@@ -343,10 +348,23 @@ private[snap] trait HealingOrchestrator
     * `startStateHealingWithInterleave`. It opens the pivot's trie store, spawns the supervised coordinator with the
     * forwarded healing settings, sends it `StartTrieNodeHealing`, the healing in-flight budget and the current snap
     * peers, and (re)starts the 1 s peer-availability timer. Each route keeps its own guard, logs and follow-up around
-    * the call. `prunedHealVerification` is still not forwarded (#1502).
+    * the call. The `pruned-heal-verification` setting is still not forwarded (#1502).
+    *
+    * Under in-memory pruning (spec 022 review vault V3) healed nodes reach the node cache, not disk: the cache writes
+    * them as it evicts them, one by one, least recently used first (parents before children after a top-down walk), and
+    * its persist is a no-op. "Present implies complete" and "flushed means durable" therefore do not hold on disk, and
+    * a subtree-complete record written after a flush could vouch for nodes still only in the cache. So the pruned
+    * verification is off there (the full walk descends everywhere), as the storage-task markers are
+    * (`recordStorageDone`), and the verification walk stays the completion guarantee for that mode.
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+    if trieNodesCachedInMemory then
+      ctx.log.warn(
+        "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can leave " +
+          "a present node over an absent child. The pruned verification is off; the full verification walk decides " +
+          "completion."
+      )
 
     trieNodeHealingCoordinator = Some(
       ctx.spawn(
@@ -378,7 +396,8 @@ private[snap] trait HealingOrchestrator
               movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
               healedCodeCheck = true,
               walkLocalOnly = Some(healingWalkLocalOnly),
-              heldMemoryLimit = snapSyncConfig.healingHeldMemoryLimit
+              heldMemoryLimit = snapSyncConfig.healingHeldMemoryLimit,
+              prunedHealVerification = !trieNodesCachedInMemory
             )
           )
           .onFailure[Throwable](

@@ -115,6 +115,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - It sends `kill -9` at four points: after a node is held, mid-chain commit, mid-re-peg, and mid-excluded-set write.
   - It reopens the database and runs an audit asserting that no present node has an absent child.
   - Parameterise it over Path and Hash, and over `pruning.mode=basic` and `inmemory`.
+  - *Scope (slice 2 review, vault V3/V4, eye F10):* the invariant is claimed for archive and basic pruning only (spec.md, after FR-004). Under `inmemory` the Hash cells run with a node cache small enough to evict and audit what eviction wrote, without asserting the invariant; the Path cells ignore the pruning mode (the path store is written directly), so they run once.
   - **[vault]**
   - **Done in slice 2 for three of the four points** (held, mid-chain before and after the write, mid-re-peg with nodes held and with the old trie healed), 20 runs. The fourth, mid-excluded-set write, lands with the excluded-account store in slice 3 (T032-T035).
 
@@ -229,7 +230,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - Drop the `storageScheme == Path &&` condition from the stale-walk filter in the `FrontierRebuilt` arm, so stale-root batches are dropped on Hash as well. Slice 1 added the filter for Path only.
   - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
   **[forge]**
-- [ ] T051 [US1] Remove the completion gates:
+- [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; the verification walk stays the completion gate there, and the pruned verification stays off):
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
   - the `VerificationBFSComplete` arms and `MaxConsecutiveStaleDiscards` (`:1164-1250`);
   - the BFS start on a re-pegged root that is already present (`:666-690`): with the marker present, that case is complete immediately.

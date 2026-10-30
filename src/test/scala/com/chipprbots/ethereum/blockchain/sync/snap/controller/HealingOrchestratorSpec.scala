@@ -110,6 +110,7 @@ private[snap] class StubHealingOrchestratorState(
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
   def ec: ExecutionContext = notUsed("ec")
+  def trieNodesCachedInMemory: Boolean = false
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
