@@ -24,12 +24,14 @@ Decisions that are the user's are collected in §5.
 ## 2. The one structural finding
 
 **025 and 026 as merged depend on 018 Track F, which puts the first follower behind the engine bake-off, the engine swap
-and the flat-layout migration.** That is the longest chain in the roadmap (017 → 018 Phase 0 → Track E → Track F) and
+and the flat-layout migration.** That is the longest chain in the roadmap (017 → 018 Phase 0 → Track E → Track F)
+and
 none of it is a hard dependency of a change record.
 
 The dependency came from a wrong choice in 025 DC-2/FR-008: the state diff was keyed by 018's storage namespaces,
 **including trie nodes**. A record that carries trie nodes is a rollback log for one layout. A record that carries the
-**semantic write set** (`address → account`, `(address, slot) → value`, `codeHash → code`, each with previous and new
+**semantic write set** (`address → account`, `(address, slot) → value`, `codeHash → code`, each with previous and
+new
 value) is layout-independent, is exactly what the indexer's balance tables need, and is already in memory at the end of
 every block: `InMemoryWorldStateProxy` holds `accountsStateTrie` (pending account writes), `contractStorages` (per
 address), `accountCodes` and `touchedAccounts` before `persistState` (`ledger/InMemoryWorldStateProxy.scala:184-196`).
