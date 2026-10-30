@@ -105,7 +105,9 @@ private[actors] class StubStorageOrderedApplyState(
     def validatorFactory: MptStorage => StateValidator = notReached("StateIngest.validatorFactory")
     def durability: StateIngest.Durability = StateIngest.Durability.Default
     def trieStore(pivot: BigInt): MptStorage = notReached("StateIngest.trieStore")
-    def snapProgress: SnapSyncProgressStorage = notReached("StateIngest.snapProgress")
+    // spec 022 T033: where a root mismatch is recorded.
+    lazy val snapProgress: SnapSyncProgressStorage =
+      new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
     def healingFrontier: Option[HealingFrontierStorage] = notReached("StateIngest.healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("StateIngest.bfsQueue")

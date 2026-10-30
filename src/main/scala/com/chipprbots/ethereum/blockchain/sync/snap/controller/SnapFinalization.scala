@@ -7,7 +7,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
-import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -96,21 +95,10 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       stateRoot.map(_.value.toHex.take(16)).getOrElse("none"),
       stateIngest.appState.getSnapSyncStateRoot().map(_.toHex.take(16)).getOrElse("none")
     )
-    dropHealedCodeNowPresent()
-    if healedCodeHashes.nonEmpty && !healedCodeWaitExhausted then
-      // Healing delivered accounts whose bytecode is not here. Finalising now hands regular sync a state in which a
-      // call to one of them runs as a call to an EOA. Hold until the bytecode arrives or the wait runs out; every
-      // caller of this method ignores the Behavior when it is `Behaviors.same`, so holding is just not finalising.
-      if !awaitingHealedCode then
-        awaitingHealedCode = true
-        ctx.log.info(s"[HEAL-CODE] Holding SNAP finalisation for ${healedCodeHashes.size} healed-account bytecode(s)")
-        timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, HealedCodeWaitMs.millis)
-        queueHealedCode(healedCodeHashes.toSeq)
-      Behaviors.same
-    else
-      timers.cancel(HealedCodeWaitTimerKey)
-      awaitingHealedCode = false
-      pivotBlock.map(p => finalizeSnapSync(p)).getOrElse(Behaviors.same)
+    // spec 022 D4, T037: no hold for bytecode here any more. A healing completion means every healed leaf's code is in
+    // (the leaf waited on it); what reaches this point with code missing is a lazy hand-off, which claims no completeness:
+    // `bytecodeRecoveryDone` stays unset below, and the importer fetches the code on demand meanwhile.
+    pivotBlock.map(p => finalizeSnapSync(p)).getOrElse(Behaviors.same)
 
   /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits
     * `Done` either immediately (no backfill in flight) or later from `completedWithBackfill` after
@@ -299,8 +287,10 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
           // hold accounts with a codeHash and no code, forever.
           dropHealedCodeNowPresent()
+          // spec 022 D5: an entry left in the excluded set (a lazy hand-off) may be bytecode the download gave up on.
           val bytecodeComplete =
-            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted)
+            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
+              !stateIngest.snapProgress.hasExcluded
           if !bytecodeComplete then
             ctx.log.warn(
               s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
@@ -315,6 +305,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           val doneFlags = stateIngest.appState.snapSyncDone().and(stateIngest.appState.storageRecoveryDone())
           (if bytecodeComplete then doneFlags.and(stateIngest.appState.bytecodeRecoveryDone()) else doneFlags)
             .commitSync()
+          // SNAP is done: no later cycle may read this one's decisions (one left behind by a crash here would only be
+          // resolved against that cycle's root).
+          try stateIngest.snapProgress.clearExcluded()
+          catch
+            case scala.util.control.NonFatal(e) =>
+              ctx.log.warn(s"[HEAL-EXCLUDED] Could not clear the excluded set after finalisation: ${e.getMessage}")
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 

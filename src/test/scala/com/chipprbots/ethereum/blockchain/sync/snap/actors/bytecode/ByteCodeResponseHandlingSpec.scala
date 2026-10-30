@@ -316,4 +316,3 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     )
     m.pendingTasks.toSeq shouldBe Seq(ByteCodeTask(Seq(retried)))
   }
-

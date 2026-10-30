@@ -23,11 +23,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealCrashChild
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.FastSyncNodeStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
@@ -53,15 +55,16 @@ import com.chipprbots.ethereum.testing.Tags.*
   *
   * Parameters: the storage scheme; the fixture (`account`: branches, an extension and leaves; `storage`: an account
   * leaf over a storage trie, so a Path chain commit spans both trie column families and the audit checks the storage
-  * root); and `pruning.mode`, for the Hash scheme only (the Path scheme writes the path store directly whatever the
-  * pruning mode, so a Path `inmemory` run would repeat the `basic` one, vault V4 (a)).
+  * root; `twin`: two accounts with one storage trie, aliased positions); and `pruning.mode`, for the Hash scheme only
+  * (the Path scheme writes the path store directly whatever the pruning mode, so a Path `inmemory` run would repeat the
+  * `basic` one, vault V4 (a)).
   *
   * Kill points (see `HealCrashChild`): after a node is held, inside a commit write before and after it is applied, and
   * in the first commit write after a re-peg that writes a node, with nodes held (`repeg-partial`) or the old trie
-  * healed (`repeg-full`); under Path also in the first write after a re-peg that only deletes (`repeg-delete`).
-  *
-  * Not here: the fourth kill point of tasks.md, "mid-excluded-set write". The excluded-account store is slice 3
-  * (T032-T035); its kill point is added with it.
+  * healed (`repeg-full`); under Path also in the first write after a re-peg that only deletes (`repeg-delete`); and
+  * mid-excluded-set write (T032-T034): inside the fsynced write of an entry, before and after it is applied
+  * (`excluded-write`, `excluded-written`), and under Path right after a heal start's position deletes
+  * (`excluded-delete`). Those three also check the set itself: an entry is there whole, or not at all.
   *
   * Under in-memory pruning (Hash) the invariant is NOT claimed (spec.md, after FR-004; vault V3): the node cache, two
   * entries here, writes what it evicts one node at a time, least recently used first, so a kill can leave a present
@@ -71,14 +74,16 @@ import com.chipprbots.ethereum.testing.Tags.*
   */
 class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
 
-  private val fixtures = Seq("account", "storage")
+  private val fixtures = Seq("account", "storage", "twin")
   private val basePoints = Seq("held", "chain-before", "chain-after", "repeg-partial", "repeg-full")
+  private val excludedPoints = Seq("excluded-write", "excluded-written")
 
   private val cells: Seq[(String, String, String, String)] =
     for
       (scheme, prunings, points) <- Seq(
-        ("path", Seq("basic"), basePoints :+ "repeg-delete"),
-        ("hash", Seq("basic", "inmemory"), basePoints)
+        ("path", Seq("basic"), (basePoints :+ "repeg-delete") ++ excludedPoints :+ "excluded-delete"),
+        ("hash", Seq("basic"), basePoints ++ excludedPoints),
+        ("hash", Seq("inmemory"), basePoints)
       )
       fixture <- fixtures
       pruning <- prunings
@@ -101,11 +106,21 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
         exit shouldBe 137 // SIGKILL
       }
       val audit = auditStore(dir, scheme, pruning)
-      val (_, newTrie) = HealCrashChild.fixture(fixture)
+      val (oldTrie, newTrie) = HealCrashChild.fixture(fixture)
+      if point.startsWith("excluded") then
+        val entries = excludedEntries(dir)
+        withClue(s"the excluded set after a kill at $point: ") {
+          if point == "excluded-write" then entries shouldBe empty
+          else entries.map(_.subject) shouldBe Seq(HealCrashChild.excludedSubject(fixture, oldTrie))
+        }
       withClue(s"${audit.nodes} node(s) on disk; violations:\n${audit.violations.mkString("\n")}\n") {
         // Where the kill lands after a write that put nodes on disk, the audit had nodes to check (eye F10: the
         // re-peg-with-held-nodes point included, whose earlier subtree commit is on disk).
-        if Set("chain-after", "repeg-partial", "repeg-full")(point) then audit.nodes should be > 0
+        if Set("chain-after", "repeg-partial", "repeg-full")(point) || point.startsWith("excluded") then
+          audit.nodes should be > 0
+        if point == "excluded-delete" then
+          // Every position on the key went in one batch: the root with the rest, and the audit above holds without it.
+          audit.present should not contain oldTrie.root.hash
         if pruning == "inmemory" then
           info(s"in-memory pruning: ${audit.violations.size} present node(s) over an absent child (not asserted)")
         else
@@ -179,6 +194,11 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
   private def auditStore(dir: Path, scheme: String, pruning: String): Audit =
     val source = RocksDbDataSource(rocksConfig(dir.toAbsolutePath.toString), Namespaces.nsSeq)
     try if scheme == "path" then auditPath(new PathNodeStorage(source)) else auditHash(source, pruning)
+    finally source.close()
+
+  private def excludedEntries(dir: Path): Seq[ExcludedAccount] =
+    val source = RocksDbDataSource(rocksConfig(dir.toAbsolutePath.toString), Namespaces.nsSeq)
+    try new SnapSyncProgressStorage(source).excludedPage(None, 100)
     finally source.close()
 
   private def hex(b: ByteString): String = b.map("%02x".format(_)).mkString

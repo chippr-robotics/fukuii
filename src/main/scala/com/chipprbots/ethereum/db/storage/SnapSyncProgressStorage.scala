@@ -66,8 +66,9 @@ object ExcludedReason:
     values.find(_.code == code).getOrElse(StorageAbandoned)
 
 /** One entry of the durable excluded set. `subject` is the account hash, except under [[ExcludedReason.CodeMissing]],
-  * where it is the code hash (see that case). `claimedStorageRoot` and `claimedCodeHash` are what the decision saw, empty
-  * when it saw none: they are for the operator; what the entry needs at the current root is read from the account leaf.
+  * where it is the code hash (see that case). `claimedStorageRoot` and `claimedCodeHash` are what the decision saw,
+  * empty when it saw none: they are for the operator; what the entry needs at the current root is read from the account
+  * leaf.
   */
 final case class ExcludedAccount(
     subject: ByteString,
@@ -169,7 +170,9 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
   def removeExcluded(entries: Seq[ExcludedAccount]): Unit =
     if entries.nonEmpty then
       dataSource.updateSync(
-        Seq(DataSourceUpdateOptimized(Namespaces.AppStateNamespace, entries.map(SnapSyncProgressStorage.excludedKey), Nil))
+        Seq(
+          DataSourceUpdateOptimized(Namespaces.AppStateNamespace, entries.map(SnapSyncProgressStorage.excludedKey), Nil)
+        )
       )
 
   /** Up to `limit` entries in key order, starting after the entry whose [[ExcludedAccount.cursor]] is `after`. */

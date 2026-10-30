@@ -157,11 +157,25 @@ class SNAPHealLoopSpec
     val snap = f.enterStateHealing(PathHeal)
 
     Using.resource(new SnapLogCapture) { log =>
-      snap ! SNAPSyncController.StateHealingAbandoned
+      snap ! SNAPSyncController.StateHealingComplete
+      log.awaitLine("[PATH-PUBLISH] not publishing")
       f.awaitProcessed(snap)
       drainParent(f).filter(isTerminal) shouldBe Seq(SyncProtocol.HealingImpossible)
-      log.contains("[PATH-PUBLISH] not publishing") shouldBe true
       log.contains("[PATH-PUBLISH] publishing") shouldBe false
+    }
+  }
+
+  // spec 022 review beacon N4: a hand-off that could not publish the root must not be tried: it would only restart SNAP.
+  it should "re-peg, not hand off, when healing is abandoned with the root absent under Path" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val snap = f.enterStateHealing(PathHeal)
+
+    Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.StateHealingAbandoned
+      f.awaitProcessed(snap)
+      log.contains("NOT handing off") shouldBe true
+      log.contains("[SNAP-COMPLETE]") shouldBe false
+      drainParent(f).filter(isTerminal) shouldBe empty
     }
   }
 

@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -52,6 +53,7 @@ private class StubHealDispatchState(
   var serveRoot: ByteString = stateRoot
   val pendingTasks: HealTaskQueue[HealingEntry] =
     new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
+  val healRequests: HealRequestBook = new HealRequestBook()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   var maxInFlightPerPeer: Int = 2
   var maxConcurrentRequests: Int = 16
@@ -270,6 +272,7 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     sent should have size 1
     val request = sent.head._1
 
+    entries.foreach(e => m.healRequests.add(HealRequest.ofNode(e.pathset, e.hash)))
     m.handleTimeout(request.requestId, entries, p)
     m.activeRequests shouldBe empty
     m.peerCooldownUntilMs.get(p.id.value).exists(_ > System.currentTimeMillis()) shouldBe true
@@ -291,6 +294,7 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     m.totalNodesHealed = 17
     m.lastHealedAtMs = System.currentTimeMillis() - 6 * 60 * 1000
 
+    entries.foreach(e => m.healRequests.add(HealRequest.ofNode(e.pathset, e.hash)))
     m.handleTimeout(BigInt(1), entries, p)
     m.healAttempts(entries.head.hash) shouldBe 1
     m.pivotRefreshRequested shouldBe true
@@ -303,6 +307,30 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     m.handleTimeout(BigInt(2), entries, p)
     m.healAttempts(entries.head.hash) shouldBe 2
     h.controller.hasMessages shouldBe false
+  }
+
+  // spec 022 review beacon N6, eye F9 (3): as the response path, not unconditionally.
+  it should "put a timed-out fetch back from the next alias position, and not at all when nothing waits on it" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val p = peer("p")
+    val hash = ByteString(Array.fill[Byte](32)(0x21))
+    val first = Seq(ByteString(Array[Byte](0, 0x11)))
+    val second = Seq(ByteString(Array[Byte](0, 0x22)))
+    m.healRequests.add(HealRequest.atPosition(first, hash))
+    m.healRequests.add(HealRequest.atPosition(second, hash))
+
+    m.handleTimeout(BigInt(1), Seq(HealingEntry(first, hash)), p)
+    withClue("the next alias position: ")(m.pendingTasks.toSeq shouldBe Seq(HealingEntry(second, hash)))
+
+    m.pendingTasks.clear()
+    m.handleTimeout(BigInt(2), Seq(HealingEntry(second, hash)), p)
+    withClue("and round again: ")(m.pendingTasks.toSeq shouldBe Seq(HealingEntry(first, hash)))
+
+    m.pendingTasks.clear()
+    val orphan = HealingEntry(first, ByteString(Array.fill[Byte](32)(0x31)))
+    m.handleTimeout(BigInt(3), Seq(orphan), p)
+    withClue("no live request waits on this one: ")(m.pendingTasks.toSeq shouldBe empty)
   }
 
   it should "revive the soonest-expiring cooling peer only on the periodic floor, never a stateless one" taggedAs UnitTest in {

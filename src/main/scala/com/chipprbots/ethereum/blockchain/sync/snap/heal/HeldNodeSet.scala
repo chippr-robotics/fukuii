@@ -32,8 +32,8 @@ import scala.collection.mutable
   *
   * '''Code (spec 022 D4, geth `AddCodeEntry`).''' An account leaf whose bytecode is not in the code store waits on it:
   * one more outstanding count, closed by [[codeArrived]] only once the bytecode coordinator has written it. So a leaf
-  * reaches disk only with its code, and everything above it waits too. [[awaitingCode]] tells the orphan guard that such
-  * a node is not an orphan: something is still expected to complete it.
+  * reaches disk only with its code, and everything above it waits too. [[awaitingCode]] tells the orphan guard that
+  * such a node is not an orphan: something is still expected to complete it.
   *
   * '''Memory.''' [[bytes]] estimates the heap the entries use. The bound and the pause it drives are the caller's.
   *
@@ -236,7 +236,7 @@ object HeldNodeSet:
     * under the Path scheme.
     */
   def idOf(request: HealRequest): ByteString =
-    if request.key == request.hash then request.key else request.key ++ request.hash
+    if request.positional then request.key ++ request.hash else request.key
 
   /** What a held account leaf waits on besides its children: the bytecode `codeHash` of `account` (empty when the
     * leaf's position does not give a full 64-nibble account hash).

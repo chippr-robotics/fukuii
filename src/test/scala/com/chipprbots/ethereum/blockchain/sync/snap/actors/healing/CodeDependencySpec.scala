@@ -205,7 +205,9 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       val before = rig.seen()
       withClue("still waiting: ")(before should not contain SNAPSyncController.StateHealingAbandoned)
       withClue("it asks again: ") {
-        before.count(_.isInstanceOf[SNAPSyncController.HealedCodeHashes]) shouldBe TrieNodeHealingCoordinator.MaxBlockedTicks - 1
+        before.count(
+          _.isInstanceOf[SNAPSyncController.HealedCodeHashes]
+        ) shouldBe TrieNodeHealingCoordinator.MaxBlockedTicks - 1
       }
       rig.ticks(1)
       val at = rig.seen()

@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 import scala.util.Using
@@ -117,11 +116,10 @@ class SNAPResetCharacterizationSpec
       f.factories.chainSpawns.get() shouldBe 1
       f.heapWatchdogStarts.get() shouldBe 1
       Using.resource(new SnapLogCapture) { log =>
-        // Hold StateValidation: a healed account's code is outstanding, so the clean walk's completion waits for it.
-        snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
-        snap ! SNAPSyncController.TrieWalkComplete(0)
-        log.awaitLine("[HEAL-CODE] Holding SNAP finalisation")
-        f.awaitProcessed(snap)
+        // A healed account's code is outstanding: the bytecode child is spawned to fetch it.
+        snap ! SNAPSyncController.HealedCodeHashes(Seq(org.apache.pekko.util.ByteString(Array.fill(32)(0x44.toByte))))
+        // Hold StateValidation: finalisation stops at the A5 root guard, so the controller stays in that phase.
+        f.parkInStateValidation(snap)
 
         // A validation pass that finds the root missing four times (MaxValidationRetries = 3) is a critical failure.
         snap ! SNAPSyncController.ValidationRetry(0L)

@@ -377,24 +377,45 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     )
   }
 
-  it should "forget the whole healed-code hold on reset" taggedAs UnitTest in {
+  it should "forget the healed codeHashes and the bytecode force-complete on reset" taggedAs UnitTest in {
     val h = new Harness()
     h.module.healedCodeHashes += ByteString(Array.fill[Byte](32)(5))
-    h.module.awaitingHealedCode = true
-    h.module.healedCodeWaitExhausted = true
     h.module.bytecodeForceCompleted = true
-    // The kit records TimerCancelled only for an active timer, so arm the wait timer first.
-    h.call(_.timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, 1.second))
-    h.effects()
 
     h.call(_.resetHealedCodeHold())
 
     h.module.healedCodeHashes shouldBe empty
-    h.module.awaitingHealedCode shouldBe false
-    h.module.healedCodeWaitExhausted shouldBe false
     h.module.bytecodeForceCompleted shouldBe false
-    h.effects().collect { case c: Effect.TimerCancelled => c.key } shouldBe Seq(HealedCodeWaitTimerKey)
   }
+
+  // spec 022 FR-011: the Hash controller's own way to completion yields to the excluded set.
+  private val excludedEntry =
+    com.chipprbots.ethereum.db.storage.ExcludedAccount(
+      ByteString(Array.fill[Byte](32)(6)),
+      com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped
+    )
+
+  for (name, walkResult) <- Seq[(String, Command)](
+      "TrieWalkComplete(0)" -> TrieWalkComplete(0),
+      "TrieWalkResult(empty)" -> TrieWalkResult(Seq.empty)
+    )
+  do
+    it should s"not complete on $name while the excluded set is not empty: the coordinator goes on with it" taggedAs UnitTest in {
+      val h = new Harness()
+      val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+      h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+      h.module.currentPhase = SyncPhase.StateHealing
+      h.module.pivotBlock = Some(BigInt(1000))
+      h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+      h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+
+      h.call(_.stateHealingArms(walkResult))
+
+      h.module.currentPhase shouldBe SyncPhase.StateHealing
+      h.module.validations shouldBe 0
+      h.module.healingValidatedRoot shouldBe None
+      coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    }
 
   it should "finish healing on a clean trie walk and enter validation" taggedAs UnitTest in {
     val h = new Harness()

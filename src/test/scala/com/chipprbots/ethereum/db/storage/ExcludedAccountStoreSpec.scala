@@ -34,7 +34,12 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
     val entries = Seq(
       ExcludedAccount(h(1), ExcludedReason.StorageAbandoned, claimedStorageRoot = h(0x11)),
       ExcludedAccount(h(2), ExcludedReason.StorageSkipped, claimedStorageRoot = h(0x12)),
-      ExcludedAccount(h(3), ExcludedReason.StorageRootMismatch, claimedStorageRoot = h(0x13), claimedCodeHash = h(0x14)),
+      ExcludedAccount(
+        h(3),
+        ExcludedReason.StorageRootMismatch,
+        claimedStorageRoot = h(0x13),
+        claimedCodeHash = h(0x14)
+      ),
       ExcludedAccount(h(4), ExcludedReason.CodeMissing)
     )
     store.recordExcluded(entries)

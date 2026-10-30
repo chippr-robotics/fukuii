@@ -58,6 +58,20 @@ final class ExcludedAccountSeeding(
   /** Whether the durable set holds anything. */
   def outstanding: Boolean = store.hasExcluded
 
+  /** Hand `delete` the positions of every account in the set (T034), a batch at a time: every position of an account in
+    * one batch, each position once. Returns how many accounts there were. Throws if a page cannot be read or a batch
+    * cannot be written; what was deleted stays deleted, which is safe, and a later run deletes the rest.
+    */
+  def deleteAccountPositions(delete: Seq[(Option[ByteString], Array[Byte])] => Unit): Int =
+    @tailrec
+    def loop(after: Option[ByteString], accounts: Int): Int =
+      val page = store.excludedPage(after, DeleteBatchAccounts)
+      val keys = page.filterNot(_.isCodeOnly).map(_.subject)
+      if keys.nonEmpty then delete(keys.flatMap(accountPathPositions).distinctBy(p => ByteString(p._2)))
+      if page.size == DeleteBatchAccounts then loop(page.lastOption.map(_.cursor), accounts + keys.size)
+      else accounts + keys.size
+    loop(None, 0)
+
   /** Resolve the next page against `root`. Throws only if the page cannot be read or its completed entries cannot be
     * removed, and then changes nothing here: the same page is resolved again.
     */
@@ -95,10 +109,13 @@ final class ExcludedAccountSeeding(
         case Lookup.Absent              => Resolution.Complete
         case Lookup.Missing(path, hash) => Resolution.Needs(Seq((path, hash)), Nil)
         case Lookup.Found(account) =>
-          val storageSeed = Option.when(account.storageRoot != Account.EmptyStorageRootHash) {
-            (Seq(entry.subject, EmptyPath), account.storageRoot.value)
-          }.filter { case (path, hash) => readNode(hash, path).isEmpty }
-          val missingCode = Option.when(account.codeHash != Account.EmptyCodeHash)(account.codeHash.value)
+          val storageSeed = Option
+            .when(account.storageRoot != Account.EmptyStorageRootHash) {
+              (Seq(entry.subject, EmptyPath), account.storageRoot.value)
+            }
+            .filter { case (path, hash) => readNode(hash, path).isEmpty }
+          val missingCode = Option
+            .when(account.codeHash != Account.EmptyCodeHash)(account.codeHash.value)
             .filterNot(codePresent)
           if storageSeed.isEmpty && missingCode.isEmpty then Resolution.Complete
           else Resolution.Needs(storageSeed.toSeq, missingCode.toSeq)
@@ -171,7 +188,7 @@ object ExcludedAccountSeeding:
     def at(hash: ByteString, depth: Int): Lookup =
       val path = pathsetAt(depth)
       read(hash, path) match
-        case None       => Lookup.Missing(path, hash)
+        case None => Lookup.Missing(path, hash)
         case Some(node) =>
           descend(node, depth) match
             case Left((childHash, childDepth)) => at(childHash, childDepth)
@@ -185,14 +202,14 @@ object ExcludedAccountSeeding:
           b.children(key(depth)) match
             case h: HashNode => Left((ByteString(h.hashNode), depth + 1))
             case NullNode    => Right(Lookup.Absent)
-            case inline      => descend(inline, depth + 1)
+            case other       => descend(other, depth + 1)
         case e: ExtensionNode if key.slice(depth, depth + e.sharedKey.length).sameElements(e.sharedKey.toArray) =>
           e.next match
             case h: HashNode => Left((ByteString(h.hashNode), depth + e.sharedKey.length))
-            case inline      => descend(inline, depth + e.sharedKey.length)
+            case other       => descend(other, depth + e.sharedKey.length)
         case l: LeafNode if key.drop(depth).sameElements(l.key.toArray) =>
           // A leaf that is not an account stands for nothing to complete; a valid state trie has none.
-          Right(Account(l.value).toOption.fold(Lookup.Absent)(Lookup.Found(_)))
+          Right(Account(l.value).toOption.fold[Lookup](Lookup.Absent)(Lookup.Found(_)))
         case _ => Right(Lookup.Absent)
 
     at(root, 0)

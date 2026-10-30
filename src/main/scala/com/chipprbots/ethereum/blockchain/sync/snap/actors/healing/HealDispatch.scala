@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingRequestTimeout
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -36,6 +37,7 @@ private[actors] trait HealDispatchState:
   def stateRoot: ByteString
   def serveRoot: ByteString
   def pendingTasks: HealTaskQueue[HealingEntry]
+  def healRequests: HealRequestBook
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def maxInFlightPerPeer: Int
   def maxConcurrentRequests: Int
@@ -122,9 +124,9 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     * log + unservable-count metric). This is OBSERVATION ONLY — it MUST NOT force-complete, abandon, or declare
     * completion: the content-hash check (C4) guarantees a wrong/missing node can never be accepted, so a stuck node
     * simply keeps the walk from finding zero, which is the correct no-false-completion behaviour (SC-002). The map is
-    * bounded by the pending-task set (only ever keyed by hashes being re-queued; cleared on every serve-root advance
-    * and decayed when a task is satisfied). No-op when decoupling is disabled — the coupled path's behaviour is
-    * byte-identical to today (SC-006).
+    * bounded by the live requests (only ever keyed by hashes being re-queued; cleared on every serve-root advance and
+    * whenever the requests go, `pruneFetchCounters`; decayed when a task is satisfied). No-op when decoupling is
+    * disabled — the coupled path's behaviour is byte-identical to today (SC-006).
     */
   def noteUnservableAttempt(hash: ByteString): Unit =
     if decoupledHealServeRoot then
@@ -285,17 +287,21 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
 
-    // Re-queue all timed-out tasks unconditionally — aligned with go-ethereum and Besu pipeline
+    // Re-queue the timed-out tasks a request still waits on — aligned with go-ethereum and Besu pipeline
     // behaviour. Both reference clients never permanently abandon nodes: go-ethereum puts them
     // straight back into trieTasks (no counter); Besu re-queues at the pipeline level after each
     // RetryingGetTrieNodeFromPeerTask attempt. Permanently unservable nodes are handled by the
-    // stagnation → pivot-refresh path, not a per-node retry cap.
+    // stagnation → pivot-refresh path, not a per-node retry cap. spec 022 review beacon N6: as the response path does, it
+    // goes out again from the next alias position, so a peer that cannot serve one path does not starve the others, and
+    // a hash nothing waits on any more is not queued again.
     var requeued = 0
     tasks.foreach { task =>
-      pendingTasks += task
-      requeued += 1
-      // spec 004 T015/FR-006: a timed-out task is unsatisfied — bump its attempt counter (surfacing only).
-      noteUnservableAttempt(task.hash)
+      healRequests.nextWaiter(task.hash, task.pathset).foreach { live =>
+        pendingTasks += HealingEntry(live.pathset, task.hash)
+        requeued += 1
+        // spec 004 T015/FR-006: a timed-out task is unsatisfied — bump its attempt counter (surfacing only).
+        noteUnservableAttempt(task.hash)
+      }
     }
 
     if requeued > 0 then log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})")

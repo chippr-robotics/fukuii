@@ -138,7 +138,10 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     val store = freshStore()
     val bare = ByteString(Array.fill(32)(0x53.toByte))
     store.recordExcluded(
-      Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned), ExcludedAccount(bare, ExcludedReason.CodeMissing))
+      Seq(
+        ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned),
+        ExcludedAccount(bare, ExcludedReason.CodeMissing)
+      )
     )
     val step = seeding(store, present(storageRoot), code = _ => false).step(root)
     step.missingCode.toSet shouldBe Set(codeHash, bare)
@@ -163,7 +166,10 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     val store = freshStore()
     val gone = ByteString(Array.fill(32)(0xee.toByte)) // not on the trie, so resolved by the walk from the root
     store.recordExcluded(
-      Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned), ExcludedAccount(gone, ExcludedReason.StorageSkipped))
+      Seq(
+        ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned),
+        ExcludedAccount(gone, ExcludedReason.StorageSkipped)
+      )
     )
     val failing: (ByteString, Seq[ByteString]) => Option[MptNode] = (hash, path) =>
       if hash == storageRoot then throw new RuntimeException("injected read failure") else reader()(hash, path)

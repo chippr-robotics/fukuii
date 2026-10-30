@@ -422,3 +422,43 @@ class HealFlushFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       after.nodes.foreach(n => withClue(s"${n.label}: ")(noException should be thrownBy store.get(n.hash.toArray)))
     finally rig.stop()
   }
+
+  // ---- spec 022 review vault V6: a commit write that keeps failing is said to the controller -----------------------
+
+  it should "abandon, loudly and never as a completion, after MaxConsecutiveCommitFailures commit writes in a row fail, under the Path scheme (vault V6)" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val source = new FailingWritesDataSource(failures = Int.MaxValue)
+    val pns = new PathNodeStorage(source)
+    val peer = new ScriptedPeer(testKit)
+    peer.serveFrom.set(Some(trie.served))
+    val controller = createTestProbe[SNAPSyncController.Command]()
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = trie.root.hash,
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      healingWriterEcOverride = Some(new ManualExecutionContext),
+      storageScheme = StorageScheme.Path,
+      pathNodeStorageOpt = Some(pns),
+      movingRootDeltaHeal = true
+    )
+    peer.coordinator.set(coordinator)
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      PeerTestHelpers.createTestPeer("commit-failing-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    val deadline = 30.seconds.fromNow
+    var abandoned = false
+    while !abandoned do
+      withClue("no abandonment within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+      coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion // each retries the write
+      try
+        controller.receiveMessage(50.millis) match
+          case SNAPSyncController.StateHealingAbandoned => abandoned = true
+          case SNAPSyncController.StateHealingComplete  => fail("completed over writes that all failed")
+          case _                                        => ()
+      catch case _: AssertionError => ()
+    testKit.stop(coordinator)
+  }

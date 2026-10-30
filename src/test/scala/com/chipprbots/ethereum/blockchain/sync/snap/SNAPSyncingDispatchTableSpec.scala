@@ -32,8 +32,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *   - `AccountRangeSync`: genesis pivot, one snap peer (account, bytecode and storage children);
   *   - `ByteCodeAndStorageSync`: accounts-complete recovery with storage still to download;
   *   - `StateHealing`: accounts-complete recovery with every phase done;
-  *   - `StateValidation`: from `StateHealing`, a clean walk (`TrieWalkComplete(0)`) whose finalisation waits for an
-  *     outstanding healed account's bytecode, so the controller stays in `StateValidation`;
+  *   - `StateValidation`: from `StateHealing`, a clean walk (`TrieWalkComplete(0)`) whose finalisation stops at the A5
+  *     root guard (the pivot's stored header names another root, `parkInStateValidation`), so the controller stays in
+  *     `StateValidation`, in `syncing`'s ordinary arms;
   *   - `Completed`: storage force-completed under deferred merkleization (#1371 handoff): `finalizeSnapSync` runs, but
   *     `checkAllDownloadsComplete` discards the behaviour it returns, so the controller stays in `syncing` with
   *     `currentPhase = Completed`.
@@ -126,7 +127,7 @@ class SNAPSyncingDispatchTableSpec
     "StateHealingComplete" -> StateHealingComplete,
     "StateHealingAbandoned" -> StateHealingAbandoned,
     "HealedCodeHashes" -> HealedCodeHashes(Seq(hash)),
-    "HealedCodeWaitTimeout" -> HealedCodeWaitTimeout,
+    "ByteCodesStored" -> ByteCodesStored(Seq(hash)),
     "HealingAllPeersStateless" -> HealingAllPeersStateless,
     "HealingRootUnservable" -> HealingRootUnservable(root),
     "StateValidationComplete" -> StateValidationComplete,
@@ -170,8 +171,7 @@ class SNAPSyncingDispatchTableSpec
       "PivotBootstrapFailed" -> everywhere(CatchAll),
       // #1516: with an account coordinator already running the arm leaves it alone (a second launch reused its name).
       // Guarded on the phase-complete / healed-code flags.
-      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync", "StateValidation"),
-      "HealedCodeWaitTimeout" -> handledOnlyIn("StateValidation"),
+      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync"),
       "StorageRangeSyncComplete" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       "StorageRangeSyncForceCompleted" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       // Guarded on currentPhase == StateHealing.
@@ -203,12 +203,7 @@ class SNAPSyncingDispatchTableSpec
     case "StateHealing"           => f.enterStateHealing()
     case "StateValidation" =>
       val snap = f.enterStateHealing()
-      Using.resource(new SnapLogCapture) { log =>
-        snap ! HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
-        snap ! TrieWalkComplete(0)
-        log.awaitLine("[HEAL-CODE] Holding SNAP finalisation")
-      }
-      f.awaitProcessed(snap)
+      f.parkInStateValidation(snap)
       snap
     case "Completed" =>
       val snap = f.enterStorageResume(SNAPSyncConfig(deferredMerkleization = true))

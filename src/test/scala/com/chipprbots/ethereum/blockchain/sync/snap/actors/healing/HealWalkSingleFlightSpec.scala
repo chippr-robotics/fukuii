@@ -6,6 +6,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.SupervisorStrategy
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
@@ -115,7 +116,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     if otherOnDisk then PathHealPresenceFixtures.seedHash(hashStore, otherTrie.nodes)
     val queue = new InterleavingBfsQueue
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
-    private val peers = createTestProbe[NetworkPeerManagerActor.Command]()
+    val peers: TestProbe[NetworkPeerManagerActor.Command] = createTestProbe[NetworkPeerManagerActor.Command]()
 
     private def coordinator: Behavior[Command] = TrieNodeHealingCoordinator(
       stateRoot = trie.root.hash,
@@ -484,3 +485,38 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     withClue("marked by the walk that started after the last re-peg: ")(store.isComplete shouldBe true)
   }
 
+  it should "not let a scoped walk stand in for the full verification a resume asked for (T038c)" taggedAs UnitTest in {
+    val rig = new Rig(hole = true, frontier = Some(completeEmptyFrontier()))
+    val c = rig.spawnGeneration()
+    val brX = rig.trie("brX")
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    withClue("the resume is queued: ")(rig.ec.pending shouldBe 1)
+    c ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((brX.pathset, brX.hash)))
+    c ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      com.chipprbots.ethereum.testing.PeerTestHelpers
+        .createTestPeer("scoped-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    val request = rig.peers
+      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+      .message
+      .underlyingMsg
+      .asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes]
+    c ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+      com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes(request.requestId, Seq(brX.encoded))
+    )
+    rig.settle(c)
+    rig.ec.runNewest() // brX's flush
+    rig.ec.runNewest() // its completion: then the completion check starts its walk, scoped by the marker and the heal
+    rig.settle(c)
+    withClue("the resume and the scoped walk are queued: ")(rig.ec.pending shouldBe 2)
+    rig.ec.runNext() // the resume: its full verification is dropped, a walk is running
+    rig.settle(c)
+    withClue("the scoped walk, alone: ")(rig.ec.pending shouldBe 1)
+    rig.ec.runNext() // the scoped walk ends clean
+    rig.settle(c)
+    withClue("it does not count: ")(rig.completions() shouldBe 0)
+    withClue("a full walk follows: ")(rig.ec.pending shouldBe 1)
+    rig.drive(c)
+    rig.awaitComplete()
+  }

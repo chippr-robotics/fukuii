@@ -41,9 +41,10 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** SNAP must not finalise while the bytecode of healed accounts is still missing, and must not claim bytecode recovery
-  * is done when it is. (Devnet-8 block 318074: contracts created after the pivot arrived through healing, their code
-  * was never requested, and `bytecodeRecoveryDone` was set regardless.)
+/** SNAP must not claim bytecode recovery is done while the bytecode of healed accounts is missing. (Devnet-8 block
+  * 318074: contracts created after the pivot arrived through healing, their code was never requested, and
+  * `bytecodeRecoveryDone` was set regardless.) Spec 022 T037: a healing completion cannot reach finalisation with code
+  * missing (`CodeDependencySpec`); only a lazy hand-off can, and that does not wait for it.
   *
   * Drives the same entry the lazy-heal handoff uses (`HealingRootUnservable` -> `completeSnapSync()`), as
   * `SNAPLazyHealAnchorSpec` does.
@@ -125,37 +126,11 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       ()
 
   "SNAPSyncController" should
-    "hold finalisation while the bytecode of a healed account is missing, then finalise with bytecodeRecoveryDone " +
-    "set once it is stored" taggedAs UnitTest in new Fixture:
-      val snap = start()
-      snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
-      snap ! SNAPSyncController.HealingRootUnservable(root) // lazy-heal handoff -> completeSnapSync()
-      awaitProcessed(snap)
-
-      parent.expectNoMessage(1.second) // held: nothing is finalised, nothing aborted
-      appStateStorage.isSnapSyncDone() shouldBe false
-
-      evmCodeStorage.put(ByteString(codeHash), code).commit() // the bytecode coordinator stored it
-      snap ! SNAPSyncController.ByteCodeSyncComplete // ...and reports its queue drained
-
-      parent.fishForMessage(10.seconds) {
-        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
-        case SyncProtocol.HealingImpossible                        => FishingOutcomes.fail("finalisation aborted")
-        case _                                                     => FishingOutcomes.continueAndIgnore
-      }
-      appStateStorage.isSnapSyncDone() shouldBe true
-      appStateStorage.isBytecodeRecoveryDone() shouldBe true
-
-  it should
-    "finalise when the wait runs out, but leave bytecodeRecoveryDone UNSET so the next start's recovery scan fetches " +
-    "the missing code" taggedAs UnitTest in new Fixture:
+    "not hold a lazy hand-off for a healed account's bytecode: it finalises with bytecodeRecoveryDone UNSET, so the next " +
+    "start's recovery scan fetches the missing code (spec 022 T037)" taggedAs UnitTest in new Fixture:
       val snap = start()
       snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
       snap ! SNAPSyncController.HealingRootUnservable(root)
-      awaitProcessed(snap)
-      parent.expectNoMessage(500.millis)
-
-      snap ! SNAPSyncController.HealedCodeWaitTimeout
 
       parent.fishForMessage(10.seconds) {
         case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
@@ -164,6 +139,21 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       appStateStorage.isSnapSyncDone() shouldBe true
       appStateStorage.isBytecodeRecoveryDone() shouldBe false
       appStateStorage.isStorageRecoveryDone() shouldBe true
+
+  it should "set bytecodeRecoveryDone at a lazy hand-off when the reported bytecode has been stored" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
+    awaitProcessed(snap)
+    evmCodeStorage.put(ByteString(codeHash), code).commit() // the bytecode coordinator stored it
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+
+    parent.fishForMessage(10.seconds) {
+      case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
+      case SyncProtocol.HealingImpossible                        => FishingOutcomes.fail("finalisation aborted")
+      case _                                                     => FishingOutcomes.continueAndIgnore
+    }
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
   it should "finalise immediately, with bytecodeRecoveryDone set, when healing reported no missing bytecode" taggedAs UnitTest in new Fixture:
     val snap = start()
@@ -174,26 +164,6 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       case _                                                     => FishingOutcomes.continueAndIgnore
     }
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
-
-  it should
-    "not let a HealedCodeWaitTimeout from before a restart finalise the fresh sync" taggedAs UnitTest in new Fixture:
-      val snap = start()
-      snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
-      snap ! SNAPSyncController.HealingRootUnservable(root) // enters the hold
-      awaitProcessed(snap)
-      parent.expectNoMessage(500.millis)
-
-      snap ! SNAPSyncController.AccountTrieFinalizationFailed("test") // restartSnapSync: a fresh sync
-      awaitProcessed(snap)
-
-      snap ! SNAPSyncController.HealedCodeWaitTimeout // the old hold's timer firing late
-      awaitProcessed(snap)
-      val deadline = 1.second.fromNow
-      var seen = List.empty[SyncProtocol.SyncControllerReply]
-      while deadline.hasTimeLeft() do
-        scala.util.Try(parent.receiveMessage(deadline.timeLeft.max(10.millis))).foreach(m => seen = m :: seen)
-      seen.collect { case f: SNAPSyncController.SnapSyncFinalized => f } shouldBe empty
-      appStateStorage.isSnapSyncDone() shouldBe false
 
   "SNAPSyncController.bytecodeRecoveryComplete" should
     "be false after a force-completed bytecode phase, or while healed-account code is missing" taggedAs UnitTest in {

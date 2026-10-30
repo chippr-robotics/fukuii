@@ -89,3 +89,22 @@ class WalkLeaseSpec extends AnyFlatSpec with Matchers:
     lease.cancel(walk) // no longer the holder: the next walk is not touched
     lease.isCancelled(next) shouldBe false
   }
+
+  "A walk's level" should "wait for every sub-range before it reports one that failed: the lease must not go back while one writes (T038a)" taggedAs UnitTest in {
+    import scala.concurrent.{Await, ExecutionContext, Future, Promise}
+    import scala.concurrent.duration.*
+    import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+    given ExecutionContext = ExecutionContext.global
+    val stillWriting = Promise[Seq[Int]]()
+    val level = Future(
+      scala.concurrent.blocking(
+        TrieNodeHealingCoordinator.awaitSubRanges(
+          Seq(Future.failed[Seq[Int]](new RuntimeException("the first sub-range failed")), stillWriting.future)
+        )
+      )
+    )
+    an[java.util.concurrent.TimeoutException] should be thrownBy Await.ready(level, 200.millis)
+    stillWriting.success(Seq(1))
+    val failure = intercept[RuntimeException](Await.result(level, 30.seconds))
+    failure.getMessage shouldBe "the first sub-range failed"
+  }

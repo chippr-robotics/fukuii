@@ -118,14 +118,18 @@ private class StubHealVerificationState(
       rootPath: ByteString,
       isStor: Boolean,
       onComplete: (Long, Long) => Unit
-  ): Unit =
+  ): Boolean =
     singleSeedLaunches += ((root, rootPath, isStor))
-    verificationBFSRunning = true
+    if walkStarts then verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
-  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Unit =
+    walkStarts
+  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Boolean =
     multiSeedLaunches += seeds
-    verificationBFSRunning = true
+    if walkStarts then verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
+    walkStarts
+  // spec 022 T038a: false when the lease refuses the walk.
+  var walkStarts: Boolean = true
 
   // HealCompletionApi
   var isComplete: Boolean = true

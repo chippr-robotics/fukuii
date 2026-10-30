@@ -156,6 +156,11 @@ class HealGiveUpCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         case _                                       => FishingOutcomes.continueAndIgnore
       }
 
+    /** Send `message` and wait until it has been handled. */
+    def seen(message: TrieNodeHealingCoordinator.Command): Unit =
+      coordinator ! message
+      settle()
+
     def stop(): Unit =
       testKit.stop(coordinator)
       testKit.stop(peer.ref)
@@ -282,4 +287,126 @@ class HealGiveUpCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       StorageScheme.Path,
       rig => rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(rig.trie.root.hash)
     )
+  }
+
+  // ---- spec 022 T038c ----------------------------------------------------------------------------------------------
+
+  private def queueBrX(rig: Rig): Unit =
+    rig.coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(
+      Seq((rig.trie("brX").pathset, rig.trie("brX").hash))
+    )
+
+  private def stagnated(rig: Rig): Int =
+    var seen = 0
+    var open = true
+    while open do
+      try
+        if rig.controller.receiveMessage(Duration.Zero).isInstanceOf[SNAPSyncController.HealingStagnated] then seen += 1
+      catch case _: AssertionError => open = false
+    seen
+
+  /** forge N-r4-1: a walk running when a node is given up on may not cover it, so its clean end vouches for nothing. */
+  private def giveUpDuringAWalk(scheme: StorageScheme): Unit =
+    withRig(new Rig(scheme, hole = false)) { rig =>
+      rig.fault(on = false)
+      rig.peerAvailable()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+      rig.settle()
+      withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
+      rig.fault(on = true)
+      queueBrX(rig)
+      (1 to 3).foreach(rig.serveBrX) // the third fill gives it up
+      rig.settle()
+      rig.fault(on = false)
+      rig.ec.runNext() // the walk ends clean: brX is on disk in this fixture, so it found nothing
+      rig.settle()
+      withClue("its clean end does not count: ")(rig.completions() shouldBe 0)
+      withClue("it walks again: ")(rig.ec.pending shouldBe 1)
+      rig.drive()
+      rig.awaitComplete()
+    }
+
+  it should "not count a walk during which a node was given up on, under the Hash scheme (forge N-r4-1)" taggedAs UnitTest in {
+    giveUpDuringAWalk(StorageScheme.Hash)
+  }
+
+  it should "not count a walk during which a node was given up on, under the Path scheme (forge N-r4-1)" taggedAs UnitTest in {
+    giveUpDuringAWalk(StorageScheme.Path)
+  }
+
+  it should "walk again after a clean pass followed by a give-up (hunter-r3 C1 (5))" taggedAs UnitTest in {
+    withRig(new Rig(StorageScheme.Hash, hole = false)) { rig =>
+      rig.fault(on = false)
+      rig.peerAvailable()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+      rig.drive()
+      rig.awaitComplete()
+      rig.fault(on = true)
+      queueBrX(rig)
+      (1 to 3).foreach(rig.serveBrX)
+      rig.settle()
+      withClue("the earlier clean pass vouches for nothing now: ")(rig.completions() shouldBe 0)
+      withClue("the check walks: ")(rig.ec.pending should be > 0)
+      rig.fault(on = false)
+      rig.drive()
+      rig.awaitComplete()
+    }
+  }
+
+  it should "forget a read-failure count below the cap at a re-peg: the requests it was for have gone (hunter-r3 N2)" taggedAs UnitTest in {
+    withRig(new Rig(StorageScheme.Hash)) { rig =>
+      rig.coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(rig.trie.root.hash)
+      rig.peerAvailable()
+      rig.drive()
+      (1 to 2).foreach(rig.serveBrX) // two failures: one short of the give-up
+      // The put-back fetch of brX is out; the re-peg cancels it.
+      rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](5.seconds)
+      rig.seen(TrieNodeHealingCoordinator.HealingPivotRefreshed(PathHealPresenceFixtures.accountTrieNew().root.hash))
+      rig.peerAvailable() // the controller's 1 s tick
+      rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](5.seconds) // the new root's seed, unanswered
+      queueBrX(rig)
+      rig.serveBrX(3) // the third fill overall, the first since the re-peg
+      rig.settle()
+      withClue("not given up on: ")(stagnated(rig) shouldBe 0)
+      withClue("fetched again: ") {
+        rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](5.seconds).paths shouldBe Seq(rig.trie("brX").pathset)
+      }
+    }
+  }
+
+  it should "keep a read-failure count at the cap across a re-peg: a child that never reads is not fetched in a loop (hunter-r3 N2)" taggedAs UnitTest in {
+    withRig(new Rig(StorageScheme.Hash)) { rig =>
+      rig.coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(rig.trie.root.hash)
+      rig.peerAvailable()
+      rig.drive()
+      (1 to 3).foreach(rig.serveBrX)
+      rig.settle()
+      stagnated(rig) shouldBe 1
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingResumeDispatch // the controller's answer
+      rig.seen(TrieNodeHealingCoordinator.HealingPivotRefreshed(PathHealPresenceFixtures.accountTrieNew().root.hash))
+      rig.peerAvailable() // the controller's 1 s tick
+      rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](5.seconds) // the new root's seed, unanswered
+      queueBrX(rig)
+      rig.serveBrX(4)
+      rig.settle()
+      withClue("given up on at once: ")(stagnated(rig) shouldBe 1)
+    }
+  }
+
+  it should "let a later give-up escalate again once the latch has waited as long as the pivot-refresh watchdog (hunter-r3 N1)" taggedAs UnitTest in {
+    withRig(new Rig(StorageScheme.Hash)) { rig =>
+      rig.coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(rig.trie.root.hash)
+      rig.peerAvailable()
+      rig.drive()
+      (1 to 3).foreach(rig.serveBrX)
+      rig.settle()
+      stagnated(rig) shouldBe 1 // no answer ever comes
+      (1 to TrieNodeHealingCoordinator.GiveUpLatchMaxPulses).foreach { _ =>
+        rig.coordinator ! TrieNodeHealingCoordinator.HealingStagnationCheck
+      }
+      rig.drive() // the check's walk finds brX again
+      rig.serveBrX(4) // given up on at once: three failures already
+      rig.settle()
+      withClue("escalated again: ")(stagnated(rig) shouldBe 1)
+    }
   }

@@ -116,7 +116,7 @@ class SNAPIdleTotalitySpec
     StateHealingComplete,
     StateHealingAbandoned,
     HealedCodeHashes(Seq(hash)),
-    HealedCodeWaitTimeout,
+    ByteCodesStored(Seq(hash)),
     HealingAllPeersStateless,
     HealingRootUnservable(root),
     StateValidationComplete,

@@ -94,3 +94,13 @@ class HeldNodeSetCodeSpec extends AnyFlatSpec with Matchers:
     set.codeArrived(code) shouldBe 0
     set.hasPendingWrites shouldBe false
   }
+
+  "idOf" should "say the scheme by how the request was built, not by comparing bytes (beacon N7)" taggedAs UnitTest in {
+    val pathset = Seq(ByteString(Array[Byte](0)))
+    HeldNodeSet.idOf(HealRequest.ofNode(pathset, h(1))) shouldBe h(1)
+    val position = HealRequest.atPosition(pathset, h(1))
+    HeldNodeSet.idOf(position) shouldBe position.key ++ h(1)
+    // A position whose key happens to equal the hash still names position and hash.
+    val awkward = position.copy(key = h(1))
+    HeldNodeSet.idOf(awkward) shouldBe h(1) ++ h(1)
+  }

@@ -59,6 +59,8 @@ private[actors] trait HealResponseProcessingState:
   def prunedEnabled: Boolean
   def pendingSubtreeRecords: mutable.Set[ByteString]
   var verificationPassComplete: Boolean
+  var consecutiveCommitFailures: Int
+  def invalidateRunningWalk(): Unit
 
 /** What `reverifyCurrentRoot` calls: `isComplete`, nothing pending and nothing in flight. `HealResponseProcessing`
   * provides it (spec 016 C-H5).
@@ -88,10 +90,11 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
-  // spec 022 review forge F2: per node hash, how many fills in a row failed to read its children from storage. A node
-  // whose children cannot be read is fetched again, up to `MaxConsecutiveReadFailures` fills, then given up on. The
-  // entry goes when a fill reads them; it survives a re-peg and the orphan guard, so a stored child that never reads
-  // (corrupt bytes under Hash survive a re-peg) is not fetched in a tight loop again.
+  // spec 022 review forge F2: per node hash (Path aliases share one count), how many fills in a row failed to read its
+  // children from storage. A node whose children cannot be read is fetched again, up to `MaxConsecutiveReadFailures`
+  // fills, then given up on. An entry goes when a fill reads them, or at a re-peg unless it has reached the cap
+  // (`pruneFetchCounters`): so the map stays as small as the set of stored children that do not read, and a child that
+  // never reads (corrupt bytes under Hash survive a re-peg) is not fetched in a tight loop again.
   private lazy val readFailures: mutable.HashMap[ByteString, Int] = mutable.HashMap.empty
 
   /** Reset the scoped-verification healed-paths set (spec 003 C1). Called at the round-invalidation / round-close sites
@@ -104,6 +107,15 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     healedPathsOverflowed = false
 
   private lazy val EmptyResponseStrikeThreshold: Int = 5
+
+  /** The requests these counters were for have gone (a re-peg, a force-complete, the orphan guard's book clear): keep
+    * only what stops a fetch loop, a read-failure count at its cap (spec 022 review hunter-r3 N2, forge N13). Without
+    * this they grow by every node that ever failed, and `healAttempts` is otherwise cleared only by a serve-root
+    * advance, which the default moving-root heal never makes.
+    */
+  def pruneFetchCounters(): Unit =
+    readFailures.filterInPlace((_, failures) => failures >= TrieNodeHealingCoordinator.MaxConsecutiveReadFailures)
+    healAttempts.clear()
 
   /** The heal request `entry` stands for (spec 022 D2): its trie position under the Path scheme, its node hash under
     * the Hash scheme.
@@ -121,6 +133,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     val request = healRequestFor(entry)
     // A node already held (received, waiting on its children) is not fetched again: its children are being fetched.
     if heldNodes.contains(HeldNodeSet.idOf(request)) then false
+    // spec 022 review beacon N2 (mirrors HealRequestBook.Added.Refused): a parentless entry never displaces a node a
+    // parent waits on, held at this position for another hash.
+    else if heldNodes.heldAt(request.key).exists(h => h.request.hash != request.hash && h.parents.nonEmpty) then false
     // Hash: a node in the flush buffer was committed with its whole subtree, only not flushed yet (forge N2).
     else if storageScheme == StorageScheme.Hash && rawNodeBuffer.contains(request.hash) then false
     else if healRequests.add(request).needsFetch then
@@ -249,7 +264,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // A healed account leaf brings an account that account-range sync never saw, so nothing else will ever fetch its
     // bytecode (the code-hash list is built from account-range responses). Hand the missing ones to the controller,
     // which fetches them before it finalises SNAP. Sent BEFORE any completion signal this actor emits afterwards
-    // (same sender, ordered), so the controller always knows of them by the time it is told healing is done.
+    // (same sender, ordered), so the controller always knows of them by the time it is told healing is done. Each such
+    // leaf stays held until the code write is acknowledged (spec 022 D4).
     flushHealedCodeHashes()
 
     // Re-queue the fetches this response left unsatisfied (server skipped or didn't have them), one per hash. Their
@@ -337,7 +353,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     // threshold, so a sparse heal never leaves complete nodes sitting in the buffer.
     if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
 
-    // Dispatch more work to this peer if available (pipeline multiple requests)
+    // Dispatch more work to this peer if available (pipeline multiple requests). This comes before the completion check,
+    // so the orphan guard, which runs in that check, fires only once what this dispatch opened has drained (spec 022
+    // review hunter N2, beacon W1): held orphans can wait out those fetches, and never stop them.
     dispatchIfPossible(peer)
 
     self ! HealingCheckCompletion
@@ -352,7 +370,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * and the stale positions found since the last commit, in one atomic write; then release them. Path: written now,
     * one `PathNodeStorage` batch. Hash: moved to the flush buffer, which the flush writes in commit order (any prefix
     * of it is complete). A write that throws loses nothing: the held nodes and deletes stay, and the next commit
-    * retries them (#1549); the error is logged.
+    * retries them (#1549); the error is logged, and at `MaxConsecutiveCommitFailures` in a row healing says so to the
+    * controller (spec 022 review vault V6): abandoning, which claims nothing, rather than retrying forever in silence.
     */
   def commitHeld(): Unit =
     if heldNodes.hasPendingWrites then
@@ -372,6 +391,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                 }
                 pns.writeNodesWithDeletes(writes, plan.deletes)
                 heldNodes.applyCommit(plan)
+                consecutiveCommitFailures = 0
                 // vault note 2: deletes per batch, to check the tombstone estimate (about 0.07 per extension).
                 log.debug(s"[HEAL-COMMIT] ${plan.nodes.size} node(s) and ${plan.deletes.size} delete(s) in one batch")
               catch
@@ -381,16 +401,27 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                       "kept held, retried at the next commit (or the next pulse)",
                     e
                   )
+                  consecutiveCommitFailures += 1
+                  if consecutiveCommitFailures >= TrieNodeHealingCoordinator.MaxConsecutiveCommitFailures then
+                    log.error(
+                      s"[HEAL-COMMIT] $consecutiveCommitFailures commit writes in a row failed — abandoning healing"
+                    )
+                    consecutiveCommitFailures = 0
+                    snapSyncController ! SNAPSyncController.StateHealingAbandoned
         case StorageScheme.Hash =>
           rawNodeBuffer ++= plan.nodes.map(e => (e.request.hash, e.node.toArray))
           heldNodes.applyCommit(plan)
 
-  /** Remember `account`'s codeHash for the controller if it names code this node does not hold. */
-  private def recordHealedCodeHash(account: Account): Unit =
-    if healedCodeCheck then
+  /** Whether `account` names code this node does not hold: if so its leaf waits on it (spec 022 D4), and its codeHash
+    * is remembered for the controller, which has it fetched.
+    */
+  private def recordHealedCodeHash(account: Account): Boolean =
+    healedCodeCheck && {
       val codeHash = account.codeHash
-      if codeHash != Account.EmptyCodeHash && stateIngest.bytecode.get(codeHash.value).isEmpty then
-        healedCodeHashesThisResponse += codeHash.value
+      val missing = codeHash != Account.EmptyCodeHash && stateIngest.bytecode.get(codeHash.value).isEmpty
+      if missing then healedCodeHashesThisResponse += codeHash.value
+      missing
+    }
 
   private def flushHealedCodeHashes(): Unit =
     if healedCodeHashesThisResponse.nonEmpty then
@@ -426,12 +457,13 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             s"${Hex.toHexString(request.hash.take(4).toArray)} — the held node is dropped"
         )
         heldNodes.drop(other.id)
+        forgetCleanPass() // hunter N2: a node known missing was dropped
       }
       // The children are looked up in storage; a read that throws is not the node's fault (forge W1).
       val discovered =
         try
-          Right(discoverMissingChildren(nodeData, request).map { case (children, deletes) =>
-            (children, ownPositionDelete(request, parents) ++ deletes)
+          Right(discoverMissingChildren(nodeData, request).map { case (children, deletes, code) =>
+            (children, ownPositionDelete(request, parents) ++ deletes, code)
           })
         catch case scala.util.control.NonFatal(e) => Left(e)
       discovered match
@@ -447,8 +479,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
             readFailure
           )
           // spec 022 review forge F6: a node known missing was dropped, so no earlier clean pass vouches for completion;
-          // the completion check walks again (and finds it, if the current root still needs it).
-          verificationPassComplete = false
+          // the completion check walks again (and finds it, if the current root still needs it). Nor does a walk running
+          // now, whose scope may not cover it (forge N-r4-1).
+          forgetCleanPass()
           // Escalated to the controller's stagnation path (as the pulse does, NB-11): afterwards nothing may be pending,
           // so the pulse's own stagnation count never starts. Once per controller answer (hold: resume dispatch; or a
           // refresh), which clears `giveUpEscalated`; not while the pulse's escalation waits. Dispatch goes on meanwhile
@@ -472,8 +505,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           // vault note 5: a node that hashes right but does not decode is never written: its children are unknown, so
           // it cannot be complete. Every peer serves the same bytes, so it is not fetched again. Its parents' edges to
           // it close nothing: they stay held until the orphan guard drops them (a walk then finds them again).
-          ()
-        case Right(Some((children, deletes))) =>
+          forgetCleanPass() // hunter N2: a node known missing was dropped
+        case Right(Some((children, deletes, code))) =>
           if deletes.nonEmpty then heldNodes.addDeletes(deletes)
           val (heldChildren, newChildren) = children.partition(c => heldNodes.contains(HeldNodeSet.idOf(c)))
           heldChildren.groupBy(_.key).foreach { case (_, refs) =>
@@ -483,7 +516,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
           // A child already live gained an edge: its queued fetch, if it opened a new subtree, now frees held memory.
           if toFetch.size < newChildren.size then
             newChildren.iterator.map(_.hash).distinct.foreach(pendingTasks.promote)
-          heldNodes.hold(request, nodeData, children.size, parents)
+          heldNodes.hold(request, nodeData, children.size, parents, code)
           val newEntries = toFetch.map(c => HealingEntry(c.pathset, c.hash))
           if newEntries.nonEmpty then
             pendingTasks ++= newEntries
@@ -506,10 +539,17 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
       else healedPathsThisRound.update(request.key, HealingEntry(request.pathset, request.hash))
     childrenRead
 
+  /** No earlier clean pass, nor a walk running now, vouches for completion any more: a node known missing was dropped.
+    */
+  private def forgetCleanPass(): Unit =
+    verificationPassComplete = false
+    invalidateRunningWalk()
+
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node and
-    * returns its missing children, one request per child edge, and (Path scheme) the stale positions to delete. Makes
-    * healing self-feeding: root → children → grandchildren top-down without a trie walk. `None` when the node does not
-    * decode: its children are unknown, so it must never be written (vault note 5).
+    * returns its missing children, one request per child edge, (Path scheme) the stale positions to delete, and (an
+    * account leaf whose bytecode is missing, spec 022 D4) the code it waits on. Makes healing self-feeding: root →
+    * children → grandchildren top-down without a trie walk. `None` when the node does not decode: its children are
+    * unknown, so it must never be written (vault note 5).
     *
     * A child whose request is already live (queued or in flight), or that is held (received, waiting on its own
     * children: not on disk), is missing by definition: under Hash it is the same node, so the parent gains an edge to
@@ -535,14 +575,14 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   private def discoverMissingChildren(
       nodeData: ByteString,
       parent: HealRequest
-  ): Option[(Seq[HealRequest], Seq[(Option[ByteString], Array[Byte])])] =
+  ): Option[(Seq[HealRequest], Seq[(Option[ByteString], Array[Byte])], Option[HeldNodeSet.CodeDependency])] =
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
 
     val pathset = parent.pathset
     val nodeHash = parent.hash
-    if pathset.isEmpty then Some((Seq.empty, Seq.empty))
+    if pathset.isEmpty then Some((Seq.empty, Seq.empty, None))
     else
       // Only the decode is a node fault (vault note 5): it returns None. A storage read below throws to the caller
       // (forge N1, W1), which puts the request back.
@@ -561,6 +601,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
 
           val children = mutable.ArrayBuffer.empty[HealRequest]
           val deletes = mutable.ArrayBuffer.empty[(Option[ByteString], Array[Byte])]
+          var codeDependency: Option[HeldNodeSet.CodeDependency] = None
 
           // The path a child at `childNibbles` is queued, fetched and (Path scheme) stored under.
           def childPathset(childNibbles: Array[Byte]): Seq[ByteString] =
@@ -632,18 +673,24 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
               // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
               Account(leaf.value).foreach { account =>
-                recordHealedCodeHash(account)
+                val allNibbles = parentNibbles ++ leaf.key.toArray
+                // Only a full 64-nibble path names an account: read below only when it is one.
+                lazy val accountHashBytes = allNibbles
+                  .grouped(2)
+                  .map { g =>
+                    ((g(0) << 4) | g(1)).toByte
+                  }
+                  .toArray
+                lazy val accountHash = ByteString(accountHashBytes)
+                if recordHealedCodeHash(account) then
+                  codeDependency = Some(
+                    HeldNodeSet.CodeDependency(
+                      account.codeHash.value,
+                      if allNibbles.length == 64 then accountHash else ByteString.empty
+                    )
+                  )
                 if account.storageRoot != Account.EmptyStorageRootHash then
-                  val leafNibbles = leaf.key.toArray
-                  val allNibbles = parentNibbles ++ leafNibbles
                   if allNibbles.length == 64 then
-                    val accountHashBytes = allNibbles
-                      .grouped(2)
-                      .map { g =>
-                        ((g(0) << 4) | g(1)).toByte
-                      }
-                      .toArray
-                    val accountHash = ByteString(accountHashBytes)
                     val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                     val storageRootSet = Seq(accountHash, emptyStoragePath)
                     val storageRoot = account.storageRoot.value
@@ -710,7 +757,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                 s"[HEAL-VERIFY-PRUNED] Staged subtree-complete candidate ${Hex.toHexString(nodeHash.take(4).toArray)} " +
                   s"(${subtreeRoots.size} child subtree(s) present+recorded) — durable record written post-flush (D3)."
               )
-          Some((children.toSeq, deletes.toSeq))
+          Some((children.toSeq, deletes.toSeq, codeDependency))
 
   /** Path scheme: a parentless node's own position may hold a stale node nothing has deleted yet (a parent's discovery
     * deletes a stale child's position): it is deleted before anything below it is written. Reads storage, so it may

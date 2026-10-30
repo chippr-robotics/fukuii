@@ -340,20 +340,12 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
     status.receiveAll() shouldBe Seq(SyncProtocol.Status.SyncDone)
   }
 
-  it should "hold finalisation while healed-account bytecode is missing" taggedAs UnitTest in {
+  it should "not hold finalisation for healed-account bytecode: leaves wait on it, and a lazy hand-off claims nothing (T037)" taggedAs UnitTest in {
     val h = new Harness()
-    val codeHash = ByteString(Array.fill[Byte](32)(9))
-    h.module.pivotBlock = Some(pivot)
-    h.module.healedCodeHashes += codeHash
+    h.module.healedCodeHashes += ByteString(Array.fill[Byte](32)(9))
 
-    h.call(_.completeSnapSync())
+    h.call(_.completeSnapSync()) // no pivot here: it goes on to finalisation, which needs one, and returns
 
-    h.module.healedCodeDrops shouldBe 1
-    h.module.awaitingHealedCode shouldBe true
-    h.module.healedCodeQueued.toSeq shouldBe Seq(Seq(codeHash))
-    h.kit.retrieveAllEffects().collect { case t: Effect.TimerScheduled[?] => (t.key, t.msg, t.delay) } shouldBe Seq(
-      (HealedCodeWaitTimerKey, HealedCodeWaitTimeout, HealedCodeWaitMs.millis)
-    )
-    h.module.currentPhase shouldBe SyncPhase.StateValidation
-    h.parent.hasMessages shouldBe false
+    h.module.healedCodeQueued shouldBe empty
+    h.kit.retrieveAllEffects().collect { case t: Effect.TimerScheduled[?] => t.key } shouldBe empty
   }

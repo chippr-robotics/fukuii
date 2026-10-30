@@ -202,13 +202,13 @@ class FrontierPersistenceOrderSpec extends AnyFlatSpec with Matchers:
   "FrontierPersistence's drain wait" should "not wait or log below the high-water mark" taggedAs UnitTest in {
     val s = stub()
     s.pendingBackpressure.set(99)
-    logLines(s)(s.awaitFrontierDrain()) shouldBe empty
+    logLines(s)(s.awaitFrontierDrain(() => false)) shouldBe empty
   }
 
   it should "pause above the high-water mark and give up at the safety timeout" taggedAs UnitTest in {
     val s = stub()
     s.pendingBackpressure.set(1000)
-    val lines = logLines(s)(s.awaitFrontierDrain())
+    val lines = logLines(s)(s.awaitFrontierDrain(() => false))
     lines.map(_._1) shouldBe Seq(Level.INFO, Level.WARN)
     lines(0)._2 should include("Backpressure: healing backlog 1000 >= high-water 100")
     lines(1)._2 should include("Backpressure wait hit the 0s safety timeout (backlog still 1000)")

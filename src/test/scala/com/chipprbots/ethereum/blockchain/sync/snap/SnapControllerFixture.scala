@@ -382,6 +382,19 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     expectSpawn[ChildSpawn.Healing]
     snap
 
+  /** From `StateHealing`: a clean walk takes the controller to `StateValidation`, and it stays there: finalisation
+    * stops at the A5 root guard, because the pivot's stored header now names another root. (The phase otherwise lasts
+    * one mailbox turn: a clean walk's validation short-circuits.) The guard's `HealingImpossible` goes to the parent
+    * probe, which does nothing with it.
+    */
+  def parkInStateValidation(snap: ActorRef[SNAPSyncController.Command], pivot: BigInt = Pivot): Unit =
+    storeHeaderAt(pivot, ByteString(Array.fill(32)(0x7b.toByte)))
+    scala.util.Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.TrieWalkComplete(0)
+      log.awaitLine("SNAP finalization aborted")
+    }
+    awaitProcessed(snap)
+
   /** `ByteCodeAndStorageSync`: accounts-complete recovery with storage still to download (storage child only). */
   def enterStorageResume(
       config: SNAPSyncConfig = SNAPSyncConfig(deferredMerkleization = false)

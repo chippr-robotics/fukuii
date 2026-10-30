@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
-import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
@@ -45,9 +44,9 @@ final private class ScanFailingDataSource extends EphemDataSource(Map.empty):
     if failing then throw new RuntimeException("injected excluded-set read failure")
     super.scanRangeLimit(ns, from, to, limit)
 
-/** Spec 022 T029 (Path) and T030 (Hash), amended FR-005 and FR-006: an account whose storage or code was left incomplete
-  * never looks complete to healing. It is recorded durably, reached from the current root and completed before
-  * completion is declared, whatever made it incomplete and however the root moves.
+/** Spec 022 T029 (Path) and T030 (Hash), amended FR-005 and FR-006: an account whose storage or code was left
+  * incomplete never looks complete to healing. It is recorded durably, reached from the current root and completed
+  * before completion is declared, whatever made it incomplete and however the root moves.
   *
   * Fixture: two accounts, `acct0` over a two-slot storage trie and `acct1` over a one-slot one.
   * {{{
@@ -178,16 +177,21 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         catch case _: AssertionError => open = false
       out.result()
 
+    /** Run what comes, a peer round trip at a time, until the controller hears the completion. */
     def awaitComplete(): Unit =
-      drive()
-      controller.fishForMessage(30.seconds) {
-        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
-      }
+      val deadline = 30.seconds.fromNow
+      var done = false
+      while !done do
+        drive()
+        withClue("no completion within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        try done = controller.receiveMessage(100.millis) == SNAPSyncController.StateHealingComplete
+        catch case _: AssertionError => ()
 
     def requested: Seq[Seq[ByteString]] = peer.requests.flatten
 
-  /** The three storage reasons: what each leaves on disk. A root mismatch leaves another trie's root at `s0`'s position. */
+  /** The three storage reasons: what each leaves on disk. A root mismatch leaves another trie's root at `s0`'s
+    * position.
+    */
   private val StorageReasons = Seq(
     ("abandoned at force-complete", ExcludedReason.StorageAbandoned, false),
     ("skipped after max-empty", ExcludedReason.StorageSkipped, false),
@@ -240,7 +244,9 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.start() // the walk of the resume stays queued on the writer executor
       rig.settle()
       withClue("the seed goes out without any walk having run: ")(rig.requested should contain(rig.trie("s0").pathset))
-      withClue("no completion while the entry stands: ")(rig.seen() should not contain SNAPSyncController.StateHealingComplete)
+      withClue("no completion while the entry stands: ")(
+        rig.seen() should not contain SNAPSyncController.StateHealingComplete
+      )
       rig.awaitComplete()
       rig.trie.nodes.foreach(n => withClue(s"${n.label} on disk: ")(rig.onDisk(n) shouldBe true))
       withClue("the entry left once the account was complete: ")(rig.progress.hasExcluded shouldBe false)
@@ -249,12 +255,19 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
   for scheme <- Schemes do
     "A healing coordinator" should s"not complete over a clean walk while a bytecode the download gave up on is missing, on $scheme (T029, T030)" taggedAs UnitTest in {
       val rig =
-        new Rig(scheme, fixture(withCode = true), absent = Set.empty, Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)))
+        new Rig(
+          scheme,
+          fixture(withCode = true),
+          absent = Set.empty,
+          Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
+        )
       rig.start()
       rig.drive()
       val before = rig.seen()
       withClue("the code is asked for: ")(before should contain(SNAPSyncController.HealedCodeHashes(Seq(codeHash))))
-      withClue("no completion, however clean the trie: ")(before should not contain SNAPSyncController.StateHealingComplete)
+      withClue("no completion, however clean the trie: ")(
+        before should not contain SNAPSyncController.StateHealingComplete
+      )
       rig.codes.put(codeHash, code).commit()
       rig.coordinator ! TrieNodeHealingCoordinator.HealedCodeStored(Seq(codeHash))
       rig.awaitComplete()
@@ -303,7 +316,9 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.drive()
       rig.coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
       rig.drive()
-      withClue("an unreadable set keeps the gate shut: ")(rig.seen() should not contain SNAPSyncController.StateHealingComplete)
+      withClue("an unreadable set keeps the gate shut: ")(
+        rig.seen() should not contain SNAPSyncController.StateHealingComplete
+      )
       (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
         rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
       }
@@ -350,6 +365,8 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     keys should have size 65 // depth 0 to 64, the leaf slot included
     keys should contain(accountKey(Array.empty[Byte]))
     keys should contain(accountKey(nibbles(0)))
-    keys should contain(accountKey(com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedAccountSeeding.accountNibbles(a0)))
+    keys should contain(
+      accountKey(com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedAccountSeeding.accountNibbles(a0))
+    )
     keys should not contain accountKey(nibbles(1))
   }
