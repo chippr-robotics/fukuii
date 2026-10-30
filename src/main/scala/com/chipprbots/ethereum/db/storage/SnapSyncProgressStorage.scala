@@ -12,6 +12,7 @@ import io.circe.syntax.*
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** SNAP sync download progress persisted per state root.
@@ -69,22 +70,34 @@ object ExcludedReason:
   * where it is the code hash (see that case). `claimedStorageRoot` and `claimedCodeHash` are what the decision saw,
   * empty when it saw none: they are for the operator; what the entry needs at the current root is read from the account
   * leaf.
+  *
+  * `dormant` (accounts only): the last look found no such account at the root it looked from. The decision still stands
+  * for the account's storage, and a later root can hold the account again (A to B to A, a reorg: spec 022 review hunter
+  * W2), so the entry stays. It does not count against a root ([[SnapSyncProgressStorage.hasExcluded]]), and every pass
+  * looks at it again.
   */
 final case class ExcludedAccount(
     subject: ByteString,
     reason: ExcludedReason,
     claimedStorageRoot: ByteString = ByteString.empty,
-    claimedCodeHash: ByteString = ByteString.empty
+    claimedCodeHash: ByteString = ByteString.empty,
+    dormant: Boolean = false
 ):
   def isCodeOnly: Boolean = reason == ExcludedReason.CodeMissing
 
   /** The entry's place in the set: its kind byte and subject, the part of its key after the versioned prefix. */
   def cursor: ByteString =
-    ByteString(if isCodeOnly then ExcludedAccount.CodeKind else ExcludedAccount.AccountKind) ++ subject
+    val kind =
+      if isCodeOnly then ExcludedAccount.CodeKind
+      else if dormant then ExcludedAccount.DormantKind
+      else ExcludedAccount.AccountKind
+    ByteString(kind) ++ subject
 
 object ExcludedAccount:
+  // In this key order: the entries that count against a root sort before the ones that do not.
   private[storage] val AccountKind: Byte = 'a'.toByte
   private[storage] val CodeKind: Byte = 'c'.toByte
+  private[storage] val DormantKind: Byte = 'd'.toByte
 
 class SnapSyncProgressStorage(val dataSource: DataSource)
     extends TransactionalKeyValueStorage[ByteString, SnapSyncProgress]:
@@ -148,34 +161,45 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
   // wipe `p`, and the set must outlive both until each entry is complete at the current root. Keys are `SnapExcluded/1/`,
   // a kind byte and a 32-byte subject (the same reason for the column family as `SnapStorageDoneStorage`: no new one, so
   // a downgrade still opens the database; the family's string keys never start with this prefix, and it is read only by
-  // this range). The set is written with `updateSync`: an entry is durable before anything is done on its strength, and
+  // this range). Each write ends with a `updateSync`: an entry is durable before anything is done on its strength, and
   // the fsync syncs the WAL up to it. Every read is a page, so no caller ever holds the whole set.
 
   /** Record `entries`, durably, before any action is taken on them. An entry already there is overwritten. */
-  def recordExcluded(entries: Seq[ExcludedAccount]): Unit =
-    if entries.nonEmpty then
-      dataSource.updateSync(
-        Seq(
-          DataSourceUpdateOptimized(
-            Namespaces.AppStateNamespace,
-            Nil,
-            entries.map(e => SnapSyncProgressStorage.excludedKey(e) -> SnapSyncProgressStorage.excludedValue(e))
-          )
-        )
-      )
+  def recordExcluded(entries: Seq[ExcludedAccount]): Unit = updateExcluded(Nil, entries)
 
-  /** Take `entries` out of the set, durably: only when they are complete at the current root (or the current root holds
-    * no such account).
+  /** Take `entries` out of the set, durably: only when they are complete at the current root. Under `pruning.mode =
+    * inmemory` (Hash) a node read as present may be only in the node cache, so "complete" there holds until the cache
+    * is lost: the entry is gone and a crash can take the node back. That is one of the reasons the walk stays for
+    * inmemory (T051, T052).
     */
-  def removeExcluded(entries: Seq[ExcludedAccount]): Unit =
-    if entries.nonEmpty then
-      dataSource.updateSync(
-        Seq(
-          DataSourceUpdateOptimized(Namespaces.AppStateNamespace, entries.map(SnapSyncProgressStorage.excludedKey), Nil)
-        )
-      )
+  def removeExcluded(entries: Seq[ExcludedAccount]): Unit = updateExcluded(entries, Nil)
 
-  /** Up to `limit` entries in key order, starting after the entry whose [[ExcludedAccount.cursor]] is `after`. */
+  /** Take `remove` out of the set and put `record` in, durably. Atomic up to `ExcludedWriteBatch` keys, which covers a
+    * page's moves between kinds. A larger write is batches of that size with the fsync on the last
+    * (`storage-rocksdb.md`, and the exclusive lock of the data source is not held for the whole of a 200k-account
+    * force-complete), `record` first: a failure or a crash part way loses no entry, and leaves what it did write;
+    * writing again is idempotent.
+    */
+  def updateExcluded(remove: Seq[ExcludedAccount], record: Seq[ExcludedAccount]): Unit =
+    import SnapSyncProgressStorage.*
+    def batch(removed: Seq[ExcludedAccount], recorded: Seq[ExcludedAccount]): DataUpdate =
+      DataSourceUpdateOptimized(
+        Namespaces.AppStateNamespace,
+        removed.map(excludedKey),
+        recorded.map(e => excludedKey(e) -> excludedValue(e))
+      )
+    val batches: Seq[DataUpdate] =
+      if remove.size + record.size <= ExcludedWriteBatch then
+        if remove.isEmpty && record.isEmpty then Nil else Seq(batch(remove, record))
+      else
+        record.grouped(ExcludedWriteBatch).map(batch(Nil, _)).toSeq ++
+          remove.grouped(ExcludedWriteBatch).map(batch(_, Nil))
+    batches.dropRight(1).foreach(b => dataSource.update(Seq(b)))
+    if batches.nonEmpty then dataSource.updateSync(batches.takeRight(1))
+
+  /** Up to `limit` entries in key order, dormant ones last, starting after the entry whose [[ExcludedAccount.cursor]]
+    * is `after`.
+    */
   def excludedPage(after: Option[ByteString], limit: Int): Seq[ExcludedAccount] =
     import SnapSyncProgressStorage.*
     val from = after.fold(ExcludedPrefix)(c => ExcludedPrefix ++ c.toArray :+ 0.toByte)
@@ -184,10 +208,30 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       .map { case (k, v) => excludedEntry(k, v) }
       .toSeq
 
-  /** Whether the set holds anything. One bounded read. */
-  def hasExcluded: Boolean = excludedPage(None, 1).nonEmpty
+  /** Whether the set holds anything that counts against a root: any entry but a dormant one. One bounded read. */
+  def hasExcluded: Boolean = excludedKindPresent(ExcludedAccount.AccountKind, ExcludedAccount.DormantKind)
 
-  /** Empty the set (one range tombstone): SNAP has finalised, and no later cycle may read this one's decisions. */
+  /** Whether the set holds anything at all, dormant entries included. One bounded read. */
+  def hasAnyExcluded: Boolean = excludedPage(None, 1).nonEmpty
+
+  /** Whether the set holds an account-kind entry, dormant or not: an account whose storage nothing has shown complete.
+    */
+  def hasExcludedAccounts: Boolean =
+    excludedKindPresent(ExcludedAccount.AccountKind, ExcludedAccount.CodeKind) ||
+      excludedKindPresent(ExcludedAccount.DormantKind, (ExcludedAccount.DormantKind + 1).toByte)
+
+  /** Whether the set holds a code hash the download gave up on. */
+  def hasExcludedCode: Boolean = excludedKindPresent(ExcludedAccount.CodeKind, ExcludedAccount.DormantKind)
+
+  private def excludedKindPresent(from: Byte, untilKind: Byte): Boolean =
+    import SnapSyncProgressStorage.*
+    dataSource
+      .scanRangeLimit(Namespaces.AppStateNamespace, ExcludedPrefix :+ from, ExcludedPrefix :+ untilKind, 1)
+      .nonEmpty
+
+  /** Empty the set (one range tombstone): a SNAP cycle is starting from nothing, and may not read an earlier one's
+    * decisions.
+    */
   def clearExcluded(): Unit =
     dataSource.deleteRange(
       Namespaces.AppStateNamespace,
@@ -200,6 +244,8 @@ object SnapSyncProgressStorage:
   // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
   private val ExcludedEnd: Array[Byte] = ExcludedPrefix :+ 0xff.toByte
   private val AbsentHash: Array[Byte] = new Array[Byte](32)
+  // Keys in one write batch: the size `storage-rocksdb.md` names (5-10k).
+  private val ExcludedWriteBatch: Int = 5_000
 
   private def excludedKey(e: ExcludedAccount): Array[Byte] = ExcludedPrefix ++ e.cursor.toArray
 
@@ -218,4 +264,10 @@ object SnapSyncProgressStorage:
     if kind == ExcludedAccount.CodeKind then ExcludedAccount(subject, ExcludedReason.CodeMissing)
     else
       val reason = value.headOption.map(ExcludedReason.fromCode).filterNot(_ == ExcludedReason.CodeMissing)
-      ExcludedAccount(subject, reason.getOrElse(ExcludedReason.StorageAbandoned), hash(1), hash(33))
+      ExcludedAccount(
+        subject,
+        reason.getOrElse(ExcludedReason.StorageAbandoned),
+        hash(1),
+        hash(33),
+        dormant = kind == ExcludedAccount.DormantKind
+      )

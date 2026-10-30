@@ -8,6 +8,7 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
@@ -22,12 +23,19 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
   final private class SyncCountingDataSource extends EphemDataSource(Map.empty):
     var synced = 0
     var unsynced = 0
+    var largest = 0
+    private def write(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      dataSourceUpdates.foreach {
+        case DataSourceUpdateOptimized(_, removed, upserted) => largest = largest.max(removed.size + upserted.size)
+        case _                                               => ()
+      }
+      super.update(dataSourceUpdates)
     override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
       synced += 1
-      super.update(dataSourceUpdates)
+      write(dataSourceUpdates)
     override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
       unsynced += 1
-      super.update(dataSourceUpdates)
+      write(dataSourceUpdates)
 
   "The excluded set" should "round-trip entries of every reason, with their claims" taggedAs UnitTest in {
     val store = new SnapSyncProgressStorage(EphemDataSource())
@@ -58,7 +66,77 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
     store.hasExcluded shouldBe false
   }
 
-  it should "do nothing for an empty write" taggedAs UnitTest in {
+  // spec 022 review (vault F2, beacon W-2, forge N4): a force-complete can record about 200k accounts.
+  it should "write a large set in batches of at most 5,000 keys, with the fsync on the last" taggedAs UnitTest in {
+    val source = new SyncCountingDataSource
+    val store = new SnapSyncProgressStorage(source)
+    val entries = (0 until 12_001).map(i =>
+      ExcludedAccount(ByteString(ByteBuffer.allocate(32).putInt(28, i).array()), ExcludedReason.StorageAbandoned)
+    )
+    store.recordExcluded(entries)
+    (source.synced, source.unsynced) shouldBe (1, 2)
+    source.largest should be <= 5_000
+    store.excludedPage(None, 20_000) should have size 12_001
+    store.removeExcluded(entries)
+    (source.synced, source.unsynced) shouldBe (2, 4)
+    store.excludedPage(None, 1) shouldBe empty
+  }
+
+  it should "keep a move between kinds atomic, and write the additions of a split write first" taggedAs UnitTest in {
+    val source = new SyncCountingDataSource
+    val store = new SnapSyncProgressStorage(source)
+    val entry = ExcludedAccount(h(1), ExcludedReason.StorageSkipped, claimedStorageRoot = h(9))
+    store.recordExcluded(Seq(entry))
+    store.updateExcluded(Seq(entry), Seq(entry.copy(dormant = true)))
+    (source.synced, source.unsynced) shouldBe (2, 0)
+    store.excludedPage(None, 10) shouldBe Seq(entry.copy(dormant = true))
+  }
+
+  // spec 022 review hunter W2: A to B to A, or a reorg.
+  "A dormant entry" should "stay in the set, last, without counting against a root" taggedAs UnitTest in {
+    val store = new SnapSyncProgressStorage(EphemDataSource())
+    val account = ExcludedAccount(h(1), ExcludedReason.StorageAbandoned, claimedStorageRoot = h(0x11))
+    val dormant = ExcludedAccount(h(0), ExcludedReason.StorageSkipped, claimedStorageRoot = h(0x12), dormant = true)
+    val code = ExcludedAccount(h(2), ExcludedReason.CodeMissing)
+    store.recordExcluded(Seq(account, dormant, code))
+    store.excludedPage(None, 10) shouldBe Seq(account, code, dormant)
+
+    store.removeExcluded(Seq(account, code))
+    withClue("dormant only: ") {
+      store.hasExcluded shouldBe false
+      store.hasAnyExcluded shouldBe true
+      store.hasExcludedAccounts shouldBe true
+      store.hasExcludedCode shouldBe false
+    }
+    store.excludedPage(None, 10) shouldBe Seq(dormant)
+  }
+
+  it should "come back as an active entry with its claims" taggedAs UnitTest in {
+    val store = new SnapSyncProgressStorage(EphemDataSource())
+    val dormant = ExcludedAccount(h(1), ExcludedReason.StorageRootMismatch, h(0x11), h(0x12), dormant = true)
+    store.recordExcluded(Seq(dormant))
+    store.updateExcluded(Seq(dormant), Seq(dormant.copy(dormant = false)))
+    store.excludedPage(None, 10) shouldBe Seq(dormant.copy(dormant = false))
+    store.hasExcluded shouldBe true
+  }
+
+  "The kind reads" should "tell account entries and code entries apart" taggedAs UnitTest in {
+    val store = new SnapSyncProgressStorage(EphemDataSource())
+    store.hasExcluded shouldBe false
+    store.hasAnyExcluded shouldBe false
+    store.hasExcludedAccounts shouldBe false
+    store.hasExcludedCode shouldBe false
+
+    val code = ExcludedAccount(h(1), ExcludedReason.CodeMissing)
+    store.recordExcluded(Seq(code))
+    (store.hasExcluded, store.hasExcludedAccounts, store.hasExcludedCode) shouldBe (true, false, true)
+
+    store.removeExcluded(Seq(code))
+    store.recordExcluded(Seq(ExcludedAccount(h(1), ExcludedReason.StorageSkipped)))
+    (store.hasExcluded, store.hasExcludedAccounts, store.hasExcludedCode) shouldBe (true, true, false)
+  }
+
+  "An empty write" should "do nothing" taggedAs UnitTest in {
     val source = new SyncCountingDataSource
     val store = new SnapSyncProgressStorage(source)
     store.recordExcluded(Nil)
