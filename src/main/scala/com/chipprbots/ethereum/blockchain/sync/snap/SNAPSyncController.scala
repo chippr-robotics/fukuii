@@ -244,13 +244,17 @@ private class SNAPSyncControllerImpl(
   // phase completes. See SnapStorageDoneStorage for exactly what a marker guarantees in each mode.
   val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
 
+  // Whether trie nodes written through the state storage reach its in-memory node cache rather than RocksDB (cached,
+  // "inmemory" pruning): they reach disk one by one as the cache evicts them, or all at once at a forced persist. Read by
+  // the storage-task markers below and by the healing spawn (spec 022 review vault V3).
+  val trieNodesCachedInMemory: Boolean = stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
+
   // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
   // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
   // CachedReferenceCountedStorage.update into an in-memory cache, not RocksDB, so they could be lost with a marker on
   // disk. Path scheme writes through PathNodeStorage; archive/basic pruning write through; deferred builds no trie.
   val recordStorageDone: Boolean =
-    snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization ||
-      !stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
+    snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization || !trieNodesCachedInMemory
   if !recordStorageDone then
     ctx.log.info(
       "Storage-task completion markers off (Hash scheme + in-memory pruning buffers storage trie nodes): " +
@@ -856,9 +860,10 @@ private class SNAPSyncControllerImpl(
       if snapSyncConfig.storageScheme == StorageScheme.Path then
         // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
         // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
-        // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
-        // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
-        // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
+        // only sends StateHealingComplete once a path-aware walk of its current root in that incarnation found zero
+        // missing nodes (verificationPassComplete: a clean verification walk, or the clean full rebuild walk), so
+        // that signal IS the clean walk: take the same exit as TrieWalkComplete(0) rather than running a second,
+        // blind, full-trie walk.
         if currentPhase == StateHealing then completeHealingWalkClean()
         else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
       else if trieWalkInProgress then
@@ -1511,6 +1516,10 @@ case class SNAPSyncConfig(
     // full-state walk (≈ cap × 80 B; 4,000,000 ≈ 320 MB) so the walk completes instead of OOM-looping.
     // Completeness is independent of this value. See docs/design/healing-frontier-scale.md.
     healingVisitedCap: Int = actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+    // spec 022 D1: the held-memory bound in bytes (held nodes, flush buffer, live requests); at it no new subtree is
+    // opened. Key: `sync.snap-sync.healing.held-memory-limit` (a HOCON size, e.g. `128 MiB`). Not in base/sync.conf
+    // yet: the SNAP-split verifier forbids src/main/resources changes on fix branches, so the default comes from here.
+    healingHeldMemoryLimit: Long = actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
     // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
     // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
     healingFrontierPersistence: Boolean = false,
@@ -1696,6 +1705,9 @@ object SNAPSyncConfig:
       healingVisitedCap =
         if snapConfig.hasPath("healing-visited-cap") then snapConfig.getInt("healing-visited-cap")
         else actors.TrieNodeHealingCoordinator.DefaultVisitedCap,
+      healingHeldMemoryLimit =
+        if snapConfig.hasPath("healing.held-memory-limit") then snapConfig.getBytes("healing.held-memory-limit")
+        else actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
         snapConfig.getBoolean("healing-frontier-persistence"),
       prunedHealVerification =

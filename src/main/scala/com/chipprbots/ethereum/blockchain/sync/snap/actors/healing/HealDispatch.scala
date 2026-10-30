@@ -15,6 +15,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingRequestTimeout
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
@@ -28,12 +30,12 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
   * heal requests (spec 022 D2): a request stays live while it is in flight, so dispatching or re-queueing it changes
   * nothing there. `lastThrottleAdjustMs` is touched only by the dispatch, but its initializer is not a literal, so rule
   * (d) keeps it in the core; `maxConcurrentRequests`, `rawFlushThreshold` and `healingStagnationTimeoutMs` are
-  * immutable vals rule (d) keeps in the core.
+  * immutable vals rule (d) keeps in the core. `newSubtreesPaused` is the core's held-memory pause (spec 022 D1).
   */
 private[actors] trait HealDispatchState:
   def stateRoot: ByteString
   def serveRoot: ByteString
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
+  def pendingTasks: HealTaskQueue[HealingEntry]
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def maxInFlightPerPeer: Int
   def maxConcurrentRequests: Int
@@ -46,8 +48,9 @@ private[actors] trait HealDispatchState:
   def healAttempts: HealAttemptMap
   var healRate: Double
   var lastThrottleAdjustMs: Long
-  def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
+  def rawNodeBuffer: FlushBuffer
   def rawFlushThreshold: Int
+  def newSubtreesPaused: Boolean
   var lastHealedAtMs: Long
   def healingStagnationTimeoutMs: Long
   def totalNodesHealed: Int
@@ -222,17 +225,15 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     (batchSize.toDouble / healThrottle).toInt.max(1)
 
   private def requestNextBatch(peer: Peer): Option[BigInt] =
+    // spec 022 D1: deepest first (the queue's order); at the held-memory cap only fetches that let held nodes commit.
+    lazy val batch: Seq[HealingEntry] = pendingTasks.dequeue(effectiveBatchSize, paused = newSubtreesPaused)
     if pendingTasks.isEmpty then
       log.debug("No pending healing tasks")
       None
     else if pivotRefreshRequested then None
     else if statelessPeers.contains(peer.id.value) then None
+    else if batch.isEmpty then None
     else
-      val effectiveBatch = effectiveBatchSize
-      val takeCount = effectiveBatch.min(pendingTasks.size)
-      val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
-      pendingTasks.dropInPlace(takeCount)
-
       val requestId = requestTracker.generateRequestId()
       val responseBytes = responseBytesTargetFor(peer)
 

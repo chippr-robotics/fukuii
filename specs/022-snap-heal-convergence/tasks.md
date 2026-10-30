@@ -106,33 +106,64 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Tests (write first; they must fail)
 
-- [ ] T017 [P] [US3] Test: when a re-peg happens while nodes are held, none of the held nodes is on disk, and completion waits until their children arrive. File: `test/.../blockchain/sync/snap/actors/healing/HeldNodeSetSpec.scala`. **[vault]**
-- [ ] T018 [P] [US3] Test the #1549 regression on the heal path: a throw inside the node write leaves the held or buffered nodes intact and resets `flushing`. File: `test/.../blockchain/sync/snap/actors/healing/HealFlushFailureSpec.scala`. Today, `FrontierPersistence.flushRawNodesAsync:185-206` clears the buffer before the write. **[vault]**
-- [ ] T019 [P] [US3] Test the bound and pause policy: at the held-memory cap, requests for children of held nodes are still dispatched, and requests that open a new subtree are not. There is no deadlock on a trie deeper than the bound allows. File: `HeldNodeSetSpec.scala`. **[vault]**
-- [ ] T020 [P] [US3] Test that dispatch order is deepest first: with mixed-depth pending requests, the dispatched order is non-increasing in depth. File: `test/.../blockchain/sync/snap/actors/healing/HealDispatchOrderSpec.scala`. **[beacon]**
-- [ ] T021 [US3] Build the kill-point harness in `src/it/scala/com/chipprbots/ethereum/sync/HealCrashSafetyItSpec.scala` (the IntegrationTest module).
+- [x] T017 [P] [US3] Test: when a re-peg happens while nodes are held, none of the held nodes is on disk, and completion waits until their children arrive. File: `test/.../blockchain/sync/snap/actors/healing/HeldNodeSetSpec.scala`. **[vault]**
+- [x] T018 [P] [US3] Test the #1549 regression on the heal path: a throw inside the node write leaves the held or buffered nodes intact and resets `flushing`. File: `test/.../blockchain/sync/snap/actors/healing/HealFlushFailureSpec.scala`. Today, `FrontierPersistence.flushRawNodesAsync:185-206` clears the buffer before the write. **[vault]**
+- [x] T019 [P] [US3] Test the bound and pause policy: at the held-memory cap, requests for children of held nodes are still dispatched, and requests that open a new subtree are not. There is no deadlock on a trie deeper than the bound allows. File: `HeldNodeSetSpec.scala`. **[vault]**
+- [x] T020 [P] [US3] Test that dispatch order is deepest first: with mixed-depth pending requests, the dispatched order is non-increasing in depth. File: `test/.../blockchain/sync/snap/actors/healing/HealDispatchOrderSpec.scala`. **[beacon]**
+- [x] T021 [US3] Build the kill-point harness in `src/it/scala/com/chipprbots/ethereum/sync/HealCrashSafetyItSpec.scala` (the IntegrationTest module).
   - It heals a synthetic trie in a child JVM on real RocksDB.
   - It sends `kill -9` at four points: after a node is held, mid-chain commit, mid-re-peg, and mid-excluded-set write.
   - It reopens the database and runs an audit asserting that no present node has an absent child.
   - Parameterise it over Path and Hash, and over `pruning.mode=basic` and `inmemory`.
+  - *Scope (slice 2 review, vault V3/V4, eye F10):* the invariant is claimed for archive and basic pruning only (spec.md, after FR-004). Under `inmemory` the Hash cells run with a node cache small enough to evict and audit what eviction wrote, without asserting the invariant; the Path cells ignore the pruning mode (the path store is written directly), so they run once.
   - **[vault]**
+  - **Done in slice 2 for three of the four points** (held, mid-chain before and after the write, mid-re-peg with nodes held and with the old trie healed), 20 runs. The fourth, mid-excluded-set write, lands with the excluded-account store in slice 3 (T032-T035).
+  - *Widened after the slice-2 review (vault V4, eye F10), 32 runs:* two fixtures (the account trie, and an account leaf over a storage trie, so a Path chain commit and a re-peg delete span both trie column families and the audit checks a storage root); the re-peg points count only writes that put a node, `repeg-full` must find the new root on disk, and Path adds `repeg-delete` (the first, delete-only write after a re-peg); the Path cells run under basic pruning only (12), the Hash cells under basic (10, invariant asserted) and inmemory (10, a two-entry node cache that evicts to disk; the audit is reported, not asserted: 0 violations in the run of 2026-10-29); the writer pool has two threads. Not done: the restart-after-kill step (SC-006, slice 4), the twin-storage alias fixture (slice 3), `repeg-k` points (beacon N5, slice 4); see `.local/docs/continuations/s022-slice3-inputs.md`.
 
 ### Implementation
 
-- [ ] T022 [US1] Make `pendingTasks` a priority queue on depth, deepest first, in `actors/healing/HealDispatch.scala:233-234` (today a FIFO `ArrayDeque`; children are appended at `HealResponseProcessing:409`). **[beacon] [forge]**
-- [ ] T023 [US3] Implement the held-node set in `blockchain/sync/snap/heal/HeldNodeSet.scala` (new file), following data-model.md "Held node".
+- [x] T022 [US1] Make `pendingTasks` a priority queue on depth, deepest first, in `actors/healing/HealDispatch.scala:233-234` (today a FIFO `ArrayDeque`; children are appended at `HealResponseProcessing:409`). **[beacon] [forge]**
+- [x] T023 [US3] Implement the held-node set in `blockchain/sync/snap/heal/HeldNodeSet.scala` (new file), following data-model.md "Held node".
   - Each entry holds the node bytes, its outstanding count and its parent edges.
   - Measure the bound in bytes, configured by `fukuii.sync.snap-sync.healing.held-memory-limit` (default 128 MiB) in `src/main/resources/conf/base/sync.conf`.
   - Implement the pause policy from plan D1.
   - **[vault]**
-- [ ] T024 [US3] Change `actors/healing/HealResponseProcessing.scala:151-193` so that a healed node is **held**, not written, until its outstanding count is 0.
+- [x] T024 [US3] Change `actors/healing/HealResponseProcessing.scala:151-193` so that a healed node is **held**, not written, until its outstanding count is 0.
   - A node whose children are all present is committed together with every ancestor whose count reaches 0, in one atomic write. That write is a new `db/storage` method (on `PathNodeStorage`, and on the node storage behind `MptStorage` for Hash) that builds and applies the batch, because heal code may not import `DataSource`. Include any T014 deletes in that batch.
   - Release held entries only after the write returns.
   - **[vault] [beacon] [forge]**
-- [ ] T025 [US3] On a re-peg (`TrieNodeHealingCoordinator.scala:606-690`) and on `HealingForceComplete` (`:567-584`), drop the held set and pending requests, flush **only** complete nodes, and re-seed from the new root. **[beacon] [forge]**
-- [ ] T026 [US3] Remove the buffer-before-write ordering in `actors/healing/FrontierPersistence.scala:167-206`, so the #1549 heal-path bug is gone. If the Hash `rawNodeBuffer` path survives T024, it must clear only after a successful write and reset `flushing` on failure. **[vault]**
-- [ ] T027 [US3] Write the completion flag with `updateSync`, following research R-3, wherever `StateHealingComplete` is persisted. **[vault]**
-- [ ] T028 Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
+- [x] T025 [US3] On a re-peg (`TrieNodeHealingCoordinator.scala:606-690`) and on `HealingForceComplete` (`:567-584`), drop the held set and pending requests, flush **only** complete nodes, and re-seed from the new root. **[beacon] [forge]**
+- [x] T026 [US3] Remove the buffer-before-write ordering in `actors/healing/FrontierPersistence.scala:167-206`, so the #1549 heal-path bug is gone. If the Hash `rawNodeBuffer` path survives T024, it must clear only after a successful write and reset `flushing` on failure. **[vault]**
+- [x] T027 [US3] Write the completion flag with `updateSync`, following research R-3, wherever `StateHealingComplete` is persisted. **[vault]**
+- [x] T028 **Dev-loop run done 2026-10-29** (`/home/dontpanic/mordor-scarcity/S2`, jar `9b71bcd02`, sha256 `c69a841d…`).
+  - **Correctness:**
+    - SNAP completed and handed off at pivot 17,289,450.
+    - The second verification walk found **0 missing nodes**. The 2026-10-28 baseline's second walk found 1, which forced a third walk.
+    - Regular sync then imported 168 blocks in 10 min, with no missing-node or root errors.
+    - No `[HEAL-KEY-CONFLICT]`, `[HEAL-HELD-CONFLICT]` or bookkeeping-fault lines.
+  - **Timing, confounded by host IO:**
+    - Bootstrap → handoff: 28.9 min (baseline 25.6).
+    - Accounts + storage: 7.3 min (baseline about 16).
+    - Bytecode: 11.4 min (baseline 3.5).
+    - Healing → handoff: 10.3 min (baseline 5.7).
+    - JFR shows the slow stretch (19:10–19:17) was disk-bound: healing threads sat in native `RocksDB.multiGet` / iterator `next`, with almost no Java CPU samples. GC paused 7 s in total over 610 s, the longest pause 226 ms.
+    - Over the same window core-geth imported empty blocks at 15.5 s each on average (57 s at worst), so the SATA SSD was saturated for both processes. The slow bytecode phase has the same cause.
+  - **Held set:** Mordor healed only 649 nodes. The cap was never reached (no `[HEAL-HELD]` pause), and the 2-minute pulse sampled after the drain (held=0), so the peak was **not captured**. The expected peak of about 43k nodes (20–45 MB) needs a larger heal. Sepolia gate T063 measures it.
+  - Run the measured comparison again on a quiet host before slice 5's T057 timing.
+  - **Re-run on the reviewed head `c6768e799`** (2026-10-30, `/home/dontpanic/mordor-scarcity/S3`, jar sha256 `96cc4901…`):
+    - SNAP completed and handed off at pivot 17,292,570.
+    - Walk 1's result was **discarded as stale**, because a re-peg happened mid-walk; this is the round-4 current-root guard.
+    - Walk 2 found 41 missing nodes, which were healed. Walk 3 was clean, and healing declared 698 nodes healed.
+    - Regular sync followed the head to 17,292,725.
+    - No `[HEAL-KEY-CONFLICT]`, `[HEAL-HELD-CONFLICT]` or fault lines.
+    - Timings: bootstrap → handoff 27 min, storage-done → handoff 19 min, healing → handoff 10 min.
+    - About 80 s after handoff there was a burst of 16 `Could not get weight for parent` import errors that blacklisted the only peer. It also occurs on the pre-spec-022 run B, so it was filed as #1683 and is not slice-2.
+  - **Host disk finding (2026-10-30), which confounds both runs' timings:**
+    - TRIM never reaches the root SSD: `/etc/crypttab` has `luks` without `discard`, and `lsblk --discard` shows 0 B at `dm_crypt-0`.
+    - Under load the BX500 showed r_await 330–445 ms and w_await 235–320 ms at 3–7 IOPS.
+    - Redo the timing comparison after TRIM is enabled.
+
+  Original task: Run T017–T021 and the slice-1 tests, then do one dev-loop Mordor run against the local core-geth (quickstart §0). Record the held-set size and bytes at peak (expected about 43k nodes, 20–45 MB). Open the slice-2 PR and request reviews from vault, beacon and forge.
 
 **Checkpoint**: the invariant holds for everything healing writes, and is proven under kill points.
 
@@ -164,6 +195,21 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [ ] T035 [US2] On Hash, on every adopted pivot root, resolve each excluded account against the current root. If the lookup hits a missing node, skip the account. If its storage root or code is absent, seed a heal task. Same file as T034. **[forge]**
 - [ ] T036 [US1] Add the code-acknowledgement message from `ByteCodeCoordinator` to the heal coordinator, and make code an outstanding dependency of its leaf (D4). Files: `actors/ByteCodeCoordinator.scala`, `heal/HeldNodeSet.scala`, `actors/TrieNodeHealingCoordinator.scala`. **[beacon] [forge]**
 - [ ] T037 [US1] Remove `HealedCodeWaitTimeout` (`SNAPSyncController.scala:836-846`). If code is unavailable, log the account every 60 s. After 30 min with no progress, fall back to `StateHealingAbandoned`, which leads to the lazy handoff. **[beacon] [forge]**
+- [ ] T038a [US3] **(slice-2 sign-off condition: hunter, forge, vault, beacon)** Make the frontier walk exclusive across SNAP controller instances, not just across coordinator incarnations.
+  - Slice 2's `WalkLease` belongs to one `BfsQueueStorage` wrapper instance, but the shared resource is the BFS column family. A walk left running by a stopped controller (after a `HealingImpossible` restart, for example) can still cut short the next controller's walk, which then reports clean (P1b).
+  - Key the lease to the column family, process-wide, and **cancel** orphaned walks rather than waiting them out. Today the next walk waits out the orphan's remaining runtime, which on ETH mainnet Path can be hours.
+  - Fix the orphan's backpressure, which reads the replaced incarnation's frozen gauge.
+  - Close the refused-launch observability gap: run flags and gauges stay set, and 'engaged' is logged for a walk that never ran.
+  - The stale-root end of a rebuild walk must start the completion check.
+  - **[vault] [forge] [beacon]**
+- [ ] T038b [US3] **(slice-2 sign-off condition, beacon N3-r3 / W2-r4)** A supervisor-restarted heal coordinator must get the controller's **current** root. Today it walks its spawn-time root, because no `StartTrieNodeHealing` or re-peg is replayed. **[beacon] [forge]**
+- [ ] T038c Work through the remaining slice-2 review notes. They are recorded in the git-ignored `.local/docs/continuations/s022-slice3-inputs.md`. Highlights:
+  - the A→B→A re-peg marker ABA;
+  - a scoped gate walk replacing a dropped RestartResumeVerification;
+  - the four-fault loadAll fallback;
+  - `readFailures` stays unbounded and keyed per hash;
+  - the give-up latch has no watchdog;
+  - CF `g` entries survive a re-peg until slice 4.
 - [ ] T038 Run T029–T031 and all earlier slice tests, then do one dev-loop Mordor run. Open the slice-3 PR and request reviews from beacon and forge.
 
 **Checkpoint**: no excluded account can make healing declare completion early.
@@ -182,10 +228,10 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ### Implementation
 
-- [ ] T042 [US4] Add the invariant marker `snap.heal.invariant=2` and the `checkpoint.import.inProgress` key to AppState `s`, both written with `updateSync`, following data-model.md "Invariant marker". Files: `db/storage/AppStateStorage.scala` and `blockchain/sync/checkpoint/CheckpointImporter.scala:81-156` (set the key before streaming, clear it on CRC success). **[vault] [forge]**
-- [ ] T043 [US4] Detect a pre-invariant datadir at SNAP start, run one repair pass (the background-audit engine run inline before completion), then stamp the marker. Files: `blockchain/sync/SyncController.scala:1510-1516` and `SNAPSyncController.scala`. **[beacon] [forge]**
+- [ ] T042 [US4] Add the invariant marker `snap.heal.invariant=2` and the `checkpoint.import.inProgress` key to AppState `s`, both written with `updateSync`, following data-model.md "Invariant marker". Under `pruning.mode = inmemory` the marker is never stamped (or, if one is found, never trusted): healed nodes reach disk only as the node cache evicts them, so "present ⇒ complete" does not hold on disk there (spec 022 review vault R1/V3, V-N2). Files: `db/storage/AppStateStorage.scala` and `blockchain/sync/checkpoint/CheckpointImporter.scala:81-156` (set the key before streaming, clear it on CRC success). **[vault] [forge]**
+- [ ] T043 [US4] Detect a pre-invariant datadir at SNAP start, run one repair pass (the background-audit engine run inline before completion), then stamp the marker. Under `pruning.mode = inmemory` run the repair pass at every start and do not stamp (T042); slice 5 must read `trieNodesCachedInMemory` alongside any marker it trusts (T051). Files: `blockchain/sync/SyncController.scala:1510-1516` and `SNAPSyncController.scala`. **[beacon] [forge]**
 - [ ] T044 [US4] Retire the persisted frontier:
-  - stop **every** writer to CF `g`: `persistFrontier`, `unpersistFrontier`, `markComplete` (`TrieNodeHealingCoordinator:843,1124`), `clearComplete` (`FrontierPersistence:105`) and `markSubtreeComplete` (`FrontierPersistence:162`, `TrieNodeHealingCoordinator:1119`);
+  - stop **every** writer to CF `g`: `persistFrontier`, `unpersistFrontier`, `markComplete` (`TrieNodeHealingCoordinator:843,1124`), `clearComplete` (`FrontierPersistence:105`, and the spawn-time clear under in-memory pruning, `HealingOrchestrator.spawnHealingCoordinator`'s `healingFrontierStorageOpt.foreach(_.clearComplete())`, whose storage_refs unit then goes: HealingOrchestrator 27 -> 26) and `markSubtreeComplete` (`FrontierPersistence:162`, `TrieNodeHealingCoordinator:1119`);
   - clear `g` once on upgrade with `deleteRange`, and keep `g` listed in `Namespaces.nsSeq`;
   - update the tests in research R-5b, including `CleanRebuildEarlyCompletionSpec` and `DecoupledHealSafetySpec`. Files: `actors/healing/FrontierPersistence.scala` and `actors/healing/HealResponseProcessing.scala:107,410`. **[vault]**
 - [ ] T045 Run T039–T041 and all earlier slice tests. Open the slice-4 PR and request reviews from vault and forge.
@@ -212,13 +258,13 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - Drop the `storageScheme == Path &&` condition from the stale-walk filter in the `FrontierRebuilt` arm, so stale-root batches are dropped on Hash as well. Slice 1 added the filter for Path only.
   - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
   **[forge]**
-- [ ] T051 [US1] Remove the completion gates:
+- [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3 and R1: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; there the coordinator's full verification walk, unscoped and unpruned, with no frontier resume, stays the completion gate on every completion and every restart, and the pruned and scoped verifications and the frontier persistence stay off, as slice 2 set them):
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
   - the `VerificationBFSComplete` arms and `MaxConsecutiveStaleDiscards` (`:1164-1250`);
   - the BFS start on a re-pegged root that is already present (`:666-690`): with the marker present, that case is complete immediately.
 
   **[beacon] [forge]**
-- [ ] T052 [US2] On Hash, route completion to `completeHealingWalkClean` (`HealingOrchestrator.scala:271-286`), and remove the controller trie walk (`SNAPSyncController.scala:853-870` → `HealingOrchestrator.scala:203-315`) as a gate. Fix `HealingForceComplete` (`:584`). **[forge]**
+- [ ] T052 [US2] On Hash, route completion to `completeHealingWalkClean` (`HealingOrchestrator.scala:271-286`), and remove the controller trie walk (`SNAPSyncController.scala:853-870` → `HealingOrchestrator.scala:203-315`) as a gate. Fix `HealingForceComplete` (`:584`). *Carve-out (slice 2 review, vault R1):* under `pruning.mode = inmemory` the route to `completeHealingWalkClean` must still require the coordinator's clean full verification walk (T051's carve-out); the controller trie walk is no substitute to keep instead, since it does not descend into present hash nodes. **[forge]**
 - [ ] T053 [US1] Move the full-trie walk into a background audit owned by the regular-sync side, reusing the `FrontierRebuildBfs` engine.
   - It walks the hash store at a recent root that is still present.
   - It throttles itself so it doesn't compete with import.

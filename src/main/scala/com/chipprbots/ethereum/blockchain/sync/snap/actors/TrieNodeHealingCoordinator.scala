@@ -17,7 +17,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -97,7 +102,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
     // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
-    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+    // spec 022 D1: the held-memory bound, in bytes (held nodes, the flush buffer and the live requests). At it, no new
+    // subtree is opened; fetches that let held nodes commit continue. `sync.snap-sync.healing.held-memory-limit`.
+    heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -125,10 +133,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Mutable state root — updated in-place when the controller refreshes the pivot (HealingPivotRefreshed).
   var stateRoot: ByteString = initialStateRoot
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
-  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
-  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification). One queued fetch per
+  // node hash (`healRequests` decides when one is needed). spec 022 D1: dispatched deepest first (the depth of the
+  // fetch's path), FIFO among equal depths; a fetch is classed when queued as freeing held memory (a request waiting
+  // on it has a parent edge, i.e. a held parent) or opening a new subtree, for the held-memory pause policy.
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](
+      e => HealRequest.depthOf(e.pathset),
+      _.hash,
+      e => healRequests.fetchFreesHeld(e.hash)
+    )
   // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
   // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
   // directly) to apply backpressure — it pauses emission when the healing backlog is large so a
@@ -196,6 +210,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // FrontierRebuildComplete / VerificationBFSComplete / FrontierWalkFailed message handlers. The Future bodies never
   // touch it; they communicate completion via `selfRef ! …`. So a plain var is correct (constraint #6).
   var verificationBFSRunning: Boolean = false
+  // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the token of the last walk this incarnation
+  // launched (its `WalkLease` token, set with `verificationBFSRunning`). A walk's end carries its token and is taken only
+  // when it matches: a walk another incarnation launched (a supervisor restart keeps the ActorRef, and a walk outlives
+  // its incarnation) says nothing about this incarnation's root or scope. Per incarnation: a restart forgets it.
+  var currentWalk: Option[Long] = None
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
 
@@ -247,6 +266,49 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // instead of queueing a second one; under Hash each such parent is one more edge to the child. Replaces the
   // `pendingHashSet` de-dup set (pending only, by hash) and the Path `pathAliases` map.
   val healRequests: HealRequestBook = new HealRequestBook()
+
+  // spec 022 D3 (FR-001 to FR-004): served nodes whose subtree is not all present yet. Never on disk; committed with
+  // every ancestor they complete, in one atomic write, once their last child edge closes. Dropped on a re-peg or a
+  // force-complete, after what is ready has been committed.
+  val heldNodes: HeldNodeSet = new HeldNodeSet()
+
+  // spec 022 D1: the held-memory pause, with its last state for the transition log.
+  private var newSubtreesPausedLast: Boolean = false
+
+  /** Whether opening new subtrees is paused: something is held, the held nodes, the flush buffer and the live requests
+    * (forge N4) together reach `heldMemoryLimit`, and something can still free memory: a queued fetch below a held node
+    * or a fetch in flight (spec 022 review beacon W1, hunter W2). Fetches that let held nodes commit are never paused,
+    * which is what keeps the bound from deadlocking; with nothing held, nothing is paused (a backlog of requests alone
+    * does not shrink by waiting); and held nodes that nothing can complete any more (orphans) do not pause either: the
+    * new subtrees go out, and the orphan guard drops them. The bound is therefore soft: the subtrees already open run
+    * to completion, deepest first.
+    */
+  def newSubtreesPaused: Boolean =
+    val bytes = heldMemoryBytes
+    val paused = HeldNodeSet.pausesNewSubtrees(
+      held = heldNodes.nonEmpty,
+      bytes = bytes,
+      limit = heldMemoryLimit,
+      canFree = pendingTasks.hasDispatchable(paused = true) || activeRequests.nonEmpty
+    )
+    if paused != newSubtreesPausedLast then
+      newSubtreesPausedLast = paused
+      if paused then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB reached the ${heldMemoryLimit / 1024} KiB limit " +
+            s"(${heldNodes.size} held, ${rawNodeBuffer.size} buffered, ${healRequests.size} requests) — no new " +
+            s"subtree is opened until held nodes commit; their children are still fetched"
+        )
+      else if bytes >= heldMemoryLimit && heldNodes.nonEmpty then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB is still at the limit, but nothing queued or in flight can " +
+            "complete the held nodes — new subtrees are opened again (the orphan guard drops the held nodes)"
+        )
+      else log.info(s"[HEAL-HELD] Held memory ${bytes / 1024} KiB under the limit — new subtrees are opened again")
+    paused
+
+  /** Estimated heap of what healing holds before it is durable: held nodes, the flush buffer and the live requests. */
+  def heldMemoryBytes: Long = heldNodes.bytes + rawNodeBuffer.bytes + healRequests.bytes
 
   // --- spec 003: scoped post-heal verification (FR-001) ---
   // Bounded, per-round, in-memory accumulator of the nodes HEALED this round (their HealingEntry,
@@ -304,8 +366,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // it — they key off `stateRoot` (the walk root) exclusively, preserving FR-007 parity by construction.
   var serveRoot: ByteString = stateRoot
   // T015 / FR-006: per-task count of fetch attempts that did not satisfy the task (content-mismatch drop, empty
-  // response, or timeout re-queue). Bounded by the pending-task set (an entry is only ever incremented for a hash
-  // that is being re-queued, and the whole map is cleared on every serve-root advance). A task that exceeds
+  // response, or timeout re-queue). Bounded by the live requests (an entry is only ever incremented for a hash that is
+  // being re-queued, dropped once the task is satisfied or given up on, and the whole map is cleared on every
+  // serve-root advance; a fill put back after a failed read keeps it, spec 022 review hunter-r3 N2). A task that exceeds
   // `decoupledHealMaxAttemptsNoRefresh` with no serve-root advance in between is surfaced (log + metric) — it is
   // NEVER force-completed: the content-hash check guarantees a wrong/missing node can never be accepted, so a stuck
   // node simply keeps the walk from finding zero, which is the correct (no-false-completion) behaviour.
@@ -329,6 +392,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
+  // spec 022 review beacon N2-r3, hunter-r3 N1: a read-failure give-up escalates once per controller answer. Its own
+  // latch, not `pivotRefreshRequested`: that one stops every dispatch, and an answer that never comes or leaves it set
+  // would freeze unrelated fetches until the watchdog above. Cleared when the controller answers (resume or refresh).
+  var giveUpEscalated: Boolean = false
 
   val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
@@ -336,9 +403,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   val peerCooldownUntilMs = mutable.Map[String, Long]()
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
-  val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  // spec 022 D3: nodes committed with their whole subtree, waiting for the asynchronous flush (Hash scheme).
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   val rawFlushThreshold = 1000
-  var flushing: Boolean = false
+  // spec 022 review forge C1: the asynchronous flush in flight, by its ticket (a token unique in the process, so a late
+  // completion from another flush, or from the instance a supervisor restart replaced, matches nothing). `flushing` is
+  // whether it is set.
+  var flushInFlight: Option[FlushTicket] = None
 
   // spec 005 C3b/D2/T009/T012: heal-side subtree-complete seeding, DEFERRED until durable. discoverMissingChildren
   // identifies a candidate X (a just-healed node whose direct children are ALL present on disk AND themselves
@@ -403,7 +474,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * Each group keeps its arms in their original relative order. Every arm except the three `VerificationBFSComplete`
     * arms and the catch-all matches its own Command type and no other, so the first arm that matches a message is the
     * same arm as before for every message: the three `VerificationBFSComplete` arms sit together in
-    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm.
+    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm. Spec 022
+    * fix round 4 puts a replaced-walk arm first among the arms of each walk end (`FrontierRebuildComplete`,
+    * `FrontierWalkFailed`, `VerificationBFSComplete`), in the same group: it takes only an end whose walk this
+    * incarnation did not launch.
     */
   private def activeBehavior(): Behavior[Command] =
     Behaviors.receiveMessage[Command](
@@ -415,6 +489,62 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         .orElse(healVerificationArms)
         .orElse(unhandledCommandArms)
     )
+
+  /** Drop every held node, unwritten (a re-peg or a force-complete: its subtree is not all present), after the commit
+    * the caller made; Hash: their persisted frontier entries go too (spec 022 review vault V5). A commit that failed
+    * leaves ready nodes and pending deletes: they are dropped as well, unwritten (vault V6: said at WARN). Discovery
+    * from the root finds again whatever the root still needs, deletes included (hash-checked presence).
+    */
+  private def dropHeld(reason: String): Unit =
+    if heldNodes.hasPendingWrites then
+      log.warn(
+        s"[HEAL-HELD] $reason: the last commit write failed; ${heldNodes.readyCount} ready node(s) and the pending " +
+          "deletes are dropped unwritten (discovery finds again what the root still needs)"
+      )
+    val dropped = heldNodes.heldHashes
+    heldNodes.clear()
+    unpersistDroppedHeld(dropped)
+    if dropped.nonEmpty then log.info(s"[HEAL-HELD] $reason: dropped ${dropped.size} held node(s), never written")
+
+  /** spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the end of a walk this incarnation did not
+    * launch, `walk`: a walk of an incarnation a supervisor restart replaced, which ran on in the shared BFS queue and
+    * reports to the same ActorRef. Its verdict says nothing about this incarnation's root or scope, so it changes
+    * nothing here: no flag, no clean pass, no marker. It gave the queue's lease back before reporting, so a walk this
+    * incarnation could not start meanwhile can start now: the completion check decides.
+    */
+  private def ignoreReplacedWalk(walk: Long, what: String): Unit =
+    log.info(
+      s"[HEAL-BFS] Ignoring the end of $what (walk $walk): a replaced incarnation of this coordinator launched it"
+    )
+    self ! HealingCheckCompletion
+
+  /** spec 022 review (beacon W1, hunter W2, forge W1): drop the held nodes nothing can complete any more. A held node's
+    * count goes down only when a child's subtree commits, and a child arrives only through a fetch queued below a held
+    * node or one in flight. With neither (and no commit pending), the held nodes are orphans: a child was lost (it did
+    * not decode, or its edge was dropped), and no fetch is coming. Waiting for the whole queue to drain first would let
+    * them keep new subtrees paused at the cap (beacon W1); so they are dropped as soon as nothing can free them, never
+    * written (nothing on disk is wrong), and the verification walk finds them missing again. With nothing queued
+    * either, every live request is orphaned too (live means queued or in flight), and the book is cleared.
+    *
+    * Their persisted frontier entries stay (vault R2, hunter N3, forge F3): the root has not moved, so the completeness
+    * marker may stand, and an entry is what lets a resume from it fetch a dropped node again. The walk persists them
+    * again anyway (idempotent), and a flush removes each once its node is written. Only a re-peg or a force-complete,
+    * which clear the marker too, remove the entries of the held nodes they drop (`dropHeld`).
+    */
+  private def dropOrphanedHeld(): Unit =
+    if heldNodes.nonEmpty && !heldNodes.hasPendingWrites && activeRequests.isEmpty &&
+      !pendingTasks.hasDispatchable(paused = true)
+    then
+      val dropped = heldNodes.heldHashes
+      log.error(
+        s"[HEAL-HELD] ${dropped.size} held node(s) wait on children that nothing queued or in flight can supply — " +
+          s"dropping them, never written (${pendingTasks.size} new-subtree fetch(es) stay queued); the verification " +
+          "walk finds them again"
+      )
+      heldNodes.clear()
+      if pendingTasks.isEmpty && !healRequests.isEmpty then
+        log.error(s"[HEAL-HELD] ${healRequests.size} live request(s) are neither queued nor in flight — dropping them")
+        healRequests.clear()
 
   /** Heal lifecycle (stays in the core): start, force-complete, walk-root re-peg, the 2-minute stagnation pulse and the
     * progress query. Arms #1, #9, #10, #21, #22 of the spec 016 C-H0 arm-order table (research.md R4c).
@@ -477,6 +607,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             catch
               case NonFatal(e) =>
                 asyncLog.error("[HEAL-RESTART] Failed to load persisted frontier — falling back to full-state BFS", e)
+                // spec 022 review vault-r3 W3: the fallback is marker-absent, as every other fallback here is. A marker
+                // left over entries nobody read would let the completion gate scope its walk by it if the rebuild does
+                // not run (a failed flush defers it). Removed synced, before the rebuild is sent (as at a re-peg, V-R5).
+                // If the removal fails too, the rebuild still runs: a stalled restart is worse, and the store is failing.
+                try store.clearComplete()
+                catch
+                  case NonFatal(c) =>
+                    asyncLog.error("[HEAL-RESTART] Could not remove the completeness marker of that frontier either", c)
                 None
           }
           // Route the resume decision back to the actor thread: the start*BFS launchers mutate verificationBFSRunning
@@ -572,7 +710,14 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
             s"Signaling completion with $totalNodesHealed healed nodes."
         )
-        clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
+        // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it. First, so the
+        // completeness marker is gone (synced) before any entry is deleted below (spec 022 review vault V-R5).
+        clearPersistedFrontier()
+        // spec 022 T025: commit what is complete, flush it (it was never flushed before the stop), drop the rest. A
+        // held node's subtree is not all present, so it is never written.
+        commitHeld()
+        flushRawNodesSync()
+        dropHeld("Force-complete")
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
         pendingTasks.clear()
@@ -588,6 +733,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         Behaviors.stopped
 
     case HealingPivotRefreshed(newStateRoot) =>
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       // FR-003: a same-root refresh is a no-op. ByteString `==` is full 32-byte value equality (NOT the
       // 4-byte log prefix). Returning here preserves a valid completeness marker and the persisted
       // frontier — the old body would clear both via clearPersistedFrontier(), wiping a good snapshot.
@@ -604,17 +750,25 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
         )
         stateRoot = newStateRoot
-        flushRawNodesSync() // Flush any buffered nodes before clearing state
+        // Layer 2: the old-root frontier is stale after the refresh (the reseed below repopulates it). Invalidated
+        // first, so the completeness marker is gone (synced) before the flush and `dropHeld` delete any entry (spec 022
+        // review vault V-R5). It reads only the pending and in-flight sets, which nothing before it here changes.
+        clearPersistedFrontier()
+        // spec 022 T025: commit what is complete (with the stale positions already found) and flush it, then drop every
+        // held node: its subtree is not all present, so it is never written. Discovery from the new root finds again
+        // whatever the new root still needs.
+        commitHeld()
+        flushRawNodesSync()
+        dropHeld("Re-peg")
         // spec 009 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
-        // healRequests / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
-        // which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
+        // healRequests / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier()
+        // (above), which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
         // records) and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes
         // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
         // fault).
-        clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
         clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
         pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
         // spec 022 FR-007/FR-010: every request (and Path alias) of the old root goes; discovery from the new root finds
@@ -668,12 +822,27 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
               s"— starting verification BFS to find missing children"
           )
+          // spec 022 review forge F1: not while the flush above failed. The old root's buffered nodes are mostly the new
+          // root's too, and a walk would read them as missing; startVerificationBFS retries the write first, and if it
+          // fails again defers the walk to the completion check (verificationPassComplete is false: it walks).
           startVerificationBFS(newStateRoot, pivotReseedPath)
 
       Behaviors.same
 
     case HealingStagnationCheck =>
       emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
+      // spec 022 review hunter W1: a commit or flush whose write failed is retried by the next one, and the last one by
+      // the completion check right after it; if that fails too and nothing is pending or in flight, no later commit or
+      // flush comes. Retry it here, every pulse, while unwritten nodes remain (a failure is logged each time). The
+      // asynchronous flush runs whether or not healing looks complete (forge F1): with nothing pending a verification
+      // walk may be the only other actor, and no walk starts over an unwritten buffer, so this is what writes it.
+      if heldNodes.hasPendingWrites || (rawNodeBuffer.nonEmpty && !flushing) then
+        log.warn(
+          s"[HEAL-COMMIT] Retrying unwritten healed nodes: ${heldNodes.readyCount} ready to commit, " +
+            s"${rawNodeBuffer.size} buffered for the flush"
+        )
+        if rawNodeBuffer.nonEmpty && !flushing then flushRawNodesAsync()
+        self ! HealingCheckCompletion
       // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
       // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
       // empty for the current root earlier may now be in its serve window. While there is residual work and
@@ -700,7 +869,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
       log.info(
         s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
-          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+          s"pending=${pendingTasks.size} active=${activeRequests.size} held=${heldNodes.size} " +
+          s"(${heldMemoryBytes / 1024} KiB) peers=${knownAvailablePeers.size} | " +
           s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
       )
       val (newM, crossed) =
@@ -730,6 +900,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         if consecutiveDeadPulses >= 3 then
           log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
           consecutiveDeadPulses = 0
+          // spec 022 review forge F1: started only once the flush buffer is written (startVerificationBFS); with a write
+          // that keeps failing it is deferred, and the retry above flushes again every pulse.
           val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
           startVerificationBFS(stateRoot, emptyPath)
       else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
@@ -817,7 +989,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   }
 
   /** Frontier-rebuild BFS results and the crash-recovery full rebuild (C-H2 `FrontierRebuildBfs`). Arms #2, #3, #4, #25
-    * (research.md R4c).
+    * (research.md R4c), and before #3 and before #4 the replaced-walk arm of each (spec 022 fix round 4): the end of a
+    * walk this incarnation did not launch.
     */
   private[actors] lazy val frontierRebuildArms: PartialFunction[Command, Behavior[Command]] = {
     case FrontierRebuilt(entries, walkRoot) =>
@@ -843,19 +1016,35 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierRebuildComplete(missingEmitted, walkRoot) =>
+    case FrontierRebuildComplete(_, walkRoot, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"full-state rebuild of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case FrontierRebuildComplete(missingEmitted, walkRoot, _) =>
       // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
       // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
       verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
-      // spec 002/005 marker: gated on frontier persistence (default off). With it off, `FrontierRebuildComplete` is
-      // never reached via the resume path anyway (that path requires `frontierStore` defined), but guard defensively
-      // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
-      // the spec-003 scoped path, which must stay dark by default).
+      // spec 002/005 marker: gated on frontier persistence. The resume path (StartTrieNodeHealing) reads the store
+      // whenever it is present, which it also is for the spec 005 records with persistence off, so this guard is what
+      // keeps the marker unwritten then (FR-005 parity; the marker also gates the spec-003 scoped path). Under
+      // in-memory pruning the controller passes persistence off and clears any marker before the spawn (spec 022
+      // review vault R1): no marker is trusted there.
+      // spec 022 review (hunter W2, forge W-r4-1, vault-r3 W2): only for the current root. A re-peg does not stop this
+      // walk; it clears the marker and drops the outstanding frontier the walk had found (pending, in flight, held), so
+      // a walk of the root it left must not set the marker again: a restart would trust it, and so would the
+      // completion gate's scoped walk.
       if frontierPersistenceEnabled then
-        stateIngest.healingFrontier.foreach { store =>
-          store.markComplete()
-          log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
-        }
+        if walkRoot == stateRoot then
+          stateIngest.healingFrontier.foreach { store =>
+            store.markComplete()
+            log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
+          }
+        else
+          log.info(
+            s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
+              s"complete — the persisted frontier is not marked complete (the heal has re-pegged to " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)})"
+          )
       // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
       // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
       // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
@@ -864,7 +1053,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // conjunct holds — each excludes a specific false-completion path (research D2 + adversarial verdict):
       //   missingEmitted == 0    — the deciding walk found nothing missing (no gap discovered).
       //   totalNodesHealed == 0  — nothing healed during the walk (excludes heal-during-walk mutation;
-      //                            conservative `== 0`, D5; cumulative counter preserved across pivots).
+      //                            conservative `== 0`, D5; cumulative counter preserved across pivots). A fill
+      //                            put back or given up on writes nothing, so it is not counted and need not be:
+      //                            this arm rests on the clean full walk (missingEmitted == 0), not on the count.
       //   isComplete             — pendingTasks.isEmpty && activeRequests.isEmpty: no outstanding frontier
       //                            or in-flight request (excludes outstanding work).
       //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
@@ -898,7 +1089,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierWalkFailed =>
+    case FrontierWalkFailed(walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, "frontier walk (it failed)")
+      Behaviors.same
+
+    case FrontierWalkFailed(_) =>
       verificationBFSRunning = false
       trieWalkInProgress = false
       log.warn(
@@ -913,12 +1108,39 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // spec 006 C1/D3/FR-004: forward the walk's missing-node count (missingEmitted) and the root this walk
       // traversed (`root`, captured here) so the FrontierRebuildComplete handler can decide early completion and
       // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
-      startFrontierBFS(
-        root,
-        rootPath,
-        isStor = false,
-        (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
-      )
+      // spec 022 review forge F1: like every frontier walk, the rebuild starts on a written flush buffer. At a fresh start
+      // the buffer is empty; if responses filled it meanwhile and its write fails, no rebuild runs: something was healed,
+      // so once the write succeeds the completion check runs the full verification walk in its place (full: the resume
+      // sends this only when the store holds no completeness marker, or after removing one over a frontier it could not
+      // read, vault-r3 W3; one stays only if that removal fails too).
+      // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): no rebuild of a root a re-peg in the resume
+      // window has left (the re-peg seeded or walks the new root), and none while a walk runs (a completion check or a
+      // re-peg in the window started one, and two walks on the shared queue cut each other short). Without the rebuild
+      // no marker is set; this incarnation has no clean pass yet, so the completion check walks the root once that
+      // walk has ended.
+      if root != stateRoot then
+        log.info(
+          s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
+            s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
+        )
+      else if trieWalkInProgress || verificationBFSRunning then
+        log.info(
+          "[HEAL-RESTART] Full-state rebuild not started: a frontier walk is already running. The completion check " +
+            "walks the root once it has ended."
+        )
+      else if flushedForWalk() then
+        startFrontierBFS(
+          root,
+          rootPath,
+          isStor = false,
+          (walk: Long, missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root, walk)
+        )
+      else
+        log.warn(
+          "[HEAL-RESTART] Full-state rebuild not started: healed nodes waiting in the flush buffer could not be written. " +
+            "The completion check retries the write and then runs the full verification walk instead."
+        )
+        self ! HealingCheckCompletion
       Behaviors.same
   }
 
@@ -1057,6 +1279,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // fired HealingStagnated, give a fresh stagnation window, and resume dispatching the EXISTING pending tasks.
       // NOTHING is cleared (root, pendingTasks, frontier, verificationPassComplete all preserved) — that is the
       // whole point: a slow-but-servable verification pass must survive so it can converge against one stable root.
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       if pivotRefreshRequested then
         log.info(
           s"[HEAL] Resume dispatch on held root ${Hex.toHexString(stateRoot.take(4).toArray)} " +
@@ -1069,6 +1292,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         consecutiveIdleChecks = 0
         lastHealedAtMs = System.currentTimeMillis() // give the held root a fresh healingStagnationTimeoutMs window
         tryRedispatchPendingTasks()
+        // spec 022 review beacon W1: the stall may be held nodes that nothing can complete; the check drops them.
+        self ! HealingCheckCompletion
       else log.debug("[HEAL] HealingResumeDispatch with no pending pivot-refresh latch — ignoring")
 
       Behaviors.same
@@ -1084,59 +1309,63 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   /** Async raw-node flush completion (C-H1 `FrontierPersistence`). Arm #14 (research.md R4c). */
   private[actors] lazy val frontierPersistenceArms: PartialFunction[Command, Behavior[Command]] = {
-    case FlushComplete(count) =>
-      flushing = false
+    case FlushComplete(token, count) =>
+      flushCompleted(token, count)
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
-      // Check if buffer filled up again during the flush
-      if rawNodeBuffer.size >= rawFlushThreshold then flushRawNodesAsync()
+      // Flush what was committed during the write.
+      if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
+      self ! HealingCheckCompletion
+
+      Behaviors.same
+
+    case FlushFailed(token, cause) =>
+      flushFailed(token, cause)
       self ! HealingCheckCompletion
 
       Behaviors.same
   }
 
   /** The completion gate, the verification-walk results and the crash-recovery verification launch (C-H3
-    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The three `VerificationBFSComplete` arms (#17 stale
-    * root, #18 dirty pass, #19 clean pass) are the only Command with more than one arm; they stay together, in this
-    * order, so their guards fall through exactly as before.
+    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The `VerificationBFSComplete` arms (the replaced-walk
+    * arm spec 022 fix round 4 added, then #17 stale root, #18 dirty pass, #19 clean pass) stay together, in this order,
+    * so their guards fall through as before for the end of a walk this incarnation launched.
     */
   private[actors] lazy val healVerificationArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingCheckCompletion =>
-      if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
-        // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
-        // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
-        // all nodes were already in local storage — either way the trie is complete from our
-        // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
-        // HealingPivotRefreshed calling startVerificationBFS directly, not through this gate.
-        if verificationPassComplete || totalNodesHealed == 0 then
-          flushRawNodesSync()
+      // spec 022 D3: retry a commit whose write failed.
+      if heldNodes.hasPendingWrites then commitHeld()
+      dropOrphanedHeld()
+      if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && flushRawNodesSync() then
+        // spec 022 review hunter-r3 C1, forge F6, beacon W1-r3 and N3-r3: completion needs a clean walk of the current
+        // root in this incarnation (verificationPassComplete: a verification walk, or the full rebuild walk, that found
+        // nothing missing, each started only on a written flush buffer). There is no arm for "nothing was healed": a node
+        // given up on is not healed either, and a supervisor-restarted incarnation starts from zero, so in neither case
+        // does that count show that nothing is missing. With no clean pass yet, the check walks (the `else` below).
+        // spec 022 T026: the gate's flushRawNodesSync() above wrote every buffered node, or the gate stays shut.
+        if verificationPassComplete then
           log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
-          // FR-002: mark the snapshot complete ONLY on the verified-complete path — a verification BFS
-          // actually walked the trie and found zero missing nodes (verificationPassComplete == true).
-          // FR-004: do NOT mark on the pure `totalNodesHealed == 0` idle arm: the coordinator was never
-          // given work, so the trie may be untraversed and we cannot assert completeness. Setting the
-          // marker here (gated on verificationPassComplete) is the single completion chokepoint for the
-          // verification path — VerificationBFSComplete routes through HealingCheckCompletion, so this is
-          // equivalent to (and cleaner than) writing the marker inside VerificationBFSComplete.
-          if verificationPassComplete then
-            stateIngest.healingFrontier.foreach { store =>
-              // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — the
-              // verification BFS just confirmed zero missing descendants (verificationPassComplete && isComplete) and
-              // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
-              // is it crash-safe to record the root subtree-complete (ordinary WAL-ordered `update`). This is a real
-              // closure, NOT a `visitedLru`-faked queue-drain: the gate required isComplete (no pending/active
-              // frontier) AND a clean BFS pass. Recorded only under `prunedEnabled` (Hash scheme) so a Path-scheme
-              // node never writes a hash-keyed record. The terminal `markComplete()` (fsync) follows last (D3 order).
-              if prunedEnabled then
-                store.markSubtreeComplete(stateRoot) // spec 005 root record — gated on prunedEnabled
-              // spec 002 snapshot marker — gated on frontier persistence (default off). MUST stay separate from the
-              // spec-005 root record above: with persistence off, the marker is never written, so the spec-003 scoped
-              // path (which keys off `store.isComplete`) stays dark and behavior is byte-for-byte pre-spec-005 (FR-005).
-              if frontierPersistenceEnabled then
-                store.markComplete()
-                log.info(
-                  "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
-                )
-            }
+          // FR-002/FR-004: the snapshot is marked complete only here, on a clean walk of the current root in this
+          // incarnation (verificationPassComplete: a verification walk, or the clean full rebuild walk, that found
+          // nothing missing). This is the single completion chokepoint: VerificationBFSComplete and the rebuild's early
+          // completion both route through HealingCheckCompletion, so the marker is written here, not in either.
+          stateIngest.healingFrontier.foreach { store =>
+            // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — a clean
+            // walk just confirmed zero missing descendants (verificationPassComplete && isComplete) and
+            // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
+            // is it crash-safe to record the root subtree-complete (ordinary WAL-ordered `update`). This is a real
+            // closure, NOT a `visitedLru`-faked queue-drain: the gate required isComplete (no pending/active
+            // frontier) AND a clean BFS pass. Recorded only under `prunedEnabled` (Hash scheme) so a Path-scheme
+            // node never writes a hash-keyed record. The terminal `markComplete()` (fsync) follows last (D3 order).
+            if prunedEnabled then store.markSubtreeComplete(stateRoot) // spec 005 root record — gated on prunedEnabled
+            // spec 002 snapshot marker — gated on frontier persistence (default off). MUST stay separate from the
+            // spec-005 root record above: with persistence off, the marker is never written, so the spec-003 scoped
+            // path (which keys off `store.isComplete`) stays dark and behavior is byte-for-byte pre-spec-005 (FR-005).
+            if frontierPersistenceEnabled then
+              store.markComplete()
+              log.info(
+                "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
+              )
+          }
           snapSyncController ! SNAPSyncController.StateHealingComplete
           clearHealedPathsSet() // spec 003 C1: round closed — next round starts with a fresh scope
         else
@@ -1172,11 +1401,15 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case VerificationBFSComplete(walkRoot, _) if walkRoot != stateRoot =>
+    case VerificationBFSComplete(walkRoot, _, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"verification walk of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case VerificationBFSComplete(walkRoot, _, _) if walkRoot != stateRoot =>
       // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
       // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
-      // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
-      // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
+      // observability flags, then verify the CURRENT root explicitly (`reverifyCurrentRoot` also clears the stale
+      // verdict, so the completion check cannot complete on it).
       verificationBFSRunning = false
       consecutiveStaleDiscards += 1
       log.warn(
@@ -1195,7 +1428,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       else reverifyCurrentRoot()
       Behaviors.same
 
-    case VerificationBFSComplete(_, missingEmitted) if missingEmitted > 0 =>
+    case VerificationBFSComplete(_, missingEmitted, _) if missingEmitted > 0 =>
       consecutiveStaleDiscards = 0
       // DIRTY pass: the walk found (and queued) missing nodes. They may all have been healed by now, so `isComplete`
       // can already be true, but the walk did not descend below any node that was missing when it reached it, and
@@ -1210,7 +1443,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       if isComplete then reverifyCurrentRoot() else tryRedispatchPendingTasks()
       Behaviors.same
 
-    case VerificationBFSComplete(_, _) =>
+    case VerificationBFSComplete(_, _, _) =>
       verificationBFSRunning = false
       consecutiveStaleDiscards = 0
       if isComplete then
@@ -1262,7 +1495,19 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case RestartResumeVerification(root, rootPath) =>
       // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
-      startVerificationBFS(root, rootPath)
+      // spec 022 review (forge W-r4-2, beacon W1-r4): as for the full rebuild, no walk of a root a re-peg in the resume
+      // window has left, and none while a walk runs; the completion check walks once that walk has ended.
+      if root != stateRoot then
+        log.info(
+          s"[HEAL-RESTART] Resume verification of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
+            s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
+        )
+      else if trieWalkInProgress || verificationBFSRunning then
+        log.info(
+          "[HEAL-RESTART] Resume verification not started: a frontier walk is already running. The completion check " +
+            "walks the root once it has ended."
+        )
+      else startVerificationBFS(root, rootPath)
       Behaviors.same
   }
 
@@ -1297,6 +1542,12 @@ object TrieNodeHealingCoordinator:
     * which nodes are stored or the content-hash gate.
     */
   val MinInFlightPerPeer: Int = 2
+
+  /** spec 022 review forge F2: fills in a row whose stored children could not be read before a healed node is given up
+    * on (not fetched again; its parents are left to the orphan guard). The first failures are fetched again: a read can
+    * fail once and work the next time.
+    */
+  val MaxConsecutiveReadFailures: Int = 3
 
   sealed trait Command
   case class StartTrieNodeHealing(stateRoot: ByteString) extends Command
@@ -1333,7 +1584,11 @@ object TrieNodeHealingCoordinator:
   // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
   // the Typed behavior can receive them. They were plain `Any` messages under Classic.
   // Internal message for async flush completion
-  private[actors] case class FlushComplete(count: Int) extends Command
+  // `token` is the flush's ticket token (FlushTicket, spec 022 review forge C1): only the flush in flight with that
+  // token releases anything (FrontierPersistence.flushCompleted).
+  private[actors] case class FlushComplete(token: Long, count: Int) extends Command
+  // spec 022 T026 (#1549): the asynchronous flush `token` threw; nothing it was writing is released.
+  private[actors] case class FlushFailed(token: Long, cause: Throwable) extends Command
 
   // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS).
   // `walkRoot` is the root the emitting walk was launched on (captured on the actor thread at launch), as
@@ -1349,7 +1604,10 @@ object TrieNodeHealingCoordinator:
   // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
   // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
   // it reached it, so the healed node's present children (and their subtrees) were not verified.
-  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
+  // `walk` is the walk's lease token (spec 022 review hunter W1, beacon W1-r4): the end is taken only by the incarnation
+  // that launched that walk (`currentWalk`).
+  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long, walk: Long)
+      extends Command
 
   // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
   // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
@@ -1357,13 +1615,16 @@ object TrieNodeHealingCoordinator:
   //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
   //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
   //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
-  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
+  //   walk           = the walk's lease token: taken only by the incarnation that launched it (`currentWalk`).
+  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString, walk: Long)
+      extends Command
 
   // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
   // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
   // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
-  // permanently blocking every future walk (including the watchdog) until restart.
-  private[actors] case object FrontierWalkFailed extends Command
+  // permanently blocking every future walk (including the watchdog) until restart. `walk` is the walk's lease token: a
+  // failure of a walk another incarnation launched resets nothing here.
+  private[actors] case class FrontierWalkFailed(walk: Long) extends Command
 
   // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
   // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
@@ -1403,6 +1664,11 @@ object TrieNodeHealingCoordinator:
     * Operator-tunable via `sync.snap-sync.decoupled-heal-max-attempts-no-refresh`.
     */
   val DefaultDecoupledHealMaxAttemptsNoRefresh: Int = 12
+
+  /** Default held-memory bound (spec 022 D1, FR-002): 128 MiB, about 250k held nodes. Operator-tunable via
+    * `sync.snap-sync.healing.held-memory-limit`.
+    */
+  val DefaultHeldMemoryLimit: Long = 128L * 1024 * 1024
 
   /** Operator-configurable ceiling for BFS level parallelism. Effective parallelism is `min(DefaultBfsParallelism,
     * max(1, availableProcessors - 2))` so large levels are split across sub-ranges on `healingWriterEc`. See
@@ -1496,7 +1762,8 @@ object TrieNodeHealingCoordinator:
       // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = DefaultHeldMemoryLimit
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1529,7 +1796,8 @@ object TrieNodeHealingCoordinator:
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
           healedCodeCheck = healedCodeCheck,
-          walkLocalOnly = walkLocalOnly
+          walkLocalOnly = walkLocalOnly,
+          heldMemoryLimit = heldMemoryLimit
         ).start()
       }
     }

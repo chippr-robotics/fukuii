@@ -129,7 +129,8 @@ object HealingTrieFixtures:
       movingRootDeltaHeal: Boolean = false,
       // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.
       evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -159,7 +160,8 @@ object HealingTrieFixtures:
         decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
         movingRootDeltaHeal = movingRootDeltaHeal,
         healedCodeCheck = evmCodeStorage.isDefined,
-        walkLocalOnly = walkLocalOnly
+        walkLocalOnly = walkLocalOnly,
+        heldMemoryLimit = heldMemoryLimit
       )
     )
 

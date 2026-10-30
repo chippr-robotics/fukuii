@@ -19,6 +19,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.readAtPath
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
@@ -34,17 +35,22 @@ import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
 
-/** Spec 022 slice 1, T008 (FR-008, D10, Path scheme): a healed node written at position P removes, in the same write
-  * batch, the positions that write leaves dangling:
+/** Spec 022 slice 1, T008 (FR-008, D10, Path scheme), as slice 2 (D3) writes it: healing deletes the positions a node
+  * leaves stale:
   *   - the inner prefixes of an extension node's `sharedKey` (P ++ key[:i], 0 < i < len(key)), which the extension
   *     skips over, so nothing may stay there (geth `trie/sync.go` `children()`);
-  *   - a child position whose stored bytes hash to something other than what P now references (geth `hasNode`'s
+  *   - a child position whose stored bytes hash to something other than what P references (geth `hasNode`'s
   *     "inconsistent" case): a stale node from an older root.
   *
+  * Slice 2 holds a node until its whole subtree is present, so the node that finds a stale position is written later,
+  * together with its subtree. The delete does not wait for it: it goes out in the write batch of the response whose
+  * discovery found it, before anything is written at that position, as geth's membatch orders a `delNode` before the
+  * later write there. Deferred to the parent's own commit it would delete the child written there in between.
+  *
   * Method: a real coordinator over a `PathNodeStorage` whose data source records every write batch (one `update` call
-  * is one RocksDB `WriteBatch`). Stale bytes are seeded at the dangling positions; the test answers the fake peer by
-  * hand up to the write under test and stops there. On the code before the fix the node is written alone and the stale
-  * bytes stay.
+  * is one RocksDB `WriteBatch`). Stale bytes are seeded at the stale positions; the test answers the fake peer one
+  * level at a time, so the batches and their order are exact. On the code before slice 1 the node is written alone and
+  * the stale bytes stay.
   */
 class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
 
@@ -82,7 +88,28 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       pool.shutdown()
       pool.awaitTermination(5, TimeUnit.SECONDS)
 
-  "Path-scheme healing" should "delete an extension's inner prefixes and a stale child, in the batch that writes the extension (T008)" taggedAs UnitTest in {
+  /** Answer each of the next `levels` requests from `served`, then wait until the coordinator has processed the last
+    * answer (a progress query, answered in order, is the barrier).
+    */
+  private def answerLevels(
+      coordinator: ActorRef[TrieNodeHealingCoordinator.Command],
+      peer: ScriptedPeer,
+      served: Map[Seq[ByteString], ByteString],
+      levels: Seq[Set[Seq[ByteString]]]
+  ): Unit =
+    levels.foreach { expected =>
+      val req = peer.manual.expectMessageType[SNAP.GetTrieNodes]
+      req.paths.toSet shouldBe expected
+      peer.answerFrom(req, served)
+    }
+    val stats = createTestProbe[HealingStatistics]()
+    coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(stats.ref)
+    stats.expectMessageType[HealingStatistics]
+
+  private def put(ns: IndexedSeq[Byte], key: ByteString): Op = Op(ns, delete = false, key)
+  private def del(ns: IndexedSeq[Byte], key: ByteString): Op = Op(ns, delete = true, key)
+
+  "Path-scheme healing" should "delete an extension's inner prefixes and a stale child in the batch of the response that found them, before the child is written (T008)" taggedAs UnitTest in {
     // root (branch) []
     //   ├─[0] ext (sharedKey 5,6)  [0]
     //   │       └─ brX (branch)    [0,5,6]  ← stale bytes there (an older brX: wrong hash)
@@ -114,31 +141,39 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ds.forget() // only the healing writes are under test
     val peer = new ScriptedPeer(testKit)
 
-    withPathCoordinator(ByteString(root.hash), pns, peer) { _ =>
-      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], served) // the root
-      val children = peer.manual.expectMessageType[SNAP.GetTrieNodes]
-      children.paths.toSet shouldBe Set(accountPathset(0), accountPathset(1))
-      peer.answerFrom(children, served) // the extension and leafY: the write under test
-      // brX is requested only after the extension's write: from here the batch log is complete for that write.
-      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(accountPathset(0, 5, 6))
+    withPathCoordinator(ByteString(root.hash), pns, peer) { coordinator =>
+      answerLevels(
+        coordinator,
+        peer,
+        served,
+        Seq(
+          Set(accountPathset()),
+          Set(accountPathset(0), accountPathset(1)),
+          Set(accountPathset(0, 5, 6)),
+          Set(accountPathset(0, 5, 6, 1), accountPathset(0, 5, 6, 2))
+        )
+      )
     }
 
-    val extBatches = ds.batchesPutting(AccountNs, accountKey(nibbles(0)))
-    extBatches should have size 1
-    extBatches.head.toSet shouldBe Set(
-      Op(AccountNs, delete = false, accountKey(nibbles(0))), // the extension
-      Op(AccountNs, delete = true, accountKey(nibbles(0, 5))), // its key's inner prefix
-      Op(AccountNs, delete = true, accountKey(nibbles(0, 5, 6))) // its child's position: stale bytes, wrong hash
+    val key = (ns: Seq[Int]) => accountKey(nibbles(ns*))
+    ds.batches.map(_.toSet) shouldBe Seq(
+      // The response with the extension (held: brX missing) and leafY (complete): the extension's stale positions are
+      // deleted now, in the batch that commits leafY.
+      Set(del(AccountNs, key(Seq(0, 5))), del(AccountNs, key(Seq(0, 5, 6))), put(AccountNs, key(Seq(1)))),
+      // brX's leaves complete the trie: every held node is written with them, in one batch.
+      Set(
+        put(AccountNs, key(Seq(0, 5, 6, 1))),
+        put(AccountNs, key(Seq(0, 5, 6, 2))),
+        put(AccountNs, key(Seq(0, 5, 6))),
+        put(AccountNs, key(Seq(0))),
+        put(AccountNs, key(Nil))
+      )
     )
     pns.readAccountNode(nibbles(0, 5)) shouldBe None
-    pns.readAccountNode(nibbles(0, 5, 6)) shouldBe None
-    // The sibling write carries no deletes: its position had nothing stale below it.
-    ds.batchesPutting(AccountNs, accountKey(nibbles(1))).map(_.toSet) shouldBe Seq(
-      Set(Op(AccountNs, delete = false, accountKey(nibbles(1))))
-    )
+    pns.readAccountNode(nibbles(0, 5, 6)).map(ByteString(_)) shouldBe Some(ByteString(brX.encode))
   }
 
-  it should "do the same in a storage trie, and delete a stale storage root in the batch that writes its account leaf (T008)" taggedAs UnitTest in {
+  it should "do the same in a storage trie, and delete a stale storage root before its account leaf's storage trie is written (T008)" taggedAs UnitTest in {
     // The account trie is one account leaf at []; its storage trie:
     //   sExt (sharedKey 3,4,5)  (A, [])       ← stale bytes there (an older storage root: wrong hash)
     //     └─ sBr (branch)       (A, [3,4,5])
@@ -170,27 +205,33 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ds.forget()
     val peer = new ScriptedPeer(testKit)
 
-    withPathCoordinator(ByteString(accountLeaf.hash), pns, peer) { _ =>
-      peer.answerFrom(peer.manual.expectMessageType[SNAP.GetTrieNodes], served) // the account leaf
-      val storageRoot = peer.manual.expectMessageType[SNAP.GetTrieNodes]
-      storageRoot.paths shouldBe Seq(storagePathset())
-      peer.answerFrom(storageRoot, served) // sExt: the second write under test
-      peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(storagePathset(3, 4, 5))
+    withPathCoordinator(ByteString(accountLeaf.hash), pns, peer) { coordinator =>
+      answerLevels(
+        coordinator,
+        peer,
+        served,
+        Seq(
+          Set(accountPathset()),
+          Set(storagePathset()),
+          Set(storagePathset(3, 4, 5)),
+          Set(storagePathset(3, 4, 5, 0), storagePathset(3, 4, 5, 1))
+        )
+      )
     }
 
-    // The account leaf's batch also deletes the stale storage root it now points past (one batch, two column families).
-    ds.batchesPutting(AccountNs, accountKey(Array.empty[Byte])).map(_.toSet) shouldBe Seq(
+    val skey = (ns: Seq[Int]) => storageKey(owner, nibbles(ns*))
+    ds.batches.map(_.toSet) shouldBe Seq(
+      // The account leaf (held: its storage root is missing) deletes the stale storage root it points past.
+      Set(del(StorageNs, skey(Nil))),
+      // sExt (held: sBr missing) deletes its key's two inner prefixes.
+      Set(del(StorageNs, skey(Seq(3))), del(StorageNs, skey(Seq(3, 4)))),
+      // The slots complete the storage trie and the account: one batch, two column families.
       Set(
-        Op(AccountNs, delete = false, accountKey(Array.empty[Byte])),
-        Op(StorageNs, delete = true, storageKey(owner, Array.empty[Byte]))
-      )
-    )
-    // The storage extension's batch deletes its key's two inner prefixes.
-    ds.batchesPutting(StorageNs, storageKey(owner, Array.empty[Byte])).map(_.toSet) shouldBe Seq(
-      Set(
-        Op(StorageNs, delete = false, storageKey(owner, Array.empty[Byte])),
-        Op(StorageNs, delete = true, storageKey(owner, nibbles(3))),
-        Op(StorageNs, delete = true, storageKey(owner, nibbles(3, 4)))
+        put(StorageNs, skey(Seq(3, 4, 5, 0))),
+        put(StorageNs, skey(Seq(3, 4, 5, 1))),
+        put(StorageNs, skey(Seq(3, 4, 5))),
+        put(StorageNs, skey(Nil)),
+        put(AccountNs, accountKey(Array.empty[Byte]))
       )
     )
     pns.readStorageNode(owner, nibbles(3)) shouldBe None
@@ -198,7 +239,7 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     pns.readStorageNode(owner, Array.empty[Byte]).map(ByteString(_)) shouldBe Some(ByteString(sExt.encode))
   }
 
-  it should "delete each alias position's own stale bytes in the batch that writes that position (review item 7)" taggedAs UnitTest in {
+  it should "delete each alias position's own stale bytes, and write every alias position of a node in one batch (review item 7, vault note 4)" taggedAs UnitTest in {
     // The twin storage tries (one storage root S, a branch over slotA and slotB, under two accounts A0 and A1). Stale
     // bytes sit at both storage-root positions and at A1's slotA position; A0's slot positions are empty.
     val trie = twinStorageTrie(nonce = 1)
@@ -241,28 +282,17 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       pool.shutdown()
       pool.awaitTermination(5, TimeUnit.SECONDS)
 
-    def batchOf(ns: IndexedSeq[Byte], key: ByteString): Set[Op] =
-      val batches = ds.batchesPutting(ns, key)
-      batches should have size 1
-      batches.head.toSet
-    // Each account leaf's batch deletes its own stale storage root (the other column family).
-    batchOf(AccountNs, accountKey(nibbles(0))) shouldBe
-      Set(
-        Op(AccountNs, delete = false, accountKey(nibbles(0))),
-        Op(StorageNs, delete = true, storageKey(a0, Array.empty))
-      )
-    batchOf(AccountNs, accountKey(nibbles(1))) shouldBe
-      Set(
-        Op(AccountNs, delete = false, accountKey(nibbles(1))),
-        Op(StorageNs, delete = true, storageKey(a1, Array.empty))
-      )
-    // S is fetched once and written at both positions; only A1's write finds a stale child below it.
-    batchOf(StorageNs, storageKey(a0, Array.empty)) shouldBe Set(
-      Op(StorageNs, delete = false, storageKey(a0, Array.empty))
-    )
-    batchOf(StorageNs, storageKey(a1, Array.empty)) shouldBe Set(
-      Op(StorageNs, delete = false, storageKey(a1, Array.empty)),
-      Op(StorageNs, delete = true, storageKey(a1, nibbles(0)))
+    ds.batches.map(_.toSet) shouldBe Seq(
+      // The account leaves (held: S missing) each delete their own stale storage root.
+      Set(del(StorageNs, storageKey(a0, Array.empty)), del(StorageNs, storageKey(a1, Array.empty))),
+      // S, fetched once, fills both positions (held: the slots are missing); only A1's position finds a stale child.
+      Set(del(StorageNs, storageKey(a1, nibbles(0)))),
+      // The slots complete everything: every position of every node, in one batch.
+      trie.nodes
+        .map(n =>
+          n.accountHash.fold(put(AccountNs, accountKey(n.nibbles)))(o => put(StorageNs, storageKey(o, n.nibbles)))
+        )
+        .toSet
     )
     fetchedMoreThanOnce(trie, peer.requests) shouldBe empty
     trie.nodes.foreach(n => readAtPath(pns, n).map(ByteString(_)) shouldBe Some(n.encoded))

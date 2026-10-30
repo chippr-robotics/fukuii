@@ -166,7 +166,8 @@ trait ChildFactories:
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -195,7 +196,8 @@ trait ChildFactories:
       decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal = movingRootDeltaHeal,
       healedCodeCheck = healedCodeCheck,
-      walkLocalOnly = walkLocalOnly
+      walkLocalOnly = walkLocalOnly,
+      heldMemoryLimit = heldMemoryLimit
     )
 
   def byteCodeCoordinator(

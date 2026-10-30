@@ -98,9 +98,14 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
     val accountHash = kec256(ByteString(s"crash-gap-account-$seed"))
     (Seq(accountHash, ByteString(Array[Byte](0x20, seed.toByte))), hash, ByteString(encoded), missingChild)
 
+  /** `writerEc`: where the healed-node flushes run; the default is a single-thread pool. A case asserting a node is NOT
+    * on disk passes `ExecutionContext.parasitic`, so a flush (a regression that wrote the node) completes inside the
+    * message that started it, before the case's mailbox barrier returns (spec 022 review eye F6, forge N8).
+    */
   private def withFixture(
       stateRoot: ByteString,
-      storage: TestMptStorage
+      storage: TestMptStorage,
+      writerEc: Option[ExecutionContext] = None
   )(
       body: (
           ActorRef[TrieNodeHealingCoordinator.Command],
@@ -137,7 +142,7 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
       batchSize = 64,
       snapSyncController = controller.ref,
       healingFrontierStorage = Some(store),
-      healingWriterEcOverride = Some(ec)
+      healingWriterEcOverride = Some(writerEc.getOrElse(ec))
     )
     try body(coordinator, store, controller)
     finally
@@ -194,21 +199,20 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
     val root = storedRoot(storage)
     val (pathset, hash, encoded, missingChild) = branchWithMissingChild(1)
 
-    withFixture(root, storage) { (coordinator, store, _) =>
+    withFixture(root, storage, Some(ExecutionContext.parasitic)) { (coordinator, store, _) =>
       val peer = PeerTestHelpers.createTestPeer("crash-gap-peer", testKit.createTestProbe[Any]().ref.toClassic)
       coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((pathset, hash)))
       coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(peer)
       coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(SNAP.TrieNodes(requestId = 1, nodes = Seq(encoded)))
 
-      // X's bytes get committed, but its subtree did NOT close (the child is missing). The missing child surfaces in
-      // the open frontier and X is NEVER recorded subtree-complete — so a later verification has no record to prune X
-      // by and MUST descend it (the descend-on-missing-record fallback, FR-006). We assert the record-absence
-      // directly (the precondition that forces descent; the descent itself is proven by T-2).
+      // X's subtree did NOT close (the child is missing). The missing child surfaces in the open frontier and X is NEVER
+      // recorded subtree-complete — so a later verification has no record to prune X by and MUST descend it (the
+      // descend-on-missing-record fallback, FR-006). We assert the record-absence directly (the precondition that
+      // forces descent; the descent itself is proven by T-2). spec 022 D3: X itself is held, not written, until its
+      // subtree is present.
       eventually(timeout(5.seconds), interval(100.millis))(openFrontier(coordinator) should be >= 1)
-      eventually(timeout(5.seconds), interval(100.millis))(
-        nodeInStorage(storage, hash) shouldBe true
-      ) // X bytes committed
-      store.isSubtreeComplete(hash) shouldBe false // … but X NOT recorded ⇒ descend-on-missing-record
+      nodeInStorage(storage, hash) shouldBe false // X held, never on disk while its child is missing (spec 022 D3)
+      store.isSubtreeComplete(hash) shouldBe false // … and X NOT recorded ⇒ descend-on-missing-record
       missingChild.length shouldBe 32
     }
   }
@@ -224,7 +228,7 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
       val root = storedRoot(storage)
       val (pathset, hash, encoded, _) = branchWithMissingChild(2)
 
-      withFixture(root, storage) { (coordinator, store, _) =>
+      withFixture(root, storage, Some(ExecutionContext.parasitic)) { (coordinator, store, _) =>
         val peer = PeerTestHelpers.createTestPeer("d2-guard-peer", testKit.createTestProbe[Any]().ref.toClassic)
         coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((pathset, hash)))
         coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(peer)
@@ -232,13 +236,14 @@ class PrunedHealCrashSafetySpec extends ScalaTestWithActorTestKit() with AnyFlat
           SNAP.TrieNodes(requestId = 1, nodes = Seq(encoded))
         )
 
-        // The child is enqueued (open frontier) and X's bytes flush, but the record must stay absent.
+        // The child is enqueued (open frontier); X is held (spec 022 D3: never on disk while its child is missing), and
+        // the record must stay absent.
         eventually(timeout(5.seconds), interval(100.millis))(openFrontier(coordinator) should be >= 1)
-        eventually(timeout(5.seconds), interval(100.millis))(nodeInStorage(storage, hash) shouldBe true)
+        nodeInStorage(storage, hash) shouldBe false
         store.isSubtreeComplete(hash) shouldBe false
-        // Issue a progress query (a barrier on the single-thread actor: any earlier message — including a flush
-        // completion — has been processed by the time the reply returns), then re-confirm the record is STILL absent.
-        // A late flush cannot fabricate a record because X was never staged (its subtree did not close).
+        // Issue a progress query (a barrier on the actor: every earlier message has been handled by the time the reply
+        // returns, and with the parasitic writer every flush those messages started has run too), then re-confirm the
+        // record is STILL absent. A late flush cannot fabricate a record because X was never staged.
         openFrontier(coordinator) should be >= 0
         store.isSubtreeComplete(hash) shouldBe false
       }

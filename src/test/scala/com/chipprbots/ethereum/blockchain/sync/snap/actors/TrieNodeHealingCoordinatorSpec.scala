@@ -134,7 +134,7 @@ class TrieNodeHealingCoordinatorSpec
     statusProbe.expectMessageType[HealingStatistics]
   }
 
-  it should "report completion when all nodes healed" taggedAs UnitTest in {
+  it should "not report completion with no walk when nothing was healed (spec 022 review hunter-r3 C1)" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
@@ -152,8 +152,13 @@ class TrieNodeHealingCoordinatorSpec
 
     coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
 
-    // An idle coordinator (no pending tasks, no active requests) should complete immediately
-    snapSyncController.expectMessage(SNAPSyncController.StateHealingComplete)
+    // An idle coordinator (no pending tasks, no active requests) completes only after a clean walk of its root. This root
+    // is not on disk, so the walk queues it for a fetch instead, and healing is not complete.
+    eventually(timeout(10.seconds)) {
+      coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(statusProbe.ref)
+      statusProbe.expectMessageType[HealingStatistics].pendingTasks shouldBe 1
+    }
+    snapSyncController.expectNoMessage(Duration.Zero)
   }
 
   it should "handle task failures" taggedAs UnitTest in {
@@ -1373,6 +1378,12 @@ class TrieNodeHealingCoordinatorSpec
           if c >= 1L then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
         case _ => FishingOutcomes.continueAndIgnore
       }
+      // spec 022 D3: the root is written only once its subtree is present, so serve its one missing child too.
+      val send2 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](3.seconds)
+      val req2 = getTrieNodesOf(send2)
+      coordinator ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+        SNAP.TrieNodes(requestId = req2.requestId, nodes = Seq(fx.childNode.encoded))
+      )
       // The root is durably in storage before the re-peg (the node whose survival we assert).
       eventually(timeout(5.seconds), interval(100.millis))(isInStorage(fx.storage, fx.rootHash) shouldBe true)
 

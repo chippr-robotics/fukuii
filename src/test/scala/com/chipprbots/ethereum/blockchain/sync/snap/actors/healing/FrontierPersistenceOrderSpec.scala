@@ -25,6 +25,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -120,13 +124,14 @@ private class StubFrontierOrderState(val healingWriterEc: ExecutionContext)
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // FrontierPersistenceState
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   val pendingBackpressure: AtomicInteger = new AtomicInteger(0)
   var crossRootHealCount: Long = 0L
   val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
-  var flushing: Boolean = false
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
+  var flushInFlight: Option[FlushTicket] = None
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var totalNodesHealed: Int = 0
   val prunedEnabled: Boolean = true
@@ -186,7 +191,7 @@ class FrontierPersistenceOrderSpec extends AnyFlatSpec with Matchers:
     staged(s)
     s.flushRawNodesAsync()
 
-    s.selfInbox.receiveAll() shouldBe Seq(FlushComplete(2))
+    s.selfInbox.receiveAll() should matchPattern { case Seq(FlushComplete(_, 2)) => }
     s.mptStorage.events.toSeq shouldBe Seq("store:2", "persist")
     s.mptStorage.frontierHeldAtPersist shouldBe Some(true)
     s.mptStorage.recordSeenAtPersist shouldBe Some(false)

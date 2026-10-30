@@ -34,6 +34,8 @@ These are the logical entities. Field names are indicative, and the final names 
 
 **Bound:** total held bytes ≤ `healing.held-memory-limit`, default 128 MiB. At the bound, only requests for children of held nodes are dispatched.
 
+*The bound is soft (slice 2 review, hunter W3, a Note):* every fetch below a held node frees memory, so it is never paused, and the pause only holds back new subtrees (a root seed, walk and controller entries). On a heal seeded from the root almost everything is below a held node, so the limit does not cap that path: memory there is bounded by deepest-first dispatch (in flight × depth, plus the queued siblings in the request book), about 150 MB at worst with the defaults, the same order as the limit. A per-depth cap on queued children would make it hard; that is a later design change, not this slice. Held nodes that nothing can complete any more (orphans) do not pause new subtrees either: the orphan guard drops them.
+
 ## Excluded account (durable, AppState `s`)
 
 | Field | Notes |
@@ -55,7 +57,7 @@ These are the logical entities. Field names are indicative, and the final names 
 
 | Key | Value | Semantics |
 |-----|-------|-----------|
-| `snap.heal.invariant` | version (`2`) | Set only on an empty datadir at SNAP start, or after a repair pass finds zero holes. Means "everything present was written under present ⇒ complete". **Does not mean complete.** |
+| `snap.heal.invariant` | version (`2`) | Set only on an empty datadir at SNAP start, or after a repair pass finds zero holes. Means "everything present was written under present ⇒ complete". **Does not mean complete.** Never set (or trusted) under `pruning.mode = inmemory`, where healed nodes reach disk only as the node cache evicts them; the repair pass runs at every start there. |
 | `checkpoint.import.inProgress` | root plus start time | Set before a checkpoint import starts writing, and cleared on CRC success. If it is present at SNAP start, the datadir counts as pre-invariant. |
 
 **Pre-invariant states:**

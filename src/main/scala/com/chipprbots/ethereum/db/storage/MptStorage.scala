@@ -23,6 +23,13 @@ trait MptStorage:
 
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
+    *
+    * '''One atomic write per call''' (spec 022 D3): healing passes complete chains (a node with every ancestor its
+    * subtree completes) and relies on all of them landing together or none. [[SerializingMptStorage]] makes one
+    * `NodesKeyValueStorage.update` call, which under archive pruning (`ArchiveNodeStorage`) and basic pruning
+    * (`ReferenceCountNodeStorage`, `FastSyncNodeStorage`) is one `NodeStorage.update`, i.e. one data-source write
+    * batch. Under in-memory pruning (`CachedReferenceCountedStorage`) the nodes go to the node cache, not to disk; the
+    * cache reaches disk in one batch when persisted, or node by node as entries are evicted.
     */
   def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     throw new UnsupportedOperationException("Raw node storage not supported by this implementation")

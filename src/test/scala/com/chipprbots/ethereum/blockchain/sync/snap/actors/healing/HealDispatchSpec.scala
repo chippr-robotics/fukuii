@@ -20,6 +20,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -47,7 +50,8 @@ private class StubHealDispatchState(
   // HealDispatchState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   var maxInFlightPerPeer: Int = 2
   var maxConcurrentRequests: Int = 16
@@ -60,7 +64,8 @@ private class StubHealDispatchState(
   val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   var healRate: Double = 0.0
   var lastThrottleAdjustMs: Long = 0L
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
+  var newSubtreesPaused: Boolean = false
   val rawFlushThreshold: Int = 1000
   var lastHealedAtMs: Long = System.currentTimeMillis()
   val healingStagnationTimeoutMs: Long = 5 * 60 * 1000

@@ -82,7 +82,20 @@ private[snap] class StubHealingOrchestratorState(
     with PivotSelectionApi
     with ByteCodeRequestApi:
 
-  private val dataSource = EphemDataSource()
+  // Records whether each write was synced (`updateSync`), and the keys it wrote (spec 022 T027).
+  val syncedWrites: mutable.ArrayBuffer[(Boolean, Seq[ByteString])] = mutable.ArrayBuffer.empty
+  private val dataSource = new EphemDataSource(Map.empty):
+    private def keys(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Seq[ByteString] =
+      updates.flatMap {
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, _, up) => up.map(u => ByteString(u._1))
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, _, up) => up.map(u => ByteString(u._1.toArray))
+      }
+    override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      syncedWrites += ((false, keys(updates)))
+      super.update(updates)
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      syncedWrites += ((true, keys(updates)))
+      super.update(updates)
 
   // HealingOrchestratorState
   var trieWalkInProgress: Boolean = false
@@ -97,6 +110,7 @@ private[snap] class StubHealingOrchestratorState(
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
   def ec: ExecutionContext = notUsed("ec")
+  def trieNodesCachedInMemory: Boolean = false
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -399,6 +413,29 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
     h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(root.value)
     coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.WalkStateChanged(false))
+  }
+
+  it should "persist the healed pivot block and root in one synced write, on every healing exit (spec 022 T027)" taggedAs UnitTest in {
+    val exits: Seq[(String, StubHealingOrchestratorState & HealingOrchestrator => Unit)] = Seq(
+      "TrieWalkComplete(0)" -> (_.stateHealingArms(TrieWalkComplete(0))),
+      "TrieWalkResult(none)" -> (_.stateHealingArms(TrieWalkResult(Seq.empty))),
+      "completeHealingWalkClean" -> (_.completeHealingWalkClean())
+    )
+    exits.foreach { case (exit, run) =>
+      withClue(s"$exit: ") {
+        val h = new Harness()
+        h.module.pivotBlock = Some(pivot)
+        h.module.stateRoot = Some(root)
+        h.module.trieWalkInProgress = true
+        h.module.syncedWrites.clear()
+        h.call(run)
+        val anchorWrites = h.module.syncedWrites.filter(_._2.size == 2)
+        anchorWrites.map(_._1) shouldBe Seq(true) // one write, both anchors, synced
+        h.module.syncedWrites.filterNot(_._1) shouldBe empty // nothing else unsynced on the way out
+        h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+        h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(root.value)
+      }
+    }
   }
 
   it should "schedule another walk round while nodes are still missing" taggedAs UnitTest in {

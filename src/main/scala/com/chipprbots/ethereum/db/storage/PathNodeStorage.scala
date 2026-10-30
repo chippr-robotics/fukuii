@@ -136,11 +136,32 @@ class PathNodeStorage(val dataSource: DataSource):
       rlp: Array[Byte],
       deletes: Seq[(Option[ByteString], Array[Byte])]
   ): Unit =
+    writeNodesWithDeletes(Seq((owner, nibblePath, rlp)), deletes)
+
+  /** Write healed nodes and delete stale positions, all in ONE write batch (spec 022 D3 and FR-008): one
+    * `dataSource.update`, so a crash keeps all of it or none. Healing passes a whole commit here: a node together with
+    * every ancestor its subtree completes (children first), every alias position of a node, and the deletes found while
+    * discovering children since the last commit.
+    *
+    * A node is `(owner, nibblePath, rlp)`, a position `(owner, nibblePath)`, as in [[writeNodeWithDeletes]]. Every
+    * removal is applied before any write, and a position that is both deleted and written keeps the written node: a
+    * stale position found under one node of the batch may be where another node of the same batch belongs.
+    */
+  def writeNodesWithDeletes(
+      nodes: Seq[(Option[ByteString], Array[Byte], Array[Byte])],
+      deletes: Seq[(Option[ByteString], Array[Byte])]
+  ): Unit =
     // Point deletes, not deleteRange: HP-encoded keys are not prefix-ordered (a position's key does not prefix its
     // descendants'), and deleteRange is not part of the one atomic `update` batch.
-    val removals = deletes.map { case (o, path) => o.fold(accountNodeRemoval(path))(storageNodeRemoval(_, path)) }
-    val upsert = owner.fold(accountNodeUpsert(nibblePath, rlp))(storageNodeUpsert(_, nibblePath, rlp))
-    dataSource.update(removals :+ upsert)
+    val written = nodes.iterator.map { case (o, path, _) => positionKey(o, path) }.toSet
+    val removals = deletes.collect {
+      case (o, path) if !written.contains(positionKey(o, path)) =>
+        o.fold(accountNodeRemoval(path))(storageNodeRemoval(_, path))
+    }
+    val upserts = nodes.map { case (o, path, rlp) =>
+      o.fold(accountNodeUpsert(path, rlp))(storageNodeUpsert(_, path, rlp))
+    }
+    if removals.nonEmpty || upserts.nonEmpty then dataSource.update(removals ++ upserts)
 
   /** True if the StateTriePathNamespace column family has at least one entry. Used by the startup guard. */
   def hasAccountData: Boolean = hasAnyEntry(acctNs)
@@ -182,6 +203,12 @@ class PathNodeStorage(val dataSource: DataSource):
 
   private def storageKey(accountHash: ByteString, nibbles: Array[Byte]): Array[Byte] =
     accountHash.toArray ++ encodePath(nibbles)
+
+  /** A position as one comparable value: a trie tag, the owner for a storage trie, then the HP-encoded path. */
+  private def positionKey(owner: Option[ByteString], nibbles: Array[Byte]): ByteString =
+    owner.fold(ByteString(0.toByte) ++ ByteString(encodePath(nibbles)))(o =>
+      ByteString(1.toByte) ++ o ++ ByteString(encodePath(nibbles))
+    )
 
   private def hasAnyEntry(ns: IndexedSeq[Byte]): Boolean =
     import cats.effect.unsafe.implicits.global

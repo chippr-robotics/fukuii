@@ -9,24 +9,30 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.blocking
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.ActiveRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushComplete
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FlushFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 
 /** The coordinator state `FrontierPersistence` reads and writes (spec 016 C-H1, research.md R14b). The core's behaviour
   * arms and the code C-H2…C-H5 will move touch every one of them too, or rule (d) keeps them in the core
   * (`pendingBackpressure`, the `AtomicInteger` the frontier walk's thread reads; `prunedEnabled` and `healingWriterEc`,
-  * derived vals), so the Impl keeps them as fields. `flushing` is the one `var` the module writes; it also mutates
-  * `rawNodeBuffer` and `pendingSubtreeRecords`.
+  * derived vals), so the Impl keeps them as fields. `flushInFlight` is the `var` the module writes (spec 022 review
+  * forge C1: the asynchronous flush in flight, by its ticket); it also mutates `rawNodeBuffer` and
+  * `pendingSubtreeRecords`.
   */
 private[actors] trait FrontierPersistenceState:
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
+  def pendingTasks: HealTaskQueue[HealingEntry]
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def pendingBackpressure: AtomicInteger
   def crossRootHealCount: Long
   def healAttempts: HealAttemptMap
-  def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
-  var flushing: Boolean
+  def rawNodeBuffer: FlushBuffer
+  var flushInFlight: Option[FlushTicket]
   def pendingSubtreeRecords: mutable.Set[ByteString]
   def totalNodesHealed: Int
   def prunedEnabled: Boolean
@@ -52,6 +58,13 @@ private[actors] trait FrontierWriteApi:
   def persistFrontier(entries: Seq[HealingEntry]): Unit
   def flushRawNodesAsync(): Unit
 
+/** What a walk launcher calls before it starts a frontier walk (the verification launchers in C-H3 `HealVerification`,
+  * the core's crash-recovery rebuild): `flushedForWalk`, which writes the flush buffer first if it holds anything (spec
+  * 022 review forge F1). A separate trait, so the C-H1 interfaces stay as recorded.
+  */
+private[actors] trait WalkFlushApi:
+  def flushedForWalk(): Boolean
+
 /** TrieNodeHealingCoordinator's frontier persistence and healed-node flush (spec 016 C-H1,
   * coordinator-characterization.md §3.4): the Layer-2 persisted-frontier mirror (persist on enqueue, unpersist after a
   * durable flush, clear on invalidation; CF `g`), the backlog gauges and the frontier walk's backpressure wait, and the
@@ -59,15 +72,22 @@ private[actors] trait FrontierWriteApi:
   * otherwise), which writes the staged spec 005 subtree-complete records only after the nodes are durable. The
   * coordinator core keeps the behaviour arms that call it (`frontierPersistenceArms` handles `FlushComplete`).
   */
-private[actors] trait FrontierPersistence extends FrontierDrainApi with FrontierGaugesApi with FrontierWriteApi:
+private[actors] trait FrontierPersistence
+    extends FrontierDrainApi
+    with FrontierGaugesApi
+    with FrontierWriteApi
+    with WalkFlushApi:
   this: FrontierPersistenceState & TrieNodeHealingEnv =>
 
 // --- Layer 2: persisted frontier (sync.snap-sync.healing-frontier-persistence) ---
   // When `healingFrontierStorage` is defined, the outstanding frontier is mirrored to a dedicated RocksDB
   // CF so a restart resumes (O(frontier)) instead of re-walking the full state. Invariant: the persisted
-  // set equals `pendingTasks ∪ in-flight` — write on every new enqueue (queueNodes / inline child discovery
-  // / pivot reseed), delete on heal-flush (NOT on dispatch), clear on force-complete / pivot-refresh.
-  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (the common default).
+  // set covers `pendingTasks ∪ in-flight ∪ held` (spec 022: a held node is received but not on disk, so a restart must
+  // fetch it again) — write on every new enqueue (queueNodes / inline child discovery / pivot reseed), delete on
+  // heal-flush (NOT on dispatch, NOT on hold) and when a re-peg or force-complete drops a held node unwritten (Hash,
+  // `unpersistDroppedHeld`), clear on force-complete / pivot-refresh. A node the orphan guard drops keeps its entry (same
+  // root, the marker may stand: spec 022 review vault R2), so the set may hold more than that union, never less.
+  // See docs/design/healing-frontier-scale.md. No-ops when persistence is disabled (sync.conf enables it; the spawn turns it off under in-memory pruning).
 
   /** Persist newly-queued frontier entries (hash -> pathset). Idempotent: re-persisting an existing entry overwrites it
     * identically, so re-queues and resume-loads are harmless.
@@ -87,9 +107,11 @@ private[actors] trait FrontierPersistence extends FrontierDrainApi with Frontier
         if hashes.nonEmpty then store.update(hashes, Nil).commit()
       }
 
-  /** Clear the entire persisted frontier by deleting every outstanding hash. Because the persisted set equals
-    * `pendingTasks ∪ in-flight`, deleting those hashes empties the CF without a namespace-wipe primitive. MUST be
-    * called BEFORE the in-memory `pendingTasks`/`activeRequests` are cleared.
+  /** Invalidate the persisted frontier: drop the completeness marker, then delete the pending and in-flight hashes (the
+    * held ones go with [[unpersistDroppedHeld]] where they are dropped). Entries the orphan guard kept, and those of
+    * nodes given up on, can stay (the set may hold more than the outstanding union, never less); without the marker a
+    * restart rebuilds the frontier with a full walk and does not resume from them. MUST be called BEFORE the in-memory
+    * `pendingTasks`/`activeRequests` are cleared, and before any held node's entry is deleted.
     */
   def clearPersistedFrontier(): Unit =
     // FR/T013: a same-root HealingPivotRefreshed no longer reaches here — its early guard returns first.
@@ -97,13 +119,23 @@ private[actors] trait FrontierPersistence extends FrontierDrainApi with Frontier
     // abandonment), so dropping the completeness marker below is always correct.
     if frontierPersistenceEnabled then
       stateIngest.healingFrontier.foreach { store =>
+        // spec 022 review vault V-R5: the marker goes first, synced. A crash after it leaves a frontier without a marker,
+        // which a restart never trusts; a marker left over a frontier whose entries are gone would let it skip the walk.
+        store.clearComplete()
         val outstanding =
           pendingTasks.iterator.map(_.hash).toSeq ++ activeRequests.values.iterator
             .flatMap(_.tasks.iterator.map(_.hash))
         if outstanding.nonEmpty then store.update(outstanding, Nil).commit()
-        // The snapshot is no longer valid/complete — drop the marker so a restart re-walks rather than resuming stale.
-        store.clearComplete()
       }
+
+  /** Hash scheme: the held nodes `hashes` were dropped unwritten by a re-peg or a force-complete, so they leave the
+    * persisted frontier, whose marker those clear too; nothing else would ever remove their entries (spec 022 review
+    * vault V5). A held node keeps its entry while held, and when the orphan guard drops it under the same root (vault
+    * R2): it is not on disk, and the entry is what lets a resume fetch it again. Path scheme: its entries are never
+    * removed on heal (research R-5); slice 4 retires the CF.
+    */
+  def unpersistDroppedHeld(hashes: Seq[ByteString]): Unit =
+    if storageScheme == StorageScheme.Hash then unpersistFrontier(hashes)
 
   /** Publish the live healing backlog/in-flight gauges for the Grafana healing-analytics section. */
   def emitHealingFrontierGauges(): Unit =
@@ -162,44 +194,128 @@ private[actors] trait FrontierPersistence extends FrontierDrainApi with Frontier
         log.debug(s"[HEAL-VERIFY-PRUNED] Seeded ${toRecord.size} heal-closed subtree-complete records (post-flush)")
       }
 
-  /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
-  def flushRawNodesSync(): Unit =
-    if rawNodeBuffer.nonEmpty then
-      val flushed = rawNodeBuffer.toSeq
-      // spec 005 T012: compute the staged records this flush makes durable BEFORE persist, write them AFTER.
-      val toRecord = flushed.iterator.map(_._1).filter(pendingSubtreeRecords.contains).toSeq
-      toRecord.foreach(pendingSubtreeRecords.remove)
-      mptStorage.storeRawNodes(flushed)
-      mptStorage.persist()
-      writeDurableSubtreeRecords(toRecord) // post-persist (D3) — bytes durable before the record
-      unpersistFrontier(flushed.map(_._1)) // Layer 2: healed nodes leave the persisted frontier
-      val count = flushed.size
-      rawNodeBuffer.clear()
-      log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
+  /** Whether an asynchronous flush is in flight: its ticket is set from its start until its own `FlushComplete` or
+    * `FlushFailed`, or until a synchronous flush takes it over.
+    */
+  def flushing: Boolean = flushInFlight.isDefined
 
-  /** Async flush — copies buffer, clears it, writes on the dedicated `healing-writer-dispatcher` so the blocking
-    * RocksDB write doesn't compete with sync actors on `sync-dispatcher`.
+  /** Synchronous flush of the whole buffer, on the actor thread: at completion, a re-peg and a force-complete. True
+    * when the buffer is empty afterwards. The buffer is cleared only once the write has returned (#1549, spec 022
+    * T026); a throw is logged and leaves the buffer and the staged records as they were, for the next flush. A
+    * completion gate must not declare completion on `false`.
+    *
+    * '''One writer (spec 022 review vault V1, hunter W4).''' Every healed-node write holds the store's lock
+    * (`mptStorage`: the one instance every incarnation of this coordinator writes through). An asynchronous flush in
+    * flight is superseded first: if it is still queued it never writes, and if it is writing this waits for it, then
+    * releases what it wrote instead of writing it again. Afterwards no asynchronous flush is in flight, whether this
+    * write succeeded or not.
+    */
+  def flushRawNodesSync(): Boolean =
+    flushInFlight.foreach(_.supersede())
+    val store = mptStorage
+    store.synchronized {
+      flushInFlight.filter(_.written).foreach(releaseWritten)
+      flushInFlight = None
+      if rawNodeBuffer.isEmpty then true
+      else
+        val flushed = rawNodeBuffer.snapshot
+        // spec 005 T012: the staged records this flush makes durable, written only AFTER persist.
+        val toRecord = flushed.iterator.map(_._1).filter(pendingSubtreeRecords.contains).toSeq
+        val written =
+          try
+            store.storeRawNodes(flushed)
+            store.persist()
+            true
+          catch
+            case scala.util.control.NonFatal(e) =>
+              log.error(s"Healed-node flush of ${flushed.size} node(s) failed — kept for the next flush", e)
+              false
+        if written then
+          toRecord.foreach(pendingSubtreeRecords.remove)
+          writeDurableSubtreeRecords(toRecord) // post-persist (D3) — bytes durable before the record
+          unpersistFrontier(flushed.map(_._1)) // Layer 2: healed nodes leave the persisted frontier
+          rawNodeBuffer.clear()
+          log.info(s"Flushed ${flushed.size} healed nodes to disk (total: $totalNodesHealed)")
+        written
+    }
+
+  /** Whether a frontier walk may start: true when the flush buffer is empty, or once a synchronous flush has written it
+    * (spec 022 review forge F1). A walk reads the store only, so a node committed with its whole subtree but still in
+    * the buffer reads as missing there, and the walk's entry for it is refused (it is complete, only not written): the
+    * walk ends dirty, and the next would too, while nothing writes the buffer. False means the write failed; the caller
+    * starts no walk, and the completion check and the 2-minute pulse retry the write.
+    */
+  def flushedForWalk(): Boolean = rawNodeBuffer.isEmpty || flushRawNodesSync()
+
+  /** Async flush on the dedicated `healing-writer-dispatcher`, so the blocking RocksDB write doesn't compete with sync
+    * actors on `sync-dispatcher`. It writes a snapshot of the buffer and does NOT clear it: the nodes leave the buffer
+    * only when this flush's own `FlushComplete` reports the write returned ([[flushCompleted]]), and a throw sends
+    * `FlushFailed`, which ends the flush and keeps them ([[flushFailed]]) (#1549, spec 022 T026). Every node in the
+    * buffer was committed with its whole subtree (spec 022 D3), so the snapshot, a prefix of the buffer, is complete.
+    * The write holds the store's lock and skips itself once superseded (see [[flushRawNodesSync]] and [[FlushTicket]]).
     */
   def flushRawNodesAsync(): Unit =
     if rawNodeBuffer.nonEmpty && !flushing then
-      flushing = true
-      val nodes = rawNodeBuffer.toSeq
-      rawNodeBuffer.clear()
-      // spec 005 T012: snapshot the staged records this flush will make durable on the ACTOR thread (pendingSubtreeRecords
-      // is actor state), then write them on the worker thread AFTER persist. Crash before persist ⇒ records dropped ⇒ safe.
+      val ticket = FlushTicket(rawNodeBuffer.snapshot)
+      flushInFlight = Some(ticket)
+      val nodes = ticket.snapshot
+      // spec 005 T012: the staged records this flush will make durable, read on the ACTOR thread (pendingSubtreeRecords
+      // is actor state), written on the worker thread AFTER persist, and unstaged only on FlushComplete.
       val toRecord = nodes.iterator.map(_._1).filter(pendingSubtreeRecords.contains).toSeq
-      toRecord.foreach(pendingSubtreeRecords.remove)
       import scala.concurrent.{Future, blocking}
       val selfRef = self
       val ec = healingWriterEc
+      val store = mptStorage
       Future {
         blocking {
-          mptStorage.storeRawNodes(nodes)
-          mptStorage.persist()
-          writeDurableSubtreeRecords(
-            toRecord
-          ) // post-persist (D3); HealingFrontierStorage writes are DB-lock-safe off-thread
-          unpersistFrontier(nodes.map(_._1)) // Layer 2: healed nodes leave the persisted frontier (post-durable-write)
-          nodes.size
+          store.synchronized {
+            if ticket.superseded then false
+            else
+              store.storeRawNodes(nodes)
+              store.persist()
+              writeDurableSubtreeRecords(toRecord) // post-persist (D3); CF g writes are DB-lock-safe off-thread
+              unpersistFrontier(nodes.map(_._1)) // Layer 2: healed nodes leave the persisted frontier (post-durable)
+              ticket.markWritten()
+              true
+          }
         }
-      }(ec).foreach(n => selfRef ! FlushComplete(n))(ec)
+      }(ec).onComplete {
+        case scala.util.Success(true)  => selfRef ! FlushComplete(ticket.token, nodes.size)
+        case scala.util.Success(false) => () // superseded: the synchronous flush that took it over wrote these nodes
+        case scala.util.Failure(e)     => selfRef ! FlushFailed(ticket.token, e)
+      }(ec)
+
+  /** The asynchronous flush `token` wrote its snapshot: release those nodes and unstage their records. Only the flush
+    * in flight counts. A completion of any other (one a synchronous flush took over, or one a previous incarnation of
+    * this coordinator started before a supervisor restart) changes nothing (spec 022 review forge C1).
+    */
+  def flushCompleted(token: Long, count: Int): Unit =
+    flushInFlight match
+      case Some(ticket) if ticket.token == token =>
+        flushInFlight = None
+        releaseWritten(ticket)
+      case _ =>
+        log.debug(s"Ignoring the completion of healed-node flush $token ($count node(s)): not the flush in flight")
+
+  /** The asynchronous flush `token` threw: nothing is released, the flush in flight ends if it is that one, and the
+    * next flush writes the same nodes again. Another flush's failure (a previous incarnation's) changes nothing.
+    */
+  def flushFailed(token: Long, cause: Throwable): Unit =
+    flushInFlight match
+      case Some(ticket) if ticket.token == token =>
+        log.error(s"Healed-node flush failed — ${rawNodeBuffer.size} node(s) kept for the next flush", cause)
+        flushInFlight = None
+      case _ =>
+        log.error(s"Healed-node flush $token failed; it is not the flush in flight, so nothing here changes", cause)
+
+  /** `ticket`'s snapshot is durable: drop exactly those entries from the head of the buffer (the very objects it took)
+    * and unstage their records.
+    */
+  private def releaseWritten(ticket: FlushTicket): Unit =
+    ticket.snapshot.foreach(n => pendingSubtreeRecords.remove(n._1))
+    val dropped = rawNodeBuffer.dropWritten(ticket.snapshot)
+    if dropped != ticket.snapshot.size then
+      log.error(
+        s"[HEAL-FLUSH] Flush ${ticket.token} wrote ${ticket.snapshot.size} node(s), but only the first $dropped are " +
+          "still at the head of the buffer: the rest stay buffered and are written again (a bookkeeping fault)"
+      )

@@ -25,7 +25,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.RecordingDataSource
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.accountKey
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -86,10 +90,12 @@ private class StubHealResponseProcessingState(
   // HealResponseProcessingState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
   val healRequests: HealRequestBook = new HealRequestBook()
+  val heldNodes: HeldNodeSet = new HeldNodeSet()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   var totalNodesHealed: Int = 0
   var crossRootHealCount: Long = 0L
   val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
@@ -105,6 +111,8 @@ private class StubHealResponseProcessingState(
   var pivotRefreshRequestedAt: Long = 0L
   var lastHealedAtMs: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
+  var verificationPassComplete: Boolean = false
+  var giveUpEscalated: Boolean = false
 
   // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck, scopedHealMaxPaths and
   // decoupledHealServeRoot are constructor vals)
@@ -112,7 +120,7 @@ private class StubHealResponseProcessingState(
   val asyncLog: org.slf4j.Logger = log
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
-  val mptStorage: TestMptStorage = new TestMptStorage()
+  val mptStorage: ReadFailingMptStorage = new ReadFailingMptStorage()
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notReached("networkPeerManager")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
@@ -173,13 +181,25 @@ private class StubHealResponseProcessingState(
   // PathPresenceApi: present exactly where `readPathVerifiedRlp` answers; stale bytes of another hash where
   // `stalePaths` names the pathset.
   val stalePaths: mutable.Set[Seq[ByteString]] = mutable.Set.empty
+  // A read at one of these pathsets throws, once (a storage read failure, spec 022 review forge W1).
+  val failingReads: mutable.Set[Seq[ByteString]] = mutable.Set.empty
   def pathPresence(hash: ByteString, pathset: Seq[ByteString]): PathPresence =
-    if pathReads.contains((hash, pathset)) then PathPresence.Present
+    if failingReads.remove(pathset) then throw new RuntimeException("injected path read failure")
+    else if pathReads.contains((hash, pathset)) then PathPresence.Present
     else if stalePaths.contains(pathset) then PathPresence.Mismatch
     else PathPresence.Absent
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealResponseProcessing read $member")
+
+/** A test trie store whose next `failReads` batched reads throw (a storage read failure, spec 022 review forge W1). */
+final private class ReadFailingMptStorage extends TestMptStorage:
+  @volatile var failReads: Int = 0
+  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+    if failReads > 0 then
+      failReads -= 1
+      throw new RuntimeException("injected node read failure")
+    super.multiGetNodes(hashes)
 
 /** Spec 016 C-H5 stub test (FR-016 (b), T075): `HealResponseProcessing` mixed into a stub of its state interface, the
   * coordinator environment and the interfaces it calls. The cases drive a served response through `handleResponse` and
@@ -259,7 +279,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     // A content mismatch (a node no task asked for) is dropped: never buffered, never counted.
     h.respond(1, p, Seq(task, skipped), Seq(bytes(served), bytes(leaf(4)("other"))))
 
-    m.rawNodeBuffer.map(_._1) shouldBe Seq(hashOf(served))
+    m.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(hashOf(served))
     m.rawNodeBuffer.head._2.toSeq shouldBe served.encode.toSeq
     m.totalNodesHealed shouldBe 1
     m.completedTaskCount shouldBe 1
@@ -339,6 +359,19 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.pendingTasks.count(_ == task) shouldBe 5
   }
 
+  it should "not strike, cool or shrink the budget of a peer that answers empty a request with nothing left to fill (beacon N4)" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val p = peer("innocent")
+    m.knownAvailablePeers += p
+    // Its one task was retired or never vouched for: nothing could fill it, whatever the peer sent.
+    val task = HealingEntry(Seq(compact(5)), ByteString(Array.fill[Byte](32)(5)))
+    h.respondUnbooked(1, p, Seq(task), Seq.empty)
+    m.emptyResponseStrikes.get(p.id.value) shouldBe None
+    m.calls.toSeq should not contain "cooldown:innocent"
+    m.calls.toSeq should not contain "budget-down:innocent"
+  }
+
   it should "under the Path scheme write a served node at the task's path and at every alias path" taggedAs UnitTest in {
     val pns = new PathNodeStorage(EphemDataSource())
     val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(pns))
@@ -387,7 +420,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.healRequests.isFetching(child.hash) shouldBe true
     m.persisted.toSeq shouldBe Seq(Seq(child))
     // spec 022 D2 (Hash): one edge from the branch to each missing child, the pending one included.
-    m.healRequests.outstandingChildren(task.hash) shouldBe 2
+    m.heldNodes.get(task.hash).map(_.outstanding) shouldBe Some(2) // held: two children missing
     m.healRequests.parentsOf(hashOf(pending)) shouldBe Seq(task.hash)
   }
 
@@ -529,19 +562,21 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     h.respond(1, peer("p1"), Seq(task), Seq(bytes(branch)))
     (ds, m, childEntries, accountKey(Array[Byte](6)))
 
-  it should "under the Path scheme delete a stale child in the parent's batch, and leave a present child alone (item 7)" taggedAs UnitTest in {
+  // spec 022 slice 2 (D3): the branch waits on missing children, so it is held, not written. The stale child's position
+  // is deleted in the batch of the response that found it, before the child can be written there (geth's membatch
+  // orders a delNode before the later write); deferring it to the branch's own commit would delete the child.
+  it should "under the Path scheme delete a stale child in the batch of the response that found it, and leave a present child alone (item 7)" taggedAs UnitTest in {
     val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
       m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1) // [6,0]: present (right bytes)
       m.stalePaths += kids(1).pathset // [6,4]: stale bytes of another hash
       // [6,9]: absent
     }
-    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
-      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
-    )
+    ds.batches.map(_.toSet) shouldBe Seq(Set(Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4)))))
+    ds.batchesPutting(AccountNs, parentKey) shouldBe empty // held: two children missing
     m.pendingTasks.toSeq shouldBe Seq(kids(1), kids(2)) // the stale and the absent child are requested
   }
 
-  it should "under the Path scheme delete a stale child that is already requested, in the parent's batch (item 6)" taggedAs UnitTest in {
+  it should "under the Path scheme delete a stale child that is already requested, in the batch of the response that found it (item 6)" taggedAs UnitTest in {
     val (ds, m, kids, parentKey) = healBranchUnderPath { (m, kids) =>
       m.pathReads((kids(0).hash, kids(0).pathset)) = Array[Byte](1)
       m.pathReads((kids(2).hash, kids(2).pathset)) = Array[Byte](1)
@@ -549,9 +584,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
       m.healRequests.add(m.healRequestFor(kids(1)))
       m.stalePaths += kids(1).pathset
     }
-    ds.batchesPutting(AccountNs, parentKey).map(_.toSet) shouldBe Seq(
-      Set(Op(AccountNs, delete = false, parentKey), Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4))))
-    )
+    ds.batches.map(_.toSet) shouldBe Seq(Set(Op(AccountNs, delete = true, accountKey(Array[Byte](6, 4)))))
+    ds.batchesPutting(AccountNs, parentKey) shouldBe empty // held: [6,4] missing
     m.pendingTasks shouldBe empty // already requested: an edge, no second fetch
     m.healRequests.parentsOf(m.healRequestFor(kids(1)).key) should have size 1
   }
@@ -574,4 +608,245 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pns.readAccountNode(Array[Byte](4)) shouldBe None // never written where the newer node is expected
     m.totalNodesHealed shouldBe 0
     m.pendingTasks.toSeq shouldBe Seq(current) // only the newer fetch
+  }
+
+  // ---- spec 022 slice 2 review: a served node whose children cannot be found (eye F2, forge W1, vault note 5) ------
+
+  /** A branch with hash children only, at `slots`. */
+  private def branchOf(slots: (Int, ByteString)*): BranchNode =
+    val children = Array.fill[MptNode](16)(NullNode)
+    slots.foreach { case (i, h) => children(i) = HashNode(h.toArray) }
+    BranchNode(children, None)
+
+  /** The task the module queued for `hash`, taken out of the queue as a dispatch takes it. */
+  private def dispatched(m: StubHealResponseProcessingState, hash: ByteString): HealingEntry =
+    val task = m.pendingTasks.find(_.hash == hash).getOrElse(fail(s"no queued task for ${hash.take(4)}"))
+    val rest = m.pendingTasks.toSeq.filterNot(_ eq task)
+    m.pendingTasks.clear()
+    m.pendingTasks ++= rest
+    task
+
+  private def undecodableChild(scheme: StorageScheme): Unit =
+    val source = new RecordingDataSource
+    val h =
+      new Harness(scheme = scheme, pathStore = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val undecodable = ByteString(Array.fill[Byte](40)(0x05)) // hashes right, is no node
+    val gHash = kec256(undecodable)
+    val parent = branchOf(0 -> gHash)
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1)
+    val gTask = dispatched(m, gHash)
+
+    h.respond(2, p, Seq(gTask), Seq(undecodable))
+
+    val gRequest = m.healRequestFor(gTask)
+    withClue("the node is not held: ")(m.heldNodes.contains(HeldNodeSet.idOf(gRequest)) shouldBe false)
+    withClue("not buffered: ")(m.rawNodeBuffer.contains(gHash) shouldBe false)
+    withClue("not written: ")(source.batchesPutting(AccountNs, accountKey(Array[Byte](0))) shouldBe empty)
+    withClue("its request is satisfied: ")(m.healRequests.contains(gRequest.key) shouldBe false)
+    withClue("and not fetched again (every peer serves the same bytes): ")(m.pendingTasks shouldBe empty)
+    withClue("its parent still waits on it: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+
+  it should "never hold, buffer or write a served node that hashes right but does not decode, under the Hash scheme (eye F2)" taggedAs UnitTest in {
+    undecodableChild(StorageScheme.Hash)
+  }
+
+  it should "never hold, buffer or write a served node that hashes right but does not decode, under the Path scheme (eye F2)" taggedAs UnitTest in {
+    undecodableChild(StorageScheme.Path)
+  }
+
+  /** P (held) waits on B; B arrives, and a storage read throws while B's children are looked up. B is fine: its request
+    * goes back, with P's edge, and is fetched again; once the read works B is held and the chain commits.
+    */
+  private def readFailsDuringDiscovery(scheme: StorageScheme): Unit =
+    val source = new RecordingDataSource
+    val h =
+      new Harness(scheme = scheme, pathStore = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/read-failure-leaf")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    val bTask = dispatched(m, hashOf(b))
+    val bRequest = m.healRequestFor(bTask)
+    if scheme == StorageScheme.Hash then m.mptStorage.failReads = 1
+    else m.failingReads += Seq(compact(0, 0))
+
+    h.respond(2, p, Seq(bTask), Seq(bytes(b)))
+
+    withClue("B is not held: ")(m.heldNodes.contains(HeldNodeSet.idOf(bRequest)) shouldBe false)
+    withClue("B's request is back: ")(m.healRequests.contains(bRequest.key) shouldBe true)
+    withClue("with P's edge: ")(m.healRequests.parentsOf(bRequest.key) shouldBe Seq(parentId))
+    withClue("and B is fetched again: ")(m.pendingTasks.toSeq.map(_.hash) shouldBe Seq(hashOf(b)))
+    withClue("P still waits on B: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+
+    // The read works now: B is held, its child fetched, and the chain commits whole.
+    h.respond(3, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    m.heldNodes.contains(HeldNodeSet.idOf(bRequest)) shouldBe true
+    h.respond(4, p, Seq(dispatched(m, hashOf(c))), Seq(bytes(c)))
+    m.heldNodes.isEmpty shouldBe true
+    if scheme == StorageScheme.Hash then
+      m.rawNodeBuffer.map(_._1).toSeq shouldBe Seq(hashOf(c), hashOf(b), hashOf(parent))
+
+  it should "put a served node's request back, with its parent edges, when a storage read fails while its children are looked up, under the Hash scheme (forge W1)" taggedAs UnitTest in {
+    readFailsDuringDiscovery(StorageScheme.Hash)
+  }
+
+  it should "put a served node's request back, with its parent edges, when a storage read fails while its children are looked up, under the Path scheme (forge W1)" taggedAs UnitTest in {
+    readFailsDuringDiscovery(StorageScheme.Path)
+  }
+
+  // ---- spec 022 review hunter W1-r2, forge W1 (Path aliases), forge F2 (no retry cap) ------------------------------
+
+  /** Two accounts with one storage trie (`twinStorageTrie`): S waits at two positions, each under its held account
+    * leaf, and one fetch of S is in flight. S arrives, and a storage read fails while the children of the alias at
+    * `failAt` are looked up. Every alias whose read failed is put back with its parent's edge, and S must be fetched
+    * once more: the fetch that came back is spent, and a put-back alias can only join a fetch that exists.
+    */
+  private def aliasReadFails(failAt: Seq[String]): Unit =
+    val source = new RecordingDataSource
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val trie = HealRequestFixtures.twinStorageTrie(1)
+    def task(label: String): HealingEntry = HealingEntry(trie(label).pathset, trie(label).hash)
+    def request(label: String): HealRequest = m.healRequestFor(task(label))
+    h.respond(1, p, Seq(task("root")), Seq(trie.root.encoded))
+    h.respond(
+      2,
+      p,
+      Seq(dispatched(m, trie("acct0").hash), dispatched(m, trie("acct1").hash)),
+      Seq(trie("acct0").encoded, trie("acct1").encoded)
+    )
+    // S is requested at both positions and fetched once.
+    m.healRequests.waitingOn(trie("s0").hash).map(_.key) shouldBe Seq(request("s0").key, request("s1").key)
+    val sFetch = dispatched(m, trie("s0").hash)
+    m.pendingTasks shouldBe empty
+    failAt.foreach(alias => m.failingReads += trie(s"${alias}A").pathset)
+
+    h.respond(3, p, Seq(sFetch), Seq(trie("s0").encoded))
+
+    withClue("S is fetched again, once: ")(m.pendingTasks.toSeq.count(_.hash == trie("s0").hash) shouldBe 1)
+    failAt.foreach { alias =>
+      val acct = if alias == "s0" then "acct0" else "acct1"
+      withClue(s"$alias is waiting again, with its account's edge: ") {
+        m.healRequests.parentsOf(request(alias).key) shouldBe Seq(HeldNodeSet.idOf(request(acct)))
+      }
+    }
+    // S is served again; then its leaves, once each for both positions: the whole trie commits, both accounts too.
+    h.respond(4, p, Seq(dispatched(m, trie("s0").hash)), Seq(trie("s0").encoded))
+    h.respond(
+      5,
+      p,
+      Seq(dispatched(m, trie("s0A").hash), dispatched(m, trie("s0B").hash)),
+      Seq(trie("s0A").encoded, trie("s0B").encoded)
+    )
+    withClue("nothing waits on a child any more: ")(m.heldNodes.isEmpty shouldBe true)
+    Seq("acct0", "acct1").foreach { acct =>
+      withClue(s"$acct written: ")(source.batchesPutting(AccountNs, accountKey(trie(acct).nibbles)) should not be empty)
+    }
+
+  it should "fetch a node again when a read fails for one of its Path aliases, so the account waiting there commits (hunter W1-r2, forge W1)" taggedAs UnitTest in {
+    aliasReadFails(Seq("s0"))
+  }
+
+  it should "fetch a node again, once, when a read fails for every one of its Path aliases (hunter W1-r2, forge W1)" taggedAs UnitTest in {
+    aliasReadFails(Seq("s0", "s1"))
+  }
+
+  it should "stop fetching a node whose children's read keeps failing after three tries, and never count a put-back node as healed (forge F2, hunter N1)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/unreadable-child")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    m.totalNodesHealed shouldBe 1
+    m.mptStorage.failReads = 100 // every read of B's child fails (a corrupt stored child, say)
+
+    // The cap (TrieNodeHealingCoordinator's three consecutive read failures per node): B is fetched again after the
+    // first two failures, and given up on at the third.
+    (1 to 3).foreach { attempt =>
+      withClue(s"before attempt $attempt, B is queued: ")(m.pendingTasks.toSeq.map(_.hash) shouldBe Seq(hashOf(b)))
+      h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    }
+
+    withClue("B is not fetched a fourth time: ")(m.pendingTasks shouldBe empty)
+    val bRequest = m.healRequestFor(HealingEntry(Seq(compact(0)), hashOf(b)))
+    withClue("nor waiting: ")(m.healRequests.contains(bRequest.key) shouldBe false)
+    withClue("P stays held, for the orphan guard: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+    withClue("no put-back node counts as healed, so stagnation can fire: ")(m.totalNodesHealed shouldBe 1)
+    withClue("the give-up goes to the controller's stagnation path, once, without stopping dispatch: ") {
+      h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } should have size 1
+      m.giveUpEscalated shouldBe true
+      m.pivotRefreshRequested shouldBe false
+    }
+    // B found again (a walk entry, say) and given up on again while that escalation is pending: not sent twice.
+    h.respond(5, p, Seq(HealingEntry(Seq(compact(0)), hashOf(b))), Seq(bytes(b)))
+    m.pendingTasks shouldBe empty
+    h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } shouldBe empty
+  }
+
+  it should "make the next completion check walk after a give-up, whatever an earlier verification pass found (forge F6)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/unreadable-child-after-clean-pass")
+    val b = branchOf(0 -> hashOf(c))
+    val bTask = HealingEntry(Seq(compact(0)), hashOf(b))
+    // A clean pass ran earlier; B came in afterwards (a controller walk's QueueMissingNodes, say).
+    m.verificationPassComplete = true
+    m.queueNodes(Seq(bTask.pathset -> bTask.hash))
+    m.mptStorage.failReads = 100
+    (1 to 3).foreach(attempt => h.respond(attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    withClue("B is given up on: ")(m.healRequests.contains(m.healRequestFor(bTask).key) shouldBe false)
+    withClue("the earlier pass no longer vouches for completion: ")(m.verificationPassComplete shouldBe false)
+  }
+
+  /** B, under a parent, fetched and filled three times while every read of its child fails: given up on at the third.
+    */
+  private def giveUpB(h: Harness, label: String): ByteString =
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)(s"s022/review/$label")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    h.respond(1, p, Seq(HealingEntry(Seq(emptyPath), hashOf(parent))), Seq(bytes(parent)))
+    m.mptStorage.failReads = 100
+    (1 to 3).foreach(attempt => h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    hashOf(b)
+
+  it should "not escalate a give-up while the pulse's own escalation waits for the controller (forge F2)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    m.pivotRefreshRequested = true
+    giveUpB(h, "give-up-under-pulse-escalation")
+    h.controller.receiveAll().collect { case s: SNAPSyncController.HealingStagnated => s } shouldBe empty
+    m.giveUpEscalated shouldBe false
+  }
+
+  it should "drop the attempt counter of a node it gives up on, and keep it while the node is fetched again (hunter-r3 N2, forge N13)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/attempts-of-given-up")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    h.respond(1, p, Seq(HealingEntry(Seq(emptyPath), hashOf(parent))), Seq(bytes(parent)))
+    m.healAttempts(hashOf(b)) = 2 // B went unserved twice before
+    m.mptStorage.failReads = 100
+    (1 to 2).foreach(attempt => h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b))))
+    withClue("put back, so still live: ")(m.healAttempts.get(hashOf(b)) shouldBe Some(2))
+    h.respond(4, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    withClue("given up on, so no longer live: ")(m.healAttempts.contains(hashOf(b)) shouldBe false)
   }

@@ -172,6 +172,70 @@ class SNAPSyncControllerPinSpec
       }
     }
 
+  it should
+    "spec 022 review (vault V3): spawn the healing coordinator with pruned verification off under in-memory pruning" taggedAs UnitTest in {
+      // In-memory pruning keeps healed nodes in its node cache and writes them as the cache evicts them, one by one, so
+      // a subtree-complete record (written once the flush returns) can outlive a node it vouches for.
+      def inMemory(f: Fixture): Unit =
+        f.stateStorageOverride = Some(
+          new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
+            f.storagesInstance.storages.nodeStorage,
+            10,
+            new com.chipprbots.ethereum.db.cache.LruCache[ByteString, com.chipprbots.ethereum.db.storage.HeapEntry](
+              new com.chipprbots.ethereum.utils.NodeCacheConfig:
+                override val maxSize: Long = 1000
+                override val maxHoldTime: FiniteDuration = 60.minutes
+            )
+          )
+        )
+      val viaStart = new Fixture:
+        inMemory(this)
+        startHealingViaStartStateHealing(healingConfig(frontierPersistence = false))
+      val viaInterleave = new Fixture:
+        inMemory(this)
+        startHealingViaInterleave(healingConfig(frontierPersistence = false))
+      viaStart.expectHealingSpawn().prunedHealVerification shouldBe false
+      viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe false
+    }
+
+  it should
+    "spec 022 review (vault R1, V3): under in-memory pruning trust no persisted completeness: no frontier marker, no mirror, no scoped verification" taggedAs UnitTest in {
+      // A completeness marker is written after flushes whose persist does nothing under in-memory pruning, so a restart
+      // that resumed from it, or a scoped verification it enabled, could skip nodes lost with the cache. Configured on
+      // here, both must reach the coordinator off, and a marker an earlier run left must be gone before it starts.
+      def inMemoryWithStaleMarker(f: Fixture): com.chipprbots.ethereum.db.storage.HealingFrontierStorage =
+        f.stateStorageOverride = Some(
+          new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
+            f.storagesInstance.storages.nodeStorage,
+            10,
+            new com.chipprbots.ethereum.db.cache.LruCache[ByteString, com.chipprbots.ethereum.db.storage.HeapEntry](
+              new com.chipprbots.ethereum.utils.NodeCacheConfig:
+                override val maxSize: Long = 1000
+                override val maxHoldTime: FiniteDuration = 60.minutes
+            )
+          )
+        )
+        val store = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(
+          f.storagesInstance.storages.flatSlotStorage.dataSource
+        )
+        store.markComplete()
+        store
+      val cfg = healingConfig(frontierPersistence = true).copy(scopedHealVerification = true)
+      Seq("startStateHealing", "startStateHealingWithInterleave").foreach { route =>
+        val f = new Fixture
+        val store = inMemoryWithStaleMarker(f)
+        if route == "startStateHealing" then f.startHealingViaStartStateHealing(cfg)
+        else f.startHealingViaInterleave(cfg)
+        val spawn = f.expectHealingSpawn()
+        withClue(s"$route: ") {
+          spawn.prunedHealVerification shouldBe false
+          spawn.frontierPersistenceEnabled shouldBe false
+          spawn.scopedHealVerification shouldBe false
+          store.isComplete shouldBe false
+        }
+      }
+    }
+
   // ── #1371 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController download completion" should
@@ -205,6 +269,9 @@ class SNAPSyncControllerPinSpec
     val factories = new RecordingChildFactories(spawns.ref)
     private val progressProbe = testKit.createTestProbe[SyncProgress]()
 
+    /** The state storage the controller gets; the node's own (archive pruning) unless a case sets another. */
+    var stateStorageOverride: Option[com.chipprbots.ethereum.db.storage.StateStorage] = None
+
     def spawnController(config: SNAPSyncConfig): ActorRef[SNAPSyncController.Command] =
       given ExecutionContext = system.executionContext
       testKit.spawn(
@@ -212,7 +279,7 @@ class SNAPSyncControllerPinSpec
           blockchainReader,
           blockchainWriter,
           appStateStorage,
-          storagesInstance.storages.stateStorage,
+          stateStorageOverride.getOrElse(storagesInstance.storages.stateStorage),
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.flatSlotStorage,
           npm.ref,
