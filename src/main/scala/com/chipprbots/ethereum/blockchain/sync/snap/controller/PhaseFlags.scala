@@ -28,10 +28,6 @@ private[snap] trait PhaseFlags:
   var storagePhaseComplete: Boolean = false
   var storagePhaseForceCompleted: Boolean = false
 
-  // The healed-code finalisation hold (see `healedCodeHashes` in the controller core): set while SNAP waits for the
-  // bytecode of accounts that arrived only through healing, and once that wait has run out.
-  var awaitingHealedCode: Boolean = false
-  var healedCodeWaitExhausted: Boolean = false
   // The bytecode phase was force-completed with tasks abandoned (stagnation): some bytecode was never fetched.
   var bytecodeForceCompleted: Boolean = false
 
@@ -47,9 +43,9 @@ private[snap] trait PhaseFlags:
     *     the other phase flags from disk, and clears `forceCompleteStorageSent` itself only when it spawns a storage
     *     coordinator.
     *   - `Restart` (`restartSnapSync`) and `Wake` (`wakeFromDormant`): the three phase-complete flags,
-    *     `storagePhaseForceCompleted` and `forceCompleteStorageSent`. Both sites clear the three healed-code flags just
-    *     before, through the core's `resetHealedCodeHold()`, which also clears the healed codeHashes and cancels their
-    *     timer. The two sets are equal today, but they are separate kinds and stay separate.
+    *     `storagePhaseForceCompleted` and `forceCompleteStorageSent`. Both sites clear `bytecodeForceCompleted` and the
+    *     healed codeHashes just before, through the core's `resetHealedCodeHold()`. The two sets are equal today, but
+    *     they are separate kinds and stay separate.
     *   - `Dormant` (`enterDormantMode`): nothing. Dormancy leaves every phase flag as it is.
     *
     * `resumedStaleCursors` is cleared by no kind.

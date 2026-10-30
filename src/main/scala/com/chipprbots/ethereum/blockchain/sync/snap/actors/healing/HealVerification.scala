@@ -127,37 +127,41 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
 
   private def launchVerificationBFS(root: ByteString, rootPath: ByteString): Unit =
     val selfRef = self
-    // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
-    // distinguish the two paths, and mark the in-flight run as NOT scoped for the completion handler.
-    scopedVerificationActive = false
-    SNAPSyncMetrics.setHealingScopedVerification(0L)
-    // spec 005 C2/C8/T024: this full-root walk is the SAME traversal whether or not pruning is engaged — the
-    // descend-and-stop oracle (pruneIfSubtreeComplete) is inert unless `prunedEnabled`. Reset the per-run pruned
-    // counter and record engagement so the completion handler can emit the [HEAL-VERIFY-PRUNED] savings, and surface
-    // the engaged/disabled path here at the verification entry (FR-009/FR-007).
+    // Reset before the walk can bump it.
     prunedSubtreeCount.set(0L)
-    prunedVerificationActive = prunedEnabled
-    prunedVerificationStartMs = System.currentTimeMillis()
-    SNAPSyncMetrics.setHealingPrunedVerification(if prunedEnabled then 1L else 0L)
-    SNAPSyncMetrics.setHealingPrunedSubtrees(0L)
-    if prunedEnabled then
-      log.info(
-        s"[HEAL-VERIFY-PRUNED] Pruned (descend-and-stop) verification engaged on root " +
-          s"${Hex.toHexString(root.take(4).toArray)} — present, recorded-complete subtrees are pruned " +
-          s"(O(missing-frontier)); present-but-unrecorded and missing nodes are descended"
-      )
-    else
-      log.info(
-        s"[HEAL-VERIFY-PRUNED] Pruning disabled (flag=$prunedHealVerification scheme=$storageScheme " +
-          s"store=${stateIngest.healingFrontier.isDefined}) — full-trie verification on root " +
-          s"${Hex.toHexString(root.take(4).toArray)}"
-      )
-    startFrontierBFS(
+    // spec 022 T038a: the run's flags, gauges and engagement log only once the walk has started: a walk the lease refused
+    // never ran.
+    val started = startFrontierBFS(
       root,
       rootPath,
       isStor = false,
       (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(root, missing, walk)
     )
+    if started then
+      // spec 003 C6/T016: full-root path — clear the scoped engagement gauge so a dashboard can
+      // distinguish the two paths, and mark the in-flight run as NOT scoped for the completion handler.
+      scopedVerificationActive = false
+      SNAPSyncMetrics.setHealingScopedVerification(0L)
+      // spec 005 C2/C8/T024: this full-root walk is the SAME traversal whether or not pruning is engaged — the
+      // descend-and-stop oracle (pruneIfSubtreeComplete) is inert unless `prunedEnabled`. Record engagement so the
+      // completion handler can emit the [HEAL-VERIFY-PRUNED] savings, and surface the engaged/disabled path here at the
+      // verification entry (FR-009/FR-007).
+      prunedVerificationActive = prunedEnabled
+      prunedVerificationStartMs = System.currentTimeMillis()
+      SNAPSyncMetrics.setHealingPrunedVerification(if prunedEnabled then 1L else 0L)
+      SNAPSyncMetrics.setHealingPrunedSubtrees(0L)
+      if prunedEnabled then
+        log.info(
+          s"[HEAL-VERIFY-PRUNED] Pruned (descend-and-stop) verification engaged on root " +
+            s"${Hex.toHexString(root.take(4).toArray)} — present, recorded-complete subtrees are pruned " +
+            s"(O(missing-frontier)); present-but-unrecorded and missing nodes are descended"
+        )
+      else
+        log.info(
+          s"[HEAL-VERIFY-PRUNED] Pruning disabled (flag=$prunedHealVerification scheme=$storageScheme " +
+            s"store=${stateIngest.healingFrontier.isDefined}) — full-trie verification on root " +
+            s"${Hex.toHexString(root.take(4).toArray)}"
+        )
 
   /** Launch a SCOPED verification BFS seeded from the healed-paths set (spec 003 C3/FR-002/FR-006). Each healed node's
     * subtree is re-walked to completion; any missing descendant is emitted via `FrontierRebuilt`. Sends
@@ -180,23 +184,25 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
 
   private def launchScopedVerification(seeds: Seq[HealingEntry]): Unit =
     val selfRef = self
-    // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and
-    // emit the engagement signal on entry.
-    scopedVerificationActive = true
-    scopedVerificationSeedCount = seeds.size
-    scopedVerificationStartMs = System.currentTimeMillis()
-    log.info(
-      s"[HEAL-VERIFY-SCOPED] Scoped verification engaged — ${seeds.size} healed subtrees " +
-        s"(root ${Hex.toHexString(stateRoot.take(4).toArray)}); skipping full-root re-walk"
-    )
-    SNAPSyncMetrics.setHealingScopedVerification(1L)
-    SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
     val bfsSeeds = seeds.map(e => (e.hash, e.pathset, e.pathset.size > 1))
     val walkRoot = stateRoot
-    startFrontierBFS(
+    val started = startFrontierBFS(
       bfsSeeds,
       (walk: Long, missing: Long) => selfRef ! VerificationBFSComplete(walkRoot, missing, walk)
     )
+    // spec 022 T038a: only once the walk has started.
+    if started then
+      // spec 003 C6/T016: record the in-flight scoped run for the completion log + duration gauge, and
+      // emit the engagement signal on entry.
+      scopedVerificationActive = true
+      scopedVerificationSeedCount = seeds.size
+      scopedVerificationStartMs = System.currentTimeMillis()
+      log.info(
+        s"[HEAL-VERIFY-SCOPED] Scoped verification engaged — ${seeds.size} healed subtrees " +
+          s"(root ${Hex.toHexString(stateRoot.take(4).toArray)}); skipping full-root re-walk"
+      )
+      SNAPSyncMetrics.setHealingScopedVerification(1L)
+      SNAPSyncMetrics.setHealingScopedSubtrees(seeds.size.toLong)
 
   /** Path scheme only: the bytes stored at the task's OWN path in [[PathNodeStorage]], returned ONLY when their
     * keccak256 equals `hash` — otherwise `None`.

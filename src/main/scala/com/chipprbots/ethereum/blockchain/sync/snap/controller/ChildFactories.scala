@@ -111,7 +111,8 @@ trait ChildFactories:
       storageScheme: StorageScheme = StorageScheme.Hash,
       stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[StorageRangeCoordinator.Command] =
     StorageRangeCoordinator(
       stateRoot = stateRoot,
@@ -135,7 +136,8 @@ trait ChildFactories:
       storageScheme = storageScheme,
       stateIngest = stateIngest,
       recordStorageDone = recordStorageDone,
-      intakeBudget = intakeBudget
+      intakeBudget = intakeBudget,
+      recordExcluded = recordExcluded
     )
 
   // TrieNodeHealingCoordinator.apply takes no intakeBudget (the #1501 budget gates storage and bytecode intake only).
@@ -167,7 +169,10 @@ trait ChildFactories:
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
-      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+      excludedAccounts: Boolean = false,
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -197,7 +202,10 @@ trait ChildFactories:
       movingRootDeltaHeal = movingRootDeltaHeal,
       healedCodeCheck = healedCodeCheck,
       walkLocalOnly = walkLocalOnly,
-      heldMemoryLimit = heldMemoryLimit
+      heldMemoryLimit = heldMemoryLimit,
+      excludedAccounts = excludedAccounts,
+      currentRoot = currentRoot,
+      excludedPassRoot = excludedPassRoot
     )
 
   def byteCodeCoordinator(
@@ -209,7 +217,8 @@ trait ChildFactories:
       cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
       backpressureLowWatermark: Int = 25000,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[ByteCodeCoordinator.Command] =
     ByteCodeCoordinator(
       stateIngest = stateIngest,
@@ -220,7 +229,8 @@ trait ChildFactories:
       cooldownConfig = cooldownConfig,
       backpressureHighWatermark = backpressureHighWatermark,
       backpressureLowWatermark = backpressureLowWatermark,
-      intakeBudget = intakeBudget
+      intakeBudget = intakeBudget,
+      recordExcluded = recordExcluded
     )
 
   // scalastyle:off parameter.number

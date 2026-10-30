@@ -140,7 +140,7 @@ private[snap] class StubHealingOrchestratorState(
   lazy val bfsQueueStore: Option[BfsQueueStorage] = Some(new InMemoryBfsQueueStorage())
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
-  val stateIngest: StateIngest = new ForwardingStateIngest(
+  val stateIngest: ForwardingStateIngest = new ForwardingStateIngest(
     appStateStorage,
     stateStorage,
     flatSlotStorage,
@@ -268,6 +268,11 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawn.stateRoot shouldBe root.value
     (spawn.mptStorage should be).theSameInstanceAs(h.module.mptStorage)
     spawn.walkLocalOnly.exists(_ eq h.module.healingWalkLocalOnly) shouldBe true
+    withClue("spec 022 D5, T038b: production works the excluded set, and a restart finds the current root: ") {
+      spawn.excludedAccounts shouldBe true
+      h.factories.lastHealingCurrentRoot.get().exists(_ eq h.module.healingCurrentRoot) shouldBe true
+      h.module.healingCurrentRoot.get() shouldBe spawn.stateRoot
+    }
     spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
     spawn.healingFrontierStorage shouldBe defined
     spawn.bfsQueueStorageOpt shouldBe defined
@@ -348,7 +353,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     scheduledTimers(effects) shouldBe Seq((RequestByteCodes, RequestByteCodes, 1.second))
     h.kit.childInbox[ByteCodeCoordinator.Command]("bytecode-coordinator-4").receiveAll() shouldBe Seq(
       ByteCodeCoordinator.StartByteCodeSync(Seq.empty),
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
 
@@ -372,28 +377,146 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.coordinatorGeneration shouldBe 3L
     spawnedNames(h.effects()) shouldBe empty
     coordinator.receiveAll() shouldBe Seq(
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
   }
 
-  it should "forget the whole healed-code hold on reset" taggedAs UnitTest in {
+  it should "forget the healed codeHashes and the bytecode force-complete on reset" taggedAs UnitTest in {
     val h = new Harness()
     h.module.healedCodeHashes += ByteString(Array.fill[Byte](32)(5))
-    h.module.awaitingHealedCode = true
-    h.module.healedCodeWaitExhausted = true
     h.module.bytecodeForceCompleted = true
-    // The kit records TimerCancelled only for an active timer, so arm the wait timer first.
-    h.call(_.timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, 1.second))
-    h.effects()
 
     h.call(_.resetHealedCodeHold())
 
     h.module.healedCodeHashes shouldBe empty
-    h.module.awaitingHealedCode shouldBe false
-    h.module.healedCodeWaitExhausted shouldBe false
     h.module.bytecodeForceCompleted shouldBe false
-    h.effects().collect { case c: Effect.TimerCancelled => c.key } shouldBe Seq(HealedCodeWaitTimerKey)
+  }
+
+  // spec 022 FR-011: the Hash controller's own way to completion yields to the excluded set.
+  private val excludedEntry =
+    com.chipprbots.ethereum.db.storage.ExcludedAccount(
+      ByteString(Array.fill[Byte](32)(6)),
+      com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped
+    )
+
+  for (name, walkResult) <- Seq[(String, Command)](
+      "TrieWalkComplete(0)" -> TrieWalkComplete(0),
+      "TrieWalkResult(empty)" -> TrieWalkResult(Seq.empty)
+    )
+  do
+    it should s"not complete on $name while the excluded set is not empty: the coordinator goes on with it" taggedAs UnitTest in {
+      val h = new Harness()
+      val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+      h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+      h.module.currentPhase = SyncPhase.StateHealing
+      h.module.pivotBlock = Some(BigInt(1000))
+      h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+      h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+
+      h.call(_.stateHealingArms(walkResult))
+
+      h.module.currentPhase shouldBe SyncPhase.StateHealing
+      h.module.validations shouldBe 0
+      h.module.healingValidatedRoot shouldBe None
+      coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    }
+
+  // Spec 022 review hunter N1 (P1b, Hash): a clean walk does not see code, and a dormant entry may be revived by this root.
+  it should "not complete on a clean trie walk over a dormant entry no pass has looked at from this root" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
+    coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
+  it should "complete on a clean trie walk over a dormant entry once a pass has ended at this root, and drop it" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+    h.module.healingExcludedPassRoot.set(root.value)
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.validations shouldBe 1
+    withClue("it would otherwise cost the next start a recovery scan: ") {
+      h.module.stateIngest.snapProgress.hasAnyExcluded shouldBe false
+    }
+  }
+
+  it should "not drop anything but dormant entries at a clean walk, and not complete over one that counts" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+    h.module.healingExcludedPassRoot.set(root.value)
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.validations shouldBe 0
+    h.module.stateIngest.snapProgress.excludedPage(None, 10) shouldBe Seq(excludedEntry)
+  }
+
+  it should "not complete on a clean trie walk when the excluded set cannot be read" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress = new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def scanRangeLimit(
+            namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+            fromKey: Array[Byte],
+            toKeyExclusive: Array[Byte],
+            limit: Int
+        ): Iterator[(Array[Byte], Array[Byte])] = throw new RuntimeException("excluded set unreadable")
+    )
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
+    h.module.healingValidatedRoot shouldBe None
+    coordinator.receiveAll() should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
+  it should "set the current heal root as a re-peg goes out, for a coordinator a supervisor restarts (T038b)" taggedAs UnitTest in {
+    val h = new Harness()
+    val moved = ByteString(Array.fill[Byte](32)(0x5b))
+    h.call(_.pivotRefreshed(moved))
+    h.module.healingCurrentRoot.get() shouldBe moved
+  }
+
+  it should "start a coordinator to work the excluded set when a clean trie walk finds none running" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(BigInt(1000))
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(7))))
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry))
+
+    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
   }
 
   it should "finish healing on a clean trie walk and enter validation" taggedAs UnitTest in {

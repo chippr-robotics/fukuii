@@ -112,6 +112,9 @@ private class StubHealResponseProcessingState(
   var lastHealedAtMs: Long = 0L
   val pendingSubtreeRecords: mutable.Set[ByteString] = mutable.Set.empty
   var verificationPassComplete: Boolean = false
+  var consecutiveCommitFailures: Int = 0
+  var runningWalkInvalidated: Int = 0
+  def invalidateRunningWalk(): Unit = runningWalkInvalidated += 1
   var giveUpEscalated: Boolean = false
 
   // TrieNodeHealingEnv (requestTracker, snapSyncController, storageScheme, healedCodeCheck, scopedHealMaxPaths and
@@ -849,4 +852,41 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     withClue("put back, so still live: ")(m.healAttempts.get(hashOf(b)) shouldBe Some(2))
     h.respond(4, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
     withClue("given up on, so no longer live: ")(m.healAttempts.contains(hashOf(b)) shouldBe false)
+  }
+
+  // ---- spec 022 T038c ----------------------------------------------------------------------------------------------
+
+  it should "refuse a parentless request for a position held for another node by a parent's child (beacon N2)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(EphemDataSource())))
+    val m = h.module
+    val pathset = Seq(ByteString(HexPrefix.encode(Array[Byte](1), isLeaf = false)))
+    val heldHash = ByteString(Array.fill[Byte](32)(0x41))
+    m.heldNodes.hold(HealRequest.atPosition(pathset, heldHash), ByteString("node"), 1, Seq(ByteString("parent")))
+    m.enqueueRequest(HealingEntry(pathset, ByteString(Array.fill[Byte](32)(0x42)))) shouldBe false
+    m.pendingTasks.isEmpty shouldBe true
+    m.healRequests.isEmpty shouldBe true
+  }
+
+  it should "take a parentless request for a position held without parents: nothing else waits on that node" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(EphemDataSource())))
+    val m = h.module
+    val pathset = Seq(ByteString(HexPrefix.encode(Array[Byte](1), isLeaf = false)))
+    m.heldNodes.hold(
+      HealRequest.atPosition(pathset, ByteString(Array.fill[Byte](32)(0x41))),
+      ByteString("node"),
+      1,
+      Nil
+    )
+    m.enqueueRequest(HealingEntry(pathset, ByteString(Array.fill[Byte](32)(0x42)))) shouldBe true
+  }
+
+  it should "forget a clean pass when a node that does not decode is dropped (hunter N2)" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val junk = ByteString(Array.fill[Byte](40)(0xff.toByte))
+    val task = HealingEntry(Seq(ByteString(HexPrefix.encode(Array[Byte](1), isLeaf = false))), kec256(junk))
+    m.verificationPassComplete = true
+    h.respond(1, peer("p1"), Seq(task), Seq(junk))
+    m.verificationPassComplete shouldBe false
+    m.runningWalkInvalidated shouldBe 1
   }

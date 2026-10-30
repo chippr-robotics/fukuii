@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 
 /** ByteCodeCoordinator's environment for its modules (spec 016 C-B1, characterization G9): the actor context and
@@ -24,4 +25,5 @@ private[actors] trait ByteCodeEnv:
   def snapSyncController: ActorRef[SNAPSyncController.Command]
   def intakeBudget: Option[SnapIntakeBudget]
   def stateIngest: StateIngest
+  def excludedRecorder: ExcludedRecorder
   def maxWorkers: Int

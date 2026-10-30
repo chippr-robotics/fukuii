@@ -62,9 +62,9 @@ private[snap] trait LazyHandoffApi:
   * `startStateHealingWithInterleave`), the 1 s healing tick (`startHealingRequestScheduler`, `requestTrieNodeHealing`)
   * and the serve-root / re-peg staleness check (`maybeRequestHealingServeRoot`), the trie walks (`startTrieWalk`,
   * `triggerHealingForMissingNodes`), the Path-scheme clean exit (`completeHealingWalkClean`), the lazy-heal anchor
-  * (`anchorPivotBeforeLazyHandoff`) and the healed-code hold helpers (`resetHealedCodeHold`,
-  * `dropHealedCodeNowPresent`, `queueHealedCode`). The core keeps the dispatch: `phaseArms(StateHealing)` and the
-  * healing arms of `commonSyncingArms` call these members.
+  * (`anchorPivotBeforeLazyHandoff`) and the healed-code helpers (`resetHealedCodeHold`, `dropHealedCodeNowPresent`,
+  * `queueHealedCode`). The core keeps the dispatch: `phaseArms(StateHealing)` and the healing arms of
+  * `commonSyncingArms` call these members.
   */
 private[snap] trait HealingOrchestrator
     extends HealingApi
@@ -148,10 +148,22 @@ private[snap] trait HealingOrchestrator
     // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
     // directly (the same handoff below). This handler stays for the flag-OFF path (where the coordinator still emits
     // HealingRootUnservable) and as a defensive catch; either way it is fail-SAFE (anchor-guard gated), never fail-open.
+    // spec 022 review beacon N4: under the Path scheme with the root absent, a hand-off could not publish it (#1555), and
+    // the excluded set's deletes or a held root make that the usual case. Re-peg instead and keep healing: a new root
+    // gets a new look, and no completion is claimed. Hash scheme (ETC): unchanged.
+    case StateHealingAbandoned if lazyHandoffBlockedByAbsentPathRoot() =>
+      ctx.log.warn(
+        "[HEAL-ABANDONED] Healing gave up, but the heal root is absent from local storage (Path scheme): the lazy " +
+          "hand-off could not publish it. NOT handing off: re-pegging to a newer root and continuing to heal."
+      )
+      refreshPivotInPlace("healing abandoned with the root absent (Path scheme)", countsTowardHealBudget = false)
+      Behaviors.same
+
     case StateHealingAbandoned =>
       ctx.log.warn(
-        "[HEAL-ABANDONED] Healing coordinator force-completed without a verification walk (Path scheme). The trie is " +
-          "NOT verified, so this is not a clean walk: handing off to lazy on-demand healing via completeSnapSync()."
+        "[HEAL-ABANDONED] Healing coordinator gave up, so healing is not complete and this is not a clean walk: handing " +
+          "off to lazy on-demand healing via completeSnapSync(). (When only bytecode blocked it has walked the rest; " +
+          "otherwise the trie is not verified.)"
       )
       anchorPivotBeforeLazyHandoff("HEAL-ABANDONED")
       completeSnapSync()
@@ -204,10 +216,12 @@ private[snap] trait HealingOrchestrator
     case TrieWalkComplete(totalFound) =>
       trieWalkInProgress = false
       trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
-      if totalFound == 0 then
+      if totalFound == 0 && excludedHoldsCompletion() then ()
+      else if totalFound == 0 then
         ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
         persistHealedAnchorSync()
+        dropDormantExcluded()
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -230,12 +244,14 @@ private[snap] trait HealingOrchestrator
     case TrieWalkResult(missingNodes) =>
       trieWalkInProgress = false
       trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.WalkStateChanged(false))
-      if missingNodes.isEmpty then
+      if missingNodes.isEmpty && excludedHoldsCompletion() then ()
+      else if missingNodes.isEmpty then
         ctx.log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
         if pivotBlock.isDefined && stateRoot.isDefined then persistHealedAnchorSync()
+        dropDormantExcluded()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -267,6 +283,42 @@ private[snap] trait HealingOrchestrator
       Behaviors.same
   }
 
+  /** spec 022 FR-011, the Hash controller's own way to completion: a clean trie walk (which this controller also runs
+    * on its 2-minute schedule, ahead of the coordinator's verdict) proves nothing about an excluded account's code, so
+    * it too yields to the set. The coordinator's gate works the set and says when it is done; that verdict brings this
+    * walk back. A set that cannot be read holds completion too.
+    */
+  private def excludedHoldsCompletion(): Boolean =
+    val held =
+      try
+        val progress = stateIngest.snapProgress
+        progress.hasExcluded ||
+        (progress.hasAnyExcluded && !stateRoot.exists(_.value == healingExcludedPassRoot.get()))
+      catch
+        case scala.util.control.NonFatal(e) =>
+          ctx.log.error(
+            "[HEAL-EXCLUDED] Could not read the excluded set; a clean trie walk does not complete healing",
+            e
+          )
+          true
+    if held then
+      ctx.log.info(
+        "[HEAL-EXCLUDED] Clean trie walk, but the excluded set still counts against this root: the coordinator goes on with it"
+      )
+      trieNodeHealingCoordinator match
+        case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
+        case None              => startStateHealing()
+    held
+
+  /** Healing has completed clean at this root, and a pass has looked at every dormant entry from it: none is held by
+    * this root, and none should cost the next start a recovery scan. A write that fails leaves them, at that cost only.
+    */
+  private def dropDormantExcluded(): Unit =
+    try stateIngest.snapProgress.clearDormantExcluded()
+    catch
+      case scala.util.control.NonFatal(e) =>
+        ctx.log.warn(s"[HEAL-EXCLUDED] Could not drop the dormant entries at a clean completion: ${e.getMessage}")
+
   /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
     * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
     * `healingValidatedRoot`), driven by the coordinator's verified `StateHealingComplete` instead of a controller walk.
@@ -277,6 +329,7 @@ private[snap] trait HealingOrchestrator
     )
     healingRoundCount = 0
     persistHealedAnchorSync()
+    dropDormantExcluded()
     healingValidatedRoot = stateRoot
     timers.cancel(RequestTrieNodeHealing)
     progressMonitor.startPhase(StateValidation)
@@ -366,6 +419,7 @@ private[snap] trait HealingOrchestrator
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+    healingCurrentRoot.set(root.value)
     if trieNodesCachedInMemory then
       ctx.log.warn(
         "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can leave " +
@@ -406,7 +460,10 @@ private[snap] trait HealingOrchestrator
               healedCodeCheck = true,
               walkLocalOnly = Some(healingWalkLocalOnly),
               heldMemoryLimit = snapSyncConfig.healingHeldMemoryLimit,
-              prunedHealVerification = !trieNodesCachedInMemory
+              prunedHealVerification = !trieNodesCachedInMemory,
+              excludedAccounts = true,
+              currentRoot = Some(healingCurrentRoot),
+              excludedPassRoot = Some(healingExcludedPassRoot)
             )
           )
           .onFailure[Throwable](
@@ -663,15 +720,10 @@ private[snap] trait HealingOrchestrator
       )
       stateIngest.appState.putSnapSyncPivotBlock(b).and(stateIngest.appState.putSnapSyncStateRoot(r.value)).commit()
 
-  /** Forget everything the healed-code hold knows. A restart or re-peg starts a fresh sync: a stale hold, or a
-    * `HealedCodeWaitTimeout` still in flight from the old one, must not finalise it mid-download.
-    */
+  /** Forget the healed codeHashes and the bytecode force-complete: a restart starts a fresh sync. */
   def resetHealedCodeHold(): Unit =
     healedCodeHashes.clear()
-    awaitingHealedCode = false
-    healedCodeWaitExhausted = false
     bytecodeForceCompleted = false
-    timers.cancel(HealedCodeWaitTimerKey)
 
   /** Forget healed codeHashes whose bytecode has since been stored. */
   def dropHealedCodeNowPresent(): Unit =
@@ -699,7 +751,8 @@ private[snap] trait HealingOrchestrator
                   requestTracker = requestTracker,
                   batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
                   snapSyncController = ctx.self,
-                  intakeBudget = Some(intakeBudget)
+                  intakeBudget = Some(intakeBudget),
+                  recordExcluded = true
                 )
               )
               .onFailure[Throwable](
@@ -711,7 +764,7 @@ private[snap] trait HealingOrchestrator
         )
         bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
       bytecodeCoordinator.foreach { coordinator =>
-        coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing)
+        coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing, skipQueued = true)
         // Answers `ByteCodeSyncComplete` when the queue drains, and keeps the coordinator from waiting for more.
         coordinator ! actors.ByteCodeCoordinator.NoMoreByteCodeTasks
       }

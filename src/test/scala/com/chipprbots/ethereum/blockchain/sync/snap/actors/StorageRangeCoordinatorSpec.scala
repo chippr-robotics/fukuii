@@ -85,11 +85,28 @@ class StorageRangeCoordinatorSpec
       )
     )
 
+  // spec 022 T033: where the coordinator records what it leaves incomplete. Shared by the spec's tests, whose account
+  // hashes are unique.
+  final private class SyncFailingDataSource extends EphemDataSource(Map.empty):
+    @volatile var failSync: Boolean = false
+    @volatile var syncs: Int = 0
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
+      syncs += 1
+      super.updateSync(updates)
+  private val progressSource = new SyncFailingDataSource
+  // The app-state store a test points at a task file; none means the coordinator may not read it.
+  private var taskFilePointer: Option[AppStateStorage] = None
+  private val progressStore = new SnapSyncProgressStorage(progressSource)
+
+  private def excluded(account: ByteString): Option[com.chipprbots.ethereum.db.storage.ExcludedAccount] =
+    progressStore.excludedPage(None, 100000).find(_.subject == account)
+
   // The coordinator's StateIngest (spec 016 C-S2, C-S3): these tests run the Hash scheme, so the coordinator reads only
   // `pathNodes` (None) and `flatSlots` (the test's flat-slot store) from it; every other member throws.
   private def hashSchemeIngest(flatSlotStore: FlatSlotStorage): StateIngest =
     new StateIngest:
-      def appState: AppStateStorage = notReached("appState")
+      def appState: AppStateStorage = taskFilePointer.getOrElse(notReached("appState"))
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = flatSlotStore
       def pathNodes: Option[PathNodeStorage] = None
@@ -99,7 +116,7 @@ class StorageRangeCoordinatorSpec
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progressStore
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
       def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
@@ -137,7 +154,9 @@ class StorageRangeCoordinatorSpec
       // builds a trie at all (flat-slot writes only).
       deferredMerkleization: Boolean = true,
       recordStorageDone: Boolean = false,
-      requestTimeout: FiniteDuration = 30.seconds
+      requestTimeout: FiniteDuration = 30.seconds,
+      recordExcluded: Boolean = true,
+      restartedIncarnation: Boolean = false
   ): (StorageRangeCoordinatorImpl, BehaviorTestKit[StorageRangeCoordinator.Command]) =
     var captured: StorageRangeCoordinatorImpl = null
     val behavior = Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -159,7 +178,9 @@ class StorageRangeCoordinatorSpec
           backpressureLowWatermark = backpressureLowWatermark,
           deferredMerkleization = deferredMerkleization,
           stateIngest = hashSchemeIngest(flatSlotStorage),
-          recordStorageDone = recordStorageDone
+          recordStorageDone = recordStorageDone,
+          recordExcluded = recordExcluded,
+          restartedIncarnation = restartedIncarnation
         )
         captured.start()
       }
@@ -2128,4 +2149,521 @@ class StorageRangeCoordinatorSpec
     completeAccount(off, kec256(ByteString("done-account-off")), storageRootOf(doneSlots))
     off.completedAccountCount shouldBe 1L
     off.pendingDoneMarkers shouldBe empty
+  }
+
+  // ---- spec 022 T033: every decision that leaves an account incomplete is recorded durably as it is made ----------------
+
+  private def excludedFixture(deferred: Boolean = false) =
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("excluded-state-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = controller.ref,
+      deferredMerkleization = deferred
+    )
+    (impl, kit, controller)
+
+  "A force-complete" should "record every account it abandons before it reports, whatever state its tasks were in" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val queued = kec256(ByteString("excluded-queued"))
+    val queuedRoot = kec256(ByteString("excluded-queued-root"))
+    val chunked = kec256(ByteString("excluded-chunked"))
+    val partial = kec256(ByteString("excluded-partial"))
+    kit.run(StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(queued, queuedRoot))))
+    // A chunk waiting on an earlier sibling, in the ordering gate.
+    impl.storageTrieCursor(chunked) = kec256(ByteString("excluded-earlier"))
+    val peer = PeerTestHelpers.createTestPeer("excluded-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val late = StorageTask
+      .createStorageTask(chunked, kec256(ByteString("excluded-chunked-root")))
+      .copy(next = kec256(ByteString("excluded-later")))
+    impl.applyOrderedStorageChunk(peer, late, doneSlots, Seq.empty)
+    // A trie with no task left in any queue.
+    impl.pendingAccountTries(partial) = new com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie(_ => ())
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(queued).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
+    excluded(queued).map(_.claimedStorageRoot) shouldBe Some(queuedRoot)
+    excluded(chunked) shouldBe defined
+    excluded(partial) shouldBe defined
+  }
+
+  it should "report nothing, keep its work and try again when the record cannot be written (P3)" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val account = kec256(ByteString("excluded-failed-write"))
+    kit.run(
+      StorageRangeCoordinator.AddStorageTasks(
+        Seq(StorageTask.createStorageTask(account, kec256(ByteString("excluded-failed-write-root"))))
+      )
+    )
+    progressSource.failSync = true
+    try kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    finally progressSource.failSync = false
+    controller.expectNoMessage(50.millis)
+    impl.tasks.map(_.accountHash) should contain(account)
+    excluded(account) shouldBe None
+
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage) // the retry its timer sends
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(account) shouldBe defined
+  }
+
+  // Spec 022 review items 5, 6 and 7 (vault F2, F3, F4; beacon W-2; hunter W4).
+  private def emptyAnswers(
+      impl: StorageRangeCoordinatorImpl,
+      batch: Seq[StorageTask],
+      peerId: String,
+      times: Int
+  ): Unit =
+    val peer = PeerTestHelpers.createTestPeer(peerId, testKit.createTestProbe[Any]().ref.toClassic)
+    (1 to times).foreach { i =>
+      val response = StorageRanges(i, Seq.empty, Seq.empty)
+      val job =
+        new StorageRangeCoordinator.PendingResponse(i, 0L, peer, batch, BigInt(1024), response, 100L, System.nanoTime())
+      job.ready = true
+      impl.pendingResponses.enqueue(job)
+      impl.drainProcessedResponses()
+      impl.tasks.clear()
+    }
+
+  "One message's decisions" should "reach the disk under one fsync, when the message ends" taggedAs UnitTest in {
+    val (impl, kit, _) = excludedFixture()
+    val batch =
+      (0 until 128).map(i =>
+        StorageTask.createStorageTask(kec256(ByteString(s"excluded-batch-$i")), kec256(ByteString(s"r$i")))
+      )
+    emptyAnswers(impl, batch, "batch-peer", times = 4)
+    val before = progressSource.syncs
+    emptyAnswers(impl, batch, "batch-peer", times = 1) // the fifth empty answer: every task of the batch is skipped
+    withClue("nothing is written inside the handler: ")(progressSource.syncs shouldBe before)
+    impl.excludedRecorder.pending shouldBe true
+
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+
+    progressSource.syncs shouldBe before + 1
+    batch.foreach(t => excluded(t.accountHash) shouldBe defined)
+  }
+
+  it should "survive a failed write: the handler does not throw, the phase waits, and the next message writes them" taggedAs UnitTest in {
+    val (impl, kit, controller) = excludedFixture()
+    val task =
+      StorageTask.createStorageTask(kec256(ByteString("excluded-retry")), kec256(ByteString("excluded-retry-root")))
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+
+    progressSource.failSync = true
+    try
+      noException should be thrownBy emptyAnswers(impl, Seq(task), "retry-peer", times = 5)
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion) // its write fails, and it stays staged
+      kit.isAlive shouldBe true
+      impl.excludedRecorder.pending shouldBe true
+      excluded(task.accountHash) shouldBe None
+
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      withClue("no clean end of the phase over a decision not on disk: ") {
+        controller.expectNoMessage(50.millis)
+      }
+    finally progressSource.failSync = false
+
+    // The end of a message tries a failing store once a second.
+    eventually(timeout(5.seconds)) {
+      kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      excluded(task.accountHash) shouldBe defined
+    }
+    impl.excludedRecorder.pending shouldBe false
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  // Spec 022 review item 1 (hunter C1, vault F3): what a supervisor restart loses.
+  private def supervised(
+      controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+      flatSlots: FlatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      recordStorageDone: Boolean = false
+  ) =
+    testKit.spawn(
+      Behaviors
+        .supervise(
+          StorageRangeCoordinator(
+            stateRoot = kec256(ByteString("excluded-restart-root")),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            mptStorage = new TestMptStorage(),
+            maxAccountsPerBatch = 8,
+            maxInFlightRequests = 8,
+            requestTimeout = 30.seconds,
+            snapSyncController = controller,
+            flatBatchEcOverride = Some(scala.concurrent.ExecutionContext.parasitic),
+            stateIngest = hashSchemeIngest(flatSlots),
+            recordStorageDone = recordStorageDone,
+            recordExcluded = true
+          )
+        )
+        // As the controller's spawn sites supervise it, with a shorter backoff.
+        .onFailure[Throwable](
+          org.apache.pekko.actor.typed.SupervisorStrategy
+            .restartWithBackoff(1.millis, 10.millis, 0.0)
+            .withMaxRestarts(3)
+        )
+    )
+
+  /** A coordinator that has been through a supervisor restart whose record could not be written: what it held is gone.
+    */
+  private def restartedWithoutARecord(
+      controller: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
+      source: EphemDataSource,
+      lost: StorageTask
+  ) =
+    val coordinator = supervised(controller, new FlatSlotStorage(source), recordStorageDone = true)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(lost))
+    val alive = testKit.createTestProbe[StorageRangeCoordinator.SyncStatistics]()
+    coordinator ! StorageRangeCoordinator.StorageGetProgress(alive.ref)
+    alive.receiveMessage(30.seconds)
+    progressSource.failSync = true
+    try
+      coordinator ! StorageRangeCoordinator.StorageGetProgress(null) // the handler throws: a supervisor restart
+      coordinator ! StorageRangeCoordinator.StorageGetProgress(alive.ref) // answered by the new incarnation
+      alive.receiveMessage(30.seconds)
+    finally progressSource.failSync = false
+    withClue("the restart's own record failed, so only the file has it: ")(excluded(lost.accountHash) shouldBe None)
+    coordinator
+
+  private def writeTaskFile(entries: Seq[(ByteString, ByteString)]): java.nio.file.Path =
+    val file = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
+    file
+
+  // Spec 022 round 2 review B (hunter W1): a restart, then a clean end of the phase, whose controller then wipes the markers.
+  "A restarted coordinator" should "read the task file back before a clean end of the phase" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("clean-lost"), fileRoot("clean-lost"))
+    val finished = (fileAccount("clean-done"), fileRoot("clean-done"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot, finished))
+    appState.putSnapSyncStorageFilePath(file.toString).commit()
+    new SnapStorageDoneStorage(source).markDone(Seq(finished)).commit()
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      withClue("durable before the clean end that wipes the markers: ") {
+        excluded(lost.accountHash) shouldBe defined
+      }
+      excluded(finished._1) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  it should "wait for the task file's pointer: it is persisted just after the account phase's end reaches this actor" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("late-pointer"), fileRoot("late-pointer"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot))
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ controller.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      withClue("no clean end yet: ")(heard should not contain SNAPSyncController.StorageRangeSyncComplete)
+      appState.putSnapSyncStorageFilePath(file.toString).commit()
+      coordinator ! StorageRangeCoordinator.StorageCheckCompletion
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      excluded(lost.accountHash) shouldBe defined
+    finally taskFilePointer = None
+  }
+
+  // A retry must not take the liveness timer's key: that timer is what brings any stalled coordinator back.
+  it should "leave the periodic check running when the task file's accounts cannot be written at a clean end" taggedAs UnitTest in {
+    val account = fileAccount("clean-store-failed")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("clean-store-failed")), restartedIncarnation = true)
+    try
+      rig.kit.retrieveAllEffects()
+      progressSource.failSync = true
+      try
+        rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+        drainSelf(rig.kit)
+      finally progressSource.failSync = false
+      val timersStarted =
+        rig.kit.retrieveAllEffects().collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] =>
+          t.msg
+        }
+      timersStarted should not contain StorageRangeCoordinator.StorageCheckCompletion
+      rig.controller.expectNoMessage(50.millis)
+
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the periodic one
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      excluded(account) shouldBe defined
+    finally taskFilePointer = None
+  }
+
+  // Spec 022 round 2 review B, vault N2: storage-writer-dispatcher has one thread.
+  "A healthy coordinator" should "not read the task file for a clean end of the phase" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("healthy-clean") -> fileRoot("healthy-clean")))
+    try
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      excluded(fileAccount("healthy-clean")) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  it should "not read the task file for a force-complete when it was given every task itself" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("healthy-forced") -> fileRoot("healthy-forced")))
+    try
+      val queued = fileAccount("healthy-queued")
+      rig.kit.run(
+        StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(queued, fileRoot("queued"))))
+      )
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(queued) shouldBe defined
+      withClue("all it was given is in memory, so the file adds nothing: ") {
+        excluded(fileAccount("healthy-forced")) shouldBe None
+      }
+    finally taskFilePointer = None
+  }
+
+  it should "treat a read of the task file that runs too long as unreadable, and take no later answer" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val account = fileAccount("hung")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("hung")), flatBatchEc = ec)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      val token = rig.kit
+        .retrieveAllEffects()
+        .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
+        .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
+        .get
+      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      while ec.pending > 0 do ec.runNext()
+      withClue("told to stop, so it found nothing: ")(excluded(account) shouldBe None)
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+    finally taskFilePointer = None
+  }
+
+  it should "take nothing from a read a replaced incarnation started" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("old-read") -> fileRoot("old-read")))
+    try
+      rig.kit.run(
+        StorageRangeCoordinator.TaskFileSwept(
+          -1L,
+          com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile.Outcome.Recorded(5L)
+        )
+      )
+      withClue("it is not the read this one is waiting for: ")(rig.kit.selfInbox().hasMessages shouldBe false)
+    finally taskFilePointer = None
+  }
+
+  it should "call a task file of another size than was recorded unreadable, and go on" taggedAs UnitTest in {
+    val account = fileAccount("wrong-size")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("wrong-size")))
+    try
+      rig.appState.putSnapSyncStorageFileCount(Some(99L)).commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(account) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  // Spec 022 round 2 review C (hunter W3, vault N3): after a restart of the cycle every entry of the file reads as unfinished.
+  it should "stop reading the task file when it stops" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val entries = (0 until 10).map(i => fileAccount(s"cancel-$i") -> fileRoot(s"cancel-$i"))
+    val rig = new TaskFileRig(entries, flatBatchEc = ec)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      rig.kit.signal(org.apache.pekko.actor.typed.PostStop)
+      while ec.pending > 0 do ec.runNext()
+      entries.foreach { case (account, _) => excluded(account) shouldBe None }
+    finally taskFilePointer = None
+  }
+
+  "A supervisor restart" should "record what it is about to forget" taggedAs UnitTest in {
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = supervised(controller.ref)
+    val account = kec256(ByteString("excluded-restart"))
+    val root = kec256(ByteString("excluded-restart-account-root"))
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(account, root)))
+    coordinator ! StorageRangeCoordinator.StorageGetProgress(null) // the handler throws: a supervisor restart
+    eventually(excluded(account).map(_.claimedStorageRoot) shouldBe Some(root))
+  }
+
+  final private class TaskFileRig(
+      entries: Seq[(ByteString, ByteString)],
+      recordStorageDone: Boolean = true,
+      flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
+      restartedIncarnation: Boolean = false
+  ):
+    val file: java.nio.file.Path = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val source: EphemDataSource = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    appState.putSnapSyncStorageFilePath(file.toString).commit()
+    taskFilePointer = Some(appState)
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("excluded-file-root")),
+      flatSlotStorage = new FlatSlotStorage(source),
+      snapSyncControllerRef = controller.ref,
+      recordStorageDone = recordStorageDone,
+      flatBatchEcOverride = Some(flatBatchEc),
+      restartedIncarnation = restartedIncarnation
+    )
+    val done = new SnapStorageDoneStorage(source)
+
+  private val fileAccount = (name: String) => kec256(ByteString(s"excluded-file-$name"))
+  private val fileRoot = (name: String) => kec256(ByteString(s"excluded-file-root-$name"))
+
+  "A force-complete" should "read what a restart lost back from the task file, minus the done markers" taggedAs UnitTest in {
+    val zero = ByteString(new Array[Byte](32))
+    val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+    val rig = new TaskFileRig(
+      Seq(
+        fileAccount("done") -> fileRoot("done"),
+        fileAccount("lost") -> fileRoot("lost"),
+        zero -> fileRoot("zero"),
+        fileAccount("empty") -> emptyRoot
+      )
+    )
+    try
+      rig.done.markDone(Seq(fileAccount("done") -> fileRoot("done"))).commit()
+
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(fileAccount("lost")).map(_.claimedStorageRoot) shouldBe Some(fileRoot("lost"))
+      excluded(fileAccount("done")) shouldBe None
+      excluded(zero) shouldBe None
+      excluded(fileAccount("empty")) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  it should "report nothing until the task file's accounts are written, and read it once" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("retry") -> fileRoot("retry")))
+    try
+      progressSource.failSync = true
+      try
+        rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+        drainSelf(rig.kit)
+        rig.controller.expectNoMessage(50.millis)
+      finally progressSource.failSync = false
+
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage) // what its retry timer sends, or the watchdog
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(fileAccount("retry")) shouldBe defined
+
+      java.nio.file.Files.delete(rig.file)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      withClue("a repeat after it acted does nothing: ")(rig.controller.expectNoMessage(50.millis))
+    finally taskFilePointer = None
+  }
+
+  it should "go on without a task file that cannot be read: the walk still stands" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Nil)
+    try
+      java.nio.file.Files.delete(rig.file)
+      val queued = fileAccount("queued")
+      rig.kit.run(
+        StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(queued, fileRoot("queued"))))
+      )
+
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(queued) shouldBe defined
+    finally taskFilePointer = None
+  }
+
+  it should "not read the task file without done markers: it would name every account" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Seq(fileAccount("no-markers") -> fileRoot("no-markers")), recordStorageDone = false)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      excluded(fileAccount("no-markers")) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  "A coordinator of a recovery actor" should "write nothing to the excluded set: nothing would read it (vault F4)" taggedAs UnitTest in {
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (_, kit) = newImpl(
+      stateRoot = kec256(ByteString("excluded-recovery-root")),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = controller.ref,
+      recordExcluded = false
+    )
+    val account = kec256(ByteString("excluded-recovery"))
+    kit.run(
+      StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(account, kec256(ByteString("r")))))
+    )
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(account) shouldBe None
+  }
+
+  "A give-up" should "record the account as abandoned before it drops its tasks" taggedAs UnitTest in {
+    val (impl, _, _) = excludedFixture(deferred = true)
+    val account = kec256(ByteString("excluded-give-up"))
+    val root = kec256(ByteString("excluded-give-up-root"))
+    val task = StorageTask.createStorageTask(account, root)
+    val peers = Seq("gu-a", "gu-b", "gu-a").map(id =>
+      PeerTestHelpers.createTestPeer(id, testKit.createTestProbe[Any]().ref.toClassic)
+    )
+    peers.zipWithIndex.foreach { case (p, i) =>
+      impl.processServedTasks(
+        p,
+        Seq(task),
+        BigInt(1024),
+        StorageRanges(requestId = i + 1, slots = Seq(Seq(slotKey(0x10) -> ByteString("bad-value"))), proof = Seq.empty),
+        servedCount = 1
+      )
+      impl.tasks.clear()
+      impl.activeTasks.clear()
+    }
+    impl.abandonedAccounts should contain(account)
+    impl.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
+  }
+
+  "A root mismatch" should "record the account: the computed trie is not the account's" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    val account = kec256(ByteString("excluded-mismatch"))
+    val claimed = kec256(ByteString("excluded-mismatch-root"))
+    completeAccount(impl, account, claimed)
+    impl.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(claimed)
+  }
+
+  it should "record nothing when the computed root matches" taggedAs UnitTest in {
+    val (impl, _, _, _) = doneMarkerFixture()
+    val account = kec256(ByteString("excluded-match"))
+    completeAccount(impl, account, storageRootOf(doneSlots))
+    excluded(account) shouldBe None
   }

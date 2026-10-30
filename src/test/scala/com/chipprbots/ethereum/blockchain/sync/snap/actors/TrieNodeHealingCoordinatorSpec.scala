@@ -158,7 +158,7 @@ class TrieNodeHealingCoordinatorSpec
       coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(statusProbe.ref)
       statusProbe.expectMessageType[HealingStatistics].pendingTasks shouldBe 1
     }
-    snapSyncController.expectNoMessage(Duration.Zero)
+    snapSyncController.expectNoMessage(100.millis)
   }
 
   it should "handle task failures" taggedAs UnitTest in {

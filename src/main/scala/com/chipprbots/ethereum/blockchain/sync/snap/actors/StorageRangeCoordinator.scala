@@ -9,6 +9,8 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
@@ -16,6 +18,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedSweep
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -89,6 +96,12 @@ private[actors] class StorageRangeCoordinatorImpl(
     // unfinished storage tasks. Off by default: only SNAPSyncController's account-phase and recovery coordinators read
     // the markers back.
     recordStorageDone: Boolean = false,
+    // spec 022 T033: whether what this coordinator leaves incomplete goes into the durable excluded set. Only the SNAP
+    // controller's spawns: the set is read by SNAP healing, and a recovery actor runs after that (review vault F4).
+    recordExcluded: Boolean = false,
+    // spec 022 round 2 review B: whether a supervisor restart replaced an earlier incarnation of this coordinator. What
+    // that one held is gone, so this one reads the task file back before the phase ends.
+    restartedIncarnation: Boolean = false,
     // Spec 014: shared admission gate. This coordinator acknowledges received tasks and publishes its queue depth so the
     // producers can wait synchronously instead of through the mailbox-borne watermark signal. None = not wired (tests).
     val intakeBudget: Option[SnapIntakeBudget] = None,
@@ -427,6 +440,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   val storageDoneStorage: Option[SnapStorageDoneStorage] =
     Option.when(recordStorageDone)(new SnapStorageDoneStorage(stateIngest.flatSlots.dataSource))
 
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, recordExcluded, log)
+
   /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
     * tests.
     */
@@ -529,6 +544,8 @@ private[actors] class StorageRangeCoordinatorImpl(
     * Formerly `postStop`; now invoked from the `PostStop` signal handler in `active()`.
     */
   private def onPostStop(): Unit =
+    excludedRecorder.flush(): Unit // only a decision whose write has been failing is left
+    taskFileSweep.cancel()
     // The tracker's timers outlive this actor; cancel ours so none fires for a stopped coordinator.
     activeTasks.keys.foreach(requestTracker.cancelRequest)
     // Discard any in-memory streaming tries — already-flushed nodes stay on disk
@@ -606,7 +623,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   def active(): Behavior[Command] = Behaviors
     .receiveMessage[Command] { msg =>
       val next = handleCommand(msg)
-      // Nothing buffered for RocksDB outlives the message that produced it.
+      // Nothing buffered for RocksDB outlives the message that produced it. A decision first: it explains the writes.
+      excludedRecorder.flushThrottled(): Unit
       flushTrieNodeWrites()
       next
     }
@@ -616,10 +634,127 @@ private[actors] class StorageRangeCoordinatorImpl(
         onPostStop()
         Behaviors.same
       case (_, org.apache.pekko.actor.typed.PreRestart) =>
+        // spec 022 review hunter C1: the restart empties every collection below, and nothing downloads these again. Best
+        // effort: the write may be why this is restarting, and the next incarnation reads what it loses from the task file.
+        stageUndecidedAccounts()
+        excludedRecorder.flush(): Unit
+        taskFileSweep.cancel()
         // A supervisor restart builds a new instance (and pool); this one's workers must not linger.
         shutdownProcessingPool()
         Behaviors.same
     }
+
+  /** spec 022 T033: every account in memory whose storage is not complete: queued, in flight, answered but not applied,
+    * waiting in the ordering gate, or with a partial trie and no task left.
+    */
+  private def stageUndecidedAccounts(): Unit =
+    val entries = mutable.LinkedHashMap.empty[ByteString, ExcludedAccount]
+    def abandon(task: StorageTask): Unit =
+      entries(task.accountHash) =
+        ExcludedAccount(task.accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = task.storageRoot)
+    tasks.foreach(abandon)
+    activeTasks.values.foreach { case (_, batch, _) => batch.foreach(abandon) }
+    pendingResponses.foreach(_.tasks.foreach(abandon))
+    pendingOrderedChunks.values.foreach(_.values.foreach(chunk => abandon(chunk.task)))
+    pendingAccountTries.keysIterator
+      .filterNot(entries.contains)
+      .foreach(account => entries(account) = ExcludedAccount(account, ExcludedReason.StorageAbandoned))
+    excludedRecorder.stage(entries.values)
+
+  /** spec 022 T033, at a force-complete: every account whose storage is left incomplete goes into the durable excluded
+    * set before anything is dropped. False when the write failed: nothing is dropped and nothing is reported (a
+    * force-complete that reported without its record could never be told from a clean one), and it tries again.
+    */
+  private def recordAbandonedAtForceComplete(): Boolean =
+    stageUndecidedAccounts()
+    val recorded = excludedRecorder.flush()
+    if !recorded then
+      log.error(
+        "[STORAGE-FORCE-COMPLETE] Could not record the accounts it would abandon — not force-completing; trying again " +
+          "shortly"
+      )
+      timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
+    recorded
+
+  // spec 022 review hunter C1: the task file's part of ending the phase, once per incarnation.
+  private val taskFileSweep = new ExcludedSweep
+  private var taskFileSwept: Boolean = false
+  private var forceCompleteWanted: Boolean = false
+  private var taskFilePointerWaits: Int = 0
+
+  /** The task file and the entries it was recorded as holding, if it was. */
+  private def taskFile: Option[(java.nio.file.Path, Option[Long])] =
+    try
+      val appState = stateIngest.appState
+      appState
+        .getSnapSyncStorageFilePath()
+        .filter(_.nonEmpty)
+        .map(path => (java.nio.file.Paths.get(path), appState.getSnapSyncStorageFileCount()))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        log.error("[STORAGE-FORCE-COMPLETE] Could not read where the task file is; going on without it", e)
+        None
+
+  /** Start reading the task file back into the excluded set (`ExcludedTaskFile`), off this actor, on the one thread of
+    * `storage-writer-dispatcher`: its end sends `TaskFileSwept`, and that brings back whatever was waiting. False, said
+    * at WARN, when it cannot run: no done markers, without which the file would name every account; or no file, which
+    * means the account phase has not ended and what a restart lost was recorded (at best) as it went.
+    */
+  private def startTaskFileSweep(): Boolean =
+    (storageDoneStorage, taskFile) match
+      case (Some(done), Some((file, expected))) =>
+        val record = excludedRecorder.recordNow
+        val selfRef = self
+        val token = taskFileSweep.start(flatBatchEc)(cancelled =>
+          ExcludedTaskFile.recordUnfinished(file, expected, done, record, cancelled)
+        )((t, outcome) => selfRef ! TaskFileSwept(t, outcome))
+        timers.startSingleTimer(TaskFileSweepTimedOut(token), TaskFileSweepTimeout)
+        true
+      case (done, _) =>
+        log.warn(
+          s"[STORAGE-FORCE-COMPLETE] Not reading the task file back (${
+              if done.isEmpty then "no done markers" else "no task file"
+            }): " +
+            "what this coordinator does not hold in memory has no entry in the excluded set"
+        )
+        taskFileSwept = true
+        false
+
+  private def onTaskFileSwept(outcome: ExcludedTaskFile.Outcome): Unit =
+    val resume = if forceCompleteWanted then ForceCompleteStorage else StorageCheckCompletion
+    outcome match
+      case ExcludedTaskFile.Outcome.Recorded(accounts) =>
+        taskFileSwept = true
+        log.info(s"[STORAGE-FORCE-COMPLETE] Recorded $accounts unfinished account(s) from the task file")
+        self ! resume
+      case ExcludedTaskFile.Outcome.Unreadable(cause) =>
+        // The walk still finds what it would have named; slice 5 may not remove the walk over this (T050a).
+        taskFileSwept = true
+        log.error("[STORAGE-FORCE-COMPLETE] Could not read the task file; going on with what is in memory", cause)
+        self ! resume
+      case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
+        log.error("[STORAGE-FORCE-COMPLETE] Could not record the task file's accounts; trying again shortly", cause)
+        // At a clean end the periodic check comes back here. Not a timer of its own: that key is the periodic check's.
+        if forceCompleteWanted then timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
+      case ExcludedTaskFile.Outcome.Cancelled => ()
+
+  /** The phase's clean end. The controller wipes the done markers on it, so a restarted incarnation, which does not
+    * know what the one before it held, reads the task file first (round 2 review B). The file's pointer is persisted
+    * just after the account phase's end reaches this actor, so that is worth a short wait, each
+    * `StorageCheckCompletion` looking again. A healthy run pays nothing.
+    */
+  private def endPhaseCleanly(): Unit =
+    val sweepDue = restartedIncarnation && recordExcluded && !taskFileSwept
+    if taskFileSweep.running then ()
+    else if sweepDue && storageDoneStorage.isDefined && taskFile.isEmpty &&
+      taskFilePointerWaits < MaxTaskFilePointerWaits
+    then
+      taskFilePointerWaits += 1
+      log.info("Storage phase drained after a restart: waiting for the task file's pointer before it ends")
+    else if sweepDue && startTaskFileSweep() then ()
+    else
+      log.debug("Storage range sync complete!")
+      snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
 
   private def handleCommand(msg: Command): Behavior[Command] =
     msg match
@@ -729,9 +864,7 @@ private[actors] class StorageRangeCoordinatorImpl(
         // Drain the flat-batch accumulator once no more downloads are coming.
         if noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty then
           flushPendingFlatBatch()
-        if isComplete then
-          log.debug("Storage range sync complete!")
-          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        if isComplete then endPhaseCleanly()
         else if tasks.nonEmpty then
           // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
           // Previously guarded by activeTasks.isEmpty which defeated pipelining.
@@ -747,14 +880,31 @@ private[actors] class StorageRangeCoordinatorImpl(
         )
         // Flush the final flat-slot tail if all downloads are done.
         if tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty then flushPendingFlatBatch()
-        if isComplete then
-          log.debug("Storage range sync complete!")
-          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        if isComplete then endPhaseCleanly()
+        Behaviors.same
+
+      case TaskFileSwept(token, outcome) =>
+        if taskFileSweep.finish(token) then onTaskFileSwept(outcome)
+        Behaviors.same
+
+      case TaskFileSweepTimedOut(token) =>
+        if taskFileSweep.finish(token) then
+          onTaskFileSwept(
+            ExcludedTaskFile.Outcome.Unreadable(
+              new java.util.concurrent.TimeoutException("the read of the task file hung")
+            )
+          )
         Behaviors.same
 
       case ForceCompleteStorage =>
+        forceCompleteWanted = true
         if forceCompleteExecuted then log.debug("ForceCompleteStorage: already executed — ignoring duplicate")
-        else
+        else if taskFileSweep.running then log.debug("ForceCompleteStorage: reading the task file — ignoring duplicate")
+        // Memory says all of it unless a restart lost some, or tasks are still to come from the recovery stream: the one
+        // thread of storage-writer-dispatcher is not worth spending otherwise (review vault N2).
+        else if recordExcluded && !taskFileSwept && (restartedIncarnation || !noMoreTasksExpected) && startTaskFileSweep()
+        then ()
+        else if recordAbandonedAtForceComplete() then
           forceCompleteExecuted = true
           // Responses received but not applied are abandoned with the in-flight requests (healing recovers them).
           val droppedResponses = abandonPendingResponses()
@@ -774,6 +924,7 @@ private[actors] class StorageRangeCoordinatorImpl(
           lastAppliedSlot.clear()
           pendingOrderedChunks.clear()
           staleRootFailuresByAccount.clear()
+          // spec 022 T033: recorded above, each at its give-up: this list only keeps late answers from applying.
           abandonedAccounts.clear()
           // The in-flight requests are abandoned with the tasks: cancel their tracker timers so a timeout cannot
           // re-count failures (and re-send ForceCompleteStorage) for work this coordinator no longer owns.
@@ -1023,7 +1174,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   private def isComplete: Boolean =
     noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty && pendingResponses.isEmpty &&
       pendingAccountTries.isEmpty &&
-      pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
+      pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0 && !excludedRecorder.pending
 
   /** Update contract completion counts and send progress to controller. The counter is incremented exactly once per
     * account at the "no continuation needed" branch of `processStorageRanges`; we just broadcast its current value,
@@ -1105,6 +1256,12 @@ object StorageRangeCoordinator:
     */
   case object ForceCompleteStorage extends Command
 
+  /** The read of the task file has ended (`ExcludedTaskFile`). */
+  final private[actors] case class TaskFileSwept(token: Long, outcome: ExcludedTaskFile.Outcome) extends Command
+
+  /** The read of the task file has run too long: it is treated as unreadable, and told to stop. */
+  final private[actors] case class TaskFileSweepTimedOut(token: Long) extends Command
+
   /** Dynamically adjust per-peer concurrency budget. Sent by SNAPSyncController at phase transitions (Geth-aligned:
     * total 5 requests per peer across all coordinators).
     */
@@ -1124,6 +1281,17 @@ object StorageRangeCoordinator:
   /** Periodic: submit buffered flat slots that staged completion markers wait on, and every marker that may ride. */
   private[actors] case object FlushStorageDoneMarkers extends Command
   private[actors] val DoneMarkerFlushInterval: FiniteDuration = 10.seconds
+
+  /** spec 022 T033: how soon a force-complete whose excluded-set write failed tries again. */
+  private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
+
+  /** Measured for a task file on the root SSD, with a small store: 2M entries in 9 to 12 s, so about 70 s for Sepolia's
+    * 12M. This leaves room for a store and a disk some 25 times slower.
+    */
+  private[actors] val TaskFileSweepTimeout: FiniteDuration = 30.minutes
+
+  /** Checks a restarted coordinator waits for the task file's pointer, at 30 seconds each. */
+  private[actors] val MaxTaskFilePointerWaits: Int = 4
 
   /** Aggregated flat-slot batch failed to commit. Healing phase is expected to re-fetch the missing slots. */
   private[actors] case class FlatBatchFlushFailed(
@@ -1407,8 +1575,11 @@ object StorageRangeCoordinator:
       storageScheme: StorageScheme = StorageScheme.Hash,
       stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[Command] =
+    // A supervisor restart runs this setup again, over this same closure.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.setup { context =>
       // Read from the node config here rather than taken as a parameter: the spec 016 seam pins this apply's defaults.
       val processingSettings =
@@ -1443,6 +1614,8 @@ object StorageRangeCoordinator:
           storageScheme = storageScheme,
           stateIngest = stateIngest,
           recordStorageDone = recordStorageDone,
+          recordExcluded = recordExcluded,
+          restartedIncarnation = incarnations.getAndIncrement() > 0,
           intakeBudget = intakeBudget,
           processing = processingSettings
         ).start()

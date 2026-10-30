@@ -6,6 +6,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.SupervisorStrategy
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
@@ -38,6 +39,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   */
 final private class InterleavingBfsQueue extends InMemoryBfsQueueStorage:
   @volatile var afterFirstLevel: Option[() => Unit] = None
+  @volatile var enqueued: Int = 0 // how many level batches a walk wrote: a cancelled walk writes none
+  override def enqueueBatch(entries: Seq[(Array[Byte], Seq[Array[Byte]], Boolean)]): Unit =
+    enqueued += 1
+    super.enqueueBatch(entries)
   override def deleteRange(from: Long, to: Long): Unit =
     super.deleteRange(from, to)
     val hook = afterFirstLevel
@@ -96,7 +101,10 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       hole: Boolean = false,
       frontier: Option[HealingFrontierStorage] = None,
       persistence: Boolean = false,
-      otherOnDisk: Boolean = false
+      otherOnDisk: Boolean = false,
+      sharedQueue: Option[com.chipprbots.ethereum.db.storage.BfsQueueStorage] = None,
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      writerEc: Option[scala.concurrent.ExecutionContext] = None
   ):
     val ec = new ManualExecutionContext
     val trie: PathHealPresenceFixtures.Trie = PathHealPresenceFixtures.accountTrieOld()
@@ -109,7 +117,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     if otherOnDisk then PathHealPresenceFixtures.seedHash(hashStore, otherTrie.nodes)
     val queue = new InterleavingBfsQueue
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
-    private val peers = createTestProbe[NetworkPeerManagerActor.Command]()
+    val peers: TestProbe[NetworkPeerManagerActor.Command] = createTestProbe[NetworkPeerManagerActor.Command]()
 
     private def coordinator: Behavior[Command] = TrieNodeHealingCoordinator(
       stateRoot = trie.root.hash,
@@ -118,9 +126,10 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       mptStorage = hashStore,
       batchSize = 16,
       snapSyncController = controller.ref,
-      stateIngest = HealingTrieFixtures.healingIngest(frontier, Some(queue)),
-      healingWriterEcOverride = Some(ec),
-      frontierPersistenceEnabled = persistence
+      stateIngest = HealingTrieFixtures.healingIngest(frontier, Some(sharedQueue.getOrElse(queue))),
+      healingWriterEcOverride = Some(writerEc.getOrElse(ec)),
+      frontierPersistenceEnabled = persistence,
+      currentRoot = currentRoot
     )
 
     /** A coordinator generation, as the controller spawns one. */
@@ -332,6 +341,201 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
   it should "still fall back to the full rebuild when that marker cannot be removed either (vault-r3 W3)" taggedAs UnitTest in {
     val (rig, c, _) = unreadableFrontierRestart(clearFails = true)
+    rig.drive(c)
+    rig.awaitComplete()
+  }
+
+  // ---- spec 022 T038a: one walk per column family, process-wide; orphans are cancelled ------------------------------------
+
+  it should "stop a stopped generation's walk at its next check, and wake the generation it refused (T038a)" taggedAs UnitTest in {
+    val rig = new Rig()
+    val gen1 = rig.spawnGeneration()
+    gen1 ! HealingCheckCompletion // generation 1's walk is queued, holding the lease
+    rig.settle(gen1)
+    withClue("generation 1's walk is queued: ")(rig.ec.pending shouldBe 1)
+    val gen2 = rig.spawnGeneration()
+    gen2 ! HealingCheckCompletion // refused: the lease is held
+    rig.settle(gen2)
+    withClue("no second walk: ")(rig.ec.pending shouldBe 1)
+    testKit.stop(gen1)
+    rig.ec.runNext() // the orphan: cancelled, it stops at once, gives the lease back and wakes generation 2
+    rig.settle(gen2)
+    withClue("the orphan did not walk: ")(rig.queue.enqueued shouldBe 0)
+    withClue("generation 2 walks without any further message: ")(rig.ec.pending shouldBe 1)
+    rig.drive(gen2)
+    rig.awaitComplete()
+  }
+
+  // Spec 022 review vault: the walk's executor is shutting down, so its body never runs and could not give the lease back.
+  it should "give the lease back when the executor refuses the walk" taggedAs UnitTest in {
+    val refusing = new scala.concurrent.ExecutionContext:
+      def execute(runnable: Runnable): Unit =
+        throw new java.util.concurrent.RejectedExecutionException("shutting down")
+      def reportFailure(cause: Throwable): Unit = ()
+    val rig = new Rig(writerEc = Some(refusing))
+    val c = rig.spawnGeneration()
+    c ! HealingCheckCompletion
+    rig.settle(c)
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease.of(rig.queue).held shouldBe false
+    withClue("the walk is not left looking as if it runs: a later check can start one: ") {
+      c ! HealingCheckCompletion
+      rig.settle(c)
+      com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease.of(rig.queue).held shouldBe false
+    }
+  }
+
+  it should "share the lease between controller instances: another queue wrapper over the same column family (T038a)" taggedAs UnitTest in {
+    val source = EphemDataSource()
+    def wrapper = new com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage(
+      source,
+      com.chipprbots.ethereum.db.storage.Namespaces.BfsQueueNamespace
+    )
+    val first = new Rig(sharedQueue = Some(wrapper))
+    val second = new Rig(sharedQueue = Some(wrapper))
+    val gen1 = first.spawnGeneration()
+    gen1 ! HealingCheckCompletion
+    first.settle(gen1)
+    withClue("the first controller's walk: ")(first.ec.pending shouldBe 1)
+    val gen2 = second.spawnGeneration()
+    gen2 ! HealingCheckCompletion
+    second.settle(gen2)
+    withClue("the second controller's walk waits for the first: ")(second.ec.pending shouldBe 0)
+    testKit.stop(gen1)
+    first.ec.runNext()
+    second.settle(gen2)
+    withClue("and starts once the first is gone: ")(second.ec.pending shouldBe 1)
+    second.drive(gen2)
+    second.awaitComplete()
+  }
+
+  it should "stop a supervisor-restarted incarnation's old walk when the restart happens (T038a)" taggedAs UnitTest in {
+    val failing = new SyncWriteFailingDataSource
+    val store = new NoEntriesFrontierStorage(failing)
+    val rig = new Rig(frontier = Some(store), persistence = true)
+    val c = rig.spawnSupervised()
+    c ! HealingCheckCompletion // incarnation 1 walks
+    rig.settle(c)
+    failing.failing = true
+    c ! HealingPivotRefreshed(rig.otherRoot) // the marker clear throws: the supervisor restarts the coordinator
+    rig.settle(c)
+    failing.failing = false
+    rig.ec.runNext() // incarnation 1's walk stops at once
+    withClue("the replaced walk did not walk: ")(rig.queue.enqueued shouldBe 0)
+    rig.settle(c)
+  }
+
+  it should "not log 'engaged' nor set a pruned or scoped flag for a walk that was refused (T038a)" taggedAs UnitTest in {
+    val rig = new Rig(frontier = Some(new NoEntriesFrontierStorage(EphemDataSource())))
+    val gen1 = rig.spawnGeneration()
+    gen1 ! HealingCheckCompletion
+    rig.settle(gen1)
+    val capture = new com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture
+    try
+      val gen2 = rig.spawnGeneration()
+      gen2 ! HealingCheckCompletion
+      rig.settle(gen2)
+      withClue("the refusal is said: ")(capture.count("Frontier walk not started") shouldBe 1)
+      withClue("no walk was engaged: ")(capture.count("engaged") shouldBe 0)
+      rig.completions() shouldBe 0
+      testKit.stop(gen2)
+    finally capture.close()
+  }
+
+  it should "start the completion check when a rebuild of a root a re-peg has left ends: the deferred verification runs (T038a)" taggedAs UnitTest in {
+    val rig = new Rig(otherOnDisk = true)
+    val c = rig.spawnGeneration()
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    rig.ec.runNext() // the resume: no persisted frontier, so the rebuild starts
+    rig.settle(c)
+    c ! HealingPivotRefreshed(rig.otherRoot) // to a root on disk: its verification is deferred behind the rebuild
+    rig.settle(c)
+    rig.ec.runNext() // the rebuild of the old root ends
+    rig.settle(c)
+    withClue("nothing else would start it for minutes: ")(rig.ec.pending shouldBe 1)
+    rig.drive(c)
+    rig.awaitComplete()
+  }
+
+  // ---- spec 022 T038b: a supervisor-restarted coordinator takes the controller's current root ------------------------------
+
+  it should "walk the controller's current root after a supervisor restart, not its spawn-time root (T038b)" taggedAs UnitTest in {
+    val failing = new SyncWriteFailingDataSource
+    val store = new NoEntriesFrontierStorage(failing)
+    val current = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true, currentRoot = Some(current))
+    current.set(rig.trie.root.hash)
+    val c = rig.spawnSupervised()
+    failing.failing = true
+    current.set(rig.otherRoot) // as the controller does, before it sends the re-peg
+    c ! HealingPivotRefreshed(rig.otherRoot) // the marker clear throws: the re-peg is lost with incarnation 1
+    rig.settle(c)
+    failing.failing = false
+    c ! HealingCheckCompletion // incarnation 2 walks
+    rig.drive(c)
+    rig.awaitComplete()
+    withClue("the marker is of the current root: the walk's batches and its verdict named it: ") {
+      // A walk of the spawn-time root ends with `walkRoot` != the new root in incarnation 2 only if it was given the
+      // new root; with the old one it would have completed on the old root. So: the frontier store's root record.
+      store.isSubtreeComplete(rig.otherRoot) shouldBe true
+      store.isSubtreeComplete(rig.trie.root.hash) shouldBe false
+    }
+  }
+
+  // ---- spec 022 T038c, slice-2 notes ----------------------------------------------------------------------------------
+
+  it should "not count a walk across A -> B -> A as a walk of A: no marker, no clean verdict (T038c, A-B-A)" taggedAs UnitTest in {
+    val store = new NoEntriesFrontierStorage(EphemDataSource())
+    val rig = new Rig(frontier = Some(store), persistence = true, otherOnDisk = true)
+    val c = rig.spawnGeneration()
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    rig.ec.runNext() // the resume: the rebuild of A starts
+    rig.settle(c)
+    c ! HealingPivotRefreshed(rig.otherRoot)
+    rig.settle(c)
+    c ! HealingPivotRefreshed(rig.trie.root.hash) // back to A, with A's outstanding frontier dropped twice
+    rig.settle(c)
+    rig.ec.runNext() // the rebuild, started before both re-pegs, ends clean
+    rig.settle(c)
+    withClue("its frontier was dropped under it: no complete snapshot: ")(store.isComplete shouldBe false)
+    rig.drive(c) // the check walks A again
+    rig.awaitComplete()
+    withClue("marked by the walk that started after the last re-peg: ")(store.isComplete shouldBe true)
+  }
+
+  it should "not let a scoped walk stand in for the full verification a resume asked for (T038c)" taggedAs UnitTest in {
+    val rig = new Rig(hole = true, frontier = Some(completeEmptyFrontier()))
+    val c = rig.spawnGeneration()
+    val brX = rig.trie("brX")
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    withClue("the resume is queued: ")(rig.ec.pending shouldBe 1)
+    c ! TrieNodeHealingCoordinator.QueueMissingNodes(Seq((brX.pathset, brX.hash)))
+    c ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      com.chipprbots.ethereum.testing.PeerTestHelpers
+        .createTestPeer("scoped-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    val request = rig.peers
+      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+      .message
+      .underlyingMsg
+      .asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes]
+    c ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+      com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes(request.requestId, Seq(brX.encoded))
+    )
+    rig.settle(c)
+    rig.ec.runNewest() // brX's flush
+    rig.ec.runNewest() // its completion: then the completion check starts its walk, scoped by the marker and the heal
+    rig.settle(c)
+    withClue("the resume and the scoped walk are queued: ")(rig.ec.pending shouldBe 2)
+    rig.ec.runNext() // the resume: its full verification is dropped, a walk is running
+    rig.settle(c)
+    withClue("the scoped walk, alone: ")(rig.ec.pending shouldBe 1)
+    rig.ec.runNext() // the scoped walk ends clean
+    rig.settle(c)
+    withClue("it does not count: ")(rig.completions() shouldBe 0)
+    withClue("a full walk follows: ")(rig.ec.pending shouldBe 1)
     rig.drive(c)
     rig.awaitComplete()
   }

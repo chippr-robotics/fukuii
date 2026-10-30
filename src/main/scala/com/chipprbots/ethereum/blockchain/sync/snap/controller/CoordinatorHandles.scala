@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
@@ -30,6 +32,18 @@ private[snap] trait CoordinatorHandles:
   var storageRangeCoordinator: Option[TypedActorRef[StorageRangeCoordinator.Command]] = None
   var trieNodeHealingCoordinator: Option[TypedActorRef[TrieNodeHealingCoordinator.Command]] = None
 
+  /** spec 022 T038b: the heal root the controller is on, set before every re-peg goes out, and read by a healing
+    * coordinator's setup: a supervisor restart runs that setup again and nothing replays a re-peg, so this is how the
+    * new incarnation finds the current root.
+    */
+  lazy val healingCurrentRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
+  /** spec 022 round 2 review hunter N1: the root at which the healing coordinator's pass over the excluded set last
+    * ended. What the Hash controller's clean walk reads before it treats a dormant entry as nothing: a later page may
+    * hold an entry this root revives, and a walk does not see missing code.
+    */
+  lazy val healingExcludedPassRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)
 
@@ -59,6 +73,7 @@ private[snap] trait CoordinatorHandles:
 
   /** A pivot refresh landed on `newStateRoot`: notify every existing coordinator. */
   def pivotRefreshed(newStateRoot: ByteString): Unit =
+    healingCurrentRoot.set(newStateRoot)
     accountRangeCoordinator.foreach(_ ! AccountRangeCoordinator.PivotRefreshed(newStateRoot))
     storageRangeCoordinator.foreach(_ ! StorageRangeCoordinator.StoragePivotRefreshed(newStateRoot))
     bytecodeCoordinator.foreach(_ ! ByteCodeCoordinator.ByteCodePivotRefreshed)

@@ -157,11 +157,43 @@ class SNAPHealLoopSpec
     val snap = f.enterStateHealing(PathHeal)
 
     Using.resource(new SnapLogCapture) { log =>
-      snap ! SNAPSyncController.StateHealingAbandoned
+      snap ! SNAPSyncController.StateHealingComplete
+      log.awaitLine("[PATH-PUBLISH] not publishing")
       f.awaitProcessed(snap)
       drainParent(f).filter(isTerminal) shouldBe Seq(SyncProtocol.HealingImpossible)
-      log.contains("[PATH-PUBLISH] not publishing") shouldBe true
       log.contains("[PATH-PUBLISH] publishing") shouldBe false
+    }
+  }
+
+  // The user's decision, 2026-10-30: once the chains waiting only on code are written the root is present, so the
+  // abandonment the coordinator sends at the end of its walk is the lazy hand-off, not a re-peg.
+  it should "hand off, not re-peg, when healing is abandoned with the root stored under Path" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val trie = PathHealPresenceFixtures.accountTrieNew()
+    PathHealPresenceFixtures.seedPath(
+      new PathNodeStorage(f.storagesInstance.storages.flatSlotStorage.dataSource),
+      trie.nodes
+    )
+    val snap = f.enterStateHealing(PathHeal, root = trie.root.hash)
+
+    Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.StateHealingAbandoned
+      log.awaitLine("[SNAP-COMPLETE]")
+      log.contains("NOT handing off") shouldBe false
+    }
+  }
+
+  // spec 022 review beacon N4: a hand-off that could not publish the root must not be tried: it would only restart SNAP.
+  it should "re-peg, not hand off, when healing is abandoned with the root absent under Path" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val snap = f.enterStateHealing(PathHeal)
+
+    Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.StateHealingAbandoned
+      f.awaitProcessed(snap)
+      log.contains("NOT handing off") shouldBe true
+      log.contains("[SNAP-COMPLETE]") shouldBe false
+      drainParent(f).filter(isTerminal) shouldBe empty
     }
   }
 

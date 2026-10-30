@@ -30,7 +30,13 @@ enum HealRequestKind:
   *   hangs below a 64-nibble account leaf). geth's request priority `len(path)`; dispatch becomes deepest first in
   *   slice 2 (D1).
   */
-final case class HealRequest(key: ByteString, hash: ByteString, pathset: Seq[ByteString], depth: Int):
+final case class HealRequest(
+    key: ByteString,
+    hash: ByteString,
+    pathset: Seq[ByteString],
+    depth: Int,
+    positional: Boolean = false
+):
   def kind: HealRequestKind = if pathset.size > 1 then HealRequestKind.StorageNode else HealRequestKind.AccountNode
 
 object HealRequest:
@@ -70,7 +76,7 @@ object HealRequest:
 
   /** The Path-scheme request for `hash` at `pathset`. */
   def atPosition(pathset: Seq[ByteString], hash: ByteString): HealRequest =
-    HealRequest(positionKey(pathset), hash, pathset, depthOf(pathset))
+    HealRequest(positionKey(pathset), hash, pathset, depthOf(pathset), positional = true)
 
   /** The Hash-scheme request for the node `hash`, fetched from `pathset`. */
   def ofNode(pathset: Seq[ByteString], hash: ByteString): HealRequest =

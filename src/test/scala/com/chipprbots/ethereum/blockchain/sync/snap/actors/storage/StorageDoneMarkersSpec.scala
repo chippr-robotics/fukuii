@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -87,6 +88,7 @@ private[actors] class StubStorageDoneMarkersState(
   def mptStorage: MptStorage = notReached("mptStorage")
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   val storageScheme: StorageScheme = StorageScheme.Hash
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = false, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("StateIngest.appState")
     def stateTries: StateStorage = notReached("StateIngest.stateTries")

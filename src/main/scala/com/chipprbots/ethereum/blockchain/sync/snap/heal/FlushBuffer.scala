@@ -47,8 +47,10 @@ final class FlushBuffer
     if entries.isEmpty then heldBytes = 0L
     i
 
-  /** The buffered entries in commit order, as a flush writes them: the very entry objects, for [[dropWritten]]. */
-  def snapshot: IndexedSeq[(ByteString, Array[Byte])] = entries.toIndexedSeq
+  /** The first `limit` buffered entries in commit order, as a flush writes them: a prefix, so complete (see the class
+    * comment), and the very entry objects, for [[dropWritten]].
+    */
+  def firstEntries(limit: Int): IndexedSeq[(ByteString, Array[Byte])] = entries.iterator.take(limit).toIndexedSeq
 
   /** Estimated heap of the buffered nodes, in bytes. */
   def bytes: Long = heldBytes
@@ -64,6 +66,12 @@ final class FlushBuffer
   override def iterator: Iterator[(ByteString, Array[Byte])] = entries.iterator
 
 object FlushBuffer:
+
+  /** The most nodes one flush writes in one batch (spec 022 review vault V7; `storage-rocksdb.md`: 5K-10K keys per
+    * batch). A write that keeps failing therefore keeps failing at this size, however large the buffer grew.
+    */
+  val MaxFlushNodes: Int = 10_000
+
   // The tuple, the hash ByteString and the array header, a deque slot and a map entry.
   private def entryBytes(elem: (ByteString, Array[Byte])): Long = 160L + elem._1.length + elem._2.length
 

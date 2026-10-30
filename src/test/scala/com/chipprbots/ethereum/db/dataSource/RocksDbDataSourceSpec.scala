@@ -132,6 +132,40 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
   private def keyToInt(bytes: Array[Byte]): Int =
     ByteBuffer.wrap(bytes).getInt()
 
+  // spec 022 review (vault): the bound is the override's, not the trait's filter over a full scan.
+  "RocksDbDataSource.scanRangeLimit" should "stop at the limit, in key order, inside [from, to)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    val dir = Files.createTempDirectory("rocks-scan-limit").toAbsolutePath.toString
+    val ds = RocksDbDataSource(config(dir, statisticsEnabled = false), Namespaces.nsSeq)
+    try
+      ds.update(Seq(DataSourceUpdateOptimized(Ns, Nil, (1 to 9).map(i => Array[Byte](1, i.toByte) -> Array(i.toByte)))))
+      ds.update(
+        Seq(
+          DataSourceUpdateOptimized(
+            Ns,
+            Nil,
+            Seq(Array[Byte](0, 5) -> Array[Byte](0), Array[Byte](2, 1) -> Array[Byte](0))
+          )
+        )
+      )
+      def scan(from: Array[Byte], to: Array[Byte], limit: Int): Seq[List[Byte]] =
+        ds.scanRangeLimit(Ns, from, to, limit).map(_._1.toList).toSeq
+      scan(Array[Byte](1), Array[Byte](2), 3) shouldBe Seq(List[Byte](1, 1), List[Byte](1, 2), List[Byte](1, 3))
+      withClue("from is inclusive, to exclusive: ") {
+        scan(Array[Byte](1, 3), Array[Byte](1, 5), 10) shouldBe Seq(List[Byte](1, 3), List[Byte](1, 4))
+      }
+      withClue("a limit past the range ends at the range: ") {
+        scan(Array[Byte](1), Array[Byte](2), 100) should have size 9
+      }
+      withClue("an empty range, and a zero limit: ") {
+        scan(Array[Byte](1, 20), Array[Byte](2), 5) shouldBe empty
+        scan(Array[Byte](1), Array[Byte](2), 0) shouldBe empty
+      }
+    finally ds.destroy()
+  }
+
   "RocksDbDataSource.iterateSyncRange" should "yield exactly the keys in [fromKey, toKeyExcl) in order, once each, across multiple refill batches, and handle an inclusive fromKey and empty ranges" taggedAs (
     UnitTest,
     DatabaseTest

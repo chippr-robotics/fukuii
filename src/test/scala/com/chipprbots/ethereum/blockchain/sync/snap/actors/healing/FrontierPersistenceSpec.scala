@@ -89,7 +89,7 @@ final private class RecordingMptStorage(frontier: => Option[HealingFrontierStora
 /** An execution context that runs nothing until the test says so ([[runAll]]): a flush's Future, and its completion
   * callback, wait in its queue, so a test decides exactly when an asynchronous write happens.
   */
-final private class ManualExecutionContext extends ExecutionContext:
+final private[snap] class ManualExecutionContext extends ExecutionContext:
   private val queue = mutable.Queue.empty[Runnable]
   def execute(runnable: Runnable): Unit = queue.synchronized(queue.enqueue(runnable))
   def reportFailure(cause: Throwable): Unit = throw cause
@@ -195,10 +195,13 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
   private def stub(
       persistence: Boolean = true,
       pruned: Boolean = true,
-      store: Boolean = true
+      store: Boolean = true,
+      ec: ExecutionContext = ExecutionContext.parasitic,
+      maxWaitMs: Long = 0L
   ): StubFrontierPersistenceState & FrontierPersistence =
     val frontier = Option.when(store)(new HealingFrontierStorage(EphemDataSource()))
-    new StubFrontierPersistenceState(frontier, persistence, pruned, ExecutionContext.parasitic) with FrontierPersistence
+    new StubFrontierPersistenceState(frontier, persistence, pruned, ec, frontierBackpressureMaxWaitMs = maxWaitMs)
+      with FrontierPersistence
 
   /** The frontier entries (of `entry(1)`..`entry(9)`) the store holds, read by key. */
   private def persisted(s: StubFrontierPersistenceState): Set[ByteString] =
@@ -324,10 +327,65 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
     s.pendingBackpressure.get() shouldBe 3
 
     // below the high-water mark the wait returns at once; above it, the 0 ms safety timeout returns it too
-    s.awaitFrontierDrain()
+    s.awaitFrontierDrain(() => false)
     s.pendingBackpressure.set(1000)
-    s.awaitFrontierDrain()
+    s.awaitFrontierDrain(() => false)
     s.pendingBackpressure.get() shouldBe 1000
+  }
+
+  it should "end the drain wait at once for a cancelled walk: nothing refreshes a replaced incarnation's gauge (T038a)" taggedAs UnitTest in {
+    val s = stub(maxWaitMs = 3600000L)
+    s.pendingBackpressure.set(1000)
+    @volatile var cancelled = false
+    val waiter = new Thread(() => s.awaitFrontierDrain(() => cancelled))
+    waiter.setDaemon(true)
+    waiter.start()
+    cancelled = true
+    waiter.join(30000L)
+    waiter.isAlive shouldBe false
+  }
+
+  // ---- spec 022 review vault V7: a batch at a time ---------------------------------------------------------------
+
+  private def bufferFull(s: StubFrontierPersistenceState & FrontierPersistence, n: Int): Unit =
+    (0 until n).foreach(i => s.rawNodeBuffer += ((ByteString(s"node-$i"), Array[Byte](1))))
+
+  private def batchSizes(s: StubFrontierPersistenceState & FrontierPersistence): Seq[Int] =
+    s.mptStorage.events.collect { case e if e.startsWith("store:") => e.drop("store:".length).toInt }.toSeq
+
+  it should "flush a large buffer synchronously in batches of at most MaxFlushNodes, in order (vault V7)" taggedAs UnitTest in {
+    val s = stub()
+    bufferFull(s, 2 * FlushBuffer.MaxFlushNodes + 5)
+    s.flushRawNodesSync() shouldBe true
+    s.rawNodeBuffer.isEmpty shouldBe true
+    batchSizes(s) shouldBe Seq(FlushBuffer.MaxFlushNodes, FlushBuffer.MaxFlushNodes, 5)
+  }
+
+  it should "flush asynchronously a batch of at most MaxFlushNodes, and what follows after its completion (vault V7)" taggedAs UnitTest in {
+    val ec = new ManualExecutionContext
+    val s = stub(ec = ec)
+    bufferFull(s, FlushBuffer.MaxFlushNodes + 5)
+    s.flushRawNodesAsync()
+    ec.runAll()
+    batchSizes(s) shouldBe Seq(FlushBuffer.MaxFlushNodes)
+    val complete = s.selfInbox.receiveMessage().asInstanceOf[TrieNodeHealingCoordinator.FlushComplete]
+    s.flushCompleted(complete.token, complete.count)
+    s.rawNodeBuffer.size shouldBe 5
+    s.flushRawNodesAsync()
+    ec.runAll()
+    batchSizes(s) shouldBe Seq(FlushBuffer.MaxFlushNodes, 5)
+  }
+
+  it should "keep what a failed batch held, and report false, after writing the batches before it (vault V7)" taggedAs UnitTest in {
+    val s = stub()
+    bufferFull(s, FlushBuffer.MaxFlushNodes + 5)
+    // The first batch is written; the write of the second throws.
+    s.mptStorage.onStore = _ => if batchSizes(s).nonEmpty then s.mptStorage.failWrites = 1
+    s.flushRawNodesSync() shouldBe false
+    s.rawNodeBuffer.size shouldBe 5
+    s.mptStorage.onStore = _ => ()
+    s.flushRawNodesSync() shouldBe true
+    s.rawNodeBuffer.isEmpty shouldBe true
   }
 
   // ---- spec 022 slice 2 review: one writer, and only this coordinator's own flush releases nodes ------------------
@@ -434,6 +492,8 @@ class FrontierPersistenceSpec extends AnyFlatSpec with Matchers with LoneElement
       s.mptStorage.maxActive.get() shouldBe 1
       result.get() shouldBe Some(true)
       s.mptStorage.stored.keySet shouldBe Set(1, 2, 3).map(node(_)._1)
+      // vault V1 residual: the asynchronous write ended first, and the synchronous one wrote only what it had not.
+      s.mptStorage.events.filter(_.startsWith("store:")).toSeq shouldBe Seq("store:2", "store:1")
     finally pool.shutdownNow()
   }
 

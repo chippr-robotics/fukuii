@@ -162,7 +162,9 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
   - On Path, the positions above such an account are removed from the account trie, as go-ethereum's `genTrie.delete` does.
   - On Hash, nodes already flushed cannot be recalled, so the account's storage root and code are seeded for healing, resolved against the current root on every pivot move.
   - *Original wording:* "MUST NOT commit to the account trie an account whose storage or code is incomplete". This cannot be implemented on Hash, because the account trie is built before the storage outcome is known (research.md R-2).
-- **FR-006**: Every account excluded under FR-005 MUST be reachable by healing from the current root, and MUST be fetched before completion is declared.
+- **FR-006** *(amended 2026-10-30; decided by the user)*: Every account excluded under FR-005 MUST be reachable by healing from the current root, and MUST be fetched before completion is declared.
+  - If unservable bytecode is the only thing still blocking healing after 30 idle minutes, the node writes the chains waiting only on that code, verifies the rest of the trie with a walk, and takes a lazy hand-off with `bytecodeRecoveryDone` unset. Healing MUST NOT report complete in this case: no `StateHealingComplete` and no completeness marker. The node reaches the head, fetches missing code on demand, and runs the recovery scan at next start.
+  - If anything else is still blocking, no such commit is made, and the existing abandon and re-peg paths apply.
 - **FR-007** (Path): When one node is needed at more than one position, every position MUST be recorded, filled when the node arrives, and re-discovered if a pivot move drops the request.
 - **FR-008** (Path): When a node is written at a position that replaces a deeper subtree, nodes left at deeper positions under it MUST be removed, or MUST be guaranteed never to be read as valid.
 

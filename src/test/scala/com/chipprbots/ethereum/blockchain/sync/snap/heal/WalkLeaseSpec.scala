@@ -41,3 +41,70 @@ class WalkLeaseSpec extends AnyFlatSpec with Matchers:
     WalkLease.of(other).tryAcquire() shouldBe defined // another queue's walks are not held up
     WalkLease.of(queue).release(walk.get)
   }
+
+  private def rocksShapedQueue(source: com.chipprbots.ethereum.db.dataSource.DataSource) =
+    new com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage(
+      source,
+      com.chipprbots.ethereum.db.storage.Namespaces.BfsQueueNamespace
+    )
+
+  it should "be one lease per column family, process-wide: every queue wrapper over it, of any controller instance (T038a)" taggedAs UnitTest in {
+    val source = com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+    val first = WalkLease.of(rocksShapedQueue(source))
+    val second = WalkLease.of(rocksShapedQueue(source))
+    (first eq second) shouldBe true
+    val otherSource = com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+    (first eq WalkLease.of(rocksShapedQueue(otherSource))) shouldBe false
+  }
+
+  it should "wake those it refused when the walk gives it back, once, and not before (T038a)" taggedAs UnitTest in {
+    val lease = WalkLease.of(new InMemoryBfsQueueStorage())
+    val walk = lease.tryAcquire().get
+    var woken = 0
+    val wake: () => Unit = () => woken += 1
+    lease.tryAcquire(Some(wake)) shouldBe None
+    lease.tryAcquire(Some(wake)) shouldBe None // one waiter, however often it was refused
+    woken shouldBe 0
+    lease.release(walk + 1) // not the holder: nobody is woken
+    woken shouldBe 0
+    lease.release(walk)
+    woken shouldBe 1
+    lease.release(walk) // gone already
+    woken shouldBe 1
+    lease.tryAcquire(Some(wake)) shouldBe defined // a caller that gets the lease is not a waiter
+    woken shouldBe 1
+  }
+
+  it should "let the holder alone ask a walk to stop (T038a)" taggedAs UnitTest in {
+    val lease = WalkLease.of(new InMemoryBfsQueueStorage())
+    val walk = lease.tryAcquire().get
+    lease.isCancelled(walk) shouldBe false
+    lease.cancel(walk + 1)
+    lease.isCancelled(walk) shouldBe false
+    lease.cancel(walk)
+    lease.isCancelled(walk) shouldBe true
+    lease.held shouldBe true // it holds the lease until it has stopped
+    lease.release(walk)
+    val next = lease.tryAcquire().get
+    lease.cancel(walk) // no longer the holder: the next walk is not touched
+    lease.isCancelled(next) shouldBe false
+  }
+
+  "A walk's level" should "wait for every sub-range before it reports one that failed: the lease must not go back while one writes (T038a)" taggedAs UnitTest in {
+    import scala.concurrent.{Await, ExecutionContext, Future, Promise}
+    import scala.concurrent.duration.*
+    import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+    given ExecutionContext = ExecutionContext.global
+    val stillWriting = Promise[Seq[Int]]()
+    val level = Future(
+      scala.concurrent.blocking(
+        TrieNodeHealingCoordinator.awaitSubRanges(
+          Seq(Future.failed[Seq[Int]](new RuntimeException("the first sub-range failed")), stillWriting.future)
+        )
+      )
+    )
+    an[java.util.concurrent.TimeoutException] should be thrownBy Await.ready(level, 200.millis)
+    stillWriting.success(Seq(1))
+    val failure = intercept[RuntimeException](Await.result(level, 30.seconds))
+    failure.getMessage shouldBe "the first sub-range failed"
+  }

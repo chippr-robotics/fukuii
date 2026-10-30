@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.StorageTaskKey
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.VerifiedStorageResponse
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -99,7 +100,12 @@ private[actors] class StubStorageResponseProcessingState(
   def mptStorage: MptStorage = notReached("mptStorage")
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   val storageScheme: StorageScheme = StorageScheme.Hash
-  def stateIngest: StateIngest = notReached("stateIngest")
+  // spec 022 T033: the one store this module writes through the capability, the excluded set.
+  val progress: SnapSyncProgressStorage =
+    new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+  val stateIngest: StateIngest =
+    new com.chipprbots.ethereum.blockchain.sync.snap.controller.ForwardingStateIngestForProgress(progress)
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(progress, enabled = true, log)
   val flatBatchEntryThreshold: Int = 1000
 
   // The Apis (recorded)
@@ -375,6 +381,16 @@ class StorageResponseProcessingSpec extends AnyFlatSpec with Matchers:
     m.calls should contain(s"recordCompletedTask(${task.accountString})")
     m.calls should contain(s"resetAccountTrie(${task.accountString})")
     self.receiveAll() shouldBe Seq(StorageCheckCompletion)
+    withClue("spec 022 T033: recorded when the message ends: ") {
+      m.excludedRecorder.flush() shouldBe true
+      m.progress.excludedPage(None, 10) shouldBe Seq(
+        com.chipprbots.ethereum.db.storage.ExcludedAccount(
+          task.accountHash,
+          com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped,
+          claimedStorageRoot = task.storageRoot
+        )
+      )
+    }
   }
 
   it should "route a proof-of-absence through the ordering gate with no slots" taggedAs UnitTest in {

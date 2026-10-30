@@ -137,7 +137,7 @@ private class StubFrontierRebuildState(
 
   // FrontierDrainApi
   var drainCalls: Int = 0
-  def awaitFrontierDrain(): Unit = drainCalls += 1
+  def awaitFrontierDrain(cancelled: () => Boolean): Unit = drainCalls += 1
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"FrontierRebuildBfs read StateIngest.$member")

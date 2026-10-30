@@ -370,7 +370,6 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
     cancelSyncTimers(
       RequestAccountRanges,
       RequestByteCodes,
-      HealedCodeWaitTimerKey,
       RequestStorageRanges,
       CheckDownloadStagnation,
       RequestTrieNodeHealing,

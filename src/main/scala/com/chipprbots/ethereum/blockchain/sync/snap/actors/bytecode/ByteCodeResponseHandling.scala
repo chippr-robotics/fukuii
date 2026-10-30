@@ -10,6 +10,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.A
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.ByteCodeWorkerRelease
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.ValidatedByteCodes
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 
@@ -86,6 +88,9 @@ private[actors] trait ByteCodeResponseHandling:
                 checkCompletion()
 
               case Right(_) =>
+                // spec 022 D4: the write has returned. An account leaf healing holds for this code may now commit.
+                if validated.codesByHashInOrder.nonEmpty then
+                  snapSyncController ! SNAPSyncController.ByteCodesStored(validated.codesByHashInOrder.map(_._1))
                 val remainingHashes = task.codeHashes.filterNot(validated.matchedHashes.contains)
 
                 val receivedBytes: BigInt = BigInt(response.codes.map(_.size.toLong).sum)
@@ -120,6 +125,9 @@ private[actors] trait ByteCodeResponseHandling:
                       s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
                         s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
                     )
+                    // spec 022 T033: durable when this message ends, and by hash: this download does not know the
+                    // accounts that use it. Healing cannot complete until the code is there.
+                    excludedRecorder.stage(exhausted.map(ExcludedAccount(_, ExcludedReason.CodeMissing)))
                     exhausted.foreach(hashFailureCounts.remove)
                   if retryable.nonEmpty then
                     log.info(

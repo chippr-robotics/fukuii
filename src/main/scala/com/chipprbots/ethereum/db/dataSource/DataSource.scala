@@ -72,6 +72,17 @@ trait DataSource:
       toKeyExclusive: Array[Byte]
   ): Iterator[(Array[Byte], Array[Byte])]
 
+  /** [[scanRange]] that stops after `limit` entries: a page of a range too large to hold at once. The default takes the
+    * first `limit` of a whole scan; [[RocksDbDataSource]] stops its iterator there.
+    */
+  def scanRangeLimit(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExclusive: Array[Byte],
+      limit: Int
+  ): Iterator[(Array[Byte], Array[Byte])] =
+    scanRange(namespace, fromKey, toKeyExclusive).take(limit)
+
   /** Delete every key in `[fromKey, toKeyExclusive)` (lexicographic byte order) within `namespace`.
     *
     * Implementations should prefer a storage-native range delete over per-key tombstones: RocksDB writes a SINGLE range

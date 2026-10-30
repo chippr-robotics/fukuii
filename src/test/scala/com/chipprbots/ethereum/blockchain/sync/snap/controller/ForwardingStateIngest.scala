@@ -43,7 +43,10 @@ final private[snap] class ForwardingStateIngest(
   // The derived stores (spec 016 T060d): `trieStore` forwards as the production capability does; no module reaches the
   // other two through the capability yet, so they fail loudly.
   def trieStore(pivot: BigInt): MptStorage = tries.getBackingStorage(pivot)
-  def snapProgress: SnapSyncProgressStorage = ForwardingStateIngest.notReached("snapProgress")
+  // spec 022 D5: the heal gate's excluded set; one store per capability, empty unless a test records in it. A test that
+  // needs a store that fails replaces it.
+  var snapProgress: SnapSyncProgressStorage =
+    new SnapSyncProgressStorage(new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty))
   def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
   // The healing stores (spec 016 C-H1): the healing spawn reads them; by-name like the rest.
   def healingFrontier: Option[HealingFrontierStorage] = frontier
@@ -52,3 +55,22 @@ final private[snap] class ForwardingStateIngest(
 private[snap] object ForwardingStateIngest:
   def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"module stub read StateIngest.$member")
+
+/** A `StateIngest` that hands out the excluded set's store alone; a module stub that reaches anything else fails
+  * loudly.
+  */
+final private[snap] class ForwardingStateIngestForProgress(progress: SnapSyncProgressStorage) extends StateIngest:
+  def appState: AppStateStorage = ForwardingStateIngest.notReached("appState")
+  def stateTries: StateStorage = ForwardingStateIngest.notReached("stateTries")
+  def flatSlots: FlatSlotStorage = ForwardingStateIngest.notReached("flatSlots")
+  def pathNodes: Option[PathNodeStorage] = ForwardingStateIngest.notReached("pathNodes")
+  def bytecode: EvmCodeStorage = ForwardingStateIngest.notReached("bytecode")
+  def chainReader: BlockchainReader = ForwardingStateIngest.notReached("chainReader")
+  def chainWriter: BlockchainWriter = ForwardingStateIngest.notReached("chainWriter")
+  def validatorFactory: MptStorage => StateValidator = ForwardingStateIngest.notReached("validatorFactory")
+  def durability: StateIngest.Durability = StateIngest.Durability.Default
+  def trieStore(pivot: BigInt): MptStorage = ForwardingStateIngest.notReached("trieStore")
+  def snapProgress: SnapSyncProgressStorage = progress
+  def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
+  def healingFrontier: Option[HealingFrontierStorage] = ForwardingStateIngest.notReached("healingFrontier")
+  def bfsQueue: Option[BfsQueueStorage] = ForwardingStateIngest.notReached("bfsQueue")

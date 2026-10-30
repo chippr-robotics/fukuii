@@ -342,6 +342,8 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.spawns.receiveAll() match
       case Seq(b: ChildSpawn.ByteCode, s: ChildSpawn.StorageRange) =>
         b.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        b.recordExcluded shouldBe true // spec 022 review vault F4: the SNAP controller's spawns record
+        s.recordExcluded shouldBe true
         s.stateRoot shouldBe root.value
         (s.mptStorage should be).theSameInstanceAs(storage)
         s.initialMaxInFlightPerPeer shouldBe 3
@@ -858,6 +860,8 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
         (a.mptStorage should be).theSameInstanceAs(h.module.launchStorage)
         a.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
         b.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        b.recordExcluded shouldBe true
+        s.recordExcluded shouldBe true
         s.initialMaxInFlightPerPeer shouldBe 2
         s.snapProgressStorage.exists(_ eq h.module.snapProgressStorage) shouldBe true
       case other => fail(s"expected account, bytecode and storage spawns, got $other")

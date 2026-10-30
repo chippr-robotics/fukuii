@@ -739,7 +739,11 @@ private[snap] trait SnapResumePlanner
           "Keeping storage-task completion markers: a stored account resume checkpoint that this run ignores still " +
             "relies on them"
         )
-      else clearStorageDoneMarkers("account phase starts without carried task files")
+      else
+        clearStorageDoneMarkers("account phase starts without carried task files")
+        // spec 022 D5: a cycle from nothing downloads every account again, so no decision of an earlier one still stands.
+        // With cursors resumed the accounts behind them are not downloaded again: their entries stay.
+        if resumeProgress.isEmpty then snapProgressStorage.clearExcluded()
 
     (resumeProgress, carriedTaskFiles)
 

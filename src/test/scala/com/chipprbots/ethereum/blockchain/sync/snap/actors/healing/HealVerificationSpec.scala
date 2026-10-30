@@ -118,14 +118,18 @@ private class StubHealVerificationState(
       rootPath: ByteString,
       isStor: Boolean,
       onComplete: (Long, Long) => Unit
-  ): Unit =
+  ): Boolean =
     singleSeedLaunches += ((root, rootPath, isStor))
-    verificationBFSRunning = true
+    if walkStarts then verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
-  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Unit =
+    walkStarts
+  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Boolean =
     multiSeedLaunches += seeds
-    verificationBFSRunning = true
+    if walkStarts then verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
+    walkStarts
+  // spec 022 T038a: false when the lease refuses the walk.
+  var walkStarts: Boolean = true
 
   // HealCompletionApi
   var isComplete: Boolean = true
@@ -336,4 +340,27 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.stateRoot = ByteString(Array.fill[Byte](32)(8))
     s.lastOnComplete.foreach(_(7L, 1L))
     s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(launchRoot, 1L, 7L))
+  }
+
+  // spec 022 T038a: a walk the lease refused never ran.
+  it should "set no flag, gauge or scope for a verification walk the lease refused" taggedAs UnitTest in {
+    val s = new StubHealVerificationState(None, StorageScheme.Hash, true) with HealVerification
+    s.walkStarts = false
+    s.prunedVerificationActive = false
+    s.scopedVerificationActive = true
+    s.startVerificationBFS(s.stateRoot, ByteString.empty)
+    s.singleSeedLaunches should have size 1
+    withClue("as the last run left them: ") {
+      s.prunedVerificationActive shouldBe false
+      s.scopedVerificationActive shouldBe true
+    }
+  }
+
+  it should "set no flag for a scoped walk the lease refused" taggedAs UnitTest in {
+    val s = new StubHealVerificationState(None, StorageScheme.Hash, true) with HealVerification
+    s.walkStarts = false
+    s.scopedVerificationActive = false
+    s.startScopedVerification(Seq(HealingEntry(Seq(ByteString.empty), ByteString(Array.fill[Byte](32)(1)))))
+    s.multiSeedLaunches should have size 1
+    s.scopedVerificationActive shouldBe false
   }
