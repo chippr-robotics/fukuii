@@ -700,3 +700,88 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
   it should "put a served node's request back, with its parent edges, when a storage read fails while its children are looked up, under the Path scheme (forge W1)" taggedAs UnitTest in {
     readFailsDuringDiscovery(StorageScheme.Path)
   }
+
+  // ---- spec 022 review hunter W1-r2, forge W1 (Path aliases), forge F2 (no retry cap) ------------------------------
+
+  /** Two accounts with one storage trie (`twinStorageTrie`): S waits at two positions, each under its held account
+    * leaf, and one fetch of S is in flight. S arrives, and a storage read fails while the children of the alias at
+    * `failAt` are looked up. Every alias whose read failed is put back with its parent's edge, and S must be fetched
+    * once more: the fetch that came back is spent, and a put-back alias can only join a fetch that exists.
+    */
+  private def aliasReadFails(failAt: Seq[String]): Unit =
+    val source = new RecordingDataSource
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(source)))
+    val m = h.module
+    val p = peer("p1")
+    val trie = HealRequestFixtures.twinStorageTrie(1)
+    def task(label: String): HealingEntry = HealingEntry(trie(label).pathset, trie(label).hash)
+    def request(label: String): HealRequest = m.healRequestFor(task(label))
+    h.respond(1, p, Seq(task("root")), Seq(trie.root.encoded))
+    h.respond(
+      2,
+      p,
+      Seq(dispatched(m, trie("acct0").hash), dispatched(m, trie("acct1").hash)),
+      Seq(trie("acct0").encoded, trie("acct1").encoded)
+    )
+    // S is requested at both positions and fetched once.
+    m.healRequests.waitingOn(trie("s0").hash).map(_.key) shouldBe Seq(request("s0").key, request("s1").key)
+    val sFetch = dispatched(m, trie("s0").hash)
+    m.pendingTasks shouldBe empty
+    failAt.foreach(alias => m.failingReads += trie(s"${alias}A").pathset)
+
+    h.respond(3, p, Seq(sFetch), Seq(trie("s0").encoded))
+
+    withClue("S is fetched again, once: ")(m.pendingTasks.toSeq.count(_.hash == trie("s0").hash) shouldBe 1)
+    failAt.foreach { alias =>
+      val acct = if alias == "s0" then "acct0" else "acct1"
+      withClue(s"$alias is waiting again, with its account's edge: ") {
+        m.healRequests.parentsOf(request(alias).key) shouldBe Seq(HeldNodeSet.idOf(request(acct)))
+      }
+    }
+    // S is served again; then its leaves, once each for both positions: the whole trie commits, both accounts too.
+    h.respond(4, p, Seq(dispatched(m, trie("s0").hash)), Seq(trie("s0").encoded))
+    h.respond(
+      5,
+      p,
+      Seq(dispatched(m, trie("s0A").hash), dispatched(m, trie("s0B").hash)),
+      Seq(trie("s0A").encoded, trie("s0B").encoded)
+    )
+    withClue("nothing waits on a child any more: ")(m.heldNodes.isEmpty shouldBe true)
+    Seq("acct0", "acct1").foreach { acct =>
+      withClue(s"$acct written: ")(source.batchesPutting(AccountNs, accountKey(trie(acct).nibbles)) should not be empty)
+    }
+
+  it should "fetch a node again when a read fails for one of its Path aliases, so the account waiting there commits (hunter W1-r2, forge W1)" taggedAs UnitTest in {
+    aliasReadFails(Seq("s0"))
+  }
+
+  it should "fetch a node again, once, when a read fails for every one of its Path aliases (hunter W1-r2, forge W1)" taggedAs UnitTest in {
+    aliasReadFails(Seq("s0", "s1"))
+  }
+
+  it should "stop fetching a node whose children's read keeps failing after three tries, and never count a put-back node as healed (forge F2, hunter N1)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Hash)
+    val m = h.module
+    val p = peer("p1")
+    val c = leaf(5)("s022/review/unreadable-child")
+    val b = branchOf(0 -> hashOf(c))
+    val parent = branchOf(0 -> hashOf(b))
+    val parentTask = HealingEntry(Seq(emptyPath), hashOf(parent))
+    h.respond(1, p, Seq(parentTask), Seq(bytes(parent)))
+    val parentId = HeldNodeSet.idOf(m.healRequestFor(parentTask))
+    m.totalNodesHealed shouldBe 1
+    m.mptStorage.failReads = 100 // every read of B's child fails (a corrupt stored child, say)
+
+    // The cap (TrieNodeHealingCoordinator's three consecutive read failures per node): B is fetched again after the
+    // first two failures, and given up on at the third.
+    (1 to 3).foreach { attempt =>
+      withClue(s"before attempt $attempt, B is queued: ")(m.pendingTasks.toSeq.map(_.hash) shouldBe Seq(hashOf(b)))
+      h.respond(1 + attempt, p, Seq(dispatched(m, hashOf(b))), Seq(bytes(b)))
+    }
+
+    withClue("B is not fetched a fourth time: ")(m.pendingTasks shouldBe empty)
+    val bRequest = m.healRequestFor(HealingEntry(Seq(compact(0)), hashOf(b)))
+    withClue("nor waiting: ")(m.healRequests.contains(bRequest.key) shouldBe false)
+    withClue("P stays held, for the orphan guard: ")(m.heldNodes.get(parentId).map(_.outstanding) shouldBe Some(1))
+    withClue("no put-back node counts as healed, so stagnation can fire: ")(m.totalNodesHealed shouldBe 1)
+  }
