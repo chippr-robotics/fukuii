@@ -860,9 +860,10 @@ private class SNAPSyncControllerImpl(
       if snapSyncConfig.storageScheme == StorageScheme.Path then
         // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
         // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
-        // only sends StateHealingComplete after its path-aware verification walk found zero missing nodes against
-        // the current root (or it healed nothing and was idle), so that signal IS the clean walk: take the same
-        // exit as TrieWalkComplete(0) rather than running a second, blind, full-trie walk.
+        // only sends StateHealingComplete once a path-aware walk of its current root in that incarnation found zero
+        // missing nodes (verificationPassComplete: a clean verification walk, or the clean full rebuild walk), so
+        // that signal IS the clean walk: take the same exit as TrieWalkComplete(0) rather than running a second,
+        // blind, full-trie walk.
         if currentPhase == StateHealing then completeHealingWalkClean()
         else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
       else if trieWalkInProgress then

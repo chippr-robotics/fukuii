@@ -1343,33 +1343,28 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // spec 022 T026: the gate's flushRawNodesSync() above wrote every buffered node, or the gate stays shut.
         if verificationPassComplete then
           log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
-          // FR-002: mark the snapshot complete ONLY on the verified-complete path — a verification BFS
-          // actually walked the trie and found zero missing nodes (verificationPassComplete == true).
-          // FR-004: never mark without that walk. The unwalked `totalNodesHealed == 0` arm this rule used to exclude is
-          // gone, so every completion here marks; the guard below states the marker's own precondition. Setting the
-          // marker here is the single completion chokepoint for the verification path — VerificationBFSComplete
-          // routes through HealingCheckCompletion, so this is equivalent to (and cleaner than) writing the marker
-          // inside VerificationBFSComplete.
-          if verificationPassComplete then
-            stateIngest.healingFrontier.foreach { store =>
-              // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — the
-              // verification BFS just confirmed zero missing descendants (verificationPassComplete && isComplete) and
-              // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
-              // is it crash-safe to record the root subtree-complete (ordinary WAL-ordered `update`). This is a real
-              // closure, NOT a `visitedLru`-faked queue-drain: the gate required isComplete (no pending/active
-              // frontier) AND a clean BFS pass. Recorded only under `prunedEnabled` (Hash scheme) so a Path-scheme
-              // node never writes a hash-keyed record. The terminal `markComplete()` (fsync) follows last (D3 order).
-              if prunedEnabled then
-                store.markSubtreeComplete(stateRoot) // spec 005 root record — gated on prunedEnabled
-              // spec 002 snapshot marker — gated on frontier persistence (default off). MUST stay separate from the
-              // spec-005 root record above: with persistence off, the marker is never written, so the spec-003 scoped
-              // path (which keys off `store.isComplete`) stays dark and behavior is byte-for-byte pre-spec-005 (FR-005).
-              if frontierPersistenceEnabled then
-                store.markComplete()
-                log.info(
-                  "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
-                )
-            }
+          // FR-002/FR-004: the snapshot is marked complete only here, on a clean walk of the current root in this
+          // incarnation (verificationPassComplete: a verification walk, or the clean full rebuild walk, that found
+          // nothing missing). This is the single completion chokepoint: VerificationBFSComplete and the rebuild's early
+          // completion both route through HealingCheckCompletion, so the marker is written here, not in either.
+          stateIngest.healingFrontier.foreach { store =>
+            // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — a clean
+            // walk just confirmed zero missing descendants (verificationPassComplete && isComplete) and
+            // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
+            // is it crash-safe to record the root subtree-complete (ordinary WAL-ordered `update`). This is a real
+            // closure, NOT a `visitedLru`-faked queue-drain: the gate required isComplete (no pending/active
+            // frontier) AND a clean BFS pass. Recorded only under `prunedEnabled` (Hash scheme) so a Path-scheme
+            // node never writes a hash-keyed record. The terminal `markComplete()` (fsync) follows last (D3 order).
+            if prunedEnabled then store.markSubtreeComplete(stateRoot) // spec 005 root record — gated on prunedEnabled
+            // spec 002 snapshot marker — gated on frontier persistence (default off). MUST stay separate from the
+            // spec-005 root record above: with persistence off, the marker is never written, so the spec-003 scoped
+            // path (which keys off `store.isComplete`) stays dark and behavior is byte-for-byte pre-spec-005 (FR-005).
+            if frontierPersistenceEnabled then
+              store.markComplete()
+              log.info(
+                "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
+              )
+          }
           snapSyncController ! SNAPSyncController.StateHealingComplete
           clearHealedPathsSet() // spec 003 C1: round closed — next round starts with a fresh scope
         else

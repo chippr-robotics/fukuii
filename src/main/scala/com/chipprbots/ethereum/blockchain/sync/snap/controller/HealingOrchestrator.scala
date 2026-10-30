@@ -357,9 +357,12 @@ private[snap] trait HealingOrchestrator
     * not the spec 002 completeness marker, not the persisted frontier. So, as with the storage-task markers
     * (`recordStorageDone`), the pruned verification, the frontier mirror and its marker, and the scoped verification
     * are all off there, and a marker an earlier run left is cleared before the coordinator starts (its resume would
-    * trust it). Every completion and every restart then takes the coordinator's full verification walk (a restart
-    * rebuilds the frontier with a full walk), which reads the store and so finds whatever a crash lost with the cache.
-    * That walk is the completion guarantee for this mode; slice 5 must keep it (tasks.md T051, T052).
+    * trust it). Every coordinator completion then follows a clean full walk of the current root in that coordinator
+    * incarnation (a verification walk, or the clean rebuild walk), and every restart rebuilds the frontier with a full
+    * walk; both read the store and so find whatever a crash lost with the cache. That walk is the completion guarantee
+    * for this mode; slice 5 must keep it (tasks.md T051, T052). Not covered by it, as before: the Hash controller's own
+    * trie walk, whose TrieWalkComplete(0) completes healing without a coordinator walk, and the Hash force-complete
+    * (tasks.md T051, T052).
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
