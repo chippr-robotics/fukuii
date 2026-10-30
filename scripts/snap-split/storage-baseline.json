@@ -43,8 +43,7 @@
     "actors/ByteCodeCoordinator.scala": 3,
     "actors/account/ContractWorkCarry.scala": 3,
     "actors/healing/TrieNodeHealingEnv.scala": 3,
-    "controller/SnapPeerPool.scala": 3,
-    "actors/storage/StorageResponseProcessing.scala": 0
+    "controller/SnapPeerPool.scala": 3
   },
   "raw_imports": {
     "actors/StorageRangeCoordinator.scala": [
