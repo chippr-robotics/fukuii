@@ -442,6 +442,13 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
               s"its ${parents.size} parent(s) stay held until the orphan guard drops them",
             readFailure
           )
+          // Escalated once to the controller's stagnation path (as the pulse does, NB-11): afterwards nothing may be
+          // pending, so the pulse's own stagnation count never starts. Its answer (hold: resume dispatch, which runs the
+          // orphan guard; or a re-peg) resets the latch.
+          if !pivotRefreshRequested then
+            pivotRefreshRequested = true
+            pivotRefreshRequestedAt = System.currentTimeMillis()
+            snapSyncController ! SNAPSyncController.HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           childrenRead = false
         case Left(readFailure) =>
           // spec 022 review forge W1: the node is fine, its children are unknown. Put its request back, with the edges of
