@@ -326,6 +326,22 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.isStorageRecoveryDone() shouldBe false
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
+  // Hunter 4: lostTrack runs on other actors' threads, and the batch below clears the key. The marker's removal is the last
+  // write before that batch's read, so one landing there has to be seen.
+  it should "see a lostTrack that lands after the durability barrier and the marker's removal" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    val fired = new java.util.concurrent.atomic.AtomicBoolean(false)
+    afterSyncedBatch = keys =>
+      if keys.contains(AppStateStorage.Keys.SnapHealInvariant) && fired.compareAndSet(false, true) then
+        com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+          .lostTrack(appStateStorage, "a sweep hung, late", nopLog) shouldBe true
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    fired.get() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
   it should "overwrite a bytecodeRecoveryDone an earlier cycle left set: leaving it out would not withhold it" taggedAs UnitTest in new Fixture:
     appStateStorage.bytecodeRecoveryDone().commit()
     val snap = start(marked = false)

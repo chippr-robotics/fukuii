@@ -291,16 +291,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // and a set that cannot be read claims nothing.
           val progress = stateIngest.snapProgress
           val appState = stateIngest.appState
-          // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
-          // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where
-          // unfinished accounts were never recorded, so an empty excluded set does not show them complete (forge W1). It
-          // costs no second scan: the one pass looks at both.
-          val (accountsExcluded, codeExcluded, codeScanOwed) =
-            try (progress.hasExcludedAccounts, progress.hasExcludedCode, appState.getSnapCodeScanOwed())
+          val (accountsExcluded, codeExcluded) =
+            try (progress.hasExcludedAccounts, progress.hasExcludedCode)
             catch
               case scala.util.control.NonFatal(e) =>
                 ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
-                (true, true, None)
+                (true, true)
           // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
           // in the node cache, not in the WAL; flush them to the data source BEFORE the flags, so the flags' synced
           // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
@@ -314,6 +310,20 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           then
             ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean full walk of this root: marker removed")
             stateIngest.appState.clearSnapHealInvariant().commitSync()
+          // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
+          // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where
+          // unfinished accounts were never recorded, so an empty excluded set does not show them complete (forge W1). It
+          // costs no second scan: the one pass looks at both.
+          //
+          // Read here, just before the batch that clears it, because `lostTrack` runs on other actors' threads and one
+          // landing between this read and that batch is cleared unseen. That leaves a few instructions. It does not close
+          // it: the key has no compare-and-clear. A key that cannot be read counts as owed.
+          val codeScanOwed =
+            try appState.getSnapCodeScanOwed()
+            catch
+              case scala.util.control.NonFatal(e) =>
+                ctx.log.error("[HEAL-INVARIANT] Could not read whether a code scan is owed: taking it as owed", e)
+                Some("the key could not be read")
           val bytecodeComplete =
             SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
               !codeExcluded && codeScanOwed.isEmpty
