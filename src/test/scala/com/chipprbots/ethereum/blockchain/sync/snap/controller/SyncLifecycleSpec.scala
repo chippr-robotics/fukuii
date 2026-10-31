@@ -272,6 +272,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent = true
     m.bytecodesEstimatedTotal = 500L
     m.healingValidatedRoot = Some(root)
+    m.healingCleanWalkRoot.set(root.value)
     m.coordinatorGeneration = 4L
     m.validationGeneration = 6L
     m.validationInProgress = true
@@ -360,6 +361,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent shouldBe false
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
+    withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
     m.coordinatorGeneration shouldBe 5L
     m.validationGeneration shouldBe 7L
     m.validationInProgress shouldBe false
@@ -418,6 +420,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent shouldBe false
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
+    withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
     m.appStateStorage.isSnapSyncAccountsComplete() shouldBe false
     m.appStateStorage.isSnapSyncStorageComplete() shouldBe false
     m.appStateStorage.isSnapSyncBytecodeComplete() shouldBe false

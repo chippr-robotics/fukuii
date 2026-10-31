@@ -32,10 +32,12 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -83,7 +85,12 @@ import com.chipprbots.ethereum.utils.NodeCacheConfig
   *     by, and the kill lands right after the awaited hashes are recorded, or right after the chains waiting on them
   *     are written;
   *   - `excluded-delete` (Path only): as `excluded-written`, then a coordinator starts over the entry, and the kill
-  *     lands right after it has deleted every account-trie position on the entry's key (T034).
+  *     lands right after it has deleted every account-trie position on the entry's key (T034);
+  *   - `resume` (no kill point: `KP:none`, once healing has completed): the restart after a kill, over what it left
+  *     (spec 022 SC-006, vault V4 (h));
+  *   - `invariant-cleared`, `invariant-import`, `invariant-stamped` (spec 022 T039, T040): no healing. The kill lands
+  *     between the one-time clear of CF `g` and its key; after a marker was stamped and a checkpoint import began on
+  *     it; after that import's datadir was stamped by a clean walk.
   *
   * Commit writes are counted where healing makes them: Path, a write batch to the path-trie column families; Hash, a
   * `storeRawNodes` call (under in-memory pruning it reaches the node cache, which here holds two entries, so most of a
@@ -109,6 +116,11 @@ object HealCrashChild:
     val gate = new KillGate(point)
 
     val rocks = RocksDbDataSource(rocksConfig(dbPath), Namespaces.nsSeq)
+    if point.startsWith("invariant-") then
+      invariantStep(rocks, point)
+      gate.signal(point)
+      System.in.read()
+      return
     val dataSource = new HookedDataSource(rocks, gate)
     val nodeStorage = new NodeStorage(dataSource)
     val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
@@ -245,6 +257,27 @@ object HealCrashChild:
     }
     gate.signal("none")
     System.in.read()
+
+  /** What a frontier left by an older binary holds: an entry, a subtree record and the sentinel. */
+  val frontierEntry: ByteString = ByteString(Array.fill[Byte](32)(0xab.toByte))
+
+  private def invariantStep(rocks: RocksDbDataSource, point: String): Unit =
+    val appState = new AppStateStorage(rocks)
+    val root = ByteString(Array.fill[Byte](32)(7))
+    point match
+      case "invariant-cleared" =>
+        val frontier = new HealingFrontierStorage(rocks)
+        frontier.update(Nil, Seq(frontierEntry -> Seq(root))).commit()
+        frontier.markSubtreeComplete(frontierEntry)
+        frontier.markComplete()
+        frontier.clearAll() // as `HealInvariant.retireFrontierOnce` does, and the kill lands before its key
+      case "invariant-import" =>
+        appState.stampSnapHealInvariant().commitSync()
+        appState.beginCheckpointImport(root, 1L).commitSync()
+      case "invariant-stamped" =>
+        appState.beginCheckpointImport(root, 1L).commitSync()
+        appState.stampSnapHealInvariant().commitSync()
+      case other => throw new IllegalArgumentException(s"unknown invariant step $other")
 
   private def rocksConfig(dbPath: String): RocksDbConfig =
     new RocksDbConfig:

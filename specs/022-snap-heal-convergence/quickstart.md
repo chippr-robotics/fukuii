@@ -50,7 +50,7 @@ A full Mordor SNAP sync against a local snap server. It isolates fukuii's own co
 **Prerequisites:**
 - the Sepolia node is stopped;
 - no other fukuii unit is running;
-- a fresh datadir. Do not reuse `/home/dontpanic/mordor-data`, which is the frozen base for the spec 020 differential.
+- a fresh datadir, created by this jar (one an older jar made pays a walk). Do not reuse `/home/dontpanic/mordor-data`, which is the frozen base for the spec 020 differential.
 
 1. Start `fukuii-mordor` with SNAP from scratch.
 2. **Watch for:**
@@ -67,17 +67,17 @@ A full Mordor SNAP sync against a local snap server. It isolates fukuii's own co
 **Prerequisites:**
 - the Mordor node is stopped;
 - Lighthouse checkpoint sync is running;
-- a fresh datadir. **Do not touch** `/home/dontpanic/sepolia-data`.
+- a fresh datadir, created by this jar (one an older jar made pays a walk). **Do not touch** `/home/dontpanic/sepolia-data`.
 
 1. Start `fukuii-sepolia` against the fresh datadir.
-2. Watch as for Mordor. **Expect:** from storage-done to handoff in under 12 h (SC-001), and no full-trie walk before handoff (SC-005).
+2. Watch as for Mordor. **Expect:** from storage-done to handoff in under 12 h (SC-001), and no full-trie walk before handoff (SC-005). Record the pending-task gauge, RSS, the RocksDB gauges, the live set and the fiber count (T063).
 3. Follow the head through the Engine API for 24 h. Expect the same as Mordor step 4.
 
 ## 4. Secondary: repair of the kept datadir (User Story 4)
 
 1. Start the fixed build on `/home/dontpanic/sepolia-data`, which has no invariant marker.
-2. **Expect:** the node logs that the datadir is pre-invariant, runs one audit and repair pass, heals the holes it finds, stamps the marker, then hands off.
-3. Record the holes found and the pass duration. This tests repair, not convergence.
+2. **Expect:** the walk finds holes, healing fills them, and the node hands off. A stamp is not expected: a walk here outlasts a re-peg, so with holes in the datadir it abandons to a lazy hand-off (tasks.md T064). At about 17 h per walk that takes about 3 days, so against SC-001's 12 h the run will look hung; with the current root absent an abandon re-pegs and keeps healing until the root is fetched.
+3. Record the holes found and filled, the walks run, whether it abandoned, and the duration. This tests repair, not convergence.
 
 ## 5. Sign-off
 

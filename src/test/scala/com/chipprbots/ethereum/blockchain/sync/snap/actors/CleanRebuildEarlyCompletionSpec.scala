@@ -122,13 +122,6 @@ class CleanRebuildEarlyCompletionSpec
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controllerProbe.ref,
-      healingFrontierStorage = Some(store),
-      // spec 005 default-off gating: markComplete() (FrontierRebuildComplete + HealingCheckCompletion) is gated on
-      // frontierPersistenceEnabled. This fixture's docstring states "Persistence is ON" and T-1/T-4 assert the CF `g`
-      // completeness marker (store.isComplete) is set on the clean early-completion path; that marker is written only
-      // when persistence is enabled. Must be explicit here — the param defaults to false. Test-only: production gating
-      // is left untouched (FR-005 byte-parity stays default-off). Dropped by the #1373 Classic→Typed fixture rewrite.
-      frontierPersistenceEnabled = true,
       healingWriterEcOverride = Some(ec)
     )
     try body(coordinator, root, store, controllerProbe)
@@ -151,11 +144,9 @@ class CleanRebuildEarlyCompletionSpec
       // the fix nothing reaches the controller until the ~6-min dead-pulse watchdog forces walk #2.
       val storage = new TestMptStorage()
       val root = storedLeafRoot(storage, seed = 1)
-      withRebuildFixture(storage, root) { (coordinator, r, store, controller) =>
+      withRebuildFixture(storage, root) { (coordinator, r, _, controller) =>
         coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(r)
         controller.expectMessage(5.seconds, SNAPSyncController.StateHealingComplete)
-        // The same clean rebuild set the CF `g` completeness marker (already true today; asserted for parity).
-        eventually(timeout(5.seconds), interval(100.millis))(store.isComplete shouldBe true)
       }
     }
 
@@ -205,27 +196,6 @@ class CleanRebuildEarlyCompletionSpec
       ) // flips stateRoot A → B before the stale A-walk lands
       // The stale FrontierRebuildComplete(walkRoot = A) must NOT complete against the new root B.
       controller.expectNoMessage(5.seconds)
-    }
-  }
-
-  // ---- T-4 (FR-002/SC-003): byte-parity of the completion marker via the single chokepoint ----
-
-  it should "set the SAME completeness marker on the early path as the two-walk path (T-4, FR-002)" taggedAs UnitTest in {
-    // The early path routes through the SAME HealingCheckCompletion → markComplete → StateHealingComplete
-    // chokepoint as the two-walk verification path and the walk does no state writes, so the persisted CF `g`
-    // marker bytes are identical. We assert the early-path completion declares completion AND sets the marker
-    // (true) — the same terminal outcome the two-walk path reaches (mirrors ScopedVerificationParitySpec).
-    val storage = new TestMptStorage()
-    val root = storedLeafRoot(storage, seed = 1)
-    withRebuildFixture(storage, root) { (coordinator, r, store, controller) =>
-      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(r)
-      controller.expectMessage(5.seconds, SNAPSyncController.StateHealingComplete)
-      val earlyPathMarker =
-        eventually(timeout(5.seconds), interval(100.millis))(store.isComplete shouldBe true)
-        store.isComplete
-      // The two-walk path's marker is the same CF `g` 0x01 sentinel written via the same markComplete(); the
-      // early path neither changes what the marker asserts nor its bytes. Parity is `true == true`.
-      earlyPathMarker shouldBe true
     }
   }
 

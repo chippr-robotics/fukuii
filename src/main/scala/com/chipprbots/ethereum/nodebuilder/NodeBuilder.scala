@@ -1285,7 +1285,8 @@ trait GenesisDataLoaderBuilder:
       blockchainReader,
       blockchainWriter,
       storagesInstance.storages.evmCodeStorage,
-      storagesInstance.storages.stateStorage
+      storagesInstance.storages.stateStorage,
+      () => storagesInstance.storages.appStateStorage.markDatadirCreatedUnderInvariant().commitSync()
     )
 
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on

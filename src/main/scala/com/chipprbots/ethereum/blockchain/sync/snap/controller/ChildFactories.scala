@@ -172,7 +172,8 @@ trait ChildFactories:
       heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       excludedAccounts: Boolean = false,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -205,7 +206,8 @@ trait ChildFactories:
       heldMemoryLimit = heldMemoryLimit,
       excludedAccounts = excludedAccounts,
       currentRoot = currentRoot,
-      excludedPassRoot = excludedPassRoot
+      excludedPassRoot = excludedPassRoot,
+      cleanWalkRoot = cleanWalkRoot
     )
 
   def byteCodeCoordinator(

@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
-import java.util.concurrent.atomic.AtomicLong
-
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.util.ByteString
@@ -23,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -35,10 +34,17 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.mpt.BranchNode
+import com.chipprbots.ethereum.mpt.ExtensionNode
+import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.NullNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
@@ -70,7 +76,6 @@ private class StubFrontierRebuildState(
     val mptStorage: CountingMptStorage,
     val bfsQueue: BfsQueueStorage,
     val storageScheme: StorageScheme,
-    val prunedEnabled: Boolean,
     frontierStore: Option[HealingFrontierStorage],
     val FrontierBatchSize: Int
 ) extends FrontierRebuildBfsState
@@ -82,7 +87,7 @@ private class StubFrontierRebuildState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var currentWalk: Option[Long] = None
-  val prunedSubtreeCount: AtomicLong = new AtomicLong(0L)
+  val walkSkips: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
   val healingWriterEc: ExecutionContext = ExecutionContext.parasitic
   val healingReaderEc: ExecutionContext = ExecutionContext.parasitic
   val HealingVisitedCap: Int = 1000
@@ -93,7 +98,6 @@ private class StubFrontierRebuildState(
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[FrontierRebuildBfsSpec])
   val asyncLog: org.slf4j.Logger = log
-  val prunedHealVerification: Boolean = true
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] =
     throw new UnsupportedOperationException("FrontierRebuildBfs read networkPeerManager")
   def requestTracker: SNAPRequestTracker = throw new UnsupportedOperationException(
@@ -103,7 +107,6 @@ private class StubFrontierRebuildState(
     throw new UnsupportedOperationException("FrontierRebuildBfs read snapSyncController")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
-  val scopedHealMaxPaths: Int = 200_000
   val healedCodeCheck: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
@@ -160,13 +163,12 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
   private def stub(
       fixture: HealingTrieFixtures.SharedAncestorFixture,
       scheme: StorageScheme = StorageScheme.Hash,
-      pruned: Boolean = false,
       store: Option[HealingFrontierStorage] = None,
       queue: BfsQueueStorage = new InMemoryBfsQueueStorage(),
       batchSize: Int = 1000
   ): StubFrontierRebuildState & FrontierRebuildBfs =
     val trie = new CountingMptStorage(fixture.storage)
-    new StubFrontierRebuildState(trie, queue, scheme, pruned, store, batchSize) with FrontierRebuildBfs
+    new StubFrontierRebuildState(trie, queue, scheme, store, batchSize) with FrontierRebuildBfs
 
   private def emitted(s: StubFrontierRebuildState): Seq[Seq[HealingEntry]] =
     s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries, _) => entries }
@@ -226,24 +228,165 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.verificationBFSRunning shouldBe true // left for the core's FrontierWalkFailed arm
   }
 
-  it should "prune a recorded-complete subtree only when pruning is enabled" taggedAs UnitTest in {
+  // spec 022 D6, T043: this is what makes the walk a repair pass. An older binary's records say nothing it can trust.
+  it should "descend a present subtree an older binary recorded as complete, and find the hole in it" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
     val store = new HealingFrontierStorage(EphemDataSource())
     store.markSubtreeComplete(fixture.sharedAncestorHash)
+    store.markSubtreeComplete(fixture.rootHash)
 
-    val on = stub(fixture, pruned = true, store = Some(store))
-    var onCompleted: Option[Long] = None
-    on.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => onCompleted = Some(n))
-    onCompleted shouldBe Some(0L)
-    emitted(on) shouldBe empty
-    on.prunedSubtreeCount.get() shouldBe 1L // de-duped first, so the shared subtree is counted once
+    val s = stub(fixture, store = Some(store))
+    var completed: Option[Long] = None
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+    completed shouldBe Some(1L)
+    emitted(s).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
+  }
 
-    val off = stub(fixture, pruned = false, store = Some(store))
-    var offCompleted: Option[Long] = None
-    off.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => offCompleted = Some(n))
-    offCompleted shouldBe Some(1L)
-    emitted(off).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
-    off.prunedSubtreeCount.get() shouldBe 0L
+  // ---- the storage descent, on Hash (spec 022 review forge F3): no other test pins it now the oracle's are gone --------
+
+  private def packed(nibbles: Array[Byte]): ByteString =
+    ByteString(nibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray)
+
+  private def accountLeaf(key: Array[Byte], storageRoot: Option[ByteString]): LeafNode =
+    val account = storageRoot.fold(Account(nonce = UInt256(1L)))(r =>
+      Account(nonce = UInt256(1L), storageRoot = com.chipprbots.ethereum.domain.TrieRoot(r))
+    )
+    LeafNode(ByteString(key), ByteString(Account.accountSerializer.toBytes(account)))
+
+  private def branchOver(slots: (Int, Array[Byte])*): BranchNode =
+    val children = Array.fill[MptNode](16)(NullNode)
+    slots.foreach { case (i, hash) => children(i) = HashNode(hash) }
+    BranchNode(children, None)
+
+  private def rooted(storage: TestMptStorage, root: MptNode): HealingTrieFixtures.SharedAncestorFixture =
+    HealingTrieFixtures.SharedAncestorFixture(storage, ByteString(root.hash), ByteString.empty, ByteString.empty)
+
+  private def absentNode(seed: String): Array[Byte] = kec256(ByteString(seed).toArray)
+
+  it should "follow an account leaf over a present storage root over a branch to the node absent below, under Hash" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val absent = absentNode("s022/forge-f3/absent")
+    val inner = branchOver(5 -> absent)
+    val storageRoot = branchOver(3 -> inner.hash)
+    val accountNibbles = Array.fill[Byte](64)(7)
+    val leaf = accountLeaf(accountNibbles, Some(ByteString(storageRoot.hash)))
+    Seq[MptNode](inner, storageRoot, leaf).foreach(storage.putNode)
+    val fixture = rooted(storage, leaf)
+    val s = stub(fixture)
+    var completed: Option[Long] = None
+
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+
+    completed shouldBe Some(1L)
+    emitted(s) shouldBe Seq(Seq(HealingEntry(Seq(packed(accountNibbles), compact(3, 5)), ByteString(absent))))
+    s.walkSkips.get() shouldBe 0L
+  }
+
+  it should "emit a storage root two accounts share once, under Hash" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val sharedRoot = absentNode("s022/forge-f3/shared-root") // absent: a second visit would emit it a second time
+    val first = accountLeaf(Array.fill[Byte](63)(1), Some(ByteString(sharedRoot)))
+    val second = accountLeaf(Array.fill[Byte](63)(2), Some(ByteString(sharedRoot)))
+    val root = branchOver(0 -> first.hash, 1 -> second.hash)
+    Seq[MptNode](first, second, root).foreach(storage.putNode)
+    val fixture = rooted(storage, root)
+    val s = stub(fixture)
+    var completed: Option[Long] = None
+
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+
+    completed shouldBe Some(1L)
+    emitted(s).flatten.map(_.hash) shouldBe Seq(ByteString(sharedRoot))
+    withClue("a root already visited is not a skip: ")(s.walkSkips.get() shouldBe 0L)
+  }
+
+  it should "not descend an account's empty storage root, which no store holds, under Hash" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val leaf = accountLeaf(Array.fill[Byte](64)(9), None)
+    storage.putNode(leaf)
+    val fixture = rooted(storage, leaf)
+    val s = stub(fixture)
+    var completed: Option[Long] = None
+
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+
+    completed shouldBe Some(0L)
+    emitted(s) shouldBe empty
+    s.walkSkips.get() shouldBe 0L
+  }
+
+  // ---- a walk that skipped something proves nothing (spec 022 review beacon 2) ------------------------------------------
+
+  /** The walk's end, and the WARN lines it logged, over a trie rooted at `root`. */
+  private def walkOf(storage: TestMptStorage, root: ByteString): (StubFrontierRebuildState, Option[Long], Seq[String]) =
+    val s = stub(HealingTrieFixtures.SharedAncestorFixture(storage, root, ByteString.empty, ByteString.empty))
+    val logger = s.log.asInstanceOf[ch.qos.logback.classic.Logger]
+    val appender = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
+    appender.start()
+    val levelBefore = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.WARN)
+    logger.addAppender(appender)
+    var completed: Option[Long] = None
+    try s.startFrontierBFS(root, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(levelBefore)
+    val warnings = appender.list.toArray.toSeq.collect {
+      case e: ch.qos.logback.classic.spi.ILoggingEvent if e.getLevel == ch.qos.logback.classic.Level.WARN =>
+        e.getFormattedMessage
+    }
+    (s, completed, warnings)
+
+  it should "count an account leaf it cannot read as a skip, and say so" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val unreadable = LeafNode(ByteString(Array.fill[Byte](64)(4)), ByteString(Array[Byte](0x01, 0x02, 0x03)))
+    storage.putNode(unreadable)
+    val (s, completed, warnings) = walkOf(storage, ByteString(unreadable.hash))
+    completed shouldBe Some(0L)
+    s.walkSkips.get() shouldBe 1L
+    warnings.count(_.contains("could not follow 1")) shouldBe 1
+  }
+
+  it should "count a storage root it has no account path for as a skip" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val shortPath = accountLeaf(Array.fill[Byte](10)(4), Some(ByteString(branchOver(1 -> absentNode("x")).hash)))
+    storage.putNode(shortPath)
+    val (s, _, warnings) = walkOf(storage, ByteString(shortPath.hash))
+    s.walkSkips.get() shouldBe 1L
+    warnings.count(_.contains("could not follow 1")) shouldBe 1
+  }
+
+  it should "count a node it cannot traverse as a skip, and go on" taggedAs UnitTest in {
+    val rootHash = ByteString(absentNode("s022/beacon-2/untraversable"))
+    val storage = new TestMptStorage:
+      // An extension with no shared key: following its child throws inside the walk's per-node catch.
+      override def get(key: Array[Byte]): MptNode =
+        if ByteString(key) == rootHash then ExtensionNode(null, HashNode(absentNode("s022/beacon-2/below")))
+        else super.get(key)
+    val (s, completed, warnings) = walkOf(storage, rootHash)
+    completed shouldBe Some(0L)
+    s.walkSkips.get() shouldBe 1L
+    warnings.count(_.contains("could not follow 1")) shouldBe 1
+  }
+
+  it should "start each walk's count from nothing" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val unreadable = LeafNode(ByteString(Array.fill[Byte](64)(4)), ByteString(Array[Byte](0x01, 0x02, 0x03)))
+    val readable = accountLeaf(Array.fill[Byte](64)(5), None)
+    Seq[MptNode](unreadable, readable).foreach(storage.putNode)
+    val s = stub(
+      HealingTrieFixtures.SharedAncestorFixture(
+        storage,
+        ByteString(unreadable.hash),
+        ByteString.empty,
+        ByteString.empty
+      )
+    )
+    s.startFrontierBFS(ByteString(unreadable.hash), emptyPath, isStor = false, (_: Long, _: Long) => ())
+    s.walkSkips.get() shouldBe 1L
+    s.verificationBFSRunning = false
+    s.startFrontierBFS(ByteString(readable.hash), emptyPath, isStor = false, (_: Long, _: Long) => ())
+    s.walkSkips.get() shouldBe 0L
   }
 
   it should "share one visited set across several seeds" taggedAs UnitTest in {

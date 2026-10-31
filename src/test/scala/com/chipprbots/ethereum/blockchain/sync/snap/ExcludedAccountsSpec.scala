@@ -260,7 +260,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       val rig = storageRig(StorageScheme.Hash, reason, stale)
       rig.serve(rig.trie)
       rig.peerAvailable()
-      rig.start() // the walk of the resume stays queued on the writer executor
+      rig.start() // the rebuild walk stays queued on the writer executor
       rig.settle()
       withClue("the seed goes out without any walk having run: ")(rig.requested should contain(rig.trie("s0").pathset))
       withClue("no completion while the entry stands: ")(
@@ -293,12 +293,12 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.progress.hasExcluded shouldBe false
     }
 
-    it should s"resolve an entry recorded before a re-peg against the new root, and not stall, on $scheme (T030)" taggedAs UnitTest in {
+    it should s"resolve an entry recorded before a re-peg against the new root, and not stall past the next re-peg, on $scheme (T030)" taggedAs UnitTest in {
       val oldTrie = PathHealPresenceFixtures.storageTrieOld()
       val newTrie = PathHealPresenceFixtures.storageTrieNew()
       val rig = new Rig(scheme, oldTrie, absent = Set("sRoot", "sLeaf1"), excluded = Nil)
       rig.seed(Seq(newTrie.root)) // the new root's leaf is on disk too: it is the storage below it that is missing
-      rig.start()
+      rig.start() // the old root's walk is queued: the re-peg overtakes it
       rig.progress.recordExcluded(
         Seq(
           ExcludedAccount(
@@ -311,8 +311,25 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       rig.serve(newTrie) // a peer at the new root: the old storage root is not served any more
       rig.peerAvailable()
       rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash)
+      val reached =
+        if scheme == StorageScheme.Path then newTrie // the old walk's batch is dropped: its position is another root's
+        else
+          // The bound, on Hash (T051a, forge F1): the old walk's batch is queued, since most of what such a walk finds the
+          // new root needs too. What only the old root holds no peer at the new root serves, so it holds completion...
+          rig.awaitOnDisk(newTrie("sRoot")) // the new root's own work is done, so all that is left is the old root's
+          val stats = createTestProbe[HealingStatistics]()
+          rig.coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(stats.ref)
+          val left = stats.receiveMessage(30.seconds)
+          withClue("what only the old root holds is still owed: ")((left.pendingTasks + left.activeTasks) should be > 0)
+          withClue("and holds completion: ")(rig.seen() should not contain SNAPSyncController.StateHealingComplete)
+          // ... until the next re-peg clears it.
+          val next = PathHealPresenceFixtures.storageTrie("path-heal-presence/storage/slot1-next")
+          rig.seed(Seq(next.root))
+          rig.serve(next)
+          rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+          next
       rig.awaitComplete()
-      Seq("sRoot", "sLeaf0", "sLeaf1").foreach(l => withClue(s"$l on disk: ")(rig.onDisk(newTrie(l)) shouldBe true))
+      Seq("sRoot", "sLeaf0", "sLeaf1").foreach(l => withClue(s"$l on disk: ")(rig.onDisk(reached(l)) shouldBe true))
       rig.progress.hasExcluded shouldBe false
     }
 
@@ -521,9 +538,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing)),
       progressSource = source
     )
-    rig.start()
-    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
-    rig.settle()
+    rig.start() // the rebuild walk is queued, and so running
     withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
     val afterAdoption = source.pageReads
     afterAdoption should be > 0
@@ -541,9 +556,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       absent = Set.empty,
       Seq(ExcludedAccount(codeHash, ExcludedReason.CodeMissing))
     )
-    rig.start()
-    rig.ec.runNext() // the resume: the rebuild walk is queued, and so running
-    rig.settle()
+    rig.start() // the rebuild walk is queued, and so running
     withClue("the walk is queued: ")(rig.ec.pending shouldBe 1)
     (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach { _ =>
       rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick

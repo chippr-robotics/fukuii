@@ -38,7 +38,10 @@ class GenesisDataLoader(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage,
-    stateStorage: StateStorage
+    stateStorage: StateStorage,
+    // Called once the genesis has been stored on a datadir that held none: the one moment it is known nothing else is
+    // there (spec 022 D7, `HealInvariant.isEmpty`). Crash before it, and the datadir only counts as not empty: one walk.
+    onFirstStored: () => Unit = () => ()
 ) extends Logger:
 
   private val bloomLength = 512
@@ -126,6 +129,7 @@ class GenesisDataLoader(
           ChainWeight.totalDifficultyOnly(header.difficulty.value),
           saveAsBestBlock = true
         )
+        onFirstStored()
         Success(())
 
   private def getGenesisStateRoot(genesisData: GenesisData, initalRootHash: Array[Byte], storage: MptStorage)(implicit

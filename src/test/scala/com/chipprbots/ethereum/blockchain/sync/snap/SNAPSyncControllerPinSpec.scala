@@ -202,7 +202,7 @@ class SNAPSyncControllerPinSpec
     "spec 022 review (vault R1, V3): under in-memory pruning trust no persisted completeness: no frontier marker, no mirror, no scoped verification" taggedAs UnitTest in {
       // A completeness marker is written after flushes whose persist does nothing under in-memory pruning, so a restart
       // that resumed from it, or a scoped verification it enabled, could skip nodes lost with the cache. Configured on
-      // here, both must reach the coordinator off, and a marker an earlier run left must be gone before it starts.
+      // here, both must reach the coordinator off.
       def inMemoryWithStaleMarker(f: Fixture): com.chipprbots.ethereum.db.storage.HealingFrontierStorage =
         f.stateStorageOverride = Some(
           new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
@@ -231,7 +231,9 @@ class SNAPSyncControllerPinSpec
           spawn.prunedHealVerification shouldBe false
           spawn.frontierPersistenceEnabled shouldBe false
           spawn.scopedHealVerification shouldBe false
-          store.isComplete shouldBe false
+          // spec 022 T044: the spawn no longer clears it: nothing reads CF `g` now, and nothing writes to it. The
+          // one-time clear at node start takes it, and `HealInvariant` keeps the invariant marker off this mode.
+          store.isComplete shouldBe true
         }
       }
     }

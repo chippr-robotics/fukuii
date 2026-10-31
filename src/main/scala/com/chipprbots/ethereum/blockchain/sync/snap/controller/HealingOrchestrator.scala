@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -222,6 +223,7 @@ private[snap] trait HealingOrchestrator
         healingRoundCount = 0
         persistHealedAnchorSync()
         dropDormantExcluded()
+        stampInvariantAfterCleanWalk()
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -233,6 +235,7 @@ private[snap] trait HealingOrchestrator
         currentPhase = StateValidation
         validateState()
       else
+        healingCleanWalkRoot.set(null) // spec 022 T043: something is missing after all
         // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
         healingRoundCount += 1
         ctx.log.info(
@@ -252,6 +255,7 @@ private[snap] trait HealingOrchestrator
         // AppStateStorage now reflects the root that healing actually completed against.
         if pivotBlock.isDefined && stateRoot.isDefined then persistHealedAnchorSync()
         dropDormantExcluded()
+        stampInvariantAfterCleanWalk()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
         healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
@@ -261,6 +265,7 @@ private[snap] trait HealingOrchestrator
         currentPhase = StateValidation
         validateState()
       else
+        healingCleanWalkRoot.set(null) // spec 022 T043: something is missing after all
         healingRoundCount += 1
         ctx.log.info(
           s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
@@ -319,6 +324,31 @@ private[snap] trait HealingOrchestrator
       case scala.util.control.NonFatal(e) =>
         ctx.log.warn(s"[HEAL-EXCLUDED] Could not drop the dormant entries at a clean completion: ${e.getMessage}")
 
+  /** spec 022 T043, at each clean exit from healing: stamp the invariant marker, if what ends here was a repair pass.
+    *
+    * That pass is the coordinator's clean full walk, which `FrontierRebuildBfs` makes a full descent since no subtree
+    * record can stop it (the records went with CF `g`): every present child, and the storage trie of every account
+    * leaf. It is not the Hash controller's own trie walk, whose `TrieWalkComplete(0)` is what reaches this on Hash:
+    * that walk reads a present hash node and stops there, so it cannot vouch for what is below, and can complete
+    * healing with no coordinator walk of the root at all (the clean walk of an earlier root, then a re-peg). Hence the
+    * root check: no clean full walk of this root, no stamp, and the next SNAP run on this datadir repairs again. A
+    * write that fails costs the same and no more, so it does not stop the completion.
+    *
+    * Nor does the walk look at code. On a datadir written by older binaries, an account's code can be missing with
+    * nothing saying so: the marker's claim there covers the trie, and missing code is found as it always was, by the
+    * recovery scan or at import (data-model.md "Invariant marker").
+    */
+  private def stampInvariantAfterCleanWalk(): Unit =
+    if HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory) &&
+      stateRoot.exists(_.value == healingCleanWalkRoot.get())
+    then
+      try
+        stateIngest.appState.stampSnapHealInvariant().commitSync()
+        ctx.log.info("[HEAL-INVARIANT] Clean full walk of the completed root: marker stamped")
+      catch
+        case scala.util.control.NonFatal(e) =>
+          ctx.log.error("[HEAL-INVARIANT] Could not write the marker; a later SNAP run walks again", e)
+
   /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
     * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
     * `healingValidatedRoot`), driven by the coordinator's verified `StateHealingComplete` instead of a controller walk.
@@ -330,6 +360,7 @@ private[snap] trait HealingOrchestrator
     healingRoundCount = 0
     persistHealedAnchorSync()
     dropDormantExcluded()
+    stampInvariantAfterCleanWalk()
     healingValidatedRoot = stateRoot
     timers.cancel(RequestTrieNodeHealing)
     progressMonitor.startPhase(StateValidation)
@@ -378,15 +409,11 @@ private[snap] trait HealingOrchestrator
       }
   // end if !trieWalkInProgress && currentPhase == StateHealing
 
-  /** Layer 2: shared, lazily-built persisted-frontier handle for the healing coordinator. `None` (the default,
-    * `healing-frontier-persistence = false`) keeps Layer-1 behaviour — no CF writes, always full BFS on restart. Reuses
-    * the node's existing RocksDB DataSource (via `flatSlotStorage`); the CF auto-creates on open. Handed to the healing
-    * spawn as `stateIngest.healingFrontier` (spec 016 C-H1), by-name, so it is still built on the first spawn.
+  /** The handle `stateIngest.healingFrontier` hands out (spec 016 C-H1), by-name, so it is still built on the first
+    * spawn. Nothing reads or writes through it since CF `g` was retired (spec 022 D6); `SNAPSyncControllerPinSpec` pins
+    * when it exists, so it goes with a `# pins:` change, with the settings above.
     */
   private[snap] lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
-    // #4 (restored, spec-005): the pruned post-heal verification also needs the frontier store
-    // (prunedHealVerification default true) — without it the first verification reverts to a full
-    // ~90M-node trie walk. Dropped by #1384's stale base.
     if snapSyncConfig.healingFrontierPersistence || snapSyncConfig.prunedHealVerification then
       Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
     else None
@@ -403,31 +430,30 @@ private[snap] trait HealingOrchestrator
     * peers, and (re)starts the 1 s peer-availability timer. Each route keeps its own guard, logs and follow-up around
     * the call. The `pruned-heal-verification` setting is still not forwarded (#1502).
     *
-    * Under in-memory pruning (spec 022 review vault V3, R1) healed nodes reach the node cache, not disk: the cache
-    * writes them as it evicts them, one by one, least recently used first (parents before children after a top-down
-    * walk), and its persist is a no-op. "Present implies complete" and "flushed means durable" therefore do not hold on
-    * disk, and nothing persisted after such a flush may stand for completeness: not a spec 005 subtree-complete record,
-    * not the spec 002 completeness marker, not the persisted frontier. So, as with the storage-task markers
-    * (`recordStorageDone`), the pruned verification, the frontier mirror and its marker, and the scoped verification
-    * are all off there, and a marker an earlier run left is cleared before the coordinator starts (its resume would
-    * trust it). Every coordinator completion then follows a clean full walk of the current root in that coordinator
+    * Under in-memory pruning on the Hash scheme (spec 022 review vault V3, R1) healed nodes reach the node cache, not
+    * disk: the cache writes them as it evicts them, one by one, least recently used first (parents before children
+    * after a top-down walk), and its persist is a no-op. "Present implies complete" and "flushed means durable"
+    * therefore do not hold on disk, so the invariant marker cannot hold (`HealInvariant.canHold`): none is stamped or
+    * trusted there. Every coordinator completion then follows a clean full walk of the current root in that coordinator
     * incarnation (a verification walk, or the clean rebuild walk), and every restart rebuilds the frontier with a full
     * walk; both read the store and so find whatever a crash lost with the cache. That walk is the completion guarantee
     * for this mode; slice 5 must keep it (tasks.md T051, T052). Not covered by it, as before: the Hash controller's own
     * trie walk, whose TrieWalkComplete(0) completes healing without a coordinator walk, and the Hash force-complete
     * (tasks.md T051, T052).
+    *
+    * Four settings forwarded here no longer do anything: `scopedHealVerification`, `scopedHealMaxPaths`,
+    * `prunedHealVerification`, `frontierPersistenceEnabled` (CF `g` is retired, spec 022 D6). They stay in the
+    * factory's signature because `SNAPSyncControllerPinSpec` pins this call; they go with a `# pins:` change.
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
     healingCurrentRoot.set(root.value)
-    if trieNodesCachedInMemory then
+    healingCleanWalkRoot.set(null) // spec 022 T043: this coordinator has walked nothing yet
+    if !HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory) then
       ctx.log.warn(
         "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can leave " +
-          "a present node over an absent child. No persisted completeness is trusted: the pruned and scoped " +
-          "verifications and the frontier persistence are off, and the full verification walk decides completion."
+          "a present node over an absent child. The full verification walk decides completion."
       )
-      // vault R1: a completeness marker from an earlier run (or binary) would let the resume skip the full walk.
-      healingFrontierStorageOpt.foreach(_.clearComplete())
 
     trieNodeHealingCoordinator = Some(
       ctx.spawn(
@@ -463,7 +489,8 @@ private[snap] trait HealingOrchestrator
               prunedHealVerification = !trieNodesCachedInMemory,
               excludedAccounts = true,
               currentRoot = Some(healingCurrentRoot),
-              excludedPassRoot = Some(healingExcludedPassRoot)
+              excludedPassRoot = Some(healingExcludedPassRoot),
+              cleanWalkRoot = Some(healingCleanWalkRoot)
             )
           )
           .onFailure[Throwable](
@@ -652,6 +679,12 @@ private[snap] trait HealingOrchestrator
     */
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit =
     ctx.log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
+    // spec 022 T043 (review vault F2): validation walks every node, so no earlier clean walk stands, and a marker that says
+    // everything present is complete has just been contradicted. A clean full walk stamps again.
+    healingCleanWalkRoot.set(null)
+    if stateIngest.appState.isSnapHealInvariantPresent() then
+      ctx.log.warn("[HEAL-INVARIANT] Validation found nodes missing under a stamped datadir: marker removed")
+      stateIngest.appState.clearSnapHealInvariant().commitSync()
     currentPhase = StateHealing
     stateRoot.foreach { root =>
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))

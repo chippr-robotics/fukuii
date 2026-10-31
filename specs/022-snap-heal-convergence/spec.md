@@ -106,15 +106,15 @@ The node crashes or is killed (for example by the out-of-memory daemon) in the m
 
 ### User Story 4 - A node from before the fix can be repaired (Priority: P2)
 
-An operator has a datadir written by the old code, for example the kept Sepolia datadir with about 32.8 M healed nodes. That datadir contains holes nothing recorded. The operator can run one repair pass that finds and fills them, then hand off.
+An operator has a datadir written by the old code, for example the kept Sepolia datadir with about 32.8 M healed nodes. That datadir contains holes nothing recorded. On the fixed build a repair walk finds and fills them, as far as a walk can finish between re-pegs, and the node then hands off.
 
 **Why this priority**: Existing nodes are affected. This is a secondary test only: it exercises repair, not convergence, so it must never stand in for the fresh-sync acceptance tests.
 
-**Independent Test**: Resume the kept Sepolia datadir (`/home/dontpanic/sepolia-data`) on the fixed build. A single audit and repair pass finds the old holes, healing fills them, and the node hands off.
+**Independent Test**: Resume the kept Sepolia datadir (`/home/dontpanic/sepolia-data`) on the fixed build. The walk finds old holes, healing fills them, and the node hands off, by a lazy hand-off when the walk cannot finish between re-pegs. A stamp is not expected at this scale (tasks.md T064, T050a).
 
 **Acceptance Scenarios**:
 
-1. **Given** a datadir written by the old healing code, **When** the fixed build starts on it, **Then** it detects that the datadir predates the invariant and runs one repair pass before declaring completion.
+1. **Given** a datadir written by the old healing code, **When** the fixed build starts on it, **Then** it detects that the datadir predates the invariant and runs a repair walk before it hands off. Where a walk over holes outlasts a re-peg, that walk fills what it found and the node hands off lazily, unmarked (tasks.md T050a).
 
 ---
 
@@ -184,7 +184,7 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
 
 **Existing datadirs and compatibility**
 
-- **FR-015**: The node MUST record, in the datadir, that its state was healed under this invariant. On a datadir without that record, healing in progress or state not yet declared complete, the node MUST run one audit-and-repair pass before declaring completion. Under in-memory pruning the invariant does not hold on disk (healed nodes reach it only as the node cache evicts them), so the record MUST NOT be written or trusted there and the pass runs at every start.
+- **FR-015**: The node MUST record, in the datadir, that its state was healed under this invariant. On a datadir without that record, healing in progress or state not yet declared complete, the node MUST run one audit-and-repair pass before declaring completion. Where a walk over holes outlasts a re-peg, the pass fills what it found and the node hands off lazily and unmarked, declaring no completion (tasks.md T050a). Under in-memory pruning on the Hash scheme the invariant does not hold on disk (healed nodes reach it only as the node cache evicts them), so the record MUST NOT be written or trusted there and the pass runs at every start. (The Path scheme writes round the cache, so this does not apply to it: slice 4, V-N2 (4).)
 - **FR-016**: The persisted heal frontier MUST stay bounded on both schemes. Entries for nodes that have been persisted MUST be removed (today the Path scheme never removes them).
 
 **Observability**

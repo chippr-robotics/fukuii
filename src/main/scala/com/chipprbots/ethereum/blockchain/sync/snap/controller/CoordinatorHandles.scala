@@ -44,6 +44,12 @@ private[snap] trait CoordinatorHandles:
     */
   lazy val healingExcludedPassRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
+  /** spec 022 T043: the root of the healing coordinator's last clean full walk, set as it reports completion. What
+    * backs the invariant marker: the Hash controller's own trie walk stops at present hash nodes, so it cannot vouch
+    * for what is below them. Void (null) once a later look at the trie has found something missing.
+    */
+  lazy val healingCleanWalkRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)
 

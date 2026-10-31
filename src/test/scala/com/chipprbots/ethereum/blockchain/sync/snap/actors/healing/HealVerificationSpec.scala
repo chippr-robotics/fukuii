@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors.healing
 
-import java.util.concurrent.atomic.AtomicLong
-
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.util.ByteString
@@ -17,7 +15,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
-import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.VerificationBFSComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
@@ -46,8 +43,7 @@ import com.chipprbots.ethereum.testing.Tags.*
   */
 private class StubHealVerificationState(
     pathStore: Option[PathNodeStorage],
-    val storageScheme: StorageScheme,
-    val prunedEnabled: Boolean
+    val storageScheme: StorageScheme
 ) extends HealVerificationState
     with TrieNodeHealingEnv
     with FrontierRebuildApi
@@ -56,22 +52,14 @@ private class StubHealVerificationState(
 
   // HealVerificationState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
-  var healedPathsRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var verificationPassComplete: Boolean = true
   var trieWalkInProgress: Boolean = false
   var flushing: Boolean = false
-  var scopedVerificationActive: Boolean = true
-  var scopedVerificationSeedCount: Int = 0
-  var scopedVerificationStartMs: Long = 0L
-  var prunedVerificationActive: Boolean = true
-  var prunedVerificationStartMs: Long = 0L
-  val prunedSubtreeCount: AtomicLong = new AtomicLong(42L)
 
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[HealVerificationSpec])
   val asyncLog: org.slf4j.Logger = log
-  val prunedHealVerification: Boolean = prunedEnabled
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] =
     throw new UnsupportedOperationException("HealVerification read networkPeerManager")
   def requestTracker: SNAPRequestTracker = throw new UnsupportedOperationException(
@@ -81,12 +69,10 @@ private class StubHealVerificationState(
     throw new UnsupportedOperationException("HealVerification read snapSyncController")
   val batchSize: Int = 32
   val movingRootDeltaHeal: Boolean = false
-  val scopedHealMaxPaths: Int = 200_000
   val healedCodeCheck: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
   def mptStorage: MptStorage = notReached("mptStorage")
-  val frontierPersistenceEnabled: Boolean = false
   val decoupledHealServeRoot: Boolean = false
   val decoupledHealMaxAttemptsNoRefresh: Int = 3
   val frontierHighWater: Int = 100
@@ -164,10 +150,9 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
 
   private def stub(
       store: Option[PathNodeStorage],
-      scheme: StorageScheme = StorageScheme.Path,
-      pruned: Boolean = false
+      scheme: StorageScheme = StorageScheme.Path
   ): StubHealVerificationState & HealVerification =
-    new StubHealVerificationState(store, scheme, pruned) with HealVerification
+    new StubHealVerificationState(store, scheme) with HealVerification
 
   "HealVerification.readPathVerifiedRlp" should "return the account node stored at its own path when it hashes to the hash" taggedAs UnitTest in {
     val pns = new PathNodeStorage(EphemDataSource())
@@ -226,9 +211,6 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.singleSeedLaunches.toSeq shouldBe Seq((s.stateRoot, emptyPath, false))
     s.verificationBFSRunning shouldBe true
     s.verificationPassComplete shouldBe false
-    s.scopedVerificationActive shouldBe false
-    s.prunedVerificationActive shouldBe false
-    s.prunedSubtreeCount.get() shouldBe 0L
     s.selfInbox.hasMessages shouldBe false
 
     s.lastOnComplete.foreach(_(7L, 3L))
@@ -250,8 +232,6 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
         s.singleSeedLaunches shouldBe empty
         s.multiSeedLaunches shouldBe empty
         s.verificationPassComplete shouldBe false
-        s.scopedVerificationActive shouldBe false
-        s.prunedVerificationActive shouldBe false
         s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
       }
   }
@@ -269,98 +249,32 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
   }
 
-  "HealVerification's walk launchers" should "write the flush buffer before every verification walk, full or scoped, and start none while it cannot be written (forge F1)" taggedAs UnitTest in {
+  "HealVerification's walk launcher" should "write the flush buffer before a verification walk, and start none if it cannot (forge F1)" taggedAs UnitTest in {
     val s = stub(None, StorageScheme.Hash)
-    val seeds = Seq(HealingEntry(Seq(emptyPath), ByteString(Array.fill[Byte](32)(5))))
-    s.healedPathsRoot = s.stateRoot
 
     s.bufferWritten = false
     s.startVerificationBFS(s.stateRoot, emptyPath)
-    s.startScopedVerification(seeds)
-    s.walkFlushes shouldBe 2
+    s.walkFlushes shouldBe 1
     s.singleSeedLaunches shouldBe empty
-    s.multiSeedLaunches shouldBe empty
     s.verificationBFSRunning shouldBe false
-    s.scopedVerificationActive shouldBe true // untouched: no scoped run was started
-    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion, HealingCheckCompletion)
+    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
 
     s.bufferWritten = true
-    s.startScopedVerification(seeds)
-    s.walkFlushes shouldBe 3
-    s.multiSeedLaunches.toSeq shouldBe Seq(Seq((seeds.head.hash, seeds.head.pathset, false)))
+    s.startVerificationBFS(s.stateRoot, emptyPath)
+    s.walkFlushes shouldBe 2
+    s.singleSeedLaunches.toSeq shouldBe Seq((s.stateRoot, emptyPath, false))
     s.verificationBFSRunning shouldBe true
   }
 
-  "HealVerification.startVerificationBFS" should "engage the pruned walk only when pruning is enabled" taggedAs UnitTest in {
+  "HealVerification.startVerificationBFS" should "walk the given root and report the walk's end against it" taggedAs UnitTest in {
     val root = ByteString(Array.fill[Byte](32)(3))
     val rootPath = compact(1)
-    for pruned <- Seq(true, false) do
-      val s = stub(None, StorageScheme.Hash, pruned)
-
-      s.startVerificationBFS(root, rootPath)
-
-      withClue(s"pruned=$pruned") {
-        s.singleSeedLaunches.toSeq shouldBe Seq((root, rootPath, false))
-        s.prunedVerificationActive shouldBe pruned
-        s.prunedSubtreeCount.get() shouldBe 0L
-        s.scopedVerificationActive shouldBe false
-        s.verificationBFSRunning shouldBe true
-        s.lastOnComplete.foreach(_(7L, 0L))
-        s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(root, 0L, 7L))
-      }
-  }
-
-  "HealVerification.startScopedVerification" should "refuse healed paths captured against another root (beacon contract)" taggedAs UnitTest in {
     val s = stub(None, StorageScheme.Hash)
-    s.healedPathsRoot = ByteString(Array.fill[Byte](32)(9))
-    an[IllegalArgumentException] should be thrownBy
-      s.startScopedVerification(Seq(HealingEntry(Seq(compact(2)), ByteString(Array.fill[Byte](32)(1)))))
-    s.multiSeedLaunches shouldBe empty
-  }
 
-  it should "seed the walk from the healed entries and complete against its launch root" taggedAs UnitTest in {
-    val accountHash = ByteString(Array.fill[Byte](32)(5))
-    val accountEntry = HealingEntry(Seq(compact(2)), ByteString(Array.fill[Byte](32)(1)))
-    val storageEntry = HealingEntry(Seq(accountHash, emptyPath), ByteString(Array.fill[Byte](32)(2)))
-    val s = stub(None, StorageScheme.Hash)
-    val launchRoot = s.stateRoot
+    s.startVerificationBFS(root, rootPath)
 
-    s.startScopedVerification(Seq(accountEntry, storageEntry))
-
-    s.multiSeedLaunches.toSeq shouldBe Seq(
-      Seq(
-        (accountEntry.hash, accountEntry.pathset, false),
-        (storageEntry.hash, storageEntry.pathset, true)
-      )
-    )
-    s.scopedVerificationActive shouldBe true
-    s.scopedVerificationSeedCount shouldBe 2
+    s.singleSeedLaunches.toSeq shouldBe Seq((root, rootPath, false))
     s.verificationBFSRunning shouldBe true
-
-    s.stateRoot = ByteString(Array.fill[Byte](32)(8))
-    s.lastOnComplete.foreach(_(7L, 1L))
-    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(launchRoot, 1L, 7L))
-  }
-
-  // spec 022 T038a: a walk the lease refused never ran.
-  it should "set no flag, gauge or scope for a verification walk the lease refused" taggedAs UnitTest in {
-    val s = new StubHealVerificationState(None, StorageScheme.Hash, true) with HealVerification
-    s.walkStarts = false
-    s.prunedVerificationActive = false
-    s.scopedVerificationActive = true
-    s.startVerificationBFS(s.stateRoot, ByteString.empty)
-    s.singleSeedLaunches should have size 1
-    withClue("as the last run left them: ") {
-      s.prunedVerificationActive shouldBe false
-      s.scopedVerificationActive shouldBe true
-    }
-  }
-
-  it should "set no flag for a scoped walk the lease refused" taggedAs UnitTest in {
-    val s = new StubHealVerificationState(None, StorageScheme.Hash, true) with HealVerification
-    s.walkStarts = false
-    s.scopedVerificationActive = false
-    s.startScopedVerification(Seq(HealingEntry(Seq(ByteString.empty), ByteString(Array.fill[Byte](32)(1)))))
-    s.multiSeedLaunches should have size 1
-    s.scopedVerificationActive shouldBe false
+    s.lastOnComplete.foreach(_(7L, 0L))
+    s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(root, 0L, 7L))
   }

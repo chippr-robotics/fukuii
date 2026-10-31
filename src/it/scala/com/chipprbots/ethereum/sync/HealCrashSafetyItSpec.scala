@@ -20,11 +20,14 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealCrashChild
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.FastSyncNodeStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
@@ -69,8 +72,7 @@ import com.chipprbots.ethereum.testing.Tags.*
   * Under in-memory pruning (Hash) the invariant is NOT claimed (spec.md, after FR-004; vault V3): the node cache, two
   * entries here, writes what it evicts one node at a time, least recently used first, so a kill can leave a present
   * node over an absent child. Those runs check that the kill point is reached and that eviction put nodes on disk, and
-  * report the audit's result without asserting it; the pruned verification is off under that mode, and the full
-  * verification walk decides completion.
+  * report the audit's result without asserting it; the full verification walk decides completion under that mode.
   */
 class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
 
@@ -103,8 +105,11 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
     yield (scheme, fixture, "basic", point)
 
   for (scheme, fixture, pruning, point) <- cells ++ sliceThreeCells do
+    // vault V4 (2): held and chain-before have written nothing yet, so under in-memory pruning they show nothing evicted.
     val claim =
-      if pruning == "inmemory" then "evict nodes to disk (the invariant is not claimed under in-memory pruning)"
+      if pruning == "inmemory" && Set("held", "chain-before")(point) then
+        "reach the kill point (the invariant is not claimed under in-memory pruning)"
+      else if pruning == "inmemory" then "evict nodes to disk (the invariant is not claimed under in-memory pruning)"
       else "leave no present node with an absent child"
     "Healing under kill -9" should s"$claim: $scheme, $fixture trie, pruning $pruning, kill at $point" taggedAs (
       IntegrationTest,
@@ -151,7 +156,64 @@ class HealCrashSafetyItSpec extends AnyFlatSpec with Matchers:
           // `nodes > 0`, so the new root itself must be on disk.
           if point == "repeg-full" then audit.present should contain(newTrie.root.hash)
       }
+      // spec 022 SC-006 (vault V4 (h)): a restart over what the kill left heals to completion, with nothing to trust but
+      // what it walks: the audit stays clean and the whole trie is there. Not under in-memory pruning, whose node cache
+      // this second kill also loses, nor after a kill in the excluded set's own cells, which have a story of their own.
+      if pruning != "inmemory" && (basePoints :+ "repeg-delete").contains(point) then
+        val (restarted, restartOutput, restartExit) = runAndKill(dir, scheme, pruning, fixture, "resume")
+        withClue(s"restart output:\n${restartOutput.mkString("\n")}\n") {
+          restarted shouldBe "KP:none" // it completed
+          restartExit shouldBe 137
+        }
+        val healed = auditStore(dir, scheme, pruning)
+        withClue(
+          s"after the restart, ${healed.nodes} node(s) on disk; violations:\n${healed.violations.mkString("\n")}\n"
+        ) {
+          healed.violations shouldBe empty
+          oldTrie.nodes.foreach(n => withClue(s"${n.label}: ")(healed.present should contain(n.hash)))
+        }
     }
+
+  // spec 022 T039, T040: a real kill between the steps of the one-time clear, and around the marker's writes.
+  Seq("invariant-cleared", "invariant-import", "invariant-stamped").foreach { point =>
+    "The invariant marker's writes under kill -9" should s"leave what each step says: $point" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
+      val dir = Files.createTempDirectory(s"heal-crash-$point")
+      val (signal, output, exit) = runAndKill(dir, "hash", "basic", "account", point)
+      withClue(s"child output:\n${output.mkString("\n")}\n") {
+        signal shouldBe s"KP:$point"
+        exit shouldBe 137
+      }
+      val source = RocksDbDataSource(rocksConfig(dir.toAbsolutePath.toString), Namespaces.nsSeq)
+      try
+        val appState = new AppStateStorage(source)
+        point match
+          case "invariant-cleared" =>
+            val frontier = new HealingFrontierStorage(source)
+            withClue("the key was never written, so the next start clears again: ") {
+              appState.isHealingFrontierRetired() shouldBe false
+              HealInvariant.retireFrontierOnce(appState, frontier) shouldBe true
+            }
+            frontier.loadAll() shouldBe empty
+            frontier.isComplete shouldBe false
+            frontier.isSubtreeComplete(HealCrashChild.frontierEntry) shouldBe false
+            appState.isHealingFrontierRetired() shouldBe true
+          case "invariant-import" =>
+            withClue("an import on a marked datadir: the key is there and the marker is not: ") {
+              appState.hasSnapHealInvariant() shouldBe false
+              appState.getCheckpointImportInProgress() shouldBe defined
+            }
+          case _ =>
+            withClue("the clean walk's stamp: the marker is there and the key is not: ") {
+              appState.hasSnapHealInvariant() shouldBe true
+              appState.getCheckpointImportInProgress() shouldBe None
+            }
+      finally source.close()
+    }
+  }
 
   // ---- the child ------------------------------------------------------------------------------------------------------
 

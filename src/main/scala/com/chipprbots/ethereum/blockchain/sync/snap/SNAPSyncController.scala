@@ -49,6 +49,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateValidationSt
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycle
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncLifecycleState
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.SyncingApi
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -508,6 +509,13 @@ private class SNAPSyncControllerImpl(
     */
   def start(): Behavior[Command] =
     checkStorageSchemeMismatch()
+    logHealInvariant(
+      HealInvariant.atSnapStart(
+        stateIngest.appState,
+        stateIngest.pathNodes,
+        HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory)
+      )
+    )
     ctx.log.info("SNAP Sync Controller initialized")
     ctx.log.info(
       s"SNAPSyncConfig: accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
@@ -520,6 +528,23 @@ private class SNAPSyncControllerImpl(
     timers.startTimerWithFixedDelay(PollHandshakedPeersKey, PollHandshakedPeers, 5.seconds)
     ctx.self ! PollHandshakedPeers // immediate first poll
     idle()
+
+  private def logHealInvariant(found: HealInvariant.AtSnapStart): Unit =
+    found match
+      case HealInvariant.AtSnapStart.Stands =>
+        ctx.log.info("[HEAL-INVARIANT] Marker found: everything present was written under present-implies-complete")
+      case HealInvariant.AtSnapStart.StampedEmpty =>
+        ctx.log.info("[HEAL-INVARIANT] Empty datadir: marker stamped")
+      case HealInvariant.AtSnapStart.PreInvariant(reason) =>
+        ctx.log.warn(
+          s"[HEAL-INVARIANT] Pre-invariant datadir ($reason): this run's clean verification walk is its repair pass, " +
+            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked"
+        )
+      case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
+        ctx.log.warn(
+          "[HEAL-INVARIANT] pruning.mode = inmemory on the Hash scheme: no marker can hold here, and the verification " +
+            s"walk stays at every start and completion${if clearedOne then " (a marker found here was removed)" else ""}"
+        )
 
   /** OQ-3: ask NetworkPeerManagerActor for the current handshaked peers; the reply (`HandshakedPeers`) is bridged back
     * into the Command ADT via a Typed message adapter.

@@ -331,7 +331,8 @@ final class RecordingChildFactories(
       heldMemoryLimit: Long,
       excludedAccounts: Boolean,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
     lastHealingCurrentRoot.set(currentRoot)

@@ -84,17 +84,53 @@ private[snap] class StubHealingOrchestratorState(
 
   // Records whether each write was synced (`updateSync`), and the keys it wrote (spec 022 T027).
   val syncedWrites: mutable.ArrayBuffer[(Boolean, Seq[ByteString])] = mutable.ArrayBuffer.empty
+  // spec 022 T040: what was written to CF `g`, by any route.
+  val frontierWrites: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  // The keys removed by a synced write (spec 022 review vault F2, F3).
+  val syncedRemovals: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
+  // spec 022 T043: a synced write of this key fails (the disk is full, say).
+  var failSyncedWritesOf: Option[String] = None
   private val dataSource = new EphemDataSource(Map.empty):
     private def keys(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Seq[ByteString] =
       updates.flatMap {
         case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, _, up) => up.map(u => ByteString(u._1))
         case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, _, up) => up.map(u => ByteString(u._1.toArray))
       }
+    private def recordFrontier(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      updates.foreach {
+        case u: com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+            if u.namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace =>
+          frontierWrites += "update"
+        case u: com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+            if u.namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace =>
+          frontierWrites += "update"
+        case _ => ()
+      }
+    override def deleteRange(
+        namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte]
+    ): Unit =
+      if namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace then
+        frontierWrites += "deleteRange"
+      super.deleteRange(namespace, fromKey, toKeyExclusive)
     override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
       syncedWrites += ((false, keys(updates)))
+      recordFrontier(updates)
       super.update(updates)
     override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      failSyncedWritesOf.foreach { key =>
+        if keys(updates).contains(ByteString(key.getBytes("UTF-8"))) then
+          throw new RuntimeException(s"cannot write $key")
+      }
       syncedWrites += ((true, keys(updates)))
+      syncedRemovals ++= updates.flatMap {
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, removed, _) =>
+          removed.map(ByteString(_))
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, _) =>
+          removed.map(k => ByteString(k.toArray))
+      }
+      recordFrontier(updates)
       super.update(updates)
 
   // HealingOrchestratorState
@@ -109,8 +145,8 @@ private[snap] class StubHealingOrchestratorState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
-  def ec: ExecutionContext = notUsed("ec")
-  def trieNodesCachedInMemory: Boolean = false
+  def ec: ExecutionContext = ExecutionContext.parasitic
+  var trieNodesCachedInMemory: Boolean = false
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None

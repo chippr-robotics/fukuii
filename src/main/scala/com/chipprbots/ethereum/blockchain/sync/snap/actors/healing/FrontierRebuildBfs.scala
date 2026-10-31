@@ -23,28 +23,26 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkCancelled
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 
 /** The coordinator state `FrontierRebuildBfs` reads and writes (spec 016 C-H2, research.md R14b). The core's behaviour
   * arms and the code C-H3…C-H5 will move touch them too, or rule (d) keeps them in the core, so the Impl keeps them as
   * fields. `verificationBFSRunning` and `currentWalk` are the `var`s the module writes (the walk launcher sets them on
   * the actor thread when a walk starts; the core's completion and failure arms clear the flag, and take a walk's end
   * only when it carries `currentWalk`, the token of the last walk this incarnation launched, spec 022 review hunter W1,
-  * beacon W1-r4); `stateRoot`, the walk root, is read by the multi-seed launcher on the actor thread to tag the walk's
-  * batches; `prunedSubtreeCount` is the `AtomicLong` the walk's sub-range threads bump and the verification entry and
-  * completion read. The rest are immutable vals rule (d) keeps in the core: `bfsQueue` (the walk's level queue,
-  * `stateIngest.bfsQueue` or an in-memory fallback, built once with the coordinator), the two dispatchers,
-  * `prunedEnabled`, the emission batch size and the walk's caps.
+  * beacon W1-r4); `walkSkips` is the `AtomicLong` the walk's threads bump for what they could not follow, reset as a
+  * walk starts and read at the completion gate (spec 022 review beacon 2); `stateRoot`, the walk root, is read by the
+  * multi-seed launcher on the actor thread to tag the walk's batches. The rest are immutable vals rule (d) keeps in the
+  * core: `bfsQueue` (the walk's level queue, `stateIngest.bfsQueue` or an in-memory fallback, built once with the
+  * coordinator), the two dispatchers, the emission batch size and the walk's caps.
   */
 private[actors] trait FrontierRebuildBfsState:
   def stateRoot: ByteString
   var verificationBFSRunning: Boolean
   var currentWalk: Option[Long]
-  def prunedSubtreeCount: AtomicLong
+  def walkSkips: AtomicLong
   def bfsQueue: BfsQueueStorage
   def healingWriterEc: ExecutionContext
   def healingReaderEc: ExecutionContext
-  def prunedEnabled: Boolean
   def FrontierBatchSize: Int
   def HealingVisitedCap: Int
   def HealingTraversalParallelism: Int
@@ -117,8 +115,8 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // earliest-INSERTED entry is evicted (NOT an LRU — recent access does not protect an entry)
     // instead of refusing new entries. Refusing (the previous ConcurrentHashMap gate)
     // silently TRUNCATED the traversal on tries larger than the cap — children past the cap were
-    // never enqueued, the queue drained early, and the walk reported "Complete" (and set the
-    // Layer-2 completeness marker) having covered only `cap` of the trie. Eviction trades that
+    // never enqueued, the queue drained early, and the walk reported "Complete" having covered only
+    // `cap` of the trie. Eviction trades that
     // correctness hole for bounded re-walks of shared subtries (de-duplicated downstream by
     // the live heal requests). Access is synchronized: worker threads only touch it via markIfNew, and
     // per-check lock cost is negligible against the 50K-node multiGet I/O per chunk.
@@ -139,22 +137,9 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     val visitedCount = new java.util.concurrent.atomic.AtomicLong(0L)
     val frontierCount = new java.util.concurrent.atomic.AtomicLong(0L)
 
-    // --- spec 005 (Pruned descend-and-stop oracle, C2/T006/T014) ---
-    // The store is consulted ONLY when `prunedEnabled` (config on AND Hash scheme AND store present). When pruning is
-    // disabled, `prunedStore` is None and the oracle below is inert — the walk descends EVERY present child exactly as
-    // today (byte-identical full walk). The oracle's contract (FR-001/FR-004, never-false-prune): a present child X is
-    // pruned (treated as a verified leaf, NOT enqueued, so its whole subtree is skipped) IFF `prunedEnabled` AND X has
-    // a durable subtree-complete record. A present-but-not-recorded child and any missing child are ALWAYS descended /
-    // emitted — pruning narrows the walk only where completeness is durably proven, never where it is merely assumed.
-    // Returns true when the child was pruned (caller must NOT enqueue it). Increments the pruned-subtree counter on a
-    // hit. `markIfNew` has already de-duplicated the child, so each pruned subtree is counted once per walk.
-    val prunedStore: Option[HealingFrontierStorage] = if prunedEnabled then stateIngest.healingFrontier else None
-    def pruneIfSubtreeComplete(childHash: ByteString): Boolean =
-      prunedStore.exists { store =>
-        val recorded = store.isSubtreeComplete(childHash)
-        if recorded then prunedSubtreeCount.incrementAndGet()
-        recorded
-      }
+    // spec 022 T043: this walk descends every present child and the storage trie of every account leaf, with nothing to
+    // stop it: the spec 005 subtree records went with CF `g` (D6). So a clean end is the repair pass the invariant marker
+    // records, unless it could not follow something (`walkSkips`, review beacon 2). It does not look at code.
 
     // --- spec 002 US2 observability (observation-only, FR-006/FR-007/FR-008) ---
     // Per-level coarse-phase timers (nanos) accumulated across chunks/sub-ranges, and re-walk inflation
@@ -231,16 +216,13 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
                             // Observation-only (FR-008/FR-023): count this child reference before the de-dup gate.
                             childRefsSeen.incrementAndGet()
                             if markIfNew(branchChildVisitKey(childHash, entry, nibbles, i)) then
-                              // spec 005 C2/T006: prune a present, recorded-complete child — do NOT enqueue it, so its
-                              // whole subtree is skipped (descend-and-stop). Else descend exactly as today.
-                              if !pruneIfSubtreeComplete(childHash) then
-                                distinctEnqueued.incrementAndGet()
-                                val childNibbles = nibbles :+ i.toByte
-                                val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                                val childPathset =
-                                  if entry.isStorage then Seq(pathset.head.toArray, childCompact.toArray)
-                                  else Seq(childCompact.toArray)
-                                nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
+                              distinctEnqueued.incrementAndGet()
+                              val childNibbles = nibbles :+ i.toByte
+                              val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                              val childPathset =
+                                if entry.isStorage then Seq(pathset.head.toArray, childCompact.toArray)
+                                else Seq(childCompact.toArray)
+                              nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
                           case _ =>
 
                     case ext: ExtensionNode =>
@@ -250,47 +232,46 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
                           // Observation-only (FR-008/FR-023): count this child reference before the de-dup gate.
                           childRefsSeen.incrementAndGet()
                           if markIfNew(extChildVisitKey(childHash, entry, nibbles, ext.sharedKey)) then
-                            // spec 005 C2/T006: prune a present, recorded-complete child (descend-and-stop); else descend.
-                            if !pruneIfSubtreeComplete(childHash) then
-                              distinctEnqueued.incrementAndGet()
-                              val childNibbles = nibbles ++ ext.sharedKey.toArray
-                              val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
-                              val childPathset =
-                                if entry.isStorage then Seq(pathset.head.toArray, childCompact.toArray)
-                                else Seq(childCompact.toArray)
-                              nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
+                            distinctEnqueued.incrementAndGet()
+                            val childNibbles = nibbles ++ ext.sharedKey.toArray
+                            val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                            val childPathset =
+                              if entry.isStorage then Seq(pathset.head.toArray, childCompact.toArray)
+                              else Seq(childCompact.toArray)
+                            nextBuf += ((hashChild.hashNode, childPathset, entry.isStorage))
                         case _ =>
 
                     case leaf: LeafNode if !entry.isStorage =>
-                      Account(leaf.value).foreach { account =>
+                      val decoded = Account(leaf.value)
+                      if decoded.isFailure then walkSkips.incrementAndGet() // its storage trie, if any, goes unseen
+                      decoded.foreach { account =>
                         // Observation-only (FR-008/FR-023): count the account-leaf storageRoot reference
                         // before the de-dup gate, when there is a non-empty storage root to follow.
                         if account.storageRoot != Account.EmptyStorageRootHash then childRefsSeen.incrementAndGet()
                         if account.storageRoot != Account.EmptyStorageRootHash &&
                           markIfNew(storageRootVisitKey(account.storageRoot.value, nibbles, leaf.key))
                         then
-                          // spec 005 C2/T006: prune a present, recorded-complete storage-trie root (descend-and-stop) —
-                          // do NOT enqueue the storage subtree. Else descend it exactly as today.
-                          if !pruneIfSubtreeComplete(account.storageRoot.value) then
-                            distinctEnqueued.incrementAndGet()
-                            val allNibbles = nibbles ++ leaf.key.toArray
-                            if allNibbles.length == 64 then
-                              val accountHashBytes =
-                                allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
-                              val accountHash = ByteString(accountHashBytes)
-                              val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                              nextBuf += (
-                                (
-                                  account.storageRoot.toArray,
-                                  Seq(accountHash.toArray, emptyStoragePath.toArray),
-                                  true
-                                )
+                          distinctEnqueued.incrementAndGet()
+                          val allNibbles = nibbles ++ leaf.key.toArray
+                          if allNibbles.length == 64 then
+                            val accountHashBytes =
+                              allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
+                            val accountHash = ByteString(accountHashBytes)
+                            val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                            nextBuf += (
+                              (
+                                account.storageRoot.toArray,
+                                Seq(accountHash.toArray, emptyStoragePath.toArray),
+                                true
                               )
+                            )
+                          else walkSkips.incrementAndGet() // a storage root with no account position to walk it from
                       }
 
                     case _ => // storage trie leaf, NullNode, inline HashNode
                 catch
                   case NonFatal(e) =>
+                    walkSkips.incrementAndGet()
                     asyncLog.debug(
                       s"[HEAL-BFS] Cannot traverse ${Hex.toHexString(entry.hash.take(4))}: ${e.getMessage} — skipping"
                     )
@@ -394,6 +375,12 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     asyncLog.info(
       s"[HEAL-BFS] Complete: ${visitedCount.get()} nodes across $levelIndex levels, $totalMissing missing nodes identified"
     )
+    val skips = walkSkips.get()
+    if skips > 0 then
+      asyncLog.warn(
+        s"[HEAL-BFS] This walk could not follow $skips node(s): what is below them went unseen, so it proves nothing for " +
+          "the invariant marker. Healing goes on as before."
+      )
     // spec 006 C1/D3/FR-004: return the count of missing nodes this walk emitted so the launcher
     // can pass it to onComplete (→ FrontierRebuildComplete.missingEmitted). The walk does NO state
     // writes; this is a pure read of the in-kernel AtomicLong.
@@ -425,8 +412,9 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
       onComplete: (Long, Long) => Unit
   ): Boolean =
-    // The seeds are subtrees of the current walk root (spec 003 scoped verification): its batches carry `stateRoot`,
-    // read here on the actor thread, never from the walk's own thread (spec 022 review W1).
+    // The seeds are subtrees of the current walk root: its batches carry `stateRoot`, read here on the actor thread,
+    // never from the walk's own thread (spec 022 review W1). No production caller since the scoped verification went
+    // (spec 022 D6); T056 takes this overload with the walk's other spec 003 leavings.
     launchFrontierBFS(seeds, stateRoot, onComplete)
 
   /** The BFS column family's lease (see [[WalkLease]]): every coordinator incarnation of every controller over it sees
@@ -501,6 +489,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // VerificationBFSComplete / FrontierWalkFailed of this walk.
     verificationBFSRunning = true
     currentWalk = Some(walk)
+    walkSkips.set(0L)
     val running = Future {
       val missingEmitted =
         try
@@ -521,9 +510,8 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
             )
             None
           case scala.util.control.NonFatal(e) =>
-            // Never call onComplete() on failure — for the crash-recovery rebuild that would set the
-            // Layer-2 completeness marker on a walk that did NOT cover the full state. Reset flags
-            // through the actor instead so a fresh walk can be started.
+            // Never call onComplete() on failure — that would count as a clean pass of a walk that did NOT cover the
+            // full state. Reset flags through the actor instead so a fresh walk can be started.
             asyncLog.error("[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed", e)
             None
         finally walkLease.release(walk)
