@@ -223,7 +223,76 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     source.batches.toSeq shouldBe Seq((true, Seq(Op(AppNs, delete = true, key(Keys.SnapHealInvariant)))))
   }
 
-  it should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
+  // spec 022 T050a, beacon's crash class: a Path account phase over existing nodes takes the marker back.
+  private val invariantMarkerDelete = Op(AppNs, delete = true, key(Keys.SnapHealInvariant))
+
+  private def stamped(): (Recording, AppStateStorage, PathNodeStorage) =
+    val (source, appState) = created()
+    val pathNodes = new PathNodeStorage(source)
+    HealInvariant.atSnapStart(appState, Some(pathNodes), canHold = true) shouldBe AtSnapStart.StampedEmpty
+    source.forget()
+    (source, appState, pathNodes)
+
+  private def withdrawal(
+      appState: AppStateStorage,
+      pathNodes: PathNodeStorage,
+      scheme: StorageScheme = StorageScheme.Path,
+      resumedCursors: Boolean = false
+  ): Boolean = HealInvariant.withdrawForPathAccountPhase(appState, Some(pathNodes), scheme, resumedCursors)
+
+  "A Path account phase" should "withdraw the marker when it resumes cursors, in one synced write" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
+    appState.isSnapHealInvariantPresent() shouldBe false
+    source.batches.toSeq shouldBe Seq((true, Seq(invariantMarkerDelete)))
+  }
+
+  it should "withdraw the marker when it starts fresh over a Path family holding a node, whichever one" taggedAs UnitTest in {
+    Seq[PathNodeStorage => Unit](
+      _.writeAccountNode(Array[Byte](1), Array[Byte](1, 2)),
+      _.writeStorageNode(root, Array[Byte](1), Array[Byte](1, 2))
+    ).foreach { write =>
+      val (source, appState, pathNodes) = stamped()
+      write(pathNodes)
+      source.forget()
+      withdrawal(appState, pathNodes) shouldBe true
+      appState.isSnapHealInvariantPresent() shouldBe false
+      source.batches.toSeq shouldBe Seq((true, Seq(invariantMarkerDelete)))
+    }
+  }
+
+  it should "withdraw a marker of another version too: the removals go by the key being there" taggedAs UnitTest in {
+    val (_, appState) = markedThree()
+    val pathNodes = new PathNodeStorage(EphemDataSource())
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  it should "keep the marker on a first sync: fresh, over empty families" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    withdrawal(appState, pathNodes) shouldBe false
+    appState.hasSnapHealInvariant() shouldBe true
+    source.batches shouldBe empty
+  }
+
+  it should "write nothing when there is no marker to withdraw" taggedAs UnitTest in {
+    val (source, appState) = created()
+    val pathNodes = new PathNodeStorage(source)
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe false
+    source.batches shouldBe empty
+  }
+
+  "A Hash account phase" should "keep the marker, resuming or over any node: nodes are content-addressed" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    pathNodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    source.forget()
+    withdrawal(appState, pathNodes, StorageScheme.Hash, resumedCursors = true) shouldBe false
+    withdrawal(appState, pathNodes, StorageScheme.Hash) shouldBe false
+    appState.hasSnapHealInvariant() shouldBe true
+    source.batches shouldBe empty
+  }
+
+  "HealInvariant at a SNAP start" should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
     val (_, appState) = markedThree()
     HealInvariant.atSnapStart(appState, None, canHold = false) shouldBe AtSnapStart.CannotHold(clearedOne = true)
     appState.get(Keys.SnapHealInvariant) shouldBe None

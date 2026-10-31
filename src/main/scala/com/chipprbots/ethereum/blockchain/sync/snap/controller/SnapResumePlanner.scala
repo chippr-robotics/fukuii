@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -545,9 +546,10 @@ private[snap] trait SnapResumePlanner
   /** The account phase's resume selection (spec 016 lift before M11b, CQ-SNAP-016-33), extracted verbatim from
     * `launchAccountRangeWorkers`, which calls it at the same point: the versioned resume checkpoint, then the progress
     * store, then the legacy record (each subject to the `MaxPreservedPivotDistance` drift cap), the drift check on the
-    * preserved cursors, the `resumedStaleCursors` latch, the carried contract task files and the storage-done marker
-    * clear. It returns the cursors to resume from and the task files to carry; the account coordinator spawn and
-    * everything after it stay in `launchAccountRangeWorkers`. `currentPivot` is the caller's value, read once.
+    * preserved cursors, the `resumedStaleCursors` latch, the invariant marker's withdrawal on Path, the carried
+    * contract task files and the storage-done marker clear. It returns the cursors to resume from and the task files to
+    * carry; the account coordinator spawn and everything after it stay in `launchAccountRangeWorkers`. `currentPivot`
+    * is the caller's value, read once.
     */
   def selectAccountResume(
       rootHash: TrieRoot,
@@ -713,6 +715,19 @@ private[snap] trait SnapResumePlanner
     // Resuming cursors from a prior session ⇒ force the healing walk at completion (see flag decl).
     // Latch: once set, never cleared for the life of this process.
     if resumeProgress.nonEmpty then resumedStaleCursors = true
+
+    if HealInvariant.withdrawForPathAccountPhase(
+        stateIngest.appState,
+        stateIngest.pathNodes,
+        snapSyncConfig.storageScheme,
+        resumedCursors = resumeProgress.nonEmpty
+      )
+    then
+      ctx.log.warn(
+        "[HEAL-INVARIANT] Marker withdrawn: a Path account phase starts over existing nodes " +
+          s"(${if resumeProgress.nonEmpty then "resuming account cursors" else "the Path column families are not empty"}). " +
+          "This run's clean walk stamps it again."
+      )
 
     // Carry the contract task files only when they are provably consistent with the cursors; otherwise partial
     // ranges fall back to re-downloading from their start (never a partial resume without its contract work).

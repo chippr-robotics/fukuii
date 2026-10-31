@@ -69,6 +69,29 @@ object HealInvariant:
           removeFound() // another version's, if any: it does not stand, so it does not stay
           AtSnapStart.PreInvariant("no marker, and not an empty datadir")
 
+  /** Run where an account phase is about to start, before it writes (spec 022 T050a). True when a marker was removed.
+    *
+    * On the Path scheme a node's position holds one node, so a phase that starts over existing nodes can rewrite a
+    * region at another root. If a state then returns to an earlier value and a second interruption falls between
+    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child, and only a walk
+    * that reads every node would see it. That takes a resume of cursors, a fresh phase over nodes already there (the
+    * accounts-complete flag set with no task-file pointer persisted is one), or a supervisor restart of the account
+    * coordinator. A clean walk stamps the marker again, so the cost is one walk on such a run.
+    *
+    * Nothing here on Hash: nodes are content-addressed, so a node's bytes cannot change under it. Nor at a
+    * storage-phase restart: its chunks verify against the task's root.
+    */
+  def withdrawForPathAccountPhase(
+      appState: AppStateStorage,
+      pathNodes: Option[PathNodeStorage],
+      scheme: StorageScheme,
+      resumedCursors: Boolean
+  ): Boolean =
+    val withdraw = scheme == StorageScheme.Path && appState.isSnapHealInvariantPresent() &&
+      (resumedCursors || pathNodes.exists(!_.isEmpty))
+    if withdraw then appState.clearSnapHealInvariant().commitSync()
+    withdraw
+
   /** Whether this datadir is empty for the marker's purposes, conservatively: when in doubt it is not, since a stamp
     * over state an older binary wrote is the one thing that must not happen, and the doubt costs one walk.
     *

@@ -26,6 +26,7 @@ import com.google.common.hash.PrimitiveSink
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -1115,8 +1116,24 @@ object AccountRangeCoordinator:
       storageDone: Option[SnapStorageDoneStorage] = None,
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
+    // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
+        // A supervisor restart starts the phase over what the last incarnation wrote, from the launch's cursors and root,
+        // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a).
+        if incarnations.getAndIncrement() > 0 &&
+          HealInvariant.withdrawForPathAccountPhase(
+            stateIngest.appState,
+            stateIngest.pathNodes,
+            storageScheme,
+            resumedCursors = resumeProgress.nonEmpty
+          )
+        then
+          ctx.log.warn(
+            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted over existing Path nodes. " +
+              "This run's clean walk stamps it again."
+          )
         val impl = new AccountRangeCoordinatorImpl(
           ctx = ctx,
           timers = timers,

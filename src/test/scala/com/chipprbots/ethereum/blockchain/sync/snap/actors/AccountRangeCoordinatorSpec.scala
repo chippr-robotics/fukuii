@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
@@ -99,6 +100,59 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"AccountRangeCoordinator read StateIngest.$member")
+
+  private def pathSchemeIngest(app: AppStateStorage, nodes: PathNodeStorage): StateIngest =
+    new StateIngest:
+      def appState: AppStateStorage = app
+      def stateTries: StateStorage = notReached("stateTries")
+      def flatSlots: FlatSlotStorage = notReached("flatSlots")
+      def pathNodes: Option[PathNodeStorage] = Some(nodes)
+      def bytecode: EvmCodeStorage = notReached("bytecode")
+      def chainReader: BlockchainReader = notReached("chainReader")
+      def chainWriter: BlockchainWriter = notReached("chainWriter")
+      def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
+      def durability: StateIngest.Durability = StateIngest.Durability.Default
+      def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
+      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def storageDone: SnapStorageDoneStorage = notReached("storageDone")
+      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
+      def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
+
+  // spec 022 T050a, beacon's crash class: the restart the controller's resume planning never sees.
+  "A supervisor restart of a Path account coordinator" should "withdraw the marker over nodes the last incarnation wrote" taggedAs UnitTest in {
+    val source = EphemDataSource()
+    val app = new AppStateStorage(source)
+    val nodes = new PathNodeStorage(source)
+    app.stampSnapHealInvariant().commitSync()
+    val coordinator = testKit.spawn(
+      Behaviors
+        .supervise(
+          AccountRangeCoordinator(
+            stateRoot = kec256(ByteString("restart-root")),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            mptStorage = new TestMptStorage(),
+            concurrency = 1,
+            snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+            accountTrieEcOverride = Some(classicSystem.dispatcher),
+            storageScheme = StorageScheme.Path,
+            stateIngest = pathSchemeIngest(app, nodes)
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    // The first incarnation starts as the planner left things: it takes nothing back itself.
+    coordinator ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats]
+    app.hasSnapHealInvariant() shouldBe true
+
+    nodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    // A null reply target makes the arm throw, and a restart keeps the mailbox: the reply after it is the new incarnation's.
+    coordinator ! AccountRangeCoordinator.AccountGetProgress(null)
+    coordinator ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats]
+    app.isSnapHealInvariantPresent() shouldBe false
+  }
 
   /** Resolve the coordinator's single (concurrency = 1) worker child via actorSelection; returns a Typed ref so sends
     * are compile-time checked. Replaces the former `coordinator.underlyingActor.activeTasks(reqId)._2`, which is
