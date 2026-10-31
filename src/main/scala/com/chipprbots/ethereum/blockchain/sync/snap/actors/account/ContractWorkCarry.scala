@@ -192,6 +192,12 @@ private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with Contra
           codeHashBloom.put(account.codeHash.value)
           uniqueCodeHashesOut.write(account.codeHash.value.toArray.padTo(32, 0.toByte), 0, 32)
           uniqueCodeHashesCount += 1
+          if uniqueCodeHashesCount == com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CodeHashBloomExpectedEntries
+          then
+            log.warn(
+              s"$uniqueCodeHashesCount unique code hashes: past this the code-hash filter's false-positive rate climbs, " +
+                "and a false positive is a hash never fetched until import needs it. Resize it (spec 022 T050a, H3)."
+            )
           newCodeHashes += account.codeHash.value
 
       if hasCode || hasRoot then

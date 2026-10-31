@@ -318,8 +318,8 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   // spec 022 T050a, H3: a false positive loses a code hash for good, so the filter is sized for mainnet's unique hashes.
   // Read off the filter itself rather than its arguments: Guava's serial form is a strategy byte, a hash-function count
   // byte, an int word count, then the 64-bit words.
-  "The code-hash filter" should "stay near 1e-9 at the load it is built for, for about 103 MiB" taggedAs UnitTest in {
-    val designLoad = 20_000_000L
+  "The code-hash filter" should "stay near 1e-9 at the load it is built for, for about 206 MiB" taggedAs UnitTest in {
+    val designLoad = 40_000_000L
     var header = Array.empty[Byte]
     var size = 0L
     AccountRangeCoordinator
@@ -339,10 +339,10 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
     withClue(s"$bits bits, $hashes hashes: ") {
       falsePositiveRate(designLoad) should be <= 1.1e-9
-      bits / 8 should be <= 110_000_000L
+      bits / 8 should be <= 220_000_000L
     }
-    // What the filter costs at the load measured so far: Sepolia's, about 2.5M.
-    falsePositiveRate(2_500_000L) should be <= 1e-30
+    // What the filter costs at the largest load seen so far: Sepolia's, about 16M (research R-5d).
+    falsePositiveRate(16_000_000L) should be <= 1e-17
   }
 
   "ContractWorkCarry" should "replay the carried prefix, skipping marked tasks and, on the Hash scheme, present roots" taggedAs UnitTest in {

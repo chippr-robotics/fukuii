@@ -917,11 +917,12 @@ private[actors] class AccountRangeCoordinatorImpl(
 
 object AccountRangeCoordinator:
 
-  /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia holds about 2.5M, and ETH mainnet's
-    * count has not been measured here. The rate climbs steeply past this load: a sync of 10M unique hashes has about a
-    * 4e-11 chance of losing any, one of 20M about 1e-3, and one of 30M would lose a few.
+  /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia's logs show 13.5M through the old filter
+    * (3M entries at 1e-4), whose false-positive rate had reached about 0.53 by then, which implies about 16M. ETH
+    * mainnet's count has not been measured here. Expected hashes lost in a whole sync: about 1e-12 at 17M, 2e-6 at 30M,
+    * 2e-3 at 40M, and climbing steeply past that, so `identifyContractAccounts` warns at this load.
     */
-  private[actors] val CodeHashBloomExpectedEntries: Long = 20_000_000L
+  private[actors] val CodeHashBloomExpectedEntries: Long = 40_000_000L
   private[actors] val CodeHashBloomFpp: Double = 1e-9
 
   private object ByteStringFunnel extends Funnel[ByteString]:
@@ -929,7 +930,7 @@ object AccountRangeCoordinator:
       into.putBytes(from.toArray)
 
   /** The dedup filter of the unique code-hash file. A false positive loses a hash for good (see
-    * `ContractWorkCarry.identifyContractAccounts`), so it is sized for that, not for memory: about 103 MiB in one array
+    * `ContractWorkCarry.identifyContractAccounts`), so it is sized for that, not for memory: about 206 MiB in one array
     * for as long as the coordinator lives, and 30 hash functions per operation (spec 022 T050a, H3).
     */
   private[actors] def newCodeHashBloom(): BloomFilter[ByteString] =
@@ -1132,7 +1133,7 @@ object AccountRangeCoordinator:
         then
           ctx.log.warn(
             "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted over existing Path nodes. " +
-              "This run's clean walk stamps it again."
+              "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
           )
         val impl = new AccountRangeCoordinatorImpl(
           ctx = ctx,
