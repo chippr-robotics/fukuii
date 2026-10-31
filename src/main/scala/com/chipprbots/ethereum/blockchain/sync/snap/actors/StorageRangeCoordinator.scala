@@ -701,15 +701,15 @@ private[actors] class StorageRangeCoordinatorImpl(
   /** Start reading the task file back into the excluded set (`ExcludedTaskFile`), off this actor, on the one thread of
     * `storage-writer-dispatcher`: its end sends `TaskFileSwept`, and that brings back whatever was waiting. False when
     * it cannot run:
-    *   - no done markers, without which the file would name every account. Said at WARN. That is Hash under
-    *     `pruning.mode = inmemory`, where no marker can hold and the walk stays at every completion
-    *     (`HealInvariant.doneMarkersHold`), so nothing here trusts what this leaves out;
-    *   - no file, after a restart: the run has lost track (spec 022 T050a), and what the restart lost is left to the
-    *     walk. True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next
+    *   - no file, or no done markers (without which the file would name every account), after a restart: the run has
+    *     lost track (spec 022 T050a), and what the restart lost is left to the walk and the scan. No done markers is
+    *     Hash under `pruning.mode = inmemory` (`HealInvariant.doneMarkersHold`), where no invariant marker stands to
+    *     withdraw; what counts there is the debt, or a lazy hand-off writes `storageRecoveryDone` over what was lost
+    *     (forge). True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next
     *     check or force-complete comes back here;
-    *   - no file, on a coordinator that has not restarted: its own force-complete during the account phase (peers not
-    *     serving storage), which has no file yet. It holds all it was given, and has recorded it. Nothing is lost, so
-    *     the marker stays.
+    *   - either of those on a coordinator that has not restarted: its own force-complete during the account phase
+    *     (peers not serving storage), which has no file yet. It holds all it was given, and has recorded it. Nothing is
+    *     lost, so the marker stays. Said at WARN.
     */
   private def startTaskFileSweep(): Boolean =
     (storageDoneStorage, taskFile) match
@@ -721,7 +721,7 @@ private[actors] class StorageRangeCoordinatorImpl(
         )((t, outcome) => selfRef ! TaskFileSwept(t, outcome))
         timers.startSingleTimer(TaskFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
         true
-      case (done, _) if done.isEmpty || !restartedIncarnation =>
+      case (done, _) if !restartedIncarnation =>
         log.warn(
           s"[STORAGE-FORCE-COMPLETE] Not reading the task file back (${
               if done.isEmpty then "no done markers" else "no task file"
@@ -729,10 +729,12 @@ private[actors] class StorageRangeCoordinatorImpl(
         )
         taskFileSwept = true
         false
-      case _ =>
+      case (done, _) =>
         val recorded = lostTrack(
-          "a restarted storage coordinator has no task file to read back: what it does not hold in memory has no entry in " +
-            "the excluded set"
+          s"a restarted storage coordinator has ${
+              if done.isEmpty then "no done markers to read a task file against" else "no task file to read back"
+            }: " +
+            "what it does not hold in memory has no entry in the excluded set"
         )
         taskFileSwept = recorded
         !recorded

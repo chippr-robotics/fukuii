@@ -115,7 +115,7 @@ class SNAPCoordinatorGoneSpec
     }
   }
 
-  "A coordinator stopped on purpose" should "cost nothing: stopAll takes its handle first" taggedAs UnitTest in {
+  "A coordinator stopped by a restart" should "cost nothing: the report lands where it is dropped" taggedAs UnitTest in {
     val f = fixture()
     val snap = f.enterStorageResume()
     val child = f.factories.selves.get(ChildStopped.Storage)

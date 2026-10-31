@@ -2675,8 +2675,12 @@ class StorageRangeCoordinatorSpec
 
   // spec 022 T050a, the user's decision of 2026-10-31: where the bookkeeping has lost something, the marker cannot stand.
   // The walk then covers it, and the node goes on.
-  private def markedRig(entries: Seq[(ByteString, ByteString)], restarted: Boolean = false): TaskFileRig =
-    val rig = new TaskFileRig(entries, restartedIncarnation = restarted)
+  private def markedRig(
+      entries: Seq[(ByteString, ByteString)],
+      restarted: Boolean = false,
+      recordStorageDone: Boolean = true
+  ): TaskFileRig =
+    val rig = new TaskFileRig(entries, recordStorageDone = recordStorageDone, restartedIncarnation = restarted)
     rig.appState.stampSnapHealInvariant().commit()
     rig
 
@@ -2801,6 +2805,26 @@ class StorageRangeCoordinatorSpec
       drainSelf(rig.kit)
       rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
       lostTrackOn(rig, "no task file")
+    finally taskFilePointer = None
+  }
+
+  "A restarted coordinator with no done markers" should "owe the scan at a force-complete, so a lazy hand-off cannot write storage complete over what it lost" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true, recordStorageDone = false)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "no done markers")
+    finally taskFilePointer = None
+  }
+
+  it should "owe nothing when it has not restarted: it holds all it was given" taggedAs UnitTest in {
+    val rig = markedRig(Nil, recordStorageDone = false)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      stillTrusted(rig)
     finally taskFilePointer = None
   }
 
