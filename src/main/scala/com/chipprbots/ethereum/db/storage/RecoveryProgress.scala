@@ -16,9 +16,10 @@ import com.chipprbots.ethereum.utils.Hex
   * self-consistent.
   *
   * @param scanRoot
-  *   the state root being scanned (the on-disk SNAP-finalized/pivot root). Forms half the resume tag: re-enumerating
-  *   shards from the SAME root is deterministic, so persisted shard indices stay meaningful only while the root is
-  *   unchanged. A different root (pivot refresh) ⇒ different partition ⇒ stale indices ⇒ discard and re-scan.
+  *   the state root being scanned (the best block's, or the SNAP pivot's if that cannot be read). Forms half the resume
+  *   tag: re-enumerating shards from the SAME root is deterministic, so persisted shard indices stay meaningful only
+  *   while the root is unchanged. A different root (pivot refresh) ⇒ different partition ⇒ stale indices ⇒ discard and
+  *   re-scan.
   * @param shardCount
   *   number of shards the trie was partitioned into. The other half of the resume tag: a partition-fanout (depth)
   *   reconfig changes this, invalidating prior indices.

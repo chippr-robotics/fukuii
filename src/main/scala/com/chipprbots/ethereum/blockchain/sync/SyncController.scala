@@ -1954,6 +1954,7 @@ object SyncController:
       syncGeneration += 1
       txGossipGate.stateSyncStarted()
 
+      // `pivotBlock` from here on is the scanned root's block: the best block's, unless that root could not be read.
       scanRoot match
         case Some((stateRoot, pivotBlock)) =>
           log.info(
