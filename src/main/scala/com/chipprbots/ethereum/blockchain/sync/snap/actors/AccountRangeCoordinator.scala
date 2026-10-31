@@ -305,17 +305,11 @@ private[actors] class AccountRangeCoordinatorImpl(
   var contractAccountsCount: Long = 0
   var contractStorageCount: Long = carriedStorageCount
 
-  // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
-  // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
+  // Unique codeHashes for bytecode download: a Bloom filter for dedup + a temp file for the hashes. At handoff, reads
+  // ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
   // Bug 20 fix: the original ask-based handoff timed out (5s) and OOMed when reading the full file.
-  implicit private object ByteStringFunnel extends Funnel[ByteString]:
-    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
-      into.putBytes(from.toArray)
-  val codeHashBloom: BloomFilter[ByteString] = BloomFilter.create[ByteString](
-    ByteStringFunnel,
-    3_000_000,
-    0.0001 // ~4MB for 3M expected entries at 0.01% FPR
-  )
+  // Built on first use: it is large (see `newCodeHashBloom`), and a coordinator with no contract work never needs it.
+  lazy val codeHashBloom: BloomFilter[ByteString] = AccountRangeCoordinator.newCodeHashBloom()
   val uniqueCodeHashesFos = new FileOutputStream(uniqueCodeHashesFile.toFile, true)
   val uniqueCodeHashesOut = new BufferedOutputStream(uniqueCodeHashesFos, 65536)
   var uniqueCodeHashesCount: Long = carriedCodeHashesCount
@@ -921,6 +915,24 @@ private[actors] class AccountRangeCoordinatorImpl(
         else Some(estimatedBig.toLong)
 
 object AccountRangeCoordinator:
+
+  /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia holds about 2.5M, and ETH mainnet's
+    * count has not been measured here. The rate climbs steeply past this load: a sync of 10M unique hashes has about a
+    * 4e-11 chance of losing any, one of 20M about 1e-3, and one of 30M would lose a few.
+    */
+  private[actors] val CodeHashBloomExpectedEntries: Long = 20_000_000L
+  private[actors] val CodeHashBloomFpp: Double = 1e-9
+
+  private object ByteStringFunnel extends Funnel[ByteString]:
+    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
+      into.putBytes(from.toArray)
+
+  /** The dedup filter of the unique code-hash file. A false positive loses a hash for good (see
+    * `ContractWorkCarry.identifyContractAccounts`), so it is sized for that, not for memory: about 103 MiB in one array
+    * for as long as the coordinator lives, and 30 hash functions per operation (spec 022 T050a, H3).
+    */
+  private[actors] def newCodeHashBloom(): BloomFilter[ByteString] =
+    BloomFilter.create[ByteString](ByteStringFunnel, CodeHashBloomExpectedEntries, CodeHashBloomFpp)
 
   /** Why the account phase has tasks pending and nothing in flight. */
   enum IdleStallVerdict:

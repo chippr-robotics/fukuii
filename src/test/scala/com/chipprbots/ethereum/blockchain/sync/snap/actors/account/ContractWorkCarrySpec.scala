@@ -315,7 +315,37 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     recorded.map(e => e.subject -> e.claimedStorageRoot).toSeq shouldBe Seq(h32(2) -> h32(0x21), h32(5) -> h32(0x51))
   }
 
-  it should "replay the carried prefix, skipping marked tasks and, on the Hash scheme, present roots" taggedAs UnitTest in {
+  // spec 022 T050a, H3: a false positive loses a code hash for good, so the filter is sized for mainnet's unique hashes.
+  // Read off the filter itself rather than its arguments: Guava's serial form is a strategy byte, a hash-function count
+  // byte, an int word count, then the 64-bit words.
+  "The code-hash filter" should "stay near 1e-9 at the load it is built for, for about 103 MiB" taggedAs UnitTest in {
+    val designLoad = 20_000_000L
+    var header = Array.empty[Byte]
+    var size = 0L
+    AccountRangeCoordinator
+      .newCodeHashBloom()
+      .writeTo(
+        new java.io.OutputStream:
+          override def write(b: Int): Unit =
+            if header.length < 6 then header = header :+ b.toByte
+            size += 1
+      )
+    val hashes = header(1) & 0xff
+    val bits = java.nio.ByteBuffer.wrap(header, 2, 4).getInt.toLong * 64
+    size shouldBe 6L + bits / 8
+
+    def falsePositiveRate(inserted: Long): Double =
+      math.pow(1.0 - math.exp(-hashes.toDouble * inserted.toDouble / bits.toDouble), hashes.toDouble)
+
+    withClue(s"$bits bits, $hashes hashes: ") {
+      falsePositiveRate(designLoad) should be <= 1.1e-9
+      bits / 8 should be <= 110_000_000L
+    }
+    // What the filter costs at the load measured so far: Sepolia's, about 2.5M.
+    falsePositiveRate(2_500_000L) should be <= 1e-30
+  }
+
+  "ContractWorkCarry" should "replay the carried prefix, skipping marked tasks and, on the Hash scheme, present roots" taggedAs UnitTest in {
     val mpt = new TestMptStorage
     val leaf = LeafNode(ByteString(Array[Byte](1, 2)), ByteString(Array[Byte](3)))
     mpt.putNode(leaf)

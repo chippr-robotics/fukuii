@@ -183,9 +183,11 @@ private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with Contra
         contractAccountsOut.write(account.codeHash.value.toArray.padTo(32, 0.toByte), 0, 32)
         codeBearing += 1
 
-        // Track unique codeHashes via Bloom filter + temp file (~4MB RAM vs 200MB HashSet).
-        // The Bloom filter has 0.01% FPR — ~200 of 2M hashes may be missed but the
-        // recovery scan (Bug 20 hardening) catches any gaps.
+        // Track unique codeHashes via Bloom filter + temp file. A false positive means this hash is never queued and
+        // never written to the file, and nothing in SNAP catches that: a clean finalisation sets bytecodeRecoveryDone,
+        // so the recovery scan is skipped, and the healing walk has never read code. So the filter is sized to make it
+        // negligible (`newCodeHashBloom`, about 1e-9 at the load it is built for), which is not provably zero. What is
+        // left is found at import, whose bulk code recovery is the backstop (spec 022 T050a, H3).
         if !codeHashBloom.mightContain(account.codeHash.value) then
           codeHashBloom.put(account.codeHash.value)
           uniqueCodeHashesOut.write(account.codeHash.value.toArray.padTo(32, 0.toByte), 0, 32)
