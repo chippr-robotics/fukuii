@@ -250,12 +250,13 @@ private class SNAPSyncControllerImpl(
   // the storage-task markers below and by the healing spawn (spec 022 review vault V3).
   val trieNodesCachedInMemory: Boolean = stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
 
-  // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
-  // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
-  // CachedReferenceCountedStorage.update into an in-memory cache, not RocksDB, so they could be lost with a marker on
-  // disk. Path scheme writes through PathNodeStorage; archive/basic pruning write through; deferred builds no trie.
+  // Markers are recorded only where a marker's claim holds once written (HealInvariant.doneMarkersHold).
   val recordStorageDone: Boolean =
-    snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization || !trieNodesCachedInMemory
+    HealInvariant.doneMarkersHold(
+      snapSyncConfig.storageScheme,
+      snapSyncConfig.deferredMerkleization,
+      trieNodesCachedInMemory
+    )
   if !recordStorageDone then
     ctx.log.info(
       "Storage-task completion markers off (Hash scheme + in-memory pruning buffers storage trie nodes): " +

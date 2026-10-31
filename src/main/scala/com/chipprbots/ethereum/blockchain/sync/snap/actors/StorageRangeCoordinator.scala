@@ -703,7 +703,7 @@ private[actors] class StorageRangeCoordinatorImpl(
     * it cannot run:
     *   - no done markers, without which the file would name every account. Said at WARN. That is Hash under
     *     `pruning.mode = inmemory`, where no marker can hold and the walk stays at every completion
-    *     (`HealPolicy.recordStorageDone`), so nothing here trusts what this leaves out;
+    *     (`HealInvariant.doneMarkersHold`), so nothing here trusts what this leaves out;
     *   - no file, after a restart: the run has lost track (spec 022 T050a), and what the restart lost is left to the
     *     walk. True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next
     *     check or force-complete comes back here;

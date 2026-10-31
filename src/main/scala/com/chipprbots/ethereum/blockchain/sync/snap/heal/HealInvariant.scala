@@ -51,6 +51,22 @@ object HealInvariant:
   def canHold(scheme: StorageScheme, trieNodesCachedInMemory: Boolean): Boolean =
     scheme == StorageScheme.Path || !trieNodesCachedInMemory
 
+  /** Whether a storage task's done marker holds what it claims once written. Not on the Hash scheme building the trie
+    * during the download under `pruning.mode = inmemory`: storage trie nodes go through the node cache there, not
+    * RocksDB, so they could be lost with a marker on disk. The Path scheme writes through `PathNodeStorage`, other
+    * pruning modes write through, and a deferred build makes no trie.
+    *
+    * With no markers a restarted storage coordinator cannot sweep (spec 022 T050a, hunter W1.3), since its task file
+    * would name every account. That never leaves a marker standing over what it lost: where these do not hold, neither
+    * does [[canHold]], and the walk stays at every completion. `InvariantMarkerSpec` goes through every combination.
+    */
+  def doneMarkersHold(
+      scheme: StorageScheme,
+      deferredMerkleization: Boolean,
+      trieNodesCachedInMemory: Boolean
+  ): Boolean =
+    scheme == StorageScheme.Path || deferredMerkleization || !trieNodesCachedInMemory
+
   /** Run at every SNAP start, before anything of this run is written. The checkpoint key outranks the marker: while it
     * is set, the datadir is pre-invariant whatever else it holds.
     */

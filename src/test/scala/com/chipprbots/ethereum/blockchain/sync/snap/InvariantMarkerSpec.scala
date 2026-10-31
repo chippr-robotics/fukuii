@@ -74,6 +74,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
 
@@ -291,6 +292,22 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     withdrawal(appState, pathNodes, StorageScheme.Hash) shouldBe false
     appState.hasSnapHealInvariant() shouldBe true
     source.batches shouldBe empty
+  }
+
+  // spec 022 T050a (hunter W1.3): a restarted storage coordinator with no done markers cannot sweep, since its file would
+  // name every account. That is safe only if nothing trusts a marker there.
+  "A datadir with no done markers" should "be one where the invariant marker cannot hold, whatever the settings" taggedAs UnitTest in {
+    for
+      scheme <- Seq(StorageScheme.Hash, StorageScheme.Path)
+      deferred <- Seq(true, false)
+      cached <- Seq(true, false)
+    do
+      withClue(s"$scheme, deferred=$deferred, cached=$cached: ") {
+        val markers = HealInvariant.doneMarkersHold(scheme, deferred, cached)
+        val canHold = HealInvariant.canHold(scheme, cached)
+        if !markers then canHold shouldBe false
+        markers shouldBe (scheme == StorageScheme.Path || deferred || !cached)
+      }
   }
 
   // ---- spec 022 T050a, the user's decision of 2026-10-31: a run that knows it lost track -------------------------------
@@ -987,21 +1004,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   it should "find again what the old incarnation held, and complete, under the Path scheme (N3)" taggedAs UnitTest in {
     restartedOverHeldNodes(StorageScheme.Path)
   }
-
-  /** The trie store, counting what is written through it. */
-  final private class TrieStoreSpy extends TestMptStorage:
-    private val written = new java.util.concurrent.atomic.AtomicInteger(0)
-    def writes: Int = written.get()
-    def seed(nodes: Seq[(ByteString, Array[Byte])]): Unit = super.storeRawNodes(nodes)
-    override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
-      written.incrementAndGet()
-      super.storeRawNodes(rawNodes)
-    override def updateNodesInStorage(
-        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
-        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
-    ): Option[com.chipprbots.ethereum.mpt.MptNode] =
-      written.incrementAndGet()
-      super.updateNodesInStorage(newRoot, toRemove)
 
   it should "get no write from a whole heal, under the Hash scheme" taggedAs UnitTest in {
     healWritesNothingToFrontier(StorageScheme.Hash)
