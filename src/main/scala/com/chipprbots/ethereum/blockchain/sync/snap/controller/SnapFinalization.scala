@@ -290,18 +290,22 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 D5: what the excluded set still says at a lazy hand-off. Each flag claims only its own kind of entry,
           // and a set that cannot be read claims nothing.
           val progress = stateIngest.snapProgress
-          val (accountsExcluded, codeExcluded) =
-            try (progress.hasExcludedAccounts, progress.hasExcludedCode)
+          val appState = stateIngest.appState
+          // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for.
+          val (accountsExcluded, codeExcluded, codeScanOwed) =
+            try (progress.hasExcludedAccounts, progress.hasExcludedCode, appState.getSnapCodeScanOwed())
             catch
               case scala.util.control.NonFatal(e) =>
                 ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
-                (true, true)
+                (true, true, None)
           val bytecodeComplete =
-            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) && !codeExcluded
+            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
+              !codeExcluded && codeScanOwed.isEmpty
           if !bytecodeComplete then
             ctx.log.warn(
               s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
-                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
+                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted, " +
+                s"code entries: $codeExcluded, scan owed: ${codeScanOwed.getOrElse("no")}) — " +
                 "bytecodeRecoveryDone NOT set"
             )
           // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
@@ -323,11 +327,14 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                 "storageRecoveryDone NOT set"
             )
           // The set stays: it is the only record of those accounts, and only a cycle that starts from nothing wipes it.
-          val snapDone = stateIngest.appState.snapSyncDone()
+          val snapDone = appState.snapSyncDone()
           val storageFlag =
-            if accountsExcluded then snapDone else snapDone.and(stateIngest.appState.storageRecoveryDone())
-          (if bytecodeComplete then storageFlag.and(stateIngest.appState.bytecodeRecoveryDone()) else storageFlag)
-            .commitSync()
+            if accountsExcluded then snapDone else snapDone.and(appState.storageRecoveryDone())
+          // Withheld is written, not left out: a datadir SNAP has been through before can hold `true` from that cycle.
+          // The scan's debt moves to that flag here, in one write, so nothing charges a later cycle for it.
+          val codeFlag =
+            if bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
+          storageFlag.and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 

@@ -1,5 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.heal
 
+import scala.util.control.NonFatal
+
+import org.slf4j.Logger
+
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
@@ -52,22 +56,24 @@ object HealInvariant:
     */
   def atSnapStart(appState: AppStateStorage, pathNodes: Option[PathNodeStorage], canHold: Boolean): AtSnapStart =
     val present = appState.isSnapHealInvariantPresent()
-    def removeFound(): Unit = if present then appState.clearSnapHealInvariant().commitSync()
+    // A repair run's clean walk stamps the trie and says nothing of code, so the scan is owed (the user's decision,
+    // 2026-10-31), and stays owed across a restart that finds the stamp. Written once: a later start changes nothing.
+    def preInvariant(reason: String): AtSnapStart =
+      if present || appState.getSnapCodeScanOwed().isEmpty then appState.markSnapCodeScanOwed(reason).commitSync()
+      AtSnapStart.PreInvariant(reason)
     if !canHold then
-      removeFound()
+      if present then appState.clearSnapHealInvariant().commitSync()
       AtSnapStart.CannotHold(clearedOne = present)
     else
       appState.getCheckpointImportInProgress() match
-        case Some(importing) =>
-          removeFound()
-          AtSnapStart.PreInvariant(s"a checkpoint import did not finish ($importing)")
+        case Some(importing)                         => preInvariant(s"a checkpoint import did not finish ($importing)")
         case None if appState.hasSnapHealInvariant() => AtSnapStart.Stands
         case None if isEmpty(appState, pathNodes) =>
           appState.stampSnapHealInvariant().commitSync()
           AtSnapStart.StampedEmpty
         case None =>
-          removeFound() // another version's, if any: it does not stand, so it does not stay
-          AtSnapStart.PreInvariant("no marker, and not an empty datadir")
+          // A marker of another version, if there is one, does not stand, so it goes with this write.
+          preInvariant("no marker, and not an empty datadir")
 
   /** Run where an account phase is about to start, before it writes (spec 022 T050a). True when a marker was removed.
     *
@@ -91,6 +97,31 @@ object HealInvariant:
       (resumedCursors || pathNodes.exists(!_.isEmpty))
     if withdraw then appState.clearSnapHealInvariant().commitSync()
     withdraw
+
+  /** A run that knows its bookkeeping has lost something (spec 022 T050a; the user's decision, 2026-10-31, in place of
+    * a hard stop, which would halt a node that could finish, and at Sepolia's size on a false timeout). The marker goes
+    * and the code scan is owed, in one synced write, so a later PR's walk-skip cannot take this datadir's word: the
+    * walk covers the trie and storage, the recovery scan at the next start covers code, which the walk never reads, and
+    * the node keeps going. A clean full walk may stamp the marker again; only a finalisation settles the debt.
+    *
+    * `log` is the caller's: the shipped logback.xml keeps `...sync.snap` at ERROR, so a logger of this object's would
+    * lose the WARN.
+    *
+    * False when the write failed. Nothing was claimed or changed then, so the caller holds whatever it was about to end
+    * and comes back to this, as for a `StoreFailed` sweep: going on would leave the marker vouching for what was lost.
+    */
+  def lostTrack(appState: AppStateStorage, reason: String, log: Logger): Boolean =
+    try
+      appState.markSnapCodeScanOwed(reason).commitSync()
+      log.warn(
+        s"[HEAL-INVARIANT] Lost track: $reason. Marker withdrawn, so the walk stays for this run, and the code scan " +
+          "runs at the next start"
+      )
+      true
+    catch
+      case NonFatal(e) =>
+        log.error(s"[HEAL-INVARIANT] Lost track ($reason), and could not withdraw the marker; trying again", e)
+        false
 
   /** Whether this datadir is empty for the marker's purposes, conservatively: when in doubt it is not, since a stamp
     * over state an older binary wrote is the one thing that must not happen, and the doubt costs one walk.
