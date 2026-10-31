@@ -147,8 +147,8 @@ final class ExcludedSweep:
   import ExcludedSweep.*
 
   final private class Running(val token: Long, val work: Work):
-    val startedNanos: Long = System.nanoTime()
     var chunksSeen: Long = 0L
+    var begunAtLastLook: Boolean = false
 
   private var current: Option[Running] = None
 
@@ -166,30 +166,42 @@ final class ExcludedSweep:
     val token = ExcludedSweep.nextToken.incrementAndGet()
     val handle = new Work
     current = Some(new Running(token, handle))
-    Future(work(handle))(ec).onComplete {
+    Future {
+      handle.begin()
+      work(handle)
+    }(ec).onComplete {
       case Success(outcome) => report(token, outcome)
       case Failure(e)       => report(token, ExcludedTaskFile.Outcome.StoreFailed(e))
     }(ExecutionContext.parasitic)
     token
 
-  /** A look by the sweep's watchdog: whether `token`, if it is the one running, has finished a chunk since the last
-    * look. A sweep stuck on one chunk is hung however long it has been healthy, and a slow one that keeps finishing
-    * chunks is not, however long it takes.
+  /** A look by the sweep's watchdog: `Some(false)` when `token`, if it is the one running, has been at its work for the
+    * whole time since the last look and finished no chunk. A sweep stuck on one chunk is hung however long it has been
+    * healthy, and a slow one that keeps finishing chunks is not, however long it takes.
+    *
+    * The clock starts when the work starts, not when it is queued. A storage sweep shares a one-thread dispatcher with
+    * flat-batch writes, so it can wait behind them for longer than a look, and a sweep that has not begun is not hung
+    * (beacon F4). Nor is one that began just before this look: it has had no whole look, so that gets no verdict
+    * either, which is why a read hung from its first chunk is seen at the second look. A dispatcher that is wedged
+    * means this waits for good. That is acceptable: everything else on it has stopped too.
     */
   def chunkFinishedSinceLastLook(token: Long): Option[Boolean] =
     current.filter(_.token == token).map { sweep =>
       val chunks = sweep.work.chunks
       val finished = chunks != sweep.chunksSeen
       sweep.chunksSeen = chunks
-      finished
+      val hadAWholeLook = sweep.begunAtLastLook
+      sweep.begunAtLastLook = sweep.work.begun
+      finished || !hadAWholeLook
     }
 
   /** The sweep `token` has ended or is taken as hung. True if it is the one running, which is then told to stop. */
   def finish(token: Long): Boolean =
     current.filter(_.token == token) match
       case Some(sweep) =>
-        lastRunSummary =
-          s"${sweep.work.chunks} chunk(s) in ${(System.nanoTime() - sweep.startedNanos) / 1_000_000_000L} s"
+        lastRunSummary = sweep.work.runningNanos.fold("did not begin") { nanos =>
+          s"${sweep.work.chunks} chunk(s) in ${nanos / 1_000_000_000L} s"
+        }
         cancel()
         current = None
         true
@@ -205,20 +217,27 @@ object ExcludedSweep:
   final class Work:
     private val cancelFlag = new AtomicBoolean(false)
     private val chunkCount = new AtomicLong(0L)
+    private val begunNanos = new AtomicLong(NotBegun)
     val cancelled: () => Boolean = () => cancelFlag.get()
     val chunkDone: () => Unit = () =>
       chunkCount.incrementAndGet(); ()
+    private[ExcludedSweep] def begin(): Unit = begunNanos.set(System.nanoTime())
+    private[ExcludedSweep] def begun: Boolean = begunNanos.get() != NotBegun
+    private[ExcludedSweep] def runningNanos: Option[Long] =
+      Option.when(begun)(System.nanoTime() - begunNanos.get())
     private[ExcludedSweep] def cancel(): Unit = cancelFlag.set(true)
     private[ExcludedSweep] def chunks: Long = chunkCount.get()
 
-  /** How often a sweep's watchdog looks: a sweep is taken as hung when no chunk finished between two looks, so a hung
-    * read is seen after this long and at most twice it. A wall-clock cap on the whole sweep was wrong: at one
-    * `code.get` a hash and about 0.8 ms each (vault W2), Sepolia's 16M code hashes take about 3.5 h. A chunk is 4,096
-    * entries: about 20 ms from a task file on the root SSD (measured, 2M entries in 9 to 12 s) and about 3 s for code
-    * hashes, so this leaves a chunk some 200 times the slower of those, which also covers a raidz HDD at 20 ms a read
-    * (82 s) and a RocksDB write stall behind the excluded set's synced write. Past that the disk is dead, not slow. The
-    * cost of being wrong is one walk and one scan, not a stop. Not measured on this path at mainnet's scale: the end of
-    * each sweep logs its chunks and time (`lastRun`).
+  private val NotBegun = Long.MinValue
+
+  /** How often a sweep's watchdog looks: a sweep is taken as hung when it was at work for the whole time between two
+    * looks and no chunk finished, so a hung read is seen after this long and at most twice it. A wall-clock cap on the
+    * whole sweep was wrong: at one `code.get` a hash and about 0.8 ms each (vault W2), Sepolia's 16M code hashes take
+    * about 3.5 h. A chunk is 4,096 entries: about 20 ms from a task file on the root SSD (measured, 2M entries in 9 to
+    * 12 s) and about 3 s for code hashes, so this leaves a chunk some 200 times the slower of those, which also covers
+    * a raidz HDD at 20 ms a read (82 s) and a RocksDB write stall behind the excluded set's synced write. Past that the
+    * disk is dead, not slow. The cost of being wrong is one walk and one scan, not a stop. Not measured on this path at
+    * mainnet's scale: the end of each sweep logs its chunks and time (`lastRun`).
     */
   val NoChunkLimit: FiniteDuration = 10.minutes
 
