@@ -538,7 +538,7 @@ private class SNAPSyncControllerImpl(
       case HealInvariant.AtSnapStart.PreInvariant(reason) =>
         ctx.log.warn(
           s"[HEAL-INVARIANT] Pre-invariant datadir ($reason): this run's clean verification walk is its repair pass, " +
-            "and stamps the marker"
+            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked"
         )
       case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
         ctx.log.warn(

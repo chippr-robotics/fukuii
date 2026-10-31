@@ -10,7 +10,9 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
   * The marker (`snap.heal.invariant`, AppState `s`) says everything present here was written under "present implies
   * complete". It does not say complete. It is stamped on an empty datadir at a SNAP start and at a clean walk
   * completion; a datadir without it gets one repair pass, which is the verification walk healing already runs at every
-  * completion, and the marker records how that went. Slice 5 reads it to take that walk off the completion path.
+  * completion, and the marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills
+  * what it found and the run hands off unmarked (T050a). Slice 5 reads the marker to take that walk off the completion
+  * path.
   *
   * Every write here is one synced batch, so no crash can leave half of one.
   */
@@ -25,7 +27,7 @@ object HealInvariant:
     /** The datadir was empty, and is stamped now. */
     case StampedEmpty
 
-    /** No marker, and not empty: this run's clean walk is the repair pass, and stamps. */
+    /** No marker, and not empty: this run's clean walk, if one finishes, is the repair pass, and stamps. */
     case PreInvariant(reason: String)
 
     /** The marker cannot hold on this scheme and pruning mode (see [[canHold]]). `clearedOne`: one was found, and

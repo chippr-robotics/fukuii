@@ -297,6 +297,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
     completed shouldBe Some(1L)
     emitted(s).flatten.map(_.hash) shouldBe Seq(ByteString(sharedRoot))
+    withClue("a root already visited is not a skip: ")(s.walkSkips.get() shouldBe 0L)
   }
 
   it should "not descend an account's empty storage root, which no store holds, under Hash" taggedAs UnitTest in {

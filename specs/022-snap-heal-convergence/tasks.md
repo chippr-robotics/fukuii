@@ -238,7 +238,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ## Phase 5: Slice 4: invariant marker, frontier retirement (US4)
 
-**Purpose**: datadirs written before the invariant get exactly one repair pass (FR-015), and the persisted frontier stops growing (FR-016).
+**Purpose**: datadirs written before the invariant get a repair pass (FR-015; what it can finish at scale is in the checkpoint below), and the persisted frontier stops growing (FR-016).
 
 ### Tests (write first; they must fail)
 
@@ -256,7 +256,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - update the tests in research R-5b, including `CleanRebuildEarlyCompletionSpec` and `DecoupledHealSafetySpec`. Files: `actors/healing/FrontierPersistence.scala` and `actors/healing/HealResponseProcessing.scala`. **[vault]**
 - [ ] T045 Run T039–T041 and all earlier slice tests. Open the slice-4 PR and request reviews from vault and forge.
 
-**Checkpoint**: a datadir with no holes, or whose walk can finish between re-pegs, is repaired once and stamped. A longer walk over holes finds and fills some, then abandons to a lazy hand-off with no stamp (T064, T050a). New datadirs are never audited on the critical path, and CF `g` no longer grows.
+**Checkpoint**: a datadir with no holes, or whose walk can finish between re-pegs, is repaired and stamped (with holes, that takes a dirty walk and then a clean one). A longer walk over holes finds and fills some, then abandons to a lazy hand-off with no stamp (T064, T050a). New datadirs are never audited on the critical path, and CF `g` no longer grows.
 
 ---
 
@@ -276,7 +276,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [ ] T050 [US1] Change `isComplete` (`TrieNodeHealingCoordinator.scala:290-291`) so that it also requires no held nodes, no outstanding code dependencies, and an empty excluded set. **[beacon] [forge]**
 - [ ] T051a [US2] (forge, slice-1 review) One Hash change is needed **before** the gate goes. A second was withdrawn:
   - **Withdrawn (forge, slice-4 review F1, retracting forge's own slice-1 request): keep the `storageScheme == Path &&` condition on the stale-walk filter in the `FrontierRebuilt` arm.** The request was to drop stale-root batches on Hash as well. Dropping loses repair progress: a re-peg invalidates a long walk without cancelling it, so each walk would repair only its first hole-bearing BFS level, its later batches dropped, and the fourth stale end abandons (about 3.5-4 days at ETC mainnet's 16-20 h a walk). Keeping them costs at most one re-peg on an advancing chain: a node only the old root holds is asked for and holds completion until the next re-peg clears it (T030 pins that bound). The rest of such a batch is servable at the new root, since a node is keyed by its hash (forge's estimate is about 99.9%, converging geometrically; `HealWalkSingleFlightSpec` pins a shared node queued and healed at the new root). On a chain that does not advance the cost is unbounded, since no re-peg comes. The one line was tried in slice 4 and taken back: the tests that went green with it say nothing about a long walk.
-  - **For slice 5 (forge): the Path drop is safe against a false marker only if the marker is true.** Path keeps the drop, because a position there names one node, and the reason it is safe is that the current root's own discovery and walks find every position it needs. Once T051 takes the walk away on a marked datadir, nothing else finds what a dropped batch named, so a marker that lies would lose those holes in silence.
+  - **For slice 5 (forge):** the Path drop is safe because the current root's own walk finds what a stale batch named. T051 removes that walk only where the marker stands, which makes the marker's truth the dependency (T050a).
   - Make the "dispatched task not in the book" branch in `HealResponseProcessing` fail closed on Hash: re-add and re-queue the request (content-addressed, so this is safe), or block `isComplete` while a book fault is recorded.
   **[forge]**
 - [ ] T050a [US1] **Prerequisites of T051 and T052 from the slice 3 review.** Each is safe today only because the walk catches it, so each is settled, or the walk stays for that case, before the walk goes:
@@ -312,6 +312,11 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - [ ] **What an interrupted import left, which a stamp covers without reaching (slice 4 review, vault F5, forge N3).** Nodes an import wrote before it stopped, for state that changed before the pivot P, are present over absent, and no walked root reaches them. A stamp at P vouches for them all the same, and it erases the import key, the one record that they exist. Slice 5's audit must cover them, and cannot rely on that key to find them.
   - [ ] **On Hash the walk proves presence and decoding, not `keccak(bytes) = key` (slice 4 review, forge N2).** A node whose bytes are wrong but still decode passes the walk there, so it passes the stamp too. On Path the walk reads through `readPathVerifiedRlp`, which hashes the bytes, and a node that fails counts as missing. Decide whether the audit checks this on Hash.
   - [ ] **Dead wiring to take with a `# pins:` change (slice 4):** `scopedHealVerification`, `scopedHealMaxPaths`, `prunedHealVerification`, `frontierPersistenceEnabled` at the spawn, in `ChildFactories` and in `TrieNodeHealingCoordinator.apply`, `SNAPSyncConfig`'s fields for them, `StateIngest.healingFrontier`, `healingFrontierStorageOpt`, the multi-seed `startFrontierBFS` and the scoped and pruned gauges in `SNAPSyncMetrics`. Renaming `FrontierPersistence` (a fix cannot) goes on the same list.
+  - [ ] **A datadir stamped empty at SNAP start, then interrupted during download (forge, vault; neither assessed it):** can the download phases leave a present node over an absent child? T051 would then skip a walk over it. Settle this before T051.
+  - [ ] **Path account-range and storage-range writes are not pinned as bypassing the trie store (beacon):** only a heal is. Run those specs with the trie-store spy as `mptStorage`, asserting no writes, before T051 trusts the marker under `pruning.mode = inmemory`.
+  - [ ] **Validation never really runs (hunter):** every clean exit sets `healingValidatedRoot` first, so `validateState` returns early and the marker removal in `triggerHealingForMissingNodes` is defensive. If validation is ever made real, `QueueMissingNodes` must also clear `verificationPassComplete`, or the next gate proves the root again from the old pass.
+  - [ ] **`startRegularSyncForBootstrap` has no callers and would bypass the marker check (hunter, beacon):** retire it under `dead-code-review.md`.
+  - [ ] **On Hash, `multiGetNodes` decodes outside the per-node catch:** one undecodable node fails the whole walk (`FrontierWalkFailed`). That can't falsely prove a stamp, but a walk can't get past that node. It predates this slice; check it for liveness.
 
 - [ ] T051 [US1] Remove the completion gates (slice 2 review, vault V3 and R1: **not** under `pruning.mode = inmemory`, where the trie store is the node cache and FR-001 to FR-004 do not hold on disk; there the coordinator's full verification walk, unscoped and unpruned, with no frontier resume, stays the completion gate on every completion and every restart, and the pruned and scoped verifications and the frontier persistence stay off, as slice 2 set them):
   - `verificationPassComplete` and the full, scoped and pruned BFS (`TrieNodeHealingCoordinator.scala:1093-1160`);
@@ -366,7 +371,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
   - SC-003/004: root match, then 24 h following the head with no holes.
   - SC-005: no walk before handoff.
   - Record the pending-task gauge, RSS and the RocksDB gauges (`db.rocksdb.*`, the `_bytes` series) through the storage phase, and the live set and fiber count spec 014 T016 names. This closes spec 014 T016 and spec 015 T011. T011's budget log line cannot print: the shipped `logback.xml` sets `RocksDbDataSource` to ERROR, so its evidence is the gauges.
-- [ ] T064 [US4] **Secondary: repair of the kept datadir.** Start the fixed build on `/home/dontpanic/sepolia-data` (no marker). **Success is holes found and filled, then a hand-off. A stamp is not expected on Sepolia:** a walk there outlasts a re-peg, so with holes in the datadir it abandons to a lazy hand-off (T050a, beacon 1). Record holes found and filled, walks run, whether it abandoned, and duration. If slice 5 settles that T050a entry another way, restate what this run should show.
+- [ ] T064 [US4] **Secondary: repair of the kept datadir.** Start the fixed build on `/home/dontpanic/sepolia-data` (no marker). **Success is holes found and filled, then a hand-off. A stamp is not expected on Sepolia:** a walk there outlasts a re-peg, so with holes in the datadir it abandons to a lazy hand-off (T050a, beacon 1). Record holes found and filled, walks run, whether it abandoned, and duration. If slice 5 settles that T050a entry another way, restate what this run should show. At about 17 h per walk, four stale ends take about 3 days, so against SC-001's 12 h the run will look hung. With the current root absent, an abandon re-pegs and keeps healing (`lazyHandoffBlockedByAbsentPathRoot`) until the root is fetched.
 - [ ] T065 Get sign-off from beacon (Path), forge (Hash and the ETC suites), vault (write order) and eye (gates). Tick #1671 and the gates on #1659.
 
 ---

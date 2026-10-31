@@ -152,6 +152,7 @@ Evidence for each decision is in research.md.
   - A versioned key in AppState `s`, written with `updateSync`.
   - Stamped only on an **empty** datadir at SNAP start, or after a repair pass finds zero holes.
   - Never stamped when resuming state written by old code.
+  - *As built (slice 4 review):* a walk over holes that outlasts a re-peg does not finish: it fills what it found and the run hands off unmarked (tasks.md T050a, T064).
   - **Pre-invariant states that force one repair pass:**
     - no marker;
     - a checkpoint import in progress (a new "import in progress" key, because the importer writes parent-first and a failed import falls through to SNAP on the same datadir: `SyncController:1510`);

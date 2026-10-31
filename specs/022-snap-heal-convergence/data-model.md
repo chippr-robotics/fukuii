@@ -78,7 +78,7 @@ Every write of these keys is one `updateSync` batch. The frontier key goes throu
 **Removed:**
 - when a checkpoint import starts writing; a successful import does not bring it back;
 - at a finalisation with no clean full walk of the finalised root behind it, whatever the route: every lazy hand-off, since from there regular sync fetches what is missing a node at a time;
-- when regular sync starts with SNAP not done (`SyncController.startRegularSync`), synced: SNAP's `Done` with no finalisation (`PivotSelector`), a finalisation that found no pivot header, and any route added later. Regular sync's on-demand fetches store a node alone, so the claim ends there;
+- when regular sync starts with SNAP not done (`SyncController.startRegularSync`), synced: SNAP's `Done` with no finalisation (`PivotSelector`), a finalisation that found no pivot header, and any route added later. Regular sync's on-demand fetches store a node alone, so the claim ends there; On Path regular sync cannot write the Path column families, so there the removal is only conservative: it costs a repair walk at the next SNAP start.
 - when validation finds a node missing (`triggerHealingForMissingNodes`), synced: it walked the trie and contradicted a stamp;
 - wherever `SnapSyncDone` is cleared, in the same batch: `clearDoneOnStart`, a stuck regular sync, a failed hand-off, a dangling best block. `clearDoneOnStart` removes it when SNAP was not done too;
 - at a SNAP start where the marker cannot hold, or where the import key is set.

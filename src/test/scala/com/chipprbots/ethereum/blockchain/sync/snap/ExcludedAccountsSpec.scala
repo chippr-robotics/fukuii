@@ -316,10 +316,11 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
         else
           // The bound, on Hash (T051a, forge F1): the old walk's batch is queued, since most of what such a walk finds the
           // new root needs too. What only the old root holds no peer at the new root serves, so it holds completion...
-          rig.drive()
-          withClue("the node only the old root holds is asked for: ") {
-            rig.requested should contain(oldTrie("sRoot").pathset)
-          }
+          rig.awaitOnDisk(newTrie("sRoot")) // the new root's own work is done, so all that is left is the old root's
+          val stats = createTestProbe[HealingStatistics]()
+          rig.coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(stats.ref)
+          val left = stats.receiveMessage(30.seconds)
+          withClue("what only the old root holds is still owed: ")((left.pendingTasks + left.activeTasks) should be > 0)
           withClue("and holds completion: ")(rig.seen() should not contain SNAPSyncController.StateHealingComplete)
           // ... until the next re-peg clears it.
           val next = PathHealPresenceFixtures.storageTrie("path-heal-presence/storage/slot1-next")

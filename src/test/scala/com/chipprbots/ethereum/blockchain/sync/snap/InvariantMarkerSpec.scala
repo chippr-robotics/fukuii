@@ -526,6 +526,33 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     testKit.stop(coordinator)
   }
 
+  // Spec 022 closure review, beacon: a counted skip on valid Path state would stop every stamp on an ETH chain in silence.
+  it should "have a clean Path walk over an account with storage earn the proof" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.storageTrieOld()
+    val pns = new PathNodeStorage(EphemDataSource())
+    PathHealPresenceFixtures.seedPath(pns, trie.nodes)
+    val peer = new ScriptedPeer(testKit)
+    val controller = createTestProbe[Command]()
+    val cleanRoot = new AtomicReference[ByteString]()
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = trie.root.hash,
+      networkPeerManager = peer.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      batchSize = 16,
+      snapSyncController = controller.ref,
+      storageScheme = StorageScheme.Path,
+      pathNodeStorageOpt = Some(pns),
+      movingRootDeltaHeal = true,
+      cleanWalkRoot = Some(cleanRoot)
+    )
+    peer.coordinator.set(coordinator)
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    awaitComplete(controller)
+    cleanRoot.get() shouldBe trie.root.hash
+    testKit.stop(coordinator)
+  }
+
   it should "say nothing while a walk has found a hole, and say it only after a clean walk over the healed node" taggedAs UnitTest in {
     val trie = PathHealPresenceFixtures.accountTrieOld()
     val peer = new ScriptedPeer(testKit)
