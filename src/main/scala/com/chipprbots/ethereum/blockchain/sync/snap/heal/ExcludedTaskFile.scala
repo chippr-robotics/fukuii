@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.annotation.tailrec
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -64,9 +65,10 @@ object ExcludedTaskFile:
       done: SnapStorageDoneStorage,
       record: Seq[ExcludedAccount] => Unit,
       cancelled: () => Boolean = () => false,
-      chunkEntries: Int = GatedTaskFileReplay.DefaultChunkEntries
+      chunkEntries: Int = GatedTaskFileReplay.DefaultChunkEntries,
+      chunkDone: () => Unit = () => ()
   ): Outcome =
-    sweep(path, StorageTaskFile.EntrySize, expectedCount, chunkEntries, cancelled) { entries =>
+    sweep(path, StorageTaskFile.EntrySize, expectedCount, chunkEntries, cancelled, chunkDone) { entries =>
       val tasks = entries.flatMap { entry =>
         val account = ByteString(java.util.Arrays.copyOfRange(entry, 0, 32))
         val root = ByteString(java.util.Arrays.copyOfRange(entry, 32, 64))
@@ -86,9 +88,10 @@ object ExcludedTaskFile:
       codePresent: ByteString => Boolean,
       record: Seq[ExcludedAccount] => Unit,
       cancelled: () => Boolean = () => false,
-      chunkEntries: Int = GatedTaskFileReplay.DefaultChunkEntries
+      chunkEntries: Int = GatedTaskFileReplay.DefaultChunkEntries,
+      chunkDone: () => Unit = () => ()
   ): Outcome =
-    sweep(path, StorageTaskFile.CodeHashEntrySize, expectedCount, chunkEntries, cancelled) { entries =>
+    sweep(path, StorageTaskFile.CodeHashEntrySize, expectedCount, chunkEntries, cancelled, chunkDone) { entries =>
       val missing = entries
         .map(ByteString(_))
         .filterNot(hash => hash == Account.EmptyCodeHash.value || codePresent(hash))
@@ -102,7 +105,8 @@ object ExcludedTaskFile:
       entrySize: Int,
       expectedCount: Option[Long],
       chunkEntries: Int,
-      cancelled: () => Boolean
+      cancelled: () => Boolean,
+      chunkDone: () => Unit
   )(
       recordChunk: Vector[Array[Byte]] => Int
   ): Outcome =
@@ -129,42 +133,97 @@ object ExcludedTaskFile:
                 case Success(_) =>
                   Try(recordChunk(chunk)) match
                     case Failure(e) => Outcome.StoreFailed(e)
-                    case Success(n) => loop(total + n)
+                    case Success(n) =>
+                      chunkDone()
+                      loop(total + n)
 
           loop(0L)
 
-/** One coordinator's running sweep: its token, so the end of one a replaced incarnation started matches nothing, and
-  * its cancel flag. Actor-confined; `start`'s work runs on `ec`, and reports through `report`.
+/** One coordinator's running sweep: its token, so the end of one a replaced incarnation started matches nothing, its
+  * cancel flag, and how many chunks it has finished. Actor-confined; `start`'s work runs on `ec`, and reports through
+  * `report`.
   */
 final class ExcludedSweep:
-  private var current: Option[(Long, AtomicBoolean)] = None
+  import ExcludedSweep.*
+
+  final private class Running(val token: Long, val work: Work):
+    val startedNanos: Long = System.nanoTime()
+    var chunksSeen: Long = 0L
+
+  private var current: Option[Running] = None
+
+  /** How the last sweep to finish went, for the log: what its limit (`NoChunkLimit`) has to stand on. */
+  private var lastRunSummary: String = "no sweep yet"
 
   def running: Boolean = current.isDefined
 
-  /** Start `work`, which gets the cancel flag's read. Returns its token. An executor that refuses it reports a failure.
-    */
-  def start(ec: ExecutionContext)(work: (() => Boolean) => ExcludedTaskFile.Outcome)(
+  def lastRun: String = lastRunSummary
+
+  /** Start `work`. Returns its token. An executor that refuses it reports a failure. */
+  def start(ec: ExecutionContext)(work: Work => ExcludedTaskFile.Outcome)(
       report: (Long, ExcludedTaskFile.Outcome) => Unit
   ): Long =
     val token = ExcludedSweep.nextToken.incrementAndGet()
-    val cancelled = new AtomicBoolean(false)
-    current = Some((token, cancelled))
-    Future(work(() => cancelled.get()))(ec).onComplete {
+    val handle = new Work
+    current = Some(new Running(token, handle))
+    Future(work(handle))(ec).onComplete {
       case Success(outcome) => report(token, outcome)
       case Failure(e)       => report(token, ExcludedTaskFile.Outcome.StoreFailed(e))
     }(ExecutionContext.parasitic)
     token
 
-  /** The sweep `token` has ended or timed out. True if it is the one running, which is then told to stop. */
+  /** A look by the sweep's watchdog: whether `token`, if it is the one running, has finished a chunk since the last
+    * look. A sweep stuck on one chunk is hung however long it has been healthy, and a slow one that keeps finishing
+    * chunks is not, however long it takes.
+    */
+  def chunkFinishedSinceLastLook(token: Long): Option[Boolean] =
+    current.filter(_.token == token).map { sweep =>
+      val chunks = sweep.work.chunks
+      val finished = chunks != sweep.chunksSeen
+      sweep.chunksSeen = chunks
+      finished
+    }
+
+  /** The sweep `token` has ended or is taken as hung. True if it is the one running, which is then told to stop. */
   def finish(token: Long): Boolean =
-    if current.exists(_._1 == token) then
-      cancel()
-      current = None
-      true
-    else false
+    current.filter(_.token == token) match
+      case Some(sweep) =>
+        lastRunSummary =
+          s"${sweep.work.chunks} chunk(s) in ${(System.nanoTime() - sweep.startedNanos) / 1_000_000_000L} s"
+        cancel()
+        current = None
+        true
+      case None => false
 
   /** Whoever started it no longer wants the answer: it stops at its next chunk. */
-  def cancel(): Unit = current.foreach(_._2.set(true))
+  def cancel(): Unit = current.foreach(_.work.cancel())
 
 object ExcludedSweep:
   private val nextToken = new AtomicLong(0L)
+
+  /** What a sweep's work is handed: read from its own thread, as `chunkDone` is written. */
+  final class Work:
+    private val cancelFlag = new AtomicBoolean(false)
+    private val chunkCount = new AtomicLong(0L)
+    val cancelled: () => Boolean = () => cancelFlag.get()
+    val chunkDone: () => Unit = () =>
+      chunkCount.incrementAndGet(); ()
+    private[ExcludedSweep] def cancel(): Unit = cancelFlag.set(true)
+    private[ExcludedSweep] def chunks: Long = chunkCount.get()
+
+  /** How often a sweep's watchdog looks: a sweep is taken as hung when no chunk finished between two looks, so a hung
+    * read is seen after this long and at most twice it. A wall-clock cap on the whole sweep was wrong: at one
+    * `code.get` a hash and about 0.8 ms each (vault W2), Sepolia's 16M code hashes take about 3.5 h. A chunk is 4,096
+    * entries: about 20 ms from a task file on the root SSD (measured, 2M entries in 9 to 12 s) and about 3 s for code
+    * hashes, so this leaves a chunk some 200 times the slower of those, which also covers a raidz HDD at 20 ms a read
+    * (82 s) and a RocksDB write stall behind the excluded set's synced write. Past that the disk is dead, not slow. The
+    * cost of being wrong is one walk and one scan, not a stop. Not measured on this path at mainnet's scale: the end of
+    * each sweep logs its chunks and time (`lastRun`).
+    */
+  val NoChunkLimit: FiniteDuration = 10.minutes
+
+  /** How long a restarted coordinator waits for its file's pointer at a clean end. The pointer is written on the
+    * controller's thread just after the account phase's end reaches the coordinator, so this only has to outlast the
+    * controller's mailbox. It is the two minutes that four 30-second pulses were meant to be.
+    */
+  val PointerWaitLimit: FiniteDuration = 2.minutes

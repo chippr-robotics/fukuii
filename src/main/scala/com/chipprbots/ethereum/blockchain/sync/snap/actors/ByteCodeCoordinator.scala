@@ -174,7 +174,7 @@ private[actors] class ByteCodeCoordinatorImpl(
   private val codeFileSweep = new ExcludedSweep
   private var codeFileSwept: Boolean = false
   private var forceCompleteWanted: Boolean = false
-  private var codeFilePointerWaits: Int = 0
+  private var codeFilePointerWaitOver: Boolean = false
 
   private def codeFileSweepDue: Boolean = restartedIncarnation && recordExcluded && !codeFileSwept
 
@@ -203,10 +203,17 @@ private[actors] class ByteCodeCoordinatorImpl(
         val record = excludedRecorder.recordNow
         val selfRef = context.self
         val ec = context.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
-        val token = codeFileSweep.start(ec)(cancelled =>
-          ExcludedTaskFile.recordMissingCode(file, Some(expected), hash => code.get(hash).isDefined, record, cancelled)
+        val token = codeFileSweep.start(ec)(work =>
+          ExcludedTaskFile.recordMissingCode(
+            file,
+            Some(expected),
+            hash => code.get(hash).isDefined,
+            record,
+            work.cancelled,
+            chunkDone = work.chunkDone
+          )
         )((t, outcome) => selfRef ! CodeFileSwept(t, outcome))
-        timers.startSingleTimer(CodeFileSweepTimedOut(token), CodeFileSweepTimeout)
+        timers.startSingleTimer(CodeFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
         true
       case None =>
         log.warn(
@@ -221,7 +228,7 @@ private[actors] class ByteCodeCoordinatorImpl(
     outcome match
       case ExcludedTaskFile.Outcome.Recorded(hashes) =>
         codeFileSwept = true
-        log.info(s"Recorded $hashes missing bytecode hash(es) from the code-hash file")
+        log.info(s"Recorded $hashes missing bytecode hash(es) from the code-hash file (${codeFileSweep.lastRun})")
         context.self ! resume
       case ExcludedTaskFile.Outcome.Unreadable(cause) =>
         codeFileSwept = true
@@ -234,14 +241,15 @@ private[actors] class ByteCodeCoordinatorImpl(
 
   /** Whether the phase's clean end waits for the code-hash file: a restarted incarnation, which does not know what the
     * one before it held. The file's pointer is persisted just after the account phase's end reaches this actor, so that
-    * is worth a short wait, each status pulse looking again.
+    * is worth a short wait, by the clock (`PointerWaitLimit`): what checks here comes in bursts.
     */
   private def codeFileSweepHoldsCompletion: Boolean =
     if codeFileSweep.running then true
     else if !codeFileSweepDue then false
-    else if codeFile.isEmpty && codeFilePointerWaits < MaxCodeFilePointerWaits then
-      codeFilePointerWaits += 1
-      log.info("Bytecode phase drained after a restart: waiting for the code-hash file's pointer before it ends")
+    else if codeFile.isEmpty && !codeFilePointerWaitOver then
+      if !timers.isTimerActive(CodeFilePointerWaitOver) then
+        timers.startSingleTimer(CodeFilePointerWaitOver, ExcludedSweep.PointerWaitLimit)
+        log.info("Bytecode phase drained after a restart: waiting for the code-hash file's pointer before it ends")
       true
     else startCodeFileSweep()
 
@@ -417,10 +425,22 @@ private[actors] class ByteCodeCoordinatorImpl(
         Behaviors.same
 
       case CodeFileSweepTimedOut(token) =>
-        if codeFileSweep.finish(token) then
-          onCodeFileSwept(
-            ExcludedTaskFile.Outcome.Unreadable(new java.util.concurrent.TimeoutException("the read of the file hung"))
-          )
+        codeFileSweep.chunkFinishedSinceLastLook(token) match
+          case Some(true) => timers.startSingleTimer(CodeFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
+          case Some(false) if codeFileSweep.finish(token) =>
+            onCodeFileSwept(
+              ExcludedTaskFile.Outcome.Unreadable(
+                new java.util.concurrent.TimeoutException(
+                  s"the read of the file hung: no chunk finished in ${ExcludedSweep.NoChunkLimit}"
+                )
+              )
+            )
+          case _ => ()
+        Behaviors.same
+
+      case CodeFilePointerWaitOver =>
+        codeFilePointerWaitOver = true
+        checkCompletion()
         Behaviors.same
 
       case ForceCompleteByteCodes =>
@@ -561,19 +581,16 @@ object ByteCodeCoordinator:
   /** How soon a force-complete tries again after its record could not be written. */
   private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
 
-  /** Measured for a task file on the root SSD, with a small store: 2M entries in 9 to 12 s, so about 70 s for Sepolia's
-    * 12M. This leaves room for a store and a disk some 25 times slower.
-    */
-  private[actors] val CodeFileSweepTimeout: FiniteDuration = 30.minutes
-
-  /** Status pulses a restarted coordinator waits for the code-hash file's pointer, at 30 seconds each. */
-  private[actors] val MaxCodeFilePointerWaits: Int = 4
-
   /** The read of the code-hash file has ended (`ExcludedTaskFile`). */
   final private[actors] case class CodeFileSwept(token: Long, outcome: ExcludedTaskFile.Outcome) extends Command
 
-  /** The read of the code-hash file has run too long: it is treated as unreadable, and told to stop. */
+  /** The read of the code-hash file's watchdog looks: with no chunk finished since the last look it is treated as
+    * unreadable, and told to stop.
+    */
   final private[actors] case class CodeFileSweepTimedOut(token: Long) extends Command
+
+  /** A restarted coordinator has waited `ExcludedSweep.PointerWaitLimit` for the code-hash file's pointer. */
+  private[actors] case object CodeFilePointerWaitOver extends Command
 
   /** Command protocol for the Typed coordinator (Group S3). All subtypes live in this companion so the trait is sealed
     * — Scala 3 file-scope sealing enables exhaustive match checking at every call site.

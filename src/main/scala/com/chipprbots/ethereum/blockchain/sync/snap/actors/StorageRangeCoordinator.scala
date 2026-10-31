@@ -680,7 +680,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   private val taskFileSweep = new ExcludedSweep
   private var taskFileSwept: Boolean = false
   private var forceCompleteWanted: Boolean = false
-  private var taskFilePointerWaits: Int = 0
+  private var taskFilePointerWaitOver: Boolean = false
 
   /** The task file and the entries it was recorded as holding, if it was. */
   private def taskFile: Option[(java.nio.file.Path, Option[Long])] =
@@ -705,10 +705,10 @@ private[actors] class StorageRangeCoordinatorImpl(
       case (Some(done), Some((file, expected))) =>
         val record = excludedRecorder.recordNow
         val selfRef = self
-        val token = taskFileSweep.start(flatBatchEc)(cancelled =>
-          ExcludedTaskFile.recordUnfinished(file, expected, done, record, cancelled)
+        val token = taskFileSweep.start(flatBatchEc)(work =>
+          ExcludedTaskFile.recordUnfinished(file, expected, done, record, work.cancelled, chunkDone = work.chunkDone)
         )((t, outcome) => selfRef ! TaskFileSwept(t, outcome))
-        timers.startSingleTimer(TaskFileSweepTimedOut(token), TaskFileSweepTimeout)
+        timers.startSingleTimer(TaskFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
         true
       case (done, _) =>
         log.warn(
@@ -725,7 +725,9 @@ private[actors] class StorageRangeCoordinatorImpl(
     outcome match
       case ExcludedTaskFile.Outcome.Recorded(accounts) =>
         taskFileSwept = true
-        log.info(s"[STORAGE-FORCE-COMPLETE] Recorded $accounts unfinished account(s) from the task file")
+        log.info(
+          s"[STORAGE-FORCE-COMPLETE] Recorded $accounts unfinished account(s) from the task file (${taskFileSweep.lastRun})"
+        )
         self ! resume
       case ExcludedTaskFile.Outcome.Unreadable(cause) =>
         // The walk still finds what it would have named; slice 5 may not remove the walk over this (T050a).
@@ -740,17 +742,16 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   /** The phase's clean end. The controller wipes the done markers on it, so a restarted incarnation, which does not
     * know what the one before it held, reads the task file first (round 2 review B). The file's pointer is persisted
-    * just after the account phase's end reaches this actor, so that is worth a short wait, each
-    * `StorageCheckCompletion` looking again. A healthy run pays nothing.
+    * just after the account phase's end reaches this actor, so that is worth a short wait, by the clock
+    * (`PointerWaitLimit`): what checks here comes in bursts. A healthy run pays nothing.
     */
   private def endPhaseCleanly(): Unit =
     val sweepDue = restartedIncarnation && recordExcluded && !taskFileSwept
     if taskFileSweep.running then ()
-    else if sweepDue && storageDoneStorage.isDefined && taskFile.isEmpty &&
-      taskFilePointerWaits < MaxTaskFilePointerWaits
-    then
-      taskFilePointerWaits += 1
-      log.info("Storage phase drained after a restart: waiting for the task file's pointer before it ends")
+    else if sweepDue && storageDoneStorage.isDefined && taskFile.isEmpty && !taskFilePointerWaitOver then
+      if !timers.isTimerActive(TaskFilePointerWaitOver) then
+        timers.startSingleTimer(TaskFilePointerWaitOver, ExcludedSweep.PointerWaitLimit)
+        log.info("Storage phase drained after a restart: waiting for the task file's pointer before it ends")
     else if sweepDue && startTaskFileSweep() then ()
     else
       log.debug("Storage range sync complete!")
@@ -888,12 +889,22 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
 
       case TaskFileSweepTimedOut(token) =>
-        if taskFileSweep.finish(token) then
-          onTaskFileSwept(
-            ExcludedTaskFile.Outcome.Unreadable(
-              new java.util.concurrent.TimeoutException("the read of the task file hung")
+        taskFileSweep.chunkFinishedSinceLastLook(token) match
+          case Some(true) => timers.startSingleTimer(TaskFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
+          case Some(false) if taskFileSweep.finish(token) =>
+            onTaskFileSwept(
+              ExcludedTaskFile.Outcome.Unreadable(
+                new java.util.concurrent.TimeoutException(
+                  s"the read of the task file hung: no chunk finished in ${ExcludedSweep.NoChunkLimit}"
+                )
+              )
             )
-          )
+          case _ => ()
+        Behaviors.same
+
+      case TaskFilePointerWaitOver =>
+        taskFilePointerWaitOver = true
+        self ! StorageCheckCompletion
         Behaviors.same
 
       case ForceCompleteStorage =>
@@ -1259,8 +1270,13 @@ object StorageRangeCoordinator:
   /** The read of the task file has ended (`ExcludedTaskFile`). */
   final private[actors] case class TaskFileSwept(token: Long, outcome: ExcludedTaskFile.Outcome) extends Command
 
-  /** The read of the task file has run too long: it is treated as unreadable, and told to stop. */
+  /** The read of the task file's watchdog looks: with no chunk finished since the last look it is treated as
+    * unreadable, and told to stop.
+    */
   final private[actors] case class TaskFileSweepTimedOut(token: Long) extends Command
+
+  /** A restarted coordinator has waited `ExcludedSweep.PointerWaitLimit` for the task file's pointer. */
+  private[actors] case object TaskFilePointerWaitOver extends Command
 
   /** Dynamically adjust per-peer concurrency budget. Sent by SNAPSyncController at phase transitions (Geth-aligned:
     * total 5 requests per peer across all coordinators).
@@ -1284,14 +1300,6 @@ object StorageRangeCoordinator:
 
   /** spec 022 T033: how soon a force-complete whose excluded-set write failed tries again. */
   private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
-
-  /** Measured for a task file on the root SSD, with a small store: 2M entries in 9 to 12 s, so about 70 s for Sepolia's
-    * 12M. This leaves room for a store and a disk some 25 times slower.
-    */
-  private[actors] val TaskFileSweepTimeout: FiniteDuration = 30.minutes
-
-  /** Checks a restarted coordinator waits for the task file's pointer, at 30 seconds each. */
-  private[actors] val MaxTaskFilePointerWaits: Int = 4
 
   /** Aggregated flat-slot batch failed to commit. Healing phase is expected to re-fetch the missing slots. */
   private[actors] case class FlatBatchFlushFailed(

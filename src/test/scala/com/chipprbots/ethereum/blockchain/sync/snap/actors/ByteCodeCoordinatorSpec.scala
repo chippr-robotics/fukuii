@@ -834,9 +834,8 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         progressStore.excludedPage(None, 1000).map(_.subject) should not contain lost
       }
       coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
-      // Each check looks for the pointer again, standing in for the 30-second pulse.
-      (1 to ByteCodeCoordinator.MaxCodeFilePointerWaits)
-        .foreach(_ => coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion)
+      // Standing in for the timer: with a path and no count the wait for the pointer has to run out.
+      if pointerCount.isEmpty then coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
       snapSyncController.fishForMessage(30.seconds) {
         case SNAPSyncController.ByteCodeSyncComplete =>
           org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
@@ -844,6 +843,62 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       }
       (progressStore.excludedPage(None, 1000).map(_.subject), lost, storedHash)
     finally codeFilePointer = None
+
+  // spec 022 T050a (vault, forge N-c): the wait is by the clock, not a count of the checks that happen to come.
+  it should "not let a burst of checks use up the wait for the code-hash file's pointer" taggedAs UnitTest in {
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val codes = new TestEvmCodeStorage()
+    val lost = kec256(ByteString("restart-file-burst"))
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, lost.toArray)
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    codeFilePointer = Some(appState)
+    try
+      val coordinator = testKit.spawn(
+        org.apache.pekko.actor.typed.scaladsl.Behaviors
+          .supervise(
+            ByteCodeCoordinator(
+              stateIngest = bytecodeIngest(codes),
+              networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+              requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+              batchSize = 4,
+              snapSyncController = snapSyncController.ref,
+              recordExcluded = true
+            )
+          )
+          .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+      )
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(lost))
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      progressSource.failSync = true
+      try
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+        alive.receiveMessage(30.seconds)
+      finally progressSource.failSync = false
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      (1 to 20).foreach(_ => coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion)
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ snapSyncController.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      withClue("twenty checks in a moment are not two minutes: ") {
+        heard should not contain SNAPSyncController.ByteCodeSyncComplete
+      }
+      appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(Some(1L))).commit()
+      coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion
+      snapSyncController.fishForMessage(30.seconds) {
+        case SNAPSyncController.ByteCodeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      progressStore.excludedPage(None, 1000).map(_.subject) should contain(lost)
+    finally codeFilePointer = None
+  }
 
   it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
     val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = false)
