@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chippr-robotics/fukuii/specs/024-chain-registry/contracts/chainspec.schema.json",
+  "title": "fukuii ChainSpec entry",
+  "description": "Shape of one registry entry <chainKey>-chain.conf (HOCON) rendered as JSON (ConfigRenderOptions.concise). Kept in sync with com.chipprbots.ethereum.chainspec.ChainSpecSchema by ChainSpecSchemaSyncSpec. Keys are today's chain-config keys; 'consensus' is new and required; 'network-type' is the family; finality rule, fork dispatch and storage scheme are derived from 'consensus' and are not keys. Deployment keys (ports, datadir, RPC APIs, peer limits, mining.*, sync.* other than do-snap-sync) are rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "consensus",
+    "chain-id",
+    "network-id",
+    "sync",
+    "bootstrap-nodes",
+    "account-start-nonce",
+    "monetary-policy",
+    "gas-tie-breaker",
+    "eth-compatible-storage",
+    "frontier-block-number",
+    "homestead-block-number",
+    "eip106-block-number",
+    "eip150-block-number",
+    "eip155-block-number",
+    "eip160-block-number",
+    "eip161-block-number",
+    "byzantium-block-number",
+    "constantinople-block-number",
+    "istanbul-block-number",
+    "atlantis-block-number",
+    "agharta-block-number",
+    "phoenix-block-number",
+    "petersburg-block-number",
+    "difficulty-bomb-pause-block-number",
+    "difficulty-bomb-continue-block-number",
+    "difficulty-bomb-removal-block-number",
+    "ecip1099-block-number",
+    "muir-glacier-block-number",
+    "magneto-block-number",
+    "berlin-block-number",
+    "mystique-block-number",
+    "spiral-block-number"
+  ],
+  "properties": {
+    "consensus": {
+      "description": "Consensus type the build implements. Implies family, validator set, fork dispatch and storage scheme. Adding a value is a code change (spec 023 D-2).",
+      "type": "string",
+      "enum": ["ethash-pow", "engine-api"]
+    },
+    "network-type": {
+      "description": "Chain family (model name: family). Must agree with consensus: ethash-pow => etc, engine-api => eth. Default etc when absent; explicit \"eth\" is required for engine-api entries.",
+      "type": "string",
+      "enum": ["etc", "eth"],
+      "default": "etc"
+    },
+    "chain-id": {
+      "description": "EIP-155 chain id. Hex string with 0x prefix or decimal string; may exceed 32 bits (Platåberget 0x1a6a8cc6e).",
+      "$ref": "#/$defs/hexOrDecimalString"
+    },
+    "network-id": {
+      "description": "devp2p network id.",
+      "$ref": "#/$defs/uintOrDecimalString"
+    },
+    "custom-genesis-file": {
+      "description": "geth-format genesis JSON: a path (string; relative paths resolve against the entry's directory for operator entries, file-then-classpath for built-ins) or the genesis object inline. Absent only for the built-in etc entry (default genesis).",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "$ref": "#/$defs/gethGenesis" }
+      ]
+    },
+    "genesis-hash": {
+      "description": "Expected hash of the genesis block built from custom-genesis-file. Checked at load; recommended for every entry.",
+      "$ref": "#/$defs/hash32"
+    },
+    "sync": {
+      "description": "Per-chain sync default. Only do-snap-sync is allowed here; everything else under sync is a deployment key.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["do-snap-sync"],
+      "properties": {
+        "do-snap-sync": {
+          "description": "Default sync mode: true = SNAP to the head, false = import every block from genesis. The deployment profile may override.",
+          "type": "boolean"
+        }
+      }
+    },
+    "pow-target-time": {
+      "description": "Ethash target block time (HOCON duration such as \"15.seconds\"). Required non-null for ethash-pow; null or absent for engine-api.",
+      "type": ["string", "null"]
+    },
+    "terminal-total-difficulty": {
+      "description": "EIP-3675 terminal total difficulty. Required for engine-api; forbidden for ethash-pow.",
+      "$ref": "#/$defs/uintOrDecimalString"
+    },
+    "merge-netsplit-block-number": { "$ref": "#/$defs/blockNumber" },
+    "shanghai-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "cancun-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "prague-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "osaka-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "amsterdam-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "bpo1-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "bpo2-timestamp": { "$ref": "#/$defs/unixTimestamp" },
+    "blob-schedule": {
+      "description": "EIP-7840 / EIP-7892 blob parameters per fork (go-ethereum BlobScheduleConfig). Required when a blob fork timestamp is declared.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cancun": { "$ref": "#/$defs/blobParams" },
+        "prague": { "$ref": "#/$defs/blobParams" },
+        "bpo1": { "$ref": "#/$defs/blobParams" },
+        "bpo2": { "$ref": "#/$defs/blobParams" }
+      }
+    },
+    "deposit-contract-address": {
+      "description": "EIP-6110 deposit contract (geth config.depositContractAddress). ETH family only.",
+      "$ref": "#/$defs/address"
+    },
+    "frontier-block-number": { "$ref": "#/$defs/blockNumber" },
+    "homestead-block-number": { "$ref": "#/$defs/blockNumber" },
+    "eip106-block-number": { "$ref": "#/$defs/blockNumber" },
+    "eip150-block-number": { "$ref": "#/$defs/blockNumber" },
+    "eip155-block-number": { "$ref": "#/$defs/blockNumber" },
+    "eip160-block-number": { "$ref": "#/$defs/blockNumber" },
+    "eip161-block-number": { "$ref": "#/$defs/blockNumber" },
+    "byzantium-block-number": { "$ref": "#/$defs/blockNumber" },
+    "constantinople-block-number": { "$ref": "#/$defs/blockNumber" },
+    "petersburg-block-number": { "$ref": "#/$defs/blockNumber" },
+    "istanbul-block-number": { "$ref": "#/$defs/blockNumber" },
+    "muir-glacier-block-number": { "$ref": "#/$defs/blockNumber" },
+    "berlin-block-number": { "$ref": "#/$defs/blockNumber" },
+    "arrow-glacier-block-number": { "$ref": "#/$defs/blockNumber" },
+    "gray-glacier-block-number": { "$ref": "#/$defs/blockNumber" },
+    "difficulty-bomb-pause-block-number": { "$ref": "#/$defs/blockNumber" },
+    "difficulty-bomb-continue-block-number": { "$ref": "#/$defs/blockNumber" },
+    "difficulty-bomb-removal-block-number": { "$ref": "#/$defs/blockNumber" },
+    "atlantis-block-number": { "$ref": "#/$defs/blockNumber" },
+    "agharta-block-number": { "$ref": "#/$defs/blockNumber" },
+    "phoenix-block-number": { "$ref": "#/$defs/blockNumber" },
+    "ecip1099-block-number": { "$ref": "#/$defs/blockNumber" },
+    "magneto-block-number": { "$ref": "#/$defs/blockNumber" },
+    "mystique-block-number": { "$ref": "#/$defs/blockNumber" },
+    "spiral-block-number": { "$ref": "#/$defs/blockNumber" },
+    "olympia-block-number": { "$ref": "#/$defs/blockNumber" },
+    "spiral-gas-target": { "$ref": "#/$defs/uintOrDecimalString" },
+    "olympia-gas-target": { "$ref": "#/$defs/uintOrDecimalString" },
+    "olympia-gas-limit-elasticity": { "type": "integer", "minimum": 1 },
+    "max-code-size": { "$ref": "#/$defs/uintOrDecimalString" },
+    "account-start-nonce": { "$ref": "#/$defs/uintOrDecimalString" },
+    "gas-tie-breaker": { "type": "boolean" },
+    "eth-compatible-storage": { "type": "boolean" },
+    "treasury-address": {
+      "description": "Olympia treasury (ECIP-1112). Address without or with 0x prefix; built-ins reference ${fukuii.olympia.treasury-address}.",
+      "$ref": "#/$defs/address"
+    },
+    "base-fee-floor": { "$ref": "#/$defs/uintOrDecimalString" },
+    "min-tip": { "$ref": "#/$defs/uintOrDecimalString" },
+    "gpo-default-price": { "$ref": "#/$defs/uintOrDecimalString" },
+    "monetary-policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first-era-block-reward",
+        "first-era-reduced-block-reward",
+        "first-era-constantinople-reduced-block-reward",
+        "era-duration",
+        "reward-reduction-rate"
+      ],
+      "properties": {
+        "first-era-block-reward": { "$ref": "#/$defs/uintOrDecimalString" },
+        "first-era-reduced-block-reward": { "$ref": "#/$defs/uintOrDecimalString" },
+        "first-era-constantinople-reduced-block-reward": { "$ref": "#/$defs/uintOrDecimalString" },
+        "era-duration": { "type": "integer", "minimum": 1 },
+        "reward-reduction-rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "dao": {
+      "description": "DAO fork handling (DaoForkConfig).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fork-block-number", "fork-block-hash", "include-on-fork-id-list"],
+      "properties": {
+        "fork-block-number": { "$ref": "#/$defs/blockNumber" },
+        "fork-block-hash": { "$ref": "#/$defs/hash32" },
+        "block-extra-data": { "type": "string" },
+        "block-extra-data-range": { "type": "integer", "minimum": 0 },
+        "refund-contract-address": { "$ref": "#/$defs/address" },
+        "drain-list": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "include-on-fork-id-list": { "type": "boolean" }
+      }
+    },
+    "bootstrap-nodes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^enode://[0-9a-fA-F]{128}@.+:[0-9]{1,5}(\\?.*)?$" }
+    },
+    "dns-discovery-domains": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^enrtree://" }
+    },
+    "allowed-miners": {
+      "description": "restricted-pow miner public keys (hex).",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^(0x)?[0-9a-fA-F]{128}$" }
+    },
+    "mess": {
+      "description": "ECIP-1100 MESS. Required with explicit enabled for ethash-pow (default false, DC-2); forbidden for engine-api.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ecbp1100-block-number": { "$ref": "#/$defs/blockNumber" },
+        "ecbp1100-deactivate-block-number": { "$ref": "#/$defs/blockNumber" },
+        "ecbp1100-reactivate-block-number": { "$ref": "#/$defs/blockNumber" }
+      }
+    },
+    "resources": {
+      "description": "Optional per-role resource defaults (FR-007). Operators and Orbita override; fukuii never enforces them.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ingest": { "$ref": "#/$defs/resourceProfile" },
+        "replica": { "$ref": "#/$defs/replicaResourceProfile" },
+        "archive": { "$ref": "#/$defs/resourceProfile" },
+        "sim": { "$ref": "#/$defs/resourceProfile" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "consensus": { "const": "ethash-pow" } } },
+      "then": {
+        "required": ["pow-target-time", "mess"],
+        "properties": {
+          "network-type": { "const": "etc" },
+          "pow-target-time": { "type": "string" }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["terminal-total-difficulty"] },
+            { "required": ["shanghai-timestamp"] },
+            { "required": ["cancun-timestamp"] },
+            { "required": ["prague-timestamp"] },
+            { "required": ["osaka-timestamp"] },
+            { "required": ["amsterdam-timestamp"] },
+            { "required": ["bpo1-timestamp"] },
+            { "required": ["bpo2-timestamp"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "consensus": { "const": "engine-api" } } },
+      "then": {
+        "required": ["network-type", "terminal-total-difficulty"],
+        "properties": { "network-type": { "const": "eth" } },
+        "not": { "required": ["mess"] }
+      }
+    }
+  ],
+  "$defs": {
+    "blockNumber": {
+      "description": "Block number as a decimal string; \"1000000000000000000\" is the never sentinel.",
+      "type": "string",
+      "pattern": "^[0-9]{1,19}$"
+    },
+    "unixTimestamp": {
+      "description": "Fork activation time, seconds since the epoch.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "uintOrDecimalString": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "pattern": "^[0-9]+$" }
+      ]
+    },
+    "hexOrDecimalString": {
+      "type": "string",
+      "pattern": "^(0x[0-9a-fA-F]+|[0-9]+)$"
+    },
+    "hash32": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{64}$"
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^(0x)?[0-9a-fA-F]{40}$"
+    },
+    "blobParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "max", "base-fee-update-fraction"],
+      "properties": {
+        "target": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 },
+        "base-fee-update-fraction": { "$ref": "#/$defs/uintOrDecimalString" }
+      }
+    },
+    "resourceProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heap-hint": { "$ref": "#/$defs/sizeString" },
+        "engine-memory-budget": { "$ref": "#/$defs/sizeString" }
+      }
+    },
+    "replicaResourceProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heap-hint": { "$ref": "#/$defs/sizeString" },
+        "engine-memory-budget": { "$ref": "#/$defs/sizeString" },
+        "retention-window": {
+          "description": "HOCON duration; spec 026 default is 24h of blocks.",
+          "type": "string",
+          "pattern": "^[0-9]+\\s*(ms|s|m|h|d|seconds?|minutes?|hours?|days?)$"
+        }
+      }
+    },
+    "sizeString": {
+      "description": "HOCON memory size (Config.getBytes), e.g. \"8g\", \"512m\".",
+      "type": "string",
+      "pattern": "^[0-9]+\\s*([kKmMgGtT]i?[bB]?|[bB])?$"
+    },
+    "gethGenesis": {
+      "description": "geth-format genesis object (the shape GenesisDataLoader parses). Validated by fukuii, not exhaustively here.",
+      "type": "object",
+      "required": ["alloc"],
+      "properties": {
+        "config": { "type": "object" },
+        "nonce": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "extraData": { "type": "string" },
+        "gasLimit": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "mixHash": { "$ref": "#/$defs/hash32" },
+        "coinbase": { "$ref": "#/$defs/address" },
+        "baseFeePerGas": { "type": ["string", "null"] },
+        "excessBlobGas": { "type": ["string", "null"] },
+        "blobGasUsed": { "type": ["string", "null"] },
+        "alloc": { "type": "object" }
+      }
+    }
+  }
+}
