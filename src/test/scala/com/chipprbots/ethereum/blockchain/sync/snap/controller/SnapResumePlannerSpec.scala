@@ -38,7 +38,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -122,7 +125,7 @@ private[snap] class StubSnapResumePlannerState(
   val asyncLog: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[SnapResumePlannerSpec])
   val appStateStorage: AppStateStorage = new AppStateStorage(dataSource)
   val stateStorage: StateStorage = StateStorage.createTestStateStorage(dataSource)._1
-  def evmCodeStorage: EvmCodeStorage = notUsed("evmCodeStorage")
+  val evmCodeStorage: EvmCodeStorage = new EvmCodeStorage(dataSource)
   val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = ExecutionContext.parasitic
@@ -148,7 +151,7 @@ private[snap] class StubSnapResumePlannerState(
   )
 
   // CoordinatorHandles (no coordinator is spawned: the recovery spawns are the stub's DownloadRecoveryApi)
-  def intakeBudget: SnapIntakeBudget = notUsed("intakeBudget")
+  val intakeBudget: SnapIntakeBudget = new SnapIntakeBudget(1000L, 1000L)
   protected def stopChild(child: ActorRef[Nothing]): Unit = notUsed("stopChild")
 
   // Callee Api traits
@@ -421,6 +424,49 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.chainDownloaderStarts shouldBe 1
     h.module.snapServerSchedulerStarts shouldBe 1
     h.module.downloadChecks shouldBe 1
+  }
+
+  // spec 022 T050a, H0: the storage file now also names accounts with storage and no code, so its count and the code
+  // files' counts differ. Each file is checked against its own count, and both are read back in full.
+  it should "resume bytecodes and storage from a mixed run's task files, whose counts differ" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-mixed")
+    val h = new Harness()
+    def h32(b: Int): ByteString = ByteString(Array.fill[Byte](32)(b.toByte))
+    val storagePath = dir.resolve("fukuii-contract-storage-mixed")
+    val codeHashesPath = dir.resolve("fukuii-unique-codehashes-mixed")
+    Files.write(storagePath, (h32(1) ++ h32(0x11) ++ h32(2) ++ h32(0x22)).toArray) // the second has no code
+    Files.write(codeHashesPath, h32(0xc1).toArray)
+    h.saveRecovery(BigInt(1_000), phasesComplete = false)
+    val app = h.module.appStateStorage
+    app
+      .putSnapSyncStorageFilePath(storagePath.toString)
+      .and(app.putSnapSyncStorageFileCount(Some(2L)))
+      .and(app.putSnapSyncCodeHashesPath(codeHashesPath.toString))
+      .and(app.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    val bytecode = TestInbox[ByteCodeCoordinator.Command]()
+    h.module.storageRangeCoordinator = Some(storage.ref)
+    h.module.bytecodeCoordinator = Some(bytecode.ref)
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 1
+    app.isSnapSyncAccountsComplete() shouldBe true
+    // The replay's Futures run on the kit's executor, which only runs what it is told to. Its class is pekko-private.
+    val executor = h.module.ctx.executionContext
+    executor.getClass.getMethod("runAll").invoke(executor)
+    (storage.receiveAll() should contain).allOf(
+      StorageRangeCoordinator.AddStorageTasks(
+        Seq(StorageTask.createStorageTask(h32(1), h32(0x11)), StorageTask.createStorageTask(h32(2), h32(0x22)))
+      ),
+      StorageRangeCoordinator.NoMoreStorageTasks
+    )
+    (bytecode.receiveAll() should contain).allOf(
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(h32(0xc1))),
+      ByteCodeCoordinator.NoMoreByteCodeTasks
+    )
+    deleteDir(dir)
   }
 
   it should "clear the recovery and fall through when the saved pivot is below the escalation hint" taggedAs UnitTest in {
