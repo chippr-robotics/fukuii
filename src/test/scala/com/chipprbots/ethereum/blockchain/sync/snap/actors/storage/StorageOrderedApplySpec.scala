@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -265,14 +266,28 @@ class StorageOrderedApplySpec extends AnyFlatSpec with Matchers:
     m.storageTrieCursor.contains(Account) shouldBe false
   }
 
-  it should "commit no trie for an empty chunk and mark the account against its claimed root" taggedAs UnitTest in {
+  // Until spec 022 T050a (H1) this asserted a marker against the claimed root: the account was vouched for with its root
+  // never written. Only a claim of the empty root is what no slots computes.
+  it should "commit no trie for an empty chunk, and mark only an account that claims the empty root" taggedAs UnitTest in {
     val controller = TestInbox[SNAPSyncController.Command]()
     val m = module(controller, deferredMerkleization = false)
     m.applyOrderedStorageChunk(peer("p1"), StorageTask(Account, Root, m.zeroSlotHash, key(0x7f)), Seq.empty, Seq.empty)
 
     m.pendingAccountTries shouldBe empty
     m.completedAccountCount shouldBe 1L
-    m.stagedMarkers.toSeq shouldBe Seq(Account -> Root)
+    m.stagedMarkers shouldBe empty
+    m.excludedRecorder.pending shouldBe true
+
+    val claimsNone = ByteString(MerklePatriciaTrie.EmptyRootHash)
+    val other = key(0x42)
+    m.applyOrderedStorageChunk(
+      peer("p1"),
+      StorageTask(other, claimsNone, m.zeroSlotHash, key(0x7f)),
+      Seq.empty,
+      Seq.empty
+    )
+    m.completedAccountCount shouldBe 2L
+    m.stagedMarkers.toSeq shouldBe Seq(other -> claimsNone)
   }
 
   it should "stream a Hash-scheme chunk into a trie whose nodes reach mptStorage on commit" taggedAs UnitTest in {
