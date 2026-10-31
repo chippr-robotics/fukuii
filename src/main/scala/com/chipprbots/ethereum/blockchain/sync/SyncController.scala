@@ -1917,13 +1917,15 @@ object SyncController:
       * takes its (account, storage root) pairs from this same scan, asks peers at this same root, and checks each chunk
       * against its pair's root (and rolls to a recent root when peers no longer serve this one).
       *
-      * Regular sync is stopped through the scan and the downloads, so a restart mid-scan finds the same best root and
-      * the resume tag (`getRecoveryProgressFor`) still matches. The Engine API is not stopped: with a consensus client
-      * feeding the next payload, `forkchoiceUpdated` moves the best block under a running scan. That path does not
-      * prune, so the walk is unharmed; a restart then picks another root, the tag does not match, and the scan starts
-      * afresh.
+      * A scan already under way keeps its root while that root can be read, so a restart mid-scan resumes (the tag in
+      * `getRecoveryProgressFor` matches) instead of starting hours of walking again. The best block can move under a
+      * scan: regular sync is stopped through the scan and the downloads, but the Engine API is not, and with a
+      * consensus client feeding the next payload `forkchoiceUpdated` moves it. That path does not prune, and nothing
+      * else does until regular sync's first saved block, so the walk is unharmed. Its block number is the best block's,
+      * since the progress does not hold one: only what a download writes is tagged with it, and those nodes belong to
+      * the best state anyway.
       *
-      * `None` when there is neither: `startRecovery` then has nothing to scan.
+      * `None` when there is no root: `startRecovery` then has nothing to scan.
       */
     private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
       def readable(root: ByteString, number: BigInt): Boolean =
@@ -1936,15 +1938,25 @@ object SyncController:
         root <- appStateStorage.getSnapSyncStateRoot()
         number <- appStateStorage.getSnapSyncPivotBlock()
       yield (root, number)
-      best.filter { case (r, n) => readable(r, n) } match
+      val underWay = for
+        progress <- appStateStorage.getRecoveryProgress()
+        (bestRoot, number) <- best
+        if progress.scanRoot != bestRoot && readable(progress.scanRoot, number)
+      yield (progress.scanRoot, number)
+      underWay match
         case Some(ok) =>
-          log.info("Recovery scans the best block's state root (block {}).", ok._2)
+          log.info("Recovery resumes its scan on the state root it started with, at best block {}.", ok._2)
           Some(ok)
         case None =>
-          log.error(
-            "The best block's state root is not readable; recovery falls back to the SNAP pivot's root, which may be pruned."
-          )
-          pivot
+          best.filter { case (r, n) => readable(r, n) } match
+            case Some(ok) =>
+              log.info("Recovery scans the best block's state root (block {}).", ok._2)
+              Some(ok)
+            case None =>
+              log.error(
+                "The best block's state root is not readable; recovery falls back to the SNAP pivot's root, which may be pruned."
+              )
+              pivot
 
     def startRecovery(
         needBytecode: Boolean,
@@ -2096,8 +2108,9 @@ object SyncController:
           )
 
     /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
-      * written, and the scan's progress stays, so the next start tries again and a resume there still finds it. No hard
-      * stop: regular sync fetches what it reaches on demand. A pass that did run is another matter: see
+      * written, and the scan's progress stays, so the next start tries again. It resumes only while that root can still
+      * be read: regular sync starts here and prunes, so after about 64 blocks the next start scans afresh on the best
+      * root. No hard stop: regular sync fetches what it reaches on demand. A pass that did run is another matter: see
       * `runningCombinedScan`.
       */
     private def recoveryCouldNotRun(needBytecode: Boolean, needStorage: Boolean, why: String): Behavior[Command] =

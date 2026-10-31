@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync
 
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.util.ByteString
 
@@ -9,6 +10,10 @@ import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
+import scala.util.control.NoStackTrace
+import scala.util.control.NonFatal
+
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -68,12 +73,20 @@ final class CombinedRecoveryScanner(
     shardDepth: Int = 1,
     // Test hooks. `onShardScanStart` fires when a shard's walk begins (records which shards a resumed run actually
     // re-scans); `onShardPersisted` fires right AFTER a shard's progress is committed (throw here to simulate a
-    // crash-after-persist and assert resume). Production leaves both as no-ops.
+    // crash-after-persist and assert resume); `onShardFailed` fires once a shard's failure is visible to the other
+    // walks. Production leaves all three as no-ops.
     onShardScanStart: Int => Unit = _ => (),
-    onShardPersisted: Int => Unit = _ => ()
+    onShardPersisted: Int => Unit = _ => (),
+    onShardFailed: () => Unit = () => ()
 ):
+  private val log = LoggerFactory.getLogger(getClass)
 
-  /** Walk the not-yet-completed shards, persisting resumable progress as it goes, and return the merged gap set. */
+  /** Walk the not-yet-completed shards, persisting resumable progress as it goes, and return the merged gap set.
+    *
+    * The first shard to fail stops the rest (spec 022 T050a): a failed scan goes on to regular sync, and walks left
+    * running would read and fsync for hours beside it, over a root regular sync is pruning. What is thrown is that
+    * failure, whichever shard's future the wait happens to see first.
+    */
   def run(): RecoveryScanResult =
     val shards = ShardEnumerator.enumShards(scanRoot, storageForShard(), shardDepth)
     val shardCount = shards.length
@@ -97,6 +110,7 @@ final class CombinedRecoveryScanner(
     val remaining = (0 until shardCount).filterNot(completed)
     val lock = new Object
     var holes = 0L
+    val firstFailure = new AtomicReference[Throwable](null)
 
     // Live progress gauges for the node-health dashboard. Counts accounts walked THIS session (resumed shards are not
     // re-walked); the missing count is seeded from the resumed checkpoint so it stays cumulative. Atomics because the
@@ -105,6 +119,7 @@ final class CombinedRecoveryScanner(
     val contractsFound = new java.util.concurrent.atomic.AtomicLong(0L)
     val missingStorageCount = new java.util.concurrent.atomic.AtomicLong(accStorage.size.toLong)
     val onAccount: Boolean => Unit = isContract =>
+      if firstFailure.get != null then throw CombinedRecoveryScanner.StoppedByAnotherShard
       val n = accountsScanned.incrementAndGet()
       if isContract then contractsFound.incrementAndGet()
       if n % 100000 == 0 then RecoveryMetrics.setStorageScanProgress(n, contractsFound.get(), missingStorageCount.get())
@@ -128,22 +143,41 @@ final class CombinedRecoveryScanner(
           RecoveryProgress(scanRoot, shardCount, completed.toSet, accBytecodes.toVector, accStorage.toVector)
         )
         .commitSync()
+      // Each shard's end, so a scan of hours says how far it is and what it costs, and holes a later resume will not
+      // count are still on record.
+      log.info(
+        s"[SNAP-RECOVERY] Scan: ${completed.size} of $shardCount shards done, ${accountsScanned.get()} accounts this " +
+          s"session, ${accBytecodes.size} codes and ${accStorage.size} storage roots missing, $holes subtrees unreadable"
+      )
       onShardPersisted(completed.size)
     }
 
     def scanOne(idx: Int): Unit =
-      onShardScanStart(idx)
-      val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
-      scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
-      mergeAndPersist(idx, scan)
+      if firstFailure.get == null then
+        try
+          onShardScanStart(idx)
+          val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
+          scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
+          mergeAndPersist(idx, scan)
+        catch
+          case NonFatal(e) =>
+            firstFailure.compareAndSet(null, e)
+            onShardFailed()
+            throw e
 
     if concurrency <= 1 then remaining.foreach(scanOne)
     else
       val pool = Executors.newFixedThreadPool(math.min(concurrency, remaining.size))
       given ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
       try Await.result(Future.sequence(remaining.map(idx => Future(scanOne(idx)))), Duration.Inf)
+      catch case NonFatal(e) => throw Option(firstFailure.get).getOrElse(e)
       finally pool.shutdown()
 
     // Final progress publish so the dashboard reflects the completed totals.
     RecoveryMetrics.setStorageScanProgress(accountsScanned.get(), contractsFound.get(), missingStorageCount.get())
     RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes)
+
+object CombinedRecoveryScanner:
+
+  /** A walk's signal to give up: another shard has failed, and that failure is the one reported. */
+  private object StoppedByAnotherShard extends RuntimeException with NoStackTrace

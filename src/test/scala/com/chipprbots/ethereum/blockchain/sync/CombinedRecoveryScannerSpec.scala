@@ -1,5 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
@@ -376,4 +380,55 @@ class CombinedRecoveryScannerSpec extends AnyFunSuite:
     val deeper = new HoleFixture
     deeper.corrupt(deeper.deeperNode)
     intercept[MerklePatriciaTrie.MPTException](deeper.scanner(new AppStateStorage(EphemDataSource())).run())
+  }
+
+  test(
+    "the first shard to fail stops the rest: a walk under way gives up, nothing more is persisted, and that failure is thrown",
+    UnitTest
+  ) {
+    val f = new Fixture
+    val root =
+      f.stateRootOf(
+        (1 to 8).map(n => f.acctWithNibble(n, 0) -> acc(TrieRoot(f.missingStorageRoot(n)), Account.EmptyCodeHash))
+      )
+    // Two walks, by shard. Shard 1 waits until shard 0 is inside its walk, then fails, and is held there with its failure
+    // visible and its own future not yet failed. Shard 0 goes on to its first leaf only then, so all it can do is give up,
+    // and its future fails first: that is the wait's exception, and all it says is that it was stopped. Only the end of
+    // run() lets shard 1 go, so reaching the assertions means shard 0's walk has ended, and a walk that ignored the stop
+    // would have persisted by then.
+    val walkUnderWay = new CountDownLatch(1)
+    val failureVisible = new CountDownLatch(1)
+    val runEnded = new CountDownLatch(1)
+    val failedOnce = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val handles = new AtomicInteger(0)
+    val persisted = new AtomicInteger(0)
+    val scanner = new CombinedRecoveryScanner(
+      root,
+      () =>
+        if handles.incrementAndGet() > 1 then
+          walkUnderWay.countDown()
+          assert(failureVisible.await(10, TimeUnit.SECONDS))
+        f.handle()
+      ,
+      f.evm,
+      new AppStateStorage(EphemDataSource()),
+      concurrency = 2,
+      onShardScanStart = idx =>
+        if idx == 1 then
+          assert(walkUnderWay.await(10, TimeUnit.SECONDS))
+          throw new RuntimeException("boom"),
+      onShardPersisted = _ => persisted.incrementAndGet(): Unit,
+      onShardFailed = () =>
+        if failedOnce.compareAndSet(false, true) then
+          failureVisible.countDown()
+          runEnded.await(10, TimeUnit.SECONDS): Unit
+    )
+
+    val thrown =
+      try intercept[RuntimeException](scanner.run())
+      finally runEnded.countDown()
+
+    assert(thrown.getMessage == "boom")
+    assert(persisted.get() == 0, "shard 0 had a leaf to read and a progress write to make, and made neither")
+    assert(handles.get() == 2, "the shards after these two never began")
   }

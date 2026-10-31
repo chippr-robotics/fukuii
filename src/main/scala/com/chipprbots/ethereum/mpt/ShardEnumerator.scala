@@ -26,11 +26,11 @@ object ShardEnumerator:
 
   /** A disjoint subtree of the state trie. `root` is already resolved, and its children may still be HashNodes that the
     * walk resolves on demand. The exception is a subtree whose top node the store does not hold (spec 022 T050a):
-    * `root` is then that bare [[HashNode]], so its walk meets the hole and counts it, as for one deeper down. It stays
-    * one shard whichever way it goes: at depth 1 it is the one shard its child would have been, so the count does not
-    * depend on the hole. At a greater depth a shallow hole is one shard in place of a subtree's worth, and nothing
-    * fills a hole during a scan, so a restart mid-scan finds the same count; a count that did change only starts the
-    * scan afresh.
+    * `root` is then that bare [[HashNode]], so its walk meets the hole and counts it, as for one deeper down. It is one
+    * shard whichever way it goes. Under a branch at depth 1 that is the one shard its child would have been, so the
+    * count does not depend on the hole. Elsewhere (a greater depth, or under an extension) a hole is one shard in place
+    * of a subtree's worth, and nothing fills a hole during a scan, so a restart mid-scan finds the same count; a count
+    * that did change only starts the scan afresh.
     */
   final case class Shard(pathPrefix: ByteString, root: MptNode)
 

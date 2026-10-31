@@ -1068,7 +1068,7 @@ class SyncControllerSpec
     private val nowhere: ByteString = ByteString(Array.fill[Byte](32)(0x5a))
     codeHashes.foreach(h => evmCodes.get(h) shouldBe None)
 
-    private val cleanRoot: ByteString = com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
+    val cleanRoot: ByteString = com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
       .persistState(world0.saveAccount(Address(ByteString(Array.fill[Byte](20)(0x09))), Account(nonce = UInt256(1))))
       .stateRootHash
 
@@ -1298,6 +1298,42 @@ class SyncControllerSpec
     withClue("the pivot's trie has no gaps, so only a scan of the best root asks for these: ") {
       sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
     }
+  }
+
+  it should "resume a scan under way on the root it started with, though the best block has moved" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup, trieAtBest = true)
+    sc.owesTheScan()
+    sc.appState
+      .putRecoveryProgress(
+        com.chipprbots.ethereum.db.storage.RecoveryProgress(sc.cleanRoot, 1, Set.empty, Vector.empty, Vector.empty)
+      )
+      .commit()
+    sc.startRegularSync()
+    withClue("the checkpoint's root has no gaps, so only a scan of the best root asks for these: ") {
+      sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe None)
+    }
+    sc.appState.isBytecodeRecoveryDone() shouldBe true
+    sc.appState.getRecoveryProgress() shouldBe None
+  }
+
+  it should "scan the best block's root when the root of a scan under way has been pruned" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup, trieAtBest = true)
+    sc.owesTheScan()
+    sc.appState
+      .putRecoveryProgress(
+        com.chipprbots.ethereum.db.storage
+          .RecoveryProgress(ByteString(Array.fill[Byte](32)(0x44)), 16, Set(3), Vector.empty, Vector.empty)
+      )
+      .commit()
+    sc.startRegularSync()
+    sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+    sc.appState.isBytecodeRecoveryDone() shouldBe true
   }
 
   it should "fall back to the pivot's root at a start when the best block's cannot be read" taggedAs (
