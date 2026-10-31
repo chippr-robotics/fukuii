@@ -887,8 +887,10 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
-          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
-          appStateStorage.clearBytecodeRecoveryDone().commit()
+          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
+          // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
+          // scan's older root while it can be read, which may never have held this code.
+          appStateStorage.clearBytecodeRecoveryDone().and(appStateStorage.clearRecoveryProgress()).commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
           startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
@@ -2109,9 +2111,10 @@ object SyncController:
 
     /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
       * written, and the scan's progress stays, so the next start tries again. It resumes only while that root can still
-      * be read: regular sync starts here and prunes, so after about 64 blocks the next start scans afresh on the best
-      * root. No hard stop: regular sync fetches what it reaches on demand. A pass that did run is another matter: see
-      * `runningCombinedScan`.
+      * be read: regular sync starts here, and under `basic` pruning about 64 blocks later the next start scans afresh
+      * on the best root. Archive and in-memory pruning keep the root, so there a failure that keeps failing is paid at
+      * every start up to the node that fails. No hard stop: regular sync fetches what it reaches on demand. A pass that
+      * did run is another matter: see `runningCombinedScan`.
       */
     private def recoveryCouldNotRun(needBytecode: Boolean, needStorage: Boolean, why: String): Behavior[Command] =
       log.error(

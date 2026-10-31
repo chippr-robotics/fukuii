@@ -1192,6 +1192,24 @@ class SyncControllerSpec
     }
 
   it should
+    "scan the best block's root for the code it is after, though a failed scan left a checkpoint on an older root" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup, trieAtBest = true)
+      sc.appState
+        .putRecoveryProgress(
+          com.chipprbots.ethereum.db.storage.RecoveryProgress(sc.cleanRoot, 1, Set.empty, Vector.empty, Vector.empty)
+        )
+        .commit()
+      sc.runEscalation()
+      withClue("the checkpoint's root has no gaps, so a scan that kept it would ask for none of these: ") {
+        sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+      }
+      sc.appState.isBytecodeRecoveryDone() shouldBe true
+    }
+
+  it should
     "scan the best block's root, so a pruned SNAP pivot root does not hide the gaps" taggedAs (UnitTest, SyncTest) in
     withRecoveryTestSetup() { testSetup =>
       // The pivot's root names nothing (pruned); only the best block's root is readable.

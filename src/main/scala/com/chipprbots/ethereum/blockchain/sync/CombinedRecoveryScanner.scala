@@ -73,8 +73,8 @@ final class CombinedRecoveryScanner(
     shardDepth: Int = 1,
     // Test hooks. `onShardScanStart` fires when a shard's walk begins (records which shards a resumed run actually
     // re-scans); `onShardPersisted` fires right AFTER a shard's progress is committed (throw here to simulate a
-    // crash-after-persist and assert resume); `onShardFailed` fires once a shard's failure is visible to the other
-    // walks. Production leaves all three as no-ops.
+    // crash-after-persist and assert resume); `onShardFailed` fires when a shard's walk has ended in a failure or a stop,
+    // with the first failure already visible to the other walks. Production leaves all three as no-ops.
     onShardScanStart: Int => Unit = _ => (),
     onShardPersisted: Int => Unit = _ => (),
     onShardFailed: () => Unit = () => ()
@@ -152,18 +152,18 @@ final class CombinedRecoveryScanner(
       onShardPersisted(completed.size)
     }
 
+    // A shard still queued after a failure begins and stops at its first leaf, so nothing needs to check before it does.
     def scanOne(idx: Int): Unit =
-      if firstFailure.get == null then
-        try
-          onShardScanStart(idx)
-          val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
-          scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
-          mergeAndPersist(idx, scan)
-        catch
-          case NonFatal(e) =>
-            firstFailure.compareAndSet(null, e)
-            onShardFailed()
-            throw e
+      try
+        onShardScanStart(idx)
+        val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
+        scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
+        mergeAndPersist(idx, scan)
+      catch
+        case NonFatal(e) =>
+          firstFailure.compareAndSet(null, e)
+          onShardFailed()
+          throw e
 
     if concurrency <= 1 then remaining.foreach(scanOne)
     else

@@ -430,5 +430,4 @@ class CombinedRecoveryScannerSpec extends AnyFunSuite:
 
     assert(thrown.getMessage == "boom")
     assert(persisted.get() == 0, "shard 0 had a leaf to read and a progress write to make, and made neither")
-    assert(handles.get() == 2, "the shards after these two never began")
   }
