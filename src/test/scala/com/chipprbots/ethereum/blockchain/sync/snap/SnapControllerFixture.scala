@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -157,7 +158,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
       config: SNAPSyncConfig,
       isPoS: Boolean = false,
       validatorFactory: MptStorage => StateValidator = new StateValidator(_),
-      failedFinalizationPivot: Option[BigInt] = None
+      failedFinalizationPivot: Option[BigInt] = None,
+      stateStorage: Option[StateStorage] = None
   ): ActorRef[SNAPSyncController.Command] =
     given ExecutionContext = testKit.system.executionContext
     val snap = testKit.spawn(
@@ -165,7 +167,7 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
         blockchainReader,
         blockchainWriter,
         appStateStorage,
-        storagesInstance.storages.stateStorage,
+        stateStorage.getOrElse(storagesInstance.storages.stateStorage),
         storagesInstance.storages.evmCodeStorage,
         storagesInstance.storages.flatSlotStorage,
         npmStub,
@@ -408,9 +410,12 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     seedStorageResume(Pivot, Root)
     val snap = spawnController(config)
     snap ! SNAPSyncController.Start
-    expectSpawn[ChildSpawn.StorageRange]
+    spawnedStorageRecordsDone = Some(expectSpawn[ChildSpawn.StorageRange].recordStorageDone)
     awaitProcessed(snap)
     snap
+
+  /** What [[enterStorageResume]]'s spawn was told about done markers. */
+  var spawnedStorageRecordsDone: Option[Boolean] = None
 
   /** `ByteCodeAndStorageSync` with both the storage and the bytecode child (both still downloading). */
   def enterStorageAndByteCodeResume(

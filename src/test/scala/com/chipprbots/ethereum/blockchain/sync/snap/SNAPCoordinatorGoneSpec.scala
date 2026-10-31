@@ -118,12 +118,18 @@ class SNAPCoordinatorGoneSpec
   "A coordinator stopped on purpose" should "cost nothing: stopAll takes its handle first" taggedAs UnitTest in {
     val f = fixture()
     val snap = f.enterStorageResume()
+    val child = f.factories.selves.get(ChildStopped.Storage)
     snap ! DelayedRestart("spec 022 test")
-    f.stops.fishForMessage(10.seconds) {
-      case ChildStopped(ChildStopped.Storage) =>
-        org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
-      case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
-    }
+    testKit.createTestProbe[Any]().expectTerminated(child, 10.seconds)
+    // Two barriers, not one. CoordinatorGone only exists once the controller has handled the death-watch notification,
+    // which then enqueues it as an ordinary message, so a barrier already queued is answered first and the assertions
+    // below hold of a report not yet read. The child notified its parent before its other watchers, so that notification
+    // is in the controller's mailbox by now, and system messages run before the next user message: it is handled before
+    // the first barrier is, and CoordinatorGone is enqueued before the second at the latest.
+    //
+    // The report lands in `bootstrapping`, where a restart goes, and that drops it. So this says a restart costs nothing;
+    // that `stopAll()` takes the handle first is pinned in `SyncLifecycleSpec`, where the arm itself is called.
+    f.awaitProcessed(snap)
     f.awaitProcessed(snap)
     f.appStateStorage.getSnapCodeScanOwed() shouldBe None
     f.appStateStorage.hasSnapHealInvariant() shouldBe true
@@ -149,6 +155,15 @@ class SNAPCoordinatorGoneSpec
     f.appStateStorage.hasSnapHealInvariant() shouldBe true
   }
 
+  it should "cost nothing with a live account handle: the arm goes by whose report it is, not by there being a handle" taggedAs UnitTest in {
+    val f = fixture()
+    val snap = f.enterGenesisAccountSync()
+    snap ! CoordinatorGone(testKit.createTestProbe[Any]().ref)
+    f.awaitProcessed(snap)
+    f.appStateStorage.getSnapCodeScanOwed() shouldBe None
+    f.appStateStorage.hasSnapHealInvariant() shouldBe true
+  }
+
   // hunter 3, as the controller lives it: the account phase ends inside the capability check's grace period.
   "A capability check that outlives a fast account phase" should "not start a second one" taggedAs UnitTest in {
     val f = fixture()
@@ -159,4 +174,33 @@ class SNAPCoordinatorGoneSpec
     snap ! CheckSnapCapability
     f.awaitProcessed(snap)
     f.factories.accountSpawns.get() shouldBe 1
+  }
+
+  // forge: `doneMarkersHold` and `canHold` are pinned pure (`InvariantMarkerSpec`); this is that the controller feeds them
+  // what its state storage is.
+  "A controller on the node cache (pruning.mode = inmemory)" should "record no done markers and take CannotHold" taggedAs UnitTest in {
+    val f = fixture()
+    val cached = com.chipprbots.ethereum.db.storage.StateStorage
+      .createTestStateStorage(
+        com.chipprbots.ethereum.db.dataSource.EphemDataSource(),
+        com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning(64)
+      )
+      ._1
+    cached shouldBe a[com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage]
+    f.storeGenesis()
+    f.storeHeaderAt(SnapControllerFixture.Pivot, SnapControllerFixture.Root)
+    f.seedStorageResume(SnapControllerFixture.Pivot, SnapControllerFixture.Root)
+    val snap = f.spawnController(SNAPSyncConfig(deferredMerkleization = false), stateStorage = Some(cached))
+    snap ! Start
+    f.expectSpawn[ChildSpawn.StorageRange].recordStorageDone shouldBe false
+    f.awaitProcessed(snap)
+    withClue("the marker found here is removed: ")(f.appStateStorage.hasSnapHealInvariant() shouldBe false)
+  }
+
+  "A controller on any other state storage" should "record done markers and keep the marker: the control" taggedAs UnitTest in {
+    val f = fixture()
+    val snap = f.enterStorageResume()
+    f.appStateStorage.hasSnapHealInvariant() shouldBe true
+    f.status(snap)
+    f.spawnedStorageRecordsDone shouldBe Some(true)
   }
