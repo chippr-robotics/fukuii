@@ -471,8 +471,8 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
 
   // ---- spec 022 slice 1 review (beacon W2, item 6, item 7) -------------------------------------------------------
 
-  it should "fill nothing for a dispatched task no live request vouches for, and not queue it again (W2)" taggedAs UnitTest in {
-    val h = new Harness()
+  it should "under the Path scheme fill nothing for a dispatched task no live request vouches for, and not queue it again (W2)" taggedAs UnitTest in {
+    val h = new Harness(scheme = StorageScheme.Path, pathStore = Some(new PathNodeStorage(EphemDataSource())))
     val m = h.module
     val node = leaf(1, 2)("unbooked")
     val task = HealingEntry(Seq(compact(1)), hashOf(node))
@@ -484,6 +484,63 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     m.completedTaskCount shouldBe 0
     m.pendingTasks shouldBe empty
     m.activeRequests shouldBe empty
+    m.healRequests.isEmpty shouldBe true
+  }
+
+  // spec 022 T051a (forge, slice-1 review): the walk catches what this branch dropped, until T051. On Hash a node is keyed
+  // by its hash, so nothing can vouch for the wrong one: a request the book lost is simply recorded again.
+  it should "under the Hash scheme fill a dispatched task no live request vouches for: the node is the right one by its hash" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val node = leaf(1, 2)("unbooked")
+    val task = HealingEntry(Seq(compact(1)), hashOf(node))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task), Seq(bytes(node)))
+
+    m.totalNodesHealed shouldBe 1
+    m.rawNodeBuffer.contains(hashOf(node)) shouldBe true
+    withClue("filled, so nothing is left to ask: ")(m.pendingTasks shouldBe empty)
+    m.healRequests.isEmpty shouldBe true
+  }
+
+  it should "under the Hash scheme ask again, once, for a task no live request vouches for that the response left out" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val task = HealingEntry(Seq(compact(1)), hashOf(leaf(1, 2)("unbooked-unserved")))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task, task), Seq.empty)
+
+    m.pendingTasks.toSeq shouldBe Seq(task)
+    m.healRequests.isFetching(task.hash) shouldBe true
+    withClue("a live request now, so it holds completion: ")(m.isComplete shouldBe false)
+  }
+
+  it should "under the Hash scheme not stall on it: a later answer fills it, and it is an ordinary request from there" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val node = leaf(1, 2)("unbooked-later")
+    val task = HealingEntry(Seq(compact(1)), hashOf(node))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task), Seq.empty)
+    m.pendingTasks.dequeue(1, paused = false) shouldBe Seq(task)
+    h.respondUnbooked(2, peer("p1"), Seq(task), Seq(bytes(node)))
+
+    m.totalNodesHealed shouldBe 1
+    m.pendingTasks shouldBe empty
+    m.healRequests.isEmpty shouldBe true
+    m.isComplete shouldBe true
+  }
+
+  it should "under the Hash scheme not ask for a node already on disk, or already held, because a request for it was lost" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val node = leaf(1, 2)("unbooked-present")
+    m.mptStorage.putNode(node)
+    val task = HealingEntry(Seq(compact(1)), hashOf(node))
+
+    h.respondUnbooked(1, peer("p1"), Seq(task), Seq.empty)
+
+    m.pendingTasks shouldBe empty
     m.healRequests.isEmpty shouldBe true
   }
 
