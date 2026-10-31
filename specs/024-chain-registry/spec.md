@@ -4,13 +4,29 @@
 
 **Created**: 2026-10-30
 
-**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-3. Companion of spec 023 (fleet topology); independent
+**Status**: Clarified (2026-10-31). OQ-1..OQ-3 resolved; ready for `/speckit-plan`. Companion of spec 023 (fleet topology); independent
 of 025 and 026 and of spec 018. Can start now.
 
 **Input**: Spec 023 Goal 2 and the user decision D-6 (MESS off by default): adding a network whose consensus type fukuii
 already implements must be a registry entry and a genesis file, with no code change and no release.
 
 ---
+
+## Clarifications
+
+### Session 2026-10-31
+
+- Q: What is a ChainSpec entry on disk? → A: A **HOCON entry** (today's `<key>-chain.conf` shape, so the nine
+  built-ins need no migration) that **embeds or references a geth-format genesis JSON**, plus a **published JSON
+  Schema** for the HOCON's shape so Orbita can validate an entry without running fukuii.
+- Q: Operator entry with the same `chainKey` as a built-in: shadow or refuse? → A: **Refuse**, naming both files; a
+  development-only flag `--chain-registry-allow-shadow` permits the override for devnets.
+- Q: Which keys are chain and which are deployment? → A: **Chain**: everything derived from `consensus`
+  (`mining.protocol`, `storage-scheme`, validator set, fork dispatch) plus a per-chain **default** for the sync mode
+  (`sync.do-snap-sync`). **Deployment profile**: ports, datadir, RPC APIs, peer limits, and an override of the sync
+  mode. Consensus-derived keys are not operator-settable (DC-5).
+- Q: Keep FR-007's optional per-role resource profiles? → A: **Keep** as optional defaults (heap hint, engine memory
+  budget, `replica` retention window) that operators and Orbita override; fukuii never enforces them.
 
 ## Problem
 
@@ -150,8 +166,8 @@ Platåberget treated as if it were not built in), using a ChainSpec entry and a 
 - A ChainSpec for an ETH-family chain omits `terminal-total-difficulty` or the Engine API JWT: fail with the field name.
 - A `chainId` wider than 32 bits (Platåberget, 7091047534): accepted; the type is `BigInt`/`Long` as today.
 - A chain whose genesis file is large (Platåberget's allocation): the hash check streams; no full-file duplicate.
-- The same `chainKey` in the built-in set and the operator directory: the operator entry **shadows** the built-in
-  one, and the loader logs at WARN which file won (OQ-2 may change this to "refuse").
+- The same `chainKey` in the built-in set and the operator directory: the loader **refuses**, naming both files;
+  `--chain-registry-allow-shadow` (development only) lets the operator entry win and logs at WARN which file won.
 
 ---
 
@@ -161,7 +177,11 @@ Platåberget treated as if it were not built in), using a ChainSpec entry and a 
 
 - **FR-001** fukuii MUST load chains from a ChainSpec registry: the built-in entries on the classpath plus an operator
   directory, each entry validated at startup per DC-1, DC-2, DC-5 and DC-6, with every error named and the process
-  exiting before the datadir is opened.
+  exiting before the datadir is opened. An entry is a HOCON file `<chainKey>-chain.conf` that embeds or references a
+  geth-format genesis JSON; the repository MUST publish a JSON Schema for the entry's shape (`specs/024-chain-registry/
+  contracts/chainspec.schema.json`, kept in sync by a test) so Orbita can validate entries offline. A `chainKey`
+  present in both the built-in set and the operator directory MUST be refused unless `--chain-registry-allow-shadow` is
+  set.
 - **FR-002** `App.knownNetworks` MUST be removed; `fukuii <key>` and `--chain <key>` MUST accept any `chainKey` the
   registry holds, and MUST fail with the list of known keys otherwise.
 - **FR-003** The `consensus` field MUST be an enum with exactly the values the build implements today:
@@ -178,7 +198,10 @@ Platåberget treated as if it were not built in), using a ChainSpec entry and a 
 - **FR-006** fukuii MUST provide `fukuii chains list` (keys, chainId, family, consensus, source path) and
   `fukuii chains validate [<dir>]` (run the loader and report every error without starting a node).
 - **FR-007** A ChainSpec MAY declare default resource profiles per role (heap hint, RocksDB/engine memory budget,
-  retention window for `replica`); they are defaults an operator or Orbita overrides, never limits fukuii enforces.
+  retention window for `replica`); they are defaults an operator or Orbita overrides, never limits fukuii enforces
+  (kept, 2026-10-31). A ChainSpec MUST declare the chain's default sync mode (`sync.do-snap-sync`); the deployment
+  profile MAY override it. Ports, datadir, RPC APIs and peer limits are deployment keys and MUST NOT appear in a
+  ChainSpec.
 - **FR-008** The ChainSpec MUST carry `finalityRule` (`genesis-only` | `consensus-layer`), derived from `consensus`
   and not operator-settable, so 025 reads one field.
 
@@ -197,16 +220,10 @@ Platåberget treated as if it were not built in), using a ChainSpec entry and a 
 
 ## Open questions
 
-- **OQ-1: Entry format.** Keep HOCON (`<key>-chain.conf`, today's format, zero migration for the nine built-ins) or
-  adopt a JSON schema closer to geth's `genesis.json` + `config` so entries are portable from other clients.
-  Recommended: HOCON entry that **embeds or references** a geth-format genesis JSON (already how `sepolia-chain.conf`
-  includes `sepolia-genesis.json`), plus a published JSON Schema for the HOCON's shape so Orbita can validate entries
-  without running fukuii.
-- **OQ-2: Shadowing.** Operator entry shadows a built-in `chainKey` (WARN) or refuses (error). Recommended: refuse,
-  with `--chain-registry-allow-shadow` for development.
-- **OQ-3: Profile keys that remain outside the ChainSpec.** Ports, datadir, RPC APIs and peer limits are
-  deployment, not chain; `storage-scheme` and `mining.protocol` are chain. Confirm the split, and whether
-  `sync.do-snap-sync` is a chain default or a deployment choice.
+- **OQ-1** *(resolved 2026-10-31)*: HOCON entry + embedded/referenced geth genesis JSON + published JSON Schema (FR-001).
+- **OQ-2** *(resolved 2026-10-31)*: refuse; `--chain-registry-allow-shadow` for development (FR-001, edge cases).
+- **OQ-3** *(resolved 2026-10-31)*: consensus-derived keys and the sync-mode default are chain; ports, datadir, RPC
+  APIs, peer limits and the sync-mode override are deployment (FR-007).
 
 ---
 

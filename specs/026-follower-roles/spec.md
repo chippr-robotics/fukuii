@@ -4,7 +4,8 @@
 
 **Created**: 2026-10-30
 
-**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-4. Companion of spec 023. Depends on spec 013 (seed)
+**Status**: Clarified (2026-10-31). OQ-2, OQ-3 and two FR ambiguities resolved; OQ-1 and OQ-4 wait on GT-2 and GT-1
+measurements; ready for `/speckit-plan`. Companion of spec 023. Depends on spec 013 (seed)
 and spec 025 (the record stream); on spec 018 only for the `archive` basis (GT-2) and for the later move to the
 unified layout. **Revised 2026-10-30 (alignment review,
 [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
@@ -16,6 +17,21 @@ Track F. Its two gates (GT-1, GT-2) can start as soon as a file-sink record stre
 replica" and user decision D-5 (an archive-capable role is sufficient for historical state).
 
 ---
+
+## Clarifications
+
+### Session 2026-10-31
+
+- Q: How is an ETC follower seeded? → A: **Extend spec 013 v2 to the ETC family**: the exporter walks the trie at a
+  frozen root into the flat v2 format (013 §11 row 6) and the anchor is the fleet's own `ingest` head (no CL on ETC);
+  §5.4's root recomputation is unchanged. Checkpoint archive v1 is retired with the Hash scheme (018 DC-9).
+- Q: Default `replica` retention window W? → A: **24 hours of blocks per chain**, declared in the ChainSpec resource
+  profile (024 FR-007) and operator-overridable.
+- Q: Who restarts or re-seeds a halted follower? → A: **Nobody inside fukuii.** The process stays halted, keeps its
+  last verified state, and reports through health; Orbita decides to restart, re-seed or replace (023 DC-3, DC-4).
+- Q: `eth_getLogs` on a `replica`? → A: **Any block range inside the retention window**; outside it the DC-3 error.
+  Long-range log queries are the indexer's (023 DC-2).
+- Deferred to measurement, not asked: OQ-1 archive basis (GT-2) and OQ-4 follow method (GT-1).
 
 ## Problem
 
@@ -170,20 +186,23 @@ configured lag bound of the source head it observes in the record stream and its
 
 ### Functional requirements
 
-- **FR-001** Followers MUST bootstrap from a seed artifact: a 013 snapshot for ETH-family chains; for ETC, the
-  artifact OQ-3 selects (checkpoint archive v1 or a 013 snapshot v2 extended to ETC). `archive` MAY start from genesis
-  if GT-2 requires it. The seed MUST be verified per 013 §5.4 before following starts.
+- **FR-001** Followers MUST bootstrap from a seed artifact: a **013 v2 snapshot for both families** (ETC coverage per
+  013 §11 row 2; the walk-based exporter per 013 §11 row 6; ETC anchor = the fleet's `ingest` head). `archive` MAY
+  start from genesis if GT-2 requires it. The seed MUST be verified per 013 §5.4 before following starts. Checkpoint
+  archive v1 is not a follower seed.
 - **FR-002** Followers MUST follow by the method GT-1 selects per family (apply records through `StateReplay`, or
   re-execute canonical blocks fetched by hash from the record stream), verifying per DC-1 on every block. The apply path
   MUST work on today's storage layout (Hash and Path) and on the 018 unified layout behind the same capability; no
   follower code names a layout. Followers MUST run in a `SyncMode.Follow` (017 FR-007 amendment) in which SNAP and
   execution-driven import are unreachable.
 - **FR-003** On any verification failure a follower MUST halt applying, set `ready = false` with a named fault, keep the
-  last verified state, and refuse reads at any unverified root (DC-1).
+  last verified state, and refuse reads at any unverified root (DC-1). It MUST NOT re-seed, restart or exit on its own;
+  recovery is a lifecycle decision taken by Orbita (023 DC-3, DC-4) through the 023 FR-005 signals.
 - **FR-004** `replica` MUST serve `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount`,
-  `eth_getProof`, `eth_getBlockByNumber/Hash`, `eth_getTransactionReceipt` and `eth_getLogs` (single block) at explicit
-  blocks within its window, and return the DC-3 error outside it. Its window `W` is configuration with a documented
-  default per chain (024 FR-007 profile).
+  `eth_getProof`, `eth_getBlockByNumber/Hash`, `eth_getTransactionReceipt` and `eth_getLogs` (any range **inside the
+  window**) at explicit blocks within its window, and return the DC-3 error for any block or range edge outside it.
+  Its window `W` defaults to **24 hours of blocks per chain**, declared in the ChainSpec resource profile (024
+  FR-007) and operator-overridable.
 - **FR-005** `archive` MUST serve the FR-004 methods, `eth_call`, `eth_simulateV1` and the `debug_trace*` methods at
   **any** canonical block, on the storage basis GT-2 selects, using 018 FR-027's bounded executors for the heavy ones.
 - **FR-006** Followers MUST apply reorgs by rolling back changesets (DC-4); a `replica` whose window is exceeded MUST
@@ -216,11 +235,8 @@ configured lag bound of the source head it observes in the record stream and its
 - **OQ-1: Archive basis.** Retaining every 018 changeset over flat state vs a separate historical index. GT-2 measures;
   this question records the decision. Expected: changesets only for the first release (018 OQ-3 default), since
   historical *indices* are the indexer's job (DC-2 of 023).
-- **OQ-2: Replica window default.** Blocks or hours; a value per chain in the ChainSpec profile (024 FR-007).
-  Recommended default: 24 h of blocks, which covers every reorg seen on Sepolia and the common case on ETC.
-- **OQ-3: ETC seeding.** Spec 013 is ETH-family only; the ETC checkpoint archive v1 is hash-keyed and host-trusted
-  (013 §2). Options: extend 013 v2 to ETC (flat state, root-verified; aligns with 018 DC-9 "ETC on the unified
-  layout"), or accept v1 for the first release. Recommended: extend 013 v2; it is the format followers verify.
+- **OQ-2** *(resolved 2026-10-31)*: 24 h of blocks per chain, in the ChainSpec profile, overridable (FR-004).
+- **OQ-3** *(resolved 2026-10-31)*: extend 013 v2 to ETC; walk-based export; anchor = `ingest` head (FR-001).
 - **OQ-4: Follow method.** Decided by GT-1; the prior is "apply records" (no execution, so a follower is cheap), with
   re-execution kept as the fallback if record application cannot meet the bound. On today's layout the per-block cost
   of apply is the trie update over the changed keys, the same work import does minus execution; GT-1 records it.

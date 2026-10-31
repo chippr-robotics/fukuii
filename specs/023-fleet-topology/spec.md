@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Draft (2026-10-30). Decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-5 below. The Evidence figures from
+**Status**: Clarified (2026-10-31). OQ-1..OQ-5 resolved in the Clarifications session; ready for `/speckit-plan`. The Evidence figures from
 the originating notes were re-measured on `staging` 0f1a904 (0.10.17) and corrected in [research.md](./research.md) §1;
 the T-001 retirement inventory is done ([research.md](./research.md) §2). **Revised 2026-10-30**: the cross-spec
 [alignment review](./alignment-review.md) added FR-010 (transaction ingress), OQ-5 (`relay` role), the Engine API
@@ -68,6 +68,23 @@ and it is where the cross-cutting decisions live.
 | T-007 follower · T-008 archive | 026 T-002/T-003 · T-004/T-005 |
 
 ---
+
+## Clarifications
+
+### Session 2026-10-31
+
+- Q: How do Orbita's lifecycle signals (drain, fence, unfence, stop) reach a process? → A: An **admin HTTP surface on
+  its own localhost-bound port** (health plus signals), reusing the `/healthcheck` server code; `SIGTERM` maps to
+  drain then stop.
+- Q: ActorSystem name and default datadir once `--role` exists? → A: **`fukuii_<chainKey>`** for the ActorSystem;
+  default datadir **`~/.fukuii/<chainKey>/<role>`**, so two roles for one chain never collide on a host. The
+  single-node profile uses the `ingest` path; existing `~/.fukuii/<chainKey>` datadirs get a documented migration
+  note (move or set `datadir` explicitly).
+- Q: How does `sim` read state? → A: **Block-pinned RPC to a follower** in the first release; a co-located read-only
+  store is a later optimisation gated on 018 amendment request 1 (safe multi-process reads).
+- Q: Transaction ingress at fleet scale, and who owns per-client admission? → A: **Forward to `ingest`** (FR-010 as
+  written) in the first release; a `relay` role is opened as spec 027 **only if** the harness shows `ingest`
+  admission is the bottleneck; per-client quotas and priority are **Orbita's**, fukuii keeps the FR-003 caps.
 
 ## Origin: the reasoning that led here (kept so the premises can be challenged)
 
@@ -206,9 +223,10 @@ and hash, finalized number and hash, lag behind its source, and readiness (FR-00
 send a signal belong to Orbita.
 
 **DC-5: Simulation never shares the importer's process.** `sim` work runs in `sim` processes over `replica` or
-`archive` state. If 018 GT-1 selects an engine with safe multi-process read-only access, a `sim` process may open a
-follower's store read-only on the same host; otherwise it reads through its own follower over RPC. In the single-node
-operator profile, 018 Track R's bounded executors (FR-027) are the isolation mechanism.
+`archive` state, read through **block-pinned RPC to a follower** in the first release. Opening a follower's store
+read-only from a co-located `sim` is a later optimisation, allowed only if 018 GT-1 (amendment request 1) shows the
+engine supports safe multi-process reads. In the single-node operator profile, 018 Track R's bounded executors (FR-027)
+are the isolation mechanism.
 
 **DC-6: Block-pinned reads.** Every read RPC a follower or `sim` serves is answered at an explicit block, and every
 process reports its head, so a router can pin a session to a height and never mix states from two heights. Routing
@@ -306,7 +324,9 @@ T-002.
 - **FR-001** fukuii MUST accept `--chain <chainKey>` and `--role <ingest|replica|archive|sim>` and start exactly one
   chain in one role per process. `fukuii <network>` (today's CLI) MUST remain valid and MUST mean
   `--chain <network> --role ingest` with RPC serving enabled (the single-node operator profile). The role and
-  `chainKey` MUST be available to every component through `InstanceConfig`, not through a new global.
+  `chainKey` MUST be available to every component through `InstanceConfig`, not through a new global. The
+  ActorSystem is named `fukuii_<chainKey>`; the default datadir is `~/.fukuii/<chainKey>/<role>` (single-node profile:
+  the `ingest` path), and the operator docs carry the migration note for datadirs at today's `~/.fukuii/<chainKey>`.
 - **FR-002** Role defaults MUST be documented per role: which servers listen, which RPC namespaces are served, which
   sync mode runs (017 `SyncMode`, with `Follow` for followers), what readiness means, and how transactions are admitted
   (FR-010) (table in `quickstart.md`, produced by `/speckit-plan`). ETC PoW mining is a single-node-profile option on
@@ -334,8 +354,9 @@ T-002.
   not a production deployment; production orchestration is Orbita's.
 - **FR-008** Role MUST gate subsystem start (DC-9): `replica`, `archive` and `sim` MUST NOT bind P2P, discovery,
   Engine API or miner ports; methods a role does not serve MUST return a defined error code.
-- **FR-009** The fence and drain signals MUST be reachable without the JSON-RPC port being public: the transport is
-  OQ-2, but the spec requires that it be bindable to localhost or a Unix socket independently of RPC.
+- **FR-009** Lifecycle signals (FR-005) and the health shape (FR-004) MUST be served by an **admin HTTP surface on a
+  dedicated port bound to localhost by default**, separate from the public JSON-RPC port and reusing the
+  `/healthcheck` server code; `SIGTERM` MUST map to `drain` then `stop`. The admin port MUST never serve chain RPC.
 - **FR-010** **Transaction ingress.** `eth_sendRawTransaction` (and `eth_sendTransaction` where enabled) is admitted
   only by the chain's `ingest` txpool. `replica`, `archive` and `sim` MUST forward raw transactions to the `ingest`
   admission endpoint configured for the chain, never to peers, with a per-process rate cap and the ingest's admission
@@ -355,27 +376,20 @@ T-002.
   and the record stream has no gap (025 SC-003's checker).
 - **SC-005** Every role answers FR-004 in the same shape; a follower reports ready only at head within its bound;
   readiness never depends on peers for a role with none.
+- **SC-006** Under the harness's transaction load forwarded from two followers and one `sim`, `ingest` admission
+  latency p99 and import p99 are recorded; the figures decide whether a `relay` role (spec 027) is opened.
 
 ---
 
 ## Open questions
 
-- **OQ-1: Multi-tenant admission.** Per-client quotas, priority and gas-budget admission for simulation. Likely
-  Orbita's (it owns routing); fukuii's part is limited to FR-003 caps. Confirm.
-- **OQ-2: Signal transport.** Lifecycle signals over an admin HTTP endpoint on its own port, the existing IPC socket,
-  or POSIX signals (`SIGTERM` = drain+stop is natural; fence and unfence have no signal). Recommended: a small admin
-  HTTP surface on a separate localhost port, reusing the `/healthcheck` server code, with `SIGTERM` mapped to drain
-  then stop.
-- **OQ-3: Actor system and datadir naming.** Keep `fukuii_<chainKey>` for the ActorSystem (log continuity) or plain
-  `fukuii`. Whether `--role` changes the datadir default (`~/.fukuii/<chainKey>/<role>` lets a follower and an
-  ingest share a host without collision).
-- **OQ-4: `sim` read path.** Whether `sim` reads a co-located follower's store read-only (needs 018 GT-1's engine to
-  allow it) or always goes through the follower's RPC. Default until 018 GT-1 reports: RPC.
-- **OQ-5: A `relay` role.** FR-010 makes the single `ingest` txpool the admission point for every user's transactions,
-  which is a throughput and denial-of-service exposure on the single writer. A `relay` role (own txpool, admission
-  checks against follower state, gossip to peers on ETC or forwarding to the builder path on ETH) would take that load
-  off `ingest`. Recommended: forward first, measure ingest admission under the harness load, and open spec 027 only if
-  it is the bottleneck (alignment review D-F).
+- **OQ-1** *(resolved 2026-10-31)*: per-client quotas, priority and gas-budget admission are **Orbita's**; fukuii's
+  part is the FR-003 caps.
+- **OQ-2** *(resolved 2026-10-31)*: admin HTTP on a dedicated localhost port; `SIGTERM` = drain then stop (FR-009).
+- **OQ-3** *(resolved 2026-10-31)*: `fukuii_<chainKey>`; datadir `~/.fukuii/<chainKey>/<role>` (FR-001).
+- **OQ-4** *(resolved 2026-10-31)*: RPC to a follower first; read-only store later, gated on 018 request 1 (DC-5).
+- **OQ-5** *(resolved 2026-10-31)*: forward to `ingest` (FR-010); a `relay` role becomes spec 027 only if the harness
+  shows `ingest` admission is the bottleneck (SC-006 measures it).
 
 ---
 

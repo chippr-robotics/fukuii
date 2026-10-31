@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Draft (2026-10-30). Ready for `/speckit-clarify` on OQ-1..OQ-6. Companion of spec 023. **Time-critical part**: the
+**Status**: Clarified (2026-10-31). OQ-1..OQ-6 resolved (OQ-7 is a plan-time figure); ready for `/speckit-plan`. Companion of spec 023. **Time-critical part**: the
 record schema (GT-1) must be agreed with spec 018's `data-model.md` owner before 018 slice F2 freezes the changeset
 format. **Revised 2026-10-30 (alignment review, [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
 §2)**: the state diff is the **semantic write set** (accounts, slots, code by address), never trie nodes, so the
@@ -16,6 +16,24 @@ history tables all consume, with reorg and finality semantics". User decisions D
 genesis only).
 
 ---
+
+## Clarifications
+
+### Session 2026-10-31
+
+- Q: Kafka layout per chain? → A: **One topic per `chainKey`, a single partition, time-based retention** sized to the
+  longest follower outage the operator tolerates; **never compacted** (retractions must stay visible); followers
+  always bootstrap from a snapshot, never from Kafka alone.
+- Q: Wire encoding? → A: **RLP payload with a leading schema-version byte.** The node and followers decode it
+  natively and 018's changeset shares the bytes; the indexer re-encodes to Avro/Protobuf on its side if it wants a
+  schema registry.
+- Q: Export durability when Kafka is unavailable? → A: **Buffer in the node's own store**, keyed by block number and
+  written in the same batch as the block's commit, bounded by blocks and bytes; at the bound **stop exporting and
+  raise the health signal, never pause import**. The export position is a cursor into that buffer.
+- Q: Witnesses (spec 017) on the same topic? → A: **Yes, as an optional record type, off by default**; the schema
+  reserves the type now, 017's plan decides when it is produced.
+- Defaults accepted without a question: receipts and logs ride **inside the block record** (OQ-4); the stream
+  **starts at the export position** on first start, with no backfill of pre-exporter history (OQ-5).
 
 ## Problem
 
@@ -98,7 +116,8 @@ engine or flat-layout work (alignment review §2).
 ## Design constraints *(mandatory)*
 
 **DC-1: Record identity.** Every record carries `schemaVersion`, `chainKey`, `chainId`, `blockNumber`, `blockHash`,
-`parentHash`, and a record type (`block`, `retraction`, `finality`). `chainKey` is the partitioning identity;
+`parentHash`, and a record type (`block`, `retraction`, `finality`, and the reserved optional `witness`). Records are
+RLP-encoded with the schema version as the leading byte. `chainKey` is the partitioning identity;
 `chainId` is informational (024 DC-3).
 
 **DC-2: The block record is complete, self-contained and layout-independent.** It contains the header, every receipt
@@ -200,13 +219,19 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **FR-001** `ingest` MUST produce one block record per canonical commit (DC-2), retraction records on reorg (DC-4)
   and finality watermarks (DC-5), at the hook points GT-2 names.
 - **FR-002** Records MUST be published through an **exporter seam** with two implementations: Kafka (production) and
-  append-only files (tests, offline tools). Neither implementation is referenced outside the seam.
-- **FR-003** One topic per `chainKey`; per-chain total order MUST hold (OQ-1 decides partitions and retention). The
-  topic name, partition key and the ordering guarantee MUST be documented in `contracts/`.
+  append-only files (tests, offline tools). Neither implementation is referenced outside the seam. Records are
+  RLP-encoded with a leading schema-version byte (DC-1); no other encoding is produced by the node.
+- **FR-003** One topic per `chainKey` with a **single partition** and **time-based, non-compacted retention**; per-chain
+  total order MUST hold. The topic name, the retention guidance (at least the longest tolerated follower outage) and
+  the ordering guarantee MUST be documented in `contracts/`. Followers MUST NOT depend on Kafka retention for
+  bootstrap (026 FR-001 seeds from a snapshot).
 - **FR-004** The export position MUST be persisted in the node's own store after the transport acknowledges, and MUST
-  be the resume point after restart and after `unfence`.
-- **FR-005** When the transport is unavailable, records MUST be buffered durably up to a configured bound (OQ-2) and
-  exported in order on recovery; the bound reached MUST stop export, not import (DC-6).
+  be the resume point after restart and after `unfence`. It is a cursor into the FR-005 buffer.
+- **FR-005** Every record MUST be written to a **durable export buffer in the node's own store**, keyed by block
+  number, in the same atomic batch as the block's commit; the exporter drains it to the transport in order. The buffer
+  is bounded by blocks and by bytes (both configured); at the bound the exporter MUST stop exporting and set the
+  FR-006 health signal, and import MUST continue (DC-6). Drained records are deleted from the buffer once the position
+  passes them.
 - **FR-006** The exporter MUST export `exportLag` (blocks between head and the export position), `exportQueueDepth`,
   `exportBufferBytes` and `exportLastError` as metrics and in the 023 FR-004 health shape.
 - **FR-007** Retractions MUST be emitted newest-first before the replacement block records, and MUST never target a
@@ -224,6 +249,8 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
   against the node (SC-001, SC-004); it is the oracle for every follower and indexer claim.
 - **FR-011** Every record MUST begin with the schema version; a consumer seeing an unknown version MUST stop, not
   guess. The schema and its golden-bytes vectors live in `contracts/` and are shared with 018 `data-model.md`.
+- **FR-012** The schema MUST reserve a `witness` record type carrying spec 017's `ExecutionWitness` for a block,
+  published only when the operator enables it (default off); 017's plan decides which role produces it.
 
 ### Success criteria
 
@@ -242,25 +269,16 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 
 ## Open questions
 
-- **OQ-1: Kafka layout.** One topic per chain with a **single partition** (simplest strict ordering; throughput of one
-  block per 12 s is far below a partition's limit) vs partitioned by block range with a sequencing key. Retention:
-  compacted vs time-based, and whether followers can bootstrap from Kafka alone or always need a snapshot (026 GT-1
-  measures). Recommended: single partition per chain, time-based retention sized to the longest follower outage the
-  operator accepts, snapshots for bootstrap.
-- **OQ-2: Export durability bound.** How long `ingest` buffers before it stops exporting (bytes and blocks), whether
-  the buffer lives in the node's store (recommended: a CF/sub-store keyed by block number, so buffering is one write
-  in the same batch as the changeset) and whether a very long outage ever pauses import (DC-6 says no; confirm).
-- **OQ-3: Encoding.** RLP (already in the node, golden-bytes tooling exists) vs Avro/Protobuf with a schema registry
-  (indexer-friendly). Recommended: RLP payload with the version byte for the node and followers; the indexer may
-  re-encode. Decide with the Chain Intelligence owners before GT-1.
-- **OQ-4: Receipts and logs placement.** In the block record (one record per block, larger) or on a sibling topic
-  keyed identically (smaller follower records). Recommended: in the block record; followers can skip the field.
-- **OQ-5: Backfill.** Whether an `ingest` whose datadir predates the exporter can export history (needs 018's
-  changesets or archive mode), or whether the stream starts at the export position and history is seeded through 026's
-  snapshot. Recommended: start at position; backfill is an `archive` feature if ever needed.
-- **OQ-6: Witnesses on the topic.** Whether spec 017's `ExecutionWitness` (read set with proofs) is published as an
-  optional record type on the same topic, so the indexer and provers get it without a second transport, or stays an
-  RPC-only artifact of `archive`. Recommended: optional record type, off by default, decided with 017's plan.
+- **OQ-1** *(resolved 2026-10-31)*: single partition per chain, time-based non-compacted retention, snapshot bootstrap
+  (FR-003).
+- **OQ-2** *(resolved 2026-10-31)*: durable buffer in the node's store, same batch as the commit, bounded by blocks and
+  bytes; stop export at the bound, never import (FR-005).
+- **OQ-3** *(resolved 2026-10-31)*: RLP with a leading version byte (DC-1, FR-002).
+- **OQ-4** *(default accepted 2026-10-31)*: receipts and logs inside the block record.
+- **OQ-5** *(default accepted 2026-10-31)*: the stream starts at the export position; no backfill in the first release.
+- **OQ-6** *(resolved 2026-10-31)*: reserved optional `witness` record type, off by default (FR-012).
+- **OQ-7 (new)**: the concrete buffer bounds per chain (blocks and bytes) and the retention figure per chain, to be set
+  from the 023 harness's outage tests in `plan.md`.
 
 ---
 
