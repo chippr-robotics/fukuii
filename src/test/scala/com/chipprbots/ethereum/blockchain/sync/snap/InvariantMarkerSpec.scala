@@ -208,15 +208,15 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
 
   // spec 022 review vault F3: nothing vouches for what this binary wrote under another version's rule, so removal goes by
   // the key being there, and only `Stands` looks at the version.
-  private def markedThree(): (Recording, AppStateStorage) =
+  private def markedOther(): (Recording, AppStateStorage) =
     val source = new Recording
     val appState = new AppStateStorage(source)
-    appState.put(Keys.SnapHealInvariant, "3").commit()
+    appState.put(Keys.SnapHealInvariant, "4").commit()
     source.forget()
     (source, appState)
 
   it should "not take a marker of another version as standing, and remove it, synced" taggedAs UnitTest in {
-    val (source, appState) = markedThree()
+    val (source, appState) = markedOther()
     appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
     appState.get(Keys.SnapHealInvariant) shouldBe None
@@ -262,7 +262,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   }
 
   it should "withdraw a marker of another version too: the removals go by the key being there" taggedAs UnitTest in {
-    val (_, appState) = markedThree()
+    val (_, appState) = markedOther()
     val pathNodes = new PathNodeStorage(EphemDataSource())
     withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
     appState.get(Keys.SnapHealInvariant) shouldBe None
@@ -293,21 +293,31 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   }
 
   "HealInvariant at a SNAP start" should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
-    val (_, appState) = markedThree()
+    val (_, appState) = markedOther()
     HealInvariant.atSnapStart(appState, None, canHold = false) shouldBe AtSnapStart.CannotHold(clearedOne = true)
     appState.get(Keys.SnapHealInvariant) shouldBe None
   }
 
   it should "remove a marker of another version under an unfinished checkpoint import" taggedAs UnitTest in {
-    val (_, appState) = markedThree()
+    val (_, appState) = markedOther()
     appState.put(Keys.CheckpointImportInProgress, "a:1").commit()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  // Version 2 stamped an empty datadir and then downloaded with H0 and H1 open: published in the v0.10.20 pre-release.
+  it should "not trust a marker from before the download's gaps were closed" taggedAs UnitTest in {
+    val source = new Recording
+    val appState = new AppStateStorage(source)
+    appState.put(Keys.SnapHealInvariant, "2").commit()
+    appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
     appState.get(Keys.SnapHealInvariant) shouldBe None
   }
 
   it should "stamp over a marker of another version on an otherwise empty datadir" taggedAs UnitTest in {
     val (_, appState) = created()
-    appState.put(Keys.SnapHealInvariant, "3").commit()
+    appState.put(Keys.SnapHealInvariant, "4").commit()
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe AtSnapStart.StampedEmpty
     appState.hasSnapHealInvariant() shouldBe true
   }
@@ -489,7 +499,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   }
 
   // spec 022 review vault F2: validation walks every node, so it can contradict a stamp, from a stamped start too.
-  Seq("2", "3").foreach { version =>
+  Seq(AppStateStorage.SnapHealInvariantVersion, "4").foreach { version =>
     it should s"take a stamped marker (version $version), synced, when validation finds something missing" taggedAs UnitTest in {
       val h = new Harness()
       h.ready()

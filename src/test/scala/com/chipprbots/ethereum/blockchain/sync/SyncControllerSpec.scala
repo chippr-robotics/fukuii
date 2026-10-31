@@ -147,7 +147,7 @@ class SyncControllerSpec
     import testSetup.*
     val appState = storagesInstance.storages.appStateStorage
     val markerKey = com.chipprbots.ethereum.db.storage.AppStateStorage.Keys.SnapHealInvariant
-    appState.put(markerKey, "3").commit()
+    appState.put(markerKey, "4").commit()
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
     awaitSnapStarted(syncController)
 

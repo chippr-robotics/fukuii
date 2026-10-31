@@ -64,9 +64,9 @@ These are the logical entities. Field names are indicative, and the final names 
 
 | Key | Value | Semantics |
 |-----|-------|-----------|
-| `snap.heal.invariant` | version (`2`) | Means "everything present was written under present ⇒ complete". **Does not mean complete.** A value of another version does not stand, and the removals below take it as they take a `2`: they go by the key being there. |
+| `snap.heal.invariant` | version (`3`) | Means "everything present was written under present ⇒ complete". **Does not mean complete.** A value of another version does not stand, and the removals below take it as they take a `2`: they go by the key being there. |
 | `checkpoint.import.inProgress` | root hex, `:`, start ms | Set before a checkpoint import writes its first node, synced, in one write with the marker's removal. Cleared on CRC success, in the batch that writes the import's done flags, and by a stamp. While it is present the datadir is pre-invariant, whatever else it holds. |
-| `snap.heal.datadirCreated` | version (`2`) | Written when the genesis is first stored on a datadir that held none. A datadir created by an older binary never has it. The evidence that "empty" rests on. |
+| `snap.heal.datadirCreated` | version (`3`) | Written when the genesis is first stored on a datadir that held none. A datadir created by an older binary never has it. The evidence that "empty" rests on. |
 | `snap.heal.frontierRetired` | `true` | CF `g` has had its one-time clear. |
 
 Every write of these keys is one `updateSync` batch. The frontier key goes through the same WAL as the range delete before it, so expect the delete to survive with it, but nothing depends on that: nothing reads `g`, so a lost clear costs only disk space.
