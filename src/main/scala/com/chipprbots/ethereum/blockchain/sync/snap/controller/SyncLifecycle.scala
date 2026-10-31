@@ -403,10 +403,10 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
 
   /** spec 022 T050a (hunter N4): a coordinator has stopped under the handle it was spawned to. A supervisor restart
     * does not reach here, and nor does `stopAll()`, which clears the handle first; what does is the failure after its
-    * last restart, four within a second or so of each other, so a failure that is not going away. Until this the
-    * controller did not see that at all: its asks timed out and read as zeros, which a stagnation check takes for a
-    * busy mailbox (storage), ignores (account), or answers with a force-complete sent to nobody (bytecode), and the
-    * phase hung with no message until the process restarted.
+    * last restart, the fourth, each within about 5.5 s of the restart before it, so a failure that is not going away.
+    * Until this the controller did not see that at all: its asks timed out and read as zeros, which a stagnation check
+    * takes for a busy mailbox (storage), ignores (account), or answers with a force-complete sent to nobody (bytecode),
+    * and the phase hung with no message until the process restarted.
     *
     * No coordinator remains to sweep what it held, so the run has lost track. Then dormancy, for a coordinator whose
     * work is not done: no phase flag moves, and the wake goes through `startSnapSync`, whose resume replays the task
