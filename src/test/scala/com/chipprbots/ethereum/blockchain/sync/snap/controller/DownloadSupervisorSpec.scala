@@ -536,6 +536,27 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     running.hasMessages shouldBe false
   }
 
+  // spec 022 PR 5b, hunter 3: since `coordinatorGoneArms` clears the account handle once accounts are complete, the handle
+  // no longer says a phase has run. A timer outliving a fast account phase must not start a second one mid-storage.
+  it should "have nothing to do at a capability check once accounts are complete: no second account phase, no dormancy" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(root)
+    h.module.accountsComplete = true
+    h.module.accountRangeCoordinator = None
+    var result: Option[Behavior[Command]] = None
+
+    h.module.downloadPeers = Map(peer("a"))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+
+    h.module.downloadPeers = Map(peer("b", snap = false))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+    h.module.dormantReasons shouldBe empty
+  }
+
   it should "offer the snap-serving peers on each download tick arm" taggedAs UnitTest in {
     val h = new Harness()
     val bytecode = TestInbox[ByteCodeCoordinator.Command]()

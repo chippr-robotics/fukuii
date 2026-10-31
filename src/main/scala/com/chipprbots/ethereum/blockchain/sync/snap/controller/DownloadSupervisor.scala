@@ -375,7 +375,13 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
         p.peerInfo.remoteStatus.supportsSnap
       }
-      if snapPeerCount > 0 && accountRangeCoordinator.isDefined then
+      if accountsComplete then
+        // spec 022 PR 5b: a timer that outlived a fast account phase. The handle does not say a phase has run, since it
+        // goes when the coordinator stops itself after finalising the trie (`coordinatorGoneArms`), and launching here
+        // would start account workers mid-storage or healing. Nor is having no snap peer now a reason for dormancy here.
+        ctx.log.debug("Capability check: accounts are complete, nothing to do")
+        Behaviors.same
+      else if snapPeerCount > 0 && accountRangeCoordinator.isDefined then
         // #1516: the account phase is already running (a peer arrived inside the grace period and launched it), and
         // spawning a second coordinator under the same name throws InvalidActorNameException. Nothing to do.
         ctx.log.debug("Capability check: account range coordinator already running, not launching another")

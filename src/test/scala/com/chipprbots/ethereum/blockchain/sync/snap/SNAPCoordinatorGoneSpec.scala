@@ -148,3 +148,15 @@ class SNAPCoordinatorGoneSpec
     f.appStateStorage.getSnapCodeScanOwed() shouldBe None
     f.appStateStorage.hasSnapHealInvariant() shouldBe true
   }
+
+  // hunter 3, as the controller lives it: the account phase ends inside the capability check's grace period.
+  "A capability check that outlives a fast account phase" should "not start a second one" taggedAs UnitTest in {
+    val f = fixture()
+    val snap = f.enterGenesisAccountSync()
+    val account = f.factories.selves.get(ChildStopped.Account)
+    snap ! AccountRangeSyncComplete
+    snap ! CoordinatorGone(account)
+    snap ! CheckSnapCapability
+    f.awaitProcessed(snap)
+    f.factories.accountSpawns.get() shouldBe 1
+  }
