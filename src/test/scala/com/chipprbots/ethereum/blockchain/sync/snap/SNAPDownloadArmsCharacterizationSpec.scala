@@ -20,8 +20,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** Spec 016 lift slice before M11b (T053a): characterization of the M11 arms of `commonSyncingArms` that the slice
   * lifts into class members, as they behave today. It adds only what the existing suites leave unasserted:
   *   - `CheckSnapCapability` with a snap peer present: the account phase is launched at the configured concurrency on
-  *     the current root (here from `ByteCodeAndStorageSync`, the one phase where the launch does not collide with a
-  *     running account child);
+  *     the current root (from the grace period itself: the phase started with no snap peer, so no child runs yet, and
+  *     accounts are not complete; with them complete there is nothing to launch, spec 022 PR 5b);
   *   - the three peer-availability ticks: each offers the snap peer to its own coordinator;
   *   - the progress reports: the counters, estimates and storage-contract figures they feed into the progress monitor,
   *     the trie-finalizing flag, the persisted finalized root, and the restart on a finalization failure;
@@ -85,8 +85,21 @@ class SNAPDownloadArmsCharacterizationSpec
   "SNAPSyncController's CheckSnapCapability arm" should
     "launch the account phase at the configured concurrency on the current root once a snap peer is present" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
-      val snap = f.enterStorageResume() // no peer at entry, no account child
-      f.pollWith(snap, f.peersAt(height = (Pivot + 100).toInt))
+      f.storeGenesis()
+      f.peers.set(f.peersAt(height = 1_000))
+      val snap = f.spawnController(SNAPSyncConfig())
+      snap ! SNAPSyncController.Start
+      val pivot = BigInt(1_000) - Offset
+      f.parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.StartRegularSyncBootstrap(`pivot`) => FishingOutcomes.complete
+        case _                                                     => FishingOutcomes.continueAndIgnore
+      }
+      // The peer stops advertising snap before the header arrives, so the phase starts with none: the grace period.
+      f.pollWith(snap, f.peersAt(height = 1_000, snap = false))
+      snap ! SNAPSyncController.BootstrapComplete(Some(f.storeHeaderAt(pivot, Root)))
+      f.awaitProcessed(snap)
+      f.factories.accountSpawns.get() shouldBe 0
+      f.pollWith(snap, f.peersAt(height = 1_000))
       Using.resource(new SnapLogCapture) { log =>
         snap ! SNAPSyncController.CheckSnapCapability
         val account = f.expectSpawn[ChildSpawn.AccountRange]
