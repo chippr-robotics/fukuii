@@ -59,7 +59,8 @@ class SyncControllerSpec
 
   // ── T6-T9: runningRecovery state machine ──────────────────────────────────────────────────────
   // These tests drive SyncController through the post-SNAP recovery path.
-  // Recovery actors scan an empty trie → MissingRootNodeException → ScanResult(Seq.empty) → RecoveryComplete.
+  // A scan of a readable trie with nothing missing is a pass with no gaps, and goes straight to regular sync. One that
+  // cannot run settles nothing (spec 022 T050a): see "settle nothing when the scan could not run" below.
 
   private val recoveryFakeStateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x55.toByte))
 
@@ -76,12 +77,28 @@ class SyncControllerSpec
       appState.putSnapSyncStateRoot(recoveryFakeStateRoot).commit()
       appState.putSnapSyncPivotBlock(BigInt(100)).commit()
 
+  /** As [[seedSnapDoneWithRecovery]], over a real trie: one account, nothing missing under it. */
+  private def seedSnapDoneWithScannableRoot(
+      testSetup: TestSetup,
+      needBytecode: Boolean = true,
+      needStorage: Boolean = true
+  ): Unit =
+    import testSetup.*
+    import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
+    val appState = storagesInstance.storages.appStateStorage
+    val root = com.chipprbots.ethereum.mpt
+      .MerklePatriciaTrie[Array[Byte], Array[Byte]](blockchain.getBackingMptStorage(100))
+      .put(Array.fill[Byte](32)(0x11), Account(nonce = UInt256(1)).toBytes)
+      .getRootHash
+    seedSnapDoneWithRecovery(appState, needBytecode, needStorage, withStateRoot = false)
+    appState.putSnapSyncStateRoot(ByteString(root)).and(appState.putSnapSyncPivotBlock(BigInt(100))).commit()
+
   "SyncController" should "transition to regular sync after both bytecode and storage recovery complete" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage)
+    seedSnapDoneWithScannableRoot(testSetup)
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
@@ -175,7 +192,7 @@ class SyncControllerSpec
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needStorage = false)
+    seedSnapDoneWithScannableRoot(testSetup, needStorage = false)
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
@@ -191,7 +208,7 @@ class SyncControllerSpec
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needBytecode = false)
+    seedSnapDoneWithScannableRoot(testSetup, needBytecode = false)
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
@@ -202,12 +219,14 @@ class SyncControllerSpec
     storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
   }
 
-  it should "skip recovery and start regular sync immediately when stateRoot or pivotBlock is missing" taggedAs (
+  it should "skip recovery and start regular sync with nothing settled when there is no root to scan" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
     import testSetup.*
-    // snap done but no stateRoot/pivotBlock stored → startRecovery falls to case _ => and calls startRegularSync
+    // snap done, no stateRoot/pivotBlock stored and no readable best root: nothing to scan, so nothing was scanned.
+    // It costs nothing to come back to at the next start, where it has been marking done since the arm was written with
+    // no stated reason (dc433be5f), and this test only pinned that.
     seedSnapDoneWithRecovery(
       storagesInstance.storages.appStateStorage,
       withStateRoot = false
@@ -219,8 +238,8 @@ class SyncControllerSpec
       someTimePasses()
       assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
     }
-    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe true
-    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
+    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe false
   }
 
   // ── PoS regular sync: ask peers for the block a CL head is missing ─────────────────────────────────────────────────
@@ -586,16 +605,24 @@ class SyncControllerSpec
 
   /** The ERROR messages SyncController logs while `f` runs (TestActorRef handles the message on the calling thread). */
   private def syncControllerErrorsDuring(f: => Unit): List[String] =
+    syncControllerLogsDuring(ch.qos.logback.classic.Level.ERROR)(f)
+
+  private def syncControllerLogsDuring(level: ch.qos.logback.classic.Level)(f: => Unit): List[String] =
     val logger = org.slf4j.LoggerFactory
       .getLogger("com.chipprbots.ethereum.blockchain.sync.SyncController$Impl")
       .asInstanceOf[ch.qos.logback.classic.Logger]
     val appender = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
     appender.start()
     logger.addAppender(appender)
+    // The test logback config keeps this logger above WARN, so without this a WARN would never reach the appender.
+    val levelBefore = logger.getLevel
+    logger.setLevel(level)
     try f
-    finally logger.detachAppender(appender)
+    finally
+      logger.setLevel(levelBefore)
+      logger.detachAppender(appender)
     appender.list.asScala.toList
-      .filter(_.getLevel == ch.qos.logback.classic.Level.ERROR)
+      .filter(_.getLevel == level)
       .map(_.getFormattedMessage)
 
   /** SNAP part-way through healing: pivot saved, every data phase done, best moved on by a healing pivot roll. */
@@ -1010,7 +1037,8 @@ class SyncControllerSpec
       testSetup: TestSetup,
       n: Int = 200,
       trieAtBest: Boolean = false,
-      prunedEverywhere: Boolean = false
+      prunedEverywhere: Boolean = false,
+      pivotReadableWithNoGaps: Boolean = false
   ):
     import testSetup.*
     import java.util.concurrent.ConcurrentLinkedQueue
@@ -1040,7 +1068,12 @@ class SyncControllerSpec
     private val nowhere: ByteString = ByteString(Array.fill[Byte](32)(0x5a))
     codeHashes.foreach(h => evmCodes.get(h) shouldBe None)
 
-    private val pivotRoot = if trieAtBest || prunedEverywhere then nowhere else trieRoot
+    private val cleanRoot: ByteString = com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
+      .persistState(world0.saveAccount(Address(ByteString(Array.fill[Byte](20)(0x09))), Account(nonce = UInt256(1))))
+      .stateRootHash
+
+    private val pivotRoot =
+      if pivotReadableWithNoGaps then cleanRoot else if trieAtBest || prunedEverywhere then nowhere else trieRoot
     private val bestRoot = if trieAtBest && !prunedEverywhere then trieRoot else nowhere
     private val pivotHeader =
       Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(100), stateRoot = TrieRoot(pivotRoot))
@@ -1107,9 +1140,24 @@ class SyncControllerSpec
       (1 to 5).foreach(_ => someTimePasses())
       regularSyncChild.contains(first) && requests.isEmpty && appState.isBytecodeRecoveryDone()
 
-    def runEscalation(): Unit =
+    /** Both recovery flags unset, as a finalisation that withheld them leaves them. */
+    def owesTheScan(): Unit =
+      appState.clearBytecodeRecoveryDone().and(appState.clearStorageRecoveryDone()).commit()
+
+    /** The node at first nibble `n` of the trie the codes are in is gone: a hole. */
+    def dropChildOfTrieRoot(n: Int): Unit =
+      val hole = blockchain
+        .getBackingMptStorage(100)
+        .get(trieRoot.toArray)
+        .asInstanceOf[com.chipprbots.ethereum.mpt.BranchNode]
+        .children(n)
+        .asInstanceOf[com.chipprbots.ethereum.mpt.HashNode]
+      storagesInstance.storages.nodeStorage.update(Seq(ByteString(hole.hash)), Nil)
+      ()
+
+    def runEscalation(codeHash: ByteString = codeHashes.head): Unit =
       val first = startRegularSync()
-      val trigger = SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHashes.head)
+      val trigger = SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHash)
       syncController ! SyncController.WrappedSyncProtocol(trigger)
       syncController ! SyncController.WrappedSyncProtocol(trigger)
       eventually {
@@ -1202,12 +1250,75 @@ class SyncControllerSpec
       UnitTest,
       SyncTest
     ) in withRecoveryTestSetup() { testSetup =>
+      val sc = new BulkScenario(testSetup)
+      sc.appState.putBulkBytecodeRecoveryFailures(SyncController.MaxBulkBytecodeRecoveryFailures - 1).commit()
+      // The scan ran and fetched all it found, and the code asked for was not among it: its account is not in the trie.
+      sc.runEscalation(codeHash = ByteString(Array.fill[Byte](32)(0x77)))
+      sc.appState.bulkBytecodeRecoveryFailures() shouldBe SyncController.MaxBulkBytecodeRecoveryFailures
+      sc.appState.isBytecodeRecoveryDone() shouldBe true
+    }
+
+  it should
+    "not let the failure cap settle a scan that could not run: the count stands, the flag stays clear (spec 022 T050a)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withRecoveryTestSetup() { testSetup =>
       val sc = new BulkScenario(testSetup, prunedEverywhere = true)
       sc.appState.putBulkBytecodeRecoveryFailures(SyncController.MaxBulkBytecodeRecoveryFailures - 1).commit()
       sc.runEscalation()
       sc.appState.bulkBytecodeRecoveryFailures() shouldBe SyncController.MaxBulkBytecodeRecoveryFailures
-      sc.appState.isBytecodeRecoveryDone() shouldBe true
+      sc.appState.isBytecodeRecoveryDone() shouldBe false
     }
+
+  // ── spec 022 T050a: the recovery scan at a start, which pays what a finalisation withheld ─────────────────────────────
+  // Measured, Mordor, 2026-10-31: on a clean Hash datadir under the default pruning a node stopped about 3 minutes after
+  // its hand-off had imported 87 blocks past its pivot, and the next start's scan found the pivot root gone and read that
+  // as no gaps, so the flag went true over nothing.
+
+  it should "settle nothing when the scan could not run: no flag, the scan's progress kept, regular sync started" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup, prunedEverywhere = true)
+    sc.owesTheScan()
+    val progress = com.chipprbots.ethereum.db.storage.RecoveryProgress(
+      ByteString(Array.fill[Byte](32)(0x44)),
+      shardCount = 16,
+      completedShards = Set(3),
+      missingBytecodes = Vector.empty,
+      missingStorageTries = Vector.empty
+    )
+    sc.appState.putRecoveryProgress(progress).commit()
+
+    val errors = syncControllerErrorsDuring { sc.startRegularSync(); () }
+
+    sc.regularSyncChild shouldBe defined
+    sc.appState.isBytecodeRecoveryDone() shouldBe false
+    sc.appState.isStorageRecoveryDone() shouldBe false
+    sc.appState.getRecoveryProgress() shouldBe Some(progress)
+    errors.exists(e => e.contains("could not run") && e.contains("next start tries again")) shouldBe true
+    sc.requests.isEmpty shouldBe true
+  }
+
+  it should "settle the flags on a pass with a hole, fetch what it did find, and WARN what the flags then mean" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup)
+    sc.owesTheScan()
+    sc.dropChildOfTrieRoot(4)
+
+    val warnings = syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) { sc.startRegularSync(); () }
+
+    sc.appState.isBytecodeRecoveryDone() shouldBe true
+    sc.appState.isStorageRecoveryDone() shouldBe true
+    val stored = sc.codeHashes.count(h => sc.evmCodes.get(h).isDefined)
+    withClue(s"stored $stored of ${sc.codeHashes.size}: ") {
+      stored should be > 0
+      stored should be < sc.codeHashes.size
+    }
+    warnings.exists(w => w.contains("could not read 1 subtree(s)") && w.contains("a pass ran")) shouldBe true
+  }
 
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed

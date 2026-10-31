@@ -260,6 +260,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def storageRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.StorageRecoveryDone, true.toString)
 
+  /** Mark storage recovery as NOT done, so the next start's recovery scan runs. Written when a finalisation withholds
+    * it (spec 022 T050a): a datadir SNAP has been through before can hold `true` from that cycle.
+    */
+  def clearStorageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, false.toString)
+
   // ========================================
   // Resumable recovery scan progress
   // ========================================

@@ -16,10 +16,17 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.RecoveryProgress
 import com.chipprbots.ethereum.mpt.ShardEnumerator
 
-/** The merged, cross-shard-deduped gap set a recovery scan produces. */
+/** The merged, cross-shard-deduped gap set a recovery scan produces.
+  *
+  * @param holes
+  *   subtrees this session's walks could not read, the store holding no node at the top of each, so nothing under them
+  *   was looked at. This session's only: `RecoveryProgress` does not record it, so the shards a resume skips count none
+  *   (spec 022 T050a). It is for the log, and decides nothing.
+  */
 final case class RecoveryScanResult(
     missingBytecodes: Vector[ByteString],
-    missingStorageTries: Vector[(ByteString, ByteString)]
+    missingStorageTries: Vector[(ByteString, ByteString)],
+    holes: Long
 )
 
 /** The cohesive recovery-scan unit: integrates the three building blocks into one driver.
@@ -72,7 +79,7 @@ final class CombinedRecoveryScanner(
     val shardCount = shards.length
 
     // An empty state trie has nothing to recover; never persist a checkpoint for it (invariant: shardCount >= 1).
-    if shardCount == 0 then return RecoveryScanResult(Vector.empty, Vector.empty)
+    if shardCount == 0 then return RecoveryScanResult(Vector.empty, Vector.empty, holes = 0L)
 
     // Resume: a tag-matched checkpoint seeds the accumulators + dedup sets; a mismatch/absence starts fresh.
     val resumed = appStateStorage.getRecoveryProgressFor(scanRoot, shardCount)
@@ -84,10 +91,12 @@ final class CombinedRecoveryScanner(
 
     // Fast path: the checkpoint is already complete (e.g. the process died during the download phase). Skip the scan
     // and hand back the persisted gaps so download can resume without re-walking the trie.
-    if completed.size >= shardCount then return RecoveryScanResult(accBytecodes.toVector, accStorage.toVector)
+    if completed.size >= shardCount then
+      return RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes = 0L)
 
     val remaining = (0 until shardCount).filterNot(completed)
     val lock = new Object
+    var holes = 0L
 
     // Live progress gauges for the node-health dashboard. Counts accounts walked THIS session (resumed shards are not
     // re-walked); the missing count is seeded from the resumed checkpoint so it stays cumulative. Atomics because the
@@ -108,6 +117,7 @@ final class CombinedRecoveryScanner(
         if seenStorageRoots.add(root) then accStorage += ((acct, root))
       }
       missingStorageCount.set(accStorage.size.toLong)
+      holes += scan.holes
       completed += idx
       // commitSync (fsync) not commit: the per-shard checkpoint is the resumability anchor, so it must survive a hard
       // host crash (this box has hit a memory-pressure thrash-lock), not just a clean OOM exit — otherwise the OS
@@ -136,4 +146,4 @@ final class CombinedRecoveryScanner(
 
     // Final progress publish so the dashboard reflects the completed totals.
     RecoveryMetrics.setStorageScanProgress(accountsScanned.get(), contractsFound.get(), missingStorageCount.get())
-    RecoveryScanResult(accBytecodes.toVector, accStorage.toVector)
+    RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes)

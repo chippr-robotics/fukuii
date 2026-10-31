@@ -303,6 +303,8 @@ object SyncController:
 
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
+    // That recovery's scan could not run, so its failure says nothing about the code (spec 022 T050a). Read and cleared with it.
+    private var recoveryScanCouldNotRun: Boolean = false
     private var recentRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -1692,13 +1694,14 @@ object SyncController:
           val failures = appStateStorage.bulkBytecodeRecoveryFailures() + 1
           log.error(
             "Bulk bytecode recovery finished but contract code {} is STILL missing (failure {} of {}). Possible causes: " +
-              "no peer served it; its account is not in the scanned trie; or the scanned state root was pruned or " +
-              "unreadable, so the scan saw no gaps at all. Block import will now fetch that hash on its own.",
+              "no peer served it; its account is not in the scanned trie; a subtree the scan could not read holds it; or " +
+              "the scan could not run at all (logged above). Block import will now fetch that hash on its own.",
             com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash),
             failures,
             SyncController.MaxBulkBytecodeRecoveryFailures
           )
-          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures then
+          // A scan that could not run settles nothing, the cap included (spec 022 T050a): only a pass stops the next start's.
+          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures && !recoveryScanCouldNotRun then
             log.error(
               "Giving up on bulk bytecode recovery after {} failures: marking bytecodeRecoveryDone so restarts stop " +
                 "repeating a full trie scan. Missing code is still fetched one hash at a time at import.",
@@ -1714,6 +1717,7 @@ object SyncController:
               .and(appStateStorage.putBulkBytecodeRecoveryFailures(failures))
               .commit()
       }
+      recoveryScanCouldNotRun = false
 
       // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
       // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
@@ -2078,13 +2082,32 @@ object SyncController:
             )
 
         case _ =>
-          log.warn("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
-          if needBytecode then appStateStorage.bytecodeRecoveryDone().commit()
-          if needStorage then appStateStorage.storageRecoveryDone().commit()
-          startRegularSync()._2
+          recoveryCouldNotRun(needBytecode, needStorage, "there is no state root to scan: no root or pivot block stored")
+
+    /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
+      * written, and the scan's progress stays, so the next start tries again and a resume there still finds it. No hard
+      * stop: regular sync fetches what it reaches on demand. A pass that did run is another matter: see
+      * `runningCombinedScan`.
+      */
+    private def recoveryCouldNotRun(needBytecode: Boolean, needStorage: Boolean, why: String): Behavior[Command] =
+      log.error(
+        s"[SNAP-RECOVERY] The recovery scan could not run: $why. Still owed: bytecode=$needBytecode storage=$needStorage. " +
+          "Neither recovery flag is written and the scan's progress is kept, so the next start tries again. Regular sync " +
+          "starts now and fetches what it reaches on demand."
+      )
+      recoveryScanCouldNotRun = true
+      RecoveryMetrics.setBytecodePhase(
+        if needBytecode then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete
+      )
+      RecoveryMetrics.setStoragePhase(if needStorage then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete)
+      startRegularSync()._2
 
     /** Wait for the combined scan to report both gap sets, then spawn download-only recovery actors for whichever
       * phases still have gaps. Phases the scan found already complete are marked done immediately.
+      *
+      * A pass that ran settles the flags, holes or not (spec 022 T050a; the user's decision, 2026-10-31): the scan runs
+      * once, and rescanning a datadir with holes at every start would block regular sync for hours each time. So a flag
+      * means a pass ran, not that everything is there where the pass met a hole, and the WARN says so.
       */
     def runningCombinedScan(
         needBytecode: Boolean,
@@ -2096,10 +2119,25 @@ object SyncController:
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
-        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps) =>
+        case CombinedRecoveryScanActor.CombinedScanComplete(_, _, _, true) =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            s"state root ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString} at block $pivotBlock is absent, or " +
+              "reading the trie failed (logged above)"
+          )
+
+        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps, holes, _) =>
           val effByte = if needBytecode then byteGaps else Nil
           val effStor = if needStorage then storGaps else Nil
           log.info(s"Combined recovery scan reported ${effByte.size} bytecode gaps, ${effStor.size} storage gaps.")
+          if holes > 0 then
+            log.warn(
+              "[SNAP-RECOVERY] The recovery scan's pass could not read {} subtree(s) this session: the store holds no node " +
+                "at the top of each, so nothing under them was looked at. The recovery flags will mean that a pass ran, not " +
+                "that code and storage are complete. The pass is not repeated: block import fetches what it reaches on demand.",
+              holes
+            )
           // Phases the combined scan found complete (no gaps) are done right now.
           if needBytecode && effByte.isEmpty then appStateStorage.bytecodeRecoveryDone().commit()
           if needStorage && effStor.isEmpty then appStateStorage.storageRecoveryDone().commit()

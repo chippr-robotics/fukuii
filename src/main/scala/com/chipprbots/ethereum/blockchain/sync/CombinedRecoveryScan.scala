@@ -36,6 +36,7 @@ final class CombinedRecoveryScan(
   private val seenStorageRoots = mutable.HashSet.empty[ByteString]
   private val missingCode = mutable.ArrayBuffer.empty[ByteString]
   private val missingStorage = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+  private var holeCount = 0L
 
   /** Per-leaf callback for a [[PathTrackingLeafWalkVisitor]] walk. `accountHash` is the 32-byte trie key
     * (keccak256(address)); `leaf` carries the RLP-encoded [[Account]].
@@ -62,10 +63,19 @@ final class CombinedRecoveryScan(
       new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
     )
 
-  /** Walk the (already-resolved) subtree `root`, with `pathPrefix` the nibbles consumed to reach it (for sharding). */
+  /** Walk the subtree `root`, with `pathPrefix` the nibbles consumed to reach it (for sharding). An absent node is
+    * counted in [[holes]], and the walk goes on over its siblings (spec 022 T050a): a datadir handed off lazily has
+    * holes, and a pass that stopped at the first of them would look at almost nothing.
+    */
   def scanShard(root: MptNode, pathPrefix: ByteString): Unit =
-    MptTraversals.dispatch(root, new PathTrackingLeafWalkVisitor(mptStorage, pathPrefix, onLeaf))
+    MptTraversals.dispatch(
+      root,
+      new PathTrackingLeafWalkVisitor(mptStorage, pathPrefix, onLeaf, Some(_ => holeCount += 1))
+    )
 
   def missingBytecodes: Seq[ByteString] = missingCode.toSeq
 
   def missingStorageTries: Seq[(ByteString, ByteString)] = missingStorage.toSeq
+
+  /** Subtrees [[scanShard]] could not read: nothing under each of them was looked at. */
+  def holes: Long = holeCount

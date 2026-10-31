@@ -12,11 +12,17 @@ import com.chipprbots.ethereum.mpt.*
   * gives the 32-byte account hash needed by StorageTask.
   *
   * Used by StorageRecoveryActor (Bug 20 hardening) to recover missing contract storage tries.
+  *
+  * @param onHole
+  *   what to do with a node the store does not hold, given the nibble path to it. `None` rethrows, which ends the walk,
+  *   as `StorageRecoveryActor` expects. `Some` reports it and goes on over its siblings (spec 022 T050a). Only an
+  *   absent node: one that does not decode, or a store that fails, ends the walk either way.
   */
 class PathTrackingLeafWalkVisitor(
     storage: MptStorage,
     pathPrefix: ByteString,
-    onLeaf: (ByteString, LeafNode) => Unit
+    onLeaf: (ByteString, LeafNode) => Unit,
+    onHole: Option[ByteString => Unit] = None
 ) extends MptVisitor[Unit]:
 
   override def visitLeaf(leaf: LeafNode): Unit =
@@ -32,27 +38,35 @@ class PathTrackingLeafWalkVisitor(
     onLeaf(ByteString(bytes), leaf)
 
   override def visitHash(hashNode: HashNode): HashNodeResult[Unit] =
-    ResolveResult(storage.get(hashNode.hash))
+    onHole match
+      case None => ResolveResult(storage.get(hashNode.hash))
+      case Some(report) =>
+        try ResolveResult(storage.get(hashNode.hash))
+        catch
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            report(pathPrefix)
+            Result(())
 
   override def visitNull(): Unit = ()
 
   override def visitExtension(extension: ExtensionNode): ExtensionVisitor[Unit] =
-    new PathTrackingExtensionVisitor(storage, pathPrefix, extension.sharedKey, onLeaf)
+    new PathTrackingExtensionVisitor(storage, pathPrefix, extension.sharedKey, onLeaf, onHole)
 
   override def visitBranch(branch: BranchNode): BranchVisitor[Unit] =
-    new PathTrackingBranchVisitor(storage, pathPrefix, onLeaf)
+    new PathTrackingBranchVisitor(storage, pathPrefix, onLeaf, onHole)
 
 private class PathTrackingBranchVisitor(
     storage: MptStorage,
     pathPrefix: ByteString,
-    onLeaf: (ByteString, LeafNode) => Unit
+    onLeaf: (ByteString, LeafNode) => Unit,
+    onHole: Option[ByteString => Unit]
 ) extends BranchVisitor[Unit]:
   private var childIndex: Int = 0
 
   override def visitChild(): MptVisitor[Unit] =
     val idx = childIndex
     childIndex += 1
-    new PathTrackingLeafWalkVisitor(storage, pathPrefix ++ ByteString(idx.toByte), onLeaf)
+    new PathTrackingLeafWalkVisitor(storage, pathPrefix ++ ByteString(idx.toByte), onLeaf, onHole)
 
   override def visitChild(child: => Unit): Unit = child // force evaluation
   override def visitTerminator(term: Option[ByteString]): Unit = ()
@@ -62,10 +76,11 @@ private class PathTrackingExtensionVisitor(
     storage: MptStorage,
     pathPrefix: ByteString,
     sharedKey: ByteString,
-    onLeaf: (ByteString, LeafNode) => Unit
+    onLeaf: (ByteString, LeafNode) => Unit,
+    onHole: Option[ByteString => Unit]
 ) extends ExtensionVisitor[Unit]:
   override def visitNext(): MptVisitor[Unit] =
-    new PathTrackingLeafWalkVisitor(storage, pathPrefix ++ sharedKey, onLeaf)
+    new PathTrackingLeafWalkVisitor(storage, pathPrefix ++ sharedKey, onLeaf, onHole)
 
   override def visitNext(value: => Unit): Unit = value // force evaluation
   override def done(): Unit = ()
