@@ -69,6 +69,9 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     // The synced batches, each as the keys it writes or removes.
     val syncedBatches: scala.collection.mutable.ArrayBuffer[Set[String]] = scala.collection.mutable.ArrayBuffer.empty
 
+    // Runs after each synced batch lands, on the thread that wrote it.
+    @volatile var afterSyncedBatch: Set[String] => Unit = _ => ()
+
     val appStateStorage: AppStateStorage =
       new AppStateStorage(
         new EphemDataSource(Map.empty):
@@ -81,14 +84,14 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
             if failExcludedRead then throw new RuntimeException("excluded set unreadable")
             else super.scanRangeLimit(namespace, fromKey, toKeyExclusive, limit)
           override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
-            syncedBatches.synchronized {
-              syncedBatches += updates.flatMap {
-                case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, upserted) =>
-                  (removed ++ upserted.map(_._1)).map(k => new String(k.toArray, "UTF-8"))
-                case _ => Nil
-              }.toSet
-            }
+            val keys = updates.flatMap {
+              case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, upserted) =>
+                (removed ++ upserted.map(_._1)).map(k => new String(k.toArray, "UTF-8"))
+              case _ => Nil
+            }.toSet
+            syncedBatches.synchronized(syncedBatches += keys)
             super.updateSync(updates)
+            afterSyncedBatch(keys)
       )
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     private val pollsAnswered = new AtomicInteger(0)
@@ -281,7 +284,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   // spec 022 T050a, the user's decision of 2026-10-31: what no walk can vouch for is owed to the recovery scan.
   private val nopLog = org.slf4j.helpers.NOPLogger.NOP_LOGGER
 
-  it should "withhold bytecodeRecoveryDone at the end of a repair run, and settle the debt there" taggedAs UnitTest in new Fixture:
+  it should "withhold both recovery flags at the end of a repair run, and settle the debt there" taggedAs UnitTest in new Fixture:
     val snap = start(marked = false)
     appStateStorage.getSnapCodeScanOwed() shouldBe defined
     snap ! SNAPSyncController.HealingRootUnservable(root)
@@ -289,8 +292,39 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
     appStateStorage.isSnapSyncDone() shouldBe true
     appStateStorage.isBytecodeRecoveryDone() shouldBe false
-    appStateStorage.isStorageRecoveryDone() shouldBe true
+    appStateStorage.isStorageRecoveryDone() shouldBe false
     appStateStorage.getSnapCodeScanOwed() shouldBe None
+
+  // forge W1: a failed task-file sweep is exactly the case where unfinished accounts were never recorded, so an empty
+  // excluded set says nothing, and a lazy hand-off has no walk behind it.
+  it should "withhold storageRecoveryDone with the owed key on a lazy hand-off and an empty excluded set" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+      .lostTrack(appStateStorage, "the task file could not be read", nopLog) shouldBe true
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    new SnapSyncProgressStorage(appStateStorage.dataSource).excludedPage(None, 10) shouldBe empty
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
+  it should "overwrite a storageRecoveryDone an earlier cycle left set, for the owed key" taggedAs UnitTest in new Fixture:
+    appStateStorage.storageRecoveryDone().commit()
+    val snap = start(marked = false)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
+  it should "overwrite a storageRecoveryDone an earlier cycle left set, for an account entry" taggedAs UnitTest in new Fixture:
+    appStateStorage.storageRecoveryDone().commit()
+    new SnapSyncProgressStorage(appStateStorage.dataSource)
+      .recordExcluded(Seq(excluded(codeHash, ExcludedReason.StorageAbandoned)))
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
   it should "overwrite a bytecodeRecoveryDone an earlier cycle left set: leaving it out would not withhold it" taggedAs UnitTest in new Fixture:
     appStateStorage.bytecodeRecoveryDone().commit()
@@ -330,6 +364,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     val theWrite = syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
     theWrite.size shouldBe 1
     theWrite.head should contain(AppStateStorage.Keys.BytecodeRecoveryDone)
+    theWrite.head should contain(AppStateStorage.Keys.StorageRecoveryDone)
     theWrite.head should contain(AppStateStorage.Keys.SnapCodeScanOwed)
 
   "SNAPSyncController.bytecodeRecoveryComplete" should

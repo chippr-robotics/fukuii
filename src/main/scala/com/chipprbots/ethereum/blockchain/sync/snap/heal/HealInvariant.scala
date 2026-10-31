@@ -116,9 +116,11 @@ object HealInvariant:
 
   /** A run that knows its bookkeeping has lost something (spec 022 T050a; the user's decision, 2026-10-31, in place of
     * a hard stop, which would halt a node that could finish, and at Sepolia's size on a false timeout). The marker goes
-    * and the code scan is owed, in one synced write, so a later PR's walk-skip cannot take this datadir's word: the
-    * walk covers the trie and storage, the recovery scan at the next start covers code, which the walk never reads, and
-    * the node keeps going. A clean full walk may stamp the marker again; only a finalisation settles the debt.
+    * and the code scan is owed, in one synced write, so a later PR's walk-skip cannot take this datadir's word: a walk
+    * that completes clean covers the trie and storage (a lazy hand-off has none behind it, and leaves them to the scan
+    * and the audit), the recovery scan at the next start covers code, which the walk never reads, as far as it can
+    * read, and the node keeps going. A clean full walk may stamp the marker again; only a finalisation settles the
+    * debt.
     *
     * `log` is the caller's: the shipped logback.xml keeps `...sync.snap` at ERROR, so a logger of this object's would
     * lose the WARN.
