@@ -71,7 +71,10 @@ import com.chipprbots.ethereum.utils.NodeCacheConfig
   *     ancestors it completes), before or after the write is applied, i.e. before the coordinator releases the held
   *     entries;
   *   - `repeg-partial`: the pivot moves while the upper nodes are held (one subtree committed), and the kill lands in
-  *     the first commit write after the re-peg that writes a node;
+  *     the first commit write after the re-peg that writes a node the old trie does not have. Under Hash the old
+  *     subtree's asynchronous flush goes out just before the re-request that arms the gate, so it can land after
+  *     arming; it is not what this point is about, and under in-memory pruning its one node evicts nothing from a
+  *     two-entry cache;
   *   - `repeg-full`: the old trie is healed completely, the pivot moves to the new build of the fixture, and the kill
   *     lands in the first commit write after the re-peg that writes a node;
   *   - `repeg-delete` (Path only): as `repeg-full`, but the kill lands in the first write after the re-peg that only
@@ -114,6 +117,7 @@ object HealCrashChild:
     val scheme = if schemeArg == "path" then StorageScheme.Path else StorageScheme.Hash
     val pruning: PruningMode = if pruningArg == "basic" then BasicPruning(1000) else InMemoryPruning(1000)
     val gate = new KillGate(point)
+    val (oldTrie, newTrie) = HealCrashChild.fixture(fixture)
 
     val rocks = RocksDbDataSource(rocksConfig(dbPath), Namespaces.nsSeq)
     if point.startsWith("invariant-") then
@@ -126,10 +130,10 @@ object HealCrashChild:
     val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
     val mpt: MptStorage =
       val backing = stateStorage.getBackingStorage(1)
-      if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate) else backing
+      if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate, oldTrie.nodes.map(_.hash).toSet)
+      else backing
     val pathNodes = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
 
-    val (oldTrie, newTrie) = HealCrashChild.fixture(fixture)
     val progress = new SnapSyncProgressStorage(dataSource)
     // `excluded-resolved`: an account was committed, its storage was abandoned and the entry says so: the resolver seeds
     // the storage root, and the first chain it commits is what the kill lands after.
@@ -391,8 +395,11 @@ final class KillGate(point: String):
         park()
       case _ => apply()
 
-  /** A commit write of `nodes` trie nodes; `apply` performs it. */
-  def onCommitWrite(nodes: Int)(apply: () => Unit): Unit =
+  /** A commit write of `nodes` trie nodes; `apply` performs it. `onlyOldTrie`: every node in it is the old trie's,
+    * which says nothing of a re-peg even when it lands after one (see `repeg-partial`). Only the Hash store can tell,
+    * and only it needs to: a Path commit is written before the re-request that arms the gate.
+    */
+  def onCommitWrite(nodes: Int, onlyOldTrie: Boolean = false)(apply: () => Unit): Unit =
     point match
       case "chain-before" if nodes >= 2 && !signalled.get() =>
         signal(point)
@@ -402,7 +409,7 @@ final class KillGate(point: String):
         signal(point)
         park()
       // vault V4 (e): the re-peg points count only writes that put a node; a write that only deletes is its own point.
-      case "repeg-partial" | "repeg-full" if repegArmed.get() && nodes >= 1 && !signalled.get() =>
+      case "repeg-partial" | "repeg-full" if repegArmed.get() && nodes >= 1 && !onlyOldTrie && !signalled.get() =>
         apply()
         signal(point)
         park()
@@ -424,14 +431,16 @@ final class KillGate(point: String):
   private def park(): Unit = new CountDownLatch(1).await()
 
 /** The Hash-scheme commit write: `storeRawNodes`, counted and gated. */
-final class HookedMptStorage(underlying: MptStorage, gate: KillGate) extends MptStorage:
+final class HookedMptStorage(underlying: MptStorage, gate: KillGate, oldTrie: Set[ByteString]) extends MptStorage:
   def get(nodeId: Array[Byte]): MptNode = underlying.get(nodeId)
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
     underlying.updateNodesInStorage(newRoot, toRemove)
   def persist(): Unit = underlying.persist()
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
-    gate.onCommitWrite(nodes.size)(() => underlying.storeRawNodes(nodes))
+    gate.onCommitWrite(nodes.size, onlyOldTrie = nodes.forall(node => oldTrie(node._1)))(() =>
+      underlying.storeRawNodes(nodes)
+    )
 
 /** A data source that passes everything through, gating the Path-scheme commit writes (batches that touch the path-trie
   * column families).
