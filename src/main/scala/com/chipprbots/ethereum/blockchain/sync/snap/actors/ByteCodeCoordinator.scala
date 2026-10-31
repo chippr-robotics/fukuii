@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedSweep
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -176,6 +177,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   private var forceCompleteWanted: Boolean = false
   private var codeFilePointerWaitOver: Boolean = false
 
+  private def lostTrack(reason: String): Boolean = HealInvariant.lostTrack(stateIngest.appState, reason, log)
+
   private def codeFileSweepDue: Boolean = restartedIncarnation && recordExcluded && !codeFileSwept
 
   /** The code-hash file and the entries it was recorded as holding. The two are written together and a reset blanks
@@ -194,7 +197,10 @@ private[actors] class ByteCodeCoordinatorImpl(
         None
 
   /** Start reading the code-hash file back into the excluded set (`ExcludedTaskFile`), off this actor: its end sends
-    * `CodeFileSwept`, and that brings back whatever was waiting. False, said at WARN, with no file to read.
+    * `CodeFileSwept`, and that brings back whatever was waiting. With no file to read, what this coordinator does not
+    * hold in memory has no entry: the run has lost track (spec 022 T050a), so the recovery scan covers it, and false.
+    * True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next check or
+    * force-complete comes back here.
     */
   private def startCodeFileSweep(): Boolean =
     codeFile match
@@ -216,12 +222,12 @@ private[actors] class ByteCodeCoordinatorImpl(
         timers.startSingleTimer(CodeFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
         true
       case None =>
-        log.warn(
-          "Not reading the code-hash file back after a restart (no file): what this coordinator does not hold in memory " +
-            "has no entry in the excluded set"
+        val recorded = lostTrack(
+          "a restarted bytecode coordinator has no code-hash file to read back: what it does not hold in memory has no " +
+            "entry in the excluded set"
         )
-        codeFileSwept = true
-        false
+        codeFileSwept = recorded
+        !recorded
 
   private def onCodeFileSwept(outcome: ExcludedTaskFile.Outcome): Unit =
     val resume = if forceCompleteWanted then ForceCompleteByteCodes else ByteCodeCheckCompletion
@@ -231,9 +237,12 @@ private[actors] class ByteCodeCoordinatorImpl(
         log.info(s"Recorded $hashes missing bytecode hash(es) from the code-hash file (${codeFileSweep.lastRun})")
         context.self ! resume
       case ExcludedTaskFile.Outcome.Unreadable(cause) =>
-        codeFileSwept = true
+        // spec 022 T050a: what a restart lost has no entry, so the run has lost track. A failed write goes round again.
         log.error("Could not read the code-hash file; going on with what is in memory", cause)
-        context.self ! resume
+        if lostTrack(s"the code-hash file could not be read: $cause") then
+          codeFileSwept = true
+          context.self ! resume
+        else timers.startSingleTimer(resume, ForceCompleteRetryDelay)
       case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
         log.error("Could not record the code-hash file's missing hashes; trying again shortly", cause)
         timers.startSingleTimer(resume, ForceCompleteRetryDelay)

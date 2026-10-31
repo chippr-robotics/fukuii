@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedSweep
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -682,6 +683,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   private var forceCompleteWanted: Boolean = false
   private var taskFilePointerWaitOver: Boolean = false
 
+  private def lostTrack(reason: String): Boolean = HealInvariant.lostTrack(stateIngest.appState, reason, log)
+
   /** The task file and the entries it was recorded as holding, if it was. */
   private def taskFile: Option[(java.nio.file.Path, Option[Long])] =
     try
@@ -696,9 +699,17 @@ private[actors] class StorageRangeCoordinatorImpl(
         None
 
   /** Start reading the task file back into the excluded set (`ExcludedTaskFile`), off this actor, on the one thread of
-    * `storage-writer-dispatcher`: its end sends `TaskFileSwept`, and that brings back whatever was waiting. False, said
-    * at WARN, when it cannot run: no done markers, without which the file would name every account; or no file, which
-    * means the account phase has not ended and what a restart lost was recorded (at best) as it went.
+    * `storage-writer-dispatcher`: its end sends `TaskFileSwept`, and that brings back whatever was waiting. False when
+    * it cannot run:
+    *   - no done markers, without which the file would name every account. Said at WARN. That is Hash under
+    *     `pruning.mode = inmemory`, where no marker can hold and the walk stays at every completion
+    *     (`HealPolicy.recordStorageDone`), so nothing here trusts what this leaves out;
+    *   - no file, after a restart: the run has lost track (spec 022 T050a), and what the restart lost is left to the
+    *     walk. True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next
+    *     check or force-complete comes back here;
+    *   - no file, on a coordinator that has not restarted: its own force-complete during the account phase (peers not
+    *     serving storage), which has no file yet. It holds all it was given, and has recorded it. Nothing is lost, so
+    *     the marker stays.
     */
   private def startTaskFileSweep(): Boolean =
     (storageDoneStorage, taskFile) match
@@ -710,15 +721,21 @@ private[actors] class StorageRangeCoordinatorImpl(
         )((t, outcome) => selfRef ! TaskFileSwept(t, outcome))
         timers.startSingleTimer(TaskFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
         true
-      case (done, _) =>
+      case (done, _) if done.isEmpty || !restartedIncarnation =>
         log.warn(
           s"[STORAGE-FORCE-COMPLETE] Not reading the task file back (${
               if done.isEmpty then "no done markers" else "no task file"
-            }): " +
-            "what this coordinator does not hold in memory has no entry in the excluded set"
+            }): what this coordinator does not hold in memory has no entry in the excluded set"
         )
         taskFileSwept = true
         false
+      case _ =>
+        val recorded = lostTrack(
+          "a restarted storage coordinator has no task file to read back: what it does not hold in memory has no entry in " +
+            "the excluded set"
+        )
+        taskFileSwept = recorded
+        !recorded
 
   private def onTaskFileSwept(outcome: ExcludedTaskFile.Outcome): Unit =
     val resume = if forceCompleteWanted then ForceCompleteStorage else StorageCheckCompletion
@@ -730,10 +747,13 @@ private[actors] class StorageRangeCoordinatorImpl(
         )
         self ! resume
       case ExcludedTaskFile.Outcome.Unreadable(cause) =>
-        // The walk still finds what it would have named; slice 5 may not remove the walk over this (T050a).
-        taskFileSwept = true
+        // spec 022 T050a: what a restart lost has no entry, so the run has lost track, and the walk stays for it. A failed
+        // write goes round again, as a store failure does below.
         log.error("[STORAGE-FORCE-COMPLETE] Could not read the task file; going on with what is in memory", cause)
-        self ! resume
+        if lostTrack(s"the task file could not be read: $cause") then
+          taskFileSwept = true
+          self ! resume
+        else if forceCompleteWanted then timers.startSingleTimer(ForceCompleteStorage, ForceCompleteRetryDelay)
       case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
         log.error("[STORAGE-FORCE-COMPLETE] Could not record the task file's accounts; trying again shortly", cause)
         // At a clean end the periodic check comes back here. Not a timer of its own: that key is the periodic check's.

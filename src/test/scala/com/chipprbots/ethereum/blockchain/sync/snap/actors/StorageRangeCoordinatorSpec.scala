@@ -2601,6 +2601,149 @@ class StorageRangeCoordinatorSpec
     finally taskFilePointer = None
   }
 
+  // spec 022 T050a, the user's decision of 2026-10-31: where the bookkeeping has lost something, the marker cannot stand.
+  // The walk then covers it, and the node goes on.
+  private def markedRig(entries: Seq[(ByteString, ByteString)], restarted: Boolean = false): TaskFileRig =
+    val rig = new TaskFileRig(entries, restartedIncarnation = restarted)
+    rig.appState.stampSnapHealInvariant().commit()
+    rig
+
+  private def lostTrackOn(rig: TaskFileRig, reasonSays: String) =
+    rig.appState.hasSnapHealInvariant() shouldBe false
+    rig.appState.getSnapCodeScanOwed().get should include(reasonSays)
+
+  private def stillTrusted(rig: TaskFileRig) =
+    rig.appState.hasSnapHealInvariant() shouldBe true
+    rig.appState.getSnapCodeScanOwed() shouldBe None
+
+  "A task file that cannot be read" should "withdraw the marker when it is the wrong size" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-size") -> fileRoot("lost-size")))
+    try
+      rig.appState.putSnapSyncStorageFileCount(Some(99L)).commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker when it is missing" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-file") -> fileRoot("lost-file")))
+    try
+      java.nio.file.Files.delete(rig.file)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker when the read hangs" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val rig = new TaskFileRig(Seq(fileAccount("lost-hung") -> fileRoot("lost-hung")), flatBatchEc = ec)
+    try
+      rig.appState.stampSnapHealInvariant().commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      val token = rig.kit
+        .retrieveAllEffects()
+        .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
+        .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
+        .get
+      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "hung")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker at a clean end after a restart, and end the phase" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-clean") -> fileRoot("lost-clean")), restarted = true)
+    try
+      java.nio.file.Files.delete(rig.file)
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "not end the phase while the withdrawal cannot be written, and end it once it can" taggedAs UnitTest in {
+    val writesFail = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val failing = new EphemDataSource(Map.empty):
+      override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+        if writesFail.get() then throw new RuntimeException("cannot write")
+        super.updateSync(updates)
+    val rig = new TaskFileRig(
+      Seq(fileAccount("lost-write") -> fileRoot("lost-write")),
+      restartedIncarnation = true,
+      sourceOverride = Some(failing)
+    )
+    try
+      rig.appState.stampSnapHealInvariant().commit()
+      java.nio.file.Files.delete(rig.file)
+      writesFail.set(true)
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+      rig.appState.hasSnapHealInvariant() shouldBe true
+
+      writesFail.set(false)
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the periodic one
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "keep the marker when the read goes through" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("read-ok") -> fileRoot("read-ok")), restarted = true)
+    try
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      stillTrusted(rig)
+    finally taskFilePointer = None
+  }
+
+  "A restarted coordinator with no task file" should "withdraw the marker once the wait for the pointer runs out, and end the phase" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      withClue("the wait is on: ") {
+        rig.controller.expectNoMessage(50.millis)
+        stillTrusted(rig)
+      }
+      rig.kit.run(StorageRangeCoordinator.TaskFilePointerWaitOver)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "no task file")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker at a force-complete" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "no task file")
+    finally taskFilePointer = None
+  }
+
+  "A healthy coordinator with no task file" should "keep the marker at its own force-complete in the account phase: it lost nothing" taggedAs UnitTest in {
+    val rig = markedRig(Nil)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      stillTrusted(rig)
+    finally taskFilePointer = None
+  }
+
   // Spec 022 round 2 review C (hunter W3, vault N3): after a restart of the cycle every entry of the file reads as unfinished.
   it should "stop reading the task file when it stops" taggedAs UnitTest in {
     val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext

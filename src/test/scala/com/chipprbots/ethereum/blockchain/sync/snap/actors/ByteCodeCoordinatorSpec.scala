@@ -844,6 +844,148 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       (progressStore.excludedPage(None, 1000).map(_.subject), lost, storedHash)
     finally codeFilePointer = None
 
+  // spec 022 T050a, the user's decision of 2026-10-31: the walk never reads code, so what a restarted bytecode coordinator
+  // cannot read back is owed to the recovery scan, and the marker goes with it. The phase still ends.
+  private def restartedCoordinatorRig(
+      appState: AppStateStorage
+  ): (
+      org.apache.pekko.actor.typed.ActorRef[ByteCodeCoordinator.Command],
+      org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
+  ) =
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    codeFilePointer = Some(appState)
+    val coordinator = testKit.spawn(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors
+        .supervise(
+          ByteCodeCoordinator(
+            stateIngest = bytecodeIngest(new TestEvmCodeStorage()),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            batchSize = 4,
+            snapSyncController = snapSyncController.ref,
+            recordExcluded = true
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+    alive.receiveMessage(30.seconds)
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+    alive.receiveMessage(30.seconds)
+    (coordinator, snapSyncController)
+
+  private def awaitByteCodeEnd(
+      snapSyncController: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
+  ): Unit =
+    snapSyncController.fishForMessage(30.seconds) {
+      case SNAPSyncController.ByteCodeSyncComplete =>
+        org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+      case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+    }
+    ()
+
+  it should "withdraw the marker and owe the scan when the code-hash file cannot be read after a restart" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    appState
+      .putSnapSyncCodeHashesPath("/nonexistent/spec022-code-hashes.bin")
+      .and(appState.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("code-hash file could not be read")
+    finally codeFilePointer = None
+  }
+
+  it should "withdraw the marker and owe the scan with no code-hash file, once the wait for its pointer runs out" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("no code-hash file")
+    finally codeFilePointer = None
+  }
+
+  it should "withdraw the marker and owe the scan when a restarted coordinator is force-completed with no file" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("no code-hash file")
+    finally codeFilePointer = None
+  }
+
+  it should "not end the phase while the withdrawal cannot be written, and end it once it can" taggedAs UnitTest in {
+    val writesFail = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val appState = new AppStateStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+          if writesFail.get() then throw new RuntimeException("cannot write")
+          super.updateSync(updates)
+    )
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      writesFail.set(true)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ controller.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      heard should not contain SNAPSyncController.ByteCodeSyncComplete
+      appState.hasSnapHealInvariant() shouldBe true
+
+      writesFail.set(false)
+      coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion // what the status pulse brings
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+    finally codeFilePointer = None
+  }
+
+  it should "keep the marker when the code-hash file reads back" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, kec256(ByteString("reads-back")).toArray)
+    appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(Some(1L))).commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe true
+      appState.getSnapCodeScanOwed() shouldBe None
+    finally codeFilePointer = None
+  }
+
+  it should "keep the marker on a coordinator that has not restarted: its memory says all of it" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    codeFilePointer = Some(appState)
+    try
+      val (coordinator, controller) = forceCompleteFixture(recordExcluded = true)
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe true
+      appState.getSnapCodeScanOwed() shouldBe None
+    finally codeFilePointer = None
+  }
+
   // spec 022 T050a (vault, forge N-c): the wait is by the clock, not a count of the checks that happen to come.
   it should "not let a burst of checks use up the wait for the code-hash file's pointer" taggedAs UnitTest in {
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
