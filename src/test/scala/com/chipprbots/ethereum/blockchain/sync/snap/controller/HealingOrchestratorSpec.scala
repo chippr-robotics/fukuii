@@ -90,6 +90,8 @@ private[snap] class StubHealingOrchestratorState(
   val syncedRemovals: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
   // spec 022 T043: a synced write of this key fails (the disk is full, say).
   var failSyncedWritesOf: Option[String] = None
+  // How many writes `syncedWrites` held at each range delete, to tell what came before it (spec 022 T050a).
+  val rangeDeletesAt: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
   private val dataSource = new EphemDataSource(Map.empty):
     private def keys(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Seq[ByteString] =
       updates.flatMap {
@@ -113,6 +115,7 @@ private[snap] class StubHealingOrchestratorState(
     ): Unit =
       if namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace then
         frontierWrites += "deleteRange"
+      rangeDeletesAt += syncedWrites.size
       super.deleteRange(namespace, fromKey, toKeyExclusive)
     override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
       syncedWrites += ((false, keys(updates)))
@@ -491,6 +494,45 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     withClue("it would otherwise cost the next start a recovery scan: ") {
       h.module.stateIngest.snapProgress.hasAnyExcluded shouldBe false
     }
+  }
+
+  // spec 022 T050a (vault): the other order could heal an older anchored root with the entries gone. All three sites.
+  private def droppedAfterTheAnchor(complete: StubHealingOrchestratorState & HealingOrchestrator => Unit): Unit =
+    val h = new Harness()
+    h.module.trieNodeHealingCoordinator = Some(TestInbox[TrieNodeHealingCoordinator.Command]().ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    // On the stub's recording source, so that its range delete is seen with the anchor's write.
+    h.module.stateIngest.snapProgress =
+      new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(h.module.appStateStorage.dataSource)
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+    h.module.healingExcludedPassRoot.set(root.value)
+    h.module.syncedWrites.clear()
+    h.module.rangeDeletesAt.clear()
+
+    h.call(complete)
+
+    h.module.stateIngest.snapProgress.hasAnyExcluded shouldBe false
+    val anchor = h.module.syncedWrites.indexWhere { case (synced, keys) =>
+      synced && keys.contains(ByteString(AppStateStorage.Keys.SnapSyncStateRoot.getBytes("UTF-8")))
+    }
+    withClue(s"writes ${h.module.syncedWrites}, deletes at ${h.module.rangeDeletesAt}: ") {
+      anchor should be >= 0
+      h.module.rangeDeletesAt.size shouldBe 1
+      h.module.rangeDeletesAt.head should be > anchor
+    }
+
+  it should "drop the dormant entries after the anchor at a clean streaming trie walk" taggedAs UnitTest in {
+    droppedAfterTheAnchor(_.stateHealingArms(TrieWalkComplete(0)))
+  }
+
+  it should "drop the dormant entries after the anchor at a clean trie walk result" taggedAs UnitTest in {
+    droppedAfterTheAnchor(_.stateHealingArms(TrieWalkResult(Nil)))
+  }
+
+  it should "drop the dormant entries after the anchor at the Path completion" taggedAs UnitTest in {
+    droppedAfterTheAnchor(_.completeHealingWalkClean())
   }
 
   it should "not drop anything but dormant entries at a clean walk, and not complete over one that counts" taggedAs UnitTest in {
