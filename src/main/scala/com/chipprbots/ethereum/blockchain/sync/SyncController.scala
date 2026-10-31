@@ -890,7 +890,7 @@ object SyncController:
           // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
           appStateStorage.clearBytecodeRecoveryDone().commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
-          startRecovery(needBytecode = true, needStorage = false, scanRoot = bulkRecoveryScanRoot())
+          startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -1572,7 +1572,7 @@ object SyncController:
           logSnapStateRootDiagnostic()
           val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
           val needStorage = !appStateStorage.isStorageRecoveryDone()
-          if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
+          if needBytecode || needStorage then startRecovery(needBytecode, needStorage, recoveryScanRoot())
           else startRegularSync()._2
         case (false, SyncMode.Regular) if snapHasStake() =>
           // #1434: do-snap-sync is off, but SNAP was running here and left work behind (a restart mid-heal, or mid-download
@@ -1906,17 +1906,26 @@ object SyncController:
             handleRegularSyncMsg(regularSync, m)
       }
 
-    /** The trie a bulk bytecode recovery scans: the CURRENT BEST block's state root, falling back to the SNAP pivot's.
+    /** The trie a recovery scans, at a start or for a bulk bytecode recovery: the CURRENT BEST block's state root,
+      * falling back to the SNAP pivot's.
       *
-      * The best root is always intact (it is the state regular sync executes on) and covers contracts created after the
-      * pivot. The pivot root is not: with the default `basic` pruning (history 64) the pivot trie is pruned within
-      * about 64 blocks, so a missing code found days after SNAP would scan a root that no longer exists, find "no
-      * gaps", and blame the peers. Only a best root that cannot be read falls back to the pivot's.
+      * The best root is the state regular sync executes on, and it covers contracts created after the pivot. The pivot
+      * root is gone within minutes: with the default `basic` pruning (history 64) it is pruned about 64 blocks on, and
+      * a pivot sits behind the head, so catch-up passes that almost at once. Measured on Mordor (spec 022, 2026-10-31):
+      * a node stopped about 3 minutes after its hand-off had imported 87 blocks past the pivot, and the next start's
+      * scan found the pivot root absent 6 ms in. The root need not be the pivot's for storage either: the storage phase
+      * takes its (account, storage root) pairs from this same scan, asks peers at this same root, and checks each chunk
+      * against its pair's root (and rolls to a recent root when peers no longer serve this one).
       *
-      * Startup recovery (`startRecovery` with no `scanRoot`) keeps the pivot root on purpose: it runs right after SNAP
-      * finishes, when the pivot trie is fresh, and its storage phase needs the pivot's storage tries.
+      * Regular sync is stopped through the scan and the downloads, so a restart mid-scan finds the same best root and
+      * the resume tag (`getRecoveryProgressFor`) still matches. The Engine API is not stopped: with a consensus client
+      * feeding the next payload, `forkchoiceUpdated` moves the best block under a running scan. That path does not
+      * prune, so the walk is unharmed; a restart then picks another root, the tag does not match, and the scan starts
+      * afresh.
+      *
+      * `None` when there is neither: `startRecovery` then has nothing to scan.
       */
-    private def bulkRecoveryScanRoot(): Option[(ByteString, BigInt)] =
+    private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
       def readable(root: ByteString, number: BigInt): Boolean =
         try
           stateStorage.getBackingStorage(number).get(root.toArray)
@@ -1929,27 +1938,24 @@ object SyncController:
       yield (root, number)
       best.filter { case (r, n) => readable(r, n) } match
         case Some(ok) =>
-          log.info("Bulk bytecode recovery scans the best block's state root (block {}).", ok._2)
+          log.info("Recovery scans the best block's state root (block {}).", ok._2)
           Some(ok)
         case None =>
           log.error(
-            "The best block's state root is not readable; the bulk bytecode recovery falls back to the SNAP pivot's root, " +
-              "which may be pruned."
+            "The best block's state root is not readable; recovery falls back to the SNAP pivot's root, which may be pruned."
           )
           pivot
 
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
-        scanRoot: Option[(ByteString, BigInt)] = None
+        scanRoot: Option[(ByteString, BigInt)]
     ): Behavior[Command] =
       syncGeneration += 1
       txGossipGate.stateSyncStarted()
-      val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
-      val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
-      (stateRootOpt, pivotBlockOpt) match
-        case (Some(stateRoot), Some(pivotBlock)) =>
+      scanRoot match
+        case Some((stateRoot, pivotBlock)) =>
           log.info(
             s"[SNAP-RECOVERY] Phase starting — bytecodeNeeded=$needBytecode storageNeeded=$needStorage " +
               s"generation=$syncGeneration — polling for snap-capable peers every 5s"
@@ -2081,8 +2087,12 @@ object SyncController:
               storageComplete = !needStorage
             )
 
-        case _ =>
-          recoveryCouldNotRun(needBytecode, needStorage, "there is no state root to scan: no root or pivot block stored")
+        case None =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            "there is no state root to scan: no readable best block, no pivot"
+          )
 
     /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
       * written, and the scan's progress stays, so the next start tries again and a resume there still finds it. No hard

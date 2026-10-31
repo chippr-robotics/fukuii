@@ -1275,6 +1275,42 @@ class SyncControllerSpec
   // its hand-off had imported 87 blocks past its pivot, and the next start's scan found the pivot root gone and read that
   // as no gaps, so the flag went true over nothing.
 
+  it should "scan the best block's root at a start, with the pivot's pruned, and find a gap planted under it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup, trieAtBest = true)
+    sc.owesTheScan()
+    sc.startRegularSync()
+    sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+    sc.appState.isBytecodeRecoveryDone() shouldBe true
+    sc.appState.isStorageRecoveryDone() shouldBe true
+    sc.appState.getRecoveryProgress() shouldBe None
+  }
+
+  it should "scan the best block's root at a start even with the pivot's still readable" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup, trieAtBest = true, pivotReadableWithNoGaps = true)
+    sc.owesTheScan()
+    sc.startRegularSync()
+    withClue("the pivot's trie has no gaps, so only a scan of the best root asks for these: ") {
+      sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+    }
+  }
+
+  it should "fall back to the pivot's root at a start when the best block's cannot be read" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    val sc = new BulkScenario(testSetup)
+    sc.owesTheScan()
+    sc.startRegularSync()
+    sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)
+    sc.appState.isBytecodeRecoveryDone() shouldBe true
+  }
+
   it should "settle nothing when the scan could not run: no flag, the scan's progress kept, regular sync started" taggedAs (
     UnitTest,
     SyncTest
