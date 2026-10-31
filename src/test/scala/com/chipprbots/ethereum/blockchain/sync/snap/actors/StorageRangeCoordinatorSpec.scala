@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 
@@ -34,6 +35,7 @@ import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
@@ -66,7 +68,10 @@ class StorageRangeCoordinatorSpec
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       initialMaxInFlightPerPeer: Int = 5,
       backpressureHighWatermark: Int = 100000,
-      backpressureLowWatermark: Int = 50000
+      backpressureLowWatermark: Int = 50000,
+      deferredMerkleization: Boolean = true, // the coordinator's own default, which no production config uses
+      recordStorageDone: Boolean = false,
+      recordExcluded: Boolean = false
   ): org.apache.pekko.actor.typed.ActorRef[StorageRangeCoordinator.Command] =
     testKit.spawn(
       StorageRangeCoordinator(
@@ -81,7 +86,10 @@ class StorageRangeCoordinatorSpec
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
-        stateIngest = hashSchemeIngest(flatSlotStorage)
+        stateIngest = hashSchemeIngest(flatSlotStorage),
+        deferredMerkleization = deferredMerkleization,
+        recordStorageDone = recordStorageDone,
+        recordExcluded = recordExcluded
       )
     )
 
@@ -410,10 +418,13 @@ class StorageRangeCoordinatorSpec
   // ── K5: Proof-of-absence (BUG fix b38050e49) ──────────────────────────────
 
   it should "accept proof-of-absence response (0 slots + proof) and not mark peer stateless" taggedAs UnitTest in {
-    // Fix b38050e49: when a peer returns 0 slots + non-empty proof for a single-account batch,
-    // the coordinator must treat it as a valid cryptographic proof that the account has no
-    // storage, complete the task, and NOT mark the peer stateless. The peer must be immediately
+    // Fix b38050e49: when a peer returns 0 slots + non-empty proof for a single-account batch, the
+    // coordinator completes the task and does NOT mark the peer stateless. The peer must be immediately
     // eligible to receive the next task via dispatchIfPossible().
+    //
+    // This pins that liveness only. The proof here is a dummy and nothing checks one, so the response says nothing
+    // about the account's storage (spec 022 T050a, H1): "A completion with no trie" below pins what it leaves behind.
+    // This spec's `srcProps` runs the coordinator's default `deferredMerkleization = true`, which builds no trie.
     val stateRoot = kec256(ByteString("proof-of-absence-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
@@ -2649,6 +2660,184 @@ class StorageRangeCoordinatorSpec
     impl.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
     excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned)
     excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
+  }
+
+  // spec 022 T050a, H1: no trie means nothing was written, whatever the response said. A non-empty claimed root is then
+  // unverified, so no marker hides it from the sweep, and an excluded entry gives it to healing.
+  private val absenceProof = Seq(ByteString(Array.fill(32)(0xab.toByte)))
+
+  // An inbox, not a probe: the kit runs on this thread, so "not sent" can be read straight off it.
+  private def trieLessFixture() =
+    val controller = org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox[SNAPSyncController.Command]()
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (impl, kit) = newImpl(
+      stateRoot = kec256(ByteString("trie-less-state-root")),
+      flatSlotStorage = flatSlots,
+      snapSyncControllerRef = controller.ref,
+      deferredMerkleization = false, // production default: the storage trie is built and committed
+      recordStorageDone = true
+    )
+    val peer = PeerTestHelpers.createTestPeer("trie-less-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    (impl, kit, controller, peer, new SnapStorageDoneStorage(flatSlots.dataSource))
+
+  "A completion with no trie" should "take a lone absence on a non-empty root as unverified: an excluded entry, no marker, and the phase still ends" taggedAs UnitTest in {
+    val (impl, kit, controller, peer, done) = trieLessFixture()
+    val account = kec256(ByteString("trie-less-lone-absence"))
+    val root = kec256(ByteString("trie-less-lone-absence-root"))
+
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, root), Seq.empty, absenceProof)
+    // As the coordinator's message loop does at the end of every message.
+    impl.excludedRecorder.flush() shouldBe true
+    impl.flushPendingFlatBatch()
+
+    impl.pendingDoneMarkers shouldBe empty
+    done.isDone(account, root) shouldBe false
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
+    excluded(account).map(_.claimedStorageRoot) shouldBe Some(root)
+    impl.completedAccountCount shouldBe 1L
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    drainSelf(kit)
+    controller.receiveAll() should contain(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  it should "do so for a real response through the coordinator, and the phase still ends" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("trie-less-response-state-root"))
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val account = kec256(ByteString("trie-less-response"))
+    val root = kec256(ByteString("trie-less-response-root"))
+    val coordinator = srcProps(
+      stateRoot = stateRoot,
+      networkPeerManager = networkPeerManager.ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      flatSlotStorage = flatSlots,
+      maxAccountsPerBatch = 1,
+      maxInFlightRequests = 2,
+      requestTimeout = 30.seconds,
+      snapSyncController = controller.ref,
+      initialMaxInFlightPerPeer = 1,
+      deferredMerkleization = false,
+      recordStorageDone = true,
+      recordExcluded = true
+    )
+    val peer = PeerTestHelpers.createTestPeer("trie-less-response-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    coordinator ! StorageRangeCoordinator.StartStorageRangeSync(stateRoot)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(StorageTask.createStorageTask(account, root)))
+    coordinator ! StorageRangeCoordinator.StoragePeerAvailable(peer)
+    val request = networkPeerManager
+      .expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+      .message
+      .asInstanceOf[GetStorageRangesEnc]
+      .underlyingMsg
+    coordinator ! StorageRangeCoordinator.StorageRangesResponseMsg(
+      StorageRanges(request.requestId, slots = Seq.empty, proof = absenceProof)
+    )
+    coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+
+    controller.fishForMessage(5.seconds) {
+      case SNAPSyncController.StorageRangeSyncComplete => FishingOutcomes.complete
+      case _                                           => FishingOutcomes.continueAndIgnore
+    }
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
+    new SnapStorageDoneStorage(flatSlots.dataSource).isDone(account, root) shouldBe false
+  }
+
+  it should "hold the phase's end until the excluded entry is durable" taggedAs UnitTest in {
+    val (impl, kit, controller, peer, _) = trieLessFixture()
+    val account = kec256(ByteString("trie-less-failed-write"))
+    val root = kec256(ByteString("trie-less-failed-write-root"))
+
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, root), Seq.empty, absenceProof)
+    progressSource.failSync = true
+    try
+      impl.excludedRecorder.flush() shouldBe false
+      kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(kit)
+      controller.receiveAll() should not contain SNAPSyncController.StorageRangeSyncComplete
+    finally progressSource.failSync = false
+    impl.excludedRecorder.flush() shouldBe true
+    excluded(account) shouldBe defined
+    kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+    drainSelf(kit)
+    controller.receiveAll() should contain(SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  it should "do the same when a pivot refresh wiped the account's trie and its last sub-range comes back empty" taggedAs UnitTest in {
+    val (impl, kit, _, peer, done) = trieLessFixture()
+    val account = kec256(ByteString("trie-less-refresh"))
+    val root = kec256(ByteString("trie-less-refresh-root"))
+    val lower = StorageTask(account, root, next = slotKey(0x01), last = slotKey(0x1f))
+    val upper = StorageTask(account, root, next = slotKey(0x20), last = slotKey(0xfe))
+    impl.accountSubtaskCounters(account) = (2, 0)
+    impl.storageTrieCursor(account) = lower.next
+
+    impl.applyOrderedStorageChunk(peer, lower, Seq(slotKey(0x10) -> ByteString("value-10")), Seq.empty)
+    impl.pendingAccountTries.get(account) shouldBe defined
+
+    kit.run(StorageRangeCoordinator.StoragePivotRefreshed(kec256(ByteString("trie-less-refresh-new-root"))))
+    impl.pendingAccountTries.get(account) shouldBe None
+    impl.accountSubtaskCounters.get(account) shouldBe Some((2, 1)) // what this route rests on: the refresh keeps these
+
+    impl.applyOrderedStorageChunk(peer, upper, Seq.empty, absenceProof)
+    impl.excludedRecorder.flush() shouldBe true
+    impl.flushPendingFlatBatch()
+
+    impl.accountSubtaskCounters.get(account) shouldBe None
+    impl.pendingDoneMarkers shouldBe empty
+    done.isDone(account, root) shouldBe false
+    excluded(account).map(_.reason) shouldBe Some(com.chipprbots.ethereum.db.storage.ExcludedReason.StorageRootMismatch)
+  }
+
+  it should "still mark an account that claims no storage: the empty root is what no slots computes" taggedAs UnitTest in {
+    val (impl, _, _, peer, _) = trieLessFixture()
+    val account = kec256(ByteString("trie-less-empty-claim"))
+    val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, emptyRoot), Seq.empty, Seq.empty)
+
+    impl.pendingDoneMarkers.map(m => (m._1, m._2)).toSeq shouldBe Seq((account, emptyRoot))
+    impl.excludedRecorder.pending shouldBe false
+    excluded(account) shouldBe None
+  }
+
+  it should "leave a sparse account's empty sub-range to the trie it already has, whose commit computes a real root" taggedAs UnitTest in {
+    val (impl, _, _, peer, _) = trieLessFixture()
+    val account = kec256(ByteString("trie-less-sparse"))
+    val slots = Seq(slotKey(0x10) -> ByteString("value-10"))
+    val root = storageRootOf(slots)
+    val lower = StorageTask(account, root, next = slotKey(0x01), last = slotKey(0x1f))
+    val upper = StorageTask(account, root, next = slotKey(0x20), last = slotKey(0xfe))
+    impl.accountSubtaskCounters(account) = (2, 0)
+    impl.storageTrieCursor(account) = lower.next
+
+    impl.applyOrderedStorageChunk(peer, lower, slots, Seq.empty)
+    impl.applyOrderedStorageChunk(peer, upper, Seq.empty, absenceProof)
+
+    impl.pendingDoneMarkers.map(m => (m._1, m._2)).toSeq shouldBe Seq((account, root))
+    impl.excludedRecorder.pending shouldBe false
+    excluded(account) shouldBe None
+  }
+
+  it should "leave deferred merkleization as it is: no trie is built there, and the marker vouches for flat slots alone" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (impl, _) = newImpl(
+      stateRoot = kec256(ByteString("trie-less-deferred-state-root")),
+      flatSlotStorage = flatSlots,
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+      deferredMerkleization = true,
+      recordStorageDone = true
+    )
+    val peer = PeerTestHelpers.createTestPeer("trie-less-deferred-peer", testKit.createTestProbe[Any]().ref.toClassic)
+    val account = kec256(ByteString("trie-less-deferred"))
+    val root = kec256(ByteString("trie-less-deferred-root"))
+
+    impl.applyOrderedStorageChunk(peer, StorageTask.createStorageTask(account, root), Seq.empty, absenceProof)
+
+    impl.pendingDoneMarkers.map(m => (m._1, m._2)).toSeq shouldBe Seq((account, root))
+    excluded(account) shouldBe None
   }
 
   "A root mismatch" should "record the account: the computed trie is not the account's" taggedAs UnitTest in {

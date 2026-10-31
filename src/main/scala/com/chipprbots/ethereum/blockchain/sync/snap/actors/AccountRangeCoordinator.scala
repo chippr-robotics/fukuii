@@ -26,6 +26,7 @@ import com.google.common.hash.PrimitiveSink
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -305,17 +306,11 @@ private[actors] class AccountRangeCoordinatorImpl(
   var contractAccountsCount: Long = 0
   var contractStorageCount: Long = carriedStorageCount
 
-  // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
-  // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
+  // Unique codeHashes for bytecode download: a Bloom filter for dedup + a temp file for the hashes. At handoff, reads
+  // ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
   // Bug 20 fix: the original ask-based handoff timed out (5s) and OOMed when reading the full file.
-  implicit private object ByteStringFunnel extends Funnel[ByteString]:
-    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
-      into.putBytes(from.toArray)
-  val codeHashBloom: BloomFilter[ByteString] = BloomFilter.create[ByteString](
-    ByteStringFunnel,
-    3_000_000,
-    0.0001 // ~4MB for 3M expected entries at 0.01% FPR
-  )
+  // Built on first use: it is large (see `newCodeHashBloom`), and a coordinator with no contract work never needs it.
+  lazy val codeHashBloom: BloomFilter[ByteString] = AccountRangeCoordinator.newCodeHashBloom()
   val uniqueCodeHashesFos = new FileOutputStream(uniqueCodeHashesFile.toFile, true)
   val uniqueCodeHashesOut = new BufferedOutputStream(uniqueCodeHashesFos, 65536)
   var uniqueCodeHashesCount: Long = carriedCodeHashesCount
@@ -922,6 +917,25 @@ private[actors] class AccountRangeCoordinatorImpl(
 
 object AccountRangeCoordinator:
 
+  /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia's logs show 13.5M through the old filter
+    * (3M entries at 1e-4), whose false-positive rate had reached about 0.53 by then, which implies about 16M. ETH
+    * mainnet's count has not been measured here. Expected hashes lost in a whole sync: about 1e-12 at 17M, 2e-6 at 30M,
+    * 2e-3 at 40M, and climbing steeply past that, so `identifyContractAccounts` warns at this load.
+    */
+  private[actors] val CodeHashBloomExpectedEntries: Long = 40_000_000L
+  private[actors] val CodeHashBloomFpp: Double = 1e-9
+
+  private object ByteStringFunnel extends Funnel[ByteString]:
+    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
+      into.putBytes(from.toArray)
+
+  /** The dedup filter of the unique code-hash file. A false positive loses a hash for good (see
+    * `ContractWorkCarry.identifyContractAccounts`), so it is sized for that, not for memory: about 206 MiB in one array
+    * for as long as the coordinator lives, and 30 hash functions per operation (spec 022 T050a, H3).
+    */
+  private[actors] def newCodeHashBloom(): BloomFilter[ByteString] =
+    BloomFilter.create[ByteString](ByteStringFunnel, CodeHashBloomExpectedEntries, CodeHashBloomFpp)
+
   /** Why the account phase has tasks pending and nothing in flight. */
   enum IdleStallVerdict:
     /** Dispatch is held on purpose (downstream back-pressure / zero budget) — not a stall. */
@@ -1103,8 +1117,24 @@ object AccountRangeCoordinator:
       storageDone: Option[SnapStorageDoneStorage] = None,
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
+    // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
+        // A supervisor restart starts the phase over what the last incarnation wrote, from the launch's cursors and root,
+        // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a).
+        if incarnations.getAndIncrement() > 0 &&
+          HealInvariant.withdrawForPathAccountPhase(
+            stateIngest.appState,
+            stateIngest.pathNodes,
+            storageScheme,
+            resumedCursors = resumeProgress.nonEmpty
+          )
+        then
+          ctx.log.warn(
+            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted over existing Path nodes. " +
+              "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
+          )
         val impl = new AccountRangeCoordinatorImpl(
           ctx = ctx,
           timers = timers,

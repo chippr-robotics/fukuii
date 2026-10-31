@@ -15,6 +15,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 
 import com.google.common.hash.BloomFilter
@@ -29,10 +30,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.ReplayCarriedContracts
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.domain.Account
@@ -218,7 +222,130 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     m.readUniqueCodeHashes() shouldBe empty
   }
 
-  it should "replay the carried prefix, skipping marked tasks and, on the Hash scheme, present roots" taggedAs UnitTest in {
+  // spec 022 T050a, H0: initcode that writes storage and returns empty code leaves a leaf with no code and a real
+  // storage root. The storage file and the task go by the root; only the bytecode file and code dispatch go by the code.
+  private val noCode: ByteString = Account.EmptyCodeHash.value
+  private val mixedAccounts: Seq[(ByteString, Account)] = Seq(
+    h32(1) -> Account(), // no code, no storage: nothing
+    h32(2) -> contract(h32(0xc1), h32(0x21)), // code and storage
+    h32(3) -> contract(h32(0xc1), emptyRoot), // code, no storage: keeps its entry, gets no task
+    h32(5) -> contract(noCode, h32(0x51)) // storage, no code
+  )
+
+  it should "give an account with empty code and a non-empty storage root a storage entry and a task, and no code work" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+
+    h.call(_.identifyContractAccounts(mixedAccounts))
+
+    h.controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.IncrementalContractData(
+        Seq(h32(0xc1)),
+        Seq(StorageTask.createStorageTask(h32(2), h32(0x21)), StorageTask.createStorageTask(h32(5), h32(0x51)))
+      )
+    )
+    m.readContractFile(m.contractStorageFile, m.contractStorageOut, m.contractStorageCount) shouldBe Seq(
+      h32(2) -> h32(0x21),
+      h32(3) -> emptyRoot,
+      h32(5) -> h32(0x51)
+    )
+    m.readContractFile(m.contractAccountsFile, m.contractAccountsOut, m.contractAccountsCount) shouldBe Seq(
+      h32(2) -> h32(0xc1),
+      h32(3) -> h32(0xc1)
+    )
+    m.readUniqueCodeHashes() shouldBe Seq(h32(0xc1))
+  }
+
+  it should "flush the entries of a response holding only accounts with storage and no code" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+
+    h.call(_.identifyContractAccounts(Seq(h32(5) -> contract(noCode, h32(0x51)))))
+
+    // No read and no sync: what a crash here would find in the file.
+    Files.size(m.contractStorageFile) shouldBe 64L
+    m.contractStorageCount shouldBe 1L
+    m.contractAccountsCount shouldBe 0L
+    h.controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.IncrementalContractData(Seq.empty, Seq(StorageTask.createStorageTask(h32(5), h32(0x51))))
+    )
+  }
+
+  it should "replay an account with empty code and a non-empty storage root from a carried file" taggedAs UnitTest in {
+    val first = new Harness
+    first.call(_.identifyContractAccounts(mixedAccounts))
+    val fm = first.module
+    val carriedStorage = fm.readContractFile(fm.contractStorageFile, fm.contractStorageOut, fm.contractStorageCount)
+
+    Seq(StorageScheme.Hash, StorageScheme.Path).foreach { scheme =>
+      val h =
+        new Harness(scheme = scheme, carriedStorage = carriedStorage, carriedCodeHashes = fm.readUniqueCodeHashes())
+      h.call(_.replayCarriedChunk())
+      withClue(s"$scheme: ")(
+        h.controller.receiveAll() shouldBe Seq(
+          SNAPSyncController.IncrementalContractData(
+            Seq(h32(0xc1)),
+            Seq(StorageTask.createStorageTask(h32(2), h32(0x21)), StorageTask.createStorageTask(h32(5), h32(0x51))),
+            replayed = true
+          )
+        )
+      )
+      h.module.replayDone shouldBe true
+    }
+  }
+
+  it should "leave a mixed run's storage file usable at its own count, read back in full by the restart sweep" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    h.call(_.identifyContractAccounts(mixedAccounts))
+    m.contractStorageOut.flush()
+
+    // The two files' counts differ, and only the storage file's count is what a resume checks this file against.
+    m.contractAccountsCount should not be m.contractStorageCount
+    StorageTaskFile.isUsable(m.contractStorageFile, expectedCount = Some(m.contractStorageCount)) shouldBe true
+
+    val recorded = mutable.ArrayBuffer.empty[ExcludedAccount]
+    val done = new SnapStorageDoneStorage(EphemDataSource())
+    ExcludedTaskFile.recordUnfinished(
+      m.contractStorageFile,
+      Some(m.contractStorageCount),
+      done,
+      recorded ++= _
+    ) shouldBe ExcludedTaskFile.Outcome.Recorded(2L)
+    recorded.map(e => e.subject -> e.claimedStorageRoot).toSeq shouldBe Seq(h32(2) -> h32(0x21), h32(5) -> h32(0x51))
+  }
+
+  // spec 022 T050a, H3: a false positive loses a code hash for good, so the filter is sized for mainnet's unique hashes.
+  // Read off the filter itself rather than its arguments: Guava's serial form is a strategy byte, a hash-function count
+  // byte, an int word count, then the 64-bit words.
+  "The code-hash filter" should "stay near 1e-9 at the load it is built for, for about 206 MiB" taggedAs UnitTest in {
+    val designLoad = 40_000_000L
+    var header = Array.empty[Byte]
+    var size = 0L
+    AccountRangeCoordinator
+      .newCodeHashBloom()
+      .writeTo(
+        new java.io.OutputStream:
+          override def write(b: Int): Unit =
+            if header.length < 6 then header = header :+ b.toByte
+            size += 1
+      )
+    val hashes = header(1) & 0xff
+    val bits = java.nio.ByteBuffer.wrap(header, 2, 4).getInt.toLong * 64
+    size shouldBe 6L + bits / 8
+
+    def falsePositiveRate(inserted: Long): Double =
+      math.pow(1.0 - math.exp(-hashes.toDouble * inserted.toDouble / bits.toDouble), hashes.toDouble)
+
+    withClue(s"$bits bits, $hashes hashes: ") {
+      falsePositiveRate(designLoad) should be <= 1.1e-9
+      bits / 8 should be <= 220_000_000L
+    }
+    // What the filter costs at the largest load seen so far: Sepolia's, about 16M (research R-5d).
+    falsePositiveRate(16_000_000L) should be <= 1e-17
+  }
+
+  "ContractWorkCarry" should "replay the carried prefix, skipping marked tasks and, on the Hash scheme, present roots" taggedAs UnitTest in {
     val mpt = new TestMptStorage
     val leaf = LeafNode(ByteString(Array[Byte](1, 2)), ByteString(Array[Byte](3)))
     mpt.putNode(leaf)

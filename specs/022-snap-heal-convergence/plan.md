@@ -205,7 +205,7 @@ Each slice is one PR to staging, in order. All consensus-adjacent slices are buc
 | 5 | Completion switch (D8): gates removed, Hash routed to `completeHealingWalkClean`, `HealingForceComplete` fix, background audit, FR-014/017/018 observability, handoff check (D9) | both | beacon, forge, eye |
 | 6 | FR-019 cleanup: "spec 009" references corrected, supersede notes in specs 003/005/006, ADR | – | – |
 
-Slice 5 must land **last**. Removing the gate before slices 1–4 brings back task #73, the holes in system-contract tries.
+Slice 5's switch (PR 5d, tasks.md Phase 6) must land **last**. Removing the gate before slices 1–4 brings back task #73, the holes in system-contract tries.
 
 ## Sequencing with Spec 020 and the Host Timeline
 

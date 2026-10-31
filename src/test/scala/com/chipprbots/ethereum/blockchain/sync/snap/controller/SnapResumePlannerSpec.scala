@@ -38,7 +38,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -122,7 +125,7 @@ private[snap] class StubSnapResumePlannerState(
   val asyncLog: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[SnapResumePlannerSpec])
   val appStateStorage: AppStateStorage = new AppStateStorage(dataSource)
   val stateStorage: StateStorage = StateStorage.createTestStateStorage(dataSource)._1
-  def evmCodeStorage: EvmCodeStorage = notUsed("evmCodeStorage")
+  val evmCodeStorage: EvmCodeStorage = new EvmCodeStorage(dataSource)
   val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = ExecutionContext.parasitic
@@ -133,7 +136,8 @@ private[snap] class StubSnapResumePlannerState(
   val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
   def syncController: ActorRef[SyncProtocol.SyncControllerReply] = parent.ref
   def childFactories: ChildFactories = notUsed("childFactories")
-  def pathNodeStorageOpt: Option[PathNodeStorage] = None
+  val pathNodeStorageOpt: Option[PathNodeStorage] =
+    Option.when(snapSyncConfig.storageScheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
   val stateIngest: StateIngest = new ForwardingStateIngest(
@@ -148,7 +152,7 @@ private[snap] class StubSnapResumePlannerState(
   )
 
   // CoordinatorHandles (no coordinator is spawned: the recovery spawns are the stub's DownloadRecoveryApi)
-  def intakeBudget: SnapIntakeBudget = notUsed("intakeBudget")
+  val intakeBudget: SnapIntakeBudget = new SnapIntakeBudget(1000L, 1000L)
   protected def stopChild(child: ActorRef[Nothing]): Unit = notUsed("stopChild")
 
   // Callee Api traits
@@ -423,6 +427,49 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.downloadChecks shouldBe 1
   }
 
+  // spec 022 T050a, H0: the storage file now also names accounts with storage and no code, so its count and the code
+  // files' counts differ. Each file is checked against its own count, and both are read back in full.
+  it should "resume bytecodes and storage from a mixed run's task files, whose counts differ" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-mixed")
+    val h = new Harness()
+    def h32(b: Int): ByteString = ByteString(Array.fill[Byte](32)(b.toByte))
+    val storagePath = dir.resolve("fukuii-contract-storage-mixed")
+    val codeHashesPath = dir.resolve("fukuii-unique-codehashes-mixed")
+    Files.write(storagePath, (h32(1) ++ h32(0x11) ++ h32(2) ++ h32(0x22)).toArray) // the second has no code
+    Files.write(codeHashesPath, h32(0xc1).toArray)
+    h.saveRecovery(BigInt(1_000), phasesComplete = false)
+    val app = h.module.appStateStorage
+    app
+      .putSnapSyncStorageFilePath(storagePath.toString)
+      .and(app.putSnapSyncStorageFileCount(Some(2L)))
+      .and(app.putSnapSyncCodeHashesPath(codeHashesPath.toString))
+      .and(app.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    val bytecode = TestInbox[ByteCodeCoordinator.Command]()
+    h.module.storageRangeCoordinator = Some(storage.ref)
+    h.module.bytecodeCoordinator = Some(bytecode.ref)
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 1
+    app.isSnapSyncAccountsComplete() shouldBe true
+    // The replay's Futures run on the kit's executor, which only runs what it is told to. Its class is pekko-private.
+    val executor = h.module.ctx.executionContext
+    executor.getClass.getMethod("runAll").invoke(executor)
+    (storage.receiveAll() should contain).allOf(
+      StorageRangeCoordinator.AddStorageTasks(
+        Seq(StorageTask.createStorageTask(h32(1), h32(0x11)), StorageTask.createStorageTask(h32(2), h32(0x22)))
+      ),
+      StorageRangeCoordinator.NoMoreStorageTasks
+    )
+    (bytecode.receiveAll() should contain).allOf(
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(h32(0xc1))),
+      ByteCodeCoordinator.NoMoreByteCodeTasks
+    )
+    deleteDir(dir)
+  }
+
   it should "clear the recovery and fall through when the saved pivot is below the escalation hint" taggedAs UnitTest in {
     val h = new Harness()
     h.saveRecovery(BigInt(1_000), phasesComplete = true)
@@ -520,6 +567,80 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
 
     h.module.snapProgressStorage.excludedPage(None, 10) shouldBe Seq(excludedEntry)
+  }
+
+  // spec 022 T050a, beacon's crash class: where the planner takes the marker back, and where it does not.
+  private val pathConfig = SNAPSyncConfig(storageScheme = StorageScheme.Path)
+  private val aCursor = Map(ByteString(Array.fill[Byte](32)(1)) -> ByteString(Array.fill[Byte](32)(2)))
+
+  private def stamped(h: Harness): AppStateStorage =
+    h.module.appStateStorage.stampSnapHealInvariant().commitSync()
+    h.module.appStateStorage
+
+  it should "withdraw the marker when a Path account phase resumes cursors" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.module.preservedRangeProgress = aCursor
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    app.isSnapHealInvariantPresent() shouldBe false
+  }
+
+  it should "withdraw the marker when a fresh Path account phase starts over nodes already there" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    app.isSnapHealInvariantPresent() shouldBe false
+  }
+
+  it should "withdraw the marker at the account phase an accounts-complete restart with no file pointer falls through to" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.saveRecovery(BigInt(1_000), phasesComplete = false) // the flag is set and no pointer was persisted
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+
+    h.recoveryStep() shouldBe true
+
+    app.isSnapSyncAccountsComplete() shouldBe false
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+    app.isSnapHealInvariantPresent() shouldBe false
+  }
+
+  it should "keep the marker on a first Path sync: a fresh account phase over empty families" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    app.hasSnapHealInvariant() shouldBe true
+  }
+
+  it should "keep the marker on a Path storage-phase restart, over nodes already there" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 1
+    app.hasSnapHealInvariant() shouldBe true
+  }
+
+  it should "keep the marker on Hash, resuming cursors" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig(storageScheme = StorageScheme.Hash))
+    val app = stamped(h)
+    h.module.preservedRangeProgress = aCursor
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+
+    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+
+    app.hasSnapHealInvariant() shouldBe true
   }
 
   it should "drop preserved account cursors that drifted past the cap, with their progress record and checkpoint" taggedAs UnitTest in {

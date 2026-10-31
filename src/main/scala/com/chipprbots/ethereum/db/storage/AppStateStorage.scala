@@ -612,8 +612,11 @@ object AppStateStorage:
   type Key = String
   type Value = String
 
-  /** The value of `snap.heal.invariant`. A later version of the rule writes another, and older marks do not stand. */
-  val SnapHealInvariantVersion: Value = "2"
+  /** The value of `snap.heal.invariant`. A later version of the rule writes another, and older marks do not stand. 3:
+    * version 2 stamped an empty datadir and then downloaded with spec 022's H0 and H1 still open, so its mark says less
+    * than this one's (research R-5d).
+    */
+  val SnapHealInvariantVersion: Value = "3"
 
   object Keys:
     val BestBlockNumber = "BestBlockNumber"

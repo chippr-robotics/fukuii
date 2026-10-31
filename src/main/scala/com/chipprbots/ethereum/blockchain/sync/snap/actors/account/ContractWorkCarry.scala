@@ -157,50 +157,69 @@ private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with Contra
             AccountRangeCoordinator.ReplayChunkInterval
           )
 
-  /** Identify contract accounts (those with non-empty code hash)
+  /** Identify the contract work of a response: code for every account with code, storage for every account with a
+    * storage root. They are independent. Initcode that writes storage and returns empty code leaves a leaf with no code
+    * and a real storage root, and nothing else would ever fetch that storage (spec 022 T050a, H0).
+    *
+    * The storage file holds every account with code, its root empty or not (the replays and the sweep skip an empty
+    * root), and every account with storage. The bytecode file holds accounts with code only, so the two counts differ.
     *
     * @param accounts
-    *   Accounts to scan for contracts
+    *   Accounts to scan
     */
   def identifyContractAccounts(accounts: Seq[(ByteString, Account)]): Unit =
     val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val newCodeHashes = mutable.ArrayBuffer.empty[ByteString]
     val newStorageTasks = mutable.ArrayBuffer.empty[StorageTask]
-    var count = 0
+    var codeBearing = 0
+    var storageEntries = 0
 
     accounts.foreach { case (accountHash, account) =>
-      if account.codeHash != Account.EmptyCodeHash then
+      val hasCode = account.codeHash != Account.EmptyCodeHash
+      val hasRoot = account.storageRoot.value.nonEmpty && account.storageRoot.value != emptyRoot
+      if hasCode then
         // Write 32-byte accountHash + 32-byte codeHash to bytecode file (crash recovery)
         contractAccountsOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
         contractAccountsOut.write(account.codeHash.value.toArray.padTo(32, 0.toByte), 0, 32)
-        // Write 32-byte accountHash + 32-byte storageRoot to storage file (crash recovery)
-        contractStorageOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
-        contractStorageOut.write(account.storageRoot.toArray.padTo(32, 0.toByte), 0, 32)
-        count += 1
+        codeBearing += 1
 
-        // Track unique codeHashes via Bloom filter + temp file (~4MB RAM vs 200MB HashSet).
-        // The Bloom filter has 0.01% FPR — ~200 of 2M hashes may be missed but the
-        // recovery scan (Bug 20 hardening) catches any gaps.
+        // Track unique codeHashes via Bloom filter + temp file. A false positive means this hash is never queued and
+        // never written to the file, and nothing in SNAP catches that: a clean finalisation sets bytecodeRecoveryDone,
+        // so the recovery scan is skipped, and the healing walk has never read code. So the filter is sized to make it
+        // negligible (`newCodeHashBloom`, about 1e-9 at the load it is built for), which is not provably zero. What is
+        // left is found at import, whose bulk code recovery is the backstop (spec 022 T050a, H3).
         if !codeHashBloom.mightContain(account.codeHash.value) then
           codeHashBloom.put(account.codeHash.value)
           uniqueCodeHashesOut.write(account.codeHash.value.toArray.padTo(32, 0.toByte), 0, 32)
           uniqueCodeHashesCount += 1
+          if uniqueCodeHashesCount == com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CodeHashBloomExpectedEntries
+          then
+            log.warn(
+              s"$uniqueCodeHashesCount unique code hashes: past this the code-hash filter's false-positive rate climbs, " +
+                "and a false positive is a hash never fetched until import needs it. Resize it (spec 022 T050a, H3)."
+            )
           newCodeHashes += account.codeHash.value
 
-        // Collect storage task for inline dispatch (skip contracts with empty storage)
-        if account.storageRoot.value.nonEmpty && account.storageRoot.value != emptyRoot then
-          newStorageTasks += StorageTask.createStorageTask(accountHash, account.storageRoot.value)
+      if hasCode || hasRoot then
+        // Write 32-byte accountHash + 32-byte storageRoot to storage file (crash recovery)
+        contractStorageOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
+        contractStorageOut.write(account.storageRoot.toArray.padTo(32, 0.toByte), 0, 32)
+        storageEntries += 1
+
+      // Collect storage task for inline dispatch (skip accounts with empty storage)
+      if hasRoot then newStorageTasks += StorageTask.createStorageTask(accountHash, account.storageRoot.value)
     }
 
-    if count > 0 then
-      contractAccountsCount += count
-      contractStorageCount += count
+    if codeBearing > 0 || storageEntries > 0 then
+      contractAccountsCount += codeBearing
+      contractStorageCount += storageEntries
       // Flush file streams (crash recovery path)
       contractAccountsOut.flush()
       contractStorageOut.flush()
       uniqueCodeHashesOut.flush()
       log.info(
-        s"Identified $count contract accounts (total: $contractAccountsCount, unique codeHashes: $uniqueCodeHashesCount)"
+        s"Identified $codeBearing accounts with code and $storageEntries storage-file entries " +
+          s"(totals: $contractAccountsCount, $contractStorageCount; unique codeHashes: $uniqueCodeHashesCount)"
       )
 
     // Geth-aligned: dispatch contract data inline to controller → bytecode/storage coordinators.

@@ -253,16 +253,17 @@ private[actors] trait StorageResponseProcessing:
         s"received ${response.slots.size} slot sets (served=$servedCount, proofs=${response.proof.size})"
     )
 
-    // Proof-of-absence: server returned 0 slots WITH proof nodes. Per the snap/1 protocol,
-    // this is a valid cryptographic proof that no slots exist in [startingHash, limitHash]
-    // at the current state root. The account's storage is empty or was modified/cleared
-    // since the original pivot. Healing will validate the final trie.
-    // IMPORTANT: do NOT mark the peer stateless — it served a valid, well-formed response.
+    // Proof-of-absence: server returned 0 slots WITH proof nodes. Per the snap/1 protocol this
+    // proves no slots exist in [startingHash, limitHash] at the root it was asked about, but nothing
+    // here checks the proof, so it counts for liveness only: the range is finished with. What it does
+    // to the account is decided at commit: with no trie a non-empty root is not verified, gets no done
+    // marker and an excluded entry, and healing fetches it (spec 022 T050a, H1).
+    // IMPORTANT: do NOT mark the peer stateless — it served a well-formed response.
     // Only fall through to stateless marking when proofs == 0 (peer gave us nothing at all).
     def handleProofOfAbsence(): Unit =
       // Route through the same ordered-completion/cursor bookkeeping as any other served chunk
-      // (applyOrderedStorageChunk / applyReadyStorageChunk): a proof-of-absence response is a
-      // complete, valid answer for THIS chunk's [next, last] — like a served chunk whose slots
+      // (applyOrderedStorageChunk / applyReadyStorageChunk): a proof-of-absence response is taken as a
+      // complete answer for THIS chunk's [next, last] — like a served chunk whose slots
       // reach task.last, just with zero slots — so it must advance storageTrieCursor and count
       // towards accountSubtaskCounters the same way. Continuation and subtask chunks are always
       // dispatched solo (requestNextRanges/isInitialRange), so this is reached for genuinely
@@ -273,10 +274,9 @@ private[actors] trait StorageResponseProcessing:
       val task = tasks.head
       applyOrderedStorageChunk(peer, task, Seq.empty, response.proof)
       log.warn(
-        s"Storage proof-of-absence accepted: account=${task.accountString} " +
+        s"Storage proof-of-absence taken, proof unchecked: account=${task.accountString} " +
           s"storageRoot=${task.storageRoot.take(4).toHex} range=${task.rangeString} " +
-          s"proofNodes=${response.proof.size} peer=${peer.id.value}. " +
-          s"Account storage empty/changed at current pivot — healing will validate."
+          s"proofNodes=${response.proof.size} peer=${peer.id.value}."
       )
       // Peer is healthy — clear any penalty state it accumulated.
       statelessPeers.remove(peer.id.value)

@@ -208,37 +208,116 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
 
   // spec 022 review vault F3: nothing vouches for what this binary wrote under another version's rule, so removal goes by
   // the key being there, and only `Stands` looks at the version.
-  private def markedThree(): (Recording, AppStateStorage) =
+  private def markedOther(): (Recording, AppStateStorage) =
     val source = new Recording
     val appState = new AppStateStorage(source)
-    appState.put(Keys.SnapHealInvariant, "3").commit()
+    appState.put(Keys.SnapHealInvariant, "4").commit()
     source.forget()
     (source, appState)
 
   it should "not take a marker of another version as standing, and remove it, synced" taggedAs UnitTest in {
-    val (source, appState) = markedThree()
+    val (source, appState) = markedOther()
     appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
     appState.get(Keys.SnapHealInvariant) shouldBe None
     source.batches.toSeq shouldBe Seq((true, Seq(Op(AppNs, delete = true, key(Keys.SnapHealInvariant)))))
   }
 
-  it should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
-    val (_, appState) = markedThree()
+  // spec 022 T050a, beacon's crash class: a Path account phase over existing nodes takes the marker back.
+  private val invariantMarkerDelete = Op(AppNs, delete = true, key(Keys.SnapHealInvariant))
+
+  private def stamped(): (Recording, AppStateStorage, PathNodeStorage) =
+    val (source, appState) = created()
+    val pathNodes = new PathNodeStorage(source)
+    HealInvariant.atSnapStart(appState, Some(pathNodes), canHold = true) shouldBe AtSnapStart.StampedEmpty
+    source.forget()
+    (source, appState, pathNodes)
+
+  private def withdrawal(
+      appState: AppStateStorage,
+      pathNodes: PathNodeStorage,
+      scheme: StorageScheme = StorageScheme.Path,
+      resumedCursors: Boolean = false
+  ): Boolean = HealInvariant.withdrawForPathAccountPhase(appState, Some(pathNodes), scheme, resumedCursors)
+
+  "A Path account phase" should "withdraw the marker when it resumes cursors, in one synced write" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
+    appState.isSnapHealInvariantPresent() shouldBe false
+    source.batches.toSeq shouldBe Seq((true, Seq(invariantMarkerDelete)))
+  }
+
+  it should "withdraw the marker when it starts fresh over a Path family holding a node, whichever one" taggedAs UnitTest in {
+    Seq[PathNodeStorage => Unit](
+      _.writeAccountNode(Array[Byte](1), Array[Byte](1, 2)),
+      _.writeStorageNode(root, Array[Byte](1), Array[Byte](1, 2))
+    ).foreach { write =>
+      val (source, appState, pathNodes) = stamped()
+      write(pathNodes)
+      source.forget()
+      withdrawal(appState, pathNodes) shouldBe true
+      appState.isSnapHealInvariantPresent() shouldBe false
+      source.batches.toSeq shouldBe Seq((true, Seq(invariantMarkerDelete)))
+    }
+  }
+
+  it should "withdraw a marker of another version too: the removals go by the key being there" taggedAs UnitTest in {
+    val (_, appState) = markedOther()
+    val pathNodes = new PathNodeStorage(EphemDataSource())
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  it should "keep the marker on a first sync: fresh, over empty families" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    withdrawal(appState, pathNodes) shouldBe false
+    appState.hasSnapHealInvariant() shouldBe true
+    source.batches shouldBe empty
+  }
+
+  it should "write nothing when there is no marker to withdraw" taggedAs UnitTest in {
+    val (source, appState) = created()
+    val pathNodes = new PathNodeStorage(source)
+    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe false
+    source.batches shouldBe empty
+  }
+
+  "A Hash account phase" should "keep the marker, resuming or over any node: nodes are content-addressed" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    pathNodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    source.forget()
+    withdrawal(appState, pathNodes, StorageScheme.Hash, resumedCursors = true) shouldBe false
+    withdrawal(appState, pathNodes, StorageScheme.Hash) shouldBe false
+    appState.hasSnapHealInvariant() shouldBe true
+    source.batches shouldBe empty
+  }
+
+  "HealInvariant at a SNAP start" should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
+    val (_, appState) = markedOther()
     HealInvariant.atSnapStart(appState, None, canHold = false) shouldBe AtSnapStart.CannotHold(clearedOne = true)
     appState.get(Keys.SnapHealInvariant) shouldBe None
   }
 
   it should "remove a marker of another version under an unfinished checkpoint import" taggedAs UnitTest in {
-    val (_, appState) = markedThree()
+    val (_, appState) = markedOther()
     appState.put(Keys.CheckpointImportInProgress, "a:1").commit()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.get(Keys.SnapHealInvariant) shouldBe None
+  }
+
+  // Version 2 stamped an empty datadir and then downloaded with H0 and H1 open: published in the v0.10.20 pre-release.
+  it should "not trust a marker from before the download's gaps were closed" taggedAs UnitTest in {
+    val source = new Recording
+    val appState = new AppStateStorage(source)
+    appState.put(Keys.SnapHealInvariant, "2").commit()
+    appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
     appState.get(Keys.SnapHealInvariant) shouldBe None
   }
 
   it should "stamp over a marker of another version on an otherwise empty datadir" taggedAs UnitTest in {
     val (_, appState) = created()
-    appState.put(Keys.SnapHealInvariant, "3").commit()
+    appState.put(Keys.SnapHealInvariant, "4").commit()
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe AtSnapStart.StampedEmpty
     appState.hasSnapHealInvariant() shouldBe true
   }
@@ -420,7 +499,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   }
 
   // spec 022 review vault F2: validation walks every node, so it can contradict a stamp, from a stamped start too.
-  Seq("2", "3").foreach { version =>
+  Seq(AppStateStorage.SnapHealInvariantVersion, "4").foreach { version =>
     it should s"take a stamped marker (version $version), synced, when validation finds something missing" taggedAs UnitTest in {
       val h = new Harness()
       h.ready()
