@@ -146,6 +146,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
         )
       )
+      bytecodeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
       timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
 
@@ -184,6 +185,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
         )
       )
+      storageRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StartStorageRangeSync(rootBs))
       timers.startTimerWithFixedDelay(RequestStorageRanges, RequestStorageRanges, 1.second)
 
@@ -833,6 +835,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     )
 
     // Start the coordinator
+    accountRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
     accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.StartAccountRangeSync(rootHash.value))
 
     // Periodically send peer availability notifications
@@ -869,6 +872,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         )
       )
       // Start with empty codeHashes — tasks arrive incrementally via AddByteCodeTasks
+      bytecodeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
 
       timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
@@ -919,6 +923,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         )
       )
       // Start with empty tasks — tasks arrive incrementally via AddStorageTasks
+      storageRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StartStorageRangeSync(rootHash.value))
 
       timers.startTimerWithFixedDelay(RequestStorageRanges, RequestStorageRanges, 1.second)

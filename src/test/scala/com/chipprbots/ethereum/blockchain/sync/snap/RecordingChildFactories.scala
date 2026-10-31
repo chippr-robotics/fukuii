@@ -177,7 +177,9 @@ final class RecordingChildFactories(
     healingInbox: Option[ActorRef[TrieNodeHealingCoordinator.Command]] = None,
     byteCodeInbox: Option[ActorRef[ByteCodeCoordinator.Command]] = None,
     chainInbox: Option[ActorRef[ChainDownloader.Command]] = None,
-    stopped: Option[ActorRef[ChildStopped]] = None
+    stopped: Option[ActorRef[ChildStopped]] = None,
+    // The kinds of child that throw at every message they get, to run out their supervisor's restarts.
+    dying: () => Set[String] = () => Set.empty
 ) extends ChildFactories:
 
   val accountSpawns = new AtomicInteger(0)
@@ -186,16 +188,23 @@ final class RecordingChildFactories(
   val byteCodeSpawns = new AtomicInteger(0)
   val chainSpawns = new AtomicInteger(0)
 
+  // The latest incarnation of each kind of stub, so a test can name it to the controller.
+  val selves = new java.util.concurrent.ConcurrentHashMap[String, ActorRef[Nothing]]()
+
   private def stub[T](kind: String, inbox: Option[ActorRef[T]]): Behavior[T] =
-    Behaviors
-      .receiveMessage[T] { msg =>
-        inbox.foreach(_ ! msg)
-        Behaviors.same
-      }
-      .receiveSignal { case (_, PostStop) =>
-        stopped.foreach(_ ! ChildStopped(kind))
-        Behaviors.same
-      }
+    Behaviors.setup[T] { ctx =>
+      selves.put(kind, ctx.self)
+      Behaviors
+        .receiveMessage[T] { msg =>
+          if dying().contains(kind) then throw new RuntimeException(s"the $kind stub fails")
+          inbox.foreach(_ ! msg)
+          Behaviors.same
+        }
+        .receiveSignal { case (_, PostStop) =>
+          stopped.foreach(_ ! ChildStopped(kind))
+          Behaviors.same
+        }
+    }
 
   override def accountRangeCoordinator(
       stateRoot: ByteString,

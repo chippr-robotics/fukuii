@@ -87,6 +87,7 @@ class SNAPIdleTotalitySpec
     PivotProbeTimeout(BigInt(9105)),
     DormantWakeUp,
     DelayedRestart("idle totality"),
+    CoordinatorGone(testKit.createTestProbe[Any]().ref),
     AccountRangeProgressCmd(Map.empty),
     CheckDownloadStagnation,
     AccountCoordinatorProgress(AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0L)),

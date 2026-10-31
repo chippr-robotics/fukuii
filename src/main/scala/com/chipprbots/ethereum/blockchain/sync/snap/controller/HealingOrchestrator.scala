@@ -503,6 +503,7 @@ private[snap] trait HealingOrchestrator
 
     // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
     trieNodeHealingCoordinator.foreach { coordinator =>
+      ctx.watchWith(coordinator, CoordinatorGone(coordinator))
       coordinator ! actors.TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value)
       coordinator ! actors.TrieNodeHealingCoordinator.UpdateMaxInFlightPerPeer(
         snapSyncConfig.healingMaxInFlightPerPeer
@@ -795,6 +796,7 @@ private[snap] trait HealingOrchestrator
             org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
           )
         )
+        bytecodeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
         bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
       bytecodeCoordinator.foreach { coordinator =>
         coordinator ! actors.ByteCodeCoordinator.AddByteCodeTasks(missing, skipQueued = true)

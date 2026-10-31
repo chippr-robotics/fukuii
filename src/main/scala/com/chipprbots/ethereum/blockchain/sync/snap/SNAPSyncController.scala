@@ -653,6 +653,7 @@ private class SNAPSyncControllerImpl(
         case _: PivotProbeTimeout     => ctx.log.debug("Dropping stale PivotProbeTimeout in idle"); Behaviors.same
         case DormantWakeUp            => ctx.log.debug("Dropping stale DormantWakeUp in idle"); Behaviors.same
         case _: DelayedRestart        => ctx.log.debug("Dropping stale DelayedRestart in idle"); Behaviors.same
+        case _: CoordinatorGone       => ctx.log.debug("Dropping stale CoordinatorGone in idle"); Behaviors.same
 
         // ── Coordinator progress (stale after sync stops) ────────────────────────────
         case _: AccountRangeProgressCmd =>
@@ -1022,6 +1023,10 @@ private class SNAPSyncControllerImpl(
       case msg if stateHealingCompleteArms.isDefinedAt(msg) =>
         stateHealingCompleteArms(msg)
 
+      // spec 022 T050a: a coordinator that gave up after its last restart.
+      case msg if coordinatorGoneArms.isDefinedAt(msg) =>
+        coordinatorGoneArms(msg)
+
       // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
       // (StateHealing only): stateHealingArms (P4c).
 
@@ -1276,6 +1281,11 @@ object SNAPSyncController:
       replayed: Boolean = false
   ) extends Command
   case object StateHealingComplete extends Command
+
+  /** A coordinator stopped: its supervisor's last restart failed, or something stopped it on purpose. Only its handle
+    * still naming it counts (`SyncLifecycle.coordinatorGoneArms`).
+    */
+  final private[snap] case class CoordinatorGone(ref: org.apache.pekko.actor.typed.ActorRef[Nothing]) extends Command
 
   /** Coordinator gave up (HealingForceComplete) WITHOUT a verification walk. Never a clean-walk signal: under Path the
     * controller routes it to the lazy-heal handoff instead of declaring the trie validated.

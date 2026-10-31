@@ -111,6 +111,9 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
   val byteCodeInbox: TestProbe[ByteCodeCoordinator.Command] = testKit.createTestProbe[ByteCodeCoordinator.Command]()
   val chainInbox: TestProbe[ChainDownloader.Command] = testKit.createTestProbe[ChainDownloader.Command]()
 
+  // The kinds of child that fail at every message, as `RecordingChildFactories` reads it.
+  val dying: AtomicReference[Set[String]] = new AtomicReference(Set.empty)
+
   val factories = new RecordingChildFactories(
     spawns.ref,
     accountInbox = Some(accountInbox.ref),
@@ -118,7 +121,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     healingInbox = Some(healingInbox.ref),
     byteCodeInbox = Some(byteCodeInbox.ref),
     chainInbox = Some(chainInbox.ref),
-    stopped = Some(stops.ref)
+    stopped = Some(stops.ref),
+    dying = () => dying.get()
   )
 
   // ── #1501 seams ──────────────────────────────────────────────────────────────────────────────
