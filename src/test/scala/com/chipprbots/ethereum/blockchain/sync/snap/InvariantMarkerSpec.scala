@@ -927,6 +927,67 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       withClue("a Path heal writes nothing through the trie store: ")(mpt.writes shouldBe 0)
     testKit.stop(coordinator)
 
+  // spec 022 T050a, hunter N3: what the old incarnation held was never on disk, so top-down discovery from the root finds
+  // it again as absent, and nothing it wrote can be taken for what it did not.
+  private def restartedOverHeldNodes(scheme: StorageScheme): Unit =
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val peer = new ScriptedPeer(testKit)
+    val controller = createTestProbe[Command]()
+    val mpt = new TestMptStorage()
+    val pns = new PathNodeStorage(new EphemDataSource(Map.empty))
+    val coordinator = testKit.spawn(
+      Behaviors
+        .supervise(
+          new ChildFactories {}.trieNodeHealingCoordinator(
+            stateRoot = trie.root.hash,
+            networkPeerManager = peer.ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            mptStorage = mpt,
+            batchSize = 16,
+            snapSyncController = controller.ref,
+            stateIngest = HealingTrieFixtures.healingIngest(
+              None,
+              pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns)
+            ),
+            storageScheme = scheme,
+            movingRootDeltaHeal = true,
+            currentRoot = Some(new AtomicReference(trie.root.hash))
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    peer.coordinator.set(coordinator)
+    val p = PeerTestHelpers.createTestPeer("n3-held-peer", createTestProbe[Any]().ref.toClassic)
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(p)
+    val rootRequest = peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+    rootRequest.paths shouldBe Seq(trie("root").pathset)
+    peer.answerFrom(rootRequest, trie.served) // the root is held now, waiting on its children
+    peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds) // and they are out, unanswered
+
+    peer.serveFrom.set(Some(trie.served))
+    coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(null) // the arm throws: a supervisor restart
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(p) // what the 1-second tick sends the new incarnation
+    awaitComplete(controller)
+    withClue("the new incarnation asked for the root again: ") {
+      peer.autoRequests.flatten should contain(trie("root").pathset)
+    }
+    trie.nodes.foreach { n =>
+      withClue(s"${n.label} is on disk: ") {
+        if scheme == StorageScheme.Hash then mpt.get(n.hash.toArray).hash.toSeq shouldBe n.hash.toSeq
+        else pns.readAccountNode(n.nibbles).map(ByteString(_)) shouldBe Some(ByteString(n.encoded.toArray))
+      }
+    }
+    testKit.stop(coordinator)
+
+  "A restarted healing coordinator" should "find again what the old incarnation held, and complete, under the Hash scheme (N3)" taggedAs UnitTest in {
+    restartedOverHeldNodes(StorageScheme.Hash)
+  }
+
+  it should "find again what the old incarnation held, and complete, under the Path scheme (N3)" taggedAs UnitTest in {
+    restartedOverHeldNodes(StorageScheme.Path)
+  }
+
   /** The trie store, counting what is written through it. */
   final private class TrieStoreSpy extends TestMptStorage:
     private val written = new java.util.concurrent.atomic.AtomicInteger(0)
