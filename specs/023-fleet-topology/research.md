@@ -119,3 +119,185 @@ plan Tracks F, H, R); `specs/013-state-snapshots/spec.md`; `src/main/scala/com/c
 `conf/base/blockchains.conf`, `conf/base/chains/`; `jsonrpc/NodeJsonRpcHealthChecker.scala`;
 `blockchain/sync/regular/BlockImporter.scala`; `.claude/agent-protocols/dead-code-review.md`,
 `consensus-change-protocol.md`, `storage-rocksdb.md`.
+
+---
+
+## Phase 0 (plan) — decisions
+
+**Date**: 2026-10-31. **Tree**: `ccr-6ee15a46-q037bc-3` (0.10.18 line). Each decision below is the one the plan builds
+on; alternatives are recorded so the premise can be challenged. File:line citations were read on this tree.
+
+### D-1 Admin surface implementation
+
+- **Decision**: a new class `admin.AdminHttpServer` (package `com.chipprbots.ethereum.admin`) that builds a Pekko HTTP
+  `Route` and binds it with `Http(classicSystem).newServerAt(interface, port).bind(route)`, exactly the call
+  `InsecureJsonRpcHttpServer.run()` makes (`jsonrpc/server/http/InsecureJsonRpcHttpServer.scala:25-35`), serialising
+  with the same json4s `native.Serialization` the RPC server uses for `/healthcheck`
+  (`JsonRpcHttpServer.scala:52-54,198-213`). It serves `GET /health`, `GET /ready` and `POST /lifecycle/{drain,fence,
+  unfence,stop}` and nothing else. It binds on the node's main Classic ActorSystem, started in `BaseNode.start()`
+  before the RPC servers so Orbita can see a process while it is still coming up. The legacy `/health`, `/readiness`
+  and `/healthcheck` on the RPC port (`JsonRpcHttpServer.scala:80-85`) stay unchanged — hive and every compose file
+  probe them.
+- **Rationale**: FR-009 requires a dedicated port that never serves chain RPC; the cheapest correct reuse is the
+  bind/serialise pattern, not the route tree. Health reads only cheap sources (best block from `BlockchainReader`,
+  the CL head from `ForkChoiceManager`, AppState markers, an `AtomicReference` lifecycle state) so a busy node still
+  answers; the only actor hop is the existing `SyncController.GetStatus` ask already used by
+  `NodeJsonRpcHealthChecker.scala:78-85`.
+- **Alternatives**: (a) mount the routes on the JSON-RPC HTTP server — rejected, FR-009; (b) an isolated ActorSystem
+  + IORuntime like `EngineApiHttpServer` (`consensus/engine/EngineApiHttpServer.scala:56` explains why the Engine API
+  needs it) — rejected for the first release: the admin surface carries a handful of requests per second and no
+  heavy handler; if health latency under load is ever measured as a problem, moving it to its own system is a local
+  change; (c) gRPC — rejected, Orbita's contract is HTTP/JSON (spec §Interface to Orbita).
+
+### D-2 `Role` enum placement and `InstanceConfig` fields
+
+- **Decision**: `enum Role { case Ingest, Replica, Archive, Sim }` in `utils/Role.scala`, with `key` (lowercase wire
+  form), `fromString: String => Either[String, Role]`, `isFollower`. `InstanceConfig` (`utils/InstanceConfig.scala:29`)
+  gains `val chainKey: String = config.getString("chain")` and `val role: Role` (parsed from `config.getString("role")`,
+  an invalid value fails construction with a named `IllegalArgumentException` that `Fukuii.main` turns into exit 2).
+  `instanceId` is removed (research §2.1). `object Config extends
+  InstanceConfig(ConfigFactory.load().getConfig("fukuii"))`
+  (`utils/Config.scala:27`) therefore reads `fukuii.chain` and `fukuii.role` from the merged config, which `App.scala`
+  sets as system properties from `--chain`/`--role` before `Config` initialises (today's `setNetworkConfig` already
+  relies on that ordering, `App.scala:71-92,239-240`).
+- **Rationale**: FR-001 says role and `chainKey` reach every component through `InstanceConfig`, not a new global.
+  `utils/` already owns configuration; `nodebuilder/` depends on `utils/`, not the reverse, so the enum must live in
+  `utils/` or below.
+- **Alternatives**: `nodebuilder/Role.scala` — rejected (dependency direction); a `String` field — rejected
+  (constitution IV, exhaustive matching in `RoleProfile`); `--role` as a modifier like `public`/`enterprise`
+  (`App.scala:32`) — rejected (modifiers are boolean switches; role has four values and a default).
+
+### D-3 Config keys and CLI mapping
+
+- **Decision**: `fukuii.chain = ${fukuii.blockchains.network}` (so every existing profile keeps working: the profile
+  sets `blockchains.network`, and `chainKey` equals it until 024 makes the registry the source), `fukuii.role =
+  "ingest"`.
+  `App.scala` parses `--chain <key>` / `--chain=<key>` and `--role <role>` / `--role=<role>`, sets
+  `-Dfukuii.chain` and `-Dfukuii.role`, and treats `--chain X` like the positional network `X` for config-file
+  selection (`setNetworkConfig`, `App.scala:72-92`). A positional network with no `--role` is `--role ingest`. An
+  unknown role exits 2 with a named error before logging starts. 024 later replaces `knownNetworks` (`App.scala:18-28`).
+- **Alternatives**: deriving role from the config file name (`sepolia-replica.conf`) — rejected (hides the role from
+  the process arguments Orbita and `ps` see); a `fukuii.roles = [...]` list — rejected (DC-1, one role per process).
+
+### D-4 Datadir layout and migration
+
+- **Decision**: `conf/base/fukuii.conf:6` becomes
+  `datadir = ${user.home}"/.fukuii/"${fukuii.chain}"/"${fukuii.role}`; every derived path (`tmpdir`, `node-key-file`,
+  `keystore-dir`, `logs-dir`, `rocksdb.path`, IPC socket) already hangs off `${fukuii.datadir}` (`fukuii.conf:11,14`,
+  `keystore.conf:3`, `logging.conf:6`, `db.conf:4`, `network.conf:311`) and follows. A `utils/DatadirLayout` check runs
+  in `Fukuii.main` before `StdNode` is built: if `fukuii.datadir` is the default-derived path, the new path has no
+  `rocksdb/`, and `~/.fukuii/<chainKey>/rocksdb` exists, the process exits 2 with error `LegacyDatadirLayout` naming
+  both paths and the two remedies (`mv ~/.fukuii/<chainKey> ~/.fukuii/<chainKey>/ingest` done safely via a temp name,
+  or set `fukuii.datadir` explicitly). The operating-modes runbook carries the same note (OQ-3).
+- **Rationale**: two roles for one chain on one host must not collide (OQ-3); a synced store must never be silently
+  abandoned for a fresh sync ("fail loudly"); the detector costs one `Files.exists`.
+- **Alternatives**: auto-adopt the legacy path for `ingest` with a WARN — rejected by the plan (default would depend
+  on disk state; the move is deferred forever) but **surfaced as risk R-1** because US1 AS1 says "no config change";
+  a symlink created by the node — rejected (the node does not restructure the operator's filesystem).
+
+### D-5 Durable fence marker and first-start identity (AppState)
+
+- **Decision**: three string keys in `AppStateStorage.Keys` (`db/storage/AppStateStorage.scala:621-655`), named in
+  022's dotted style: `fleet.fenced` (value: epoch-millis of the fence; presence means fenced; `unfence` removes it),
+  `fleet.chainKey` and `fleet.role` (written once at first start, in the same batch as 022's
+  `snap.heal.datadirCreated`-style first-write; a later start with a different `chainKey` or `role` is refused with a
+  named error before any listener binds). Every write is one `updateSync` batch (022 `data-model.md` §"Invariant
+  marker": "Every write of these keys is one `updateSync` batch"). The fence's write order is: in-memory state →
+  `SyncProtocol.Pause` → fenceable hooks (025 exporter persists its position) → Engine API listener closed → marker
+  written and synced → health reports `fenced=true`. The marker is written **last** so a crash mid-fence leaves a
+  process that is unfenced on disk but was stopped, which Orbita re-fences; the reverse (marker first) could leave a
+  fenced marker over a process whose exporter never persisted its position.
+- **Alternatives**: a file `datadir/FENCED` — rejected (not in the same durability domain as the store the fence
+  protects; 022 chose AppState for the same reason); a RocksDB column family — rejected (one boolean does not need a
+  CF; AppState is the key/value store for exactly this).
+
+### D-6 Role gating mechanism in the cake builders
+
+- **Decision**: no changes to the cake composition (`NodeBuilder.scala:1299-1381`). The builders are `lazy val`s, so
+  a subsystem that is never *started* is never constructed. `BaseNode.start()` (`nodebuilder/StdNode.scala:55-117`) is
+  refactored into a pure `StartPlan.steps(role: Role, engineApiEnabled, miningEnabled, readinessPort): List[Step]`
+  (unit-testable) and an executor that runs the steps; `RoleProfile(role)` says which of `startServer`,
+  `loadStaticNodes`, `startPortForwarding`, `startPeerManager`, `startDiscoveryManager`, `startEngineApiServer`,
+  `startSyncController`, `startMining` are in the plan (contracts/role-matrix.md). `shutdown` (`StdNode.scala:319-362`)
+  is gated by the same profile so it never touches `peerDiscoveryManagerTyped`, `mining` or `maybeEngineApiServer`
+  of a role that never started them. The Engine API has one extra gate at its source,
+  `engineApiConfig.enabled = configured && role == Ingest` (`NodeBuilder.scala:956-963`), so `bindInvalidChainReporter`,
+  `bindDesignatedHead` and `maybeEngineApiServer` (`:997,1013,1024`) are all inert for followers through the gate they
+  already check. RPC: `RoleMethodPolicy.servedBy(role, method)` is consulted in `JsonRpcBaseController.handleRequest`
+  (`jsonrpc/server/controllers/JsonRpcBaseController.scala:50-61`) before the `enabledApis` fold; a refused method
+  answers `JsonRpcError.NotServedByRole` (-32020). Namespaces are not removed from `enabledApis`, so `rpc_modules`
+  stays truthful about what is *configured* while the policy says what is *served*.
+- **Rationale**: the start sequence is already the single place that decides what binds, with comments explaining
+  bind order for hive (`StdNode.scala:75-108`); gating there keeps those invariants. Making the plan a pure function
+  gives a deterministic unit test per role without binding ports.
+- **Alternatives**: per-role `Node` subclasses (`IngestNode`, `ReplicaNode`) — rejected (four cakes to keep in step;
+  the difference is which steps run, not which components exist); gating inside each builder's `lazy val` — rejected
+  (scatters the policy across 1,400 lines); dropping namespaces from `enabledApis` — rejected (returns -32601
+  "method not found", which is the wrong answer; DC-9 wants a *named* role error).
+
+### D-7 Harness tooling and placement
+
+- **Decision**: Docker Compose under **`ops/fleet-harness/`** with a Python 3 standard-library driver
+  (`harness.py`), reusing `scripts/ephemery/load-gen.py` as the transaction load generator (it already accepts the
+  local devnet chain ids 1337/31337 and refuses production ids) and adding a small `load/read-burst.py` for
+  `eth_call`/`eth_simulateV1` saturation. Two devnets: an ETC devnet derived from the Gorgoroth private network
+  (`ops/gorgoroth/conf/`, PoW with the internal miner on `ingest` only) as the Mordor-class chain, and an ETH-family
+  devnet driven by the execution-apis `testing_*` block-production namespace (`NodeBuilder.scala:1392-1404`,
+  `conf/hive.conf` genesis style with timestamp forks) as the Platåberget-class chain, so no consensus client
+  container is needed. A single KRaft Kafka broker container. Each fukuii service is started with
+  `--chain <key> --role <role>`, has a `mem_limit`, and exposes its admin port on loopback only. The README states
+  it is a test fixture (FR-007), never a deployment.
+- **Rationale**: every existing multi-container fixture lives in `ops/` (`ops/gorgoroth/`, `ops/cirith-ungol/`,
+  `ops/barad-dur/`; `ops/README.md` calls Gorgoroth an "internal test network"), while `scripts/` holds single-file
+  helpers (`scripts/README.md`). Compose matches how `scripts/hive/local.sh` and the gorgoroth fixtures already run
+  fukuii images on the build host, and resource limits per container are what SC-003's OOM variant needs.
+- **Alternatives**: `scripts/fleet-harness/` — rejected (placement convention above; `ops/` is where compose lives);
+  Testcontainers from ScalaTest — rejected (adds a JVM test dependency, runs under sbt where a 2-chain × 4-role × Kafka
+  topology exceeds the Essential tier budget and the CI runner; harness runs are build-host windows like 022's
+  gates); Kubernetes manifests — rejected (that is Orbita's domain; the harness must not become a deployment).
+  Switching to the 024 SC-001 fixtures when they exist is a conf swap, not a redesign.
+
+### D-8 How SC-002 and SC-003 are measured (and GT-3)
+
+- **Decision**: **import p99** = p99 of a new Micrometer timer `regularsync.block.import.duration` recorded in
+  `BlockImporter` around one block's import, added to `RegularSyncMetrics`
+  (`blockchain/sync/regular/RegularSyncMetrics.scala`
+  has only `regularsync.blocks.imported.total` and propagation timers today, lines 14-31). The harness scrapes each
+  `ingest`'s Prometheus endpoint (`metrics.enabled = true`, port 13798, `conf/base/metrics.conf:5-9`) every 5 s and
+  computes p99 over the scenario window from the histogram buckets. **Read p99** = client-side latency recorded by
+  `load/read-burst.py` against the follower under test. **GT-3 noise band** = for each of the two chains and each of
+  the two figures, three unloaded runs of a fixed-length window (≥ 300 imported blocks); band = max − min of the three
+  p99s, floored at 5 % of their mean. SC-002/SC-003 pass when the loaded (or post-kill) p99 lies within
+  `baseline_mean ± band`. Rejections in SC-002 are counted by error code from the load generator's responses (the 018
+  R1 rejection code and -32020). Results are JSON files under `ops/fleet-harness/results/` with the tree hash, host and
+  image id; the baseline is committed, scenario runs are committed when they are release evidence.
+- **Alternatives**: log-derived timings — rejected (brittle, host-dependent); `eth_blockNumber` polling — rejected
+  (gives throughput, not per-block import time); a statistical test instead of a band — deferred; three runs do not
+  support one, and the band is what the spec asks for.
+
+### D-9 Transaction forwarding (FR-010)
+
+- **Decision**: `transactions/TxForwarder` is a minimal JSON-RPC HTTP client (Pekko HTTP `Http().singleRequest`) that
+  posts `eth_sendRawTransaction` to `fukuii.tx-forward.endpoint` and returns the ingest's JSON result or error object
+  **unchanged** to the caller; a token bucket of `fukuii.tx-forward.max-per-second` tokens per process rejects with
+  -32022 when empty; with no endpoint configured the method answers -32020. It is wired in `EthTxService` when
+  `instanceConfig.role != Role.Ingest`; the ingest's own path (`EthTxService.scala:229` → `TxAdmission`) is unchanged
+  except for the fenced check (-32021). Peers are never used for forwarding (followers have no P2P).
+- **Alternatives**: a gossip-only `relay` role — that is OQ-5 / spec 027, opened only if SC-006 shows ingest
+  admission is the bottleneck.
+
+### D-10 Error codes
+
+- **Decision**: `-32020 NotServedByRole`, `-32021 IngestFenced`, `-32022 ForwardRateCapExceeded` in
+  `jsonrpc/JsonRpcError.scala`. The -320xx server-error range is where fukuii already keeps `-32000 LogicError` and
+  `-32005 RateLimitError` (`JsonRpcError.scala:33,41`); -3802x is taken by `eth_simulateV1` errors (`:52-64`), and
+  -32601 must stay "method does not exist" so clients that probe for support keep working.
+
+### Baseline figures to be filled by the implementing thread
+
+| Figure | Where it is recorded | Task |
+| --- | --- | --- |
+| `testEssential` count/failures before S1 | plan.md §Technical Context (Testing) | T002 |
+| Spec 020 PR 5 membership of the Phase B files | plan.md §Sequencing | T001 |
+| GT-3 noise band per chain per figure | this section, D-8 (append a table) | T026 |
+| SC-006 ingest admission p99 / import p99 under forwarded load | `ops/fleet-harness/results/sc006-*.json`; summary here | T080 |
