@@ -305,3 +305,15 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
     module.criticalFailures shouldBe empty
     timersStarted(kit) shouldBe empty
   }
+
+  it should "recover through healing when the storage tries could not be validated" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    module.validationInProgress = true
+
+    kit.run(ValidateStorageTriesResult(2L, Left("storage walk failed"), 10L))
+
+    module.validationInProgress shouldBe false
+    module.currentPhase shouldBe SyncPhase.StateHealing
+    module.stateHealingStarts shouldBe 1
+  }
