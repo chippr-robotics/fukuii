@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
@@ -31,6 +32,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinatorImpl
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -464,6 +466,81 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         (line should not).include("no full-trie gate walk")
       }
       testKit.stop(rig.coordinator)
+    }
+
+    // ---- a supervisor restart ------------------------------------------------------------------------------------------
+
+    // hunter N3, with no walk at completion: what the old incarnation held was never on disk, so the root is absent at the
+    // new one's start, and it has to ask for it again rather than complete on what it no longer knows.
+    it should s"have a restarted coordinator find again what the old one held, with no walk, on $scheme" taggedAs UnitTest in {
+      val trie = PathHealPresenceFixtures.accountTrieOld()
+      val appState = new AppStateStorage(EphemDataSource())
+      appState.stampSnapHealInvariant().commit()
+      val peer = new ScriptedPeer(testKit)
+      val controller = createTestProbe[SNAPSyncController.Command]()
+      val clears = new AtomicInteger(0)
+      val queue = new InMemoryBfsQueueStorage:
+        override def clear(): Unit =
+          clears.incrementAndGet()
+          super.clear()
+      val mpt = new TestMptStorage()
+      val pns = new PathNodeStorage(EphemDataSource())
+      val coordinator = testKit.spawn(
+        Behaviors
+          .supervise(
+            new ChildFactories {}.trieNodeHealingCoordinator(
+              stateRoot = trie.root.hash,
+              networkPeerManager = peer.ref,
+              requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+              mptStorage = mpt,
+              batchSize = 16,
+              snapSyncController = controller.ref,
+              stateIngest = HealingTrieFixtures.healingIngest(
+                None,
+                bfsQueueStore = Some(queue),
+                pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns),
+                appStateStore = Some(appState)
+              ),
+              storageScheme = scheme,
+              movingRootDeltaHeal = true,
+              currentRoot = Some(new AtomicReference(trie.root.hash)),
+              decidedRoot = Some(new AtomicReference[ByteString]()),
+              markerMayStand = true
+            )
+          )
+          .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+      )
+      peer.coordinator.set(coordinator)
+      val p = PeerTestHelpers.createTestPeer("n3-no-walk-peer", createTestProbe[Any]().ref.toClassic)
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(p)
+      val rootRequest = peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+      rootRequest.paths shouldBe Seq(trie.root.pathset)
+      peer.answerFrom(rootRequest, trie.served) // the root is held now, waiting on its children
+      peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds) // and they are out, unanswered
+
+      peer.serveFrom.set(Some(trie.served))
+      coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(null) // the arm throws: a supervisor restart
+      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+        p
+      ) // what the 1-second tick sends the new incarnation
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      withClue("the new incarnation asked for the root again: ") {
+        peer.autoRequests.flatten should contain(trie.root.pathset)
+      }
+      withClue("and the root it completed on is there, with all of it under: ") {
+        trie.nodes.foreach { n =>
+          withClue(s"${n.label}: ") {
+            if scheme == StorageScheme.Hash then mpt.get(n.hash.toArray).hash.toSeq shouldBe n.hash.toSeq
+            else readAtPath(pns, n).map(ByteString(_)) shouldBe Some(n.encoded)
+          }
+        }
+      }
+      withClue("with no walk: ")(clears.get() shouldBe 0)
+      testKit.stop(coordinator)
     }
 
     // ---- one signal per root -----------------------------------------------------------------------------------------

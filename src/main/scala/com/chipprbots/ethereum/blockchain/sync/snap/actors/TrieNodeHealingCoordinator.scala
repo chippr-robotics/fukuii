@@ -372,9 +372,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           false
       )
 
-  /** Whether this root has been reported complete with no walk behind it (forge 3). The record itself, so that whatever
-    * takes it back (a re-peg, the controller's own resets) takes this back too, and no run is left waiting on a signal
-    * that went out before.
+  /** Whether this root has been reported complete, which a completion with no walk says once (forge 3). The record
+    * itself, so that whatever takes it back (a re-peg, the controller's own resets) takes this back too, and no run is
+    * left waiting on a signal that went out before.
     */
   private def saidComplete: Boolean = decidedRoot.exists(_.get() == stateRoot)
 
@@ -2049,7 +2049,8 @@ object TrieNodeHealingCoordinator:
         // incarnation starts on the controller's current root, not the spawn's.
         val root = currentRoot.flatMap(current => Option(current.get())).getOrElse(stateRoot)
         // spec 022 T050a, hunter N3: nor does anything start it. It starts on that root as a process restart would: a root
-        // on disk is walked, an absent one seeded. What the last incarnation held or had queued was never on disk, so
+        // on disk is walked, or decided on where the marker stands, and an absent one seeded. What the last incarnation
+        // held or had queued was never on disk, so
         // discovery from the root finds it again as absent; a commit is one atomic write, and a Hash flush a prefix of
         // commit order, so nothing on disk stands over what it lost. Until this it waited for the dead-pulse watchdog,
         // about 6 minutes, and without a walk at completion it would have completed on what it no longer knew.
