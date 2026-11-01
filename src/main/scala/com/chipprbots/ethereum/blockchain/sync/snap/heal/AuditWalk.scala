@@ -184,6 +184,22 @@ object AuditThrottle:
   /** A duty cycle that tunes itself to the disk: sleep `factor` times what the batch took (3 is 25%). */
   def delayAfter(readNanos: Long, factor: Int): FiniteDuration = (readNanos * factor).nanos
 
+  /** The fewest nodes a batch reads, however slow the disk. */
+  val MinBatch: Int = 16
+
+  /** How long a batch's read should take. It holds the data source's read lock throughout, and a queued writer waits
+    * behind it, so this is about what the audit may add to a block commit.
+    */
+  val TargetBatchRead: FiniteDuration = 100.millis
+
+  /** The next batch, from what the last took. A count alone is not enough: on a raidz HDD 256 reads hold a block commit
+    * for seconds.
+    */
+  def nextBatchSize(lastBatch: Int, readNanos: Long): Int =
+    if readNanos <= 0 then AuditWalk.MaxBatch
+    else
+      (lastBatch.toLong * TargetBatchRead.toNanos / readNanos).max(MinBatch.toLong).min(AuditWalk.MaxBatch.toLong).toInt
+
   /** The most a pass waits for the one before it. */
   val MaxPassBackoff: FiniteDuration = 7.days
 
@@ -200,7 +216,9 @@ object AuditThrottle:
   */
 object AuditWalk:
 
-  /** `multiGetOptimizedNoFill` holds the read lock for a batch, and a queued writer stalls behind it. */
+  /** `multiGetOptimizedNoFill` holds the read lock for a batch, and a queued writer stalls behind it. So this is only
+    * the ceiling, and [[AuditThrottle.nextBatchSize]] picks each batch.
+    */
   val MaxBatch: Int = 256
 
   private[heal] val MaxResolveAttempts: Int = 3

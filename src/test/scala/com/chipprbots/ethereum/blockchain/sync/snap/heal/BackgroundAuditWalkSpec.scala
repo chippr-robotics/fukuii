@@ -540,6 +540,16 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     AuditThrottle.paused(wasPaused = true, 3600, 300) shouldBe false
   }
 
+  it should "size the next batch for 100 ms of reading, between 16 and 256" taggedAs UnitTest in {
+    AuditThrottle.nextBatchSize(256, 100.millis.toNanos) shouldBe 256
+    AuditThrottle.nextBatchSize(256, 200.millis.toNanos) shouldBe 128
+    AuditThrottle.nextBatchSize(256, 1.second.toNanos) shouldBe 25
+    AuditThrottle.nextBatchSize(100, 50.millis.toNanos) shouldBe 200
+    withClue("the floor: ")(AuditThrottle.nextBatchSize(256, 10.seconds.toNanos) shouldBe 16)
+    withClue("the ceiling: ")(AuditThrottle.nextBatchSize(100, 1.milli.toNanos) shouldBe 256)
+    withClue("nothing measured: ")(AuditThrottle.nextBatchSize(16, 0) shouldBe 256)
+  }
+
   "AuditHeadWatch" should "move on a new number or a new root, and not on the same head" taggedAs UnitTest in {
     val head = AuditHead(10, trieKey(1), 0)
     val watch = AuditHeadWatch.first(head, 100)

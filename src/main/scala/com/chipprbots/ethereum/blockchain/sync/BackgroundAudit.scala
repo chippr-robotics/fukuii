@@ -271,6 +271,7 @@ object BackgroundAudit:
     private val servedBad = mutable.Set.empty[ByteString]
     private var counters: AuditCounters = AuditCounters()
     private var codeFilter: AuditCodeFilter = new AuditCodeFilter(settings.codeFilterEntries)
+    private var batchLimit: Int = AuditThrottle.MinBatch
     private var latestHead: Option[AuditHead] = None
     private var headWatch: Option[AuditHeadWatch] = None
     private var paused: Boolean = false
@@ -432,7 +433,7 @@ object BackgroundAudit:
     // ---- reading -----------------------------------------------------------------------------------------------------
 
     private def startBatch(): Unit =
-      val count = math.min(settings.batchSize, stack.size)
+      val count = math.min(math.min(settings.batchSize, batchLimit), stack.size)
       val frames = Vector.fill(count)(stack.removeLast())
       reading = Some(frames)
       val gen = generation
@@ -500,6 +501,7 @@ object BackgroundAudit:
         case Success(BatchOutcome.Walked(head, step, readNanos, watch)) =>
           latestHead = Some(head)
           headWatch = Some(watch)
+          batchLimit = AuditThrottle.nextBatchSize(frames.size, readNanos)
           if paused then
             paused = false
             val lasted = deps.nowMillis() - pausedAtMillis

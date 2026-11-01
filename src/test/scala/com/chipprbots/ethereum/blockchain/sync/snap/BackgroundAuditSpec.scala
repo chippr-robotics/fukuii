@@ -1390,3 +1390,21 @@ class BackgroundAuditSpec
     eventually(reader.reads.get should be > 1L)
     testKit.stop(audit)
   }
+
+  // multiGetOptimizedNoFill holds the read lock throughout, and a queued writer waits behind it.
+  "A batch's size" should "come down to 16 on a slow disk, so a block commit waits less" taggedAs UnitTest in {
+    val n = new Node
+    n.head(10, populate(n))
+    val reader = new TimedReader(n, 1.second)
+    n.ended(n.spawn(reader = reader, nanoTime = () => reader.nanos.get))
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.s.batchSizes.max shouldBe 16
+  }
+
+  it should "go up when the reads are quick" taggedAs UnitTest in {
+    val n = new Node
+    n.head(10, populate(n))
+    val reader = new TimedReader(n, 1.micro)
+    n.ended(n.spawn(reader = reader, nanoTime = () => reader.nanos.get))
+    n.s.batchSizes.max should be > 16
+  }
