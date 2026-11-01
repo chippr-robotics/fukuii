@@ -305,10 +305,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 T043: a hand-off with no clean full walk of this root behind it, whichever route brought it here, takes
           // a marker stamped earlier. From here regular sync fetches what is missing on demand, one node at a time, each
           // present over children that may be absent. Before the flags: a crash in between only resumes SNAP unmarked.
-          if !stateRoot.exists(_.value == healingCleanWalkRoot.get()) && stateIngest.appState
-              .isSnapHealInvariantPresent()
+          // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
+          // the clean route alone, so every hand-off still takes the marker here.
+          if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
+            stateIngest.appState.isSnapHealInvariantPresent()
           then
-            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean full walk of this root: marker removed")
+            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
             stateIngest.appState.clearSnapHealInvariant().commitSync()
           // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
           // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where

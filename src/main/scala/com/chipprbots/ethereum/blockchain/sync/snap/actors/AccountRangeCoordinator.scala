@@ -194,8 +194,10 @@ private[actors] class AccountRangeCoordinatorImpl(
           //     are therefore missing or wrong on disk. The state healing walk from the pivot root fetches exactly
           //     those (missing by hash; Path scheme also verifies keccak at the path) and stops at every subtree that
           //     is present — so nothing is trusted that healing has not checked against the final root.
-          //   - `resumeProgress.nonEmpty` latches `resumedStaleCursors` in the controller, which forces that healing
-          //     walk even under deferred merkleization. Correctness never depends on the resumed StackTrie's root.
+          //   - `resumeProgress.nonEmpty` latches `resumedStaleCursors` in the controller, which forces healing even under
+          //     deferred merkleization, where it walks. Where the invariant marker stands that discovery from the root is
+          //     all it runs (spec 022 T051), the background audit looking after hand-off. Correctness never depends on the
+          //     resumed StackTrie's root.
           //   - Storage/bytecode work for accounts below the cursor is NOT re-derived from the network: it is the
           //     carried prefix of the task files, replayed by `ReplayCarriedContracts`.
           log.info(
@@ -1122,17 +1124,19 @@ object AccountRangeCoordinator:
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
         // A supervisor restart starts the phase over what the last incarnation wrote, from the launch's cursors and root,
-        // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a).
+        // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a). With
+        // the task files it is a resume, and keeps the marker as any resume does: the audit covers that crash class (the
+        // user's decision, 2026-11-01). Without them every partial range starts over: a fresh phase over what is there.
         if incarnations.getAndIncrement() > 0 &&
           HealInvariant.withdrawForPathAccountPhase(
             stateIngest.appState,
             stateIngest.pathNodes,
             storageScheme,
-            resumedCursors = resumeProgress.nonEmpty
+            resumesRanges = carriedTaskFiles.isDefined
           )
         then
           ctx.log.warn(
-            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted over existing Path nodes. " +
+            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted, with nothing to resume from, over existing Path nodes. " +
               "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
           )
         val impl = new AccountRangeCoordinatorImpl(

@@ -13,10 +13,9 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
   *
   * The marker (`snap.heal.invariant`, AppState `s`) says everything present here was written under "present implies
   * complete". It does not say complete. It is stamped on an empty datadir at a SNAP start and at a clean walk
-  * completion; a datadir without it gets one repair pass, which is the verification walk healing already runs at every
-  * completion, and the marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills
-  * what it found and the run hands off unmarked (T050a). Slice 5 reads the marker to take that walk off the completion
-  * path.
+  * completion; a datadir without it gets one repair pass, which is the verification walk healing runs there, and the
+  * marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills what it found and
+  * the run hands off unmarked (T050a). Where it stands, healing completes with no walk (T051).
   *
   * Every write here is one synced batch, so no crash can leave half of one.
   */
@@ -44,12 +43,16 @@ object HealInvariant:
     * least recently used first, so a crash can leave a present node over an absent child (spec 022 review vault V3, R1,
     * V-N2). The Path scheme is not affected: its heal commits, account phase and storage phase all write to the two
     * Path column families through `PathNodeStorage`, in atomic batches, and never touch the cache, which only the
-    * hand-off's export goes through, behind its own barrier (#1581). Hence scheme-aware (V-N2 (4)). Where it cannot
-    * hold, the verification walk stays at every start and every completion: that walk is the repair, and there is no
-    * second mechanism (V-N2 (3)).
+    * hand-off's export goes through, behind its own barrier (#1581). Hence scheme-aware (V-N2 (4)).
+    *
+    * Nor under `deferred-merkleization = true`, on either scheme: no trie is built during the download and a lone
+    * absence still gets a done marker, which vouches for flat slots alone (H1, tasks.md T050a).
+    *
+    * Where it cannot hold, the verification walk stays at every start and every completion: that walk is the repair,
+    * and there is no second mechanism (V-N2 (3)).
     */
-  def canHold(scheme: StorageScheme, trieNodesCachedInMemory: Boolean): Boolean =
-    scheme == StorageScheme.Path || !trieNodesCachedInMemory
+  def canHold(scheme: StorageScheme, deferredMerkleization: Boolean, trieNodesCachedInMemory: Boolean): Boolean =
+    !deferredMerkleization && (scheme == StorageScheme.Path || !trieNodesCachedInMemory)
 
   /** Whether a storage task's done marker holds what it claims once written. Not on the Hash scheme building the trie
     * during the download under `pruning.mode = inmemory`: storage trie nodes go through the node cache there, not
@@ -95,10 +98,18 @@ object HealInvariant:
     *
     * On the Path scheme a node's position holds one node, so a phase that starts over existing nodes can rewrite a
     * region at another root. If a state then returns to an earlier value and a second interruption falls between
-    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child, and only a walk
-    * that reads every node would see it. That takes a resume of cursors, a fresh phase over nodes already there (the
-    * accounts-complete flag set with no task-file pointer persisted is one), or a supervisor restart of the account
-    * coordinator. A clean walk stamps the marker again, so the cost is one walk on such a run.
+    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child. Publish keys
+    * every node by its own keccak, so what that leaves in the store execution reads is an absence, which throws, and
+    * never a wrong root.
+    *
+    * Only a fresh phase over nodes already there withdraws (the accounts-complete flag set with no task-file pointer
+    * persisted is one, and so is a supervisor restart of a launch that had nothing to resume from): the marker says
+    * nothing of those nodes. So does a launch with cursors whose task files were rejected or are gone: every partial
+    * range starts over (beacon 1). `resumesRanges` is whether the task files came too, the one case a partial range
+    * goes on from its cursor. A launch whose cursors are all complete re-downloads nothing, and withdraws too with no
+    * files: that errs to the walk, and it is rare. A real resume keeps the marker, supervisor restart included (the
+    * user's decision, 2026-11-01): a multi-day sync restarts many times, and the background audit covers that crash
+    * class, one hole at a time. A clean walk stamps the marker again, so a withdrawal costs one walk on such a run.
     *
     * Nothing here on Hash: nodes are content-addressed, so a node's bytes cannot change under it. Nor at a
     * storage-phase restart: its chunks verify against the task's root.
@@ -107,10 +118,10 @@ object HealInvariant:
       appState: AppStateStorage,
       pathNodes: Option[PathNodeStorage],
       scheme: StorageScheme,
-      resumedCursors: Boolean
+      resumesRanges: Boolean
   ): Boolean =
     val withdraw = scheme == StorageScheme.Path && appState.isSnapHealInvariantPresent() &&
-      (resumedCursors || pathNodes.exists(!_.isEmpty))
+      !resumesRanges && pathNodes.exists(!_.isEmpty)
     if withdraw then appState.clearSnapHealInvariant().commitSync()
     withdraw
 

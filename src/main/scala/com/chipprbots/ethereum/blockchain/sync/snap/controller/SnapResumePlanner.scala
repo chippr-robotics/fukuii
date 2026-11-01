@@ -716,19 +716,6 @@ private[snap] trait SnapResumePlanner
     // Latch: once set, never cleared for the life of this process.
     if resumeProgress.nonEmpty then resumedStaleCursors = true
 
-    if HealInvariant.withdrawForPathAccountPhase(
-        stateIngest.appState,
-        stateIngest.pathNodes,
-        snapSyncConfig.storageScheme,
-        resumedCursors = resumeProgress.nonEmpty
-      )
-    then
-      ctx.log.warn(
-        "[HEAL-INVARIANT] Marker withdrawn: a Path account phase starts over existing nodes " +
-          s"(${if resumeProgress.nonEmpty then "resuming account cursors" else "the Path column families are not empty"}). " +
-          "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
-      )
-
     // Carry the contract task files only when they are provably consistent with the cursors; otherwise partial
     // ranges fall back to re-downloading from their start (never a partial resume without its contract work).
     val carriedTaskFiles: Option[ContractTaskFiles] =
@@ -741,6 +728,20 @@ private[snap] trait SnapResumePlanner
               ctx.log.warn(s"Not carrying contract task files ($why): partial ranges re-download from their start")
               None
         }
+
+    // Only here is it known whether this launch resumes: without the task files every partial range starts over, on cursors
+    // or not (beacon 1).
+    if HealInvariant.withdrawForPathAccountPhase(
+        stateIngest.appState,
+        stateIngest.pathNodes,
+        snapSyncConfig.storageScheme,
+        resumesRanges = carriedTaskFiles.isDefined
+      )
+    then
+      ctx.log.warn(
+        "[HEAL-INVARIANT] Marker withdrawn: a fresh Path account phase starts over existing nodes. " +
+          "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
+      )
 
     // Without carried task files the account phase re-identifies every contract from scratch and nothing consults
     // the completion markers; drop them so a later resume never trusts markers from before this point (an earlier SNAP

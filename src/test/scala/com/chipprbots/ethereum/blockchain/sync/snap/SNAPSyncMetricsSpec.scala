@@ -35,6 +35,29 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     gaugeValue("snapsync.healing.inflation_ratio.gauge") shouldBe 1.75 +- 1e-9
   }
 
+  // spec 022 T055, data-model.md "Metrics and logs": on the registry with no prefix, so the Prometheus names are those.
+  it should "round-trip what FR-017 asks for, under the names data-model.md gives" taggedAs UnitTest in {
+    SNAPSyncMetrics.setHealHeld(7L, 700L)
+    SNAPSyncMetrics.setHealRequests(3L, 2L)
+    SNAPSyncMetrics.setHealExcludedAccounts(5L)
+    SNAPSyncMetrics.setHealRootAgeSeconds(90L)
+
+    gaugeValue("snap.heal.held.nodes") shouldBe 7.0 +- 1e-9
+    gaugeValue("snap.heal.held.bytes") shouldBe 700.0 +- 1e-9
+    gaugeValue("snap.heal.pending") shouldBe 3.0 +- 1e-9
+    gaugeValue("snap.heal.inflight") shouldBe 2.0 +- 1e-9
+    gaugeValue("snap.heal.excluded.accounts") shouldBe 5.0 +- 1e-9
+    gaugeValue("snap.heal.root.age.seconds") shouldBe 90.0 +- 1e-9
+  }
+
+  it should "record the nodes healed per re-peg as a distribution (SC-005)" taggedAs UnitTest in {
+    SNAPSyncMetrics.recordHealNodesPerRepeg(3L)
+    val summary = Metrics.get().registry.find("snap.heal.nodes.per.repeg").summary()
+    summary should not be null
+    summary.count() should be >= 1L
+    summary.max() should be >= 3.0
+  }
+
   it should "reflect the latest pushed value (last-write-wins gauges)" taggedAs UnitTest in {
     SNAPSyncMetrics.setHealingInflationRatio(1.0)
     gaugeValue("snapsync.healing.inflation_ratio.gauge") shouldBe 1.0 +- 1e-9

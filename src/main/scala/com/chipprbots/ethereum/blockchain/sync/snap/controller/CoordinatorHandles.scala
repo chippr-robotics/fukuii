@@ -52,6 +52,13 @@ private[snap] trait CoordinatorHandles:
     */
   lazy val healingCleanWalkRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
+  /** spec 022 5d: the root the healing coordinator decided is complete, set before the signal, walk or no walk. Not by
+    * a hand-off. The controller takes `StateHealingComplete` only for the root it is on, and finalisation lets a marker
+    * stand on this or on [[healingCleanWalkRoot]]. Only the clean walk's root stamps: this one is no proof, and a
+    * `lostTrack` that lands after the decision must not be undone.
+    */
+  lazy val healingDecidedRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)
 

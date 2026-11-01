@@ -160,12 +160,10 @@ Evidence for each decision is in research.md.
     - a `clearDoneOnStart` restart (`:1516`).
   - *As built (slice 4):* while the walk runs at every completion, the repair pass is that walk, the coordinator's clean full walk of the root that completes. Never stamped or trusted on the Hash scheme under `pruning.mode = inmemory`; the Path scheme writes round the node cache, so it holds there. The marker also goes at any finalisation with no such walk behind it, and wherever `SnapSyncDone` is cleared. What it does and does not claim is in data-model.md "Invariant marker".
 - **D8. Completion and audit.**
-  - `isComplete` = no pending, in-flight or held requests, and an empty excluded set, for the current root.
-  - **Removed:**
-    - `verificationPassComplete`, the scoped and pruned paths, the stale-discard logic and `MaxConsecutiveStaleDiscards`;
-    - the BFS start on a re-pegged root that is already present (`:666-690`): with the marker present, that case is complete immediately;
-    - the Hash controller walk as a gate: Hash now routes to `completeHealingWalkClean`.
-  - **`HealingForceComplete` on Hash** must send `StateHealingAbandoned` instead of `StateHealingComplete`, because the walk it relied on is gone.
+  - **The rule, as built in PR 5d.** Complete when nothing is pending, in flight or held (`isComplete`), the excluded set is clear (the gate's last conjunct), and the current root is present. A walk is a precondition only where the invariant marker does not stand, read at the decision (tasks.md T051, research R-5g).
+  - **Bypassed where the marker stands, and kept where it does not:** `verificationPassComplete`, the stale-discard logic and `MaxConsecutiveStaleDiscards`, and the BFS start on a re-pegged root that is already present (`:666-690`): with the marker standing, that case is a check. The scoped and pruned paths went in slice 4. What is dead once nothing starts it is slice 6's.
+  - **Removed:** the Hash controller walk as a gate. Hash routes to `completeHealingWalkClean`, for the root the controller is on (`healingDecidedRoot`). Its arms stay for slice 6.
+  - **`HealingForceComplete` on Hash** sends `StateHealingAbandoned` instead of `StateHealingComplete`, because the walk it relied on is gone.
   - **The background audit (FR-013), as built in PR 5c (tasks.md T053, research R-5f):**
     - It is owned by a component that outlives the healing coordinator (`SyncController`, beside the recovery actors), and lives exactly as long as regular sync.
     - It walks the **hash store** on both schemes, by position from the current best root, since no one root lasts a pass.

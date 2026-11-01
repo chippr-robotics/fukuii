@@ -347,6 +347,25 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       }
     }
 
+    // T055, FR-017: what the last pass to end left, since a count of the set would read the store at each tick.
+    it should s"report at each tick how many entries the last pass left, on $scheme" taggedAs UnitTest in {
+      val trie = PathHealPresenceFixtures.storageTrieOld()
+      val gone = ByteString(Array.fill(32)(0x7a.toByte))
+      val rig = new Rig(scheme, trie, absent = Set.empty, Seq(ExcludedAccount(gone, ExcludedReason.StorageSkipped)))
+      rig.serve(trie)
+      rig.peerAvailable()
+      rig.start()
+      rig.awaitComplete()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      rig.settle()
+      com.chipprbots.ethereum.metrics.Metrics
+        .get()
+        .registry
+        .find("snap.heal.excluded.accounts")
+        .gauge()
+        .value() shouldBe 1d
+    }
+
     // Spec 022 review W-1: on a live chain a re-peg comes every 14 to 26 minutes and heals the spine. Neither a re-peg nor
     // that heal is a blocker shrinking, so the count goes on through both.
     it should s"count idle minutes across a re-peg and a heal, and hand off, when only code blocks, on $scheme (W-1)" taggedAs UnitTest in {

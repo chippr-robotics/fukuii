@@ -22,6 +22,10 @@ class SNAPCoordinatorGoneSpec
     with AnyFlatSpecLike
     with Matchers:
 
+  // The genesis route's default config defers merkleization, where no marker can hold (spec 022 5d), and every test here
+  // that starts from it is about a marker that stands.
+  private val NoDeferral = SNAPSyncConfig(deferredMerkleization = false)
+
   private def fixture(dying: String*): SnapControllerFixture =
     val f = new SnapControllerFixture(testKit)
     f.dying.set(dying.toSet)
@@ -80,7 +84,7 @@ class SNAPCoordinatorGoneSpec
   "An account coordinator out of restarts" should "withdraw the marker, owe the scan, and go dormant" taggedAs UnitTest in {
     val f = fixture(ChildStopped.Account)
     Using.resource(new SnapLogCapture) { log =>
-      val snap = f.enterGenesisAccountSync()
+      val snap = f.enterGenesisAccountSync(NoDeferral)
       runUntil(f, snap, log, Dormant)
       lostTrack(f, "account")
     }
@@ -137,7 +141,7 @@ class SNAPCoordinatorGoneSpec
 
   "An account coordinator that stopped itself" should "cost nothing once accounts are complete: it finalised the trie" taggedAs UnitTest in {
     val f = fixture()
-    val snap = f.enterGenesisAccountSync()
+    val snap = f.enterGenesisAccountSync(NoDeferral)
     val account = f.factories.selves.get(ChildStopped.Account)
     snap ! AccountRangeSyncComplete
     snap ! CoordinatorGone(account)
@@ -157,7 +161,7 @@ class SNAPCoordinatorGoneSpec
 
   it should "cost nothing with a live account handle: the arm goes by whose report it is, not by there being a handle" taggedAs UnitTest in {
     val f = fixture()
-    val snap = f.enterGenesisAccountSync()
+    val snap = f.enterGenesisAccountSync(NoDeferral)
     snap ! CoordinatorGone(testKit.createTestProbe[Any]().ref)
     f.awaitProcessed(snap)
     f.appStateStorage.getSnapCodeScanOwed() shouldBe None
@@ -167,7 +171,7 @@ class SNAPCoordinatorGoneSpec
   // hunter 3, as the controller lives it: the account phase ends inside the capability check's grace period.
   "A capability check that outlives a fast account phase" should "not start a second one" taggedAs UnitTest in {
     val f = fixture()
-    val snap = f.enterGenesisAccountSync()
+    val snap = f.enterGenesisAccountSync(NoDeferral)
     val account = f.factories.selves.get(ChildStopped.Account)
     snap ! AccountRangeSyncComplete
     snap ! CoordinatorGone(account)

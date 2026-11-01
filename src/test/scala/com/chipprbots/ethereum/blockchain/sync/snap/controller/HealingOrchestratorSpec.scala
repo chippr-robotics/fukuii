@@ -312,6 +312,9 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       h.factories.lastHealingCurrentRoot.get().exists(_ eq h.module.healingCurrentRoot) shouldBe true
       h.module.healingCurrentRoot.get() shouldBe spawn.stateRoot
     }
+    withClue("spec 022 5d: `SNAPSyncConfig` defers merkleization by default, and no marker can hold there: ") {
+      spawn.markerMayStand shouldBe false
+    }
     spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
     spawn.healingFrontierStorage shouldBe defined
     spawn.bfsQueueStorageOpt shouldBe defined
@@ -327,6 +330,73 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.trieWalkInProgress shouldBe true
     h.factories.healingSpawns.get shouldBe 1
     spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // beacon W1: a second start can come after a completion has been taken, with finalisation still to read the record.
+  it should "leave what is on record alone on a second start, and send nothing" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
+
+    h.call(_.startStateHealing())
+
+    h.module.healingDecidedRoot.get() shouldBe root.value
+    h.module.healingCleanWalkRoot.get() shouldBe root.value
+    coordinator.hasMessages shouldBe false
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // hunter 1: where validation could not vouch for the state, nothing before it stands, and the coordinator, having said so
+  // once, would not say so again.
+  it should "forget what is on record when healing is reopened, and have the coordinator decide again" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
+
+    h.call(_.reopenHealing())
+
+    h.module.healingDecidedRoot.get() shouldBe null
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // forge: not only where a decision is on record. An undecided coordinator would otherwise wait for its watchdog, and one
+  // that has walked clean never hears from that.
+  it should "ask when healing is reopened with nothing on record too" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.reopenHealing())
+
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
+  it should "ask the coordinator there is to decide again, and spawn one if there is none, rather than sit silent" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.call(_.askHealingAgain())
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+
+    h.module.trieNodeHealingCoordinator = None
+    h.call(_.askHealingAgain())
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    spawnedNames(h.effects()) should have size 1
   }
 
   it should "ask the parent for a newer serve root once, and not while a pivot refresh is pending" taggedAs UnitTest in {

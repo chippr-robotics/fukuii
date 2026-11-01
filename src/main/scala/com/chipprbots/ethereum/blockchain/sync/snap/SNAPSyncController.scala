@@ -514,7 +514,11 @@ private class SNAPSyncControllerImpl(
       HealInvariant.atSnapStart(
         stateIngest.appState,
         stateIngest.pathNodes,
-        HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory)
+        HealInvariant.canHold(
+          snapSyncConfig.storageScheme,
+          snapSyncConfig.deferredMerkleization,
+          trieNodesCachedInMemory
+        )
       )
     )
     ctx.log.info("SNAP Sync Controller initialized")
@@ -544,8 +548,9 @@ private class SNAPSyncControllerImpl(
         )
       case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
         ctx.log.warn(
-          "[HEAL-INVARIANT] pruning.mode = inmemory on the Hash scheme: no marker can hold here, and the verification " +
-            s"walk stays at every start and completion${if clearedOne then " (a marker found here was removed)" else ""}"
+          "[HEAL-INVARIANT] No marker can hold here (pruning.mode = inmemory on the Hash scheme, or " +
+            "deferred-merkleization = true), and the verification walk stays at every start and completion" +
+            (if clearedOne then " (a marker found here was removed)" else "")
         )
 
   /** OQ-3: ask NetworkPeerManagerActor for the current handshaked peers; the reply (`HandshakedPeers`) is bridged back
@@ -852,30 +857,30 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
-  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19):
     * `StateHealingComplete`, the healing coordinator's completion signal. `commonSyncingArms` delegates to it at the
     * arm's original position, so the arm order is unchanged.
+    *
+    * spec 022 T052: the same exit on both schemes, and no controller walk. The Hash controller's walk stops at present
+    * hash nodes, so it never proved what the coordinator's gate has decided by now; Path's would read a store Path
+    * never populates. Under `pruning.mode = inmemory` the gate has walked, since the marker cannot hold there. The
+    * walk's arms stay, with nothing to start them: dead wiring is slice 6's.
+    *
+    * The coordinator says which root it decided on before the signal, and a re-peg can pass between that and this. So a
+    * signal for any other root says nothing about this one: it is ignored, and the coordinator, which has the re-peg by
+    * now, is asked again.
     */
   private[snap] lazy val stateHealingCompleteArms: PartialFunction[Command, Behavior[Command]] = {
     case StateHealingComplete =>
-      progressMonitor.startPhase(StateHealing)
-      ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
-      if snapSyncConfig.storageScheme == StorageScheme.Path then
-        // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
-        // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
-        // only sends StateHealingComplete once a path-aware walk of its current root in that incarnation found zero
-        // missing nodes (verificationPassComplete: a clean verification walk, or the clean full rebuild walk), so
-        // that signal IS the clean walk: take the same exit as TrieWalkComplete(0) rather than running a second,
-        // blind, full-trie walk.
-        if currentPhase == StateHealing then completeHealingWalkClean()
-        else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
-      else if trieWalkInProgress then
-        // A trie walk is already running — its result will determine next step
-        ctx.log.info("Trie walk in progress, waiting for result...")
+      if currentPhase != StateHealing then
+        ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
+      else if !stateRoot.exists(_.value == healingDecidedRoot.get()) then
+        ctx.log.info("[HEAL-COMPLETE] The signal is for a root healing has left (a re-peg passed it): asking again")
+        askHealingAgain()
       else
-        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
-        // create a fresh coordinator before the walk so inline discovery can run concurrently.
-        startStateHealingWithInterleave()
+        progressMonitor.startPhase(StateHealing)
+        ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
+        completeHealingWalkClean()
       Behaviors.same
   }
 

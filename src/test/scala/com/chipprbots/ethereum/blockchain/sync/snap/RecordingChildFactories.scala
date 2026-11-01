@@ -120,7 +120,8 @@ object ChildSpawn:
       movingRootDeltaHeal: Boolean,
       evmCodeStorage: Option[EvmCodeStorage],
       walkLocalOnly: Option[AtomicBoolean],
-      excludedAccounts: Boolean
+      excludedAccounts: Boolean,
+      markerMayStand: Boolean
   ) extends ChildSpawn
 
   final case class ByteCode(
@@ -305,6 +306,10 @@ final class RecordingChildFactories(
 
   // spec 022 T038b: the current-root reference the last healing spawn got. Not on `ChildSpawn.Healing`: a spawn record is
   // compared across controller instances, and each has its own reference.
+  val lastHealingDecidedRoot: java.util.concurrent.atomic.AtomicReference[
+    Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+  ] = new java.util.concurrent.atomic.AtomicReference(None)
+
   val lastHealingCurrentRoot: java.util.concurrent.atomic.AtomicReference[
     Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
   ] = new java.util.concurrent.atomic.AtomicReference(None)
@@ -341,10 +346,13 @@ final class RecordingChildFactories(
       excludedAccounts: Boolean,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      markerMayStand: Boolean
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
     lastHealingCurrentRoot.set(currentRoot)
+    lastHealingDecidedRoot.set(decidedRoot)
     spawns ! ChildSpawn.Healing(
       stateRoot,
       networkPeerManager,
@@ -375,7 +383,8 @@ final class RecordingChildFactories(
       movingRootDeltaHeal,
       Option.when(healedCodeCheck)(stateIngest.bytecode),
       walkLocalOnly,
-      excludedAccounts
+      excludedAccounts,
+      markerMayStand
     )
     stub(ChildStopped.Healing, healingInbox)
 

@@ -173,7 +173,9 @@ trait ChildFactories:
       excludedAccounts: Boolean = false,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      markerMayStand: Boolean = false
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -207,7 +209,9 @@ trait ChildFactories:
       excludedAccounts = excludedAccounts,
       currentRoot = currentRoot,
       excludedPassRoot = excludedPassRoot,
-      cleanWalkRoot = cleanWalkRoot
+      cleanWalkRoot = cleanWalkRoot,
+      decidedRoot = decidedRoot,
+      markerMayStand = markerMayStand
     )
 
   def byteCodeCoordinator(
