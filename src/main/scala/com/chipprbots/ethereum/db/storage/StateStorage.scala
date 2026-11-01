@@ -8,6 +8,7 @@ import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.cache.MapCache
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -80,6 +81,16 @@ object StagedBlockState:
     override def pending: Option[DataSourceBatchUpdate] = None
     override def discard(): Unit = ()
 
+/** What a conditional repair write did. */
+enum RepairOutcome:
+  case Written
+
+  /** Valid bytes were already there, and they stay as they are. */
+  case AlreadyValid
+
+  /** The bytes offered do not hash to the key: nothing was written. */
+  case Rejected
+
 // scalastyle:off
 trait StateStorage:
   def getBackingStorage(bn: BigInt): MptStorage
@@ -105,6 +116,22 @@ trait StateStorage:
   def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit
   def getNode(nodeHash: NodeHash): Option[MptNode]
   def forcePersist(reason: FlushSituation): Boolean
+
+  /** Whether [[repairNode]] works on this storage (spec 022 T053). */
+  def canRepairNodes: Boolean = false
+
+  /** How many blocks behind the best block a root's replaced nodes stay readable, or `None` where they are never
+    * pruned.
+    */
+  def pruningHistoryBlocks: Option[Int] = None
+
+  /** The background audit's write (spec 022 decision 1): `nodeEncoded` goes in only if `nodeHash` is absent or its
+    * entry fails its hash, judged at write time, so it can never overwrite a node import has since written or counted.
+    * Unlike [[saveNode]], a blind upsert at one reference that can reset a live node's count, this is safe while import
+    * runs.
+    */
+  def repairNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): RepairOutcome =
+    throw new UnsupportedOperationException(s"${getClass.getSimpleName} cannot repair nodes")
 
 class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateStorage:
 
@@ -146,6 +173,16 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 
   override def getNode(nodeHash: NodeHash): Option[MptNode] =
     nodeStorage.get(nodeHash).map(_.toMptNode)
+
+  override def canRepairNodes: Boolean = true
+
+  /** No lock: an archive store keeps no counts, and two writers of one hash write the same bytes. */
+  override def repairNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): RepairOutcome =
+    if !StateStorage.hashesTo(nodeHash, nodeEncoded) then RepairOutcome.Rejected
+    else if nodeStorage.get(nodeHash).exists(StateStorage.hashesTo(nodeHash, _)) then RepairOutcome.AlreadyValid
+    else
+      nodeStorage.put(nodeHash, nodeEncoded)
+      RepairOutcome.Written
 
 object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
@@ -282,6 +319,33 @@ class ReferenceCountedStateStorage(
   override def getNode(nodeHash: NodeHash): Option[MptNode] =
     new FastSyncNodeStorage(nodeStorage, 0).get(nodeHash).map(_.toMptNode)
 
+  override def canRepairNodes: Boolean = true
+
+  override def pruningHistoryBlocks: Option[Int] = Some(pruningHistory.toInt)
+
+  /** Under [[ReferenceCountedStateStorage.commitLock]], so nothing commits a count between this re-check and this
+    * write: a node import wrote after the audit's proof that it was absent keeps the count it has. The eviction comes
+    * after the write, as in [[onBlockSave]], for a bad node a block may have read into the cache.
+    */
+  override def repairNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): RepairOutcome =
+    if !StateStorage.hashesTo(nodeHash, nodeEncoded) then RepairOutcome.Rejected
+    else
+      ReferenceCountedStateStorage.commitLock.synchronized {
+        val existing =
+          nodeStorage.get(nodeHash).flatMap(raw => scala.util.Try(encoding.storedNodeFromBytes(raw)).toOption)
+        if existing.exists(node => StateStorage.hashesTo(nodeHash, node.nodeEncoded.toArray)) then
+          RepairOutcome.AlreadyValid
+        else
+          val references =
+            existing.fold(ReferenceCountNodeStorage.RepairedNodeReferences)(
+              _.references.max(ReferenceCountNodeStorage.RepairedNodeReferences)
+            )
+          val repaired = ReferenceCountNodeStorage.StoredNode(ByteString(nodeEncoded), references, bn)
+          nodeStorage.put(nodeHash, encoding.storedNodeToBytes(repaired))
+          decodedNodes.foreach(_.evict(Seq(nodeHash)))
+          RepairOutcome.Written
+      }
+
 class CachedReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,
     private val pruningHistory: Int,
@@ -330,6 +394,11 @@ class CachedReferenceCountedStateStorage(
       )
 
 object StateStorage:
+
+  /** Whether `encoded` is the node stored under `hash`. */
+  private[storage] def hashesTo(hash: NodeHash, encoded: Array[Byte]): Boolean =
+    java.util.Arrays.equals(kec256(encoded), hash.toArray)
+
   def apply(
       pruningMode: PruningMode,
       nodeStorage: NodeStorage,

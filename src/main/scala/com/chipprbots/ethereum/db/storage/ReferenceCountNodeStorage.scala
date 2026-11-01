@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pruning.PruneSupport
@@ -54,6 +56,17 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
     */
   override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
     nodeStorage.multiGet(keys).map(_.map(node => storedNodeFromBytes(node).nodeEncoded.toArray))
+
+  /** As [[multiGet]] for a walk: no block-cache fill, and an entry that does not unwrap is that entry's result, where
+    * [[multiGet]] throws for the batch (spec 022 T053).
+    */
+  override def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    nodeStorage.multiGetNoFill(keys).map {
+      case None => RawNodeRead.Absent
+      case Some(stored) =>
+        try RawNodeRead.Bytes(storedNodeFromBytes(stored).nodeEncoded.toArray)
+        catch case NonFatal(_) => RawNodeRead.Undecodable
+    }
 
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): ReferenceCountNodeStorage =
 
@@ -145,6 +158,15 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
 object ReferenceCountNodeStorage extends PruneSupport with Logger:
 
   val nodeKeyLength = 32
+
+  /** The reference count of a node the background audit repaired (spec 022 decision 1). Its real count cannot be known:
+    * the blocks that referenced it incremented a node that was not there. A low guess is how a node gets pruned while
+    * live, the next decrement sends it to a death row with other tries still using it, so it is pinned high instead and
+    * never reaches zero: a leak of a few nodes, not a loss. 2^30, not `Int.MaxValue`: `incrementReferences` adds
+    * without a check, and a wrapped count is negative. This leaves about a billion steps each way, for increments, for
+    * decrements and for `setBlockApplied`'s undo.
+    */
+  val RepairedNodeReferences: Int = 1 << 30
 
   def drRowKey(bn: BigInt): ByteString =
     ByteString("dr".getBytes()) ++ ByteString(bn.toByteArray)

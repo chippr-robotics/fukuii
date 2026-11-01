@@ -2,7 +2,10 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
@@ -20,6 +23,18 @@ trait MptStorage:
     */
   def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
     hashes.map(h => scala.util.Try(get(h)).toOption)
+
+  /** One [[RawNodeRead]] per hash: the node's RLP as stored, or why not. Unlike [[multiGetNodes]] one entry that cannot
+    * be read fails that entry and not the batch, nothing is decoded, and the block cache is not filled. The background
+    * audit's read (spec 022 T053). The default is for the stores it never reads.
+    */
+  def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    hashes.map { hash =>
+      try RawNodeRead.Bytes(get(hash.toArray).encode)
+      catch
+        case _: MissingNodeException => RawNodeRead.Absent
+        case NonFatal(_)             => RawNodeRead.Undecodable
+    }
 
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
@@ -65,6 +80,9 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
       .multiGet(hashes.map(ByteString(_)))
       .zip(hashes)
       .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
+
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    if hashes.isEmpty then Seq.empty else storage.multiGetRaw(hashes)
 
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     storage.update(Seq.empty, nodes)

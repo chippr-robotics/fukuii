@@ -167,6 +167,26 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearSnapCodeScanOwed(): DataSourceBatchUpdate =
     remove(Keys.SnapCodeScanOwed)
 
+  /** What the last clean background-audit pass covered (spec 022 decision 7): the SNAP pivot, or
+    * [[AppStateStorage.AuditNoPivot]] on a node with no pivot. A pass is owed when this differs from the current one.
+    */
+  def getSnapAuditCleanAnchor(): Option[String] =
+    get(Keys.SnapAuditCleanAnchor)
+
+  def putSnapAuditCleanAnchor(anchor: String): DataSourceBatchUpdate =
+    put(Keys.SnapAuditCleanAnchor, anchor)
+
+  /** What a clean pass records now, and what [[isSnapAuditOwed]] compares with: this datadir's SNAP pivot. A
+    * checkpoint-synced node sets the done flags and no pivot, so it has the fixed value.
+    */
+  def snapAuditAnchor(): String =
+    getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
+
+  /** A node SNAP or a checkpoint finished owes one clean pass per anchor. A node that never finished either owes none.
+    */
+  def isSnapAuditOwed(): Boolean =
+    isSnapSyncDone() && !getSnapAuditCleanAnchor().contains(snapAuditAnchor())
+
   /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
     * is pre-invariant, whatever else it holds.
     */
@@ -641,6 +661,9 @@ object AppStateStorage:
     */
   val SnapHealInvariantVersion: Value = "3"
 
+  /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
+  val AuditNoPivot: Value = "no-pivot"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -677,3 +700,4 @@ object AppStateStorage:
     val SnapHealFrontierRetired = "snap.heal.frontierRetired"
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
+    val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"

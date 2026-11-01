@@ -14,11 +14,24 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 
+/** What one entry of a batched raw node read found (spec 022 T053). One bad entry says so for itself and the rest of
+  * the batch stands. `Bytes` holds the node's RLP, unwrapped of whatever the store keeps it in. It is what the store
+  * holds, so nothing has checked its hash yet: a reader that means to trust a node's children checks `keccak(bytes) =
+  * key` first.
+  */
+enum RawNodeRead:
+  case Absent
+  case Bytes(encoded: NodeEncoded)
+  case Undecodable
+
 sealed trait NodesStorage:
   def get(key: NodeHash): Option[NodeEncoded]
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage
   def updateCond(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)], inMemory: Boolean): NodesStorage
   def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(get)
+
+  /** [[multiGet]] with no block-cache fill where the store has one. */
+  def multiGetNoFill(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = multiGet(keys)
 
 /** This class is used to store Nodes (defined in mpt/Node.scala), by using: Key: hash of the RLP encoded node Value:
   * the RLP encoded node
@@ -37,6 +50,9 @@ class NodeStorage(val dataSource: DataSource)
 
   override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
     dataSource.multiGetOptimized(namespace, keys.map(_.toArray))
+
+  override def multiGetNoFill(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
+    dataSource.multiGetOptimizedNoFill(namespace, keys.map(_.toArray))
 
   /** This function updates the KeyValueStorage by deleting, updating and inserting new (key-value) pairs in the current
     * namespace.

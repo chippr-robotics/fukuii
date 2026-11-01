@@ -6,6 +6,7 @@ import cats.effect.IO
 
 import fs2.Stream
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage.*
@@ -81,6 +82,26 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       EvmCodeStorage.sizes.remove(cacheKey(h))
     }
     super.update(toRemove, toUpsert)
+
+  /** One result per hash, for a long walk: no block-cache fill and no execution cache, so what comes back is what the
+    * store holds, unchecked (spec 022 T053).
+    */
+  def multiGetNoFill(hashes: Seq[CodeHash]): Seq[Option[Code]] =
+    dataSource.multiGetOptimizedNoFill(namespace, hashes.map(_.toArray)).map(_.map(ByteString.fromArrayUnsafe))
+
+  /** The background audit's write (spec 022 decision 1): `code` goes in only if `hash` is absent or holds bytes that
+    * fail their hash. No lock: nothing counts references to code, and two writers of one hash write the same bytes. The
+    * execution caches may hold the bad bytes, so they go, after the write: [[update]] evicts only what it removes.
+    */
+  def repairCode(hash: CodeHash, code: Code): RepairOutcome =
+    def hashesTo(bytes: Array[Byte]): Boolean = java.util.Arrays.equals(kec256(bytes), hash.toArray)
+    if !hashesTo(code.toArray) then RepairOutcome.Rejected
+    else if dataSource.getOptimizedNoFill(namespace, hash.toArray).exists(hashesTo) then RepairOutcome.AlreadyValid
+    else
+      put(hash, code).commit()
+      EvmCodeStorage.shared.remove(cacheKey(hash))
+      EvmCodeStorage.sizes.remove(cacheKey(hash))
+      RepairOutcome.Written
 
   // overriding to avoid going through IndexedSeq[Byte]
   override def storageContent: Stream[IO, Either[IterationError, (CodeHash, Code)]] =
