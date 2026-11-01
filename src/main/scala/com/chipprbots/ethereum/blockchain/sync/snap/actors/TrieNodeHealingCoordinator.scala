@@ -100,7 +100,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // spec 022 round 2 review hunter N1: where this coordinator says at which root its pass over the set last ended.
     excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
     // spec 022 T043: where this coordinator says which root its last clean full walk, reported as completion, covered.
-    cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+    cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+    // spec 022 5d: where this coordinator says, before the signal goes out, which root it decided is complete, with a
+    // walk or without one. The controller takes a signal only for the root it is on.
+    val decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+    // spec 022 5d: whether the invariant marker can hold here at all (`HealInvariant.canHold`, from the production
+    // spawn). False (bare construction, most specs) walks at every completion and never reads the key.
+    val markerMayStand: Boolean = false
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -1913,7 +1919,9 @@ object TrieNodeHealingCoordinator:
       // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      markerMayStand: Boolean = false
   ): Behavior[Command] =
     // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
     val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -1961,7 +1969,9 @@ object TrieNodeHealingCoordinator:
           heldMemoryLimit = heldMemoryLimit,
           excludedAccounts = excludedAccounts,
           excludedPassRoot = excludedPassRoot,
-          cleanWalkRoot = cleanWalkRoot
+          cleanWalkRoot = cleanWalkRoot,
+          decidedRoot = decidedRoot,
+          markerMayStand = markerMayStand
         ).start()
       }
     }

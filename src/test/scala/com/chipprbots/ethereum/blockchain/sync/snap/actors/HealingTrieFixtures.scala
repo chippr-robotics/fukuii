@@ -65,10 +65,11 @@ object HealingTrieFixtures:
       bfsQueueStore: Option[BfsQueueStorage] = None,
       pathNodeStore: Option[PathNodeStorage] = None,
       codeStore: Option[EvmCodeStorage] = None,
-      progressStore: Option[SnapSyncProgressStorage] = None
+      progressStore: Option[SnapSyncProgressStorage] = None,
+      appStateStore: Option[AppStateStorage] = None
   ): StateIngest =
     new StateIngest:
-      def appState: AppStateStorage = notReached("appState")
+      def appState: AppStateStorage = appStateStore.getOrElse(notReached("appState"))
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = pathNodeStore
@@ -126,7 +127,10 @@ object HealingTrieFixtures:
       // Where the excluded set lives; Some(_) makes the coordinator work it (spec 022 D5).
       excludedStore: Option[SnapSyncProgressStorage] = None,
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      // Where the invariant marker lives; Some(_) makes the coordinator read it (spec 022 5d: `markerMayStand`).
+      markerStore: Option[AppStateStorage] = None
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -138,8 +142,14 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest =
-          healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage, excludedStore),
+        stateIngest = healingIngest(
+          healingFrontierStorage,
+          bfsQueueStorageOpt,
+          pathNodeStorageOpt,
+          evmCodeStorage,
+          excludedStore,
+          markerStore
+        ),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
@@ -157,7 +167,9 @@ object HealingTrieFixtures:
         heldMemoryLimit = heldMemoryLimit,
         excludedAccounts = excludedStore.isDefined,
         excludedPassRoot = excludedPassRoot,
-        cleanWalkRoot = cleanWalkRoot
+        cleanWalkRoot = cleanWalkRoot,
+        decidedRoot = decidedRoot,
+        markerMayStand = markerStore.isDefined
       )
     )
 

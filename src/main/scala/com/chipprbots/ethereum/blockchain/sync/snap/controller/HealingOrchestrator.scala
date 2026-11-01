@@ -503,7 +503,9 @@ private[snap] trait HealingOrchestrator
               excludedAccounts = true,
               currentRoot = Some(healingCurrentRoot),
               excludedPassRoot = Some(healingExcludedPassRoot),
-              cleanWalkRoot = Some(healingCleanWalkRoot)
+              cleanWalkRoot = Some(healingCleanWalkRoot),
+              decidedRoot = Some(healingDecidedRoot),
+              markerMayStand = markerCanHold
             )
           )
           .onFailure[Throwable](
