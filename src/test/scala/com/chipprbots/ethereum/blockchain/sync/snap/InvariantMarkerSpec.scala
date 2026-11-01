@@ -911,7 +911,11 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val cleanRoot = new AtomicReference[ByteString]()
     val (coordinator, controller) = spawnHealer(trie, Set.empty, peer, cleanRoot)
     coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
-    awaitComplete(controller)
+    // spec 022 T047: it abandons now on Hash too, since the controller's walk it relied on no longer runs.
+    controller.fishForMessage(30.seconds) {
+      case StateHealingAbandoned => FishingOutcomes.complete
+      case _                     => FishingOutcomes.continueAndIgnore
+    }
     cleanRoot.get() shouldBe null
   }
 

@@ -23,6 +23,7 @@ private[actors] trait HealVerificationState:
   var verificationPassComplete: Boolean
   var trieWalkInProgress: Boolean
   def flushing: Boolean
+  def markerStands(): Boolean
 
 /** What the frontier-rebuild walk calls for a Path-scheme read: `readPathVerifiedNode`, the bytes at the entry's own
   * path, counted present only when they hash to the entry's hash. `HealVerification` provides it (spec 016 C-H3).
@@ -63,10 +64,13 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     * false`: the check completes only on a clean pass, spec 022 review hunter-r3 C1). The walk itself starts only once
     * the flush buffer is written (`startVerificationBFS`, spec 022 review forge F1); a buffer that holds anything means
     * something was healed, so the gate that retries it walks too.
+    *
+    * spec 022 5d: this is the one launcher that runs no gate, so it reads the marker too. Where it stands the check
+    * decides: a fallback walk that a re-peg made stale has no second walk to start.
     */
   def reverifyCurrentRoot(): Unit =
     verificationPassComplete = false
-    if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
+    if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && !markerStands() then
       startVerificationBFS(
         stateRoot,
         ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))

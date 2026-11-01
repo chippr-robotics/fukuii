@@ -56,6 +56,8 @@ private class StubHealVerificationState(
   var verificationPassComplete: Boolean = true
   var trieWalkInProgress: Boolean = false
   var flushing: Boolean = false
+  var markerStanding: Boolean = false
+  def markerStands(): Boolean = markerStanding
 
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[HealVerificationSpec])
@@ -215,6 +217,18 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
 
     s.lastOnComplete.foreach(_(7L, 3L))
     s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(s.stateRoot, 3L, 7L))
+  }
+
+  // spec 022 5d: this launcher runs no gate, so a re-peg under the fallback walk could start a walk no marker read decided.
+  it should "defer to the completion gate where the marker stands, and start no walk" taggedAs UnitTest in {
+    val s = stub(None, StorageScheme.Hash)
+    s.markerStanding = true
+
+    s.reverifyCurrentRoot()
+
+    s.singleSeedLaunches shouldBe empty
+    s.verificationPassComplete shouldBe false
+    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
   }
 
   it should "defer to the completion gate when work is pending, a flush is in flight or a walk is running" taggedAs UnitTest in {

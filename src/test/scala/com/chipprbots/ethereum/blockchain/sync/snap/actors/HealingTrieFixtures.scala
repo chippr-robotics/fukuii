@@ -129,8 +129,10 @@ object HealingTrieFixtures:
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      // Where the invariant marker lives; Some(_) makes the coordinator read it (spec 022 5d: `markerMayStand`).
-      markerStore: Option[AppStateStorage] = None
+      // spec 022 5d. Where the invariant marker lives, and whether the coordinator may read it. With `markerMayStand` off
+      // and no store, a read of the key would throw: bare construction never reads it.
+      markerStore: Option[AppStateStorage] = None,
+      markerMayStand: Boolean = false
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -169,7 +171,7 @@ object HealingTrieFixtures:
         excludedPassRoot = excludedPassRoot,
         cleanWalkRoot = cleanWalkRoot,
         decidedRoot = decidedRoot,
-        markerMayStand = markerStore.isDefined
+        markerMayStand = markerMayStand
       )
     )
 

@@ -184,7 +184,8 @@ class TrieNodeHealingCoordinatorSpec
     statusProbe.expectMessageType[HealingStatistics]
   }
 
-  it should "signal StateHealingComplete to controller on HealingForceComplete" taggedAs UnitTest in {
+  // spec 022 T047: StateHealingAbandoned on Hash as on Path. This relied on the controller's own walk, which no longer runs.
+  it should "signal StateHealingAbandoned to controller on HealingForceComplete" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("force-complete-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
@@ -202,7 +203,7 @@ class TrieNodeHealingCoordinatorSpec
 
     coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
 
-    snapSyncController.expectMessage(SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMessage(SNAPSyncController.StateHealingAbandoned)
   }
 
   it should "accept HealingPivotRefreshed and re-seed new root — HealingCheckCompletion deferred" taggedAs UnitTest in {
@@ -363,7 +364,8 @@ class TrieNodeHealingCoordinatorSpec
     statusProbe.expectMessageType[HealingStatistics]
   }
 
-  it should "signal StateHealingComplete on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
+  // spec 022 T047: as above.
+  it should "signal StateHealingAbandoned on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
     // HealingForceComplete is the SNAPSyncController's nuclear option: when the pivot has
     // advanced beyond the SNAP serve window, healing must abandon pending tasks immediately
     // rather than waiting for them to drain normally.
@@ -403,9 +405,9 @@ class TrieNodeHealingCoordinatorSpec
     snapSyncController.expectMessage(SNAPSyncController.HealingRootUnservable(stateRoot))
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd] // queued task dispatched
 
-    // ForceComplete while tasks are in-flight: abandon all, signal complete immediately
+    // ForceComplete while tasks are in-flight: abandon all, and say so immediately
     coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
-    snapSyncController.expectMessage(SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMessage(SNAPSyncController.StateHealingAbandoned)
   }
 
   // ── Category 1e: HealingStagnated counter semantics ───────────────────────────────────────────
