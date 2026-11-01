@@ -54,6 +54,7 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     while stack.nonEmpty do
       val (frames, rest) = stack.splitAt(batch)
       val step = oneBatch(s, frames, head, filter = filter)
+      step.codeRead.foreach(filter.markIfNew) // as the actor does, applying a step
       step.rootAbsent shouldBe false
       stack = step.pushes ++ rest
       result = result.copy(
@@ -591,6 +592,17 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     filter.markIfNew(hashes(1)) shouldBe true
     filter.markIfNew(hashes(2)) shouldBe true // the first falls out
     filter.markIfNew(hashes(0)) shouldBe true
+  }
+
+  it should "be left as it was by a batch, which only asks: the actor marks what a step read" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val code = ByteString(kec256(Array[Byte](7, 7)))
+    val leaf = s.put(accountLeaf(1, accountBytes(codeHash = Some(code))))
+    val filter = new AuditCodeFilter(10)
+    val head = s.setHead(10, s.put(branch(1 -> leaf)))
+    val step = oneBatch(s, Seq(AuditFrame(accountAt(1), Some(leaf))), head, filter = filter)
+    step.codeRead shouldBe Vector(code)
+    filter.contains(code) shouldBe false
   }
 
   "AuditCounters" should "call a pass clean only when it found nothing, whatever it moved past" taggedAs UnitTest in {

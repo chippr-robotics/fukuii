@@ -130,9 +130,14 @@ final case class AuditCounters(
   * and a hash that fell out is only read again. Code only: a storage root or a node can't be deduplicated, since a root
   * one account holds may roll away from it, and the position of the account skipped for it then goes unseen. One batch
   * runs at a time, and each hand-off goes through a Future, so this has one user at a time.
+  *
+  * A batch only asks. What it looked at is marked when its [[AuditWalk.Step]] is applied: a batch that fails goes round
+  * again, and a mark it left would have that retry skip code nothing has read.
   */
 final class AuditCodeFilter(capacity: Int):
   private val seen = mutable.LinkedHashSet.empty[ByteString]
+
+  def contains(hash: ByteString): Boolean = seen.contains(hash)
 
   /** True the first time `hash` is seen, or the first time since it fell out. */
   def markIfNew(hash: ByteString): Boolean =
@@ -379,11 +384,14 @@ object AuditWalk:
 
   // ---- one batch -----------------------------------------------------------------------------------------------------
 
-  /** What one batch found. `pushes` go back on the stack in walk order, first to be read first. */
+  /** What one batch found. `pushes` go back on the stack in walk order, first to be read first. `codeRead` is for the
+    * code filter, once this step is applied.
+    */
   final case class Step(
       pushes: Vector[AuditFrame] = Vector.empty,
       holes: Vector[AuditHole] = Vector.empty,
       unfollowable: Vector[String] = Vector.empty,
+      codeRead: Vector[ByteString] = Vector.empty,
       nodes: Long = 0,
       accounts: Long = 0,
       moved: Long = 0,
@@ -449,7 +457,7 @@ object AuditWalk:
               pushes ++= found.children
               found.unfollowable.foreach(unfollowable += _)
               found.code.foreach { case (codeHash, at) =>
-                if codeFilter.markIfNew(codeHash) then wantedCode(codeHash) = at
+                if !codeFilter.contains(codeHash) && !wantedCode.contains(codeHash) then wantedCode(codeHash) = at
               }
     }
 
@@ -465,7 +473,16 @@ object AuditWalk:
         }
       }
 
-    Step(pushes.result(), holes.result(), unfollowable.result(), nodes, accounts, moved, rootAbsent)
+    Step(
+      pushes.result(),
+      holes.result(),
+      unfollowable.result(),
+      wantedCode.keys.toVector,
+      nodes,
+      accounts,
+      moved,
+      rootAbsent
+    )
 
 /** Where a pass had got to, for a restart (spec 022 decision 8): positions with no hashes, each re-resolved from the
   * current root when it comes up, so a stale one is as good as a fresh one, and the pass's counts, so a pass that found

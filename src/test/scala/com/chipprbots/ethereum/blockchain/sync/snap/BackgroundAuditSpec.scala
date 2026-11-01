@@ -1099,3 +1099,34 @@ class BackgroundAuditSpec
     st.counters.clean shouldBe false
     n.s.nodes.get(hash).get.toSeq shouldBe leaf.encode.toSeq
   }
+
+  "A batch that fails at its code read" should "look at that code again: a pass must not end clean with it unchecked" taggedAs UnitTest in {
+    val n = new Node
+    val absentCode = ByteString(kec256(Array[Byte](5, 5)))
+    val leaf = n.s.put(accountLeaf(1, accountBytes(codeHash = Some(absentCode))))
+    n.head(10, n.s.put(branch(1 -> leaf)))
+    @volatile var failing = true
+    @volatile var failed = false
+    val flaky = new AuditReader:
+      def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = n.s.reader.nodes(hashes)
+      def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] =
+        if failing then
+          failed = true
+          throw new IllegalStateException("the store fell over")
+        n.s.reader.codes(hashes)
+      def head(): Option[AuditHead] = n.s.reader.head()
+    val audit = n.spawn(reader = flaky)
+    eventually {
+      failed shouldBe true
+      val st = n.status(audit)
+      st.reading shouldBe false
+      st.stack shouldBe 1
+    }
+    failing = false
+    manualTime.timePasses(instant.pausePoll)
+    val fetch = n.fetches.receiveMessage()
+    fetch.hash shouldBe absentCode
+    fetch.isByteCode shouldBe true
+    exhaust(fetch)
+    n.awaitBackoff(audit).counters.holes shouldBe 1
+  }

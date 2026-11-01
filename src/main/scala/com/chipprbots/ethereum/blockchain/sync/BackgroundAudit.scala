@@ -492,6 +492,7 @@ object BackgroundAudit:
 
     private def applyStep(step: AuditWalk.Step): Unit =
       step.pushes.reverseIterator.foreach(stack.append)
+      step.codeRead.foreach(codeFilter.markIfNew)
       counters = counters.copy(
         nodes = counters.nodes + step.nodes,
         accounts = counters.accounts + step.accounts,
