@@ -245,11 +245,18 @@ object AuditWalk:
     /** A good node. */
     case Present(hash: ByteString)
 
+    /** The position lies inside or past a leaf or an extension, as it does when a branch collapses. That trie has no
+      * such position, and it has this node above it, whose storage trie, code or child the walk may never have read: so
+      * this node is what to look at, at its own position.
+      */
+    case Moved(hash: ByteString, position: AuditPosition)
+
     /** A node that root needs, the position's or one on the way to it, is absent or bad. */
     case Hole(hash: ByteString, position: AuditPosition, fault: NodeFault)
 
-    /** That trie has no such position: a null child, inside an extension, past a leaf, an account gone, or storage
-      * emptied. Import wrote what replaced it, so there is nothing to look at here.
+    /** Nothing here: a null child, an embedded one (which has nothing below it), an account gone, or storage emptied.
+      * An account gone says nothing of a leaf for another key found in its place: that account has its own frame on the
+      * stack, or was read.
       */
     case Gone
 
@@ -290,7 +297,10 @@ object AuditWalk:
     if remaining.isEmpty then Resolved.Present(hash)
     else
       step(node, at, remaining) match
-        case None => Resolved.Gone
+        case None =>
+          node match
+            case _: LeafNode | _: ExtensionNode => Resolved.Moved(hash, at)
+            case _                              => Resolved.Gone
         case Some((next, nextAt, nextRemaining)) =>
           check(next, read(next)) match
             case Left(fault)     => Resolved.Hole(next, nextAt, fault)
@@ -335,6 +345,7 @@ object AuditWalk:
   /** What the audit does with a position it could not read, or has no hash for. */
   enum Settled:
     case Present(hash: ByteString)
+    case Moved(hash: ByteString, position: AuditPosition)
     case Hole(hole: AuditHole)
     case Gone
     case RootAbsent
@@ -356,8 +367,9 @@ object AuditWalk:
   ): Settled =
     @tailrec def attempt(head: AuditHead, attemptsLeft: Int): Settled =
       resolve(position, head.stateRoot, read) match
-        case Resolved.Present(hash) => Settled.Present(hash)
-        case Resolved.Gone          => Settled.Gone
+        case Resolved.Present(hash)         => Settled.Present(hash)
+        case Resolved.Moved(hash, position) => Settled.Moved(hash, position)
+        case Resolved.Gone                  => Settled.Gone
         case unsure =>
           val latest = latestHead()
           val rootTooOld =
@@ -431,12 +443,18 @@ object AuditWalk:
     var accounts = 0L
     var moved = 0L
     var rootAbsent = false
+    // Siblings under a branch that collapsed land on one node, which is one walk of what is below it.
+    val movedHere = mutable.Set.empty[AuditFrame]
 
     def settleFrame(frame: AuditFrame): Unit =
       settle(frame.position, head, readOnce, () => reader.head(), pruneHorizon) match
         case Settled.Present(hash) =>
           if frame.hash.exists(_ != hash) then moved += 1
           pushes += AuditFrame(frame.position, Some(hash))
+        case Settled.Moved(hash, position) =>
+          moved += 1
+          val found = AuditFrame(position, Some(hash))
+          if movedHere.add(found) then pushes += found
         case Settled.Hole(hole) => holes += hole
         case Settled.Gone       => moved += 1
         case Settled.RootAbsent =>

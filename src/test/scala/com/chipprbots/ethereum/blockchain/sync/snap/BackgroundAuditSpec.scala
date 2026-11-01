@@ -1130,3 +1130,17 @@ class BackgroundAuditSpec
     exhaust(fetch)
     n.awaitBackoff(audit).counters.holes shouldBe 1
   }
+
+  "A hole looked at again before its turn" should "become the node it now lies inside, at that node's position" taggedAs UnitTest in {
+    val n = new Node
+    val under = n.s.put(branch(1 -> n.s.put(storageLeaf(7))))
+    val (audit, fetch, _) = holesThatWait(n, (_, _) => n.s.put(extension(Seq(3, 5), under)))
+    exhaust(fetch)
+    val st = n.awaitBackoff(audit)
+    n.fetches.expectNoMessage(50.millis)
+    st.counters.moved shouldBe 1
+    withClue("what the extension holds was read, after it stood in for the position: ") {
+      n.s.reader.nodes(Seq(under)).head should not be RawNodeRead.Absent
+      st.counters.nodes should be >= 6L
+    }
+  }

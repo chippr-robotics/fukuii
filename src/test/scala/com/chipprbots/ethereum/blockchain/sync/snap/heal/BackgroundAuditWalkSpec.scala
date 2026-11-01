@@ -95,23 +95,7 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     step.moved shouldBe 1
   }
 
-  it should "be dropped inside a new extension, and where the path leaves one" taggedAs UnitTest in {
-    val s = new AuditTestState
-    val under = s.put(branch(1 -> s.put(storageLeaf(1))))
-    val head = s.setHead(10, s.put(extension(Seq(3, 5), under)))
-
-    val inside = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), head)
-    inside.pushes shouldBe empty
-    inside.holes shouldBe empty
-    inside.moved shouldBe 1
-
-    val leaves = oneBatch(s, Seq(AuditFrame(accountAt(3, 6, 1), Some(absentHash))), head)
-    leaves.pushes shouldBe empty
-    leaves.holes shouldBe empty
-    leaves.moved shouldBe 1
-  }
-
-  it should "be dropped past a leaf, and at an embedded child" taggedAs UnitTest in {
+  it should "be dropped at an embedded child, which has nothing below it" taggedAs UnitTest in {
     val s = new AuditTestState
     val leaf = s.put(storageLeaf(1))
     val children = Array.fill[MptNode](16)(NullNode)
@@ -121,11 +105,8 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
 
     val embedded = frameAt3(s, head)
     embedded.holes shouldBe empty
+    embedded.pushes shouldBe empty
     embedded.moved shouldBe 1
-
-    val past = oneBatch(s, Seq(AuditFrame(accountAt(4, 2), Some(absentHash))), head)
-    past.holes shouldBe empty
-    past.moved shouldBe 1
   }
 
   "A real hole" should "be the same hash, absent, at the position" taggedAs UnitTest in {
@@ -688,4 +669,89 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     AuditBadEntries.decode(AuditBadEntries().encode) shouldBe Some(AuditBadEntries())
     AuditBadEntries.decode(book.encode.dropRight(1)) shouldBe None
     AuditBadEntries.decode(Array[Byte](9, 9)) shouldBe None
+  }
+
+  // ---- the review round: what hangs below a position that moved -----------------------------------------------------------
+
+  "A position inside a new node" should "push an extension at its own position, whichever way the path leaves it" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val under = s.put(branch(1 -> s.put(storageLeaf(1))))
+    val inner = s.put(extension(Seq(3, 5), under))
+    val root = s.put(branch(2 -> inner))
+    val head = s.setHead(10, root)
+    Seq(accountAt(2, 3), accountAt(2, 3, 6, 1), accountAt(2, 4)).foreach { at =>
+      val step = oneBatch(s, Seq(AuditFrame(at, Some(absentHash))), head)
+      withClue(at.describe) {
+        step.pushes shouldBe Vector(AuditFrame(accountAt(2), Some(inner)))
+        step.holes shouldBe empty
+        step.moved shouldBe 1
+      }
+    }
+  }
+
+  it should "push an account leaf at its own position, so its storage trie and code are walked" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val storageRoot = s.put(branch(2 -> s.put(storageLeaf(1))))
+    val code = ByteString(kec256(Array[Byte](4, 4)))
+    val leaf = s.put(accountLeaf(1, accountBytes(Some(storageRoot), Some(code))))
+    val root = s.put(branch(1 -> leaf))
+    val head = s.setHead(10, root)
+
+    val stale = AuditFrame(accountAt(1, 1), Some(absentHash))
+    oneBatch(s, Seq(stale), head).pushes shouldBe Vector(AuditFrame(accountAt(1), Some(leaf)))
+
+    val walked = walkAll(s, Vector(stale), head)
+    walked.accounts shouldBe 1
+    walked.nodes shouldBe 3 // the leaf, and both nodes of its storage trie
+    walked.holes.map(_.hash) shouldBe Vector(code)
+  }
+
+  it should "do the same in a storage trie, at the leaf and at the extension" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val leaf = s.put(storageLeaf(1))
+    val under = s.put(branch(1 -> s.put(storageLeaf(2))))
+    val inner = s.put(extension(Seq(3, 5), under))
+    val head = s.setHead(10, withAccount(s, Some(s.put(branch(2 -> leaf, 4 -> inner)))))
+
+    val pastLeaf = oneBatch(s, Seq(AuditFrame(storageAt(1, 2, 9), Some(absentHash))), head)
+    pastLeaf.pushes shouldBe Vector(AuditFrame(storageAt(1, 2), Some(leaf)))
+    pastLeaf.moved shouldBe 1
+
+    val insideExtension = oneBatch(s, Seq(AuditFrame(storageAt(1, 4, 3), Some(absentHash))), head)
+    insideExtension.pushes shouldBe Vector(AuditFrame(storageAt(1, 4), Some(inner)))
+    insideExtension.moved shouldBe 1
+  }
+
+  it should "push the node once, when several positions of a batch land on it" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val inner = s.put(extension(Seq(3, 5), s.put(branch(1 -> s.put(storageLeaf(1))))))
+    val head = s.setHead(10, s.put(branch(2 -> inner)))
+    val step = oneBatch(
+      s,
+      Seq(accountAt(2, 3), accountAt(2, 4), accountAt(2, 5)).map(AuditFrame(_, Some(absentHash))),
+      head
+    )
+    step.pushes shouldBe Vector(AuditFrame(accountAt(2), Some(inner)))
+    step.moved shouldBe 3
+  }
+
+  // Only a null child is gone there. A storage position's way through the account trie is another matter: a leaf for
+  // another key says this account is gone, and the other account's leaf has its own frame on the stack, or was read.
+  "A branch that collapsed under a walk" should "lose nothing: an account's own frame reaches its storage, and a gone account's frames add nothing" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val storageRoot = s.put(branch(4 -> s.put(storageLeaf(1))))
+    val leaf = s.put(LeafNode(nibbles(63, 2), ByteString(accountBytes(Some(storageRoot)))))
+    val head = s.setHead(10, s.put(branch(1 -> leaf)))
+    val goneAccount = ByteString(HexPrefix.nibblesToBytes((ByteString(Array[Byte](1, 1)) ++ nibbles(62, 1)).toArray))
+    val frames = Vector(
+      AuditFrame(AuditPosition.storageRootOf(goneAccount), Some(absentHash)),
+      AuditFrame(accountAt(1, 2), Some(absentHash))
+    )
+
+    val walked = walkAll(s, frames, head)
+
+    walked.holes shouldBe empty
+    walked.accounts shouldBe 1
+    walked.nodes shouldBe 3 // once: the leaf, and its storage trie's two nodes
+    walked.moved shouldBe 2
   }

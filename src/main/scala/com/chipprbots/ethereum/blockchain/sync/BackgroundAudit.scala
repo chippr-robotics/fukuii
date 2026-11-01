@@ -569,6 +569,9 @@ object BackgroundAudit:
           sendFetch(fresh)
         case Success(AuditWalk.Settled.Present(hash)) =>
           stack.append(AuditFrame(hole.position, Some(hash)))
+        case Success(AuditWalk.Settled.Moved(hash, position)) =>
+          counters = counters.copy(moved = counters.moved + 1)
+          stack.append(AuditFrame(position, Some(hash)))
         case Success(AuditWalk.Settled.Gone) =>
           counters = counters.copy(moved = counters.moved + 1)
         case Success(AuditWalk.Settled.RootAbsent | AuditWalk.Settled.Retry) =>
