@@ -119,7 +119,10 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // spec 022 T050a, beacon's crash class: the restart the controller's resume planning never sees.
-  private def restartOverWrittenNodes(resumeProgress: Map[ByteString, ByteString]): AppStateStorage =
+  private def restartOverWrittenNodes(
+      resumeProgress: Map[ByteString, ByteString],
+      carried: Option[ContractTaskFiles] = None
+  ): AppStateStorage =
     val source = EphemDataSource()
     val app = new AppStateStorage(source)
     val nodes = new PathNodeStorage(source)
@@ -135,6 +138,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
             concurrency = 1,
             snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]().ref,
             resumeProgress = resumeProgress,
+            carriedTaskFiles = carried,
             accountTrieEcOverride = Some(classicSystem.dispatcher),
             storageScheme = StorageScheme.Path,
             stateIngest = pathSchemeIngest(app, nodes)
@@ -158,10 +162,20 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     restartOverWrittenNodes(Map.empty).isSnapHealInvariantPresent() shouldBe false
   }
 
-  // The user's decision, 2026-11-01: with cursors it is a resume, and a resume keeps it.
-  it should "keep the marker when the launch resumed cursors" taggedAs UnitTest in {
-    val cursor = ByteString(Array.fill[Byte](32)(1)) -> ByteString(Array.fill[Byte](32)(2))
-    restartOverWrittenNodes(Map(cursor)).hasSnapHealInvariant() shouldBe true
+  // The user's decision, 2026-11-01: with the task files it is a resume, and a resume keeps it.
+  it should "keep the marker when the launch resumed its ranges" taggedAs UnitTest in {
+    val dir = java.nio.file.Files.createTempDirectory("arc-restart-resume")
+    val storage = java.nio.file.Files.write(dir.resolve("fukuii-contract-storage-r"), Array.emptyByteArray)
+    val codes = java.nio.file.Files.write(dir.resolve("fukuii-unique-codehashes-r"), Array.emptyByteArray)
+    val task = AccountTask.createInitialTasks(ByteString.empty, 1).head
+    val files = ContractTaskFiles(storage.toString, 0L, codes.toString, 0L)
+    restartOverWrittenNodes(Map(task.last -> task.next), Some(files)).hasSnapHealInvariant() shouldBe true
+  }
+
+  // beacon 1: cursors alone are no resume: every partial range starts over from its start.
+  it should "withdraw the marker with cursors and no task files: a fresh phase whatever the cursors say" taggedAs UnitTest in {
+    val task = AccountTask.createInitialTasks(ByteString.empty, 1).head
+    restartOverWrittenNodes(Map(task.last -> task.next)).isSnapHealInvariantPresent() shouldBe false
   }
 
   /** Resolve the coordinator's single (concurrency = 1) worker child via actorSelection; returns a Typed ref so sends

@@ -103,10 +103,13 @@ object HealInvariant:
     * never a wrong root.
     *
     * Only a fresh phase over nodes already there withdraws (the accounts-complete flag set with no task-file pointer
-    * persisted is one, and so is a supervisor restart of a launch that had no cursors): the marker says nothing of
-    * those nodes. A cursor resume keeps it, supervisor restart included (the user's decision, 2026-11-01): a multi-day
-    * sync restarts many times, and the background audit covers that crash class, one hole at a time. A clean walk
-    * stamps the marker again, so a withdrawal costs one walk on such a run.
+    * persisted is one, and so is a supervisor restart of a launch that had nothing to resume from): the marker says
+    * nothing of those nodes. So does a launch with cursors whose task files were rejected or are gone: every partial
+    * range starts over (beacon 1). `resumesRanges` is whether the task files came too, the one case a partial range
+    * goes on from its cursor. A launch whose cursors are all complete re-downloads nothing, and withdraws too with no
+    * files: that errs to the walk, and it is rare. A real resume keeps the marker, supervisor restart included (the
+    * user's decision, 2026-11-01): a multi-day sync restarts many times, and the background audit covers that crash
+    * class, one hole at a time. A clean walk stamps the marker again, so a withdrawal costs one walk on such a run.
     *
     * Nothing here on Hash: nodes are content-addressed, so a node's bytes cannot change under it. Nor at a
     * storage-phase restart: its chunks verify against the task's root.
@@ -115,10 +118,10 @@ object HealInvariant:
       appState: AppStateStorage,
       pathNodes: Option[PathNodeStorage],
       scheme: StorageScheme,
-      resumedCursors: Boolean
+      resumesRanges: Boolean
   ): Boolean =
     val withdraw = scheme == StorageScheme.Path && appState.isSnapHealInvariantPresent() &&
-      !resumedCursors && pathNodes.exists(!_.isEmpty)
+      !resumesRanges && pathNodes.exists(!_.isEmpty)
     if withdraw then appState.clearSnapHealInvariant().commitSync()
     withdraw
 

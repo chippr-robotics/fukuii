@@ -1125,18 +1125,18 @@ object AccountRangeCoordinator:
       Behaviors.setup { ctx =>
         // A supervisor restart starts the phase over what the last incarnation wrote, from the launch's cursors and root,
         // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a). With
-        // cursors it is a resume, and keeps the marker as any resume does: the audit covers that crash class (the user's
-        // decision, 2026-11-01). With none it is a fresh phase over what is there.
+        // the task files it is a resume, and keeps the marker as any resume does: the audit covers that crash class (the
+        // user's decision, 2026-11-01). Without them every partial range starts over: a fresh phase over what is there.
         if incarnations.getAndIncrement() > 0 &&
           HealInvariant.withdrawForPathAccountPhase(
             stateIngest.appState,
             stateIngest.pathNodes,
             storageScheme,
-            resumedCursors = resumeProgress.nonEmpty
+            resumesRanges = carriedTaskFiles.isDefined
           )
         then
           ctx.log.warn(
-            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted, with no cursors, over existing Path nodes. " +
+            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted, with nothing to resume from, over existing Path nodes. " +
               "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
           )
         val impl = new AccountRangeCoordinatorImpl(

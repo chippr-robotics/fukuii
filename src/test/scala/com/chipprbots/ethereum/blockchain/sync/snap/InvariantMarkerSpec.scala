@@ -252,8 +252,8 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       appState: AppStateStorage,
       pathNodes: PathNodeStorage,
       scheme: StorageScheme = StorageScheme.Path,
-      resumedCursors: Boolean = false
-  ): Boolean = HealInvariant.withdrawForPathAccountPhase(appState, Some(pathNodes), scheme, resumedCursors)
+      resumesRanges: Boolean = false
+  ): Boolean = HealInvariant.withdrawForPathAccountPhase(appState, Some(pathNodes), scheme, resumesRanges)
 
   // The user's decision, 2026-11-01: a resume keeps it. Sepolia's first sync took about 23 process starts, so withdrawing
   // here meant a walk on nearly every long sync; the audit covers the crash class, which leaves absence, not a wrong root.
@@ -266,7 +266,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       val (source, appState, pathNodes) = stamped()
       write(pathNodes)
       source.forget()
-      withdrawal(appState, pathNodes, resumedCursors = true) shouldBe false
+      withdrawal(appState, pathNodes, resumesRanges = true) shouldBe false
       appState.hasSnapHealInvariant() shouldBe true
       source.batches shouldBe empty
     }
@@ -314,7 +314,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val (source, appState, pathNodes) = stamped()
     pathNodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
     source.forget()
-    withdrawal(appState, pathNodes, StorageScheme.Hash, resumedCursors = true) shouldBe false
+    withdrawal(appState, pathNodes, StorageScheme.Hash, resumesRanges = true) shouldBe false
     withdrawal(appState, pathNodes, StorageScheme.Hash) shouldBe false
     appState.hasSnapHealInvariant() shouldBe true
     source.batches shouldBe empty
