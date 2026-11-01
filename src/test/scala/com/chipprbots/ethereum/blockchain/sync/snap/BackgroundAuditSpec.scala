@@ -1310,3 +1310,52 @@ class BackgroundAuditSpec
     }
     testKit.stop(audit)
   }
+
+  private def pauseLines(said: Seq[ILoggingEvent]): Seq[String] =
+    lines(said, Level.INFO).filter(l => l.contains("Paused") || l.contains("Resumed"))
+
+  // Seen live: about 14 an hour at INFO on Mordor, from ordinary PoW gaps.
+  "A short pause" should "say nothing at INFO, and show in Progress as a count" taggedAs UnitTest in {
+    val n = new Node
+    withUnservableHole(n)
+    val root = n.s.bestHead.get.stateRoot
+    n.s.setHead(10, root, n.nowSeconds - 61)
+    val (_, said) = logsOf {
+      val audit = n.spawn()
+      eventually(n.status(audit).paused shouldBe true)
+      n.s.setHead(10, root, n.nowSeconds)
+      manualTime.timePasses(instant.pausePoll)
+      n.fetches.receiveMessage() // it has resumed, and walked to the hole
+      manualTime.timePasses(instant.progressEvery)
+      n.status(audit)
+      testKit.stop(audit)
+    }
+    pauseLines(said) shouldBe empty
+    lines(said, Level.INFO).find(_.contains("Progress")).get should include("pauses=1")
+  }
+
+  "A long pause" should "say so at INFO, when it passes 5 minutes and when it ends" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    n.s.setHead(10, root, n.nowSeconds - 3600)
+    val (_, said) = logsOf {
+      val audit = n.spawn()
+      eventually(n.status(audit).paused shouldBe true)
+      (11 to 12).foreach { number =>
+        n.now.addAndGet(3.minutes.toMillis)
+        n.s.setHead(number, root, n.nowSeconds - 3600)
+        manualTime.timePasses(instant.pausePoll)
+        n.status(audit)
+        n.status(audit).paused shouldBe true
+      }
+      n.s.setHead(13, root, n.nowSeconds)
+      manualTime.timePasses(instant.pausePoll)
+      n.ended(audit)
+    }
+    val said2 = pauseLines(said)
+    said2 should have size 2
+    said2.head should include("over 5 minutes")
+    said2.head should include("best block 12")
+    said2(1) should include("Resumed at best block 13")
+    said2(1) should include("after 360s")
+  }

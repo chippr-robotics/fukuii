@@ -273,6 +273,9 @@ object BackgroundAudit:
     private var latestHead: Option[AuditHead] = None
     private var headWatch: Option[AuditHeadWatch] = None
     private var paused: Boolean = false
+    private var pausedAtMillis: Long = 0L
+    private var saidLongPause: Boolean = false
+    private var pauses: Long = 0L
     private var rootAbsent: Boolean = false
     private var passStartedMillis: Long = 0L
     private var elapsedBefore: Long = 0L
@@ -355,6 +358,7 @@ object BackgroundAudit:
       codeFilter = new AuditCodeFilter(settings.codeFilterEntries)
       saidUnservable = false
       paused = false
+      pauses = 0L
       rootAbsent = false
       passStartedMillis = deps.nowMillis()
 
@@ -476,9 +480,19 @@ object BackgroundAudit:
           putBack(frames)
           latestHead = Some(head)
           headWatch = Some(watch)
+          val nowMillis = deps.nowMillis()
           if !paused then
             paused = true
-            log.info(s"[HEAL-AUDIT] Paused: best block ${head.number} is ${age}s old, so import is catching up")
+            pausedAtMillis = nowMillis
+            saidLongPause = false
+            pauses += 1
+            log.debug(s"[HEAL-AUDIT] Paused: best block ${head.number} is ${age}s old and moving")
+          else if !saidLongPause && nowMillis - pausedAtMillis > AuditThrottle.LongPause.toMillis then
+            saidLongPause = true
+            log.info(
+              s"[HEAL-AUDIT] Paused for over 5 minutes: best block ${head.number} is ${age}s old and moving, so import " +
+                "is catching up"
+            )
           schedule(settings.pausePoll)
           Behaviors.same
         case Success(BatchOutcome.Walked(head, step, readNanos, watch)) =>
@@ -486,7 +500,9 @@ object BackgroundAudit:
           headWatch = Some(watch)
           if paused then
             paused = false
-            log.info(s"[HEAL-AUDIT] Resumed at best block ${head.number}")
+            val lasted = deps.nowMillis() - pausedAtMillis
+            val line = s"[HEAL-AUDIT] Resumed at best block ${head.number} after ${lasted / 1000}s"
+            if lasted > AuditThrottle.LongPause.toMillis then log.info(line) else log.debug(line)
           applyStep(step)
           dispatchFetch()
           if step.rootAbsent then
@@ -755,7 +771,7 @@ object BackgroundAudit:
     // ---- what it says and keeps ---------------------------------------------------------------------------------------
 
     private def summary: String =
-      s"${withElapsed.summary} stack=${stack.size} queuedHoles=${holes.size}"
+      s"${withElapsed.summary} stack=${stack.size} queuedHoles=${holes.size} pauses=$pauses"
 
     private def logProgress(): Unit =
       if !waitingForNextPass then

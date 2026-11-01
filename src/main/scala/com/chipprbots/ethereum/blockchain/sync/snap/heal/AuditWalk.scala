@@ -174,6 +174,9 @@ object AuditThrottle:
     */
   val StalledAfterSeconds: Long = 300L
 
+  /** A pause under this is ordinary, a PoW chain's block gaps say, and logs at DEBUG. */
+  val LongPause: FiniteDuration = 5.minutes
+
   def paused(wasPaused: Boolean, bestAgeSeconds: Long, sinceMovedSeconds: Long): Boolean =
     val old = if wasPaused then bestAgeSeconds >= ResumeBelowSeconds else bestAgeSeconds > PauseAboveSeconds
     old && sinceMovedSeconds < StalledAfterSeconds
