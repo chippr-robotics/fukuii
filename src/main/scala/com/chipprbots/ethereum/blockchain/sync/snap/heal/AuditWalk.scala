@@ -350,36 +350,35 @@ object AuditWalk:
     case Gone
     case RootAbsent
 
-    /** Import is going past the root faster than this can read it. Nothing is known: it goes back on the stack. */
+    /** The head keeps changing under the resolve, or cannot be read. Nothing is known: it goes back on the stack. */
     case Retry
 
-  /** Decision 4's arms, from the current best root. An "absent" verdict is only believed if the root it was reached
-    * from is still well short of the pruning horizon when it is reached: if the best block has gone far enough that
-    * this root's replaced nodes may be gone, or has rewound, the answer comes from the new best. `pruneHorizon`: blocks
-    * past the root used at which it stops counting. `None` where nothing is pruned.
+  /** Decision 4's arms, from the current best root. A hole or an absent root is believed only if the head's state root
+    * is the same after the resolve as before it: then no block was saved under it and nothing it reaches was pruned. A
+    * head that changed, however far, at the same height in a reorg too, means the answer comes from the new head, up to
+    * [[MaxResolveAttempts]] tries, and then nothing is known and the frame goes back on the stack. So is it if the head
+    * cannot be read.
     */
   def settle(
       position: AuditPosition,
       from: AuditHead,
       read: ByteString => RawNodeRead,
-      latestHead: () => Option[AuditHead],
-      pruneHorizon: Option[Long]
+      latestHead: () => Option[AuditHead]
   ): Settled =
-    @tailrec def attempt(head: AuditHead, attemptsLeft: Int): Settled =
+    @tailrec def attempt(head: AuditHead, triesLeft: Int): Settled =
       resolve(position, head.stateRoot, read) match
         case Resolved.Present(hash)         => Settled.Present(hash)
         case Resolved.Moved(hash, position) => Settled.Moved(hash, position)
         case Resolved.Gone                  => Settled.Gone
         case unsure =>
-          val latest = latestHead()
-          val rootTooOld =
-            latest.exists(l => l.number < head.number || pruneHorizon.exists(h => l.number - head.number >= h))
-          if rootTooOld then if attemptsLeft > 0 then attempt(latest.get, attemptsLeft - 1) else Settled.Retry
-          else
-            unsure match
-              case Resolved.Hole(hash, at, fault) =>
-                Settled.Hole(AuditHole(hash, at, head.stateRoot, head.number, fault))
-              case _ => Settled.RootAbsent
+          latestHead() match
+            case None => Settled.Retry
+            case Some(latest) if latest.stateRoot == head.stateRoot =>
+              unsure match
+                case Resolved.Hole(hash, at, fault) =>
+                  Settled.Hole(AuditHole(hash, at, head.stateRoot, head.number, fault))
+                case _ => Settled.RootAbsent
+            case Some(latest) => if triesLeft > 1 then attempt(latest, triesLeft - 1) else Settled.Retry
     attempt(from, MaxResolveAttempts)
 
   /** Decision 15's (b): does the trie at `root` still need `hole.hash` where `hole` says, and is it still bad there? */
@@ -418,7 +417,6 @@ object AuditWalk:
       frames: Seq[AuditFrame],
       head: AuditHead,
       reader: AuditReader,
-      pruneHorizon: Option[Long],
       codeFilter: AuditCodeFilter
   ): Step =
     val hashes = frames.flatMap(_.hash).distinct
@@ -447,7 +445,7 @@ object AuditWalk:
     val movedHere = mutable.Set.empty[AuditFrame]
 
     def settleFrame(frame: AuditFrame): Unit =
-      settle(frame.position, head, readOnce, () => reader.head(), pruneHorizon) match
+      settle(frame.position, head, readOnce, () => reader.head()) match
         case Settled.Present(hash) =>
           if frame.hash.exists(_ != hash) then moved += 1
           pushes += AuditFrame(frame.position, Some(hash))

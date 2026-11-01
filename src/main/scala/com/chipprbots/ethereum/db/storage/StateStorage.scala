@@ -135,11 +135,6 @@ trait StateStorage:
   /** Whether [[repairNode]] works on this storage (spec 022 T053). */
   def canRepairNodes: Boolean = false
 
-  /** How many blocks behind the best block a root's replaced nodes stay readable, or `None` where they are never
-    * pruned.
-    */
-  def pruningHistoryBlocks: Option[Int] = None
-
   /** The background audit's write (spec 022 decision 1): `nodeEncoded` goes in only if `nodeHash` is absent or its
     * entry fails its hash, judged at write time, so it can never overwrite a node a block commit has since written or
     * counted. Unlike [[saveNode]], a blind upsert at one reference, this never lowers a count it finds. A store's lock
@@ -360,8 +355,6 @@ class ReferenceCountedStateStorage(
     new FastSyncNodeStorage(nodeStorage, 0).get(nodeHash).map(_.toMptNode)
 
   override def canRepairNodes: Boolean = true
-
-  override def pruningHistoryBlocks: Option[Int] = Some(pruningHistory.toInt)
 
   /** Under [[ReferenceCountedStateStorage.commitLock]], so no block commit changes a count between this re-check and
     * this write: a node a commit wrote after the audit's proof that it was absent keeps the count it has. That lock is

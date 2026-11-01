@@ -196,7 +196,6 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     val state = new ArchiveStateStorage(nodes)
     val good = nodeBytes(1)
     state.canRepairNodes shouldBe true
-    state.pruningHistoryBlocks shouldBe None
 
     state.repairNode(hashOf(good), good, 77) shouldBe RepairOutcome.Written
     nodes.get(hashOf(good)).get.toSeq shouldBe good.toSeq

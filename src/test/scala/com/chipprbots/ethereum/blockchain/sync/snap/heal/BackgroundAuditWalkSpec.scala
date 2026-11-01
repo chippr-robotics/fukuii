@@ -34,10 +34,9 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
       s: AuditTestState,
       frames: Seq[AuditFrame],
       head: AuditHead,
-      horizon: Option[Long] = None,
       filter: AuditCodeFilter = new AuditCodeFilter(100)
   ): AuditWalk.Step =
-    AuditWalk.walkBatch(frames, head, s.reader, horizon, filter)
+    AuditWalk.walkBatch(frames, head, s.reader, filter)
 
   /** A whole walk from `start`, the way the actor stacks it, and everything it found along the way. */
   private case class Walked(nodes: Long, accounts: Long, moved: Long, holes: Vector[AuditHole], unfollowable: Int)
@@ -153,7 +152,6 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
       Seq(AuditFrame(accountAt(3), Some(leaf))),
       head,
       firstReadMisses,
-      None,
       new AuditCodeFilter(10)
     )
 
@@ -259,27 +257,18 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     oneBatch(s, Seq(onStorage), head).pushes shouldBe Vector(onStorage)
   }
 
-  "An absent verdict" should "be asked again from the new best when the best has gone near the pruning horizon" taggedAs UnitTest in {
+  "An absent verdict" should "be asked again from the new best when the best has moved on" taggedAs UnitTest in {
     val s = new AuditTestState
     val present = s.put(storageLeaf(1))
     val old = s.setHead(10, s.put(branch(3 -> absentHash)))
-    val moved = s.setHead(50, s.put(branch(3 -> present)))
+    val moved = s.setHead(11, s.put(branch(3 -> present)))
 
-    // The batch's head is the old one; a read after the verdict finds 40 blocks gone, past a horizon of 32.
-    val step = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), old, horizon = Some(32))
+    // The batch's head is the old one; a read after the verdict finds another root, however close.
+    val step = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), old)
 
-    moved.number shouldBe 50
+    moved.number shouldBe 11
     step.holes shouldBe empty
     step.pushes shouldBe Vector(AuditFrame(accountAt(3), Some(present)))
-  }
-
-  it should "stand when the best has not gone that far" taggedAs UnitTest in {
-    val s = new AuditTestState
-    val root = s.put(branch(3 -> absentHash))
-    val old = s.setHead(10, root)
-    s.setHead(41, s.put(branch(3 -> s.put(storageLeaf(1)))))
-    val step = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), old, horizon = Some(32))
-    step.holes shouldBe Vector(AuditHole(absentHash, accountAt(3), root, 10, NodeFault.Absent))
   }
 
   it should "be asked again after a rewind" taggedAs UnitTest in {
@@ -287,26 +276,9 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     val present = s.put(storageLeaf(1))
     val old = s.setHead(10, s.put(branch(3 -> absentHash)))
     s.setHead(9, s.put(branch(3 -> present)))
-    val step = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), old, horizon = Some(32))
+    val step = oneBatch(s, Seq(AuditFrame(accountAt(3), Some(absentHash))), old)
     step.holes shouldBe empty
     step.pushes shouldBe Vector(AuditFrame(accountAt(3), Some(present)))
-  }
-
-  it should "leave the frame on the stack when import outruns it every time" taggedAs UnitTest in {
-    val s = new AuditTestState
-    val root = s.put(branch(3 -> absentHash))
-    val head = s.setHead(10, root)
-    val racing = new AuditReader:
-      private var number = 10
-      def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = s.reader.nodes(hashes)
-      def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] = Nil
-      def head(): Option[AuditHead] =
-        number += 100
-        Some(AuditHead(number, root, 0))
-    val frame = AuditFrame(accountAt(3), Some(absentHash))
-    val step = AuditWalk.walkBatch(Seq(frame), head, racing, Some(32), new AuditCodeFilter(10))
-    step.holes shouldBe empty
-    step.pushes shouldBe Vector(frame)
   }
 
   // ---- bad nodes -----------------------------------------------------------------------------------------------------
@@ -754,4 +726,69 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     walked.accounts shouldBe 1
     walked.nodes shouldBe 3 // once: the leaf, and its storage trie's two nodes
     walked.moved shouldBe 2
+  }
+
+  // ---- the review round: a head that changed under a verdict ----------------------------------------------------------------
+
+  /** A reader whose `head()` answers from `heads`, the last again once they run out. */
+  private def headsThen(s: AuditTestState, heads: AuditHead*): AuditReader =
+    new AuditReader:
+      private var left = heads.toList
+      def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = s.reader.nodes(hashes)
+      def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] = Nil
+      def head(): Option[AuditHead] =
+        val now = left.head
+        if left.tail.nonEmpty then left = left.tail
+        Some(now)
+
+  "A hole verdict" should "not stand when the head changed at the same height: a reorg is no hole" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val present = s.put(storageLeaf(1))
+    val rootA = s.put(branch(3 -> absentHash))
+    val rootB = s.put(branch(3 -> present))
+    val step = AuditWalk.walkBatch(
+      Seq(AuditFrame(accountAt(3), Some(absentHash))),
+      AuditHead(10, rootA, 0),
+      headsThen(s, AuditHead(10, rootB, 0)),
+      new AuditCodeFilter(10)
+    )
+    step.holes shouldBe empty
+    step.pushes shouldBe Vector(AuditFrame(accountAt(3), Some(present)))
+  }
+
+  it should "be pinned to the head it was finally read from" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val rootA = s.put(branch(3 -> absentHash))
+    val rootB = s.put(branch(3 -> absentHash, 4 -> s.put(storageLeaf(1))))
+    val step = AuditWalk.walkBatch(
+      Seq(AuditFrame(accountAt(3), Some(absentHash))),
+      AuditHead(10, rootA, 0),
+      headsThen(s, AuditHead(10, rootB, 0)),
+      new AuditCodeFilter(10)
+    )
+    step.holes shouldBe Vector(AuditHole(absentHash, accountAt(3), rootB, 10, NodeFault.Absent))
+  }
+
+  it should "go back on the stack when the head changes on every try" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val roots = (0 until 8).map(i => s.put(branch(3 -> absentHash, 4 -> s.put(storageLeaf(i)))))
+    val frame = AuditFrame(accountAt(3), Some(absentHash))
+    val step = AuditWalk.walkBatch(
+      Seq(frame),
+      AuditHead(10, roots(0), 0),
+      headsThen(s, roots.tail.map(AuditHead(10, _, 0))*),
+      new AuditCodeFilter(10)
+    )
+    step.holes shouldBe empty
+    step.pushes shouldBe Vector(frame)
+  }
+
+  it should "go back on the stack when the head cannot be read" taggedAs UnitTest in {
+    val s = new AuditTestState
+    val root = s.put(branch(3 -> absentHash))
+    s.bestHead = None
+    val frame = AuditFrame(accountAt(3), Some(absentHash))
+    val step = oneBatch(s, Seq(frame), AuditHead(10, root, 0))
+    step.holes shouldBe empty
+    step.pushes shouldBe Vector(frame)
   }

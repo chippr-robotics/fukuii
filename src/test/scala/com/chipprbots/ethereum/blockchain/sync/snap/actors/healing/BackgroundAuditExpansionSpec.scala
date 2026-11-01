@@ -91,7 +91,7 @@ class BackgroundAuditExpansionSpec extends AnyFlatSpec with Matchers:
     var stack = Vector(AuditFrame(AuditPosition.AccountRoot, Some(ByteString(root.hash))))
     var holes = Vector.empty[AuditHole]
     while stack.nonEmpty do
-      val step = AuditWalk.walkBatch(stack, head, reader, None, new AuditCodeFilter(10))
+      val step = AuditWalk.walkBatch(stack, head, reader, new AuditCodeFilter(10))
       holes ++= step.holes
       stack = step.pushes
     holes.map(h => (h.position.pathset, h.hash))

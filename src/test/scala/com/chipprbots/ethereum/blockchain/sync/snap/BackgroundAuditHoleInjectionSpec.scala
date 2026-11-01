@@ -81,7 +81,7 @@ class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers:
     val head = s.setHead(77, root)
     val walk = Iterator
       .iterate(AuditWalk.Step(pushes = Vector(AuditFrame(AuditPosition.AccountRoot, None)))) { step =>
-        val next = AuditWalk.walkBatch(step.pushes, head, s.reader, None, new AuditCodeFilter(10))
+        val next = AuditWalk.walkBatch(step.pushes, head, s.reader, new AuditCodeFilter(10))
         next.copy(holes = step.holes ++ next.holes)
       }
       .dropWhile(_.pushes.nonEmpty)

@@ -249,7 +249,6 @@ object BackgroundAudit:
     private val readEc: ExecutionContext =
       deps.readEc.getOrElse(ctx.system.dispatchers.lookup(DispatcherSelector.blocking()))
     private val fetchReplies: ActorRef[BlockFetcher.FetchResponse] = ctx.messageAdapter(FetchReply(_))
-    private val pruneHorizon: Option[Long] = deps.state.pruningHistoryBlocks.map(h => math.max(1L, h / 2L))
 
     private var fetcher: Option[ActorRef[StateNodeFetcher.StateNodeFetcherCommand]] = None
 
@@ -425,7 +424,6 @@ object BackgroundAudit:
       val filter = codeFilter
       val reader = deps.reader
       val now = deps.nowMillis
-      val horizon = pruneHorizon
       val read = Future {
         val started = System.nanoTime()
         reader.head() match
@@ -434,7 +432,7 @@ object BackgroundAudit:
             val age = now() / 1000 - head.timestampSeconds
             if AuditThrottle.paused(wasPaused, age) then BatchOutcome.Paused(head, age)
             else
-              val step = AuditWalk.walkBatch(frames, head, reader, horizon, filter)
+              val step = AuditWalk.walkBatch(frames, head, reader, filter)
               BatchOutcome.Walked(head, step, System.nanoTime() - started)
       }(readEc)
       ctx.pipeToSelf(read)(outcome => BatchDone(gen, frames, outcome))
@@ -551,10 +549,9 @@ object BackgroundAudit:
     private def refresh(hole: AuditHole): Unit =
       val gen = generation
       val reader = deps.reader
-      val horizon = pruneHorizon
       val head = latestHead.get
       val work = Future {
-        AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head(), horizon)
+        AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
       }(readEc)
       ctx.pipeToSelf(work)(outcome => HoleRefreshed(gen, hole, outcome))
 
