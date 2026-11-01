@@ -135,7 +135,8 @@ object BackgroundAudit:
       fetcher: FetcherFactory,
       nowMillis: () => Long = () => System.currentTimeMillis(),
       readEc: Option[ExecutionContext] = None,
-      settings: Settings = Settings()
+      settings: Settings = Settings(),
+      nanoTime: () => Long = () => System.nanoTime()
   )
 
   sealed trait Command
@@ -440,8 +441,9 @@ object BackgroundAudit:
       val reader = deps.reader
       val now = deps.nowMillis
       val watchBefore = headWatch
+      val nanoTime = deps.nanoTime
       val read = Future {
-        val started = System.nanoTime()
+        val started = nanoTime()
         reader.head() match
           case None => BatchOutcome.NoHead
           case Some(head) =>
@@ -452,7 +454,7 @@ object BackgroundAudit:
               BatchOutcome.Paused(head, age, watch)
             else
               val step = AuditWalk.walkBatch(frames, head, reader, filter)
-              BatchOutcome.Walked(head, step, System.nanoTime() - started, watch)
+              BatchOutcome.Walked(head, step, nanoTime() - started, watch)
       }(readEc)
       ctx.pipeToSelf(read)(outcome => BatchDone(gen, frames, outcome))
 

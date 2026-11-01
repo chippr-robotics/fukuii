@@ -121,12 +121,13 @@ class BackgroundAuditSpec
         settings: BackgroundAudit.Settings = instant,
         reader: AuditReader = s.reader,
         fetcher: BackgroundAudit.FetcherFactory = fakeFetcher,
-        ec: ExecutionContext = ExecutionContext.parasitic
+        ec: ExecutionContext = ExecutionContext.parasitic,
+        nanoTime: () => Long = () => System.nanoTime()
     ): ActorRef[BackgroundAudit.Command] =
       testKit.spawn(
         BackgroundAudit(
           BackgroundAudit
-            .Deps(s.app, s.progress, s.state, s.code, reader, fetcher, () => now.get, Some(ec), settings)
+            .Deps(s.app, s.progress, s.state, s.code, reader, fetcher, () => now.get, Some(ec), settings, nanoTime)
         )
       )
 
@@ -1358,4 +1359,34 @@ class BackgroundAuditSpec
     said2.head should include("best block 12")
     said2(1) should include("Resumed at best block 13")
     said2(1) should include("after 360s")
+  }
+
+  /** A reader whose every node read takes `took`, on the clock it hands the actor. */
+  private class TimedReader(n: Node, took: FiniteDuration) extends AuditReader:
+    val nanos = new AtomicLong(0L)
+    val reads = new AtomicLong(0L)
+    def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+      nanos.addAndGet(took.toNanos)
+      reads.incrementAndGet()
+      n.s.reader.nodes(hashes)
+    def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] = n.s.reader.codes(hashes)
+    def head(): Option[AuditHead] = n.s.reader.head()
+
+  // Every other spec here has readFactor 0, so replacing delayAfter with zero stayed green.
+  "The throttle, as wired" should "sleep three times what a batch took before it reads again" taggedAs UnitTest in {
+    val n = new Node
+    n.head(10, populate(n))
+    val reader = new TimedReader(n, 10.millis)
+    val audit =
+      n.spawn(settings = instant.copy(readFactor = 3), reader = reader, nanoTime = () => reader.nanos.get)
+    eventually {
+      reader.reads.get shouldBe 1L
+      n.status(audit).reading shouldBe false
+    }
+    manualTime.timePasses(29.millis)
+    n.status(audit)
+    reader.reads.get shouldBe 1L
+    manualTime.timePasses(1.millis)
+    eventually(reader.reads.get should be > 1L)
+    testKit.stop(audit)
   }
