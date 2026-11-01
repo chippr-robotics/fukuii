@@ -207,7 +207,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private val MaxConsecutiveStaleDiscards: Int = 3
   // spec 022 5d (forge 2, beacon 3): how many times the gate has seeded the current root. Bounded: the orphan drop can
   // leave the root absent, a reseed rediscovers the same node, and each lap heals one, so stagnation never fires.
-  private var rootReseeds: Int = 0
+  private var rootAttempts: Int = 0
   // Was `@volatile` under Classic: the walk's EC thread wrote it and the actor thread read it. Under Typed all
   // reads AND writes happen on the actor dispatcher — the field is set true on the actor thread before launching a
   // walk Future (startFrontierBFS/startVerificationBFS) and set false only inside the
@@ -389,20 +389,26 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     decidedRoot.foreach(_.set(stateRoot))
     cleanWalkRoot.foreach(_.set(if walked && walkSkips.get() == 0L then stateRoot else null))
     val gateWalk =
-      if !walked then "no full-trie gate walk"
-      else if walkSkips.get() == 0L then "a full-trie gate walk ran: the marker did not stand"
-      else s"a full-trie gate walk ran and could not follow ${walkSkips.get()} node(s): it proves nothing"
+      if !walked then
+        if currentWalk.isEmpty then "no full-trie gate walk"
+        else "a full-trie gate walk ran but did not decide this"
+      else if walkSkips.get() != 0L then
+        s"a full-trie gate walk ran and could not follow ${walkSkips.get()} node(s): it proves nothing"
+      else if markerStands() then "a full-trie gate walk ran, as a fallback: the marker stands"
+      else "a full-trie gate walk ran: the marker did not stand"
     log.info(
       s"[HEAL-COMPLETE] root=${Hex.toHexString(stateRoot.toArray)} nodesHealed=$totalNodesHealed, $gateWalk, " +
-        s"${(System.currentTimeMillis() - startTime) / 1000}s from storage-done"
+        s"${(System.currentTimeMillis() - startTime) / 1000}s since this coordinator started"
     )
     snapSyncController ! SNAPSyncController.StateHealingComplete
 
   /** spec 022 5d: the current root is absent at the gate with the marker standing and nothing else to do. The orphan
     * drop can take a held chain up to the root (T050a), and a Path task the book lost leaves a parent held that is that
     * orphan. Mirrors the start arm: seeded under moving-root, `HealingRootUnservable` without it. Past `MaxRootReseeds`
-    * for a root, the walk, which is bounded by what is already there. Nothing is queued or in flight here, so a request
-    * still in the book is one nothing will answer, and it would have the seed refused in silence.
+    * for a root, the walk. That is not an exit: a walk of an absent root finds the root and nothing else, and each lap
+    * heals, so stagnation never fires (forge, beacon). Past `MaxRootAttempts` healing gives up on this root, which
+    * re-pegs on Path and hands off lazily on Hash. Nothing is queued or in flight here, so a request still in the book
+    * is one nothing will answer, and it would have the seed refused in silence.
     */
   private def seedAbsentRoot(): Unit =
     val hex = Hex.toHexString(stateRoot.take(4).toArray)
@@ -412,15 +418,20 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     if !movingRootDeltaHeal then
       log.warn(s"[HEAL] Root $hex absent, the marker stands, and it cannot be seeded: saying it is unservable")
       snapSyncController ! SNAPSyncController.HealingRootUnservable(stateRoot)
-    else if rootReseeds >= MaxRootReseeds then fallBackToWalk(s"it has been seeded $rootReseeds times already")
+    else if rootAttempts >= MaxRootAttempts then
+      log.warn(s"[HEAL] Root $hex absent, the marker stands, and $rootAttempts tries have not kept it: giving up on it")
+      snapSyncController ! SNAPSyncController.StateHealingAbandoned
+    else if rootAttempts >= MaxRootReseeds then
+      rootAttempts += 1
+      fallBackToWalk(s"it has been tried ${rootAttempts - 1} times already")
     else
       if !healRequests.isEmpty then
         log.warn(s"[HEAL] ${healRequests.size} live request(s) are neither queued nor in flight: dropping them")
         healRequests.clear()
         pruneFetchCounters()
-      rootReseeds += 1
+      rootAttempts += 1
       if enqueueRequest(HealingEntry(Seq(rootPath), stateRoot)) then
-        log.info(s"[HEAL] Root $hex absent and the marker stands: seeding it (reseed $rootReseeds), with no walk")
+        log.info(s"[HEAL] Root $hex absent and the marker stands: seeding it (reseed $rootAttempts), with no walk")
         tryRedispatchPendingTasks()
       else fallBackToWalk("the seed was refused")
 
@@ -1028,7 +1039,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // spec 022 5d: what was decided was for the root just left, and a signal on its way goes unheeded (the controller
         // compares). The reseeds are per root.
         decidedRoot.foreach(_.set(null))
-        rootReseeds = 0
+        rootAttempts = 0
         // spec 022 T055 (SC-005): what the root just left cost.
         SNAPSyncMetrics.recordHealNodesPerRepeg((totalNodesHealed - healedAtRootAdoption).toLong)
         healedAtRootAdoption = totalNodesHealed
@@ -1792,6 +1803,10 @@ object TrieNodeHealingCoordinator:
 
   /** spec 022 5d: gate reseeds of one root before the walk takes over (forge 2, beacon 3). */
   val MaxRootReseeds: Int = 3
+
+  /** spec 022 5d: reseeds and fallback walks of one root together, past which healing gives up on it (forge, beacon).
+    */
+  val MaxRootAttempts: Int = 6
 
   /** spec 022 review vault V6: commit writes in a row that fail before healing abandons, loudly. */
   val MaxConsecutiveCommitFailures: Int = 10

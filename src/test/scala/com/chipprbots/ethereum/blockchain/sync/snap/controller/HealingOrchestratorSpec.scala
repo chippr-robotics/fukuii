@@ -332,6 +332,54 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawnedNames(h.effects()) shouldBe empty
   }
 
+  // hunter 1: the guard against a second coordinator does not get to keep the first one's decision. Validation comes back
+  // here, and the coordinator, having said so once, would not say so again.
+  it should "forget a decision when healing is asked for again with a coordinator there, and have it decide again" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
+
+    h.call(_.startStateHealing())
+
+    h.module.healingDecidedRoot.get() shouldBe null
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  it should "leave the race it guards as it was: with no decision on record the duplicate sends nothing" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.startStateHealing())
+
+    coordinator.hasMessages shouldBe false
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  it should "ask the coordinator there is to decide again, and spawn one if there is none, rather than sit silent" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.call(_.askHealingAgain())
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+
+    h.module.trieNodeHealingCoordinator = None
+    h.call(_.askHealingAgain())
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    spawnedNames(h.effects()) should have size 1
+  }
+
   it should "ask the parent for a newer serve root once, and not while a pivot refresh is pending" taggedAs UnitTest in {
     val h = new Harness(SNAPSyncConfig(decoupledHealServeRoot = true, movingRootDeltaHeal = false))
     h.module.trieNodeHealingCoordinator = Some(TestInbox[TrieNodeHealingCoordinator.Command]().ref)

@@ -8,11 +8,14 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.DispatcherSelector
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
+import org.apache.pekko.testkit.CallingThreadDispatcher
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
+import scala.util.Using
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -365,6 +368,25 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.stop(rig.coordinator)
     }
 
+    // The walk is no exit: of an absent root it finds the root and nothing else, each lap heals, and stagnation never fires
+    // (forge, beacon).
+    it should s"give up on the root past 3 reseeds and 3 walks, claiming nothing, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, absent = Set("root", "ext", "brX"), unreadable = Some("leafX2"))
+      rig.peer.serveFrom.set(Some(rig.trie.served))
+      rig.start()
+      rig.available()
+      var said = Seq.empty[SNAPSyncController.Command]
+      rig.driveUntil("the give-up") {
+        said ++= rig.seen()
+        said.contains(SNAPSyncController.StateHealingAbandoned)
+      }
+      withClue("3 walks first: ")(rig.walksEnded shouldBe TrieNodeHealingCoordinator.MaxRootAttempts - 3)
+      rig.completions(said) shouldBe 0
+      rig.decided.get() shouldBe null
+      rig.cleanRoot.get() shouldBe null
+      testKit.stop(rig.coordinator)
+    }
+
     it should s"count reseeds per root, so a re-peg starts the count over, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme, absent = Set("root", "ext", "brX"), unreadable = Some("leafX2"))
       val next = PathHealPresenceFixtures.accountTrieNew()
@@ -416,12 +438,18 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
     it should s"report what is in flight and held, and the root's age, at each tick, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme, absent = Set("root", "ext"))
+      def gauge(name: String): Double = Metrics.get().registry.find(name).gauge().value()
       rig.start()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      rig.settle()
+      withClue("the root is waiting on a peer: ") {
+        gauge("snap.heal.pending") shouldBe 1d
+        gauge("snap.heal.inflight") shouldBe 0d
+      }
       rig.available()
       val request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
       rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
       rig.settle()
-      def gauge(name: String): Double = Metrics.get().registry.find(name).gauge().value()
       withClue("the root is in flight: ")(gauge("snap.heal.inflight") shouldBe 1d)
       gauge("snap.heal.held.nodes") shouldBe 0d
       rig.peer.answerFrom(request, rig.trie.served)
@@ -451,7 +479,7 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         line should include(Hex.toHexString(rig.trie.root.hash.toArray))
         line should include("nodesHealed=1")
         line should include("no full-trie gate walk")
-        line should include("from storage-done")
+        line should include("since this coordinator started")
       }
       testKit.stop(rig.coordinator)
     }
@@ -464,6 +492,42 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         val line = log.lines.find(_.contains("[HEAL-COMPLETE]")).getOrElse(fail("no [HEAL-COMPLETE] line"))
         line should include("a full-trie gate walk ran")
         (line should not).include("no full-trie gate walk")
+      }
+      testKit.stop(rig.coordinator)
+    }
+
+    // T063 greps this line for "no walk": a fallback walk that came first must not read as none.
+    it should s"say so where a fallback walk ran and a check decided, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, absent = Set("root", "ext", "brX"), unreadable = Some("leafX2"))
+      rig.peer.serveFrom.set(Some(rig.trie.served))
+      Using.resource(new SnapLogCapture) { log =>
+        rig.start()
+        rig.available()
+        rig.awaitWalkLaunched()
+        rig.hashStore.failing = false
+        rig.pathSource.failing = false
+        rig.driveUntil("the completion")(rig.decided.get() == rig.trie.root.hash)
+        val line = log.lines.find(_.contains("[HEAL-COMPLETE]")).getOrElse(fail("no [HEAL-COMPLETE] line"))
+        line should include("a full-trie gate walk ran but did not decide this")
+        (line should not).include("no full-trie gate walk")
+      }
+      withClue("and no proof comes of it: ")(rig.cleanRoot.get() shouldBe null)
+      testKit.stop(rig.coordinator)
+    }
+
+    it should s"not blame the marker for a walk that was a fallback with it standing, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, absent = Set("root", "ext", "brX"), unreadable = Some("leafX2"))
+      rig.peer.serveFrom.set(Some(rig.trie.served))
+      Using.resource(new SnapLogCapture) { log =>
+        rig.start()
+        rig.available()
+        rig.awaitWalkLaunched()
+        rig.hashStore.failing = false
+        rig.pathSource.failing = false
+        rig.seed(rig.trie.nodes) // So the walk, not yet under way, finds it all there and ends clean.
+        rig.driveUntil("the completion")(rig.decided.get() == rig.trie.root.hash)
+        val line = log.lines.find(_.contains("[HEAL-COMPLETE]")).getOrElse(fail("no [HEAL-COMPLETE] line"))
+        line should include("a full-trie gate walk ran, as a fallback: the marker stands")
       }
       testKit.stop(rig.coordinator)
     }
@@ -563,6 +627,21 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.stop(rig.coordinator)
     }
 
+    // The gate would hold a second signal anyway. This is that the watchdog does not spend a walk's worth of warnings on a
+    // coordinator with nothing left to do.
+    it should s"count no dead pulses once it has said so, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme)
+      rig.start()
+      rig.drive()
+      rig.completions(rig.seen()) shouldBe 1
+      Using.resource(new SnapLogCapture) { log =>
+        (1 to 6).foreach(_ => rig.coordinator ! TrieNodeHealingCoordinator.HealingStagnationCheck)
+        rig.drive()
+        log.contains("[HEAL-WATCHDOG] Dead pulse") shouldBe false
+      }
+      testKit.stop(rig.coordinator)
+    }
+
     it should s"say it again if the record was taken from under it, so a cleared decision cannot strand the run, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme)
       rig.start()
@@ -576,17 +655,23 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.stop(rig.coordinator)
     }
 
+    // The receiver runs on the sender's thread, inside the send, so what it reads is what was written before the send. On
+    // its own thread it would almost always read the record whichever came first.
     it should s"set the record before the signal it backs goes out, on $scheme" taggedAs UnitTest in {
       val atSignal = new AtomicReference[ByteString]()
       val decided = new AtomicReference[ByteString]()
       val received = createTestProbe[String]()
-      val controller = testKit.spawn(Behaviors.receiveMessage[SNAPSyncController.Command] {
-        case SNAPSyncController.StateHealingComplete =>
-          atSignal.set(decided.get())
-          received.ref ! "signal"
-          Behaviors.same
-        case _ => Behaviors.same
-      })
+      val controller = testKit.spawn(
+        Behaviors.receiveMessage[SNAPSyncController.Command] {
+          case SNAPSyncController.StateHealingComplete =>
+            atSignal.set(decided.get())
+            received.ref ! "signal"
+            Behaviors.same
+          case _ => Behaviors.same
+        },
+        s"record-before-signal-$scheme",
+        DispatcherSelector.fromConfig(CallingThreadDispatcher.Id)
+      )
       val trie = PathHealPresenceFixtures.accountTrieOld()
       val appState = new AppStateStorage(EphemDataSource())
       appState.stampSnapHealInvariant().commit()
@@ -674,8 +759,38 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
         PeerTestHelpers.createTestPeer("no-walk-peer", createTestProbe[Any]().ref.toClassic)
       )
-      coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
-      val request = peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
-      request.paths shouldBe Seq(Seq(EmptyPath))
+      // A refused seed falls back to the walk, which asks for the root too: so the request alone shows neither.
+      Using.resource(new SnapLogCapture) { log =>
+        coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+        val request = peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+        request.paths shouldBe Seq(Seq(EmptyPath))
+        log.contains("neither queued nor in flight: dropping them") shouldBe true
+        log.contains("seeding it (reseed 1), with no walk") shouldBe true
+        log.contains("the seed was refused") shouldBe false
+      }
       testKit.stop(coordinator)
     }
+
+  // The gate's first conjuncts, on the one scheme that flushes off the actor: a response's flush is out when its check runs.
+  // Without `!flushing` that check takes the buffer over itself, so the marker's completion must not run ahead of it, and
+  // something has to wake the gate when it is written.
+  "A completion check during a flush" should "hold the gate open, and decide on FlushComplete, with no walk" taggedAs UnitTest in {
+    val rig = new Rig(StorageScheme.Hash, absent = Set("root"))
+    rig.start()
+    rig.available()
+    val request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+    rig.peer.answerFrom(request, rig.trie.served)
+    rig.awaitWalkLaunched() // The flush: it is what goes on the executor here.
+    rig.settle()
+    withClue("the check has run, with the write out: ") {
+      rig.completions(rig.seen()) shouldBe 0
+      rig.decided.get() shouldBe null
+      rig.onDisk(rig.trie.root) shouldBe false
+    }
+    rig.drive()
+    rig.onDisk(rig.trie.root) shouldBe true
+    rig.completions(rig.seen()) shouldBe 1
+    rig.decided.get() shouldBe rig.trie.root.hash
+    rig.walked shouldBe false
+    testKit.stop(rig.coordinator)
+  }

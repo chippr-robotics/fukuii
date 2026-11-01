@@ -18,6 +18,7 @@ import scala.util.Using
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
@@ -32,6 +33,13 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -260,6 +268,95 @@ class HealConvergenceControllerSpec
   private def decide(f: SnapControllerFixture, root: ByteString): Unit =
     f.factories.lastHealingDecidedRoot.get().get.set(root)
 
+  implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
+  implicit private val actorTestKit: ActorTestKit = testKit
+
+  // forge 4, whole: the coordinator decides on a root, the controller re-pegs before the signal lands, and the run ends on
+  // the new root. A real controller and a real coordinator share the real record, and the test carries the messages
+  // between them, so it can put the signal where a thread could. The order each side sends in is kept.
+  "A re-peg between a decision and its signal" should "be ignored, asked again, and complete on the new root, with the marker" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val before = PathHealPresenceFixtures.accountTrieOld()
+    val after = PathHealPresenceFixtures.accountTrieNew()
+    val snap = f.enterStateHealing(
+      SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path),
+      pivot = BigInt(2_000),
+      root = before.root.hash,
+      isPoS = true
+    )
+    f.appStateStorage.stampSnapHealInvariant().commit()
+    val nodes = new PathNodeStorage(EphemDataSource())
+    PathHealPresenceFixtures.seedPath(nodes, before.nodes)
+    val signals = createTestProbe[SNAPSyncController.Command]()
+    def nextSignal(): Unit = signals.fishForMessage(30.seconds) {
+      case StateHealingComplete => FishingOutcomes.complete
+      case _                    => FishingOutcomes.continueAndIgnore
+    }: Unit
+    val coordinator = HealingTrieFixtures.spawnCoordinator(
+      stateRoot = before.root.hash,
+      networkPeerManager = new ScriptedPeer(testKit).ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      batchSize = 16,
+      snapSyncController = signals.ref,
+      storageScheme = StorageScheme.Path,
+      pathNodeStorageOpt = Some(nodes),
+      movingRootDeltaHeal = true,
+      decidedRoot = f.factories.lastHealingDecidedRoot.get(),
+      markerStore = Some(f.appStateStorage),
+      markerMayStand = true
+    )
+    val record = f.factories.lastHealingDecidedRoot.get().get
+
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(before.root.hash)
+    nextSignal()
+    withClue("decided, and the signal held back: ")(record.get() shouldBe before.root.hash)
+
+    // The controller re-pegs, as the characterization spec drives it.
+    val pivot = BigInt(2_100)
+    val header = Fixtures.Blocks.Genesis.header.copy(
+      number = BlockNumber(pivot),
+      stateRoot = TrieRoot(after.root.hash),
+      difficulty = Difficulty.Zero,
+      nonce = ByteString(new Array[Byte](8)),
+      ommersHash = BlockHash(BlockHeader.EmptyOmmers),
+      extraFields = BlockHeader.HeaderExtraFields.HefEmpty
+    )
+    f.blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
+    val clHead = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + 64))
+    snap ! CLPivotHint(clHead.hash.value, Some(clHead))
+    snap ! HealingAllPeersStateless
+    f.awaitProcessed(snap)
+    val toCoordinator = f.healingBefore(f.sendFence(snap))
+    toCoordinator.collect { case m: TrieNodeHealingCoordinator.HealingPivotRefreshed => m } shouldBe Seq(
+      TrieNodeHealingCoordinator.HealingPivotRefreshed(after.root.hash)
+    )
+
+    Using.resource(new SnapLogCapture) { log =>
+      // The signal lands now, with the coordinator yet to hear of the re-peg.
+      snap ! StateHealingComplete
+      f.awaitProcessed(snap)
+      withClue("nothing completes on the old root's word: ")(log.contains("healing complete") shouldBe false)
+      val asked = f.healingBefore(f.sendFence(snap))
+      asked should contain(TrieNodeHealingCoordinator.HealingCheckCompletion)
+
+      // What the controller sent, in the order it sent it: the re-peg first, so the check finds the new root.
+      PathHealPresenceFixtures.seedPath(nodes, after.changedFrom(before))
+      (toCoordinator ++ asked)
+        .collect {
+          case m: TrieNodeHealingCoordinator.HealingPivotRefreshed => m
+          case TrieNodeHealingCoordinator.HealingCheckCompletion   => TrieNodeHealingCoordinator.HealingCheckCompletion
+        }
+        .foreach(coordinator ! _)
+      nextSignal()
+      record.get() shouldBe after.root.hash
+
+      snap ! StateHealingComplete
+      log.awaitLine("healing complete (no controller walk)")
+    }
+    testKit.stop(coordinator)
+  }
+
   for scheme <- Schemes do
     "A completion signal" should s"route to completeHealingWalkClean with no controller walk, on $scheme (T047)" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
@@ -334,6 +431,25 @@ class HealConvergenceControllerSpec
     }
     f.appStateStorage.isSnapHealInvariantPresent() shouldBe false
   }
+
+  // A lazy hand-off is no clean decision, on any route to it.
+  for (route, message) <- Seq[(String, Command)](
+      "an abandoned heal" -> StateHealingAbandoned,
+      "an unservable root" -> HealingRootUnservable(Root)
+    )
+  do
+    it should s"take the marker on $route though a decision on this very root is on record" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val (snap, _) = healing(f, StorageScheme.Hash)
+      f.appStateStorage.stampSnapHealInvariant().commit()
+      decide(f, Root)
+      snap ! message
+      f.parent.fishForMessage(30.seconds) {
+        case SnapSyncFinalized(_) => FishingOutcomes.complete
+        case _                    => FishingOutcomes.continueAndIgnore
+      }
+      f.appStateStorage.isSnapHealInvariantPresent() shouldBe false
+    }
 
   it should "keep the marker on a decision for this root, with no walk's proof beside it" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)

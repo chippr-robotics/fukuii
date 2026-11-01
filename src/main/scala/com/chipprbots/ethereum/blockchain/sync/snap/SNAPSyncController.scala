@@ -876,7 +876,7 @@ private class SNAPSyncControllerImpl(
         ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
       else if !stateRoot.exists(_.value == healingDecidedRoot.get()) then
         ctx.log.info("[HEAL-COMPLETE] The signal is for a root healing has left (a re-peg passed it): asking again")
-        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion)
+        askHealingAgain()
       else
         progressMonitor.startPhase(StateHealing)
         ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")

@@ -157,6 +157,7 @@ private[snap] trait HealingOrchestrator
         "[HEAL-ABANDONED] Healing gave up, but the heal root is absent from local storage (Path scheme): the lazy " +
           "hand-off could not publish it. NOT handing off: re-pegging to a newer root and continuing to heal."
       )
+      healingDecidedRoot.set(null) // spec 022 5d: giving up on this root takes back any decision on it
       refreshPivotInPlace("healing abandoned with the root absent (Path scheme)", countsTowardHealBudget = false)
       Behaviors.same
 
@@ -312,10 +313,16 @@ private[snap] trait HealingOrchestrator
       ctx.log.info(
         "[HEAL-EXCLUDED] Clean trie walk, but the excluded set still counts against this root: the coordinator goes on with it"
       )
-      trieNodeHealingCoordinator match
-        case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
-        case None              => startStateHealing()
+      askHealingAgain()
     held
+
+  /** Have healing decide again, whichever coordinator there is or none: a phase with nothing running would otherwise
+    * sit silent.
+    */
+  private[snap] def askHealingAgain(): Unit =
+    trieNodeHealingCoordinator match
+      case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
+      case None              => startStateHealing()
 
   /** Healing has completed clean at this root, and a pass has looked at every dormant entry from it: none is held by
     * this root, and none should cost the next start a recovery scan. A write that fails leaves them, at that cost only.
@@ -542,6 +549,12 @@ private[snap] trait HealingOrchestrator
     // succession — both call checkAllDownloadsComplete() which calls startStateHealing().
     if trieNodeHealingCoordinator.isDefined then
       ctx.log.warn("startStateHealing called but healing coordinator already exists — ignoring duplicate")
+      // spec 022 5d (hunter 1): a decision on record does not answer this. Whatever came back here (validation, say) found
+      // the state wanting, and finalisation would take that record's word, while the coordinator, having said so once,
+      // would not say so again. With none on record this is the race above, and nothing changes.
+      val decided = healingDecidedRoot.getAndSet(null) != null
+      healingCleanWalkRoot.set(null)
+      if decided then askHealingAgain()
     else
       trieWalkInProgress = false // Reset for fresh healing phase
       healRepegNoRootAttempts = 0 // spec 009 T014: fresh healing phase — reset the bounded re-peg last-resort budget
@@ -760,6 +773,8 @@ private[snap] trait HealingOrchestrator
     * `completeSnapSync()` via `StateValidation`.
     */
   def anchorPivotBeforeLazyHandoff(reason: String): Unit =
+    // spec 022 5d: a lazy hand-off is no clean decision, whatever is on record, so finalisation takes the marker.
+    healingDecidedRoot.set(null)
     for
       b <- pivotBlock
       r <- stateRoot
