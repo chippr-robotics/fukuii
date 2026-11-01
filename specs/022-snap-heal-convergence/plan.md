@@ -96,7 +96,7 @@ blockchain/sync/snap/
 │   ├── HealResponseProcessing.scala   write-before-children (:151-193), aliases (:98-104, :347-382)
 │   ├── HealDispatch.scala             FIFO pendingTasks (:233), becomes deepest-first
 │   ├── FrontierPersistence.scala      flushRawNodesAsync #1549 (:185-206), unpersist (:176, :203)
-│   ├── FrontierRebuildBfs.scala       reused as the background-audit engine
+│   ├── FrontierRebuildBfs.scala       the walk at completion, until T051 (the audit has its own expansion)
 │   └── HealVerification.scala         verification gates, removed
 ├── actors/account/AccountTrieAssembly.scala   V2 source; ContractWorkCarry (:118-125)
 ├── actors/storage/StorageOrderedApply.scala   skip (:158-161), root mismatch (:123-148)
@@ -105,6 +105,7 @@ blockchain/sync/snap/
 ├── HealingOrchestrator.scala                  Hash controller walk (:203-315), completeHealingWalkClean (:271-286)
 └── PathToHashExporter.scala                   handoff copy; sample-only check (:14-29)
 blockchain/sync/SyncController.scala           checkpoint fall-through (:1510), clearDoneOnStart (:1516), ETC=Hash (:466)
+blockchain/sync/BackgroundAudit.scala          the audit (T053): reads in Futures, writes on the actor; its walk is snap/heal/AuditWalk.scala
 blockchain/sync/checkpoint/CheckpointImporter.scala   parent-first import (:81-156)
 db/storage/PathNodeStorage.scala               add accountNodeUpsert/Removal; dead deleteByPrefix (:172-186)
 db/dataSource/RocksDbDataSource.scala          atomic multi-CF update (:257-276)
@@ -165,12 +166,13 @@ Evidence for each decision is in research.md.
     - the BFS start on a re-pegged root that is already present (`:666-690`): with the marker present, that case is complete immediately;
     - the Hash controller walk as a gate: Hash now routes to `completeHealingWalkClean`.
   - **`HealingForceComplete` on Hash** must send `StateHealingAbandoned` instead of `StateHealingComplete`, because the walk it relied on is gone.
-  - **The background audit (FR-013):**
-    - It is owned by a component that outlives the healing coordinator (the regular-sync side).
-    - It walks the **hash store** at a recent root that is still present, since the pivot root may already be pruned.
-    - Gaps go to `BlockImporter.resolvingMissingNode`.
-    - The `FrontierRebuildBfs` engine is reused.
-- **D9. Handoff check.** `PathToHashExporter` checks only 1,000 account leaves and 16 storage roots. Replace that with a root recompute over the exported hash store, or a much larger stratified sample. Which one is decided in the tasks, measured on Mordor.
+  - **The background audit (FR-013), as built in PR 5c (tasks.md T053, research R-5f):**
+    - It is owned by a component that outlives the healing coordinator (`SyncController`, beside the recovery actors), and lives exactly as long as regular sync.
+    - It walks the **hash store** on both schemes, by position from the current best root, since no one root lasts a pass.
+    - What it finds it fetches itself, through a private `StateNodeFetcher` and `PeersClient`, not through `BlockImporter.resolvingMissingNode`, which would hold import.
+    - It has its own expansion, not the `FrontierRebuildBfs` engine, and a test pins that the two name the same paths.
+    - At a start with the audit on it takes the place of the blocking recovery scan. A bulk recovery stays the backstop for code import finds really missing.
+- **D9. Handoff check.** `PathToHashExporter` checked only 1,000 account leaves and 16 storage roots. Now a larger stratified sample (T054), and **no root recompute:** induction holds per root, a pass spans many, and a recompute at hand-off would put back the gate the spec removes. The size is measured on a Mordor Path run. SC-003's evidence is the sample plus import.
 - **D10. FR-008 on Path.**
   - Use exact-position deletes in the same batch: the inner prefixes of an extension node's `sharedKey`, plus hash-mismatched bytes found at a position (geth `children()` and `hasNode`).
   - Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix`. HP-encoded keys don't preserve prefixes, and those methods scan the whole CF.

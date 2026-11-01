@@ -148,6 +148,34 @@ T050a had several failures "become a hard stop" (a task file that cannot be read
 
 **Only an absent node is a hole.** `MissingNodeException`, not its parent `MPTException`, which `parseMpt` also throws for a node that does not decode. A hole below the root is counted and walked around; a node that does not decode, or a store that fails, is a failure of the scan. With the root absent there is no trie to split, which is not an empty one, so that is a failure too.
 
+**Since PR 5c (decision 14; R-5f)** a start with the audit on runs no scan: the audit's pass pays the flags. All of the above holds with the audit off, and for a bulk recovery, the backstop that remains.
+
+## R-5f. The background audit: what T053 as written did not fit (PR 5c, 2026-10-31 and 2026-11-01)
+
+Design checked by beacon, forge and vault before it was built; the decisions are in tasks.md T053 and `.local/docs/continuations/s022-slice5c.md`. What they rest on:
+
+**Import's on-demand path cannot be the audit's.** `resolvingMissingNode` holds import until the fetch returns (`BlockImporter.scala:446`). `StateNodeFetcher` has one slot: a fetch for another hash abandons the one in flight. An exhausted reply counts towards `StuckEscapeThreshold`, then `RegularSyncStuck`, then a SNAP re-sync. So a background walk feeding it would block import, starve its fetches, and could trigger the re-sync it is there to make unnecessary.
+
+**Fetch isolation needed one thing the design check did not have.** `PeerRequestHandler` filters a reply by request id only for `HasRequestId`, and the four SNAP messages had the field and not the trait. A handler took the first such message from its peer, whoever it answered. Harmless with one requester after SNAP. With two, a reply to the audit's fetch completes import's handler on the same peer, reads there as a wrong hash, burns import's one fallback root, and blacklists an honest peer in the shared blacklist. Each `PeersClient` has its own handlers, so a private blacklist does not reach that. Only `PeerRequestHandler` matches on the trait, and every peer echoes the id (snap/1), so the four classes now extend it, pinned by `PeerRequestHandlerSpec`.
+
+**`saveNode` is not safe beside import.** It is a blind upsert at one reference, outside `commitLock` (`StateStorage.scala`, `FastSyncNodeStorage.scala`). While import runs that can reset a live node's count, and prune then deletes a node the head needs. Hence `repairNode`, with the check at write time, under the lock, since the node may arrive between the walk's proof and the write. The count is pinned high because a repaired node's real count cannot be known. 2^30 and not `Int.MaxValue`: `incrementReferences` adds unchecked, and a wrapped count is negative.
+
+**The raw read.** `ReferenceCountNodeStorage.multiGet` throws for the whole batch on one entry that does not unwrap. `RocksDbDataSource` had `fill_cache=false` for a single get only. `multiGetOptimized` holds the read lock throughout and a queued writer stalls behind it, hence batches of at most 256.
+
+**A long walk over a pruned store.** Under `basic`/64 a root's changed nodes go 64 blocks on, about 13 minutes on Sepolia; seen live on Mordor, a root gone 3 minutes after hand-off. A pass takes days. So absent under a walk's root is mostly pruned, and coverage has to go by position, rolling forward, with an absent verdict believed only while its root is short of the pruning horizon. `BackgroundAuditWalkSpec` prunes under a walk with the real reference counts and finds no false hole.
+
+**No dedup by storage root.** A root deduplicated by hash and then rolled forward at one account loses the other's coverage. Code dedups, since code is by hash and not by position.
+
+**A clean pass is not a root recompute** (decision 11). Induction holds per root, and a pass spans many. The exporter's keccak check is trivially true, because it keys by keccak. So T054 keeps a sample at the hand-off, by stratum, and SC-003's evidence is that sample plus import.
+
+**T054's new strata report, and do not stop the hand-off.** Accounts and storage roots throw on a miss, as they always have. The larger strata do not: the path store can hold what another root wrote (the exporter's own doc calls those harmless), and a lazy hand-off can leave a hole. A throw there would escalate to a SNAP restart for a fault the audit is there to find, and put back the gate the spec removes. **Cost not yet measured:** to be recorded here from a Mordor Path run (`[PATH-PUBLISH] done` gives the sample's time apart from the export's). The account stratum went from 1,000 to as many as 4,096 and still throws: if a stale leaf shows up as a false alarm there, its constant comes down.
+
+**The audit in place of the scan at a start (user, 2026-11-01, decision 14).** A flag's only reader is that arm, so with the audit on the scan is skipped for every reason a flag is down, and the audit's pass sets them, clean or not. A flag left down over a matching anchor would be paid by nothing, so a flag down also owes a pass. With `do-snap-sync = false`, where no start ever ran the scan, the debt now gets paid. A bulk scan stays the backstop when import hits code that really is missing, since the audit fetches one at a time: a block remains where something is actually missing, and no block where nothing is. T050a's estimate of about 3.5 h no longer applies at a start with the audit on.
+
+**A provably bad node goes after three failed passes (user, 2026-11-01, decision 15).** Forge's case: it turns a silent wrong read or a permanent stall into fetch, exhaust, re-sync. The guards are what make it safe to do unattended. A read at the delete, so a transient fault behind the audit's verdict cannot delete a good node. A look from the current root, so a position it no longer needs stays. Both under `commitLock`, so no commit moves the root part way. And three separate passes: a pass number, persisted with the record and the cursors so a restart resumes the same pass, and a timestamp, since a restart in a backoff starts the next pass at once. A node that passes keccak is never deleted, decoding or not: its bytes are what its parent committed to, and peers would serve the same. That case is cut at one repair per pass, or serving it would go round for good.
+
+**Two traps in the code the audit landed on.** `SnapSyncProgressStorage.clearAll` decoded every value in its namespace as JSON, and raw cursors there would have made it throw, so it now reads keys alone. And `logging.logs-level` is ERROR with no entry for `blockchain.sync`, so a logger of the actor's own name would have shown nothing: it logs under `SyncController`'s, and a spec reads the shipped `logback.xml` to pin that.
+
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
 
 **Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**

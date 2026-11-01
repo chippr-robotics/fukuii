@@ -94,7 +94,8 @@ Every write of these keys is one `updateSync` batch. The frontier key goes throu
 - **Under the marker's removals above it is the code half:** the marker's own removals (a hand-off, a Path account phase) do not set it, except that a datadir with no marker at the next SNAP start is `PreInvariant`, which does. So a Path first sync restarted twice or more during the account phase owes one scan (tasks.md T050a).
 
 **The recovery flags (`bytecodeRecoveryDone`, `storageRecoveryDone`), read at a start with SNAP done and `do-snap-sync = true`:**
-- **True means a pass ran.** A clean finalisation with nothing withheld, or a pass of the recovery scan. Where that pass met holes it does not mean code and storage are complete: nothing under a hole was looked at. A WARN gives the session's count, and a pass is not repeated (user, 2026-10-31; tasks.md T050a). `RecoveryProgress` does not record the count, so a resumed pass counts only what it walked. Import fetches what it reaches on demand, and the audit keeps looking.
+- **With the audit on, a flag down means no scan (PR 5c, decision 14).** Regular sync starts at once, and the audit's pass pays it, with `do-snap-sync = false` too. A flag is also what keeps a pass owed, so a flag left down over a matching anchor is paid. A bulk bytecode recovery still scans: it is the backstop when import hits code that really is missing, so a block remains where something is actually missing, and no block where nothing is. What follows about the scan holds with the audit off, and for that backstop.
+- **True means a pass ran.** A clean finalisation with nothing withheld, a pass of the recovery scan, or a pass of the audit that ran to its end, clean or not. A stopped pass sets nothing. Where that pass met holes it does not mean code and storage are complete: nothing under a hole was looked at. A WARN gives the session's count, and a pass is not repeated (user, 2026-10-31; tasks.md T050a). `RecoveryProgress` does not record the count, so a resumed pass counts only what it walked. Import fetches what it reaches on demand, and the audit keeps looking.
 - **A scan that could not run settles nothing:** a root that is absent, a node that does not decode, a failing store. `CombinedScanComplete.failed`, neither flag written, the progress left, an ERROR, and regular sync starts. The next start tries again.
 - **The scan's root is the one a scan under way started with, while it can be read, else the best block's,** falling back to the pivot's. Regular sync is stopped through the scan and the downloads; the Engine API is not, so on a PoS node a consensus client can move the best block under a scan, and keeping the scan's own root is what lets a restart mid-scan resume. That path does not prune, so the walk is unharmed. Its first failure stops the other shards, and each shard's end logs how far the scan is and what it found, holes included, since the hole count itself is this session's only.
 - **A gap found is not always a gap filled.** A bytecode gap is fetched and stored. A storage gap is downloaded as flat slots, with no trie built, and the flag goes true with the gap still there (tasks.md T050a, "Storage gaps").
@@ -105,13 +106,48 @@ Every write of these keys is one `updateSync` batch. The frontier key goes throu
 
 **What it does not claim:**
 - **Code.** The walk reads no code. On a datadir written by older binaries an account's code can be missing with nothing saying so, and a stamp does not change that. Missing code is found as before: by the recovery scan, or at import, where it throws and starts a bulk recovery. A repair run, and a run that lost track, withhold both recovery flags, so the scan runs at the next start (decided 2026-10-31, tasks.md T050a; `snap.heal.codeScanOwed` above), and a pass that met holes does not look under them. On a datadir written under the invariant, code is a dependency of its leaf (D4), once its hash is queued. The code-hash filter can lose one first, with nothing saying so: at 20M entries and 1e-9 the expected loss in a whole sync is 4e-11 at 10M unique hashes and 9e-4 at 20M, which is not zero. Import's bulk recovery is the backstop.
-- **What the walk did not reach.** A clean walk proves what is reachable from its root. A present node from an older binary that no walked root reaches can sit over a hole, and a later root can reach it (a state that comes back). Under slice 5 that is what the background audit and the on-demand path are for: a liveness fault (R-4).
-- **What an interrupted import left that the walk did not reach.** A node it wrote for state that changed before the pivot is present over absent, and no walked root reaches it. A stamp covers it anyway and erases the import key, the one record of it. Slice 5's audit must cover this (tasks.md T050a).
+- **What the walk did not reach.** A clean walk proves what is reachable from its root. A present node from an older binary that no walked root reaches can sit over a hole, and a later root can reach it (a state that comes back). Covered when a root reaches it: the background audit descends through present nodes with nothing else to go on, and import's on-demand path finds it first if execution gets there first, since absence always throws. A liveness fault (R-4), and no scenario leaves state wrong.
+- **What an interrupted import left that the walk did not reach.** A node it wrote for state that changed before the pivot is present over absent, and no walked root reaches it. A stamp covers it anyway and erases the import key, the one record of it. The same: covered when a root reaches it (tasks.md T050a, decision 12). Nothing looks for it before that, since a scan for present over absent cannot tell it from a partly pruned old trie.
 - **On Hash, that the bytes are the node.** The walk there proves presence and decoding, not `keccak(bytes) = key`. On Path it reads through `readPathVerifiedRlp`, which hashes them, and a node that fails counts as missing. The audit checks this on Hash, in the audit only (decided 2026-10-31).
 - **What a later older binary writes.** An older binary neither reads nor clears the marker. Run on a marked datadir, its writes are not vouched for, and nothing here can tell. A downgrade is a release note: start once with `clearDoneOnStart` (decided 2026-10-31).
 - **A flat-only run.** Under `deferred-merkleization = true` no trie is built and a done marker vouches for flat slots alone, so a lone absence still gets one (tasks.md T050a, H1). A finalisation with no clean walk behind it removes the marker, so it claims nothing there. Production has it `false`.
 - **That a hand-off has its root.** An `Other` abandon on Hash can leave the root absent. An abandon removes the marker, and regular sync fetches the root on demand: a liveness fault (R-4).
 - **When healing ends, or what it costs.** The marker speaks to what is on disk. The sweeps, passes, position deletes and clocks listed as accepted under tasks.md T050a cost time or a retry and are not settled at mainnet's scale, and a walk or two more than needed may run. A restart downloads a partly downloaded account's storage again from slot zero, since nothing reads `storageCursors`: mid-account resume does not exist (research R-5d). None of it changes what a stamp says.
+
+## Background audit (T053, FR-013)
+
+The full-trie walk, after hand-off, with import running. `blockchain/sync/BackgroundAudit.scala`, `snap/heal/AuditWalk.scala`.
+
+**What a clean pass means.** Every position of every trie the head reached was read as the state stood when the walk got there, with `keccak(bytes) = key` for every node and for every account's code, and nothing was absent or bad. No hole found, no bad node, no fetch exhausted, nothing dropped at a cap, nothing it could not follow.
+
+**What it does not mean.**
+- **That any one root was recomputed.** Induction holds per root, and a pass spans many (decision 11). The state moves under it, and what moved is import's writing, or the next pass's.
+- **Anything of a node no current root reaches** (above, "What the walk did not reach").
+- **That the node has no fault now.** It holds for what was read, when it was read. A pass that filled holes is not clean even if it filled all of them: another has to look at what the fill let it reach.
+
+**A pass that ended, clean or not, sets both recovery flags**, whose meaning is that a pass ran. Only a clean one moves the anchor.
+
+**Keys:**
+
+| Key | Where | What |
+|-----|-------|------|
+| `snap.heal.auditCleanAnchor` | AppState `s` | The SNAP pivot a clean pass covered, or `no-pivot` on a checkpoint-synced node, which has done flags and no pivot. Owed when SNAP or a checkpoint is done and this differs, or a recovery flag is down. A never-SNAP node owes nothing. Finalisation does not write it. |
+| `snap.heal.auditCursors` | SNAP progress `p`, raw bytes | Where a pass has got to: the anchor, the pass number, the counts, and positions with no hashes, each resolved again from the current root when it comes up. Written with `commit()` every 3 minutes and at the pass's first fault, never `commitSync()`: the data source holds its lock through an fsync, and a lost cursor repeats a little of a walk. For another anchor, or unreadable, a pass starts over. Cleared at a pass's end. |
+| `snap.heal.auditBadEntries` | SNAP progress `p`, raw bytes | Per bad entry, how many separate passes could not fetch it, the last of those and when, up to 1,024 entries, and the last pass's number. It outlives a pass. A served repair clears an entry. |
+
+**What repair writes.** A node goes through `StateStorage.repairNode`: under `commitLock`, only if absent or failing keccak, judged at write time, with references pinned at 2^30, since a repaired node's real count is unknown (a leak of a few nodes, not a loss), never lowering a count it finds, and evicting the decoded node. Code goes to the code store alone, and the execution caches forget what it replaced.
+
+**What it deletes.** Only an entry that does not unwrap, or bytes failing keccak, or code failing keccak, after fetching it exhausted in 3 separate passes with the backoff between, and with a read at the delete still finding it bad and the current root still reaching that hash at that position, both under `commitLock`. Never a node that passes keccak. The position is a hole after that.
+
+**What is logged**, under `...sync.SyncController.BackgroundAudit`, a name the shipped `logback.xml` keeps at INFO, each line starting `[HEAL-AUDIT]`:
+
+| Level | When |
+|-------|------|
+| INFO | A pass starts or resumes. Progress every minute: nodes, accounts, moved, holes, repaired, unresolved, badNodes, deleted, droppedAtCap, unfollowable, elapsed, stack, queued holes. Paused and resumed. A repair. Off, once. |
+| WARN | Each hole and bad entry, with its position and hash, and the root and block it was resolved under, saying that on a node that never lost state it may be #1692 (FR-013). A fetch that exhausted. An absent head root. A pass that ended not clean. |
+| ERROR | The first bad entry of a pass no peer served. A delete. Something it cannot follow. A failed read. |
+
+A pass that ended clean logs at INFO. The private `StateNodeFetcher` logs under its own name: its "signaling BlockImporter to back off" line, from an audit fetch, signals nothing to the importer.
 
 ## Persisted frontier (CF `g`): retired
 
