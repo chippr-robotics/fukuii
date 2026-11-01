@@ -192,6 +192,38 @@ Design checked by beacon, forge and vault before it was built; the decisions are
 
 **T054's measurement needs a patched jar.** `SyncController.loadSnapSyncConfig`'s `require` rejects Path on ETC, so a Mordor Path run needs a local jar with that lifted, made for the measurement and never committed.
 
+## R-5g. The completion switch: what T051 as written did not fit (PR 5d, 2026-11-01)
+
+Design checked by forge and beacon before it was built; the decisions are in `.local/docs/continuations/s022-slice5d.md`. What they rest on, and what building it found.
+
+**"Remove" could not stand.** T050a's rule is "settled, or the walk stays for that case", and five cases stay: a pre-invariant datadir's repair, a run that lost track, a fresh Path account phase over existing nodes, `inmemory` and deferred merkleization. So the walk and everything that decides on it stay, bypassed where the marker stands, and what is dead once nothing starts it is slice 6's.
+
+**T050 was already true (forge, beacon).** `isComplete` has `heldNodes.isEmpty`, and a code-waiting leaf is held. The excluded set cannot move into it: `isComplete` is also read for `walkLocalOnly` and by the force-complete's refusal, and the gate runs only when it is true.
+
+**The withdrawal rule cost nearly every long sync the switch (beacon).** About 23 process starts in one Sepolia first sync, and each resume took the marker. The user's decision: a resume keeps it. Beacon's trace of what that accepts: publish keys every node by its own keccak, so positions are discarded on the way to the store execution reads, and the crash class leaves absence, never a wrong root. So nothing here can change what execution computes, and the audit finds it. A fresh phase over non-empty families still withdraws, since the marker says nothing of those nodes.
+
+**A reseed can loop (forge 2, beacon 3).** The orphan drop can leave the root absent with nothing pending, and a reseed rediscovers the same node. Each lap heals one, so stagnation never fires, and a lap takes seconds. Past 3 for a root, the walk, bounded by what is already there. `HealNoWalkCompletionSpec` reaches it by the orphan drop itself: a stored child that cannot be read, its parent given up on, the chain above it dropped.
+
+**A no-walk completion repeats unless it is latched (forge 3).** The dead-pulse watchdog looks at `verificationPassComplete`, which a no-walk completion never sets, so the signal would go out every 6 minutes or so. The latch is the record itself and not a flag of its own: whatever takes the record back takes the latch back, so no reset of the controller's can leave a coordinator silent with a controller waiting on it.
+
+**A re-peg can pass the signal (forge 4).** The coordinator decides on one root, and the controller may be on the next when the signal lands. Path has had this gap since it took the signal as a clean walk. One record closes it for both: the controller compares, ignores a mismatch and asks again, and the coordinator has the re-peg by then, since the same actor sent both. The coordinator also clears the record at a re-peg, so A to B to A cannot find the old decision standing.
+
+**The record cannot be the walk's (`healingCleanWalkRoot`).** That one stamps, and a `lostTrack` landing after a no-walk decision would be undone by a stamp. So two records, and a no-walk completion clears the walk's, since a proof from an earlier walk of this root does not stand beside it. A walk that could not follow something sets only the new one, and could keep a marker a finalisation would have taken. It cannot arise with a marker standing: only the fallback runs there, it starts with the root absent, so it ends dirty, and the check takes over from there.
+
+**One launcher runs no gate (found building it).** `reverifyCurrentRoot` is what the stale and dirty ends of a walk call, and it starts a walk directly. A re-peg under a fallback walk would have started a walk no marker read decided, so it reads the marker too. It does not simply go through the gate on every path: the gate holds a walk for the excluded set's pass, and this path does not today, so that would change the walk where it stays.
+
+**Force-complete goes with the exit (forge 5).** `triggerHealingForMissingNodes` reaches `ScheduledTrieWalk`, and a force-complete's `StateHealingComplete` relied on the controller's walk. Nothing in main sends it, and T047 pins it. It changed one commit ahead of the exit, so no commit has that signal claiming a clean root with the walk gone.
+
+**Version 4, and the constants split.** This is the first reader that skips a walk on the marker's word, and a 5a jar's run could lose track with its marker standing. `snap.heal.datadirCreated` shared the constant, and moving it would have made every datadir count as not empty. Accepted: an unfinished datadir from an earlier jar is `PreInvariant` once. Only pre-release users can hold one.
+
+**`canHold` carries deferred merkleization.** With H1 open a done marker there vouches for flat slots alone. Under it `atSnapStart` now says `CannotHold`, not `PreInvariant`, so a run with it on no longer owes the code scan. `ops/barad-dur/fukuii-conf-1/base.conf:352` is the one config that sets it, and that route skips healing unless cursors were resumed. `SNAPSyncConfig`'s default is true, which is why the fixtures about a marker that stands now say false.
+
+**Observing a hole on the Engine path (beacon 2).** There is no on-demand repair there: a hole under `newPayload` answers SYNCING and only the audit fixes it, in days. This exists today on a lazy hand-off (local task #66, raised with the user, not in this PR). Without a counter of its own SC-004 would read zero. It counts distinct holes, not hits, since the consensus client retries every slot and one hole should read as one: the log says how often it was hit.
+
+**`[HEAL-COMPLETE]` is the coordinator's.** It alone knows whether a walk ran, one that could not follow something included. Its "time from storage-done" runs from its own spawn, which follows the download's end in one process and is only a restart's age after one.
+
+**Left as they are.** A signal for root A, sent before A to B to A, is taken at A: the decision was A's, the window is one message, and it needs a reorg back during it. The sample at hand-off is blind to a region absent where no sampled account goes (beacon, accepted). A resume's seam is mended by discovery from the absent root, as it always was: the walk it used to be followed by looked for what discovery does not reach, which is now the audit's.
+
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
 
 **Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**
