@@ -1250,15 +1250,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             "walk via HealingCheckCompletion; skipping the redundant verification walk (spec 006)"
         )
 
-      // Path scheme: a heal response can land while this walk is still flagged running, in which case its
-      // HealingCheckCompletion was skipped (`!verificationBFSRunning`) and nothing else re-triggers it until the
-      // dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear. Hash scheme: unchanged.
+      // A heal response, and its flush, can land while this walk is still flagged running: the walk's level ends, then it
+      // has a level and a queue to finish. Their HealingCheckCompletions were then skipped (`!verificationBFSRunning`),
+      // and nothing else re-triggers one until the dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear.
+      // Either scheme: Path has done this since e29ddcc08, and Hash left it out for no reason of its own, until CI caught
+      // the stall (spec 022 PR 5c, InvariantMarkerSpec).
       // spec 022 T038a: and on either scheme when this walk no longer counts: what a re-peg deferred behind it (the walk of
       // the current root) starts here, not at the next heal response or the dead-pulse watchdog. And while the excluded
       // set has work: a check is what looks at it next.
-      if (storageScheme == StorageScheme.Path && missingEmitted > 0) || walkRoot != stateRoot || walkInvalidated ||
-        excludedBlocking
-      then self ! HealingCheckCompletion
+      if missingEmitted > 0 || walkRoot != stateRoot || walkInvalidated || excludedBlocking then
+        self ! HealingCheckCompletion
 
       Behaviors.same
 

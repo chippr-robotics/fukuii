@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -36,6 +38,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
@@ -54,6 +57,8 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.AppStateStorage.Keys
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
@@ -684,10 +689,15 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       stored: Set[String],
       peer: ScriptedPeer,
       cleanRoot: AtomicReference[ByteString],
-      frontier: Option[HealingFrontierStorage] = None
+      frontier: Option[HealingFrontierStorage] = None,
+      queue: Option[BfsQueueStorage] = None,
+      flushed: Option[CountDownLatch] = None
   ): (ActorRef[TrieNodeHealingCoordinator.Command], org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Command]) =
     val controller = createTestProbe[Command]()
-    val mpt = new TestMptStorage()
+    val mpt = new TestMptStorage():
+      override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+        super.storeRawNodes(rawNodes)
+        flushed.foreach(_.countDown())
     trie.nodes.filter(n => stored(n.label)).foreach(n => mpt.storeRawNodes(Seq(n.hash -> n.encoded.toArray)))
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
@@ -697,6 +707,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       batchSize = 16,
       snapSyncController = controller.ref,
       healingFrontierStorage = frontier,
+      bfsQueueStorageOpt = queue,
       movingRootDeltaHeal = true,
       cleanWalkRoot = Some(cleanRoot)
     )
@@ -762,6 +773,57 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     req.paths shouldBe Seq(trie(hole).pathset)
     cleanRoot.get() shouldBe null
     peer.answerFrom(req, trie.served)
+    awaitComplete(controller)
+    cleanRoot.get() shouldBe trie.root.hash
+    testKit.stop(coordinator)
+  }
+
+  // CI caught this as a timeout of the test above, once in 7,076 tests: a walk reports a missing node at the end of its
+  // level, and still has a level and a queue to finish. If the answer and its flush land in that gap, their completion
+  // checks find the walk flagged running, and on Hash nothing asked again until the dead-pulse watchdog, minutes on. So
+  // this holds the first walk at its last act, where the real one is slow, and lets the answer and the flush go first.
+  it should "go on when the answer and its flush land before the walk that found the hole has ended" taggedAs UnitTest in {
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val peer = new ScriptedPeer(testKit)
+    val cleanRoot = new AtomicReference[ByteString]()
+    val hole = "leafY0"
+    val walkEnding = new CountDownLatch(1)
+    val letWalkEnd = new CountDownLatch(1)
+    val clears = new AtomicInteger(0)
+    // A walk clears its queue as it starts and again as it ends, just before it reports.
+    val queue = new InMemoryBfsQueueStorage:
+      override def clear(): Unit =
+        if clears.incrementAndGet() == 2 then
+          walkEnding.countDown()
+          letWalkEnd.await(25, TimeUnit.SECONDS): Unit
+        super.clear()
+    // Counted down by the seeding of what is stored, then by the flush: one write per stored node, and one more.
+    val flushed = new CountDownLatch(trie.nodes.count(_.label != hole) + 1)
+    val (coordinator, controller) =
+      spawnHealer(
+        trie,
+        trie.nodes.map(_.label).toSet - hole,
+        peer,
+        cleanRoot,
+        queue = Some(queue),
+        flushed = Some(flushed)
+      )
+    val progress = createTestProbe[HealingStatistics]()
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      PeerTestHelpers.createTestPeer("marker-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    val req = peer.manual.expectMessageType[SNAP.GetTrieNodes](10.seconds)
+    walkEnding.await(10, TimeUnit.SECONDS) shouldBe true
+    peer.answerFrom(req, trie.served)
+    flushed.await(10, TimeUnit.SECONDS) shouldBe true
+    // Two round trips: the flush's end reaches the coordinator just after its write, and it re-checks from there.
+    coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(progress.ref)
+    progress.receiveMessage(10.seconds)
+    coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(progress.ref)
+    progress.receiveMessage(10.seconds)
+    cleanRoot.get() shouldBe null
+    letWalkEnd.countDown()
     awaitComplete(controller)
     cleanRoot.get() shouldBe trie.root.hash
     testKit.stop(coordinator)
