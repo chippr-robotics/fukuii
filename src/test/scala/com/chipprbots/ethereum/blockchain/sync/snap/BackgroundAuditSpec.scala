@@ -1269,3 +1269,44 @@ class BackgroundAuditSpec
     deleted should include("after that")
     deleted should include("on-demand")
   }
+
+  "A head that stands still" should "not hold the audit off for good: over 5 minutes unmoved, it goes on" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    n.s.setHead(10, root, n.nowSeconds - 61)
+    val audit = n.spawn()
+    eventually(n.status(audit).paused shouldBe true)
+    n.s.batchSizes shouldBe empty
+
+    withClue("under 5 minutes it might yet be import catching up: ") {
+      n.now.addAndGet(4.minutes.toMillis)
+      manualTime.timePasses(instant.pausePoll)
+      // The tick is in the mailbox, so the first answer means it was read and its result is queued; the second, handled.
+      n.status(audit)
+      n.status(audit).paused shouldBe true
+      n.s.batchSizes shouldBe empty
+    }
+
+    n.now.addAndGet(1.minute.toMillis)
+    manualTime.timePasses(instant.pausePoll)
+    n.ended(audit)
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+  }
+
+  "A head that is old and moving" should "keep the audit paused, however long it takes: import is catching up" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    n.s.setHead(10, root, n.nowSeconds - 3600)
+    val audit = n.spawn()
+    eventually(n.status(audit).paused shouldBe true)
+
+    (11 to 14).foreach { number =>
+      n.now.addAndGet(4.minutes.toMillis)
+      n.s.setHead(number, root, n.nowSeconds - 3600)
+      manualTime.timePasses(instant.pausePoll)
+      n.status(audit)
+      withClue(s"at block $number, 4 minutes after the last: ")(n.status(audit).paused shouldBe true)
+      n.s.batchSizes shouldBe empty
+    }
+    testKit.stop(audit)
+  }

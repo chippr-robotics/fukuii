@@ -526,14 +526,30 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
 
   // ---- the numbers ---------------------------------------------------------------------------------------------------
 
-  "AuditThrottle" should "pause over 60 s behind and resume under 36 s" taggedAs UnitTest in {
-    AuditThrottle.paused(wasPaused = false, 60) shouldBe false
-    AuditThrottle.paused(wasPaused = false, 61) shouldBe true
-    AuditThrottle.paused(wasPaused = true, 36) shouldBe true
-    AuditThrottle.paused(wasPaused = true, 35) shouldBe false
+  "AuditThrottle" should "pause over 60 s behind and resume under 36 s, while the head moves" taggedAs UnitTest in {
+    AuditThrottle.paused(wasPaused = false, 60, 0) shouldBe false
+    AuditThrottle.paused(wasPaused = false, 61, 0) shouldBe true
+    AuditThrottle.paused(wasPaused = true, 36, 0) shouldBe true
+    AuditThrottle.paused(wasPaused = true, 35, 0) shouldBe false
   }
 
-  it should "sleep three times the read for a duty cycle of 25%" taggedAs UnitTest in {
+  it should "not pause at all for a head that has not moved in 5 minutes, however old" taggedAs UnitTest in {
+    AuditThrottle.paused(wasPaused = false, 3600, 299) shouldBe true
+    AuditThrottle.paused(wasPaused = true, 3600, 299) shouldBe true
+    AuditThrottle.paused(wasPaused = false, 3600, 300) shouldBe false
+    AuditThrottle.paused(wasPaused = true, 3600, 300) shouldBe false
+  }
+
+  "AuditHeadWatch" should "move on a new number or a new root, and not on the same head" taggedAs UnitTest in {
+    val head = AuditHead(10, trieKey(1), 0)
+    val watch = AuditHeadWatch.first(head, 100)
+    watch.movedAtMillis shouldBe 100
+    watch.saw(head.copy(timestampSeconds = 5), 200).movedAtMillis shouldBe 100
+    watch.saw(head.copy(number = 11), 200).movedAtMillis shouldBe 200
+    withClue("a reorg at one height: ")(watch.saw(head.copy(stateRoot = trieKey(2)), 200).movedAtMillis shouldBe 200)
+  }
+
+  "AuditThrottle's duty cycle" should "sleep three times the read for a duty cycle of 25%" taggedAs UnitTest in {
     AuditThrottle.delayAfter(10.millis.toNanos, 3) shouldBe 30.millis
   }
 

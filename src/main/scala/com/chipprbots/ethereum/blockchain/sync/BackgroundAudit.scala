@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCounters
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCursors
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditFrame
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditHead
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditHeadWatch
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditHole
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditReader
@@ -166,8 +167,8 @@ object BackgroundAudit:
 
   private enum BatchOutcome:
     case NoHead
-    case Paused(head: AuditHead, ageSeconds: Long)
-    case Walked(head: AuditHead, step: AuditWalk.Step, readNanos: Long)
+    case Paused(head: AuditHead, ageSeconds: Long, watch: AuditHeadWatch)
+    case Walked(head: AuditHead, step: AuditWalk.Step, readNanos: Long, watch: AuditHeadWatch)
 
   private val NextStepTimer = "next-step"
   private val FetchTimer = "fetch-timeout"
@@ -270,6 +271,7 @@ object BackgroundAudit:
     private var counters: AuditCounters = AuditCounters()
     private var codeFilter: AuditCodeFilter = new AuditCodeFilter(settings.codeFilterEntries)
     private var latestHead: Option[AuditHead] = None
+    private var headWatch: Option[AuditHeadWatch] = None
     private var paused: Boolean = false
     private var rootAbsent: Boolean = false
     private var passStartedMillis: Long = 0L
@@ -433,16 +435,20 @@ object BackgroundAudit:
       val filter = codeFilter
       val reader = deps.reader
       val now = deps.nowMillis
+      val watchBefore = headWatch
       val read = Future {
         val started = System.nanoTime()
         reader.head() match
           case None => BatchOutcome.NoHead
           case Some(head) =>
-            val age = now() / 1000 - head.timestampSeconds
-            if AuditThrottle.paused(wasPaused, age) then BatchOutcome.Paused(head, age)
+            val nowMillis = now()
+            val watch = watchBefore.fold(AuditHeadWatch.first(head, nowMillis))(_.saw(head, nowMillis))
+            val age = nowMillis / 1000 - head.timestampSeconds
+            if AuditThrottle.paused(wasPaused, age, (nowMillis - watch.movedAtMillis) / 1000) then
+              BatchOutcome.Paused(head, age, watch)
             else
               val step = AuditWalk.walkBatch(frames, head, reader, filter)
-              BatchOutcome.Walked(head, step, System.nanoTime() - started)
+              BatchOutcome.Walked(head, step, System.nanoTime() - started, watch)
       }(readEc)
       ctx.pipeToSelf(read)(outcome => BatchDone(gen, frames, outcome))
 
@@ -466,16 +472,18 @@ object BackgroundAudit:
           putBack(frames)
           schedule(settings.pausePoll)
           Behaviors.same
-        case Success(BatchOutcome.Paused(head, age)) =>
+        case Success(BatchOutcome.Paused(head, age, watch)) =>
           putBack(frames)
           latestHead = Some(head)
+          headWatch = Some(watch)
           if !paused then
             paused = true
             log.info(s"[HEAL-AUDIT] Paused: best block ${head.number} is ${age}s old, so import is catching up")
           schedule(settings.pausePoll)
           Behaviors.same
-        case Success(BatchOutcome.Walked(head, step, readNanos)) =>
+        case Success(BatchOutcome.Walked(head, step, readNanos, watch)) =>
           latestHead = Some(head)
+          headWatch = Some(watch)
           if paused then
             paused = false
             log.info(s"[HEAL-AUDIT] Resumed at best block ${head.number}")

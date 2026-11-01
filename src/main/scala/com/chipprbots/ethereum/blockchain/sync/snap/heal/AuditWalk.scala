@@ -145,17 +145,38 @@ final class AuditCodeFilter(capacity: Int):
     if isNew && seen.size > capacity then seen.remove(seen.head)
     isNew
 
+/** When the best block last changed, as a run of the audit has seen it. */
+final case class AuditHeadWatch(number: BigInt, root: ByteString, movedAtMillis: Long):
+  def saw(head: AuditHead, nowMillis: Long): AuditHeadWatch =
+    if head.number == number && head.stateRoot == root then this
+    else AuditHeadWatch(head.number, head.stateRoot, nowMillis)
+
+object AuditHeadWatch:
+
+  /** The first look counts as a move: import may be catching up, and the wait to find out is short. */
+  def first(head: AuditHead, nowMillis: Long): AuditHeadWatch =
+    AuditHeadWatch(head.number, head.stateRoot, nowMillis)
+
 /** How long the audit waits between batches and when it holds off import (spec 022 decision 6). */
 object AuditThrottle:
 
-  /** Paused while now minus the best header's timestamp is over this: import is catching up, and has the disk. */
+  /** Paused while now minus the best header's timestamp is over this and it is moving: import is catching up, and has
+    * the disk.
+    */
   val PauseAboveSeconds: Long = 60L
 
   /** A paused audit resumes under this, so a chain's ordinary block-time wobble around the mark doesn't flip it. */
   val ResumeBelowSeconds: Long = 36L
 
-  def paused(wasPaused: Boolean, bestAgeSeconds: Long): Boolean =
-    if wasPaused then bestAgeSeconds >= ResumeBelowSeconds else bestAgeSeconds > PauseAboveSeconds
+  /** A head that has not moved for this long is not import catching up: a chain with long block gaps, or import stuck
+    * on a hole, which is just when the audit can help. And since the audit is what pays the recovery flags (decision
+    * 14), holding off here would leave that unpaid with nothing saying so.
+    */
+  val StalledAfterSeconds: Long = 300L
+
+  def paused(wasPaused: Boolean, bestAgeSeconds: Long, sinceMovedSeconds: Long): Boolean =
+    val old = if wasPaused then bestAgeSeconds >= ResumeBelowSeconds else bestAgeSeconds > PauseAboveSeconds
+    old && sinceMovedSeconds < StalledAfterSeconds
 
   /** A duty cycle that tunes itself to the disk: sleep `factor` times what the batch took (3 is 25%). */
   def delayAfter(readNanos: Long, factor: Int): FiniteDuration = (readNanos * factor).nanos
