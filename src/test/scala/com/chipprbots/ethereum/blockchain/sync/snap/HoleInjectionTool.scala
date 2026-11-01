@@ -38,6 +38,10 @@ import com.chipprbots.ethereum.mpt.MptTraversals
   *   "Test / runMain com.chipprbots.ethereum.blockchain.sync.snap.HoleInjectionTool /home/dontpanic/mordor-scarcity/<datadir> 6"
   * }}}
   *
+  * With `corrupt` as a third argument it writes junk under the node's key instead, for a live run with a bad node: on
+  * basic pruning inside a valid wrapper at the count it had, so it reads as bytes failing their hash and not as an
+  * entry that does not unwrap.
+  *
   * It refuses any datadir not under [[Allowed]], symlinks resolved. It writes to one thing, and a throw is its only
   * exit other than success, so `runMain` reports a refusal as a failure without taking sbt with it.
   */
@@ -46,8 +50,13 @@ object HoleInjectionTool:
   val Allowed: Path = Paths.get("/home/dontpanic/mordor-scarcity")
 
   val Usage: String =
-    "usage: HoleInjectionTool <stopped datadir under " + Allowed + "> <depth of 1 or more>\n" +
-      "Deletes one trie node from the hash store, `depth` references below the best block's state root."
+    "usage: HoleInjectionTool <stopped datadir under " + Allowed + "> <depth of 1 or more> [corrupt]\n" +
+      "Deletes one trie node from the hash store, `depth` references below the best block's state root, or with `corrupt` " +
+      "writes junk bytes under its key."
+
+  enum Mode:
+    case Delete
+    case Corrupt
 
   /** The datadir, with symlinks resolved, if it is under `allowed`. */
   def checked(datadir: String, allowed: Path = Allowed): Either[String, Path] =
@@ -94,23 +103,32 @@ object HoleInjectionTool:
         case _              => None
     case _ => None
 
-  /** Picks the hole and deletes it, from whichever store this is. A value that hashes to its key is archive's; anything
+  /** Picks the hole and makes it, in whichever store this is. A value that hashes to its key is archive's; anything
     * else is basic pruning's wrapper.
     */
-  def inject(source: DataSource, depth: Int): Either[String, Hole] =
+  def inject(source: DataSource, depth: Int, mode: Mode = Mode.Delete): Either[String, Hole] =
     val best = new AppStateStorage(source).getBestBlockInfo()
     val nodes = new NodeStorage(source)
+    def isBare(hash: ByteString, stored: Array[Byte]): Boolean = ByteString(kec256(stored)) == hash
     def read(hash: ByteString): Option[Array[Byte]] =
-      nodes
-        .get(hash)
-        .map(stored => if ByteString(kec256(stored)) == hash then stored else StoredNodeTestAccess.unwrapped(stored))
+      nodes.get(hash).map(stored => if isBare(hash, stored) then stored else StoredNodeTestAccess.unwrapped(stored))
     for
       header <- new BlockHeadersStorage(source).get(best.hash).toRight(s"No header for best block ${best.number}")
       root = header.stateRoot.value
       picked <- pick(root, depth, read)
     yield
       val (position, hash) = picked
-      source.updateSync(Seq(DataSourceUpdateOptimized(Namespaces.NodeNamespace, Seq(hash.toArray), Nil)))
+      val key = hash.toArray
+      val write = mode match
+        case Mode.Delete => DataSourceUpdateOptimized(Namespaces.NodeNamespace, Seq(key), Nil)
+        case Mode.Corrupt =>
+          val stored = nodes.get(hash).get
+          val junk = kec256(key ++ "hole-injection".getBytes("UTF-8"))
+          val bytes =
+            if isBare(hash, stored) then junk
+            else StoredNodeTestAccess.wrapped(junk, StoredNodeTestAccess.references(stored))
+          DataSourceUpdateOptimized(Namespaces.NodeNamespace, Nil, Seq(key -> bytes))
+      source.updateSync(Seq(write))
       Hole(header.number.value, root, position, hash)
 
   private[snap] def rocksConfig(dir: Path): RocksDbConfig =
@@ -127,27 +145,31 @@ object HoleInjectionTool:
 
   def main(args: Array[String]): Unit =
     def die(why: String): Nothing = throw new IllegalArgumentException(s"$why\n$Usage")
-    args match
-      case Array(datadir, depthText) =>
-        val depth = depthText.toIntOption.getOrElse(die(s"Depth is not a number: $depthText"))
-        val hole = for
-          real <- checked(datadir)
-          dir <- rocksDbUnder(real)
-          found <-
-            val source = RocksDbDataSource(rocksConfig(dir), Namespaces.nsSeq)
-            try inject(source, depth)
-            finally source.close()
-        yield found
-        hole.fold(
-          die,
-          h =>
-            println(
-              s"""Deleted one node from the hash store.
-                 |  block    ${h.block}
-                 |  root     ${AuditWalk.hexOf(h.root)}
-                 |  hash     ${AuditWalk.hexOf(h.hash)}
-                 |  position ${h.position.describe}
-                 |Start the node, and grep its log for: [HEAL-AUDIT].*${AuditWalk.hexOf(h.hash)}""".stripMargin
-            )
+    val (datadir, depthText, mode) = args match
+      case Array(dir, depth)            => (dir, depth, Mode.Delete)
+      case Array(dir, depth, "corrupt") => (dir, depth, Mode.Corrupt)
+      case _                            => die("Wrong arguments")
+    val depth = depthText.toIntOption.getOrElse(die(s"Depth is not a number: $depthText"))
+    val hole = for
+      real <- checked(datadir)
+      dir <- rocksDbUnder(real)
+      found <-
+        val source = RocksDbDataSource(rocksConfig(dir), Namespaces.nsSeq)
+        try inject(source, depth, mode)
+        finally source.close()
+    yield found
+    val what = mode match
+      case Mode.Delete  => "Deleted one node from the hash store."
+      case Mode.Corrupt => "Wrote junk bytes over one node in the hash store."
+    hole.fold(
+      die,
+      h =>
+        println(
+          s"""$what
+             |  block    ${h.block}
+             |  root     ${AuditWalk.hexOf(h.root)}
+             |  hash     ${AuditWalk.hexOf(h.hash)}
+             |  position ${h.position.describe}
+             |Start the node, and grep its log for: [HEAL-AUDIT].*${AuditWalk.hexOf(h.hash)}""".stripMargin
         )
-      case _ => die("Wrong arguments")
+    )
