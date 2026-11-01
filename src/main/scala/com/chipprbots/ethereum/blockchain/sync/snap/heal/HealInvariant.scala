@@ -13,10 +13,9 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
   *
   * The marker (`snap.heal.invariant`, AppState `s`) says everything present here was written under "present implies
   * complete". It does not say complete. It is stamped on an empty datadir at a SNAP start and at a clean walk
-  * completion; a datadir without it gets one repair pass, which is the verification walk healing already runs at every
-  * completion, and the marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills
-  * what it found and the run hands off unmarked (T050a). Slice 5 reads the marker to take that walk off the completion
-  * path.
+  * completion; a datadir without it gets one repair pass, which is the verification walk healing runs there, and the
+  * marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills what it found and
+  * the run hands off unmarked (T050a). Where it stands, healing completes with no walk (T051).
   *
   * Every write here is one synced batch, so no crash can leave half of one.
   */
@@ -99,10 +98,15 @@ object HealInvariant:
     *
     * On the Path scheme a node's position holds one node, so a phase that starts over existing nodes can rewrite a
     * region at another root. If a state then returns to an earlier value and a second interruption falls between
-    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child, and only a walk
-    * that reads every node would see it. That takes a resume of cursors, a fresh phase over nodes already there (the
-    * accounts-complete flag set with no task-file pointer persisted is one), or a supervisor restart of the account
-    * coordinator. A clean walk stamps the marker again, so the cost is one walk on such a run.
+    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child. Publish keys
+    * every node by its own keccak, so what that leaves in the store execution reads is an absence, which throws, and
+    * never a wrong root.
+    *
+    * Only a fresh phase over nodes already there withdraws (the accounts-complete flag set with no task-file pointer
+    * persisted is one, and so is a supervisor restart of a launch that had no cursors): the marker says nothing of
+    * those nodes. A cursor resume keeps it, supervisor restart included (the user's decision, 2026-11-01): a multi-day
+    * sync restarts many times, and the background audit covers that crash class, one hole at a time. A clean walk
+    * stamps the marker again, so a withdrawal costs one walk on such a run.
     *
     * Nothing here on Hash: nodes are content-addressed, so a node's bytes cannot change under it. Nor at a
     * storage-phase restart: its chunks verify against the task's root.
@@ -114,7 +118,7 @@ object HealInvariant:
       resumedCursors: Boolean
   ): Boolean =
     val withdraw = scheme == StorageScheme.Path && appState.isSnapHealInvariantPresent() &&
-      (resumedCursors || pathNodes.exists(!_.isEmpty))
+      !resumedCursors && pathNodes.exists(!_.isEmpty)
     if withdraw then appState.clearSnapHealInvariant().commitSync()
     withdraw
 

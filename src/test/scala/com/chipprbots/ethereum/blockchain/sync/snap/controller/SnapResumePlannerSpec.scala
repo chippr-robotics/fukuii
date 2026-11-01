@@ -577,15 +577,17 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.appStateStorage.stampSnapHealInvariant().commitSync()
     h.module.appStateStorage
 
-  it should "withdraw the marker when a Path account phase resumes cursors" taggedAs UnitTest in {
+  // The user's decision, 2026-11-01: only a fresh phase over nodes already there withdraws. The audit covers a resume.
+  it should "keep the marker when a Path account phase resumes cursors, over nodes already there" taggedAs UnitTest in {
     val h = new Harness(pathConfig)
     val app = stamped(h)
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
     h.module.preservedRangeProgress = aCursor
     h.module.preservedAtPivotBlock = Some(BigInt(1_000))
 
     h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
 
-    app.isSnapHealInvariantPresent() shouldBe false
+    app.hasSnapHealInvariant() shouldBe true
   }
 
   it should "withdraw the marker when a fresh Path account phase starts over nodes already there" taggedAs UnitTest in {

@@ -724,8 +724,7 @@ private[snap] trait SnapResumePlanner
       )
     then
       ctx.log.warn(
-        "[HEAL-INVARIANT] Marker withdrawn: a Path account phase starts over existing nodes " +
-          s"(${if resumeProgress.nonEmpty then "resuming account cursors" else "the Path column families are not empty"}). " +
+        "[HEAL-INVARIANT] Marker withdrawn: a fresh Path account phase starts over existing nodes. " +
           "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
       )
 

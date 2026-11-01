@@ -331,9 +331,9 @@ private[snap] trait HealingOrchestrator
     * That pass is the coordinator's clean full walk, which `FrontierRebuildBfs` makes a full descent since no subtree
     * record can stop it (the records went with CF `g`): every present child, and the storage trie of every account
     * leaf. It is not the Hash controller's own trie walk: that walk reads a present hash node and stops there, so it
-    * cannot vouch for what is below (nothing starts it now, spec 022 T052). Nor is it a coordinator's completion with no
-    * walk (T051): the marker stands by then, and a `lostTrack` after that decision must stay. Hence the root check: no
-    * clean full walk of this root, no stamp, and the next SNAP run on this datadir repairs again. A write that fails
+    * cannot vouch for what is below (nothing starts it now, spec 022 T052). Nor is it a coordinator's completion with
+    * no walk (T051): the marker stands by then, and a `lostTrack` after that decision must stay. Hence the root check:
+    * no clean full walk of this root, no stamp, and the next SNAP run on this datadir repairs again. A write that fails
     * costs the same and no more, so it does not stop the completion.
     *
     * Nor does the walk look at code. On a datadir written by older binaries, an account's code can be missing with
@@ -447,9 +447,9 @@ private[snap] trait HealingOrchestrator
     * trusted there. Every coordinator completion then follows a clean full walk of the current root in that coordinator
     * incarnation (a verification walk, or the clean rebuild walk), and every restart rebuilds the frontier with a full
     * walk; both read the store and so find whatever a crash lost with the cache. That walk is the completion guarantee
-    * for this mode, and `markerMayStand` is what keeps it there (spec 022 T051). So it is under
-    * `deferred-merkleization = true`, where no trie was built, and on any datadir whose marker does not stand. Where one
-    * stands, a present root is a complete one and the coordinator's gate completes with no walk.
+    * for this mode, and `markerMayStand` is what keeps it there (spec 022 T051). So it is under `deferred-merkleization
+    * \= true`, where no trie was built, and on any datadir whose marker does not stand. Where one stands, a present
+    * root is a complete one and the coordinator's gate completes with no walk.
     *
     * Four settings forwarded here no longer do anything: `scopedHealVerification`, `scopedHealMaxPaths`,
     * `prunedHealVerification`, `frontierPersistenceEnabled` (CF `g` is retired, spec 022 D6). They stay in the

@@ -255,11 +255,21 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       resumedCursors: Boolean = false
   ): Boolean = HealInvariant.withdrawForPathAccountPhase(appState, Some(pathNodes), scheme, resumedCursors)
 
-  "A Path account phase" should "withdraw the marker when it resumes cursors, in one synced write" taggedAs UnitTest in {
-    val (source, appState, pathNodes) = stamped()
-    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
-    appState.isSnapHealInvariantPresent() shouldBe false
-    source.batches.toSeq shouldBe Seq((true, Seq(invariantMarkerDelete)))
+  // The user's decision, 2026-11-01: a resume keeps it. Sepolia's first sync took about 23 process starts, so withdrawing
+  // here meant a walk on nearly every long sync; the audit covers the crash class, which leaves absence, not a wrong root.
+  "A Path account phase" should "keep the marker when it resumes cursors, over any node, and write nothing" taggedAs UnitTest in {
+    Seq[PathNodeStorage => Unit](
+      _ => (),
+      _.writeAccountNode(Array[Byte](1), Array[Byte](1, 2)),
+      _.writeStorageNode(root, Array[Byte](1), Array[Byte](1, 2))
+    ).foreach { write =>
+      val (source, appState, pathNodes) = stamped()
+      write(pathNodes)
+      source.forget()
+      withdrawal(appState, pathNodes, resumedCursors = true) shouldBe false
+      appState.hasSnapHealInvariant() shouldBe true
+      source.batches shouldBe empty
+    }
   }
 
   it should "withdraw the marker when it starts fresh over a Path family holding a node, whichever one" taggedAs UnitTest in {
@@ -279,7 +289,8 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   it should "withdraw a marker of another version too: the removals go by the key being there" taggedAs UnitTest in {
     val (_, appState) = markedOther()
     val pathNodes = new PathNodeStorage(EphemDataSource())
-    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe true
+    pathNodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    withdrawal(appState, pathNodes) shouldBe true
     appState.get(Keys.SnapHealInvariant) shouldBe None
   }
 
@@ -293,7 +304,9 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   it should "write nothing when there is no marker to withdraw" taggedAs UnitTest in {
     val (source, appState) = created()
     val pathNodes = new PathNodeStorage(source)
-    withdrawal(appState, pathNodes, resumedCursors = true) shouldBe false
+    pathNodes.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    source.forget()
+    withdrawal(appState, pathNodes) shouldBe false
     source.batches shouldBe empty
   }
 

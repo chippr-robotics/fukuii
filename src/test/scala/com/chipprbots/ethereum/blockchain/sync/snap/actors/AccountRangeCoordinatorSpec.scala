@@ -119,7 +119,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // spec 022 T050a, beacon's crash class: the restart the controller's resume planning never sees.
-  "A supervisor restart of a Path account coordinator" should "withdraw the marker over nodes the last incarnation wrote" taggedAs UnitTest in {
+  private def restartOverWrittenNodes(resumeProgress: Map[ByteString, ByteString]): AppStateStorage =
     val source = EphemDataSource()
     val app = new AppStateStorage(source)
     val nodes = new PathNodeStorage(source)
@@ -134,6 +134,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
             mptStorage = new TestMptStorage(),
             concurrency = 1,
             snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]().ref,
+            resumeProgress = resumeProgress,
             accountTrieEcOverride = Some(classicSystem.dispatcher),
             storageScheme = StorageScheme.Path,
             stateIngest = pathSchemeIngest(app, nodes)
@@ -151,7 +152,16 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coordinator ! AccountRangeCoordinator.AccountGetProgress(null)
     coordinator ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
     statusProbe.expectMessageType[AccountRangeStats]
-    app.isSnapHealInvariantPresent() shouldBe false
+    app
+
+  "A supervisor restart of a Path account coordinator" should "withdraw the marker over nodes the last incarnation wrote, with no cursors" taggedAs UnitTest in {
+    restartOverWrittenNodes(Map.empty).isSnapHealInvariantPresent() shouldBe false
+  }
+
+  // The user's decision, 2026-11-01: with cursors it is a resume, and a resume keeps it.
+  it should "keep the marker when the launch resumed cursors" taggedAs UnitTest in {
+    val cursor = ByteString(Array.fill[Byte](32)(1)) -> ByteString(Array.fill[Byte](32)(2))
+    restartOverWrittenNodes(Map(cursor)).hasSnapHealInvariant() shouldBe true
   }
 
   /** Resolve the coordinator's single (concurrency = 1) worker child via actorSelection; returns a Typed ref so sends
