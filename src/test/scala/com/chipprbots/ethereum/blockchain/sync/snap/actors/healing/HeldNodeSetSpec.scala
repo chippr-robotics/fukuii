@@ -583,9 +583,10 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
       peer.manual.expectMessageType[SNAP.GetTrieNodes].paths shouldBe Seq(trie("brX").pathset)
       Seq("leafY0", "leafY1", "brY").foreach(l => withClue(s"$l, buffered: ")(disk.holds(trie(l)) shouldBe false))
       coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
+      // spec 022 T047: it abandons on Hash too now, and what it writes on the way out is this test's subject.
       controller.fishForMessage(30.seconds) {
-        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
+        case SNAPSyncController.StateHealingAbandoned => FishingOutcomes.complete
+        case _                                        => FishingOutcomes.continueAndIgnore
       }
       Seq("leafY0", "leafY1", "brY").foreach(l => withClue(s"$l, written: ")(disk.holds(trie(l)) shouldBe true))
       Seq("root", "ext").foreach(l => withClue(s"$l, held: ")(disk.holds(trie(l)) shouldBe false))

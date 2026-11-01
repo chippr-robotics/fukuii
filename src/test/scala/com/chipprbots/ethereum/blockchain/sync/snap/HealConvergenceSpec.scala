@@ -319,3 +319,31 @@ class HealConvergenceControllerSpec
       f.awaitProcessed(snap)
       f.factories.healingSpawns.get() shouldBe 0
     }
+
+  // The record is for the root it names: a hand-off at another still takes the marker. Finalisation's other side, keeping it
+  // on a decision for this root, is `InvariantMarkerControllerSpec`'s end-to-end heal over a standing marker.
+  "A hand-off" should "take the marker though a decision on another root is on record" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val (snap, _) = healing(f, StorageScheme.Hash)
+    f.appStateStorage.stampSnapHealInvariant().commit()
+    decide(f, root(0x55))
+    snap ! HealingRootUnservable(Root)
+    f.parent.fishForMessage(30.seconds) {
+      case SnapSyncFinalized(_) => FishingOutcomes.complete
+      case _                    => FishingOutcomes.continueAndIgnore
+    }
+    f.appStateStorage.isSnapHealInvariantPresent() shouldBe false
+  }
+
+  it should "keep the marker on a decision for this root, with no walk's proof beside it" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val (snap, _) = healing(f, StorageScheme.Hash)
+    f.appStateStorage.stampSnapHealInvariant().commit()
+    decide(f, Root)
+    snap ! StateHealingComplete
+    f.parent.fishForMessage(30.seconds) {
+      case SnapSyncFinalized(_) => FishingOutcomes.complete
+      case _                    => FishingOutcomes.continueAndIgnore
+    }
+    f.appStateStorage.hasSnapHealInvariant() shouldBe true
+  }

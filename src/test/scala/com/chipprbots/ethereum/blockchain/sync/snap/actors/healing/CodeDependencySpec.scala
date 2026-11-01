@@ -119,6 +119,12 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     val appState = new com.chipprbots.ethereum.db.storage.AppStateStorage(new EphemDataSource(Map.empty))
     if marked then appState.stampSnapHealInvariant().commit()
     val decidedRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+    // A walk clears its queue as it starts.
+    val walkClears = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val walkQueue = new com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage:
+      override def clear(): Unit =
+        walkClears.incrementAndGet()
+        super.clear()
     val hashStore = new TestMptStorage()
     val pathSource = new FailingSource
     val pns = new PathNodeStorage(pathSource)
@@ -144,6 +150,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       heldMemoryLimit = heldMemoryLimit,
       cleanWalkRoot = Some(cleanWalkRoot),
       decidedRoot = Some(decidedRoot),
+      bfsQueueStorageOpt = Some(walkQueue),
       markerStore = Option.when(marked)(appState),
       markerMayStand = marked
     )
@@ -390,6 +397,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       val end = rig.seen()
       end should contain(SNAPSyncController.StateHealingAbandoned)
       end should not contain SNAPSyncController.StateHealingComplete
+      withClue("no walk: ")(rig.walkClears.get() shouldBe 0)
       withClue("no record, so finalisation takes the marker: ") {
         rig.decidedRoot.get() shouldBe null
         rig.cleanWalkRoot.get() shouldBe null
@@ -420,6 +428,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
         ended = rig.seen().contains(SNAPSyncController.StateHealingAbandoned)
         pause.expectNoMessage(5.millis)
       rig.onDisk("root") shouldBe true
+      withClue("no walk: ")(rig.walkClears.get() shouldBe 0)
       rig.decidedRoot.get() shouldBe null
     }
 
@@ -440,7 +449,10 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       rig.drive()
       rig.onDisk("root") shouldBe true
       rig.seen() should contain(SNAPSyncController.StateHealingComplete)
-      withClue("with no walk: ")(rig.cleanWalkRoot.get() shouldBe null)
+      withClue("with no walk: ") {
+        rig.walkClears.get() shouldBe 0
+        rig.cleanWalkRoot.get() shouldBe null
+      }
       rig.decidedRoot.get() shouldBe rig.t.root.hash
     }
 
