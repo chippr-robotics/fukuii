@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Known issues
+- **Plan disk for Sepolia, and for a full-history node generally: backfill has no limit and nothing stops at a full disk
+  (#1483).** A SNAP sync of Sepolia needs about 300-340 GB when it hands off to regular sync. It then backfills the whole
+  block history into the same datadir, roughly another 500-900 GB (estimated from a sample of the chain at block 12.04M,
+  with receipts the least certain part). Mainnet needs far more. There is no history expiry yet, and a separate path for
+  history is not available. Check free space before you start a sync, and watch it during backfill. To skip backfill, set
+  `fukuii.sync.snap-sync.chain-download-enabled = false`: the node then follows the head and holds no block history from
+  before the point it synced to.
+- **Running an older build on a datadir this one has synced.** An older binary neither reads nor clears the healing
+  invariant marker, so what it writes is not covered by it, and a later upgrade cannot tell. After going back up, start
+  once with `-Dfukuii.snap.clearDoneOnStart=true`, which removes the marker and runs healing again.
+
 ## [0.10.0] - 2026-10-20
 
 ### Changed
