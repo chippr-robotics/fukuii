@@ -291,6 +291,18 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
 object SnapSyncProgressStorage:
   private val AuditCursorsKey: Array[Byte] = "snap.heal.auditCursors".getBytes(StorageStringCharset.UTF8Charset)
   private val AuditBadEntriesKey: Array[Byte] = "snap.heal.auditBadEntries".getBytes(StorageStringCharset.UTF8Charset)
+
+  /** The state under the audit is being replaced, so where a pass had got to and what it was counting go, in the write
+    * that says so: a resume of those positions would skip whatever the pass had already read of the old state.
+    */
+  private[storage] def forgetAudit(dataSource: DataSource): DataSourceBatchUpdate =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(
+        DataSourceUpdateOptimized(Namespaces.SnapSyncProgressNamespace, Seq(AuditCursorsKey, AuditBadEntriesKey), Nil)
+      )
+    )
+
   private val ExcludedPrefix: Array[Byte] = "SnapExcluded/1/".getBytes(StorageStringCharset.UTF8Charset)
   // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
   private val ExcludedEnd: Array[Byte] = ExcludedPrefix :+ 0xff.toByte

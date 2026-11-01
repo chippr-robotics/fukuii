@@ -442,3 +442,39 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     store.readAuditBadEntries().get.toSeq shouldBe Seq[Byte](5)
     noException should be thrownBy store.clearAll()
   }
+
+  // ---- the review round: what a clean anchor is worth ----------------------------------------------------------------
+
+  private def anchored(pivot: Option[Int]): (AppStateStorage, SnapSyncProgressStorage) =
+    val source = EphemDataSource()
+    val app = new AppStateStorage(source)
+    val progress = new SnapSyncProgressStorage(source)
+    pivot.foreach(p => app.putSnapSyncPivotBlock(p).commit())
+    app.snapSyncDone().commit()
+    app.recoveryDone().and(app.putSnapAuditCleanAnchor(app.snapAuditAnchor())).commit()
+    progress.writeAuditCursors(Array[Byte](1))
+    progress.writeAuditBadEntries(Array[Byte](2))
+    app.isSnapAuditOwed() shouldBe false
+    (app, progress)
+
+  private def owesAWholePass(app: AppStateStorage, progress: SnapSyncProgressStorage): Unit =
+    app.getSnapAuditCleanAnchor() shouldBe None
+    app.isSnapAuditOwed() shouldBe true
+    withClue("and not the rest of a pass over the state this replaced: ") {
+      progress.readAuditCursors() shouldBe None
+      progress.readAuditBadEntries() shouldBe None
+    }
+
+  "The clean anchor" should "go with the done flag, so a re-SNAP on the same pivot owes a pass" taggedAs UnitTest in {
+    val (app, progress) = anchored(Some(5))
+    app.clearSnapSyncDone().commit()
+    app.snapSyncDone().commit() // the same pivot again
+    owesAWholePass(app, progress)
+  }
+
+  it should "go at a checkpoint import, whose anchor is the same every time" taggedAs UnitTest in {
+    val (app, progress) = anchored(None)
+    app.beginCheckpointImport(ByteString(Array.fill[Byte](32)(1)), 1L).commit()
+    app.endCheckpointImport().commit()
+    owesAWholePass(app, progress)
+  }

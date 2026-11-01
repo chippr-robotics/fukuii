@@ -228,6 +228,13 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   // spec 022 T050a, beacon's crash class: a Path account phase over existing nodes takes the marker back.
   private val invariantMarkerDelete = Op(AppNs, delete = true, key(Keys.SnapHealInvariant))
 
+  /** What a write that replaces the state takes with it for the background audit (spec 022 T053). */
+  private val auditForgotten = Set(
+    Op(AppNs, delete = true, key(Keys.SnapAuditCleanAnchor)),
+    Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditCursors")),
+    Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditBadEntries"))
+  )
+
   private def stamped(): (Recording, AppStateStorage, PathNodeStorage) =
     val (source, appState) = created()
     val pathNodes = new PathNodeStorage(source)
@@ -490,7 +497,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     source.batches.head._2.toSet shouldBe Set(
       Op(AppNs, delete = true, key(Keys.SnapSyncDone)),
       Op(AppNs, delete = true, key(Keys.SnapHealInvariant))
-    )
+    ) ++ auditForgotten
     withClue("the SNAP start that follows finds a pre-invariant datadir: ") {
       appState.putSnapSyncAccountsComplete(true).commit()
       HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
@@ -1032,7 +1039,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     source.batches.head._2.toSet shouldBe Set(
       Op(AppNs, delete = true, key(Keys.SnapHealInvariant)),
       Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))
-    )
+    ) ++ auditForgotten
     source.forget()
     appState.stampSnapHealInvariant().commitSync()
     source.batches.toSeq.map(_._1) shouldBe Seq(true)
