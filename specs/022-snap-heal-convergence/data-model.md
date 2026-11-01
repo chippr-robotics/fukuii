@@ -131,21 +131,24 @@ The full-trie walk, after hand-off, with import running. `blockchain/sync/Backgr
 
 | Key | Where | What |
 |-----|-------|------|
-| `snap.heal.auditCleanAnchor` | AppState `s` | The SNAP pivot a clean pass covered, or `no-pivot` on a checkpoint-synced node, which has done flags and no pivot. Owed when SNAP or a checkpoint is done and this differs, or a recovery flag is down. A never-SNAP node owes nothing. Finalisation does not write it. |
+| `snap.heal.auditCleanAnchor` | AppState `s` | The SNAP pivot a clean pass covered, or `no-pivot` on a checkpoint-synced node, which has done flags and no pivot. Owed when SNAP or a checkpoint is done and this differs, or a recovery flag is down. A never-SNAP node owes nothing. Finalisation does not write it. `clearSnapSyncDone` and `beginCheckpointImport` remove it, and the two keys below with it, in the same write: a re-SNAP can land on the same pivot, and every checkpoint import has the same anchor. |
 | `snap.heal.auditCursors` | SNAP progress `p`, raw bytes | Where a pass has got to: the anchor, the pass number, the counts, and positions with no hashes, each resolved again from the current root when it comes up. Written with `commit()` every 3 minutes and at the pass's first fault, never `commitSync()`: the data source holds its lock through an fsync, and a lost cursor repeats a little of a walk. For another anchor, or unreadable, a pass starts over. Cleared at a pass's end. |
-| `snap.heal.auditBadEntries` | SNAP progress `p`, raw bytes | Per bad entry, how many separate passes could not fetch it, the last of those and when, up to 1,024 entries, and the last pass's number. It outlives a pass. A served repair clears an entry. |
+| `snap.heal.auditBadEntries` | SNAP progress `p`, raw bytes | The anchor it belongs to, per bad entry how many separate passes could not fetch it, the last of those and when, up to 1,024 entries, and the last pass's number, from which the backoff between unclean passes doubles (1 h up to 7 days). It outlives a pass. A served repair clears an entry. It goes when the anchor changes and at a clean pass, which also takes the pass number back to zero. |
+
+**What the lock covers.** `commitLock` holds off block commits and prunes. `saveNode`, import's on-demand write, takes no lock and is a blind upsert at one reference: it can land either side of anything below, and can set a repaired node's count back to one, as it can any node's.
 
 **What repair writes.** A node goes through `StateStorage.repairNode`: under `commitLock`, only if absent or failing keccak, judged at write time, with references pinned at 2^30, since a repaired node's real count is unknown (a leak of a few nodes, not a loss), never lowering a count it finds, and evicting the decoded node. Code goes to the code store alone, and the execution caches forget what it replaced.
 
-**What it deletes.** Only an entry that does not unwrap, or bytes failing keccak, or code failing keccak, after fetching it exhausted in 3 separate passes with the backoff between, and with a read at the delete still finding it bad and the current root still reaching that hash at that position, both under `commitLock`. Never a node that passes keccak. The position is a hole after that.
+**What it deletes.** Only an entry that does not unwrap, or bytes failing keccak, or code failing keccak, after fetching it exhausted in 3 separate passes with the backoff between, and with a read at the delete still finding it bad, the current root still reaching that hash at that position, and a read after that still finding it bad, all under `commitLock`. A fetch that timed out does not count. Never a node that passes keccak, and that includes an entry that does not unwrap whose raw bytes hash to the key, another pruning mode's format, which stays and is counted as not followable. The position is a hole after that.
 
 **What is logged**, under `...sync.SyncController.BackgroundAudit`, a name the shipped `logback.xml` keeps at INFO, each line starting `[HEAL-AUDIT]`:
 
 | Level | When |
 |-------|------|
-| INFO | A pass starts or resumes. Progress every minute: nodes, accounts, moved, holes, repaired, unresolved, badNodes, deleted, droppedAtCap, unfollowable, elapsed, stack, queued holes. Paused and resumed. A repair. Off, once. |
-| WARN | Each hole and bad entry, with its position and hash, and the root and block it was resolved under, saying that on a node that never lost state it may be #1692 (FR-013). A fetch that exhausted. An absent head root. A pass that ended not clean. |
-| ERROR | The first bad entry of a pass no peer served. A delete. Something it cannot follow. A failed read. |
+| DEBUG | Paused and resumed, when the pause lasted 5 minutes or less. |
+| INFO | A pass starts or resumes. Progress every minute: nodes, accounts, moved, holes, repaired, unresolved, badNodes, deleted, droppedAtCap, unfollowable, elapsed, stack, queued holes, pauses. A pause past 5 minutes, once, and its end with how long. A repair. Off, once. |
+| WARN | Each hole and bad entry, with its position and hash, and the root and block it was resolved under, saying that on a node that never lost state it may be #1692 (FR-013). A fetch that exhausted, or that had no answer in 15 minutes. An absent head root. A pass that ended not clean, with the wait for the next. |
+| ERROR | The first bad entry of a pass no peer served. A delete, with what follows for its kind: for a node import's on-demand fetch, for code a bulk recovery first. Something it cannot follow, an entry kept for passing keccak in another format among them. A failed read. |
 
 A pass that ended clean logs at INFO. The private `StateNodeFetcher` logs under its own name: its "signaling BlockImporter to back off" line, from an audit fetch, signals nothing to the importer.
 
