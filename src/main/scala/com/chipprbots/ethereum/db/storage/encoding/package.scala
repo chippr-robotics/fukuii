@@ -32,7 +32,7 @@ package object encoding:
           intFromEncodeable(references),
           bigIntFromEncodeable(lastUsedByBlock)
         )
-      case _ => throw new RuntimeException("Error when decoding stored node")
+      case _ => throw RLPException("Error when decoding stored node")
 
     override def encode(obj: StoredNode): RLPEncodeable = RLPList(
       toEncodeable(obj.nodeEncoded),

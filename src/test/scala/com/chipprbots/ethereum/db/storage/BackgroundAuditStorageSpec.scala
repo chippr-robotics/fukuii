@@ -17,8 +17,13 @@ import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNode
 import com.chipprbots.ethereum.db.storage.encoding.*
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
+import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The storage primitives the background audit stands on (spec 022 T053, decisions 1, 3, 7, 8): a no-fill batch that
@@ -477,4 +482,45 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     app.beginCheckpointImport(ByteString(Array.fill[Byte](32)(1)), 1L).commit()
     app.endCheckpointImport().commit()
     owesAWholePass(app, progress)
+  }
+
+  // ---- the review round: a read error is not a bad node ---------------------------------------------------------------
+
+  final private class FailingDisk extends RuntimeException("the disk")
+
+  /** A store with no raw read of its own, so it has the default, and whose `get` is `read`. */
+  private def plainStore(read: NodeHash => Option[Array[Byte]]): NodesKeyValueStorage =
+    new NodesKeyValueStorage:
+      override def get(key: NodeHash): Option[Array[Byte]] = read(key)
+      override def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, Array[Byte])]): NodesKeyValueStorage = this
+      override def persist(): Unit = ()
+
+  private def plainMpt(read: Array[Byte] => MptNode): MptStorage =
+    new MptStorage:
+      override def get(nodeId: Array[Byte]): MptNode = read(nodeId)
+      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] = newRoot
+      override def persist(): Unit = ()
+
+  private val anyHash: NodeHash = hashOf(nodeBytes(9))
+
+  "NodesKeyValueStorage's default raw read" should "let a read error through: a disk error must not read as a bad node" taggedAs UnitTest in {
+    a[FailingDisk] should be thrownBy plainStore(_ => throw new FailingDisk).multiGetRaw(Seq(anyHash))
+  }
+
+  it should "call bytes that do not decode undecodable, that entry alone" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), good, 1)
+    b.nodes.put(anyHash, nodeBytes(2)) // a list of two: not the [bytes, refs, lastUsed] a stored node is
+    val store = plainStore(new ReferenceCountNodeStorage(b.nodes, 0).get)
+    val reads = store.multiGetRaw(Seq(anyHash, hashOf(good)))
+    reads(0) shouldBe RawNodeRead.Undecodable
+    reads(1).asInstanceOf[RawNodeRead.Bytes].encoded.toSeq shouldBe good.toSeq
+  }
+
+  "MptStorage's default raw read" should "let a read error through, and tell absent from bad" taggedAs UnitTest in {
+    a[FailingDisk] should be thrownBy plainMpt(_ => throw new FailingDisk).rawNodes(Seq(anyHash))
+    plainMpt(_ => throw new MissingRootNodeException(anyHash)).rawNodes(Seq(anyHash)) shouldBe Seq(RawNodeRead.Absent)
+    plainMpt(_ => throw new MPTException("Invalid Node")).rawNodes(Seq(anyHash)) shouldBe Seq(RawNodeRead.Undecodable)
+    plainMpt(_ => throw RLPException("not rlp")).rawNodes(Seq(anyHash)) shouldBe Seq(RawNodeRead.Undecodable)
   }

@@ -13,6 +13,9 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.rlp.RLPException
 
 /** What one entry of a batched raw node read found (spec 022 T053). One bad entry says so for itself and the rest of
   * the batch stands. `Bytes` holds the node's RLP, unwrapped of whatever the store keeps it in. It is what the store
@@ -23,6 +26,17 @@ enum RawNodeRead:
   case Absent
   case Bytes(encoded: NodeEncoded)
   case Undecodable
+
+object RawNodeRead:
+
+  /** `read` for a store that cannot read and decode apart: what bad bytes throw is [[Undecodable]], and anything else
+    * is the store failing and goes through. A disk error read as a bad node could end as a delete.
+    */
+  def decoding(read: => RawNodeRead): RawNodeRead =
+    try read
+    catch
+      case _: MissingNodeException                                          => Absent
+      case _: RLPException | _: MPTException | _: IndexOutOfBoundsException => Undecodable
 
 sealed trait NodesStorage:
   def get(key: NodeHash): Option[NodeEncoded]

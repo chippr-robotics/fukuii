@@ -2,10 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
-import scala.util.control.NonFatal
-
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
@@ -29,12 +26,7 @@ trait MptStorage:
     * audit's read (spec 022 T053). The default is for the stores it never reads.
     */
   def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
-    hashes.map { hash =>
-      try RawNodeRead.Bytes(get(hash.toArray).encode)
-      catch
-        case _: MissingNodeException => RawNodeRead.Absent
-        case NonFatal(_)             => RawNodeRead.Undecodable
-    }
+    hashes.map(hash => RawNodeRead.decoding(RawNodeRead.Bytes(get(hash.toArray).encode)))
 
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
