@@ -53,10 +53,10 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.testing.Tags.UnitTest
-import com.chipprbots.ethereum.testing.TestMptStorage
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 
 /** An in-memory trie store that records every raw-node batch the Hash-scheme StackTrie flushes to it. */
-private class RecordingMptStorage extends TestMptStorage:
+private class RecordingMptStorage extends TrieStoreSpy:
   val flushed: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
   override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
     flushed ++= rawNodes.map(_._1)
@@ -259,6 +259,7 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     m.completedTasks.toSeq shouldBe Seq(t.copy(done = true))
     m.taskStackTries shouldBe empty
     h.mpt.flushed should not be empty
+    withClue("the spy sees a Hash range's writes, so its zero under Path means something: ")(h.mpt.writes should be > 0)
     m.snapshots.toSeq shouldBe Seq(true)
     m.pendingTasks shouldBe empty
     m.storingTasks shouldBe empty
@@ -292,8 +293,25 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
 
     pns.written should not be empty
     h.mpt.flushed shouldBe empty
+    withClue("spec 022 T050a (beacon): no write of any kind through the trie store: ")(h.mpt.writes shouldBe 0)
     m.completedTasks.toSeq shouldBe Seq(t.copy(done = true))
     m.taskStackTries shouldBe empty
+  }
+
+  // spec 022 T050a (beacon): the marker holds on Path under pruning.mode = inmemory only because a Path write never goes
+  // through the trie store, which is the node cache there. A partial range and finalisation are the rest of the phase's writes.
+  it should "write nothing through the trie store on Path across a partial range and finalisation" taggedAs UnitTest in {
+    val pns = new RecordingPathNodeStorage
+    val h = new Harness(scheme = StorageScheme.Path, pathNodes = Some(pns))
+    val m = h.module
+    val t = storedTask(m, 3)
+    m.storingTasks(t.last) = t
+
+    h.call(_.handleStoreAccountChunk(t, accounts(3), 3, storedSoFar = 0, isTaskRangeComplete = false))
+    m.finalizeTrie() shouldBe a[Right[?, ?]]
+
+    pns.written should not be empty
+    h.mpt.writes shouldBe 0
   }
 
   it should "re-queue the task when the Path scheme has no node store" taggedAs UnitTest in {

@@ -74,6 +74,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
 
@@ -220,7 +221,8 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     appState.hasSnapHealInvariant() shouldBe false
     HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
     appState.get(Keys.SnapHealInvariant) shouldBe None
-    source.batches.toSeq shouldBe Seq((true, Seq(Op(AppNs, delete = true, key(Keys.SnapHealInvariant)))))
+    source.batches.toSeq.map(_._1) shouldBe Seq(true)
+    source.batches.head._2 should contain(Op(AppNs, delete = true, key(Keys.SnapHealInvariant)))
   }
 
   // spec 022 T050a, beacon's crash class: a Path account phase over existing nodes takes the marker back.
@@ -290,6 +292,113 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     withdrawal(appState, pathNodes, StorageScheme.Hash) shouldBe false
     appState.hasSnapHealInvariant() shouldBe true
     source.batches shouldBe empty
+  }
+
+  // spec 022 T050a (hunter W1.3): a restarted storage coordinator with no done markers cannot sweep, since its file would
+  // name every account. That is safe only if nothing trusts a marker there.
+  "A datadir with no done markers" should "be one where the invariant marker cannot hold, whatever the settings" taggedAs UnitTest in {
+    for
+      scheme <- Seq(StorageScheme.Hash, StorageScheme.Path)
+      deferred <- Seq(true, false)
+      cached <- Seq(true, false)
+    do
+      withClue(s"$scheme, deferred=$deferred, cached=$cached: ") {
+        val markers = HealInvariant.doneMarkersHold(scheme, deferred, cached)
+        val canHold = HealInvariant.canHold(scheme, cached)
+        if !markers then canHold shouldBe false
+        markers shouldBe (scheme == StorageScheme.Path || deferred || !cached)
+      }
+  }
+
+  // ---- spec 022 T050a, the user's decision of 2026-10-31: a run that knows it lost track -------------------------------
+
+  private val codeScanOwedPut = Op(AppNs, delete = false, key(Keys.SnapCodeScanOwed))
+  private val nopLog = org.slf4j.helpers.NOPLogger.NOP_LOGGER
+
+  "A run that lost track" should "withdraw the marker and owe the code scan, in one synced write" taggedAs UnitTest in {
+    val (source, appState, _) = stamped()
+    HealInvariant.lostTrack(appState, "a sweep hung", nopLog) shouldBe true
+    appState.isSnapHealInvariantPresent() shouldBe false
+    appState.getSnapCodeScanOwed() shouldBe Some("a sweep hung")
+    source.batches.toSeq.map(_._1) shouldBe Seq(true)
+    source.batches.head._2.toSet shouldBe Set(invariantMarkerDelete, codeScanOwedPut)
+  }
+
+  it should "say so at WARN, with the reason, in the logger it is handed" taggedAs UnitTest in {
+    val (_, appState, _) = stamped()
+    val logger = org.slf4j.LoggerFactory
+      .getLogger("spec022.lostTrack")
+      .asInstanceOf[ch.qos.logback.classic.Logger]
+    val heard = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
+    heard.start()
+    logger.addAppender(heard)
+    logger.setLevel(ch.qos.logback.classic.Level.WARN)
+    logger.setAdditive(false)
+    HealInvariant.lostTrack(appState, "no task file", logger) shouldBe true
+    val line = heard.list.get(0)
+    line.getLevel shouldBe ch.qos.logback.classic.Level.WARN
+    line.getFormattedMessage should include("no task file")
+  }
+
+  it should "still owe the scan with no marker to withdraw: the code does not depend on the marker" taggedAs UnitTest in {
+    val (source, appState) = created()
+    HealInvariant.lostTrack(appState, "where it cannot hold", nopLog) shouldBe true
+    appState.getSnapCodeScanOwed() shouldBe Some("where it cannot hold")
+    source.batches.toSeq.map(_._1) shouldBe Seq(true)
+  }
+
+  it should "claim nothing when the write fails, so that the caller holds what it was about to end" taggedAs UnitTest in {
+    val (source, appState, _) = stamped()
+    source.failSynced = true
+    HealInvariant.lostTrack(appState, "a sweep hung", nopLog) shouldBe false
+    appState.hasSnapHealInvariant() shouldBe true
+    appState.getSnapCodeScanOwed() shouldBe None
+  }
+
+  it should "keep owing the scan after a clean walk stamps the marker again, and across a restart that finds the stamp" taggedAs UnitTest in {
+    val (source, appState, pathNodes) = stamped()
+    HealInvariant.lostTrack(appState, "a sweep hung", nopLog) shouldBe true
+    appState.stampSnapHealInvariant().commitSync()
+    source.forget()
+    HealInvariant.atSnapStart(appState, Some(pathNodes), canHold = true) shouldBe AtSnapStart.Stands
+    appState.getSnapCodeScanOwed() shouldBe Some("a sweep hung")
+    source.batches shouldBe empty
+  }
+
+  // The user's decision, 2026-10-31: a repair run withholds bytecodeRecoveryDone, so the scan runs once at the next start.
+  "A SNAP start" should "owe the code scan on a repair run, in one synced write with the marker's removal" taggedAs UnitTest in {
+    val (source, appState) = markedOther()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.getSnapCodeScanOwed() shouldBe Some("no marker, and not an empty datadir")
+    source.batches.toSeq.map(_._1) shouldBe Seq(true)
+    source.batches.head._2.toSet shouldBe Set(invariantMarkerDelete, codeScanOwedPut)
+  }
+
+  it should "owe the code scan under an unfinished checkpoint import, and say which" taggedAs UnitTest in {
+    val (_, appState) = created()
+    appState.beginCheckpointImport(root, 1L).commit()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    appState.getSnapCodeScanOwed().get should include("checkpoint import")
+  }
+
+  it should "write nothing at a later start of the same repair run: the debt is already durable" taggedAs UnitTest in {
+    val (source, appState) = markedOther()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    source.forget()
+    HealInvariant.atSnapStart(appState, None, canHold = true) shouldBe a[AtSnapStart.PreInvariant]
+    source.batches shouldBe empty
+    appState.getSnapCodeScanOwed() shouldBe defined
+  }
+
+  it should "owe nothing on an empty datadir, under a standing marker, or where the marker cannot hold" taggedAs UnitTest in {
+    val (_, empty) = created()
+    HealInvariant.atSnapStart(empty, None, canHold = true) shouldBe AtSnapStart.StampedEmpty
+    empty.getSnapCodeScanOwed() shouldBe None
+    HealInvariant.atSnapStart(empty, None, canHold = true) shouldBe AtSnapStart.Stands
+    empty.getSnapCodeScanOwed() shouldBe None
+    val (_, inMemory) = created()
+    HealInvariant.atSnapStart(inMemory, None, canHold = false) shouldBe AtSnapStart.CannotHold(clearedOne = false)
+    inMemory.getSnapCodeScanOwed() shouldBe None
   }
 
   "HealInvariant at a SNAP start" should "remove a marker of another version where the marker cannot hold, and say so" taggedAs UnitTest in {
@@ -835,20 +944,66 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       withClue("a Path heal writes nothing through the trie store: ")(mpt.writes shouldBe 0)
     testKit.stop(coordinator)
 
-  /** The trie store, counting what is written through it. */
-  final private class TrieStoreSpy extends TestMptStorage:
-    private val written = new java.util.concurrent.atomic.AtomicInteger(0)
-    def writes: Int = written.get()
-    def seed(nodes: Seq[(ByteString, Array[Byte])]): Unit = super.storeRawNodes(nodes)
-    override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
-      written.incrementAndGet()
-      super.storeRawNodes(rawNodes)
-    override def updateNodesInStorage(
-        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
-        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
-    ): Option[com.chipprbots.ethereum.mpt.MptNode] =
-      written.incrementAndGet()
-      super.updateNodesInStorage(newRoot, toRemove)
+  // spec 022 T050a, hunter N3: what the old incarnation held was never on disk, so top-down discovery from the root finds
+  // it again as absent, and nothing it wrote can be taken for what it did not.
+  private def restartedOverHeldNodes(scheme: StorageScheme): Unit =
+    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val peer = new ScriptedPeer(testKit)
+    val controller = createTestProbe[Command]()
+    val mpt = new TestMptStorage()
+    val pns = new PathNodeStorage(new EphemDataSource(Map.empty))
+    val coordinator = testKit.spawn(
+      Behaviors
+        .supervise(
+          new ChildFactories {}.trieNodeHealingCoordinator(
+            stateRoot = trie.root.hash,
+            networkPeerManager = peer.ref,
+            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            mptStorage = mpt,
+            batchSize = 16,
+            snapSyncController = controller.ref,
+            stateIngest = HealingTrieFixtures.healingIngest(
+              None,
+              pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns)
+            ),
+            storageScheme = scheme,
+            movingRootDeltaHeal = true,
+            currentRoot = Some(new AtomicReference(trie.root.hash))
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    peer.coordinator.set(coordinator)
+    val p = PeerTestHelpers.createTestPeer("n3-held-peer", createTestProbe[Any]().ref.toClassic)
+    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(p)
+    val rootRequest = peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+    rootRequest.paths shouldBe Seq(trie("root").pathset)
+    peer.answerFrom(rootRequest, trie.served) // the root is held now, waiting on its children
+    peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds) // and they are out, unanswered
+
+    peer.serveFrom.set(Some(trie.served))
+    coordinator ! TrieNodeHealingCoordinator.QueueMissingNodes(null) // the arm throws: a supervisor restart
+    coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(p) // what the 1-second tick sends the new incarnation
+    awaitComplete(controller)
+    withClue("the new incarnation asked for the root again: ") {
+      peer.autoRequests.flatten should contain(trie("root").pathset)
+    }
+    trie.nodes.foreach { n =>
+      withClue(s"${n.label} is on disk: ") {
+        if scheme == StorageScheme.Hash then mpt.get(n.hash.toArray).hash.toSeq shouldBe n.hash.toSeq
+        else pns.readAccountNode(n.nibbles).map(ByteString(_)) shouldBe Some(ByteString(n.encoded.toArray))
+      }
+    }
+    testKit.stop(coordinator)
+
+  "A restarted healing coordinator" should "find again what the old incarnation held, and complete, under the Hash scheme (N3)" taggedAs UnitTest in {
+    restartedOverHeldNodes(StorageScheme.Hash)
+  }
+
+  it should "find again what the old incarnation held, and complete, under the Path scheme (N3)" taggedAs UnitTest in {
+    restartedOverHeldNodes(StorageScheme.Path)
+  }
 
   it should "get no write from a whole heal, under the Hash scheme" taggedAs UnitTest in {
     healWritesNothingToFrontier(StorageScheme.Hash)

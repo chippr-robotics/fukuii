@@ -1914,14 +1914,27 @@ object TrieNodeHealingCoordinator:
       excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
   ): Behavior[Command] =
+    // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
+        // spec 022 T038b: this setup runs again at a supervisor restart. Nothing replays a re-peg then, so the new
+        // incarnation starts on the controller's current root, not the spawn's.
+        val root = currentRoot.flatMap(current => Option(current.get())).getOrElse(stateRoot)
+        // spec 022 T050a, hunter N3: nor does anything start it. It starts on that root as a process restart would: a root
+        // on disk is walked, an absent one seeded. What the last incarnation held or had queued was never on disk, so
+        // discovery from the root finds it again as absent; a commit is one atomic write, and a Hash flush a prefix of
+        // commit order, so nothing on disk stands over what it lost. Until this it waited for the dead-pulse watchdog,
+        // about 6 minutes, and without a walk at completion it would have completed on what it no longer knew.
+        if incarnations.getAndIncrement() > 0 then
+          context.log.warn(
+            s"[HEAL-RESTART] Supervisor restart: starting again on root ${Hex.toHexString(root.take(4).toArray)}"
+          )
+          context.self ! StartTrieNodeHealing(root)
         new TrieNodeHealingCoordinatorImpl(
           context,
           timers,
-          // spec 022 T038b: this setup runs again at a supervisor restart. Nothing replays a re-peg then, so the new
-          // incarnation starts on the controller's current root, not the spawn's.
-          initialStateRoot = currentRoot.flatMap(root => Option(root.get())).getOrElse(stateRoot),
+          initialStateRoot = root,
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
           mptStorage = mptStorage,

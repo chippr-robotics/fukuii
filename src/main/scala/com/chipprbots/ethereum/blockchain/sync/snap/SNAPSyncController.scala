@@ -250,12 +250,13 @@ private class SNAPSyncControllerImpl(
   // the storage-task markers below and by the healing spawn (spec 022 review vault V3).
   val trieNodesCachedInMemory: Boolean = stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
 
-  // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
-  // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
-  // CachedReferenceCountedStorage.update into an in-memory cache, not RocksDB, so they could be lost with a marker on
-  // disk. Path scheme writes through PathNodeStorage; archive/basic pruning write through; deferred builds no trie.
+  // Markers are recorded only where a marker's claim holds once written (HealInvariant.doneMarkersHold).
   val recordStorageDone: Boolean =
-    snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization || !trieNodesCachedInMemory
+    HealInvariant.doneMarkersHold(
+      snapSyncConfig.storageScheme,
+      snapSyncConfig.deferredMerkleization,
+      trieNodesCachedInMemory
+    )
   if !recordStorageDone then
     ctx.log.info(
       "Storage-task completion markers off (Hash scheme + in-memory pruning buffers storage trie nodes): " +
@@ -538,7 +539,8 @@ private class SNAPSyncControllerImpl(
       case HealInvariant.AtSnapStart.PreInvariant(reason) =>
         ctx.log.warn(
           s"[HEAL-INVARIANT] Pre-invariant datadir ($reason): this run's clean verification walk is its repair pass, " +
-            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked"
+            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked. " +
+            "The walk reads no code, so the recovery flags are withheld and the recovery scan runs at the next start"
         )
       case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
         ctx.log.warn(
@@ -652,6 +654,7 @@ private class SNAPSyncControllerImpl(
         case _: PivotProbeTimeout     => ctx.log.debug("Dropping stale PivotProbeTimeout in idle"); Behaviors.same
         case DormantWakeUp            => ctx.log.debug("Dropping stale DormantWakeUp in idle"); Behaviors.same
         case _: DelayedRestart        => ctx.log.debug("Dropping stale DelayedRestart in idle"); Behaviors.same
+        case _: CoordinatorGone       => ctx.log.debug("Dropping stale CoordinatorGone in idle"); Behaviors.same
 
         // ── Coordinator progress (stale after sync stops) ────────────────────────────
         case _: AccountRangeProgressCmd =>
@@ -1021,6 +1024,10 @@ private class SNAPSyncControllerImpl(
       case msg if stateHealingCompleteArms.isDefinedAt(msg) =>
         stateHealingCompleteArms(msg)
 
+      // spec 022 T050a: a coordinator that gave up after its last restart.
+      case msg if coordinatorGoneArms.isDefinedAt(msg) =>
+        coordinatorGoneArms(msg)
+
       // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
       // (StateHealing only): stateHealingArms (P4c).
 
@@ -1275,6 +1282,11 @@ object SNAPSyncController:
       replayed: Boolean = false
   ) extends Command
   case object StateHealingComplete extends Command
+
+  /** A coordinator stopped: its supervisor's last restart failed, or something stopped it on purpose. Only its handle
+    * still naming it counts (`SyncLifecycle.coordinatorGoneArms`).
+    */
+  final private[snap] case class CoordinatorGone(ref: org.apache.pekko.actor.typed.ActorRef[Nothing]) extends Command
 
   /** Coordinator gave up (HealingForceComplete) WITHOUT a verification walk. Never a clean-walk signal: under Path the
     * controller routes it to the lazy-heal handoff instead of declaring the trie validated.

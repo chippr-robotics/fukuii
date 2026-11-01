@@ -93,6 +93,7 @@ class SNAPSyncingDispatchTableSpec
     "PivotProbeTimeout" -> PivotProbeTimeout(BigInt(9105)),
     "DormantWakeUp" -> DormantWakeUp,
     "DelayedRestart" -> DelayedRestart("s0d table"),
+    "CoordinatorGone" -> CoordinatorGone(testKit.createTestProbe[Any]().ref),
     "AccountRangeProgressCmd" -> AccountRangeProgressCmd(Map.empty),
     "CheckDownloadStagnation" -> CheckDownloadStagnation,
     "AccountCoordinatorProgress" -> AccountCoordinatorProgress(AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0L)),

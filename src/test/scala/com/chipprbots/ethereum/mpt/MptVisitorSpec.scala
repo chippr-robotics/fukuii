@@ -216,3 +216,31 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
       assert(reconstructed == expected, s"Key reconstruction failed. Expected $expected, got $reconstructed")
     }
   }
+
+  // spec 022 T050a: the default is what StorageRecoveryActor's walk relies on, and the callback is the combined scan's.
+  private def spreadWithHole(): (Array[Byte], MptStorage, ByteString) =
+    val (stateStorage, nodes, _) = StateStorage.createTestStateStorage(EphemDataSource())
+    val storage = stateStorage.getBackingStorage(0)
+    val trie = (0 until 16).foldLeft(freshTrie(storage)) { (t, i) =>
+      t.put(Array[Byte]((i << 4).toByte), Array.fill[Byte](40)(i.toByte))
+    }
+    val hole = storage.get(trie.getRootHash).asInstanceOf[BranchNode].children(7).asInstanceOf[HashNode]
+    nodes.update(Seq(ByteString(hole.hash)), Nil)
+    (trie.getRootHash, storage, ByteString(7.toByte))
+
+  test("PathTrackingLeafWalkVisitor rethrows an absent node unless given somewhere to report it", UnitTest, MPTTest) {
+    val (root, storage, _) = spreadWithHole()
+    intercept[MerklePatriciaTrie.MissingNodeException](walkWithPaths(root, storage))
+  }
+
+  test("PathTrackingLeafWalkVisitor with a hole callback goes on over the siblings", UnitTest, MPTTest) {
+    val (root, storage, holePath) = spreadWithHole()
+    val leaves = mutable.ArrayBuffer.empty[ByteString]
+    val holes = mutable.ArrayBuffer.empty[ByteString]
+    MptTraversals.dispatch(
+      HashNode(root),
+      new PathTrackingLeafWalkVisitor(storage, ByteString(), (_, leaf) => leaves += leaf.value, Some(holes += _))
+    )
+    assert(holes.toSeq == Seq(holePath))
+    assert(leaves.size == 15)
+  }

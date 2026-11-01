@@ -66,18 +66,33 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   class Fixture(failExcludedRead: Boolean = false) extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPHealedCodeFinalizeSpec.this.system.classicSystem
 
+    // The synced batches, each as the keys it writes or removes.
+    val syncedBatches: scala.collection.mutable.ArrayBuffer[Set[String]] = scala.collection.mutable.ArrayBuffer.empty
+
+    // Runs after each synced batch lands, on the thread that wrote it.
+    @volatile var afterSyncedBatch: Set[String] => Unit = _ => ()
+
     val appStateStorage: AppStateStorage =
-      if failExcludedRead then
-        new AppStateStorage(
-          new EphemDataSource(Map.empty):
-            override def scanRangeLimit(
-                namespace: DataSource.Namespace,
-                fromKey: Array[Byte],
-                toKeyExclusive: Array[Byte],
-                limit: Int
-            ): Iterator[(Array[Byte], Array[Byte])] = throw new RuntimeException("excluded set unreadable")
-        )
-      else storagesInstance.storages.appStateStorage
+      new AppStateStorage(
+        new EphemDataSource(Map.empty):
+          override def scanRangeLimit(
+              namespace: DataSource.Namespace,
+              fromKey: Array[Byte],
+              toKeyExclusive: Array[Byte],
+              limit: Int
+          ): Iterator[(Array[Byte], Array[Byte])] =
+            if failExcludedRead then throw new RuntimeException("excluded set unreadable")
+            else super.scanRangeLimit(namespace, fromKey, toKeyExclusive, limit)
+          override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+            val keys = updates.flatMap {
+              case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, upserted) =>
+                (removed ++ upserted.map(_._1)).map(k => new String(k.toArray, "UTF-8"))
+              case _ => Nil
+            }.toSet
+            syncedBatches.synchronized(syncedBatches += keys)
+            super.updateSync(updates)
+            afterSyncedBatch(keys)
+      )
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     private val pollsAnswered = new AtomicInteger(0)
     private val networkPeerManager: TestProbe = TestProbe()
@@ -98,7 +113,10 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     val pivot = BigInt(10_000)
     val root = ByteString(Array.fill(32)(0x11.toByte))
 
-    def start(): TypedActorRef[SNAPSyncController.Command] =
+    /** `marked`: a run with a standing marker, which owes no code scan. Without it the run is a repair run, and does.
+      */
+    def start(marked: Boolean = true): TypedActorRef[SNAPSyncController.Command] =
+      if marked then appStateStorage.stampSnapHealInvariant().commit()
       val genesis = Fixtures.Blocks.Genesis.header
       blockchainWriter.save(
         Block(genesis, BlockBody.empty),
@@ -262,6 +280,108 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.isSnapSyncDone() shouldBe true
     appStateStorage.isStorageRecoveryDone() shouldBe false
     appStateStorage.isBytecodeRecoveryDone() shouldBe false
+
+  // spec 022 T050a, the user's decision of 2026-10-31: what no walk can vouch for is owed to the recovery scan.
+  private val nopLog = org.slf4j.helpers.NOPLogger.NOP_LOGGER
+
+  it should "withhold both recovery flags at the end of a repair run, and settle the debt there" taggedAs UnitTest in new Fixture:
+    val snap = start(marked = false)
+    appStateStorage.getSnapCodeScanOwed() shouldBe defined
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.getSnapCodeScanOwed() shouldBe None
+
+  // forge W1: a failed task-file sweep is exactly the case where unfinished accounts were never recorded, so an empty
+  // excluded set says nothing, and a lazy hand-off has no walk behind it.
+  it should "withhold storageRecoveryDone with the owed key on a lazy hand-off and an empty excluded set" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+      .lostTrack(appStateStorage, "the task file could not be read", nopLog) shouldBe true
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    new SnapSyncProgressStorage(appStateStorage.dataSource).excludedPage(None, 10) shouldBe empty
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
+  it should "overwrite a storageRecoveryDone an earlier cycle left set, for the owed key" taggedAs UnitTest in new Fixture:
+    appStateStorage.storageRecoveryDone().commit()
+    val snap = start(marked = false)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
+  it should "overwrite a storageRecoveryDone an earlier cycle left set, for an account entry" taggedAs UnitTest in new Fixture:
+    appStateStorage.storageRecoveryDone().commit()
+    new SnapSyncProgressStorage(appStateStorage.dataSource)
+      .recordExcluded(Seq(excluded(codeHash, ExcludedReason.StorageAbandoned)))
+    val snap = start()
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    appStateStorage.isBytecodeRecoveryDone() shouldBe true
+
+  // Hunter 4: lostTrack runs on other actors' threads, and the batch below clears the key. The marker's removal is the last
+  // write before that batch's read, so one landing there has to be seen.
+  it should "see a lostTrack that lands after the durability barrier and the marker's removal" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    val fired = new java.util.concurrent.atomic.AtomicBoolean(false)
+    afterSyncedBatch = keys =>
+      if keys.contains(AppStateStorage.Keys.SnapHealInvariant) && fired.compareAndSet(false, true) then
+        com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+          .lostTrack(appStateStorage, "a sweep hung, late", nopLog) shouldBe true
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    fired.get() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+
+  it should "overwrite a bytecodeRecoveryDone an earlier cycle left set: leaving it out would not withhold it" taggedAs UnitTest in new Fixture:
+    appStateStorage.bytecodeRecoveryDone().commit()
+    val snap = start(marked = false)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+
+  it should "withhold bytecodeRecoveryDone when a run with a standing marker loses track mid-run" taggedAs UnitTest in new Fixture:
+    val snap = start()
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+      .lostTrack(appStateStorage, "a sweep hung", nopLog) shouldBe true
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+    appStateStorage.getSnapCodeScanOwed() shouldBe None
+
+  it should "still withhold after a restart: the debt is durable, whatever the marker says by then" taggedAs UnitTest in new Fixture:
+    val before = start()
+    com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+      .lostTrack(appStateStorage, "a sweep hung", nopLog) shouldBe true
+    testKit.stop(before)
+    val after = start() // a clean walk stamped it again, say
+    after ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    appStateStorage.isBytecodeRecoveryDone() shouldBe false
+
+  it should "settle the debt in the one synced write of the done flags: no crash can lose it without the flag" taggedAs UnitTest in new Fixture:
+    val snap = start(marked = false)
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+
+    val theWrite = syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
+    theWrite.size shouldBe 1
+    theWrite.head should contain(AppStateStorage.Keys.BytecodeRecoveryDone)
+    theWrite.head should contain(AppStateStorage.Keys.StorageRecoveryDone)
+    theWrite.head should contain(AppStateStorage.Keys.SnapCodeScanOwed)
 
   "SNAPSyncController.bytecodeRecoveryComplete" should
     "be false after a force-completed bytecode phase, or while healed-account code is missing" taggedAs UnitTest in {

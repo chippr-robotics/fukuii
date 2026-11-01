@@ -172,8 +172,8 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     val healedHashes = mutable.Set[ByteString]()
 
     // spec 022 review W2: a dispatched task is the fetch of live requests, and only those are filled. A task no live
-    // request waits on is a bookkeeping fault: nothing vouches for the positions it would write, so it is neither
-    // filled nor queued again.
+    // request waits on is a bookkeeping fault: under Path nothing vouches for the positions it would write, so it is
+    // neither filled nor queued again. Under Hash a node is keyed by its hash, so it is recorded again below.
     // A fetch whose last request was replaced by a conflicting one (review W1, HealRequestBook) is expected to come back
     // empty-handed: not an error.
     val (retiredTasks, unvouched) =
@@ -187,11 +187,23 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     if unvouched.nonEmpty then
       log.warn(
         s"[HEAL] ${unvouched.size} dispatched heal task(s) that no live request waits on, first " +
-          s"${Hex.toHexString(unvouched.head.hash.take(4).toArray)} — not filled, not queued again"
+          s"${Hex.toHexString(unvouched.head.hash.take(4).toArray)} — " +
+          (if storageScheme == StorageScheme.Hash then "recorded again" else "not filled, not queued again")
       )
     // beacon N4: a response to a request whose every task was retired or unvouched cannot fill anything; an empty
     // answer to it is no fault of the peer.
     val nothingVouched = retiredTasks.size + unvouched.size == tasksForRequest.size
+    // spec 022 T051a (forge, slice-1 review): fail closed on Hash. Until T051 the walk finds what this branch drops, and
+    // then nothing would, so the request goes back in the book, before the fill: this response may hold the node, and if
+    // it does not, the re-queue below asks again, as for any request it left out, so there is one fetch and no new way to
+    // stall. From here it is an ordinary request: a re-peg clears it, and the give-up and stagnation paths count it.
+    if storageScheme == StorageScheme.Hash then
+      unvouched.distinctBy(_.hash).foreach { task =>
+        val onDisk =
+          try isNodeInStorage(task.hash, task.pathset)
+          catch case scala.util.control.NonFatal(_) => false // cannot tell, so the fetch is the safe side
+        if !onDisk && !nodeNeedsNoFetch(task) then healRequests.add(healRequestFor(task)): Unit
+      }
 
     nodes.foreach { nodeData =>
       if nodeData.nonEmpty then

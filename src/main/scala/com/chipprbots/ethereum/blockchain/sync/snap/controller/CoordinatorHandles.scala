@@ -22,7 +22,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP
   * Invariants kept from the code this replaces:
   *   - `stopAll()` stops exactly the four coordinators, in the order the stop sites always used (account, bytecode,
   *     storage, healing). It never stops the ChainDownloader (it survives restart and dormancy) and never the heap
-  *     watchdog. There is no `ctx.watch`, and supervision is unchanged.
+  *     watchdog. Supervision is unchanged. Each spawn site watches its coordinator with `CoordinatorGone`, which only
+  *     the handle it stops under counts (`SyncLifecycle.coordinatorGoneArms`): `stopAll()` clears a handle as it stops
+  *     it.
   *   - Each fan-out sends to the coordinators that exist, in the order the replaced call sites used.
   */
 private[snap] trait CoordinatorHandles:

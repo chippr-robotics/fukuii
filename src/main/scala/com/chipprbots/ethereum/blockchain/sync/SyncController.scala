@@ -303,6 +303,8 @@ object SyncController:
 
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
+    // That recovery's scan could not run, so its failure says nothing about the code (spec 022 T050a). Read and cleared with it.
+    private var recoveryScanCouldNotRun: Boolean = false
     private var recentRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -885,10 +887,12 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
-          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
-          appStateStorage.clearBytecodeRecoveryDone().commit()
+          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
+          // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
+          // scan's older root while it can be read, which may never have held this code.
+          appStateStorage.clearBytecodeRecoveryDone().and(appStateStorage.clearRecoveryProgress()).commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
-          startRecovery(needBytecode = true, needStorage = false, scanRoot = bulkRecoveryScanRoot())
+          startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -1570,7 +1574,7 @@ object SyncController:
           logSnapStateRootDiagnostic()
           val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
           val needStorage = !appStateStorage.isStorageRecoveryDone()
-          if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
+          if needBytecode || needStorage then startRecovery(needBytecode, needStorage, recoveryScanRoot())
           else startRegularSync()._2
         case (false, SyncMode.Regular) if snapHasStake() =>
           // #1434: do-snap-sync is off, but SNAP was running here and left work behind (a restart mid-heal, or mid-download
@@ -1692,13 +1696,14 @@ object SyncController:
           val failures = appStateStorage.bulkBytecodeRecoveryFailures() + 1
           log.error(
             "Bulk bytecode recovery finished but contract code {} is STILL missing (failure {} of {}). Possible causes: " +
-              "no peer served it; its account is not in the scanned trie; or the scanned state root was pruned or " +
-              "unreadable, so the scan saw no gaps at all. Block import will now fetch that hash on its own.",
+              "no peer served it; its account is not in the scanned trie; a subtree the scan could not read holds it; or " +
+              "the scan could not run at all (logged above). Block import will now fetch that hash on its own.",
             com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash),
             failures,
             SyncController.MaxBulkBytecodeRecoveryFailures
           )
-          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures then
+          // A scan that could not run settles nothing, the cap included (spec 022 T050a): only a pass stops the next start's.
+          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures && !recoveryScanCouldNotRun then
             log.error(
               "Giving up on bulk bytecode recovery after {} failures: marking bytecodeRecoveryDone so restarts stop " +
                 "repeating a full trie scan. Missing code is still fetched one hash at a time at import.",
@@ -1714,6 +1719,7 @@ object SyncController:
               .and(appStateStorage.putBulkBytecodeRecoveryFailures(failures))
               .commit()
       }
+      recoveryScanCouldNotRun = false
 
       // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
       // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
@@ -1902,17 +1908,28 @@ object SyncController:
             handleRegularSyncMsg(regularSync, m)
       }
 
-    /** The trie a bulk bytecode recovery scans: the CURRENT BEST block's state root, falling back to the SNAP pivot's.
+    /** The trie a recovery scans, at a start or for a bulk bytecode recovery: the CURRENT BEST block's state root,
+      * falling back to the SNAP pivot's.
       *
-      * The best root is always intact (it is the state regular sync executes on) and covers contracts created after the
-      * pivot. The pivot root is not: with the default `basic` pruning (history 64) the pivot trie is pruned within
-      * about 64 blocks, so a missing code found days after SNAP would scan a root that no longer exists, find "no
-      * gaps", and blame the peers. Only a best root that cannot be read falls back to the pivot's.
+      * The best root is the state regular sync executes on, and it covers contracts created after the pivot. The pivot
+      * root is gone within minutes: with the default `basic` pruning (history 64) it is pruned about 64 blocks on, and
+      * a pivot sits behind the head, so catch-up passes that almost at once. Measured on Mordor (spec 022, 2026-10-31):
+      * a node stopped about 3 minutes after its hand-off had imported 87 blocks past the pivot, and the next start's
+      * scan found the pivot root absent 6 ms in. The root need not be the pivot's for storage either: the storage phase
+      * takes its (account, storage root) pairs from this same scan, asks peers at this same root, and checks each chunk
+      * against its pair's root (and rolls to a recent root when peers no longer serve this one).
       *
-      * Startup recovery (`startRecovery` with no `scanRoot`) keeps the pivot root on purpose: it runs right after SNAP
-      * finishes, when the pivot trie is fresh, and its storage phase needs the pivot's storage tries.
+      * A scan already under way keeps its root while that root can be read, so a restart mid-scan resumes (the tag in
+      * `getRecoveryProgressFor` matches) instead of starting hours of walking again. The best block can move under a
+      * scan: regular sync is stopped through the scan and the downloads, but the Engine API is not, and with a
+      * consensus client feeding the next payload `forkchoiceUpdated` moves it. That path does not prune, and nothing
+      * else does until regular sync's first saved block, so the walk is unharmed. Its block number is the best block's,
+      * since the progress does not hold one: only what a download writes is tagged with it, and those nodes belong to
+      * the best state anyway.
+      *
+      * `None` when there is no root: `startRecovery` then has nothing to scan.
       */
-    private def bulkRecoveryScanRoot(): Option[(ByteString, BigInt)] =
+    private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
       def readable(root: ByteString, number: BigInt): Boolean =
         try
           stateStorage.getBackingStorage(number).get(root.toArray)
@@ -1923,29 +1940,37 @@ object SyncController:
         root <- appStateStorage.getSnapSyncStateRoot()
         number <- appStateStorage.getSnapSyncPivotBlock()
       yield (root, number)
-      best.filter { case (r, n) => readable(r, n) } match
+      val underWay = for
+        progress <- appStateStorage.getRecoveryProgress()
+        (bestRoot, number) <- best
+        if progress.scanRoot != bestRoot && readable(progress.scanRoot, number)
+      yield (progress.scanRoot, number)
+      underWay match
         case Some(ok) =>
-          log.info("Bulk bytecode recovery scans the best block's state root (block {}).", ok._2)
+          log.info("Recovery resumes its scan on the state root it started with, at best block {}.", ok._2)
           Some(ok)
         case None =>
-          log.error(
-            "The best block's state root is not readable; the bulk bytecode recovery falls back to the SNAP pivot's root, " +
-              "which may be pruned."
-          )
-          pivot
+          best.filter { case (r, n) => readable(r, n) } match
+            case Some(ok) =>
+              log.info("Recovery scans the best block's state root (block {}).", ok._2)
+              Some(ok)
+            case None =>
+              log.error(
+                "The best block's state root is not readable; recovery falls back to the SNAP pivot's root, which may be pruned."
+              )
+              pivot
 
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
-        scanRoot: Option[(ByteString, BigInt)] = None
+        scanRoot: Option[(ByteString, BigInt)]
     ): Behavior[Command] =
       syncGeneration += 1
       txGossipGate.stateSyncStarted()
-      val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
-      val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
-      (stateRootOpt, pivotBlockOpt) match
-        case (Some(stateRoot), Some(pivotBlock)) =>
+      // `pivotBlock` from here on is the scanned root's block: the best block's, unless that root could not be read.
+      scanRoot match
+        case Some((stateRoot, pivotBlock)) =>
           log.info(
             s"[SNAP-RECOVERY] Phase starting — bytecodeNeeded=$needBytecode storageNeeded=$needStorage " +
               s"generation=$syncGeneration — polling for snap-capable peers every 5s"
@@ -2077,14 +2102,39 @@ object SyncController:
               storageComplete = !needStorage
             )
 
-        case _ =>
-          log.warn("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
-          if needBytecode then appStateStorage.bytecodeRecoveryDone().commit()
-          if needStorage then appStateStorage.storageRecoveryDone().commit()
-          startRegularSync()._2
+        case None =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            "there is no state root to scan: no readable best block, no pivot"
+          )
+
+    /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
+      * written, and the scan's progress stays, so the next start tries again. It resumes only while that root can still
+      * be read: regular sync starts here, and under `basic` pruning about 64 blocks later the next start scans afresh
+      * on the best root. Archive and in-memory pruning keep the root, so there a failure that keeps failing is paid at
+      * every start up to the node that fails. No hard stop: regular sync fetches what it reaches on demand. A pass that
+      * did run is another matter: see `runningCombinedScan`.
+      */
+    private def recoveryCouldNotRun(needBytecode: Boolean, needStorage: Boolean, why: String): Behavior[Command] =
+      log.error(
+        s"[SNAP-RECOVERY] The recovery scan could not run: $why. Still owed: bytecode=$needBytecode storage=$needStorage. " +
+          "Neither recovery flag is written and the scan's progress is kept, so the next start tries again. Regular sync " +
+          "starts now and fetches what it reaches on demand."
+      )
+      recoveryScanCouldNotRun = true
+      RecoveryMetrics.setBytecodePhase(
+        if needBytecode then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete
+      )
+      RecoveryMetrics.setStoragePhase(if needStorage then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete)
+      startRegularSync()._2
 
     /** Wait for the combined scan to report both gap sets, then spawn download-only recovery actors for whichever
       * phases still have gaps. Phases the scan found already complete are marked done immediately.
+      *
+      * A pass that ran settles the flags, holes or not (spec 022 T050a; the user's decision, 2026-10-31): the scan runs
+      * once, and rescanning a datadir with holes at every start would block regular sync for hours each time. So a flag
+      * means a pass ran, not that everything is there where the pass met a hole, and the WARN says so.
       */
     def runningCombinedScan(
         needBytecode: Boolean,
@@ -2096,10 +2146,25 @@ object SyncController:
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
-        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps) =>
+        case CombinedRecoveryScanActor.CombinedScanComplete(_, _, _, true) =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            s"state root ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString} at block $pivotBlock is absent, or " +
+              "reading the trie failed (logged above)"
+          )
+
+        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps, holes, _) =>
           val effByte = if needBytecode then byteGaps else Nil
           val effStor = if needStorage then storGaps else Nil
           log.info(s"Combined recovery scan reported ${effByte.size} bytecode gaps, ${effStor.size} storage gaps.")
+          if holes > 0 then
+            log.warn(
+              "[SNAP-RECOVERY] The recovery scan's pass could not read {} subtree(s) this session: the store holds no node " +
+                "at the top of each, so nothing under them was looked at. The recovery flags will mean that a pass ran, not " +
+                "that code and storage are complete. The pass is not repeated: block import fetches what it reaches on demand.",
+              holes
+            )
           // Phases the combined scan found complete (no gaps) are done right now.
           if needBytecode && effByte.isEmpty then appStateStorage.bytecodeRecoveryDone().commit()
           if needStorage && effStor.isEmpty then appStateStorage.storageRecoveryDone().commit()

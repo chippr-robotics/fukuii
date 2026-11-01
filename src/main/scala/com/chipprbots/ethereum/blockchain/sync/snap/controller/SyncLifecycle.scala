@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapHeapWatchdog
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -80,6 +81,7 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
   private lazy val DormantBaseDelay: FiniteDuration = 3.minutes
   private lazy val DormantMaxDelay: FiniteDuration = 20.minutes
   private lazy val DormantWakeUpKey = "dormant-wakeup"
+  private lazy val CoordinatorGoneRetryDelay: FiniteDuration = 5.seconds
 
   // Started with the first SNAP coordinators (not at construction: a node that never runs SNAP needs no watchdog).
   private var heapWatchdog: Option[SnapHeapWatchdog.Handle] = None
@@ -398,6 +400,56 @@ private[snap] trait SyncLifecycle(val heapWatchdogStart: HeapWatchdogStart)
     stopAll()
     forceCompleteStorageSent = false
     healingWalkLocalOnly.set(false)
+
+  /** spec 022 T050a (hunter N4): a coordinator has stopped under the handle it was spawned to. A supervisor restart
+    * does not reach here, and nor does `stopAll()`, which clears the handle first; what does is the failure after its
+    * last restart, the fourth, each within about 5.5 s of the restart before it, so a failure that is not going away.
+    * Until this the controller did not see that at all: its asks timed out and read as zeros, which a stagnation check
+    * takes for a busy mailbox (storage), ignores (account), or answers with a force-complete sent to nobody (bytecode),
+    * and the phase hung with no message until the process restarted.
+    *
+    * No coordinator remains to sweep what it held, so the run has lost track. Then dormancy, for a coordinator whose
+    * work is not done: no phase flag moves, and the wake goes through `startSnapSync`, whose resume replays the task
+    * files minus the done markers, as a process restart would, with a fresh coordinator and supervisor. Not a restart
+    * of the sync (accounts stay downloaded), and not a stop: a failure that does not go away costs a retry on
+    * dormancy's backoff. The bytecode coordinator healing spawns for healed code is not that case: the controller keeps
+    * those hashes (`healedCodeHashes`), each tick asks again, and `queueHealedCode` spawns another. The account
+    * coordinator stops itself after finalising the trie, by which point `accountsComplete` is set.
+    */
+  private[snap] lazy val coordinatorGoneArms: PartialFunction[Command, Behavior[Command]] = {
+    case CoordinatorGone(ref) if accountRangeCoordinator.contains(ref) && accountsComplete =>
+      accountRangeCoordinator = None
+      Behaviors.same
+
+    case gone @ CoordinatorGone(ref) if accountRangeCoordinator.contains(ref) =>
+      coordinatorGaveUp(gone, "account", owedWork = true) { accountRangeCoordinator = None }
+
+    case gone @ CoordinatorGone(ref) if storageRangeCoordinator.contains(ref) =>
+      coordinatorGaveUp(gone, "storage", owedWork = !storagePhaseComplete) { storageRangeCoordinator = None }
+
+    case gone @ CoordinatorGone(ref) if bytecodeCoordinator.contains(ref) =>
+      coordinatorGaveUp(gone, "bytecode", owedWork = !bytecodePhaseComplete) { bytecodeCoordinator = None }
+
+    case gone @ CoordinatorGone(ref) if trieNodeHealingCoordinator.contains(ref) =>
+      coordinatorGaveUp(gone, "healing", owedWork = currentPhase == StateHealing) { trieNodeHealingCoordinator = None }
+
+    case _: CoordinatorGone => Behaviors.same // stopped on purpose, or a generation ago: its handle is gone
+  }
+
+  private def coordinatorGaveUp(gone: CoordinatorGone, name: String, owedWork: Boolean)(
+      clearHandle: => Unit
+  ): Behavior[Command] =
+    val reason = s"the $name coordinator stopped after its supervisor's last restart: nothing holds what it held"
+    if !HealInvariant.lostTrack(stateIngest.appState, reason, ctx.log) then
+      // The handle stays, so this matches again.
+      timers.startSingleTimer(gone, CoordinatorGoneRetryDelay)
+      Behaviors.same
+    else
+      clearHandle
+      if owedWork && (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync ||
+          currentPhase == StateHealing)
+      then enterDormantMode(reason)
+      else Behaviors.same
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
     * `DelayedRestart`, the backed-off restart armed by `PivotStateUnservable`'s critical-failure path: restart in the

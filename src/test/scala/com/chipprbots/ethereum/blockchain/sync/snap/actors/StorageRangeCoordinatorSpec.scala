@@ -2397,6 +2397,111 @@ class StorageRangeCoordinatorSpec
     finally taskFilePointer = None
   }
 
+  // spec 022 T050a (vault, forge N-c): the wait is by the clock, not a count of the checks that happen to come.
+  it should "not let a burst of checks use up the wait for the task file's pointer" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("burst-pointer"), fileRoot("burst-pointer"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot))
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+      (1 to 20).foreach(_ => coordinator ! StorageRangeCoordinator.StorageCheckCompletion)
+      val alive = testKit.createTestProbe[StorageRangeCoordinator.SyncStatistics]()
+      coordinator ! StorageRangeCoordinator.StorageGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ controller.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      withClue("twenty checks in a moment are not two minutes: ") {
+        heard should not contain SNAPSyncController.StorageRangeSyncComplete
+      }
+      appState.putSnapSyncStorageFilePath(file.toString).commit()
+      coordinator ! StorageRangeCoordinator.StorageCheckCompletion
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      excluded(lost.accountHash) shouldBe defined
+    finally taskFilePointer = None
+  }
+
+  it should "start the wait for the task file's pointer once, by a timer" taggedAs UnitTest in {
+    val rig = new TaskFileRig(Nil, restartedIncarnation = true)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.retrieveAllEffects()
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion)
+      val timers = rig.kit.retrieveAllEffects().collect {
+        case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t
+      }
+      timers.count(_.msg == StorageRangeCoordinator.TaskFilePointerWaitOver) shouldBe 1
+      timers.find(_.msg == StorageRangeCoordinator.TaskFilePointerWaitOver).get.delay shouldBe
+        com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedSweep.PointerWaitLimit
+    finally taskFilePointer = None
+  }
+
+  // spec 022 T050a (vault W2, beacon 5a review): at about 0.8 ms a hash Sepolia's sweep takes about 3.5 h, and no cap on
+  // the whole of it may call that hung. A chunk goes through, and the next read of the done markers waits on a gate.
+  it should "not call a sweep hung while chunks keep finishing, and call it hung when they stop" taggedAs UnitTest in {
+    val inSecondChunk = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val thread = new java.util.concurrent.atomic.AtomicReference[Thread]()
+    val offTheActor = new scala.concurrent.ExecutionContext:
+      def execute(runnable: Runnable): Unit =
+        val t = new Thread(runnable, "sweep-under-test")
+        thread.set(t)
+        t.start()
+      def reportFailure(cause: Throwable): Unit = ()
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    val gated = new EphemDataSource(Map.empty):
+      override def multiGetOptimized(
+          namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+          keys: Seq[Array[Byte]]
+      ): Seq[Option[Array[Byte]]] =
+        if reads.incrementAndGet() == 2 then
+          inSecondChunk.countDown()
+          release.await()
+        super.multiGetOptimized(namespace, keys)
+    // Exactly two chunks of the replay's size.
+    val entries = (0 until 2 * com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay.DefaultChunkEntries)
+      .map(i => fileAccount(s"slow-$i") -> fileRoot(s"slow-$i"))
+    val rig = new TaskFileRig(entries, flatBatchEc = offTheActor, sourceOverride = Some(gated))
+    try
+      val before = reads.get()
+      withClue("the rig's own reads: ")(before shouldBe 0)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      val token = rig.kit
+        .retrieveAllEffects()
+        .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
+        .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
+        .get
+      inSecondChunk.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      withClue("a chunk finished since the sweep began, so it goes on, and the watchdog looks again: ") {
+        rig.kit
+          .retrieveAllEffects()
+          .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg } shouldBe
+          Seq(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      }
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+
+      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    finally
+      release.countDown()
+      Option(thread.get()).foreach(_.join(30000))
+      taskFilePointer = None
+  }
+
   // A retry must not take the liveness timer's key: that timer is what brings any stalled coordinator back.
   it should "leave the periodic check running when the task file's accounts cannot be written at a clean end" taggedAs UnitTest in {
     val account = fileAccount("clean-store-failed")
@@ -2450,24 +2555,96 @@ class StorageRangeCoordinatorSpec
     finally taskFilePointer = None
   }
 
-  it should "treat a read of the task file that runs too long as unreadable, and take no later answer" taggedAs UnitTest in {
-    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
-    val account = fileAccount("hung")
-    val rig = new TaskFileRig(Seq(account -> fileRoot("hung")), flatBatchEc = ec)
+  /** A task-file read that has begun and is stuck in its first chunk, on a thread of its own, until `finish()`. */
+  final private class HungRead:
+    val inRead = new java.util.concurrent.CountDownLatch(1)
+    private val release = new java.util.concurrent.CountDownLatch(1)
+    private val thread = new java.util.concurrent.atomic.AtomicReference[Thread]()
+    val ec: scala.concurrent.ExecutionContext = new scala.concurrent.ExecutionContext:
+      def execute(runnable: Runnable): Unit =
+        val t = new Thread(runnable, "hung-sweep-under-test")
+        thread.set(t)
+        t.start()
+      def reportFailure(cause: Throwable): Unit = ()
+    val source: EphemDataSource = new EphemDataSource(Map.empty):
+      override def multiGetOptimized(
+          namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+          keys: Seq[Array[Byte]]
+      ): Seq[Option[Array[Byte]]] =
+        inRead.countDown()
+        release.await()
+        super.multiGetOptimized(namespace, keys)
+    def finish(): Unit =
+      release.countDown()
+      Option(thread.get()).foreach(_.join(30000))
+
+  /** Force-complete into a sweep that hangs, and take the watchdog's looks: the first gives no verdict, since the work
+    * had not begun by a look before it, and the second calls it hung.
+    */
+  private def hangThenLook(rig: TaskFileRig, hung: HungRead): Unit =
+    rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+    val token = rig.kit
+      .retrieveAllEffects()
+      .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
+      .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
+      .get
+    hung.inRead.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+    rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+    drainSelf(rig.kit)
+    rig.controller.expectNoMessage(50.millis)
+    rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+    drainSelf(rig.kit)
+
+  it should "treat a read of the task file that hangs as unreadable, and take no later answer" taggedAs UnitTest in {
+    val hung = new HungRead
+    val rig = new TaskFileRig(
+      Seq(fileAccount("hung") -> fileRoot("hung")),
+      flatBatchEc = hung.ec,
+      sourceOverride = Some(hung.source)
+    )
     try
+      hangThenLook(rig, hung)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      hung.finish()
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+    finally
+      hung.finish()
+      taskFilePointer = None
+  }
+
+  // spec 022 T050a (beacon F4): a sweep queued behind more than the watchdog's look of flat-batch writes was called hung
+  // before it read anything, which costs a walk and a scan. Held here on an executor nothing has run.
+  it should "not call a sweep hung that has not begun: the clock starts when the work starts" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val account = fileAccount("queued-behind-writes")
+    val rig = new TaskFileRig(Seq(account -> fileRoot("queued-behind-writes")), flatBatchEc = ec)
+    try
+      rig.appState.stampSnapHealInvariant().commit()
       rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
       val token = rig.kit
         .retrieveAllEffects()
         .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg }
         .collectFirst { case StorageRangeCoordinator.TaskFileSweepTimedOut(t) => t }
         .get
-      rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+      (1 to 3).foreach { _ =>
+        rig.kit.run(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+        withClue("it goes on, and the watchdog looks again: ") {
+          rig.kit
+            .retrieveAllEffects()
+            .collect { case t: org.apache.pekko.actor.testkit.typed.Effect.TimerScheduled[?] => t.msg } shouldBe
+            Seq(StorageRangeCoordinator.TaskFileSweepTimedOut(token))
+        }
+        drainSelf(rig.kit)
+        rig.controller.expectNoMessage(50.millis)
+      }
+      stillTrusted(rig)
+
+      ec.runNext()
       drainSelf(rig.kit)
       rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
-      while ec.pending > 0 do ec.runNext()
-      withClue("told to stop, so it found nothing: ")(excluded(account) shouldBe None)
-      drainSelf(rig.kit)
-      rig.controller.expectNoMessage(50.millis)
+      excluded(account) shouldBe defined
+      stillTrusted(rig)
     finally taskFilePointer = None
   }
 
@@ -2493,6 +2670,172 @@ class StorageRangeCoordinatorSpec
       drainSelf(rig.kit)
       rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
       excluded(account) shouldBe None
+    finally taskFilePointer = None
+  }
+
+  // spec 022 T050a, the user's decision of 2026-10-31: where the bookkeeping has lost something, the marker cannot stand.
+  // The walk then covers it, and the node goes on.
+  private def markedRig(
+      entries: Seq[(ByteString, ByteString)],
+      restarted: Boolean = false,
+      recordStorageDone: Boolean = true
+  ): TaskFileRig =
+    val rig = new TaskFileRig(entries, recordStorageDone = recordStorageDone, restartedIncarnation = restarted)
+    rig.appState.stampSnapHealInvariant().commit()
+    rig
+
+  private def lostTrackOn(rig: TaskFileRig, reasonSays: String) =
+    rig.appState.hasSnapHealInvariant() shouldBe false
+    rig.appState.getSnapCodeScanOwed().get should include(reasonSays)
+
+  private def stillTrusted(rig: TaskFileRig) =
+    rig.appState.hasSnapHealInvariant() shouldBe true
+    rig.appState.getSnapCodeScanOwed() shouldBe None
+
+  "A task file that cannot be read" should "withdraw the marker when it is the wrong size" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-size") -> fileRoot("lost-size")))
+    try
+      rig.appState.putSnapSyncStorageFileCount(Some(99L)).commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker when it is missing" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-file") -> fileRoot("lost-file")))
+    try
+      java.nio.file.Files.delete(rig.file)
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker when the read hangs" taggedAs UnitTest in {
+    val hung = new HungRead
+    val rig = new TaskFileRig(
+      Seq(fileAccount("lost-hung") -> fileRoot("lost-hung")),
+      flatBatchEc = hung.ec,
+      sourceOverride = Some(hung.source)
+    )
+    try
+      rig.appState.stampSnapHealInvariant().commit()
+      hangThenLook(rig, hung)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "hung")
+    finally
+      hung.finish()
+      taskFilePointer = None
+  }
+
+  it should "withdraw the marker at a clean end after a restart, and end the phase" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("lost-clean") -> fileRoot("lost-clean")), restarted = true)
+    try
+      java.nio.file.Files.delete(rig.file)
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "not end the phase while the withdrawal cannot be written, and end it once it can" taggedAs UnitTest in {
+    val writesFail = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val failing = new EphemDataSource(Map.empty):
+      override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+        if writesFail.get() then throw new RuntimeException("cannot write")
+        super.updateSync(updates)
+    val rig = new TaskFileRig(
+      Seq(fileAccount("lost-write") -> fileRoot("lost-write")),
+      restartedIncarnation = true,
+      sourceOverride = Some(failing)
+    )
+    try
+      rig.appState.stampSnapHealInvariant().commit()
+      java.nio.file.Files.delete(rig.file)
+      writesFail.set(true)
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectNoMessage(50.millis)
+      rig.appState.hasSnapHealInvariant() shouldBe true
+
+      writesFail.set(false)
+      rig.kit.run(StorageRangeCoordinator.StorageCheckCompletion) // the periodic one
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "task file could not be read")
+    finally taskFilePointer = None
+  }
+
+  it should "keep the marker when the read goes through" taggedAs UnitTest in {
+    val rig = markedRig(Seq(fileAccount("read-ok") -> fileRoot("read-ok")), restarted = true)
+    try
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      stillTrusted(rig)
+    finally taskFilePointer = None
+  }
+
+  "A restarted coordinator with no task file" should "withdraw the marker once the wait for the pointer runs out, and end the phase" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+      drainSelf(rig.kit)
+      withClue("the wait is on: ") {
+        rig.controller.expectNoMessage(50.millis)
+        stillTrusted(rig)
+      }
+      rig.kit.run(StorageRangeCoordinator.TaskFilePointerWaitOver)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncComplete)
+      lostTrackOn(rig, "no task file")
+    finally taskFilePointer = None
+  }
+
+  it should "withdraw the marker at a force-complete" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "no task file")
+    finally taskFilePointer = None
+  }
+
+  "A restarted coordinator with no done markers" should "owe the scan at a force-complete, so a lazy hand-off cannot write storage complete over what it lost" taggedAs UnitTest in {
+    val rig = markedRig(Nil, restarted = true, recordStorageDone = false)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      lostTrackOn(rig, "no done markers")
+    finally taskFilePointer = None
+  }
+
+  it should "owe nothing when it has not restarted: it holds all it was given" taggedAs UnitTest in {
+    val rig = markedRig(Nil, recordStorageDone = false)
+    try
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      stillTrusted(rig)
+    finally taskFilePointer = None
+  }
+
+  "A healthy coordinator with no task file" should "keep the marker at its own force-complete in the account phase: it lost nothing" taggedAs UnitTest in {
+    val rig = markedRig(Nil)
+    try
+      rig.appState.putSnapSyncStorageFilePath("").commit()
+      rig.kit.run(StorageRangeCoordinator.ForceCompleteStorage)
+      drainSelf(rig.kit)
+      rig.controller.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+      stillTrusted(rig)
     finally taskFilePointer = None
   }
 
@@ -2523,13 +2866,14 @@ class StorageRangeCoordinatorSpec
       entries: Seq[(ByteString, ByteString)],
       recordStorageDone: Boolean = true,
       flatBatchEc: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic,
-      restartedIncarnation: Boolean = false
+      restartedIncarnation: Boolean = false,
+      sourceOverride: Option[EphemDataSource] = None
   ):
     val file: java.nio.file.Path = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
     file.toFile.deleteOnExit()
     java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
-    val source: EphemDataSource = EphemDataSource()
+    val source: EphemDataSource = sourceOverride.getOrElse(EphemDataSource())
     val appState = new AppStateStorage(source)
     appState.putSnapSyncStorageFilePath(file.toString).commit()
     taskFilePointer = Some(appState)

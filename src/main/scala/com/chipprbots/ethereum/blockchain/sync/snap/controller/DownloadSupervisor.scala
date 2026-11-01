@@ -146,6 +146,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
         )
       )
+      bytecodeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
       timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
 
@@ -184,6 +185,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
           org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
         )
       )
+      storageRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StartStorageRangeSync(rootBs))
       timers.startTimerWithFixedDelay(RequestStorageRanges, RequestStorageRanges, 1.second)
 
@@ -373,7 +375,13 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
         p.peerInfo.remoteStatus.supportsSnap
       }
-      if snapPeerCount > 0 && accountRangeCoordinator.isDefined then
+      if accountsComplete then
+        // spec 022 PR 5b: a timer that outlived a fast account phase. The handle does not say a phase has run, since it
+        // goes when the coordinator stops itself after finalising the trie (`coordinatorGoneArms`), and launching here
+        // would start account workers mid-storage or healing. Nor is having no snap peer now a reason for dormancy here.
+        ctx.log.debug("Capability check: accounts are complete, nothing to do")
+        Behaviors.same
+      else if snapPeerCount > 0 && accountRangeCoordinator.isDefined then
         // #1516: the account phase is already running (a peer arrived inside the grace period and launched it), and
         // spawning a second coordinator under the same name throws InvalidActorNameException. Nothing to do.
         ctx.log.debug("Capability check: account range coordinator already running, not launching another")
@@ -833,6 +841,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     )
 
     // Start the coordinator
+    accountRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
     accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.StartAccountRangeSync(rootHash.value))
 
     // Periodically send peer availability notifications
@@ -869,6 +878,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         )
       )
       // Start with empty codeHashes — tasks arrive incrementally via AddByteCodeTasks
+      bytecodeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       bytecodeCoordinator.foreach(_ ! actors.ByteCodeCoordinator.StartByteCodeSync(Seq.empty))
 
       timers.startTimerWithFixedDelay(RequestByteCodes, RequestByteCodes, 1.second)
@@ -919,6 +929,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         )
       )
       // Start with empty tasks — tasks arrive incrementally via AddStorageTasks
+      storageRangeCoordinator.foreach(c => ctx.watchWith(c, CoordinatorGone(c)))
       storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.StartStorageRangeSync(rootHash.value))
 
       timers.startTimerWithFixedDelay(RequestStorageRanges, RequestStorageRanges, 1.second)

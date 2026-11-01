@@ -150,6 +150,23 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearSnapHealInvariant(): DataSourceBatchUpdate =
     remove(Keys.SnapHealInvariant)
 
+  /** Why this datadir's next finalisation may not claim that no account's bytecode is missing, if it may not (spec 022
+    * T050a, data-model.md "Invariant marker"). The walk reads no code, so only the recovery scan can settle this.
+    */
+  def getSnapCodeScanOwed(): Option[String] =
+    get(Keys.SnapCodeScanOwed)
+
+  /** What is present is not vouched for and the code scan is owed: the marker goes and `reason` is recorded, in one
+    * write. Commit with `commitSync`.
+    */
+  def markSnapCodeScanOwed(reason: String): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.SnapHealInvariant), toUpsert = Seq(Keys.SnapCodeScanOwed -> reason))
+
+  /** The finalisation that withholds `bytecodeRecoveryDone` takes this with it: from there the flag carries the debt.
+    */
+  def clearSnapCodeScanOwed(): DataSourceBatchUpdate =
+    remove(Keys.SnapCodeScanOwed)
+
   /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
     * is pre-invariant, whatever else it holds.
     */
@@ -242,6 +259,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Mark storage recovery as completed */
   def storageRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.StorageRecoveryDone, true.toString)
+
+  /** Mark storage recovery as NOT done, so the next start's recovery scan runs. Written when a finalisation withholds
+    * it (spec 022 T050a): a datadir SNAP has been through before can hold `true` from that cycle.
+    */
+  def clearStorageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, false.toString)
 
   // ========================================
   // Resumable recovery scan progress
@@ -653,3 +676,4 @@ object AppStateStorage:
     val CheckpointImportInProgress = "checkpoint.import.inProgress"
     val SnapHealFrontierRetired = "snap.heal.frontierRetired"
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
+    val SnapCodeScanOwed = "snap.heal.codeScanOwed"
