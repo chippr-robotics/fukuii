@@ -10,3 +10,4 @@ object StoredNodeTestAccess:
   def wrapped(bytes: Array[Byte], references: Int): Array[Byte] =
     storedNodeToBytes(StoredNode(ByteString(bytes), references, 0))
   def references(stored: Array[Byte]): Int = storedNodeFromBytes(stored).references
+  def unwrapped(stored: Array[Byte]): Array[Byte] = storedNodeFromBytes(stored).nodeEncoded.toArray
