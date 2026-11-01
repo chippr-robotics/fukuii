@@ -181,6 +181,7 @@ private[snap] class StubDownloadSupervisorState(
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = notUsed("triggerHealingForMissingNodes")
   var healingStarts: Int = 0
   def startStateHealing(): Unit = healingStarts += 1
+  def reopenHealing(): Unit = ()
   val launches: mutable.ArrayBuffer[(TrieRoot, Int)] = mutable.ArrayBuffer.empty
   def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty

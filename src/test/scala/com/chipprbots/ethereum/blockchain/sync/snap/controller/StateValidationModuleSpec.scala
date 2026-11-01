@@ -98,7 +98,8 @@ private[snap] class StubStateValidationState(
   var stateHealingStarts: Int = 0
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage = notUsed(s"getOrCreateMptStorage($pivotBlockNumber)")
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = healingTriggeredFor += missingNodes
-  def startStateHealing(): Unit = stateHealingStarts += 1
+  def startStateHealing(): Unit = ()
+  def reopenHealing(): Unit = stateHealingStarts += 1
   val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val restartReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty

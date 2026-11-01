@@ -184,6 +184,21 @@ class SNAPHealLoopSpec
     }
   }
 
+  // spec 022 5d: with the decision left standing, the coordinator's latch would keep its watchdog quiet, and nothing would
+  // look at this root again until a newer one comes.
+  it should "take back a decision on the root it gives up on, under Path" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val snap = f.enterStateHealing(PathHeal)
+    f.decideHealing(SnapControllerFixture.Root)
+
+    Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.StateHealingAbandoned
+      f.awaitProcessed(snap)
+      withClue("this is the arm that re-pegs: ")(log.contains("NOT handing off") shouldBe true)
+    }
+    f.factories.lastHealingDecidedRoot.get().get.get() shouldBe null
+  }
+
   // spec 022 review beacon N4: a hand-off that could not publish the root must not be tried: it would only restart SNAP.
   it should "re-peg, not hand off, when healing is abandoned with the root absent under Path" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)

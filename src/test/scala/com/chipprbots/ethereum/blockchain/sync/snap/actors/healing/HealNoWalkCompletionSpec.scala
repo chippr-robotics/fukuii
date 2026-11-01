@@ -659,6 +659,19 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.stop(rig.coordinator)
     }
 
+    // forge N3: what a walk read may be overwritten under Path by the time a run comes back to that root.
+    it should s"take a walk's proof with it at a re-peg as well, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, marked = false)
+      val next = PathHealPresenceFixtures.accountTrieNew()
+      rig.start()
+      rig.drive()
+      rig.cleanRoot.get() shouldBe rig.trie.root.hash
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
+      rig.settle()
+      rig.cleanRoot.get() shouldBe null
+      testKit.stop(rig.coordinator)
+    }
+
     it should s"say it again if the record was taken from under it, so a cleared decision cannot strand the run, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme)
       rig.start()

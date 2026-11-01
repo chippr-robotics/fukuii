@@ -115,7 +115,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
         ctx.log.error("Recovering through healing phase")
         validationInProgress = false
         currentPhase = StateHealing
-        startStateHealing()
+        reopenHealing()
       earlyBehavior.getOrElse(Behaviors.same)
 
     // Storage trie validation result handlers.
@@ -138,7 +138,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
       ctx.log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
       validationInProgress = false
       currentPhase = StateHealing
-      startStateHealing()
+      reopenHealing()
       Behaviors.same
 
     case ValidationRetry(_) =>

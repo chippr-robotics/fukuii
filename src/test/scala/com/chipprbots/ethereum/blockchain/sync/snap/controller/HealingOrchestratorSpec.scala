@@ -332,9 +332,8 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawnedNames(h.effects()) shouldBe empty
   }
 
-  // hunter 1: the guard against a second coordinator does not get to keep the first one's decision. Validation comes back
-  // here, and the coordinator, having said so once, would not say so again.
-  it should "forget a decision when healing is asked for again with a coordinator there, and have it decide again" taggedAs UnitTest in {
+  // beacon W1: a second start can come after a completion has been taken, with finalisation still to read the record.
+  it should "leave what is on record alone on a second start, and send nothing" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
     h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
@@ -345,22 +344,28 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
 
     h.call(_.startStateHealing())
 
-    h.module.healingDecidedRoot.get() shouldBe null
-    h.module.healingCleanWalkRoot.get() shouldBe null
-    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    h.module.healingDecidedRoot.get() shouldBe root.value
+    h.module.healingCleanWalkRoot.get() shouldBe root.value
+    coordinator.hasMessages shouldBe false
     spawnedNames(h.effects()) shouldBe empty
   }
 
-  it should "leave the race it guards as it was: with no decision on record the duplicate sends nothing" taggedAs UnitTest in {
+  // hunter 1: where validation could not vouch for the state, nothing before it stands, and the coordinator, having said so
+  // once, would not say so again.
+  it should "forget what is on record when healing is reopened, and have the coordinator decide again" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
     h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
     h.module.pivotBlock = Some(pivot)
     h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
 
-    h.call(_.startStateHealing())
+    h.call(_.reopenHealing())
 
-    coordinator.hasMessages shouldBe false
+    h.module.healingDecidedRoot.get() shouldBe null
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
     spawnedNames(h.effects()) shouldBe empty
   }
 

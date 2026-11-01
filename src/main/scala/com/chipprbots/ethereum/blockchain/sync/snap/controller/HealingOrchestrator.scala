@@ -45,6 +45,7 @@ private[snap] trait HealingOrchestratorState:
 private[snap] trait HealingApi:
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit
   def startStateHealing(): Unit
+  def reopenHealing(): Unit
 
 private[snap] trait HealedCodeApi:
   def dropHealedCodeNowPresent(): Unit
@@ -324,6 +325,16 @@ private[snap] trait HealingOrchestrator
       case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
       case None              => startStateHealing()
 
+  /** Validation could not vouch for the state, so healing goes on (spec 022 5d, hunter 1). Nothing decided or walked
+    * before this stands, or finalisation would take its word, and a coordinator that has said so once would not say so
+    * again. Only here: a second start can come after a completion has been taken, and would cost that completion its
+    * marker (beacon W1).
+    */
+  def reopenHealing(): Unit =
+    healingCleanWalkRoot.set(null)
+    healingDecidedRoot.set(null)
+    askHealingAgain()
+
   /** Healing has completed clean at this root, and a pass has looked at every dormant entry from it: none is held by
     * this root, and none should cost the next start a recovery scan. A write that fails leaves them, at that cost only.
     */
@@ -549,12 +560,6 @@ private[snap] trait HealingOrchestrator
     // succession — both call checkAllDownloadsComplete() which calls startStateHealing().
     if trieNodeHealingCoordinator.isDefined then
       ctx.log.warn("startStateHealing called but healing coordinator already exists — ignoring duplicate")
-      // spec 022 5d (hunter 1): a decision on record does not answer this. Whatever came back here (validation, say) found
-      // the state wanting, and finalisation would take that record's word, while the coordinator, having said so once,
-      // would not say so again. With none on record this is the race above, and nothing changes.
-      val decided = healingDecidedRoot.getAndSet(null) != null
-      healingCleanWalkRoot.set(null)
-      if decided then askHealingAgain()
     else
       trieWalkInProgress = false // Reset for fresh healing phase
       healRepegNoRootAttempts = 0 // spec 009 T014: fresh healing phase — reset the bounded re-peg last-resort budget
@@ -773,7 +778,8 @@ private[snap] trait HealingOrchestrator
     * `completeSnapSync()` via `StateValidation`.
     */
   def anchorPivotBeforeLazyHandoff(reason: String): Unit =
-    // spec 022 5d: a lazy hand-off is no clean decision, whatever is on record, so finalisation takes the marker.
+    // spec 022 5d: a lazy hand-off is no clean decision, so one on record does not keep the marker. A clean walk's proof of
+    // this root does: that says what is on disk, and a re-peg has already taken any proof of a root left since.
     healingDecidedRoot.set(null)
     for
       b <- pivotBlock

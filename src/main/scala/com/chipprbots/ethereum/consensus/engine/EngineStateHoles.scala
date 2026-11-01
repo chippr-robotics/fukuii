@@ -52,10 +52,11 @@ final class EngineStateHoles(
       case e                       => ByteString(e.getMessage)
     seen.remove(key) match
       case None =>
-        count(kindOf(error))
-        log(s"[STATE-HOLE] newPayload #$blockNumber answered SYNCING: ${describe(error)}")
+        // Remembered and logged first: a counter that fails must not cost the line with the position, or repeat each slot.
         seen.put(key, Seen(at, 0L))
         if seen.size > remembered then seen.remove(seen.head._1)
+        log(s"[STATE-HOLE] newPayload #$blockNumber answered SYNCING: ${describe(error)}")
+        count(kindOf(error))
       case Some(entry) =>
         entry.hitsSinceLog += 1
         if at - entry.lastLoggedMs >= logEvery.toMillis then

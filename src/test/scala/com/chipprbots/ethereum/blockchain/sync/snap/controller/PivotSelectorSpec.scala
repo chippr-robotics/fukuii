@@ -149,6 +149,7 @@ private[snap] class StubPivotSelectorState(
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = notUsed("triggerHealingForMissingNodes")
   var healingStarts: Int = 0
   def startStateHealing(): Unit = healingStarts += 1
+  def reopenHealing(): Unit = ()
   def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
   val dormantEntries: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   def enterDormantMode(reason: String): Behavior[Command] =

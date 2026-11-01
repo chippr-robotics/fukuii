@@ -106,7 +106,11 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     val lines = mutable.ArrayBuffer.empty[String]
     val failingCount = new EngineStateHoles(lines += _, _ => throw new IllegalStateException("registry closed"))
     noException should be thrownBy failingCount.report(BigInt(1), new MissingRootNodeException(hash))
+    withClue("the hole's own line comes first: ")(lines.head should include(s"hash=${Hex.toHexString(hash.toArray)}"))
     withClue("and it says what it could not do: ")(lines.last should include("could not record a hole"))
+    val before = lines.size
+    failingCount.report(BigInt(2), new MissingRootNodeException(hash))
+    withClue("not again each slot: ")(lines.size shouldBe before)
     val failingLog = new EngineStateHoles(_ => throw new IllegalStateException("appender closed"), _ => ())
     noException should be thrownBy failingLog.report(BigInt(1), new MissingRootNodeException(hash))
   }

@@ -1037,8 +1037,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         stateRoot = newStateRoot
         invalidateRunningWalk() // T038c: even if the root comes back to the walk's, its frontier was dropped under it
         // spec 022 5d: what was decided was for the root just left, and a signal on its way goes unheeded (the controller
-        // compares). The reseeds are per root.
+        // compares). So was a walk's proof: coming back to that root (A to B to A), what it read may have been overwritten
+        // under Path (forge N3). The reseeds are per root.
         decidedRoot.foreach(_.set(null))
+        cleanWalkRoot.foreach(_.set(null))
         rootAttempts = 0
         // spec 022 T055 (SC-005): what the root just left cost.
         SNAPSyncMetrics.recordHealNodesPerRepeg((totalNodesHealed - healedAtRootAdoption).toLong)

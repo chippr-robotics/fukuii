@@ -403,7 +403,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
     | S4 | slice 2 | 116 s | 265 core-s | 3 |
     | S13 | 5c (no JFR) | 46 s | – | 1 |
     | S14 | 5d | 0.3 s | below JFR's 1 Hz sample | 0 |
-  - **What this does not show.** Total time did not improve on Mordor: S14 took 4m47 against S13's 4m34, because the bytecode phase (storage-done to healing start: 131 s here, 66 s in S13) varies by more than the walk costs on a trie this small, and it runs against the local core-geth. The gain the switch is for is at Sepolia's scale, and T063 is what measures it. S14, R8 and P3 healed almost nothing, and R8's kill landed just after the decision rather than mid-heal: P4 is the one with real healing behind a no-walk completion, and it saw one re-peg. Heavy re-pegging stays unit-tested (T046) until T063.
+  - **What this does not show.** Total time did not improve on Mordor: S14 took 4m47 against S13's 4m34, because the bytecode phase (storage-done to healing start: 131 s here, 66 s in S13) varies by more than the walk costs on a trie this small, and it runs against the local core-geth. The gain the switch is for is at Sepolia's scale, and T063 is what measures it. S14, R8 and P3 healed almost nothing, and R8's kill landed just after the decision rather than mid-heal: P4 is the one with real healing behind a no-walk completion, and it saw one re-peg. Heavy re-pegging stays unit-tested (T046) until T063. P4 resumed with its task files, so it shows the marker kept; a launch with cursors and no files, which withdraws it, is unit-tested only, because only a legacy record or a restart inside a process can reach it. No run reached the give-up on an absent root.
 
 **Checkpoint**: both schemes complete on "drained on the current root". Where the marker stands the walk runs only in the background. Where it does not, it stays as the repair (T051).
 
@@ -424,6 +424,7 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 - [ ] T061a **Exercise the excluded path live, before any release or any Sepolia or Platåberget jar rotation (forge and beacon, slice 3 round 3).** A core-geth outage cannot do it (T038): it takes a peer that answers but cannot serve what is asked. Needed: on Mordor (Hash) one exclusion and one unservable code hash, reaching the real hand-off; on a Path chain the code wait, and an induced force-complete if it can be had. Some way to induce this has to be built for the run.
 - [ ] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
+  - Also, from forge's read of the give-up: inject a stored node that does not read or decode (`HoleInjectionTool ... corrupt`) on a Hash datadir, and record what healing and then import do when they touch it. Peers cannot cause this state and on-demand repair does not key on it, so the hand-off defers it (R-5g). Forge would want this before an ETC rotation.
   - Stop `coregeth-mordor.service` first, so it can't be discovered.
   - Use a fresh datadir; never `/home/dontpanic/mordor-data`. It must be created by this jar: one an older jar made has no `snap.heal.datadirCreated`, so it is not empty, and it pays a walk.
   - JFR during healing.
