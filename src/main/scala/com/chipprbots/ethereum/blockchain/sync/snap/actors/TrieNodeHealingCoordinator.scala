@@ -878,20 +878,27 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       excludedSeeding.foreach(deleteExcludedPositions)
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if isNodeInStorage(root, Seq(emptyPath)) then
-        // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
-        // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
-        // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
-        // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
-        log.info(
-          s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
-            s"— rebuilding frontier via local BFS in batches of $FrontierBatchSize " +
-            s"(crash recovery, go-ethereum trie.Sync.Missing() trie traversal pattern)"
-        )
-        // spec 022 D6: nothing persisted can shorten this. A held node is never on disk, so a restart re-discovers what is
-        // missing from the current root, with the same walk that repairs a pre-invariant datadir (T043). spec 022 T051:
-        // where the marker stands there is nothing to discover: a present root is a complete one, so a check decides.
-        if markerStands() then self ! HealingCheckCompletion
-        else self ! RestartFullRebuild(root, emptyPath)
+        // spec 022 T051: where the marker stands there is nothing to discover: a present root is a complete one, so a check
+        // decides. Nor does anything need the walk at a restart, since what the old incarnation held was never on disk.
+        if markerStands() then
+          log.info(
+            s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage and the marker " +
+              "stands — a completion check, no walk"
+          )
+          self ! HealingCheckCompletion
+        else
+          // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
+          // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
+          // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
+          // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
+          log.info(
+            s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
+              s"— rebuilding frontier via local BFS in batches of $FrontierBatchSize " +
+              s"(crash recovery, go-ethereum trie.Sync.Missing() trie traversal pattern)"
+          )
+          // spec 022 D6: nothing persisted can shorten this. A held node is never on disk, so a restart re-discovers what
+          // is missing from the current root, with the same walk that repairs a pre-invariant datadir (T043).
+          self ! RestartFullRebuild(root, emptyPath)
         adoptRootForExcluded()
       else if movingRootDeltaHeal then
         // spec 009 T006/C2 (Moving-Root Delta Heal): the heal root node's OWN bytes are absent locally, but the root

@@ -201,15 +201,16 @@ private[snap] trait StateValidationModule extends ValidationApi:
     else
       (stateRoot, pivotBlock) match
         case (Some(expectedRoot), Some(pivot)) =>
-          // #1188: short-circuit when the round-2 healing trie walk just verified the same root.
-          // The walk visits every node in the account trie + every storage trie via DFS — same
-          // work `validateAccountTrie + validateAllStorageTries` would redo. Belt-and-suspenders:
-          // only honoured when captured root *equals* current `stateRoot`, so any pivot refresh
-          // or restart naturally invalidates the signal (root changes → no match → full validation).
+          // #1188: short-circuit when healing has just reported the same root complete. A walk visits every node in the
+          // account trie + every storage trie via DFS — same work `validateAccountTrie + validateAllStorageTries` would
+          // redo — and where the invariant marker stands (spec 022 T051) that work is the gate the spec removes, the
+          // background audit doing it after hand-off. Belt-and-suspenders: only honoured when captured root *equals*
+          // current `stateRoot`, so any pivot refresh or restart naturally invalidates the signal (root changes → no
+          // match → full validation).
           if healingValidatedRoot.contains(expectedRoot) then
             ctx.log.info(
-              s"Skipping redundant state validation — healing trie walk verified the entire " +
-                s"account+storage trie against ${expectedRoot.value.take(8).toHex} (clean signal)"
+              s"Skipping state validation — healing reported the account+storage trie complete at " +
+                s"${expectedRoot.value.take(8).toHex} (clean signal)"
             )
             // Consume the signal so a re-entry (e.g. after a future healing-recovery cycle that
             // didn't finish with a clean walk) doesn't reuse a stale positive.

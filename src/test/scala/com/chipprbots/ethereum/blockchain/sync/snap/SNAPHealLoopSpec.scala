@@ -157,6 +157,7 @@ class SNAPHealLoopSpec
     val snap = f.enterStateHealing(PathHeal)
 
     Using.resource(new SnapLogCapture) { log =>
+      f.decideHealing(SnapControllerFixture.Root) // spec 022 5d: the controller takes a signal only with this behind it
       snap ! SNAPSyncController.StateHealingComplete
       log.awaitLine("[PATH-PUBLISH] not publishing")
       f.awaitProcessed(snap)

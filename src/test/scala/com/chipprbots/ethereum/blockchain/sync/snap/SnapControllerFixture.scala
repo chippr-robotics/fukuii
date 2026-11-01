@@ -388,6 +388,11 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     expectSpawn[ChildSpawn.Healing]
     snap
 
+  /** spec 022 5d: what a real coordinator does before it sends `StateHealingComplete`: says which root it decided on.
+    */
+  def decideHealing(root: ByteString): Unit =
+    factories.lastHealingDecidedRoot.get().foreach(_.set(root))
+
   /** From `StateHealing`: a clean walk takes the controller to `StateValidation`, and it stays there: finalisation
     * stops at the A5 root guard, because the pivot's stored header now names another root. (The phase otherwise lasts
     * one mailbox turn: a clean walk's validation short-circuits.) The guard's `HealingImpossible` goes to the parent

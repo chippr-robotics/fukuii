@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
+import scala.util.Using
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -230,3 +231,85 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       }
     }
   }
+
+/** T047 and the record `healingDecidedRoot`, on a real controller over a stub coordinator: what it does when the signal
+  * arrives.
+  */
+class HealConvergenceControllerSpec
+    extends ScalaTestWithActorTestKit(SnapControllerFixture.config)
+    with AnyFlatSpecLike
+    with Matchers:
+
+  import SnapControllerFixture.*
+
+  private val Schemes = Seq(StorageScheme.Hash, StorageScheme.Path)
+  private def config(scheme: StorageScheme) = SNAPSyncConfig(deferredMerkleization = false, storageScheme = scheme)
+
+  /** The controller in `StateHealing` on `Root`. */
+  private def healing(f: SnapControllerFixture, scheme: StorageScheme) =
+    val snap = f.enterStateHealing(config(scheme))
+    f.awaitProcessed(snap)
+    (snap, f.healingInbox)
+
+  private def decide(f: SnapControllerFixture, root: ByteString): Unit =
+    f.factories.lastHealingDecidedRoot.get().get.set(root)
+
+  for scheme <- Schemes do
+    "A completion signal" should s"route to completeHealingWalkClean with no controller walk, on $scheme (T047)" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val (snap, _) = healing(f, scheme)
+      decide(f, Root)
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! StateHealingComplete
+        log.awaitLine("healing complete (no controller walk)")
+        f.awaitProcessed(snap)
+        withClue("no trie walk starts, and no second coordinator: ") {
+          log.contains("Starting trie walk") shouldBe false
+          f.factories.healingSpawns.get() shouldBe 1
+        }
+      }
+      f.appStateStorage.getSnapSyncStateRoot() shouldBe Some(Root)
+    }
+
+    it should s"be ignored for another root, with the coordinator asked again: a re-peg passed it, on $scheme" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val (snap, inbox) = healing(f, scheme)
+      decide(f, root(0x55))
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! StateHealingComplete
+        inbox.fishForMessage(30.seconds) {
+          case TrieNodeHealingCoordinator.HealingCheckCompletion => FishingOutcomes.complete
+          case _                                                 => FishingOutcomes.continueAndIgnore
+        }
+        f.awaitProcessed(snap)
+        log.contains("healing complete") shouldBe false
+      }
+      withClue("and it takes one for the root it is on: ")(decide(f, Root))
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! StateHealingComplete
+        log.awaitLine("healing complete (no controller walk)")
+      }
+    }
+
+    it should s"be ignored with no decision behind it at all, on $scheme" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val (snap, inbox) = healing(f, scheme)
+      Using.resource(new SnapLogCapture) { log =>
+        snap ! StateHealingComplete
+        inbox.fishForMessage(30.seconds) {
+          case TrieNodeHealingCoordinator.HealingCheckCompletion => FishingOutcomes.complete
+          case _                                                 => FishingOutcomes.continueAndIgnore
+        }
+        f.awaitProcessed(snap)
+        log.contains("healing complete") shouldBe false
+      }
+    }
+
+    it should s"be ignored outside StateHealing: nothing spawns and no phase timer restarts, on $scheme" taggedAs UnitTest in {
+      val f = new SnapControllerFixture(testKit)
+      val snap = f.enterStorageResume(config(scheme))
+      f.factories.healingSpawns.get() shouldBe 0
+      snap ! StateHealingComplete
+      f.awaitProcessed(snap)
+      f.factories.healingSpawns.get() shouldBe 0
+    }

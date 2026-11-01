@@ -312,6 +312,9 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       h.factories.lastHealingCurrentRoot.get().exists(_ eq h.module.healingCurrentRoot) shouldBe true
       h.module.healingCurrentRoot.get() shouldBe spawn.stateRoot
     }
+    withClue("spec 022 5d: `SNAPSyncConfig` defers merkleization by default, and no marker can hold there: ") {
+      spawn.markerMayStand shouldBe false
+    }
     spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
     spawn.healingFrontierStorage shouldBe defined
     spawn.bfsQueueStorageOpt shouldBe defined

@@ -112,35 +112,26 @@ class SNAPSyncControllerPinSpec
       spawn.frontierPersistenceEnabled shouldBe false
       assertFullHealingTuple(spawn, cfg, snap)
 
+  // spec 022 T052: `startStateHealingWithInterleave` had one way in, this signal, on Hash. Outside healing the arm now takes
+  // nothing, so `startStateHealing` is the one route to the spawn, and the pins of the second route went with it.
   it should
-    "#1319/spec-002: pass frontierPersistenceEnabled = true via startStateHealingWithInterleave when healing-frontier-persistence is on" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = true)
-      val snap = startHealingViaInterleave(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe true
-      assertFullHealingTuple(spawn, cfg, snap)
+    "spec 022 T052: spawn nothing on a StateHealingComplete from outside healing: the interleave route is gone" taggedAs UnitTest in new Fixture:
+      val snap = enterStorageRecovery(healingConfig(frontierPersistence = false))
+      snap ! SNAPSyncController.StateHealingComplete
+      awaitProcessed(snap)
+      factories.healingSpawns.get() shouldBe 0
+
+  // spec 022 5d: the spawn says whether the marker can hold, and that is `canHold` with what this run is on.
+  it should
+    "spec 022 5d: tell the coordinator the marker may stand with the trie built and the trie store on disk" taggedAs UnitTest in new Fixture:
+      startHealingViaStartStateHealing(healingConfig(frontierPersistence = false))
+      expectHealingSpawn().markerMayStand shouldBe true
 
   it should
-    "#1319/spec-002: pass frontierPersistenceEnabled = false via startStateHealingWithInterleave when healing-frontier-persistence is off" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = false)
-      val snap = startHealingViaInterleave(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe false
-      assertFullHealingTuple(spawn, cfg, snap)
-
-  // M6a merges the two spawn blocks; both routes must keep building the same coordinator.
-  it should
-    "#1319/spec-002: build the same healing coordinator via startStateHealing and startStateHealingWithInterleave" taggedAs UnitTest in {
-      Seq(true, false).foreach { persistence =>
-        val cfg = healingConfig(frontierPersistence = persistence)
-        val viaStart = new Fixture:
-          startHealingViaStartStateHealing(cfg)
-        val viaInterleave = new Fixture:
-          startHealingViaInterleave(cfg)
-        comparable(viaStart.expectHealingSpawn(), viaStart) shouldBe
-          comparable(viaInterleave.expectHealingSpawn(), viaInterleave)
-      }
-    }
+    "spec 022 5d: hand the coordinator the record it says its decision in" taggedAs UnitTest in new Fixture:
+      startHealingViaStartStateHealing(healingConfig(frontierPersistence = false))
+      expectHealingSpawn()
+      factories.lastHealingDecidedRoot.get() shouldBe defined
 
   // ── spec-005 (store gate and forwarding; the config default and parsing are in SNAPSyncControllerSpec) ──────────
 
@@ -164,11 +155,8 @@ class SNAPSyncControllerPinSpec
       Seq(true, false).foreach { pruned =>
         val viaStart = new Fixture:
           startHealingViaStartStateHealing(healingConfig(frontierPersistence = false, prunedHeal = pruned))
-        val viaInterleave = new Fixture:
-          startHealingViaInterleave(healingConfig(frontierPersistence = false, prunedHeal = pruned))
         // #1502: today the coordinator gets true even when pruned-heal-verification = false.
         viaStart.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
-        viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
       }
     }
 
@@ -191,11 +179,9 @@ class SNAPSyncControllerPinSpec
       val viaStart = new Fixture:
         inMemory(this)
         startHealingViaStartStateHealing(healingConfig(frontierPersistence = false))
-      val viaInterleave = new Fixture:
-        inMemory(this)
-        startHealingViaInterleave(healingConfig(frontierPersistence = false))
-      viaStart.expectHealingSpawn().prunedHealVerification shouldBe false
-      viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe false
+      val spawn = viaStart.expectHealingSpawn()
+      spawn.prunedHealVerification shouldBe false
+      withClue("spec 022 5d: nor may the marker stand there: ")(spawn.markerMayStand shouldBe false)
     }
 
   it should
@@ -221,21 +207,16 @@ class SNAPSyncControllerPinSpec
         store.markComplete()
         store
       val cfg = healingConfig(frontierPersistence = true).copy(scopedHealVerification = true)
-      Seq("startStateHealing", "startStateHealingWithInterleave").foreach { route =>
-        val f = new Fixture
-        val store = inMemoryWithStaleMarker(f)
-        if route == "startStateHealing" then f.startHealingViaStartStateHealing(cfg)
-        else f.startHealingViaInterleave(cfg)
-        val spawn = f.expectHealingSpawn()
-        withClue(s"$route: ") {
-          spawn.prunedHealVerification shouldBe false
-          spawn.frontierPersistenceEnabled shouldBe false
-          spawn.scopedHealVerification shouldBe false
-          // spec 022 T044: the spawn no longer clears it: nothing reads CF `g` now, and nothing writes to it. The
-          // one-time clear at node start takes it, and `HealInvariant` keeps the invariant marker off this mode.
-          store.isComplete shouldBe true
-        }
-      }
+      val f = new Fixture
+      val store = inMemoryWithStaleMarker(f)
+      f.startHealingViaStartStateHealing(cfg)
+      val spawn = f.expectHealingSpawn()
+      spawn.prunedHealVerification shouldBe false
+      spawn.frontierPersistenceEnabled shouldBe false
+      spawn.scopedHealVerification shouldBe false
+      // spec 022 T044: the spawn no longer clears it: nothing reads CF `g` now, and nothing writes to it. The
+      // one-time clear at node start takes it, and `HealInvariant` keeps the invariant marker off this mode.
+      store.isComplete shouldBe true
     }
 
   // ── #1371 ──────────────────────────────────────────────────────────────────────────────────────
@@ -364,14 +345,6 @@ class SNAPSyncControllerPinSpec
       factories.healingSpawns.get() shouldBe 0
       snap
 
-    /** Route 2: from the storage resume, `StateHealingComplete` reaches `syncing`'s arm, which (Hash scheme, no trie
-      * walk running) calls `startStateHealingWithInterleave`; there is no healing coordinator yet, so it spawns one.
-      */
-    def startHealingViaInterleave(config: SNAPSyncConfig): ActorRef[SNAPSyncController.Command] =
-      val snap = enterStorageRecovery(config)
-      snap ! SNAPSyncController.StateHealingComplete
-      snap
-
     /** Every argument of the healing spawn, field by field, against the config and the fixture. */
     def assertFullHealingTuple(
         spawn: ChildSpawn.Healing,
@@ -408,17 +381,4 @@ class SNAPSyncControllerPinSpec
       spawn.evmCodeStorage shouldBe Some(storagesInstance.storages.evmCodeStorage)
       spawn.walkLocalOnly shouldBe defined
       spawn.walkLocalOnly.get.get() shouldBe false
-
-  /** The healing spawn with every per-instance reference replaced by what identifies it in its own fixture. */
-  private def comparable(spawn: ChildSpawn.Healing, f: Fixture): ChildSpawn.Healing =
-    spawn.copy(
-      networkPeerManager = if spawn.networkPeerManager == f.npm.ref then null else spawn.networkPeerManager,
-      requestTracker = null,
-      mptStorage = null,
-      snapSyncController = null,
-      healingFrontierStorage = spawn.healingFrontierStorage.map(_ => null),
-      bfsQueueStorageOpt = spawn.bfsQueueStorageOpt.map(_ => null),
-      evmCodeStorage =
-        spawn.evmCodeStorage.map(s => if s eq f.storagesInstance.storages.evmCodeStorage then null else s),
-      walkLocalOnly = spawn.walkLocalOnly.map(b => if b.get() then b else null)
-    )
+      spawn.markerMayStand shouldBe true
