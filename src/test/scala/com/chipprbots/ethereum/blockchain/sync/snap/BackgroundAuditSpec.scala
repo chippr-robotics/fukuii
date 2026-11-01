@@ -1408,3 +1408,19 @@ class BackgroundAuditSpec
     n.ended(n.spawn(reader = reader, nanoTime = () => reader.nanos.get))
     n.s.batchSizes.max should be > 16
   }
+
+  // A supervisor's restart keeps the mailbox, and a new incarnation starts its count again, so a BatchDone still queued
+  // from the old one could match.
+  "An audit's generation" should "not come round again in another incarnation" taggedAs UnitTest in {
+    val first = new Node
+    withUnservableHole(first)
+    val second = new Node
+    withUnservableHole(second)
+    val one = first.spawn()
+    first.fetches.receiveMessage()
+    val other = second.spawn()
+    second.fetches.receiveMessage()
+    first.status(one).generation should not be second.status(other).generation
+    testKit.stop(one)
+    testKit.stop(other)
+  }

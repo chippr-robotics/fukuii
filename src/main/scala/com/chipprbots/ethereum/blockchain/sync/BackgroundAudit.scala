@@ -144,6 +144,7 @@ object BackgroundAudit:
   /** What the actor has got to. */
   final case class GetStatus(replyTo: ActorRef[Status]) extends Command
   final case class Status(
+      generation: Long,
       pass: Long,
       counters: AuditCounters,
       stack: Int,
@@ -170,6 +171,11 @@ object BackgroundAudit:
     case NoHead
     case Paused(head: AuditHead, ageSeconds: Long, watch: AuditHeadWatch)
     case Walked(head: AuditHead, step: AuditWalk.Step, readNanos: Long, watch: AuditHeadWatch)
+
+  /** Process-wide: a supervisor's restart keeps the mailbox and starts a new [[Impl]], whose count would otherwise come
+    * round to a generation an old batch result still queued there carries.
+    */
+  private val generations = new java.util.concurrent.atomic.AtomicLong(0L)
 
   private val NextStepTimer = "next-step"
   private val FetchTimer = "fetch-timeout"
@@ -323,6 +329,7 @@ object BackgroundAudit:
             Behaviors.same
           case GetStatus(replyTo) =>
             replyTo ! Status(
+              generation,
               pass,
               counters,
               stack.size,
@@ -336,7 +343,7 @@ object BackgroundAudit:
             Behaviors.same
         }
         .receiveSignal { case (_, PostStop | PreRestart) =>
-          generation += 1 // anything still running reports to nobody (decision 9)
+          generation = generations.incrementAndGet() // anything still running reports to nobody (decision 9)
           if !waitingForNextPass && anchor.nonEmpty then
             log.info(
               s"[HEAL-AUDIT] Stopped mid-pass, with its place saved within the last ${settings.persistEvery}: $summary"
@@ -347,7 +354,7 @@ object BackgroundAudit:
     // ---- a pass ------------------------------------------------------------------------------------------------------
 
     private def startPass(resume: Boolean): Unit =
-      generation += 1
+      generation = generations.incrementAndGet()
       anchor = deps.appState.snapAuditAnchor()
       if badEntries.anchor != anchor then
         badEntries = AuditBadEntries(anchor)
@@ -423,7 +430,7 @@ object BackgroundAudit:
           )
           counters = done
           waitingForNextPass = true
-          generation += 1
+          generation = generations.incrementAndGet()
           timers.startSingleTimer(NextPass, wait)
           Behaviors.same
 
