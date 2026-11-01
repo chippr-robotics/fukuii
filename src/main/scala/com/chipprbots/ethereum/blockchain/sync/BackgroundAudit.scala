@@ -106,7 +106,9 @@ object BackgroundAudit:
     else if !appState.isSnapAuditOwed() then Gate.NotOwed
     else Gate.Run
 
-  /** The numbers. `readFactor` 3 sleeps three times what a batch took, a duty cycle of 25% (decision 6). */
+  /** The numbers. `readFactor` 3 sleeps three times what a batch took, a duty cycle of 25% (decision 6). `passBackoff`
+    * is the wait after the first pass that does not end clean: see [[AuditThrottle.passBackoff]].
+    */
   final case class Settings(
       batchSize: Int = AuditWalk.MaxBatch,
       readFactor: Int = 3,
@@ -140,6 +142,7 @@ object BackgroundAudit:
   /** What the actor has got to. */
   final case class GetStatus(replyTo: ActorRef[Status]) extends Command
   final case class Status(
+      pass: Long,
       counters: AuditCounters,
       stack: Int,
       queuedHoles: Int,
@@ -313,6 +316,7 @@ object BackgroundAudit:
             Behaviors.same
           case GetStatus(replyTo) =>
             replyTo ! Status(
+              pass,
               counters,
               stack.size,
               holes.size,
@@ -404,14 +408,15 @@ object BackgroundAudit:
           Behaviors.stopped
         else
           flags.commit()
+          val wait = AuditThrottle.passBackoff(settings.passBackoff, pass)
           log.warn(
-            s"[HEAL-AUDIT] Pass $pass ended, not clean: another pass in ${settings.passBackoff}, for anchor $anchor: " +
+            s"[HEAL-AUDIT] Pass $pass ended, not clean: another pass in $wait, for anchor $anchor: " +
               done.summary
           )
           counters = done
           waitingForNextPass = true
           generation += 1
-          timers.startSingleTimer(NextPass, settings.passBackoff)
+          timers.startSingleTimer(NextPass, wait)
           Behaviors.same
 
     private def withElapsed: AuditCounters =

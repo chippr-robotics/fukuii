@@ -537,6 +537,13 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     AuditThrottle.delayAfter(10.millis.toNanos, 3) shouldBe 30.millis
   }
 
+  it should "wait 1, 2, 4 hours after unclean passes, up to 7 days" taggedAs UnitTest in {
+    (1L to 10L).map(AuditThrottle.passBackoff(1.hour, _)) shouldBe
+      Seq(1.hour, 2.hours, 4.hours, 8.hours, 16.hours, 32.hours, 64.hours, 128.hours, 7.days, 7.days)
+    AuditThrottle.passBackoff(1.hour, Long.MaxValue) shouldBe 7.days
+    withClue("no pass yet: ")(AuditThrottle.passBackoff(1.hour, 0L) shouldBe 1.hour)
+  }
+
   "AuditCodeFilter" should "see a hash once until it falls out" taggedAs UnitTest in {
     val filter = new AuditCodeFilter(2)
     val hashes = (0 until 3).map(trieKey)

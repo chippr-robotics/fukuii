@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditReader
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditTestState
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditTestState.*
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditThrottle
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -137,19 +138,24 @@ class BackgroundAuditSpec
     def ended(audit: ActorRef[BackgroundAudit.Command]): Unit =
       createTestProbe().expectTerminated(audit)
 
+    private var lastEnded: Long = 0L
+
     /** The pass has ended and the next waits out its backoff. */
     def awaitBackoff(audit: ActorRef[BackgroundAudit.Command]): BackgroundAudit.Status =
-      eventually {
+      val st = eventually {
         val st = status(audit)
         st.waitingForNextPass shouldBe true
         st
       }
+      lastEnded = st.pass
+      st
 
-    /** The backoff goes by, on the clock the actor reads and the one its timers run on, and the head stays fresh. */
+    /** That backoff goes by, on the clock the actor reads and the one its timers run on, and the head stays fresh. */
     def nextPass(): Unit =
-      now.addAndGet(backoff.toMillis)
+      val wait = AuditThrottle.passBackoff(backoff, lastEnded)
+      now.addAndGet(wait.toMillis)
       s.bestHead = s.bestHead.map(_.copy(timestampSeconds = nowSeconds))
-      manualTime.timePasses(backoff)
+      manualTime.timePasses(wait)
 
     def owes: Boolean = s.app.isSnapAuditOwed()
 
@@ -1185,4 +1191,63 @@ class BackgroundAuditSpec
     n.ended(n.spawn())
     n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
     n.book.entries shouldBe empty
+  }
+
+  private def clockPasses(n: Node, d: FiniteDuration): Unit =
+    n.now.addAndGet(d.toMillis)
+    n.s.bestHead = n.s.bestHead.map(_.copy(timestampSeconds = n.nowSeconds))
+    manualTime.timePasses(d)
+
+  /** A node with a hole no peer will serve, so every pass of it ends not clean. */
+  private def withUnservableHole(n: Node): Unit =
+    val root = populate(n)
+    val (_, hash) = deepStorageNode(n, root)
+    n.s.delete(hash)
+    n.head(10, root)
+
+  "Passes that do not end clean" should "wait twice as long each time" taggedAs UnitTest in {
+    val n = new Node
+    withUnservableHole(n)
+    val audit = n.spawn()
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(audit)
+
+    clockPasses(n, 1.hour)
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(audit)
+
+    clockPasses(n, 1.hour)
+    withClue("2 h after the second: ")(n.status(audit).pass shouldBe 2L)
+    clockPasses(n, 1.hour)
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(audit)
+
+    clockPasses(n, 3.hours)
+    withClue("4 h after the third: ")(n.status(audit).pass shouldBe 3L)
+    clockPasses(n, 1.hour)
+    n.fetches.receiveMessage()
+    testKit.stop(audit)
+  }
+
+  it should "go by the pass number on record, so a restart does not start the wait again" taggedAs UnitTest in {
+    val n = new Node
+    withUnservableHole(n)
+    n.s.progress.writeAuditBadEntries(AuditBadEntries("5", 3L).encode)
+    val audit = n.spawn()
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(audit)
+
+    clockPasses(n, 7.hours)
+    withClue("the fourth waits 8 h: ")(n.status(audit).pass shouldBe 4L)
+    clockPasses(n, 1.hour)
+    n.fetches.receiveMessage()
+    testKit.stop(audit)
+  }
+
+  it should "start from the base again after a clean pass" taggedAs UnitTest in {
+    val n = new Node
+    n.head(10, populate(n))
+    n.s.progress.writeAuditBadEntries(AuditBadEntries("5", 6L).encode)
+    n.ended(n.spawn())
+    n.book.lastPass shouldBe 0L
   }

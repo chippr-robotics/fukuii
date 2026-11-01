@@ -160,6 +160,15 @@ object AuditThrottle:
   /** A duty cycle that tunes itself to the disk: sleep `factor` times what the batch took (3 is 25%). */
   def delayAfter(readNanos: Long, factor: Int): FiniteDuration = (readNanos * factor).nanos
 
+  /** The most a pass waits for the one before it. */
+  val MaxPassBackoff: FiniteDuration = 7.days
+
+  /** How long after unclean pass `pass` the next one starts: `base`, doubling, up to [[MaxPassBackoff]]. One hole no
+    * peer can serve must not cost a full walk an hour for good. A pass number starts over at a clean pass.
+    */
+  def passBackoff(base: FiniteDuration, pass: Long): FiniteDuration =
+    (base * (1L << (pass - 1).max(0L).min(16L).toInt)).min(MaxPassBackoff)
+
 /** The background audit's walk (spec 022 T053, decision 4), with nothing in it but the reads: a batched depth-first
   * walk from a root, each node's keccak checked before its children are believed, and the re-resolve that tells a hole
   * from the state moving on. `BackgroundAudit` runs it and does all the writing. `FrontierRebuildBfs` is not reused
