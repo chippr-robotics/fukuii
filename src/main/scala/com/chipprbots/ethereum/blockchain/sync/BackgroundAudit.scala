@@ -300,7 +300,7 @@ object BackgroundAudit:
           case FetchReply(_) =>
             Behaviors.same
           case FetchTimedOut(hash) =>
-            if fetching.exists(_.hash == hash) then onFetchReply(Seq.empty) else Behaviors.same
+            fetching.filter(_.hash == hash).fold(Behaviors.same[Command])(onFetchTimedOut)
           case ProgressTick =>
             logProgress()
             Behaviors.same
@@ -594,6 +594,19 @@ object BackgroundAudit:
             paths = Some(Seq(hole.position.pathset))
           )
       )
+
+    /** No answer at all, as from a fetcher that restarted. So nothing here says a peer was asked, and it books no pass
+      * towards a delete. The pass is not clean, and the next looks again.
+      */
+    private def onFetchTimedOut(hole: AuditHole): Behavior[Command] =
+      fetching = None
+      counters = counters.copy(unresolved = counters.unresolved + 1)
+      changedSincePersist = true
+      log.warn(
+        s"[HEAL-AUDIT] No answer in ${settings.fetchTimeout} for ${hole.position.describe} " +
+          s"(${AuditWalk.hexOf(hole.hash)}). This pass is not clean, and the next looks again"
+      )
+      afterFetchEnded()
 
     private def onFetchReply(values: Seq[ByteString]): Behavior[Command] =
       fetching match

@@ -1144,3 +1144,17 @@ class BackgroundAuditSpec
       st.counters.nodes should be >= 6L
     }
   }
+
+  "A fetch that times out" should "not count towards a delete: no peer may have been asked" taggedAs UnitTest in {
+    val n = new Node
+    val (hash, _) = withBadNode(n)
+    n.onRecord(hash, 2)
+    val audit = n.spawn()
+    n.fetches.receiveMessage()
+    manualTime.timePasses(instant.fetchTimeout)
+    val st = n.awaitBackoff(audit)
+    st.counters.deleted shouldBe 0
+    withClue("the pass is still not clean: ")(st.counters.unresolved shouldBe 1)
+    n.s.nodes.get(hash) shouldBe defined
+    n.book.entries(hash).passes shouldBe 2
+  }
