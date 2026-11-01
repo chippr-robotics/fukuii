@@ -524,3 +524,51 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     plainMpt(_ => throw new MPTException("Invalid Node")).rawNodes(Seq(anyHash)) shouldBe Seq(RawNodeRead.Undecodable)
     plainMpt(_ => throw RLPException("not rlp")).rawNodes(Seq(anyHash)) shouldBe Seq(RawNodeRead.Undecodable)
   }
+
+  // ---- the review round: the last look before a delete ---------------------------------------------------------------
+
+  // `commitLock` covers block commits and prunes. `saveNode`, import's on-demand write, takes no lock, so a good node can
+  // land in the middle of a delete.
+  "A delete" should "stop if good bytes land while it asks whether the root needs them, on basic" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), nodeBytes(2), 9)
+    val outcome = b.state.deleteBadNode(
+      hashOf(good),
+      () =>
+        b.state.saveNode(hashOf(good), good, 7)
+        true
+    )
+    outcome shouldBe BadEntryDelete.NoLongerBad
+    b.stored(hashOf(good)).nodeEncoded.toArray.toSeq shouldBe good.toSeq
+  }
+
+  it should "stop in the same way on archive" taggedAs UnitTest in {
+    val nodes = new NodeStorage(EphemDataSource())
+    val state = new ArchiveStateStorage(nodes)
+    val good = nodeBytes(1)
+    nodes.put(hashOf(good), nodeBytes(2))
+    val outcome = state.deleteBadNode(
+      hashOf(good),
+      () =>
+        state.saveNode(hashOf(good), good, 7)
+        true
+    )
+    outcome shouldBe BadEntryDelete.NoLongerBad
+    nodes.get(hashOf(good)).get.toSeq shouldBe good.toSeq
+  }
+
+  it should "stop in the same way for code" taggedAs UnitTest in {
+    val code = new EvmCodeStorage(EphemDataSource())
+    val bytes = ByteString(nodeBytes(1))
+    val hash = hashOf(bytes.toArray)
+    code.put(hash, ByteString(nodeBytes(2))).commit()
+    val outcome = code.deleteBadCode(
+      hash,
+      () =>
+        code.put(hash, bytes).commit()
+        true
+    )
+    outcome shouldBe BadEntryDelete.NoLongerBad
+    code.get(hash) shouldBe Some(bytes)
+  }

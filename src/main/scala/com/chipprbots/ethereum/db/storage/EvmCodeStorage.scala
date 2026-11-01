@@ -72,9 +72,11 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     else getForExecution(hash).map(_.length)
 
   /** A removal through this storage evicts the code from the execution cache, so deleting code (the missing-code
-    * scenarios in tests, a future repair path) is seen by the very next execution read. The eviction happens when the
-    * batch is built: a read that races the commit may cache the not-yet-deleted code again, which only matters to
-    * something that deletes code while executing blocks, and nothing does.
+    * scenarios in tests, the background audit's [[deleteBadCode]]) is seen by the very next execution read. The
+    * eviction happens when the batch is built: a read that races the commit may cache the not-yet-deleted code again.
+    * The audit does delete while blocks execute, and evicts again after its commit; a reader that read before the
+    * commit and caches after that eviction keeps bad code cached, which is accepted: rare, on code already rare (spec
+    * 022 R-5f).
     */
   override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]) =
     toRemove.foreach { h =>
@@ -104,19 +106,23 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       RepairOutcome.Written
 
   /** [[StateStorage.deleteBadNode]] for code that fails its hash (spec 022 decision 15), under the same lock, so its
-    * look from the best root sees no commit part way. Code that passes its hash is never deleted.
+    * look from the best root sees no block commit part way. That lock is not what writes code on demand, so the bytes
+    * are read again after the look. Code that passes its hash is never deleted.
     */
   def deleteBadCode(hash: CodeHash, stillReached: () => Boolean): BadEntryDelete =
+    def goodOrGone: Boolean =
+      dataSource
+        .getOptimizedNoFill(namespace, hash.toArray)
+        .forall(existing => java.util.Arrays.equals(kec256(existing), hash.toArray))
     ReferenceCountedStateStorage.commitLock.synchronized {
-      dataSource.getOptimizedNoFill(namespace, hash.toArray) match
-        case None                                                                      => BadEntryDelete.NoLongerBad
-        case Some(existing) if java.util.Arrays.equals(kec256(existing), hash.toArray) => BadEntryDelete.NoLongerBad
-        case Some(_) if !stillReached()                                                => BadEntryDelete.NotReached
-        case Some(_) =>
-          remove(hash).commit()
-          EvmCodeStorage.shared.remove(cacheKey(hash))
-          EvmCodeStorage.sizes.remove(cacheKey(hash))
-          BadEntryDelete.Deleted
+      if goodOrGone then BadEntryDelete.NoLongerBad
+      else if !stillReached() then BadEntryDelete.NotReached
+      else if goodOrGone then BadEntryDelete.NoLongerBad
+      else
+        remove(hash).commit()
+        EvmCodeStorage.shared.remove(cacheKey(hash))
+        EvmCodeStorage.sizes.remove(cacheKey(hash))
+        BadEntryDelete.Deleted
     }
 
   // overriding to avoid going through IndexedSeq[Byte]
