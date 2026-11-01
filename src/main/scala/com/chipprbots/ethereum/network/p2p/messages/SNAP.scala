@@ -400,7 +400,8 @@ object SNAP:
       requestId: BigInt,
       hashes: Seq[ByteString],
       responseBytes: BigInt
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.GetByteCodesCode
     override def toShortString: String =
       s"GetByteCodes(reqId=$requestId, hashes=${hashes.size}, bytes=$responseBytes)"
@@ -460,7 +461,8 @@ object SNAP:
   case class ByteCodes(
       requestId: BigInt,
       codes: Seq[ByteString]
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.ByteCodesCode
     override def toShortString: String =
       s"ByteCodes(reqId=$requestId, codes=${codes.size})"
@@ -523,7 +525,8 @@ object SNAP:
       rootHash: ByteString,
       paths: Seq[Seq[ByteString]], // List of paths (each path is a list of node hashes)
       responseBytes: BigInt
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.GetTrieNodesCode
     override def toShortString: String =
       s"GetTrieNodes(reqId=$requestId, paths=${paths.size}, bytes=$responseBytes)"
@@ -597,7 +600,8 @@ object SNAP:
   case class TrieNodes(
       requestId: BigInt,
       nodes: Seq[ByteString]
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.TrieNodesCode
     override def toShortString: String =
       s"TrieNodes(reqId=$requestId, nodes=${nodes.size})"
