@@ -369,6 +369,20 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawnedNames(h.effects()) shouldBe empty
   }
 
+  // forge: not only where a decision is on record. An undecided coordinator would otherwise wait for its watchdog, and one
+  // that has walked clean never hears from that.
+  it should "ask when healing is reopened with nothing on record too" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.reopenHealing())
+
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
   it should "ask the coordinator there is to decide again, and spawn one if there is none, rather than sit silent" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()

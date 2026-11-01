@@ -95,11 +95,11 @@ private[snap] class StubStateValidationState(
 
   // Callee Api traits
   val healingTriggeredFor: mutable.ArrayBuffer[Seq[ByteString]] = mutable.ArrayBuffer.empty
-  var stateHealingStarts: Int = 0
+  var healingReopens: Int = 0
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage = notUsed(s"getOrCreateMptStorage($pivotBlockNumber)")
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = healingTriggeredFor += missingNodes
   def startStateHealing(): Unit = ()
-  def reopenHealing(): Unit = stateHealingStarts += 1
+  def reopenHealing(): Unit = healingReopens += 1
   val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val restartReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -301,7 +301,7 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
 
     module.validationInProgress shouldBe false
     module.currentPhase shouldBe SyncPhase.StateHealing
-    module.stateHealingStarts shouldBe 1
+    module.healingReopens shouldBe 1
     module.criticalFailures shouldBe empty
     timersStarted(kit) shouldBe empty
   }
@@ -315,5 +315,5 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
 
     module.validationInProgress shouldBe false
     module.currentPhase shouldBe SyncPhase.StateHealing
-    module.stateHealingStarts shouldBe 1
+    module.healingReopens shouldBe 1
   }

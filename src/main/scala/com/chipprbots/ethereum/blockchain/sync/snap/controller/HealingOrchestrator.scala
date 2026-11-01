@@ -325,10 +325,11 @@ private[snap] trait HealingOrchestrator
       case Some(coordinator) => coordinator ! actors.TrieNodeHealingCoordinator.HealingCheckCompletion
       case None              => startStateHealing()
 
-  /** Validation could not vouch for the state, so healing goes on (spec 022 5d, hunter 1). Nothing decided or walked
+  /** Validation could not vouch for the state, so healing goes on (spec 022 5d, hunter 1). Nothing on record from
     * before this stands, or finalisation would take its word, and a coordinator that has said so once would not say so
-    * again. Only here: a second start can come after a completion has been taken, and would cost that completion its
-    * marker (beacon W1).
+    * again. The coordinator keeps what it knows: where it has walked clean, or the marker stands, it decides again with
+    * no new walk. Only here: a second start can come after a completion has been taken, and would cost that completion
+    * its marker (beacon W1).
     */
   def reopenHealing(): Unit =
     healingCleanWalkRoot.set(null)

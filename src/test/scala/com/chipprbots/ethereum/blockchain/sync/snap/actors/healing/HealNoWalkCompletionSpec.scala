@@ -672,6 +672,19 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.stop(rig.coordinator)
     }
 
+    // forge: a refresh to the root it is on drops nothing, so it takes nothing back.
+    it should s"keep what is on record through a refresh to the same root, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, marked = false)
+      rig.start()
+      rig.drive()
+      rig.completions(rig.seen()) shouldBe 1
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(rig.trie.root.hash)
+      rig.settle()
+      rig.decided.get() shouldBe rig.trie.root.hash
+      rig.cleanRoot.get() shouldBe rig.trie.root.hash
+      testKit.stop(rig.coordinator)
+    }
+
     it should s"say it again if the record was taken from under it, so a cleared decision cannot strand the run, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme)
       rig.start()
