@@ -5,6 +5,8 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.concurrent.duration.MILLISECONDS
 
 import com.google.common.util.concurrent.AtomicDouble
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.DistributionSummary
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
 
@@ -22,6 +24,43 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   * Metrics are exposed via Prometheus endpoint and can be visualized in Grafana.
   */
 object SNAPSyncMetrics extends MetricsContainer:
+
+  // ===== Spec 022 T055 (FR-014, FR-017, SC-005; data-model.md "Metrics and logs") =====
+  //
+  // On the registry directly, with no `app.` prefix, so that Prometheus shows the names data-model.md gives.
+
+  final private val HealHeldNodesGauge = metrics.registry.gauge("snap.heal.held.nodes", new AtomicLong(0L))
+  final private val HealHeldBytesGauge = metrics.registry.gauge("snap.heal.held.bytes", new AtomicLong(0L))
+  final private val HealPendingGauge = metrics.registry.gauge("snap.heal.pending", new AtomicLong(0L))
+  final private val HealInflightGauge = metrics.registry.gauge("snap.heal.inflight", new AtomicLong(0L))
+  final private val HealExcludedAccountsGauge =
+    metrics.registry.gauge("snap.heal.excluded.accounts", new AtomicLong(0L))
+  final private val HealRootAgeSecondsGauge = metrics.registry.gauge("snap.heal.root.age.seconds", new AtomicLong(0L))
+  final private lazy val HealNodesPerRepeg: DistributionSummary =
+    DistributionSummary.builder("snap.heal.nodes.per.repeg").register(metrics.registry)
+
+  def setHealHeld(nodes: Long, bytes: Long): Unit =
+    HealHeldNodesGauge.set(nodes)
+    HealHeldBytesGauge.set(bytes)
+
+  def setHealRequests(pending: Long, inflight: Long): Unit =
+    HealPendingGauge.set(pending)
+    HealInflightGauge.set(inflight)
+
+  def setHealExcludedAccounts(count: Long): Unit = HealExcludedAccountsGauge.set(count)
+  def setHealRootAgeSeconds(seconds: Long): Unit = HealRootAgeSecondsGauge.set(seconds)
+  def recordHealNodesPerRepeg(nodes: Long): Unit = HealNodesPerRepeg.record(nodes.toDouble)
+
+  /** One on-demand state fetch after hand-off (FR-014), `cause` being what was missing and `source` who wanted it.
+    * Called once per distinct hash, where a fetch starts.
+    */
+  def incrementStateOnDemandFetch(cause: String, source: String): Unit =
+    Counter
+      .builder("state.ondemand.fetch")
+      .tag("cause", cause)
+      .tag("source", source)
+      .register(metrics.registry)
+      .increment()
 
   // ===== Sync Phase Metrics =====
 

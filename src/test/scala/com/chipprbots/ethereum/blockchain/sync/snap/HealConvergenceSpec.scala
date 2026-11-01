@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -160,6 +161,9 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     /** What the audit would say: every node of the root is there. */
     def missing(t: Trie): Seq[String] = t.nodes.filterNot(onDisk).map(_.label)
 
+  private def nodesPerRepeg: Long =
+    Metrics.get().registry.find("snap.heal.nodes.per.repeg").summary().count()
+
   for scheme <- Schemes do
     "Healing under a root that moves" should s"converge with no full-trie walk, re-pegged every 4 responses, on $scheme" taggedAs UnitTest in {
       // Half the leaves are there from the download. No branch is, so everything above them has to come.
@@ -188,6 +192,7 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       val sim = new Sim(scheme, startBlock = 0)
       sim.coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(sim.current.root.hash)
       sim.completedNow() shouldBe true
+      val before = nodesPerRepeg
       (1 to 8).foreach { block =>
         val previous = sim.current
         sim.repeg()
@@ -202,6 +207,7 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
         withClue(s"block $block: ")(sim.missing(sim.current) shouldBe empty)
       }
       sim.walked shouldBe false
+      withClue("each re-peg is recorded: ")(nodesPerRepeg - before shouldBe 8L)
       testKit.stop(sim.coordinator)
     }
 

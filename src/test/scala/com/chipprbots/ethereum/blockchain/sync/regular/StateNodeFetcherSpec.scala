@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchResponse
+import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes as SNAPByteCodes
@@ -109,6 +111,51 @@ class StateNodeFetcherSpec
         .asInstanceOf[PeersClient.Request[?]]
 
   "StateNodeFetcher" - {
+
+    // spec 022 FR-014, beacon 2: once a fetch, with who wanted it. A label of its own, so another suite's fetch is not here.
+    "counts a fetch once, at its start, with its cause and source; the de-dup a 30 s retry refires does not count" taggedAs UnitTest in {
+      def count(cause: String, source: String): Double =
+        Option(
+          Metrics.get().registry.find("state.ondemand.fetch").tag("cause", cause).tag("source", source).counter()
+        ).fold(0d)(_.count())
+      val source = "state-node-fetcher-spec"
+      val peersClient = TestProbe()
+      val replyTo = TestProbe()
+      val fetcher = typedKit.spawn(
+        StateNodeFetcher(
+          peersClient.ref.toTyped[PeersClient.Command],
+          syncConfig,
+          typedKit.createTestProbe[FetchCommand]().ref,
+          source
+        )
+      )
+      val first = ByteString(Array.fill[Byte](32)(0xa1.toByte))
+      val second = ByteString(Array.fill[Byte](32)(0xa2.toByte))
+      def fetch(hash: ByteString, isByteCode: Boolean = false): Unit =
+        fetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo.ref.toTyped[FetchResponse], isByteCode = isByteCode)
+      // A new fetch sends a request, after it has counted. A de-dup sends nothing, so the next new fetch shows it passed.
+      def requestSent(): Unit =
+        peersClient.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]]): Unit
+
+      fetch(first)
+      requestSent()
+      count("node", source) shouldBe 1d
+      (1 to 3).foreach(_ => fetch(first))
+      fetch(second)
+      requestSent()
+      withClue("the retries of the fetch in flight count nothing, and another hash does: ") {
+        count("node", source) shouldBe 2d
+      }
+      fetch(ByteString(Array.fill[Byte](32)(0xa3.toByte)), isByteCode = true)
+      requestSent()
+      withClue("code has its own cause: ") {
+        count("code", source) shouldBe 1d
+        count("node", source) shouldBe 2d
+      }
+      withClue("and nothing went under the import's label by default: ") {
+        StateNodeFetcher.ImportSource should not be source
+      }
+    }
 
     "with isByteCode=true, routes the request to SNAP GetByteCodes via BestSnapPeerExcluding" taggedAs UnitTest in new TestSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(

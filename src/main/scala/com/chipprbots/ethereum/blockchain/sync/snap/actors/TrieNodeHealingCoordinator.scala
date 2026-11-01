@@ -351,6 +351,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // spec 022 T038c (the A-B-A marker, forge N-r4-1, hunter N2): the walk this incarnation no longer counts, by token.
   private var invalidatedWalk: Option[Long] = None
 
+  // spec 022 T055: when the current root was adopted, and how many nodes had been healed by then.
+  private var rootAdoptedAtMs: Long = System.currentTimeMillis()
+  private var healedAtRootAdoption: Int = 0
+
   /** The empty path: a trie root's own position. */
   private val rootPath: ByteString =
     ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
@@ -521,6 +525,15 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           ExcludedGate.Held
     }
 
+  /** spec 022 T055: what FR-017 asks the node to report. Cheap reads only: `heldMemoryBytes` keeps running totals, and
+    * the excluded count is what the last pass to end left, since a count of the set would read the store.
+    */
+  private def emitHealProgress(): Unit =
+    SNAPSyncMetrics.setHealHeld(heldNodes.size.toLong, heldMemoryBytes)
+    SNAPSyncMetrics.setHealRequests(pendingTasks.size.toLong, activeRequests.size.toLong)
+    SNAPSyncMetrics.setHealExcludedAccounts(excludedSeeding.fold(0L)(_.accountSignature.accounts))
+    SNAPSyncMetrics.setHealRootAgeSeconds((System.currentTimeMillis() - rootAdoptedAtMs) / 1000)
+
   /** What is blocking healing, looked at each idle minute while it is blocked. `CodeOnly` means every one of these
     * holds:
     *   - nothing is queued or in flight, no commit or flush is failing;
@@ -627,6 +640,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * walk keeps it shut); and, unless a fetch could still help, let an idle minute pass.
     */
   private def onBlockedTick(): Unit =
+    emitHealProgress()
     // Any lost acknowledgement (a bytecode coordinator that a supervisor restarted, say).
     if heldNodes.awaitingCode || excludedCodeAsked.nonEmpty || blockerClock.trackedCode.nonEmpty then
       try
@@ -1015,6 +1029,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // compares). The reseeds are per root.
         decidedRoot.foreach(_.set(null))
         rootReseeds = 0
+        // spec 022 T055 (SC-005): what the root just left cost.
+        SNAPSyncMetrics.recordHealNodesPerRepeg((totalNodesHealed - healedAtRootAdoption).toLong)
+        healedAtRootAdoption = totalNodesHealed
+        rootAdoptedAtMs = System.currentTimeMillis()
         // The hand-off was for the root just left. The count stands: the next idle minute looks again from this one.
         codeHandOffArmed = false
         codeHandOffSent = false

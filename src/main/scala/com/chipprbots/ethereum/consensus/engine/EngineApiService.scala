@@ -56,6 +56,9 @@ class EngineApiService(
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
 
+  // spec 022 FR-014: what `newPayload` answered SYNCING over. Says so and changes nothing.
+  private val stateHoles = new EngineStateHoles(message => log.warn(message))
+
   /*
    * EVICTION POLICY (CLASS A — BEACON approved 2026-06-21):
    * Cap = 64 entries per map.  TTL = 12.8 minutes (2 epochs, 12_800_000_000_000 ns).
@@ -678,6 +681,10 @@ class EngineApiService(
                     case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                       // Missing state — can't validate, return SYNCING
+                      error match
+                        case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
+                          stateHoles.report(payload.blockNumber, hole)
+                        case _ => ()
                       log.warn("[ENGINE-API] newPayload #{}: missing state, SYNCING", payload.blockNumber)
                       None
                     case _ =>
@@ -689,8 +696,9 @@ class EngineApiService(
                       log.warn("[ENGINE-API] newPayload #{}: INVALID reason={}", payload.blockNumber, error.describe)
                       Some(false)
             catch
-              case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
+              case hole: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
                 // Missing state nodes — can't execute, return SYNCING
+                stateHoles.report(payload.blockNumber, hole)
                 log.warn("[ENGINE-API] newPayload #{}: MPT error, SYNCING", payload.blockNumber)
                 None
               case e: Exception =>

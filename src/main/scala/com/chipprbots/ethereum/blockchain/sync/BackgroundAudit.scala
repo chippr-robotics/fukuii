@@ -238,7 +238,7 @@ object BackgroundAudit:
     )
     ctx.spawn(
       Behaviors
-        .supervise(StateNodeFetcher(peersClient, syncConfig, ctx.system.ignoreRef))
+        .supervise(StateNodeFetcher(peersClient, syncConfig, ctx.system.ignoreRef, StateNodeFetcher.AuditSource))
         .onFailure[Throwable](backoff),
       "audit-state-node-fetcher",
       sync

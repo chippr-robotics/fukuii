@@ -13,11 +13,13 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
@@ -34,6 +36,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -393,6 +396,62 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       withClue("one walk, the one the fallback started: ")(rig.walksEnded shouldBe 1)
       withClue("nothing more to run: ")(rig.ec.pending shouldBe 0)
       rig.completions(rig.seen()) shouldBe 1
+      testKit.stop(rig.coordinator)
+    }
+
+    // ---- what FR-017 asks the node to report ---------------------------------------------------------------------------
+
+    it should s"report what is in flight and held, and the root's age, at each tick, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, absent = Set("root", "ext"))
+      rig.start()
+      rig.available()
+      val request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      rig.settle()
+      def gauge(name: String): Double = Metrics.get().registry.find(name).gauge().value()
+      withClue("the root is in flight: ")(gauge("snap.heal.inflight") shouldBe 1d)
+      gauge("snap.heal.held.nodes") shouldBe 0d
+      rig.peer.answerFrom(request, rig.trie.served)
+      rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds) // `ext`, which the root waits on
+      rig.settle()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      rig.settle()
+      withClue("the root is held, on its child: ") {
+        gauge("snap.heal.held.nodes") shouldBe 1d
+        gauge("snap.heal.held.bytes") should be > 0d
+      }
+      gauge("snap.heal.root.age.seconds") should be >= 0d
+      testKit.stop(rig.coordinator)
+    }
+
+    // ---- FR-018: the completion log ----------------------------------------------------------------------------------
+
+    it should s"log the completion with its root, what was healed, and that no walk ran, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, absent = Set("root"))
+      rig.peer.serveFrom.set(Some(rig.trie.served))
+      scala.util.Using.resource(new SnapLogCapture) { log =>
+        rig.start()
+        rig.available()
+        rig.driveUntil("the root on disk")(rig.onDisk(rig.trie.root))
+        rig.drive()
+        val line = log.lines.find(_.contains("[HEAL-COMPLETE]")).getOrElse(fail("no [HEAL-COMPLETE] line"))
+        line should include(Hex.toHexString(rig.trie.root.hash.toArray))
+        line should include("nodesHealed=1")
+        line should include("no full-trie gate walk")
+        line should include("from storage-done")
+      }
+      testKit.stop(rig.coordinator)
+    }
+
+    it should s"say in that log that a walk ran where one did, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, marked = false)
+      scala.util.Using.resource(new SnapLogCapture) { log =>
+        rig.start()
+        rig.drive()
+        val line = log.lines.find(_.contains("[HEAL-COMPLETE]")).getOrElse(fail("no [HEAL-COMPLETE] line"))
+        line should include("a full-trie gate walk ran")
+        (line should not).include("no full-trie gate walk")
+      }
       testKit.stop(rig.coordinator)
     }
 
