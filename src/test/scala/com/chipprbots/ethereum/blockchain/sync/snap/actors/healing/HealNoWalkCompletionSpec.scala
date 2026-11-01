@@ -221,19 +221,30 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
     // ---- read at the decision, not cached ---------------------------------------------------------------------------
 
+    // The marker has been read and stood, at the first root. So a coordinator that kept what it read is caught here.
     it should s"be read at the decision: a run that loses track mid-run walks, on $scheme" taggedAs UnitTest in {
-      val rig = new Rig(scheme, absent = Set("root"))
+      val rig = new Rig(scheme)
+      val next = PathHealPresenceFixtures.accountTrieNew()
       rig.start()
+      rig.drive()
+      withClue("it stood at the first decision: ") {
+        rig.walked shouldBe false
+        rig.completions(rig.seen()) shouldBe 1
+      }
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(next.root.hash)
       rig.available()
       val request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
-      request.paths shouldBe Seq(rig.trie.root.pathset)
+      request.paths shouldBe Seq(next.root.pathset)
       HealInvariant.lostTrack(rig.appState, "a task file that cannot be read", NopLog) shouldBe true
-      rig.peer.answerFrom(request, rig.trie.served)
-      rig.driveUntil("the root on disk")(rig.onDisk(rig.trie.root))
+      rig.peer.serveFrom.set(Some(next.served))
+      rig.peer.answerFrom(request, next.served)
+      rig.driveUntil("the new root on disk")(rig.onDisk(next.root))
+      rig.driveUntil("the walk that follows")(rig.walked)
       rig.drive()
-      withClue("the marker went mid-run, so the check walks: ")(rig.walked shouldBe true)
-      rig.completions(rig.seen()) shouldBe 1
-      rig.cleanRoot.get() shouldBe rig.trie.root.hash
+      withClue("the marker went mid-run, so the check walks, and the walk proves the root: ") {
+        rig.completions(rig.seen()) shouldBe 1
+        rig.cleanRoot.get() shouldBe next.root.hash
+      }
       testKit.stop(rig.coordinator)
     }
 
