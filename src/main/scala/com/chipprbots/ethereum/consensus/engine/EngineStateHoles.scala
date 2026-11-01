@@ -4,6 +4,8 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.duration.*
+import scala.util.Try
+import scala.util.control.NonFatal
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -20,7 +22,8 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeExceptio
   *
   * Counts each distinct hole once, with what it is and where, and logs it. The consensus client retries every slot, so
   * the same hole logs again only once per `logEvery`, with how many times it was hit since. It reads nothing and
-  * changes nothing: the answer to the consensus client is decided by the caller.
+  * changes nothing: the answer to the consensus client is decided by the caller, so `report` never throws. One call
+  * site is inside a `catch`, where a throw from here would leave `newPayload` with no answer at all (forge, beacon).
   */
 final class EngineStateHoles(
     log: String => Unit,
@@ -36,7 +39,13 @@ final class EngineStateHoles(
   // Least recently hit first. Bounded: past it, a hole hit again counts again, at worst.
   private val seen = mutable.LinkedHashMap.empty[ByteString, Seen]
 
-  def report(blockNumber: BigInt, error: MPTException): Unit = synchronized {
+  def report(blockNumber: BigInt, error: MPTException): Unit =
+    try record(blockNumber, error)
+    catch
+      case NonFatal(e) =>
+        Try(log(s"[STATE-HOLE] newPayload #$blockNumber: could not record a hole: $e")): Unit
+
+  private def record(blockNumber: BigInt, error: MPTException): Unit = synchronized {
     val at = now()
     val key = error match
       case e: MissingNodeException => e.hash

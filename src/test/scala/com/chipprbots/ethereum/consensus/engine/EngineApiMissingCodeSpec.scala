@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.ledger.*
+import com.chipprbots.ethereum.metrics.Metrics
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -174,6 +176,8 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       block
 
     def dropCode(): Unit = evmCodes.remove(codeHash.value).commit()
+    def holesOf(kind: String): Double =
+      Option(Metrics.get().registry.find("engine.state.hole").tag("kind", kind).counter()).fold(0d)(_.count())
     def restoreCode(): Unit = evmCodes.put(codeHash.value, code).commit()
 
     def toPayload(block: Block): ExecutionPayload =
@@ -218,6 +222,43 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       }
       status.latestValidHash shouldBe None
       engineApi.invalidBlocksSnapshot shouldBe empty
+
+    // spec 022 FR-014: execution's own report of the hole. Removing the service's call leaves every other test here green.
+    "count the hole as engine_state_hole_total{kind}, once however often the consensus client retries" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val block1 = buildBlock1()
+      dropCode()
+      val before = holesOf("code")
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      holesOf("code") shouldBe before + 1d
+
+    // The other call site: a hole that reaches the service as an exception. It sits in a `catch`, which is why the
+    // reporter must not throw.
+    "count a hole that arrives as an exception too, and still answer" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          throw new MissingRootNodeException(ByteString(Array.fill[Byte](32)(0x44)))
+      val block1 = buildBlock1()
+      val before = holesOf("root")
+      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      (status.status == Accepted || status.status == Syncing) shouldBe true
+      holesOf("root") shouldBe before + 1d
 
     "execute the same block and answer VALID once the bytecode is present (no verdict was cached)" taggedAs (
       UnitTest,

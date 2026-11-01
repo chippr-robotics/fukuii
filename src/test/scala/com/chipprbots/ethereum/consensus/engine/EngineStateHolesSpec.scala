@@ -102,6 +102,15 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     rig.lines.head should include("kind=other Invalid Node")
   }
 
+  it should "never throw at the caller: one call site is inside a catch, and the answer is the caller's" taggedAs UnitTest in {
+    val lines = mutable.ArrayBuffer.empty[String]
+    val failingCount = new EngineStateHoles(lines += _, _ => throw new IllegalStateException("registry closed"))
+    noException should be thrownBy failingCount.report(BigInt(1), new MissingRootNodeException(hash))
+    withClue("and it says what it could not do: ")(lines.last should include("could not record a hole"))
+    val failingLog = new EngineStateHoles(_ => throw new IllegalStateException("appender closed"), _ => ())
+    noException should be thrownBy failingLog.report(BigInt(1), new MissingRootNodeException(hash))
+  }
+
   "EngineApiMetrics" should "count a hole as engine_state_hole_total{kind}" taggedAs UnitTest in {
     val kind = "engine-state-holes-spec"
     EngineApiMetrics.recordStateHole(kind)
