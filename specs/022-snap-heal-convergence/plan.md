@@ -172,7 +172,7 @@ Evidence for each decision is in research.md.
     - What it finds it fetches itself, through a private `StateNodeFetcher` and `PeersClient`, not through `BlockImporter.resolvingMissingNode`, which would hold import.
     - It has its own expansion, not the `FrontierRebuildBfs` engine, and a test pins that the two name the same paths.
     - At a start with the audit on it takes the place of the blocking recovery scan. A bulk recovery stays the backstop for code import finds really missing.
-- **D9. Handoff check.** `PathToHashExporter` checked only 1,000 account leaves and 16 storage roots. Now a larger stratified sample (T054), and **no root recompute:** induction holds per root, a pass spans many, and a recompute at hand-off would put back the gate the spec removes. The size is measured on a Mordor Path run. SC-003's evidence is the sample plus import.
+- **D9. Handoff check.** `PathToHashExporter` checked only 1,000 account leaves and 16 storage roots. Now a larger stratified sample (T054), and **no root recompute:** induction holds per root, a pass spans many, and a recompute at hand-off would put back the gate the spec removes. The size is measured on a Mordor Path run. SC-003's evidence is the sample plus import, and a fault under the sample's miss rate passes the hand-off at WARN: slow to repair, never silently wrong.
 - **D10. FR-008 on Path.**
   - Use exact-position deletes in the same batch: the inner prefixes of an extension node's `sharedKey`, plus hash-mismatched bytes found at a position (geth `children()` and `hasNode`).
   - Delete the dead `deleteAccountNodesByPrefix` / `deleteStorageNodesByPrefix`. HP-encoded keys don't preserve prefixes, and those methods scan the whole CF.

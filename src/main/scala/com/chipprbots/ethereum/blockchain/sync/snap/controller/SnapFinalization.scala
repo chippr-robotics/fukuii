@@ -478,6 +478,14 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         s"(${result.sampledStale} stale in the path store, ${result.sampledMissing} with a node absent on the way); " +
         s"${result.sampledCodeAbsent} of ${result.sampledCode} sampled code hashes absent"
     )
+    val sampleMisses =
+      result.sampledAccountMisses + result.sampledStale + result.sampledMissing + result.sampledCodeAbsent
+    if sampleMisses > 0 then
+      ctx.log.warn(
+        s"[PATH-PUBLISH] The hand-off's sample missed $sampleMisses time(s), under the rate that fails a hand-off. A stale " +
+          "path node is harmless, but a node absent on the way is a hole: import's on-demand path and the background audit " +
+          "are what finds the rest of one"
+      )
     pathPublish match
       case Some((pivot, pivotRoot)) =>
         pathPublish = None

@@ -186,6 +186,8 @@ Design checked by beacon, forge and vault before it was built; the decisions are
 
 **Measured on Mordor at b4f6b6537:** 5.536M nodes and 2.72M accounts in 1463-2020 s at 25% duty, about 2.7-3.8k nodes/s, and a hole found 1.4 s into a pass and repaired 47 ms later. This does not predict Sepolia: a small trie and a warm cache.
 
+**Measured live after the review round (a8e4d9c1e, 2026-11-01).** A node corrupted in a stopped datadir: found and repaired over the bad bytes 39 ms apart, pass not clean, the next clean, the next owed none. A `kill -9` past the first cursor save: the restart resumed at 7,465 saved positions and about 111k nodes, and finished. **The first live Path run**, Mordor on a local jar with `SyncController`'s ETC-requires-Hash guard patched out, never committed: sync to hand-off in about 6 minutes; export of 3.77M account and 1.77M storage nodes in 120.2 s; the stratified sample in 929 ms, 2,917 account leaves with 0 misses; a clean audit pass over the published hash store in about 33 minutes; import on that store across a restart. This shows the Path machinery working end to end. It does not show Path at Sepolia's size, on a PoS chain, or with a live CL, and Mordor's state moves little, so 0 stale leaves says little about the rate on Sepolia: T063 records it.
+
 **T054's measurement needs a patched jar.** `SyncController.loadSnapSyncConfig`'s `require` rejects Path on ETC, so a Mordor Path run needs a local jar with that lifted, made for the measurement and never committed.
 
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
