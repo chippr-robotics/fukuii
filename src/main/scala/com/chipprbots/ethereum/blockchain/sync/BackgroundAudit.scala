@@ -709,9 +709,8 @@ object BackgroundAudit:
           counters = counters.copy(deleted = counters.deleted + 1)
           log.error(
             s"[HEAL-AUDIT] Deleted the entry at $where, which ${hole.fault.describe}, after " +
-              s"${AuditBadEntries.DeleteAfterPasses} passes in which no peer served it. Absence throws at execution, so " +
-              "import's on-demand fetch takes it from here, and exhausting that leads to a SNAP re-sync. The next pass " +
-              "treats it as a hole"
+              s"${AuditBadEntries.DeleteAfterPasses} passes in which no peer served it. ${whatFollowsADelete(hole)}. The " +
+              "next pass treats it as a hole"
           )
         case BadEntryDelete.NoLongerBad =>
           log.info(s"[HEAL-AUDIT] $where reads as good now: nothing deleted")
@@ -726,6 +725,16 @@ object BackgroundAudit:
           )
         case BadEntryDelete.NotReached =>
           log.info(s"[HEAL-AUDIT] The current root no longer needs $where: nothing deleted")
+
+    /** `BlockImporter` takes the two apart: one missing contract is rarely alone, so the first goes to a bulk scan. */
+    private def whatFollowsADelete(hole: AuditHole): String =
+      if hole.isCode then
+        "Absence throws at execution: the first missing code of a process goes to a bulk bytecode recovery, which stops " +
+          "regular sync for a scan and fetches in batches, unless that has failed too often. Missing code after that " +
+          "goes to import's on-demand fetch, and exhausting that leads to a SNAP re-sync"
+      else
+        "Absence throws at execution, so import's on-demand fetch takes it from here, and exhausting that leads to a " +
+          "SNAP re-sync"
 
     private def afterFetchEnded(): Behavior[Command] =
       dispatchFetch()

@@ -1251,3 +1251,21 @@ class BackgroundAuditSpec
     n.ended(n.spawn())
     n.book.lastPass shouldBe 0L
   }
+
+  "A delete's log" should "say what happens next for code, which is a bulk recovery first and not an on-demand fetch" taggedAs UnitTest in {
+    val n = new Node
+    val codeHash = ByteString(kec256(Array[Byte](7, 7)))
+    n.s.code.put(codeHash, ByteString(Array[Byte](1, 2, 3))).commit()
+    n.head(10, n.s.put(branch(1 -> n.s.put(accountLeaf(1, accountBytes(codeHash = Some(codeHash)))))))
+    n.onRecord(codeHash, 2)
+    val (_, said) = logsOf {
+      val audit = n.spawn()
+      exhaust(n.fetches.receiveMessage())
+      n.awaitBackoff(audit).counters.deleted shouldBe 1
+    }
+    val deleted = lines(said, Level.ERROR).find(_.contains("Deleted")).get
+    deleted should include(AuditWalk.hexOf(codeHash))
+    deleted should include("bulk bytecode recovery")
+    deleted should include("after that")
+    deleted should include("on-demand")
+  }
