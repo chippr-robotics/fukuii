@@ -514,7 +514,11 @@ private class SNAPSyncControllerImpl(
       HealInvariant.atSnapStart(
         stateIngest.appState,
         stateIngest.pathNodes,
-        HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory)
+        HealInvariant.canHold(
+          snapSyncConfig.storageScheme,
+          snapSyncConfig.deferredMerkleization,
+          trieNodesCachedInMemory
+        )
       )
     )
     ctx.log.info("SNAP Sync Controller initialized")
@@ -544,8 +548,9 @@ private class SNAPSyncControllerImpl(
         )
       case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
         ctx.log.warn(
-          "[HEAL-INVARIANT] pruning.mode = inmemory on the Hash scheme: no marker can hold here, and the verification " +
-            s"walk stays at every start and completion${if clearedOne then " (a marker found here was removed)" else ""}"
+          "[HEAL-INVARIANT] No marker can hold here (pruning.mode = inmemory on the Hash scheme, or " +
+            "deferred-merkleization = true), and the verification walk stays at every start and completion" +
+            (if clearedOne then " (a marker found here was removed)" else "")
         )
 
   /** OQ-3: ask NetworkPeerManagerActor for the current handshaked peers; the reply (`HandshakedPeers`) is bridged back

@@ -230,11 +230,11 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * binary's state can be in it unless a sync's own keys say so (see `HealInvariant.isEmpty`).
     */
   def isDatadirCreatedUnderInvariant(): Boolean =
-    get(Keys.SnapHealDatadirCreated).contains(SnapHealInvariantVersion)
+    get(Keys.SnapHealDatadirCreated).contains(SnapHealDatadirCreatedVersion)
 
   /** The genesis has just been stored for the first time. */
   def markDatadirCreatedUnderInvariant(): DataSourceBatchUpdate =
-    put(Keys.SnapHealDatadirCreated, SnapHealInvariantVersion)
+    put(Keys.SnapHealDatadirCreated, SnapHealDatadirCreatedVersion)
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -668,9 +668,16 @@ object AppStateStorage:
 
   /** The value of `snap.heal.invariant`. A later version of the rule writes another, and older marks do not stand. 3:
     * version 2 stamped an empty datadir and then downloaded with spec 022's H0 and H1 still open, so its mark says less
-    * than this one's (research R-5d).
+    * than this one's (research R-5d). 4: this version is the first reader that skips a walk on the marker's word, and a
+    * run of an earlier jar can have lost track with its marker standing, so a version 3 mark costs one walk (research
+    * R-5g).
     */
-  val SnapHealInvariantVersion: Value = "3"
+  val SnapHealInvariantVersion: Value = "4"
+
+  /** The value of `snap.heal.datadirCreated`. Apart from the marker's: it says who created the datadir, and that did
+    * not change with version 4. A datadir with an older value counts as not empty.
+    */
+  val SnapHealDatadirCreatedVersion: Value = "3"
 
   /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
   val AuditNoPivot: Value = "no-pivot"

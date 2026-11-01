@@ -44,12 +44,16 @@ object HealInvariant:
     * least recently used first, so a crash can leave a present node over an absent child (spec 022 review vault V3, R1,
     * V-N2). The Path scheme is not affected: its heal commits, account phase and storage phase all write to the two
     * Path column families through `PathNodeStorage`, in atomic batches, and never touch the cache, which only the
-    * hand-off's export goes through, behind its own barrier (#1581). Hence scheme-aware (V-N2 (4)). Where it cannot
-    * hold, the verification walk stays at every start and every completion: that walk is the repair, and there is no
-    * second mechanism (V-N2 (3)).
+    * hand-off's export goes through, behind its own barrier (#1581). Hence scheme-aware (V-N2 (4)).
+    *
+    * Nor under `deferred-merkleization = true`, on either scheme: no trie is built during the download and a lone
+    * absence still gets a done marker, which vouches for flat slots alone (H1, tasks.md T050a).
+    *
+    * Where it cannot hold, the verification walk stays at every start and every completion: that walk is the repair,
+    * and there is no second mechanism (V-N2 (3)).
     */
-  def canHold(scheme: StorageScheme, trieNodesCachedInMemory: Boolean): Boolean =
-    scheme == StorageScheme.Path || !trieNodesCachedInMemory
+  def canHold(scheme: StorageScheme, deferredMerkleization: Boolean, trieNodesCachedInMemory: Boolean): Boolean =
+    !deferredMerkleization && (scheme == StorageScheme.Path || !trieNodesCachedInMemory)
 
   /** Whether a storage task's done marker holds what it claims once written. Not on the Hash scheme building the trie
     * during the download under `pruning.mode = inmemory`: storage trie nodes go through the node cache there, not

@@ -339,15 +339,23 @@ private[snap] trait HealingOrchestrator
     * recovery scan or at import (data-model.md "Invariant marker").
     */
   private def stampInvariantAfterCleanWalk(): Unit =
-    if HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory) &&
-      stateRoot.exists(_.value == healingCleanWalkRoot.get())
-    then
+    if markerCanHold && stateRoot.exists(_.value == healingCleanWalkRoot.get()) then
       try
         stateIngest.appState.stampSnapHealInvariant().commitSync()
         ctx.log.info("[HEAL-INVARIANT] Clean full walk of the completed root: marker stamped")
       catch
         case scala.util.control.NonFatal(e) =>
           ctx.log.error("[HEAL-INVARIANT] Could not write the marker; a later SNAP run walks again", e)
+
+  /** Whether the marker can hold here at all (`HealInvariant.canHold`). The one place that asks for this run's
+    * settings.
+    */
+  private def markerCanHold: Boolean =
+    HealInvariant.canHold(
+      snapSyncConfig.storageScheme,
+      snapSyncConfig.deferredMerkleization,
+      trieNodesCachedInMemory
+    )
 
   /** Path-scheme exit from state healing: same effects as the clean `TrieWalkComplete(0)` branch (commit the pivot
     * anchor, record the clean-walk signal, stop the heal scheduler, enter validation — which short-circuits on
@@ -449,10 +457,15 @@ private[snap] trait HealingOrchestrator
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
     healingCurrentRoot.set(root.value)
     healingCleanWalkRoot.set(null) // spec 022 T043: this coordinator has walked nothing yet
-    if !HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory) then
+    if !markerCanHold then
       ctx.log.warn(
-        "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can leave " +
-          "a present node over an absent child. The full verification walk decides completion."
+        (if snapSyncConfig.deferredMerkleization then
+           "[HEAL] deferred-merkleization = true: no trie was built during the download, so a done marker vouches for " +
+             "flat slots alone."
+         else
+           "[HEAL] pruning.mode = inmemory: healed nodes reach disk only as the node cache evicts them, so a crash can " +
+             "leave a present node over an absent child."
+        ) + " The full verification walk decides completion."
       )
 
     trieNodeHealingCoordinator = Some(
