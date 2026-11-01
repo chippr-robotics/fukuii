@@ -192,7 +192,7 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
   - pending and in-flight heal requests;
   - accounts excluded under FR-005 and still outstanding;
   - time since the current pivot root was adopted.
-- **FR-018**: The completion log MUST state the pivot root, the number of nodes healed, and that no full-trie gate walk ran, or that one did where the marker did not stand.
+- **FR-018**: The completion log MUST state the pivot root, the number of nodes healed, and that no full-trie gate walk ran, or that one did and what it decided: a walk that ran and did not decide must not read as no walk.
 
 **Cleanup and evaluation**
 

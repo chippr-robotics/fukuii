@@ -387,6 +387,23 @@ Within each slice, **tests come before implementation**, and the tests must fail
 - [x] T055 [P] [US1] Add the FR-014, FR-017 and FR-018 metrics and the `[HEAL-COMPLETE]` log line, following data-model.md "Metrics and logs", in `SNAPSyncMetrics` and `TrieNodeHealingCoordinator.scala`. FR-014's counter is in `StateNodeFetcher`'s new-fetch branch, with a source label since the audit has its own fetcher. **Added, not in this task's text (beacon 2):** `EngineStateHoles`, since the Engine path has no on-demand repair: without a counter of its own `state_ondemand_fetch_total` reads zero on Sepolia while `newPayload` answers SYNCING, and SC-004 passes vacuously.
 - [x] T056 Delete or rewrite the specs whose mechanism is removed. What is left: `StaleVerificationWalkSpec` (this also retires flaky task #85), `ForceCompletedStorageVerificationSpec`, `SNAPHealLoopSpec`. The rest of the original list went with their mechanism in slice 4 (research R-5b): `PrunedHeal*`, `ScopedVerification*`, `SubtreeCompleteSeedingSpec`. Confirm the ETC suites in research R-4 pass with **no assertion changes**. **None is deleted, since T051 removes nothing:** `StaleVerificationWalkSpec` and `ForceCompletedStorageVerificationSpec` stay as they are, on the path where the walk stays, so this retires no flaky task. What did change, each for its reason: `SNAPSyncControllerPinSpec` loses the pins of the route T052 closes; `SNAPHealLoopSpec`'s hand-sent signal says first what a coordinator would have said; the two force-complete pins in `TrieNodeHealingCoordinatorSpec` and one in `InvariantMarkerSpec` follow T047; three withdrawal pins follow the user's decision; `InvariantMarkerSpec`'s and `SNAPCoordinatorGoneSpec`'s fixtures say `deferredMerkleization = false`, since no marker holds under `SNAPSyncConfig`'s default. No ETC suite in R-4 has an assertion changed. **[forge]**
 - [ ] T057 Run all slice tests, then run `./scripts/fukuii-test essential` once. Do a dev-loop Mordor run against the local core-geth with JFR capture during healing, and record healing time and CPU against the T005 baseline. Open PR 5d and request reviews from beacon, forge and eye.
+  - **Runs, 2026-11-01, on `654c1682f`** (`/home/dontpanic/mordor-scarcity/S14`, `R8`, `U7`, `P3`, `P4`, script `s5d-runs.sh`; Path on a local jar with the ETC guard removed, never committed). Each ended in a clean audit pass over the head, the oracle for a no-walk completion: 5.54M nodes, 2.72M accounts, 0 holes, 0 stuck, 0 blacklisting.
+    | Run | What it is | Nodes healed | Walk | Marker |
+    |-----|-----------|-------------:|------|--------|
+    | S14 | fresh, Hash, JFR | 1 | none | stamped empty, kept |
+    | R8 | `kill -9` just after the decision, restart | 1, then 0 | none | found, kept |
+    | U7 | upgrade from a pre-marker jar | 630 | ran and decided | stamped by the clean walk |
+    | P3 | fresh, Path | 10 | none | stamped empty, kept |
+    | P4 | Path, `kill -9` 47 s into the account phase, resumed | **160,333** in 8 s, one re-peg | none | found, kept, no withdrawal |
+  - **Time and CPU against the baseline** (healing start to hand-off, jars before the switch; JVM share of 4 cores over the window from JFR):
+    | Run | Jar | Healing | JVM CPU | Walks |
+    |-----|-----|--------:|--------:|:-----:|
+    | R1 | pre-spec-022 | 151 s | 365 core-s | 4 |
+    | R2 | slice 2 | 114 s | 272 core-s | 3 |
+    | S4 | slice 2 | 116 s | 265 core-s | 3 |
+    | S13 | 5c (no JFR) | 46 s | – | 1 |
+    | S14 | 5d | 0.3 s | below JFR's 1 Hz sample | 0 |
+  - **What this does not show.** Total time did not improve on Mordor: S14 took 4m47 against S13's 4m34, because the bytecode phase (storage-done to healing start: 131 s here, 66 s in S13) varies by more than the walk costs on a trie this small, and it runs against the local core-geth. The gain the switch is for is at Sepolia's scale, and T063 is what measures it. S14, R8 and P3 healed almost nothing, and R8's kill landed just after the decision rather than mid-heal: P4 is the one with real healing behind a no-walk completion, and it saw one re-peg. Heavy re-pegging stays unit-tested (T046) until T063.
 
 **Checkpoint**: both schemes complete on "drained on the current root". Where the marker stands the walk runs only in the background. Where it does not, it stays as the repair (T051).
 
