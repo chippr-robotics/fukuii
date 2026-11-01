@@ -510,6 +510,38 @@ class BackgroundAuditSpec
     }
   }
 
+  /** Slots 1 and 2 of a root at block 10; the first's fetch hangs and the walk ends, so no batch runs from here on. The
+    * head then goes to `number`: nothing but the look before the second hole's fetch can see it.
+    */
+  private def headMovesAtThePassTail(number: Int) =
+    val n = new Node
+    val first = ByteString(kec256(Array[Byte](1)))
+    val second = ByteString(kec256(Array[Byte](2)))
+    n.head(10, n.s.put(branch(1 -> first, 2 -> second)))
+    val audit = n.spawn(settings = instant.copy(batchSize = 1))
+    val fetch = n.fetches.receiveMessage()
+    fetch.hash shouldBe first
+    eventually {
+      val st = n.status(audit)
+      st.stack shouldBe 0
+      st.reading shouldBe false
+    }
+    val other = ByteString(kec256(Array[Byte](3)))
+    val rootB = n.s.put(branch(1 -> first, 2 -> other))
+    n.head(number, rootB)
+    exhaust(fetch)
+    val next = n.fetches.receiveMessage()
+    next.hash shouldBe other
+    next.stateRoot shouldBe Some(rootB)
+
+  it should "ask the head as it is now before a fetch, though no batch has run to say it moved" taggedAs UnitTest in {
+    headMovesAtThePassTail(11)
+  }
+
+  it should "ask it after a rewind too, to a head below the root the hole was resolved under" taggedAs UnitTest in {
+    headMovesAtThePassTail(9)
+  }
+
   it should "fetch a hole that waited at the root it is now resolved under" taggedAs UnitTest in {
     val n = new Node
     val other = ByteString(kec256(Array[Byte](3)))

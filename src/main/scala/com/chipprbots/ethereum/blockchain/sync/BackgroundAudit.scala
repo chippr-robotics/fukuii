@@ -120,8 +120,7 @@ object BackgroundAudit:
       progressEvery: FiniteDuration = 1.minute,
       persistEvery: FiniteDuration = 3.minutes,
       passBackoff: FiniteDuration = 1.hour,
-      fetchTimeout: FiniteDuration = 15.minutes,
-      refreshHoleAfterBlocks: Long = 32
+      fetchTimeout: FiniteDuration = 15.minutes
   )
 
   /** The private fetch path: a `FetchStateNode` goes in, and a reply goes to the ref it names. */
@@ -415,15 +414,17 @@ object BackgroundAudit:
         val done = withElapsed
         // A pass ran, clean or not, which is what these flags have always said (decision 14). Only the anchor says clean.
         val flags = deps.appState.recoveryDone()
-        deps.progress.clearAuditCursors()
+        // Cursors after what says the pass is over: a crash between costs nothing, where the other order costs a pass.
         if done.clean then
           flags.and(deps.appState.putSnapAuditCleanAnchor(anchor)).commit()
+          deps.progress.clearAuditCursors()
           deps.progress.writeAuditBadEntries(AuditBadEntries(anchor).encode)
           log.info(s"[HEAL-AUDIT] Pass $pass ended clean for anchor $anchor: ${done.summary}")
           waitingForNextPass = true // nothing to say at the stop: this pass is over
           Behaviors.stopped
         else
           flags.commit()
+          deps.progress.clearAuditCursors()
           val wait = AuditThrottle.passBackoff(settings.passBackoff, pass)
           log.warn(
             s"[HEAL-AUDIT] Pass $pass ended, not clean: another pass in $wait, for anchor $anchor: " +
@@ -587,16 +588,22 @@ object BackgroundAudit:
         holeHashes -= hole.hash
         fetching = Some(hole)
         changedSincePersist = true
-        val tooOld = !hole.isCode && latestHead.exists(_.number - hole.rootNumber > settings.refreshHoleAfterBlocks)
-        if tooOld then refresh(hole) else sendFetch(hole)
+        if hole.isCode then sendFetch(hole) else refresh(hole)
 
-    /** A hole that waited its turn may no longer be there, and peers serve only recent roots. */
+    /** A hole that waited its turn may no longer be there, and peers serve only recent roots. Asked of the head as it
+      * is now, not as the last batch saw it: at a pass's tail no batch runs, and a run of failed fetches would go out
+      * pinned to roots peers have stopped serving. A rewind counts the same as a head that moved on. A head still at
+      * the root this hole was resolved under has nothing to add.
+      */
     private def refresh(hole: AuditHole): Unit =
       val gen = generation
       val reader = deps.reader
-      val head = latestHead.get
       val work = Future {
-        AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
+        reader.head() match
+          case None                                      => AuditWalk.Settled.Retry
+          case Some(head) if head.stateRoot == hole.root => AuditWalk.Settled.Hole(hole)
+          case Some(head) =>
+            AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
       }(readEc)
       ctx.pipeToSelf(work)(outcome => HoleRefreshed(gen, hole, outcome))
 
@@ -745,7 +752,7 @@ object BackgroundAudit:
           counters = counters.copy(deleted = counters.deleted + 1)
           log.error(
             s"[HEAL-AUDIT] Deleted the entry at $where, which ${hole.fault.describe}, after " +
-              s"${AuditBadEntries.DeleteAfterPasses} passes in which no peer served it. ${whatFollowsADelete(hole)}. The " +
+              s"${AuditBadEntries.DeleteAfterPasses} passes in which no peer served it, or none was there to ask. ${whatFollowsADelete(hole)}. The " +
               "next pass treats it as a hole"
           )
         case BadEntryDelete.NoLongerBad =>
