@@ -17,4 +17,7 @@ class ArchiveNodeStorage(nodeStorage: NodesStorage) extends NodesKeyValueStorage
 
   override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = nodeStorage.multiGet(keys)
 
+  override def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    nodeStorage.multiGetNoFill(keys).map(_.fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_)))
+
   override def persist(): Unit = {}

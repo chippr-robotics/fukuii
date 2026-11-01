@@ -11,6 +11,7 @@ import io.circe.parser.decode as circeDecoder
 import io.circe.syntax.*
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -150,10 +151,47 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
 
   /** Remove all SNAP progress entries across all state roots. Called on --snap-clear or full restart. */
   def clearAll(): Unit =
-    val keys = storageContent.compile.toList
+    // The keys alone: not every value in this namespace is a SnapSyncProgress (the audit's cursors are raw bytes).
+    val keys = dataSource
+      .iterate(namespace)
+      .compile
+      .toList
       .unsafeRunSync()(IORuntime.global)
-      .collect { case Right((k, _)) => k }
+      .collect { case Right((k, _)) => ByteString.fromArrayUnsafe(k) }
     if keys.nonEmpty then update(keys, Nil).commit()
+
+  // ---- spec 022 T053: where the background audit has got to ---
+  //
+  // Raw bytes under one key in `p`, none of them a root's hash. `clearAll` wiping it costs the audit its place, nothing
+  // more. `commit`, never `commitSync`: the data source holds its lock through an fsync, a lost cursor repeats a little
+  // of a walk, and this is written every few minutes while import runs.
+
+  def readAuditCursors(): Option[Array[Byte]] =
+    dataSource.getOptimized(namespace, SnapSyncProgressStorage.AuditCursorsKey)
+
+  def writeAuditCursors(cursors: Array[Byte]): Unit =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(DataSourceUpdateOptimized(namespace, Nil, Seq(SnapSyncProgressStorage.AuditCursorsKey -> cursors)))
+    ).commit()
+
+  def clearAuditCursors(): Unit =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(DataSourceUpdateOptimized(namespace, Seq(SnapSyncProgressStorage.AuditCursorsKey), Nil))
+    ).commit()
+
+  /** The audit's record of bad entries peers could not serve (decision 15). Its own key: it outlives a pass, and the
+    * cursors do not.
+    */
+  def readAuditBadEntries(): Option[Array[Byte]] =
+    dataSource.getOptimized(namespace, SnapSyncProgressStorage.AuditBadEntriesKey)
+
+  def writeAuditBadEntries(record: Array[Byte]): Unit =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(DataSourceUpdateOptimized(namespace, Nil, Seq(SnapSyncProgressStorage.AuditBadEntriesKey -> record)))
+    ).commit()
 
   // ---- spec 022 D5: the durable excluded set -------------------------------------------------------------------------
   //
@@ -251,6 +289,20 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
     )
 
 object SnapSyncProgressStorage:
+  private val AuditCursorsKey: Array[Byte] = "snap.heal.auditCursors".getBytes(StorageStringCharset.UTF8Charset)
+  private val AuditBadEntriesKey: Array[Byte] = "snap.heal.auditBadEntries".getBytes(StorageStringCharset.UTF8Charset)
+
+  /** The state under the audit is being replaced, so where a pass had got to and what it was counting go, in the write
+    * that says so: a resume of those positions would skip whatever the pass had already read of the old state.
+    */
+  private[storage] def forgetAudit(dataSource: DataSource): DataSourceBatchUpdate =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(
+        DataSourceUpdateOptimized(Namespaces.SnapSyncProgressNamespace, Seq(AuditCursorsKey, AuditBadEntriesKey), Nil)
+      )
+    )
+
   private val ExcludedPrefix: Array[Byte] = "SnapExcluded/1/".getBytes(StorageStringCharset.UTF8Charset)
   // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
   private val ExcludedEnd: Array[Byte] = ExcludedPrefix :+ 0xff.toByte

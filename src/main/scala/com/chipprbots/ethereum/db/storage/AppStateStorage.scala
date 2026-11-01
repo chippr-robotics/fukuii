@@ -117,9 +117,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * The heal invariant marker goes in the same write (spec 022 D7): every caller re-enters SNAP on state that regular
     * sync has written to, or that was found wanting (a stuck import, a failed hand-off, `clearDoneOnStart`), so what is
     * present there is not vouched for any more. Here, so that no caller can forget it.
+    *
+    * The audit's clean anchor and its place go with it (spec 022 T053): a re-SNAP can land on the same pivot, and a
+    * clean pass of the state it replaced says nothing of the state it writes.
     */
   def clearSnapSyncDone(): DataSourceBatchUpdate =
-    update(toRemove = Seq(Keys.SnapSyncDone, Keys.SnapHealInvariant), toUpsert = Nil)
+    update(toRemove = Seq(Keys.SnapSyncDone, Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor), toUpsert = Nil)
+      .and(SnapSyncProgressStorage.forgetAudit(dataSource))
 
   // ========================================
   // Heal invariant marker (spec 022 D7, data-model.md "Invariant marker")
@@ -167,6 +171,30 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearSnapCodeScanOwed(): DataSourceBatchUpdate =
     remove(Keys.SnapCodeScanOwed)
 
+  /** What the last clean background-audit pass covered (spec 022 decision 7): the SNAP pivot, or
+    * [[AppStateStorage.AuditNoPivot]] on a node with no pivot. A pass is owed when this differs from the current one.
+    */
+  def getSnapAuditCleanAnchor(): Option[String] =
+    get(Keys.SnapAuditCleanAnchor)
+
+  def putSnapAuditCleanAnchor(anchor: String): DataSourceBatchUpdate =
+    put(Keys.SnapAuditCleanAnchor, anchor)
+
+  /** What a clean pass records now, and what [[isSnapAuditOwed]] compares with: this datadir's SNAP pivot. A
+    * checkpoint-synced node sets the done flags and no pivot, so it has the fixed value.
+    */
+  def snapAuditAnchor(): String =
+    getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
+
+  /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
+    * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
+    * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
+    * none.
+    */
+  def isSnapAuditOwed(): Boolean =
+    isSnapSyncDone() &&
+      (!getSnapAuditCleanAnchor().contains(snapAuditAnchor()) || !isBytecodeRecoveryDone() || !isStorageRecoveryDone())
+
   /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
     * is pre-invariant, whatever else it holds.
     */
@@ -176,12 +204,15 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** A checkpoint import is about to write: the importer writes parent-first, so a present node can sit over an absent
     * child until it ends. The marker goes in the same write, so no crash can leave it standing over that. Commit with
     * `commitSync`, before the first node (T042).
+    *
+    * The audit's clean anchor and its place go too: every checkpoint import has the same anchor, so nothing else would
+    * say the state is new (spec 022 T053).
     */
   def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
     update(
-      toRemove = Seq(Keys.SnapHealInvariant),
+      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor),
       toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
-    )
+    ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
 
   /** The import's CRC checked: it goes in the batch that writes the import's done flags. */
   def endCheckpointImport(): DataSourceBatchUpdate =
@@ -641,6 +672,9 @@ object AppStateStorage:
     */
   val SnapHealInvariantVersion: Value = "3"
 
+  /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
+  val AuditNoPivot: Value = "no-pivot"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -677,3 +711,4 @@ object AppStateStorage:
     val SnapHealFrontierRetired = "snap.heal.frontierRetired"
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
+    val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"

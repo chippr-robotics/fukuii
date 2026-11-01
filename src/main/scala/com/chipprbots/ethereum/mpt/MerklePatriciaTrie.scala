@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.common.SimpleMap
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.mpt
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.encode as encodeRLP
@@ -103,6 +104,12 @@ object MerklePatriciaTrie:
 trait NodesKeyValueStorage extends SimpleMap[NodeHash, NodeEncoded, NodesKeyValueStorage]:
   def persist(): Unit
   def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(get)
+
+  /** One result per key, none of which can fail the batch: see [[RawNodeRead]]. The stores a long walk reads override
+    * this with one no-fill batch; this default is for the rest, one read at a time.
+    */
+  def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    keys.map(key => RawNodeRead.decoding(get(key).fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_))))
 
 class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNode], val nodeStorage: MptStorage)(
     implicit

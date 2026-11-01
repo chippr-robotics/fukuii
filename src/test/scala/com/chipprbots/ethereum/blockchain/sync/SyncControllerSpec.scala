@@ -1410,6 +1410,183 @@ class SyncControllerSpec
     warnings.exists(w => w.contains("could not read 1 subtree(s)") && w.contains("a pass ran")) shouldBe true
   }
 
+  // ---- spec 022 T053, decisions 9 and 14: the background audit --------------------------------------------------------
+
+  private def auditName(testSetup: TestSetup): Option[String] =
+    testSetup.syncController.children.map(_.path.name).find(_.startsWith("background-audit"))
+
+  private def childIsGone(testSetup: TestSetup, name: String): Unit =
+    eventually {
+      testSetup.someTimePasses()
+      assert(!testSetup.syncController.children.exists(_.path.name == name))
+    }
+
+  /** The best block on the scannable root, stamped now, so the audit's throttle has no reason to hold off. */
+  private def freshBestOnPivotRoot(testSetup: TestSetup): Unit =
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val header = Fixtures.Blocks.Genesis.header.copy(
+      number = BlockNumber(100),
+      stateRoot = TrieRoot(appState.getSnapSyncStateRoot().get),
+      unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(System.currentTimeMillis() / 1000)
+    )
+    blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
+    appState.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(header.hash.value, 100)).commit()
+
+  "With the audit on, a start with a recovery flag down" should "go to regular sync at once, with no scan, and say who pays" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withAuditOn() { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    val said = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    }
+    assert(childNamed(testSetup, "regular-sync"))
+    assert(auditName(testSetup).isDefined)
+    assert(!childNamed(testSetup, "combined-recovery-scan"))
+    said.exists(_.contains("background audit pays this debt")) shouldBe true
+  }
+
+  it should "pay it: a finished pass sets both flags" taggedAs (UnitTest, SyncTest) in withAuditOn() { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    freshBestOnPivotRoot(testSetup)
+    val appState = storagesInstance.storages.appStateStorage
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    eventually {
+      someTimePasses()
+      appState.isBytecodeRecoveryDone() shouldBe true
+      appState.isStorageRecoveryDone() shouldBe true
+    }
+    appState.getSnapAuditCleanAnchor() shouldBe Some("100")
+    withClue("nothing was owed after that, and the audit stopped: ") {
+      eventually {
+        someTimePasses()
+        auditName(testSetup) shouldBe None
+      }
+    }
+  }
+
+  it should "reach the audit with do-snap-sync off too, where no start ever ran the scan" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withAuditOn(
+    doSnapSync = false
+  ) { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    assert(childNamed(testSetup, "regular-sync"))
+    assert(auditName(testSetup).isDefined)
+    assert(!childNamed(testSetup, "combined-recovery-scan"))
+  }
+
+  it should "run no audit on a node that never finished SNAP" taggedAs (UnitTest, SyncTest) in withAuditOn(
+    doSnapSync = false
+  ) { testSetup =>
+    import testSetup.*
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    assert(childNamed(testSetup, "regular-sync"))
+    auditName(testSetup) shouldBe None
+  }
+
+  "With the audit off, a start with a recovery flag down" should "run the scan as before, and no audit" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    assert(childNamed(testSetup, "combined-recovery-scan"))
+    assert(!childNamed(testSetup, "regular-sync"))
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "regular-sync"))
+    }
+    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe true
+    auditName(testSetup) shouldBe None
+  }
+
+  it should "say the audit is off once, however often regular sync starts" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val said = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      val regular = syncController.children.find(_.path.name.startsWith("regular-sync")).get
+      system.stop(regular)
+      eventually {
+        someTimePasses()
+        assert(syncController.children.exists(c => c.path.name.startsWith("regular-sync") && c != regular))
+      }
+    }
+    said.count(_.contains("[HEAL-AUDIT] Off")) shouldBe 1
+  }
+
+  "The audit" should "stop when regular sync stops for a SNAP re-sync" taggedAs (UnitTest, SyncTest) in withAuditOn() {
+    testSetup =>
+      import testSetup.*
+      seedSnapDoneWithScannableRoot(testSetup)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      val running = auditName(testSetup).get
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+      childIsGone(testSetup, running)
+      assert(childNamed(testSetup, "snap-sync"))
+      auditName(testSetup) shouldBe None
+  }
+
+  it should "stop when regular sync stops for a bulk bytecode recovery" taggedAs (UnitTest, SyncTest) in withAuditOn() {
+    testSetup =>
+      import testSetup.*
+      seedSnapDoneWithScannableRoot(testSetup)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      val running = auditName(testSetup).get
+      syncController ! SyncController.WrappedExternal(
+        SyncProtocol.MissingCodeNeedsBulkRecovery(BigInt(500), ByteString(Array.fill[Byte](32)(0x44)))
+      )
+      childIsGone(testSetup, running)
+  }
+
+  it should "start afresh when regular sync restarts, and leave none of the old one" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withAuditOn() { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = auditName(testSetup).get
+    system.stop(syncController.children.find(_.path.name.startsWith("regular-sync")).get)
+    childIsGone(testSetup, running)
+    eventually {
+      someTimePasses()
+      auditName(testSetup) should not be Some(running)
+      auditName(testSetup) shouldBe defined
+    }
+  }
+
+  it should "stop through the restart that first takes down a SNAP backfill" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withAuditOn() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "snap-sync"))
+    }
+    appState.snapSyncDone().commit() // what a finalisation has written by the time it says so
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+    val running = auditName(testSetup).get
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+    childIsGone(testSetup, running)
+    auditName(testSetup) shouldBe None
+  }
+
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup
@@ -1427,6 +1604,11 @@ class SyncControllerSpec
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
     // + cake overrides
+
+    /** Off, so these scenarios keep the start's recovery scan: with the audit on the scan does not run (spec 022
+      * decision 14). `withAuditOn` is the other case.
+      */
+    def auditEnabled: Boolean = false
 
     val networkPeerManager: TestProbe = TestProbe()
     val peerMessageBus: TypedActorRef[PeerEventBusActor.Command] =
@@ -1484,7 +1666,8 @@ class SyncControllerSpec
           syncConfig,
           this,
           externalSchedulerOpt = Some(system.scheduler),
-          txGossipGate = txGossipGate
+          txGossipGate = txGossipGate,
+          backgroundAuditEnabled = auditEnabled
         )
       )
     )
@@ -1516,7 +1699,8 @@ class SyncControllerSpec
           blacklist,
           syncConfig,
           this,
-          externalSchedulerOpt = Some(system.scheduler)
+          externalSchedulerOpt = Some(system.scheduler),
+          backgroundAuditEnabled = auditEnabled
         )
       )
     )
@@ -1610,7 +1794,8 @@ class SyncControllerSpec
           syncConfig,
           chainConfigBuilder,
           forkChoiceManagerOpt = Some(forkChoiceManager),
-          externalSchedulerOpt = Some(system.scheduler)
+          externalSchedulerOpt = Some(system.scheduler),
+          backgroundAuditEnabled = auditEnabled
         )
       )
     )
@@ -1624,6 +1809,13 @@ class SyncControllerSpec
 
   def withPosRegularSyncSetup(terminalTotalDifficulty: Option[BigInt])(test: PosRegularSyncSetup => Any): Unit =
     val testSetup = new PosRegularSyncSetup(terminalTotalDifficulty)
+    try test(testSetup)
+    finally testSetup.cleanup()
+
+  def withAuditOn(doSnapSync: Boolean = true)(test: TestSetup => Any): Unit =
+    val testSetup = new TestSetup():
+      override def auditEnabled: Boolean = true
+      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = doSnapSync)
     try test(testSetup)
     finally testSetup.cleanup()
 

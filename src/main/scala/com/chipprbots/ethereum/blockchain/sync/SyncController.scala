@@ -213,7 +213,8 @@ object SyncController:
       externalSchedulerOpt: Option[Scheduler] = None,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
-        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen
+        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen,
+      backgroundAuditEnabled: Boolean = BackgroundAudit.enabledInNodeConfig
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -242,7 +243,8 @@ object SyncController:
           forkChoiceManagerOpt,
           externalSchedulerOpt,
           reorgState,
-          txGossipGate
+          txGossipGate,
+          backgroundAuditEnabled
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -283,7 +285,8 @@ object SyncController:
       reorgState: ReorgStateHandler,
       // Closed while SNAP or state recovery runs (no complete state to validate a peer tx against), opened when
       // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
-      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate,
+      backgroundAuditEnabled: Boolean
   ):
     // scalastyle:on parameter.number
 
@@ -294,6 +297,10 @@ object SyncController:
     // (context.stop is async — new actors can race with still-stopping ones).
     private var bootstrapGeneration: Long = 0
     private var syncGeneration: Long = 0
+
+    // spec 022 T053: the full-trie walk off the critical path, alive exactly while regular sync is (decision 9).
+    private var backgroundAudit: Option[TypedActorRef[BackgroundAudit.Command]] = None
+    private var saidAuditOff: Boolean = false
 
     // Recovery recent-root roll (Task #5/#6): post-SNAP storage recovery asks for a recent canonical root
     // when the saved pivot has aged out of peers' serve window. We fetch a recent header via
@@ -887,6 +894,7 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
+          stopBackgroundAudit()
           // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
           // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
           // scan's older root while it can be read, which may never have held this code.
@@ -906,6 +914,7 @@ object SyncController:
             missingHash
           )
           ctx.stop(regularSync)
+          stopBackgroundAudit()
           appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
           appStateStorage.clearFastSyncDone().commit()
           startSnapSync(minPivotBlock = Some(blockNumber))
@@ -1574,8 +1583,17 @@ object SyncController:
           logSnapStateRootDiagnostic()
           val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
           val needStorage = !appStateStorage.isStorageRecoveryDone()
-          if needBytecode || needStorage then startRecovery(needBytecode, needStorage, recoveryScanRoot())
-          else startRegularSync()._2
+          if !(needBytecode || needStorage) then startRegularSync()._2
+          else if auditGate == BackgroundAudit.Gate.Run then
+            // spec 022 decision 14: these flags say a pass ran, and this arm is their only reader. With the audit on, its
+            // pass is what pays them, with no block on a node where nothing is missing. Import's bulk recovery stays the
+            // backstop for code import finds really missing, so a block remains where something is.
+            log.info(
+              s"Recovery flags are down (bytecode=${!needBytecode}, storage=${!needStorage}): no scan at this start. The " +
+                "background audit pays this debt, with regular sync running."
+            )
+            startRegularSync()._2
+          else startRecovery(needBytecode, needStorage, recoveryScanRoot())
         case (false, SyncMode.Regular) if snapHasStake() =>
           // #1434: do-snap-sync is off, but SNAP was running here and left work behind (a restart mid-heal, or mid-download
           // with best = pivot). Regular sync on that partial trie only fetches nodes on demand, and its stuck handler
@@ -1807,6 +1825,7 @@ object SyncController:
         )
       regularSync ! SyncProtocol.Start
       ctx.watchWith(regularSync, RegularSyncTerminated(regularSync))
+      startBackgroundAudit()
       // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
       // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
       // far it got — spawn a standalone ChainDownloader to finish the job alongside regular sync.
@@ -1816,6 +1835,52 @@ object SyncController:
         if resumeBackfill then maybeStartBackfillResume(regularSync).getOrElse(runningRegularSync(regularSync))
         else runningRegularSync(regularSync)
       (regularSync, nextBehavior)
+
+    private def auditGate: BackgroundAudit.Gate =
+      BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
+
+    /** Every route into regular sync comes here, a restart of it included, so a previous incarnation's audit goes
+      * first. A failed audit restarts from its saved place and gives up after a few tries with nothing else harmed: it
+      * is off the critical path, and the next start tries again.
+      */
+    private def startBackgroundAudit(): Unit =
+      stopBackgroundAudit()
+      auditGate match
+        case BackgroundAudit.Gate.Run =>
+          backgroundAudit = Some(
+            ctx.spawn(
+              Behaviors
+                .supervise(
+                  BackgroundAudit.forNode(
+                    blockchainReader,
+                    appStateStorage,
+                    stateStorage,
+                    evmCodeStorage,
+                    networkPeerManager,
+                    peerEventBus,
+                    syncConfig
+                  )
+                )
+                .onFailure[Exception](
+                  SupervisorStrategy.restartWithBackoff(1.minute, 30.minutes, 0.2).withMaxRestarts(5)
+                ),
+              s"background-audit-$syncGeneration",
+              DispatcherSelector.blocking()
+            )
+          )
+        case BackgroundAudit.Gate.CannotRepair => sayAuditOff("pruning.mode = inmemory")
+        case BackgroundAudit.Gate.Disabled     => sayAuditOff(s"fukuii.sync.${BackgroundAudit.EnabledPath} = false")
+        case BackgroundAudit.Gate.NotOwed      => ()
+
+    private def sayAuditOff(why: String): Unit =
+      if !saidAuditOff then
+        saidAuditOff = true
+        log.info(s"[HEAL-AUDIT] Off: $why")
+
+    /** Decision 9. A stopped audit's Futures still finish, and they write nothing. */
+    private def stopBackgroundAudit(): Unit =
+      backgroundAudit.foreach(ctx.stop)
+      backgroundAudit = None
 
     /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. Returns
       * `Some(runningRegularSyncWithStandaloneBackfill)` when a resumer is spawned; `None` when SNAP has not completed,

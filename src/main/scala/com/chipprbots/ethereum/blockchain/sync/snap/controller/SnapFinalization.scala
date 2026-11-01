@@ -455,7 +455,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           if a + s - lastLogged >= 1000000L then
             lastLogged = a + s
             self ! PathPublishProgress(a, s),
-        stateRoot = Some(pivotRoot)
+        stateRoot = Some(pivotRoot),
+        codePresent = hash => stateIngest.bytecode.get(hash).isDefined
       )
     }(blockingEc)
     ctx.pipeToSelf(work) {
@@ -469,9 +470,22 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private[snap] def onPathPublishDone(result: PathToHashExporter.Result, millis: Long): Behavior[Command] =
     ctx.log.info(
-      s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms; " +
-        s"verified ${result.sampledAccountLeaves} sampled account leaves and ${result.sampledStorageRoots} storage roots"
+      s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms " +
+        s"(export ${result.exportMillis} ms, sample ${result.sampleMillis} ms); looked up " +
+        s"${result.sampledAccountLeaves} sampled account leaves (${result.sampledAccountMisses} stale or with a node " +
+        s"absent on the way); ${result.sampledStorageRoots} sampled storage roots present; looked up " +
+        s"${result.sampledLargeTrieLeaves} leaves of the largest storage tries and ${result.sampledEmbedded} embedded leaves " +
+        s"(${result.sampledStale} stale in the path store, ${result.sampledMissing} with a node absent on the way); " +
+        s"${result.sampledCodeAbsent} of ${result.sampledCode} sampled code hashes absent"
     )
+    val sampleMisses =
+      result.sampledAccountMisses + result.sampledStale + result.sampledMissing + result.sampledCodeAbsent
+    if sampleMisses > 0 then
+      ctx.log.warn(
+        s"[PATH-PUBLISH] The hand-off's sample missed $sampleMisses time(s), under the rate that fails a hand-off. A stale " +
+          "path node is harmless, but a node absent on the way is a hole: import's on-demand path and the background audit " +
+          "are what finds the rest of one"
+      )
     pathPublish match
       case Some((pivot, pivotRoot)) =>
         pathPublish = None
