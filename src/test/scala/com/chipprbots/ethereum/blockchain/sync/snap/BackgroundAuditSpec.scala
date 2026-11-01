@@ -27,7 +27,6 @@ import org.scalatest.time.Span
 import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.BackgroundAudit
-import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
@@ -47,14 +46,22 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.RepairedNodeReferences
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockAccessListStorage
+import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
+import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
+import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
+import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.mpt.byteStringSerializer
+import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -630,20 +637,40 @@ class BackgroundAuditSpec
     ImportCounterAccess.survivedExhausts shouldBe exhaustsBefore
   }
 
-  it should "put a peer that serves a wrong node in its private blacklist alone" taggedAs UnitTest in {
+  // Import's blacklist is a CacheBasedBlacklist, and every one of those sets a shared gauge and bumps shared counters. So
+  // forNode reaching for import's, or for any other of that class, moves them, and only then does this go red.
+  it should "keep a peer that serves a wrong node to itself: forNode's blacklist is neither import's nor its kind" taggedAs UnitTest in {
     val n = new Node
     val root = populate(n)
     val (_, hash) = deepStorageNode(n, root)
     n.s.delete(hash)
-    n.head(10, root)
 
-    val peerId = PeerId("bad-peer")
-    val peer = Peer(
-      peerId,
+    // What forNode's own reader reads: the best block by its hash, stamped now, on the clock it reads.
+    val header = com.chipprbots.ethereum.Fixtures.Blocks.Genesis.header.copy(
+      number = com.chipprbots.ethereum.domain.BlockNumber(10),
+      stateRoot = com.chipprbots.ethereum.domain.TrieRoot(root),
+      unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(System.currentTimeMillis() / 1000)
+    )
+    new BlockHeadersStorage(n.s.source).put(header.hash.value, header).commit()
+    n.s.app.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(header.hash.value, 10)).commit()
+    val chain = new BlockchainReader(
+      new BlockHeadersStorage(n.s.source),
+      new BlockBodiesStorage(n.s.source),
+      new BlockNumberMappingStorage(n.s.source),
+      n.s.state,
+      new ReceiptStorage(n.s.source),
+      n.s.app,
+      new ChainWeightStorage(n.s.source),
+      new BlockAccessListStorage(n.s.source)
+    )
+
+    def peerNamed(name: String): Peer = Peer(
+      PeerId(name),
       new InetSocketAddress("127.0.0.1", 30303),
       createTestProbe[PeerActor.Command]().ref,
       incomingConnection = false
     )
+    val peers = Seq(peerNamed("bad-peer"), peerNamed("good-peer"))
     val info = PeerInfo(
       RemoteStatus(
         capability = Capability.ETH68,
@@ -661,7 +688,7 @@ class BackgroundAuditSpec
     val sent = createTestProbe[NetworkPeerManagerActor.SendMessageCmd]()
     val networkPeerManager = testKit.spawn(Behaviors.receiveMessage[NetworkPeerManagerActor.Command] {
       case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
-        replyTo ! NetworkPeerManagerActor.HandshakedPeers(Map(peer -> info))
+        replyTo ! NetworkPeerManagerActor.HandshakedPeers(peers.map(_ -> info).toMap)
         Behaviors.same
       case send: NetworkPeerManagerActor.SendMessageCmd =>
         sent.ref ! send
@@ -669,8 +696,6 @@ class BackgroundAuditSpec
       case _ => Behaviors.same
     })
     val bus = testKit.spawn(PeerEventBusActor.behavior())
-    val privateBlacklist = CacheBasedBlacklist.empty(10)
-    val importsBlacklist = CacheBasedBlacklist.empty(10)
     val config = syncConfig.copy(
       peersScanInterval = 1.millis,
       syncRetryInterval = 1.millis,
@@ -678,19 +703,33 @@ class BackgroundAuditSpec
       blacklistDuration = 1.hour
     )
 
-    val audit = n.spawn(fetcher = BackgroundAudit.privateFetcher(networkPeerManager, bus, config, privateBlacklist))
-
-    // The first request finds no peer until the client has scanned, so the clock turns until one goes out.
-    val request = eventually {
+    def trieNodesRequest(): NetworkPeerManagerActor.SendMessageCmd = eventually {
       manualTime.timePasses(StateNodeFetcher.BackoffInterval)
-      sent.receiveMessage(100.millis)
+      val send = sent.receiveMessage(100.millis)
+      send.message.underlyingMsg shouldBe a[GetTrieNodes]
+      send
     }
-    val requestId = request.message.underlyingMsg.asInstanceOf[GetTrieNodes].requestId
-    bus ! PublishCmd(MessageFromPeer(TrieNodes(requestId, Seq(ByteString(Array.fill[Byte](40)(1)))), peerId))
 
-    eventually(privateBlacklist.isBlacklisted(peerId) shouldBe true)
-    importsBlacklist.keys shouldBe empty
-    testKit.stop(audit)
+    NetworkMetrics.BlacklistedPeersSize.set(12345L)
+    val countedBefore = NetworkMetrics.BlacklistedReasonsRegularSyncGroup.count()
+
+    val audit = testKit.spawn(
+      BackgroundAudit.forNode(chain, n.s.app, n.s.state, n.s.code, networkPeerManager, bus, config)
+    )
+
+    // Stopped whatever happens: its client scans every millisecond of a clock later specs here move by hours.
+    try
+      val request = trieNodesRequest()
+      val requestId = request.message.underlyingMsg.asInstanceOf[GetTrieNodes].requestId
+      bus ! PublishCmd(MessageFromPeer(TrieNodes(requestId, Seq(ByteString(Array.fill[Byte](40)(1)))), request.peerId))
+
+      // The fetcher tells its client to blacklist and then asks again, so the client has handled the one by the other.
+      val next = trieNodesRequest()
+      next.peerId should not be request.peerId
+
+      NetworkMetrics.BlacklistedPeersSize.get shouldBe 12345L
+      NetworkMetrics.BlacklistedReasonsRegularSyncGroup.count() shouldBe countedBefore
+    finally testKit.stop(audit)
   }
 
   // ---- decision 7: cadence -------------------------------------------------------------------------------------------

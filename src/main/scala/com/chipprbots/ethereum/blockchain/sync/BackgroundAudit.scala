@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher
 import com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditBadEntries
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditBlacklist
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCodeFilter
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCounters
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCursors
@@ -58,7 +59,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   *
   * It stands apart from import on purpose. Import's on-demand fetch holds import until it returns, its one fetch slot
   * abandons the fetch in flight for another hash, and an exhausted reply there counts towards a SNAP re-sync. So this
-  * has its own [[StateNodeFetcher]] and its own [[PeersClient]] over a private blacklist, spawned at its first hole,
+  * has its own [[StateNodeFetcher]] and its own [[PeersClient]] over an [[AuditBlacklist]], spawned at its first hole,
   * and it touches neither `BlockImporter`'s counter nor its adapters (decision 2).
   *
   * '''What a clean pass means.''' Every position was read as the state stood when the walk reached it, and nothing was
@@ -197,7 +198,7 @@ object BackgroundAudit:
         state,
         code,
         new StorageReader(blockchainReader, appState, state, code),
-        privateFetcher(networkPeerManager, peerEventBus, syncConfig, CacheBasedBlacklist.empty(PrivateBlacklistSize))
+        privateFetcher(networkPeerManager, peerEventBus, syncConfig)
       )
     )
 
@@ -221,12 +222,12 @@ object BackgroundAudit:
         .map(h => AuditHead(h.number.value, h.stateRoot.value, h.unixTimestamp.toLong))
 
   /** Decision 2: a bad peer here is this audit's business, and its blacklist goes when it does. */
-  private[sync] def privateFetcher(
+  private def privateFetcher(
       networkPeerManager: ActorRef[NetworkPeerManagerActor.Command],
       peerEventBus: ActorRef[PeerEventBusActor.Command],
-      syncConfig: SyncConfig,
-      blacklist: Blacklist
+      syncConfig: SyncConfig
   ): FetcherFactory = ctx =>
+    val blacklist = new AuditBlacklist(PrivateBlacklistSize)
     val sync = DispatcherSelector.fromConfig("sync-dispatcher")
     val backoff = SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
     val peersClient = ctx.spawn(

@@ -826,3 +826,40 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     step.holes shouldBe empty
     step.pushes shouldBe Vector(frame)
   }
+
+  // ---- the audit's blacklist ---------------------------------------------------------------------------------------------
+
+  private case class Id(value: String) extends com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
+
+  private val wrongNode = com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.WrongStateNodeResponse
+
+  "AuditBlacklist" should "keep an id for its time, say why, and let it go" taggedAs UnitTest in {
+    var now = 0L
+    val list = new AuditBlacklist(10, () => now)
+    list.isBlacklisted(Id("a")) shouldBe false
+    list.add(Id("a"), 10.nanos, wrongNode)
+    list.isBlacklisted(Id("a")) shouldBe true
+    list.reasonFor(Id("a")) shouldBe Some(wrongNode.reasonType)
+    list.keys shouldBe Set(Id("a"))
+    now = 10L
+    withClue("its time is up: ") {
+      list.isBlacklisted(Id("a")) shouldBe false
+      list.reasonFor(Id("a")) shouldBe None
+      list.keys shouldBe empty
+    }
+    list.add(Id("b"), 10.nanos, wrongNode)
+    list.remove(Id("b"))
+    list.isBlacklisted(Id("b")) shouldBe false
+  }
+
+  it should "hold no more than it is given, and drop what expires soonest" taggedAs UnitTest in {
+    val list = new AuditBlacklist(2, () => 0L)
+    list.add(Id("long"), 100.nanos, wrongNode)
+    list.add(Id("short"), 10.nanos, wrongNode)
+    list.add(Id("new"), 50.nanos, wrongNode)
+    list.keys shouldBe Set(Id("long"), Id("new"))
+    withClue("one already on the list is only renewed: ") {
+      list.add(Id("new"), 60.nanos, wrongNode)
+      list.keys shouldBe Set(Id("long"), Id("new"))
+    }
+  }
