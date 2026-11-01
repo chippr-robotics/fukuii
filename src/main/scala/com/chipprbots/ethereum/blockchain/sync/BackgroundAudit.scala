@@ -646,7 +646,8 @@ object BackgroundAudit:
 
     /** Decision 15. A bad entry no peer could serve is counted, once per pass, and at the third pass it goes, if a read
       * now still finds it bad and the current root still needs it there. Both are asked inside the delete, under the
-      * commit lock. On the actor, as every write here is.
+      * commit lock, which covers block commits and not an on-demand write, so the delete reads again after the look. On
+      * the actor, as every write here is.
       */
     private def onBadEntryUnserved(hole: AuditHole): Unit =
       val (book, count) =
@@ -692,6 +693,14 @@ object BackgroundAudit:
         case BadEntryDelete.NoLongerBad =>
           log.info(s"[HEAL-AUDIT] $where reads as good now: nothing deleted")
           if !hole.isCode then stack.append(AuditFrame(hole.position, Some(hole.hash)))
+        case BadEntryDelete.PassesKeccakElsewhere =>
+          // Never a node that passes keccak. A peer serving it rewrites it in this store's format, and until then there
+          // is nothing to follow.
+          counters = counters.copy(unfollowable = counters.unfollowable + 1)
+          log.error(
+            s"[HEAL-AUDIT] $where holds bytes that hash to its key in a format this store cannot read, another pruning " +
+              "mode's perhaps, so it stays. What is below it goes unseen, and this pass is not clean"
+          )
         case BadEntryDelete.NotReached =>
           log.info(s"[HEAL-AUDIT] The current root no longer needs $where: nothing deleted")
 

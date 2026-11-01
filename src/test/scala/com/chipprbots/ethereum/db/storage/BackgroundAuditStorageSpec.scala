@@ -572,3 +572,26 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     outcome shouldBe BadEntryDelete.NoLongerBad
     code.get(hash) shouldBe Some(bytes)
   }
+
+  // ---- the review round: never a node that passes keccak --------------------------------------------------------------
+
+  "An entry basic pruning cannot unwrap" should "stay if its raw bytes hash to the key: archive's format, say" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.nodes.put(hashOf(good), good)
+    withClue("this is the read the audit gets: ") {
+      b.state.getReadOnlyStorage.rawNodes(Seq(hashOf(good))) shouldBe Seq(RawNodeRead.Undecodable)
+    }
+    b.state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.PassesKeccakElsewhere
+    b.nodes.get(hashOf(good)).get.toSeq shouldBe good.toSeq
+  }
+
+  "An entry archive pruning reads as failing its hash" should "stay if it unwraps to a node that passes: basic's format" taggedAs UnitTest in {
+    val nodes = new NodeStorage(EphemDataSource())
+    val state = new ArchiveStateStorage(nodes)
+    val good = nodeBytes(1)
+    val wrapped = storedNodeToBytes(StoredNode(ByteString(good), 3, 1))
+    nodes.put(hashOf(good), wrapped)
+    state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.PassesKeccakElsewhere
+    nodes.get(hashOf(good)).get.toSeq shouldBe wrapped.toSeq
+  }

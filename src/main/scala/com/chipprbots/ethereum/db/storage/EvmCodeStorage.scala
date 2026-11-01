@@ -110,19 +110,18 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     * are read again after the look. Code that passes its hash is never deleted.
     */
   def deleteBadCode(hash: CodeHash, stillReached: () => Boolean): BadEntryDelete =
-    def goodOrGone: Boolean =
-      dataSource
-        .getOptimizedNoFill(namespace, hash.toArray)
-        .forall(existing => java.util.Arrays.equals(kec256(existing), hash.toArray))
+    def kept: Option[BadEntryDelete] =
+      Option.when(
+        dataSource
+          .getOptimizedNoFill(namespace, hash.toArray)
+          .forall(existing => java.util.Arrays.equals(kec256(existing), hash.toArray))
+      )(BadEntryDelete.NoLongerBad)
     ReferenceCountedStateStorage.commitLock.synchronized {
-      if goodOrGone then BadEntryDelete.NoLongerBad
-      else if !stillReached() then BadEntryDelete.NotReached
-      else if goodOrGone then BadEntryDelete.NoLongerBad
-      else
+      StateStorage.deleteUnless(kept, stillReached) { () =>
         remove(hash).commit()
         EvmCodeStorage.shared.remove(cacheKey(hash))
         EvmCodeStorage.sizes.remove(cacheKey(hash))
-        BadEntryDelete.Deleted
+      }
     }
 
   // overriding to avoid going through IndexedSeq[Byte]

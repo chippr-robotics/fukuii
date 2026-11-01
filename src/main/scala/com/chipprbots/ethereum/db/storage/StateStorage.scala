@@ -98,6 +98,11 @@ enum BadEntryDelete:
   /** A read now finds the entry good, or gone. */
   case NoLongerBad
 
+  /** The bytes hash to the key, though not in the format this store reads: another pruning mode's, say. They are the
+    * node, so they stay, and this store still cannot use them.
+    */
+  case PassesKeccakElsewhere
+
   /** Still bad, and the current root no longer needs it there: it stays. */
   case NotReached
 
@@ -210,13 +215,14 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
     * a write of this very hash in the last instant before the delete leaves a hole import fetches.
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
-    def goodOrGone: Boolean = nodeStorage.get(nodeHash).forall(StateStorage.hashesTo(nodeHash, _))
-    if goodOrGone then BadEntryDelete.NoLongerBad
-    else if !stillReached() then BadEntryDelete.NotReached
-    else if goodOrGone then BadEntryDelete.NoLongerBad
-    else
+    def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
+      case None                                                   => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)      => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.PassesKeccakElsewhere)
+      case _                                                      => None
+    StateStorage.deleteUnless(kept, stillReached) { () =>
       nodeStorage.update(Seq(nodeHash), Nil)
-      BadEntryDelete.Deleted
+    }
 
 object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
@@ -386,20 +392,16 @@ class ReferenceCountedStateStorage(
     * look, as the trait says. The eviction comes after the delete, as in [[onBlockSave]].
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
-    def goodOrGone: Boolean = nodeStorage.get(nodeHash).forall { raw =>
-      scala.util
-        .Try(encoding.storedNodeFromBytes(raw))
-        .toOption
-        .exists(node => StateStorage.hashesTo(nodeHash, node.nodeEncoded.toArray))
-    }
+    def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
+      case None                                                   => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)      => Some(BadEntryDelete.PassesKeccakElsewhere)
+      case _                                                      => None
     ReferenceCountedStateStorage.commitLock.synchronized {
-      if goodOrGone then BadEntryDelete.NoLongerBad
-      else if !stillReached() then BadEntryDelete.NotReached
-      else if goodOrGone then BadEntryDelete.NoLongerBad
-      else
+      StateStorage.deleteUnless(kept, stillReached) { () =>
         nodeStorage.update(Seq(nodeHash), Nil)
         decodedNodes.foreach(_.evict(Seq(nodeHash)))
-        BadEntryDelete.Deleted
+      }
     }
 
 class CachedReferenceCountedStateStorage(
@@ -454,6 +456,28 @@ object StateStorage:
   /** Whether `encoded` is the node stored under `hash`. */
   private[storage] def hashesTo(hash: NodeHash, encoded: Array[Byte]): Boolean =
     java.util.Arrays.equals(kec256(encoded), hash.toArray)
+
+  /** Whether `stored` is basic pruning's wrapper around the node stored under `hash`. */
+  private[storage] def unwrapsToNode(hash: NodeHash, stored: Array[Byte]): Boolean =
+    scala.util
+      .Try(encoding.storedNodeFromBytes(stored))
+      .toOption
+      .exists(node => hashesTo(hash, node.nodeEncoded.toArray))
+
+  /** The shape of every audit delete (spec 022 decision 15): `kept` reads the entry and says why it stays, if it does.
+    * Asked before the look from the root and again after it, since nothing holds off an on-demand write in between.
+    */
+  private[storage] def deleteUnless(kept: => Option[BadEntryDelete], stillReached: () => Boolean)(
+      delete: () => Unit
+  ): BadEntryDelete =
+    kept.getOrElse {
+      if !stillReached() then BadEntryDelete.NotReached
+      else
+        kept.getOrElse {
+          delete()
+          BadEntryDelete.Deleted
+        }
+    }
 
   def apply(
       pruningMode: PruningMode,

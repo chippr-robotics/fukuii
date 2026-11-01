@@ -1081,3 +1081,21 @@ class BackgroundAuditSpec
       .maxBy(_._1.length)
     nearest shouldBe ("com.chipprbots.ethereum.blockchain.sync.SyncController" -> "INFO")
   }
+
+  // ---- the review round -------------------------------------------------------------------------------------------------
+
+  "An entry that does not unwrap and hashes to its key" should "never be deleted, however many passes no peer serves it" taggedAs UnitTest in {
+    val n = new Node
+    val leaf = storageLeaf(1)
+    val hash = ByteString(kec256(leaf.encode))
+    n.s.nodes.put(hash, leaf.encode) // what an archive store holds, read by a basic one
+    n.head(10, n.s.put(branch(3 -> hash)))
+    n.onRecord(hash, 2)
+    val audit = n.spawn()
+    exhaust(n.fetches.receiveMessage())
+    val st = n.awaitBackoff(audit)
+    st.counters.deleted shouldBe 0
+    st.counters.unfollowable shouldBe 1
+    st.counters.clean shouldBe false
+    n.s.nodes.get(hash).get.toSeq shouldBe leaf.encode.toSeq
+  }
