@@ -24,6 +24,9 @@ import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 import com.chipprbots.ethereum.rlp.RLPException
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.encode as rlpEncode
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The storage primitives the background audit stands on (spec 022 T053, decisions 1, 3, 7, 8): a no-fill batch that
@@ -583,6 +586,18 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     }
     b.state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.PassesKeccakElsewhere
     b.nodes.get(hashOf(good)).get.toSeq shouldBe good.toSeq
+  }
+
+  it should "stay if the wrapper's counters are past reading, around bytes that hash to the key" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    val damaged = rlpEncode(RLPList(RLPValue(good), RLPList(), RLPValue(Array.empty[Byte])))
+    b.nodes.put(hashOf(good), damaged)
+    withClue("this is the read the audit gets: ") {
+      b.state.getReadOnlyStorage.rawNodes(Seq(hashOf(good))) shouldBe Seq(RawNodeRead.Undecodable)
+    }
+    b.state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.PassesKeccakElsewhere
+    b.nodes.get(hashOf(good)).get.toSeq shouldBe damaged.toSeq
   }
 
   "An entry archive pruning reads as failing its hash" should "stay if it unwraps to a node that passes: basic's format" taggedAs UnitTest in {

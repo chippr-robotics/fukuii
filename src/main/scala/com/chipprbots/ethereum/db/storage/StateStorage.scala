@@ -211,10 +211,10 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
-      case None                                                   => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)      => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.PassesKeccakElsewhere)
-      case _                                                      => None
+      case None                                               => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)  => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if StateStorage.wrapsNode(nodeHash, raw) => Some(BadEntryDelete.PassesKeccakElsewhere)
+      case _                                                  => None
     StateStorage.deleteUnless(kept, stillReached) { () =>
       nodeStorage.update(Seq(nodeHash), Nil)
     }
@@ -388,8 +388,9 @@ class ReferenceCountedStateStorage(
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
       case None                                                   => Some(BadEntryDelete.NoLongerBad)
       case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)      => Some(BadEntryDelete.PassesKeccakElsewhere)
-      case _                                                      => None
+      case Some(raw) if StateStorage.hashesTo(nodeHash, raw) || StateStorage.wrapsNode(nodeHash, raw) =>
+        Some(BadEntryDelete.PassesKeccakElsewhere)
+      case _ => None
     ReferenceCountedStateStorage.commitLock.synchronized {
       StateStorage.deleteUnless(kept, stillReached) { () =>
         nodeStorage.update(Seq(nodeHash), Nil)
@@ -456,6 +457,12 @@ object StateStorage:
       .Try(encoding.storedNodeFromBytes(stored))
       .toOption
       .exists(node => hashesTo(hash, node.nodeEncoded.toArray))
+
+  /** Whether `stored` holds the node stored under `hash`, in a wrapper whose counters may be past reading. Not a whole
+    * wrapper a store can use, but those bytes pass keccak, so they are never deleted (the user's rule, 2026-11-01).
+    */
+  private[storage] def wrapsNode(hash: NodeHash, stored: Array[Byte]): Boolean =
+    encoding.nodeBytesInWrapper(stored).exists(hashesTo(hash, _))
 
   /** The shape of every audit delete (spec 022 decision 15): `kept` reads the entry and says why it stays, if it does.
     * Asked before the look from the root and again after it, since nothing holds off an on-demand write in between.
