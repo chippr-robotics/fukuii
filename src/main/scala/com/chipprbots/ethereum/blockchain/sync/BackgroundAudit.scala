@@ -338,6 +338,9 @@ object BackgroundAudit:
     private def startPass(resume: Boolean): Unit =
       generation += 1
       anchor = deps.appState.snapAuditAnchor()
+      if badEntries.anchor != anchor then
+        badEntries = AuditBadEntries(anchor)
+        deps.progress.writeAuditBadEntries(badEntries.encode)
       stack.clear()
       holes.clear()
       holeHashes.clear()
@@ -395,6 +398,7 @@ object BackgroundAudit:
         deps.progress.clearAuditCursors()
         if done.clean then
           flags.and(deps.appState.putSnapAuditCleanAnchor(anchor)).commit()
+          deps.progress.writeAuditBadEntries(AuditBadEntries(anchor).encode)
           log.info(s"[HEAL-AUDIT] Pass $pass ended clean for anchor $anchor: ${done.summary}")
           waitingForNextPass = true // nothing to say at the stop: this pass is over
           Behaviors.stopped

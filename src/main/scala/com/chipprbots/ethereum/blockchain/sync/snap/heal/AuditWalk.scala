@@ -595,8 +595,15 @@ object AuditCursors:
   * three and a restart does not start the count again. It outlives a pass, and it is bounded: an entry past the bound
   * is counted and never deleted. It also holds the last pass's number, which is what makes two exhausts separate
   * passes.
+  *
+  * It belongs to one anchor: a count of passes over one SNAP's state says nothing of the next's. It goes when the
+  * anchor changes, and at a clean pass, which reached none of what is on it.
   */
-final case class AuditBadEntries(lastPass: Long = 0L, entries: Map[ByteString, AuditBadEntries.Entry] = Map.empty):
+final case class AuditBadEntries(
+    anchor: String = "",
+    lastPass: Long = 0L,
+    entries: Map[ByteString, AuditBadEntries.Entry] = Map.empty
+):
   import AuditBadEntries.*
 
   /** A fetch of `hash` exhausted in `pass`, at `nowMillis`. It counts once per pass, and only once the backoff has
@@ -616,8 +623,9 @@ final case class AuditBadEntries(lastPass: Long = 0L, entries: Map[ByteString, A
   def cleared(hash: ByteString): AuditBadEntries = copy(entries = entries - hash)
 
   def encode: Array[Byte] =
-    val out = ByteBuffer.allocate(1 + 8 + 4 + entries.size * (32 + 4 + 8 + 8))
-    out.put(Version).putLong(lastPass).putInt(entries.size)
+    val anchorBytes = anchor.getBytes(StandardCharsets.UTF_8)
+    val out = ByteBuffer.allocate(1 + 4 + anchorBytes.length + 8 + 4 + entries.size * (32 + 4 + 8 + 8))
+    out.put(Version).putInt(anchorBytes.length).put(anchorBytes).putLong(lastPass).putInt(entries.size)
     entries.foreach { case (hash, e) =>
       out.put(hash.toArray).putInt(e.passes).putLong(e.lastPass).putLong(e.lastMillis)
     }
@@ -632,7 +640,7 @@ object AuditBadEntries:
 
   final case class Entry(passes: Int, lastPass: Long, lastMillis: Long)
 
-  private val Version: Byte = 1
+  private val Version: Byte = 2
 
   /** `None` for anything but a whole record of this version: the counts start over, which only delays a delete. */
   def decode(bytes: Array[Byte]): Option[AuditBadEntries] =
@@ -640,11 +648,15 @@ object AuditBadEntries:
       val in = ByteBuffer.wrap(bytes)
       if in.get() != Version then None
       else
+        val anchor = new Array[Byte](in.getInt())
+        in.get(anchor)
         val lastPass = in.getLong()
         val entries = Vector.fill(in.getInt()) {
           val hash = new Array[Byte](32)
           in.get(hash)
           ByteString.fromArrayUnsafe(hash) -> Entry(in.getInt(), in.getLong(), in.getLong())
         }
-        Option.when(!in.hasRemaining)(AuditBadEntries(lastPass, entries.toMap))
+        Option.when(!in.hasRemaining)(
+          AuditBadEntries(new String(anchor, StandardCharsets.UTF_8), lastPass, entries.toMap)
+        )
     catch case NonFatal(_) => None

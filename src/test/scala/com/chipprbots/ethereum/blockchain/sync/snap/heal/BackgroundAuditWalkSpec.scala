@@ -634,6 +634,7 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
 
   it should "read back what it wrote, and take anything else for nothing" taggedAs UnitTest in {
     val book = AuditBadEntries(
+      "5",
       7,
       Map(trieKey(1) -> AuditBadEntries.Entry(2, 6, 123L), trieKey(2) -> AuditBadEntries.Entry(1, 7, 456L))
     )

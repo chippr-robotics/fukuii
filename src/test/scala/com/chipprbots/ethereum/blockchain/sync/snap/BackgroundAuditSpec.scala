@@ -159,7 +159,7 @@ class BackgroundAuditSpec
     /** `passes` exhausts on record for `hash`, the last long enough ago to count another. */
     def onRecord(hash: ByteString, passes: Int): Unit =
       val entry = AuditBadEntries.Entry(passes, lastPass = 0L, lastMillis = 0L)
-      s.progress.writeAuditBadEntries(AuditBadEntries(0L, Map(hash -> entry)).encode)
+      s.progress.writeAuditBadEntries(AuditBadEntries(s.app.snapAuditAnchor(), 0L, Map(hash -> entry)).encode)
 
   private def serve(fetch: StateNodeFetcher.FetchStateNode, bytes: Array[Byte]): Unit =
     fetch.originalSender ! FetchedStateNode(NodeData(Seq(ByteString(bytes))))
@@ -921,7 +921,7 @@ class BackgroundAuditSpec
       AuditCursors.encode(AuditCursors.Saved("5", 7L, AuditCounters(), Vector(AuditPosition(None, nibbles(1, 3)))))
     )
     val onRecord = AuditBadEntries.Entry(2, lastPass = 7L, lastMillis = 0L)
-    n.s.progress.writeAuditBadEntries(AuditBadEntries(7L, Map(hash -> onRecord)).encode)
+    n.s.progress.writeAuditBadEntries(AuditBadEntries("5", 7L, Map(hash -> onRecord)).encode)
     val audit = n.spawn()
     exhaust(n.fetches.receiveMessage())
     n.awaitBackoff(audit).counters.deleted shouldBe 0
@@ -1026,7 +1026,7 @@ class BackgroundAuditSpec
     val full = (0 until AuditBadEntries.MaxEntries)
       .map(i => trieKey(i) -> AuditBadEntries.Entry(1, 0L, 0L))
       .toMap
-    n.s.progress.writeAuditBadEntries(AuditBadEntries(0L, full).encode)
+    n.s.progress.writeAuditBadEntries(AuditBadEntries("5", 0L, full).encode)
     val audit = n.spawn()
     exhaust(n.fetches.receiveMessage())
     val st = n.awaitBackoff(audit)
@@ -1157,4 +1157,32 @@ class BackgroundAuditSpec
     withClue("the pass is still not clean: ")(st.counters.unresolved shouldBe 1)
     n.s.nodes.get(hash) shouldBe defined
     n.book.entries(hash).passes shouldBe 2
+  }
+
+  "The record of bad entries" should "start over when the anchor changes: a count for one SNAP's state is not the next's" taggedAs UnitTest in {
+    val n = new Node
+    val (hash, _) = withBadNode(n)
+    val first = n.spawn()
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(first)
+    testKit.stop(first)
+    createTestProbe().expectTerminated(first)
+    n.book.entries(hash).passes shouldBe 1
+
+    n.s.app.putSnapSyncPivotBlock(6).commit()
+    n.now.addAndGet(backoff.toMillis)
+    n.s.bestHead = n.s.bestHead.map(_.copy(timestampSeconds = n.nowSeconds))
+    val second = n.spawn()
+    exhaust(n.fetches.receiveMessage())
+    n.awaitBackoff(second)
+    n.book.entries(hash).passes shouldBe 1
+  }
+
+  it should "be cleared by a clean pass, which reached none of it" taggedAs UnitTest in {
+    val n = new Node
+    n.head(10, populate(n))
+    n.onRecord(trieKey(999), 2)
+    n.ended(n.spawn())
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.book.entries shouldBe empty
   }
