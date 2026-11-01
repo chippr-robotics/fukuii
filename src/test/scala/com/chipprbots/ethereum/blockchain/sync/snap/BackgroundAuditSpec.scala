@@ -710,6 +710,7 @@ class BackgroundAuditSpec
       send
     }
 
+    val gaugeBefore = NetworkMetrics.BlacklistedPeersSize.get
     NetworkMetrics.BlacklistedPeersSize.set(12345L)
     val countedBefore = NetworkMetrics.BlacklistedReasonsRegularSyncGroup.count()
 
@@ -729,7 +730,9 @@ class BackgroundAuditSpec
 
       NetworkMetrics.BlacklistedPeersSize.get shouldBe 12345L
       NetworkMetrics.BlacklistedReasonsRegularSyncGroup.count() shouldBe countedBefore
-    finally testKit.stop(audit)
+    finally
+      testKit.stop(audit)
+      NetworkMetrics.BlacklistedPeersSize.set(gaugeBefore) // it is the JVM's, and later specs may read it
   }
 
   // ---- decision 7: cadence -------------------------------------------------------------------------------------------

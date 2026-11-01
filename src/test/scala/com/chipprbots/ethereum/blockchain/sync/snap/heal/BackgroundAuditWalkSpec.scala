@@ -243,7 +243,7 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
     step.holes shouldBe Vector(AuditHole(intermediate, accountAt(1), root, 10, NodeFault.Absent))
   }
 
-  // ---- the root, and the horizon --------------------------------------------------------------------------------------
+  // ---- the root, and the head --------------------------------------------------------------------------------------
 
   "An absent head root" should "be no hole: the walk waits, with the frame kept" taggedAs UnitTest in {
     val s = new AuditTestState
