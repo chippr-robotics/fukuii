@@ -56,6 +56,9 @@ object PathToHashExporter:
     *   the linear scan and its writes
     * @param sampleMillis
     *   the checks above, on their own, so the sample's size can be weighed against what it costs (T054)
+    * @param sampledAccountMisses
+    *   of the account leaves, those not at the state root, different there, or with a node absent on the way. A few are
+    *   stale leaves from another root; past [[tooManyMisses]] the export threw
     */
   final case class Result(
       accountNodes: Long,
@@ -69,10 +72,17 @@ object PathToHashExporter:
       sampledCode: Int = 0,
       sampledCodeAbsent: Int = 0,
       exportMillis: Long = 0L,
-      sampleMillis: Long = 0L
+      sampleMillis: Long = 0L,
+      sampledAccountMisses: Int = 0
   )
 
   private val BatchSize = 10000
+
+  /** Whether sampled account leaves missed too often for that to be stale ones: more than 1% of them, and at least 16.
+    * A few are what the path store leaves behind from other roots, and the hand-off must not restart SNAP for those.
+    */
+  def tooManyMisses(misses: Int, sampled: Int): Boolean =
+    misses >= 16 && misses * 100L > sampled
 
   // The sample at the hand-off (spec 022 T054, decision 11). Strata, so a size can't hide a thin region: per first nibble
   // of the path or the account, the largest storage tries, and embedded leaves, which the export drops and only their
@@ -128,9 +138,10 @@ object PathToHashExporter:
   /** Blocking: run it on a worker thread, never on an actor thread (it scans the whole path-keyed trie).
     *
     * @param stateRoot
-    *   when given, the sample above is checked after the export. A miss in the account leaves or the storage roots
-    *   throws, as it always has. What the larger strata find is reported in the [[Result]] and does not stop the
-    *   hand-off (spec 022 decision 11: a gate here is what the spec removes, and the audit looks at all of it later).
+    *   when given, the sample above is checked after the export. A root that is absent throws, as does a storage root,
+    *   and account leaves past [[tooManyMisses]]. What else the sample finds is reported in the [[Result]] and does not
+    *   stop the hand-off (spec 022 decision 11: a gate here is what the spec removes, and the audit looks at all of it
+    *   later).
     * @param codePresent
     *   whether a code hash is in the code store
     */
@@ -186,15 +197,16 @@ object PathToHashExporter:
     stateRoot match
       case None => Result(account, storage, exportMillis = exportMillis)
       case Some(root) =>
-        val (sampledLeaves, codeHashes) = verifyAccountLeaves(accountSample.toSeq.flatMap(_.result), root, mptStorage)
-        val sampledRoots = verifyStorageRoots(storageRootSample.toSeq.flatMap(_.result), mptStorage)
+        requireRoot(root, mptStorage)
+        val leaves = lookUpAccountLeaves(accountSample.toSeq.flatMap(_.result), root, mptStorage)
+        val sampledRoots = requireStorageRoots(storageRootSample.toSeq.flatMap(_.result), mptStorage)
         val large = lookUpStorageLeaves(largestTries.result, root, mptStorage)
         val embedded = lookUpStorageLeaves(embeddedSample.toSeq.flatMap(_.result), root, mptStorage)
-        val distinctCode = codeHashes.distinct
+        val distinctCode = leaves.codeHashes.distinct
         Result(
           account,
           storage,
-          sampledLeaves,
+          leaves.sampled,
           sampledRoots,
           large.found,
           embedded.found,
@@ -203,19 +215,38 @@ object PathToHashExporter:
           distinctCode.size,
           distinctCode.count(h => !codePresent(h)),
           exportMillis,
-          (System.nanoTime() - exported) / 1000000L
+          (System.nanoTime() - exported) / 1000000L,
+          leaves.misses
         )
 
-  /** Re-read sampled account leaves through a full root-to-leaf lookup. Throws on the first miss or mismatch. Gives how
-    * many it checked, and the code hashes they name.
+  private def hexOf(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
+
+  /** A root that is absent is no stale leaf. Nothing under it can be read, so it throws whatever the rate would say. */
+  private def requireRoot(root: ByteString, mptStorage: MptStorage): Unit =
+    if !java.util.Arrays.equals(root.toArray, MerklePatriciaTrie.EmptyRootHash) then
+      try mptStorage.get(root.toArray)
+      catch
+        case e: Exception =>
+          throw new IllegalStateException(
+            s"Path-to-hash verification failed: state root ${hexOf(root.take(4).toArray)} absent after export",
+            e
+          )
+
+  final private case class AccountLeaves(sampled: Int, misses: Int, codeHashes: Seq[ByteString])
+
+  /** Re-read sampled account leaves through a full root-to-leaf lookup. A miss is counted: the path store keeps what
+    * other roots wrote, and [[lookUpStorageLeaves]] counts the same condition as harmless. A throw here is
+    * `PathPublishFailed`, `HealingImpossible` and a SNAP restart, so that waits for [[tooManyMisses]]. Gives how many
+    * it looked at, how many missed, and the code hashes of those that matched. A store that fails throws.
     */
-  private def verifyAccountLeaves(
+  private def lookUpAccountLeaves(
       sample: Seq[(Array[Byte], Array[Byte])],
       root: ByteString,
       mptStorage: MptStorage
-  ): (Int, Seq[ByteString]) =
+  ): AccountLeaves =
     val trie = MerklePatriciaTrie[ByteString, Array[Byte]](root.toArray, mptStorage)
-    var checked = 0
+    var sampled = 0
+    var misses = 0
     val codeHashes = Seq.newBuilder[ByteString]
     sample.foreach { case (hpKey, rlp) =>
       MptTraversals.decodeNode(rlp) match
@@ -224,35 +255,34 @@ object PathToHashExporter:
           // Only a whole-byte path is a key; a real account leaf is always 64 nibbles.
           if fullNibbles.length % 2 == 0 then
             val key = ByteString(HexPrefix.nibblesToBytes(fullNibbles))
+            sampled += 1
             val found =
               try trie.get(key)
-              catch
-                case e: Exception =>
-                  throw new IllegalStateException(
-                    s"Path-to-hash verification failed: lookup of sampled account ${key.take(8).toArray.map("%02x".format(_)).mkString} " +
-                      s"under root ${root.take(4).toArray.map("%02x".format(_)).mkString} threw ${e.getClass.getSimpleName}",
-                    e
-                  )
-            if !found.exists(java.util.Arrays.equals(_, leaf.value.toArray)) then
-              throw new IllegalStateException(
-                s"Path-to-hash verification failed: sampled account leaf ${key.take(8).toArray.map("%02x".format(_)).mkString} " +
-                  "not found (or different) at the state root"
-              )
-            checked += 1
-            Account(leaf.value).toOption
-              .map(_.codeHash)
-              .filter(_ != Account.EmptyCodeHash)
-              .foreach(code => codeHashes += code.value)
+              catch case _: MerklePatriciaTrie.MPTException => None
+            if found.exists(java.util.Arrays.equals(_, leaf.value.toArray)) then
+              Account(leaf.value).toOption
+                .map(_.codeHash)
+                .filter(_ != Account.EmptyCodeHash)
+                .foreach(code => codeHashes += code.value)
+            else misses += 1
         case _ => ()
     }
-    (checked, codeHashes.result())
+    if tooManyMisses(misses, sampled) then
+      throw new IllegalStateException(
+        s"Path-to-hash verification failed: $misses of $sampled sampled account leaves not found (or different) at " +
+          s"the state root ${hexOf(root.take(4).toArray)}"
+      )
+    AccountLeaves(sampled, misses, codeHashes.result())
 
-  private def verifyStorageRoots(sample: Seq[(Array[Byte], Array[Byte])], mptStorage: MptStorage): Int =
+  /** That each sampled storage root is in the hash store. It re-reads what the export just wrote, so its success says
+    * present and no more.
+    */
+  private def requireStorageRoots(sample: Seq[(Array[Byte], Array[Byte])], mptStorage: MptStorage): Int =
     sample.foreach { case (_, rlp) =>
       val hash = kec256(rlp)
       if scala.util.Try(mptStorage.get(hash)).isFailure then
         throw new IllegalStateException(
-          s"Path-to-hash verification failed: storage root ${hash.take(4).map("%02x".format(_)).mkString} absent after export"
+          s"Path-to-hash verification failed: storage root ${hexOf(hash.take(4))} absent after export"
         )
     }
     sample.size

@@ -203,14 +203,62 @@ class PathToHashExportCheckSpec extends AnyFlatSpec with Matchers:
     result.sampledAccountLeaves should be <= PathToHashExporter.AccountSamplePerNibble + 1
   }
 
-  it should "keep failing loudly when a sampled account leaf is not at the state root" taggedAs UnitTest in {
+  // A throw here is PathPublishFailed, HealingImpossible, and a SNAP restart, over what the storage strata call harmless.
+  it should "count an account leaf the state root has no place for, and go on: a stale leaf must not restart SNAP" taggedAs UnitTest in {
     val s = new State
     val (root, _, _) = stateWithStorage(s)
     s.account(Seq(7), LeafNode(nibbles(63, 7), accountBytes()))
-    an[IllegalStateException] should be thrownBy s.publish(root)
+    val result = s.publish(root)
+    result.sampledAccountLeaves shouldBe 2
+    result.sampledAccountMisses shouldBe 1
   }
 
-  it should "keep failing loudly when the root itself is not in the hash store" taggedAs UnitTest in {
+  it should "count a node absent on the way to an account leaf the same way" taggedAs UnitTest in {
+    val s = new State
+    val leaf = LeafNode(nibbles(63, 1), accountBytes())
+    val elsewhere = LeafNode(nibbles(63, 2), accountBytes())
+    val root = s.account(Seq(), branch(1 -> leaf, 2 -> elsewhere))
+    // Its path holds another node now, so the hash store never gets the one the root names.
+    s.account(Seq(1), LeafNode(nibbles(63, 1), accountBytes(code = Some(ByteString(kec256(Array[Byte](3)))))))
+    s.account(Seq(2), elsewhere)
+
+    val result = s.publish(ByteString(root.hash))
+
+    result.sampledAccountLeaves shouldBe 2
+    result.sampledAccountMisses shouldBe 1
+  }
+
+  /** `count` leaves in the path store at accounts no root has. */
+  private def staleLeaves(s: State, count: Int): Unit =
+    (0 until count).foreach { i =>
+      s.account(Seq(7, i % 16, i / 16), LeafNode(nibbles(61, 7), accountBytes()))
+    }
+
+  it should "go on with 15 misses, however few leaves there are" taggedAs UnitTest in {
+    val s = new State
+    val (root, _, _) = stateWithStorage(s)
+    staleLeaves(s, 15)
+    s.publish(root).sampledAccountMisses shouldBe 15
+  }
+
+  it should "fail loudly at a rate that says the export is wrong" taggedAs UnitTest in {
+    val s = new State
+    val (root, _, _) = stateWithStorage(s)
+    staleLeaves(s, 16)
+    val thrown = the[IllegalStateException] thrownBy s.publish(root)
+    thrown.getMessage should include("16 of 17")
+  }
+
+  "tooManyMisses" should "want more than 1% of the sample, and at least 16" taggedAs UnitTest in {
+    PathToHashExporter.tooManyMisses(15, 16) shouldBe false
+    PathToHashExporter.tooManyMisses(16, 16) shouldBe true
+    withClue("exactly 1%: ")(PathToHashExporter.tooManyMisses(16, 1600) shouldBe false)
+    PathToHashExporter.tooManyMisses(17, 1600) shouldBe true
+    PathToHashExporter.tooManyMisses(16, 1599) shouldBe true
+    PathToHashExporter.tooManyMisses(0, 0) shouldBe false
+  }
+
+  "The hand-off's sample of a root that is not there" should "fail loudly, whatever the rate" taggedAs UnitTest in {
     val s = new State
     stateWithStorage(s)
     an[IllegalStateException] should be thrownBy s.publish(ByteString(kec256(Array[Byte](1, 2, 3))))

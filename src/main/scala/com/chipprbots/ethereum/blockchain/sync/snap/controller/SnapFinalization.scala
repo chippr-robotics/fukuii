@@ -471,8 +471,9 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private[snap] def onPathPublishDone(result: PathToHashExporter.Result, millis: Long): Behavior[Command] =
     ctx.log.info(
       s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms " +
-        s"(export ${result.exportMillis} ms, sample ${result.sampleMillis} ms); verified " +
-        s"${result.sampledAccountLeaves} sampled account leaves and ${result.sampledStorageRoots} storage roots; looked up " +
+        s"(export ${result.exportMillis} ms, sample ${result.sampleMillis} ms); looked up " +
+        s"${result.sampledAccountLeaves} sampled account leaves (${result.sampledAccountMisses} stale or with a node " +
+        s"absent on the way); ${result.sampledStorageRoots} sampled storage roots present; looked up " +
         s"${result.sampledLargeTrieLeaves} leaves of the largest storage tries and ${result.sampledEmbedded} embedded leaves " +
         s"(${result.sampledStale} stale in the path store, ${result.sampledMissing} with a node absent on the way); " +
         s"${result.sampledCodeAbsent} of ${result.sampledCode} sampled code hashes absent"
