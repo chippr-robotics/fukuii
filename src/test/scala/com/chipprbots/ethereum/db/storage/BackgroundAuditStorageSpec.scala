@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNode
 import com.chipprbots.ethereum.db.storage.encoding.*
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.testing.Tags.*
 
@@ -275,7 +276,7 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     val app = new AppStateStorage(EphemDataSource())
     app.putSnapSyncPivotBlock(5).and(app.snapSyncDone()).commit()
     app.isSnapAuditOwed() shouldBe true
-    app.putSnapAuditCleanAnchor(app.snapAuditAnchor()).commit()
+    app.recoveryDone().and(app.putSnapAuditCleanAnchor(app.snapAuditAnchor())).commit()
     app.isSnapAuditOwed() shouldBe false
     app.putSnapSyncPivotBlock(6).commit() // a later SNAP cycle
     app.isSnapAuditOwed() shouldBe true
@@ -286,6 +287,158 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     app.snapSyncDone().commit()
     app.snapAuditAnchor() shouldBe AppStateStorage.AuditNoPivot
     app.isSnapAuditOwed() shouldBe true
-    app.putSnapAuditCleanAnchor(app.snapAuditAnchor()).commit()
+    app.recoveryDone().and(app.putSnapAuditCleanAnchor(app.snapAuditAnchor())).commit()
     app.isSnapAuditOwed() shouldBe false
+  }
+
+  // decision 14: a flag only that arm reads, with the scan skipped for the audit. Nothing else would pay it.
+  it should "owe a pass while a recovery flag is down, with the anchor matching" taggedAs UnitTest in {
+    val app = new AppStateStorage(EphemDataSource())
+    app.putSnapSyncPivotBlock(5).and(app.snapSyncDone()).commit()
+    app.recoveryDone().and(app.putSnapAuditCleanAnchor(app.snapAuditAnchor())).commit()
+    app.isSnapAuditOwed() shouldBe false
+    app.clearBytecodeRecoveryDone().commit()
+    app.isSnapAuditOwed() shouldBe true
+    app.recoveryDone().commit()
+    app.clearStorageRecoveryDone().commit()
+    app.isSnapAuditOwed() shouldBe true
+  }
+
+  // ---- decision 15 ---------------------------------------------------------------------------------------------------
+
+  private val reachedByRoot: () => Boolean = () => true
+
+  "deleteBadNode on basic pruning" should "delete bytes that fail their hash, and an entry that does not unwrap" taggedAs UnitTest in {
+    val b = new Basic
+    val failing = hashOf(nodeBytes(1))
+    b.put(failing, nodeBytes(2), 9)
+    b.state.deleteBadNode(failing, reachedByRoot) shouldBe BadEntryDelete.Deleted
+    b.nodes.get(failing) shouldBe None
+
+    val garbled = hashOf(nodeBytes(3))
+    b.nodes.put(garbled, Array[Byte](1, 2, 3))
+    b.state.deleteBadNode(garbled, reachedByRoot) shouldBe BadEntryDelete.Deleted
+    b.nodes.get(garbled) shouldBe None
+  }
+
+  it should "never delete a node that passes keccak, whatever it is asked, and whether or not it decodes" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), good, 5)
+    b.state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+    b.stored(hashOf(good)).references shouldBe 5
+
+    val notANode = Array[Byte](1, 2, 3)
+    b.put(hashOf(notANode), notANode, 5)
+    b.state.deleteBadNode(hashOf(notANode), reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+    b.nodes.get(hashOf(notANode)) shouldBe defined
+  }
+
+  it should "have nothing to do for an absent node" taggedAs UnitTest in {
+    val b = new Basic
+    b.state.deleteBadNode(hashOf(nodeBytes(1)), reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+  }
+
+  it should "leave a bad entry the current root no longer reaches" taggedAs UnitTest in {
+    val b = new Basic
+    val failing = hashOf(nodeBytes(1))
+    b.put(failing, nodeBytes(2), 9)
+    b.state.deleteBadNode(failing, () => false) shouldBe BadEntryDelete.NotReached
+    b.nodes.get(failing) shouldBe defined
+  }
+
+  it should "stop at the read under the lock: good bytes that arrive while it waits are kept" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), nodeBytes(2), 9)
+    var outcome: Option[BadEntryDelete] = None
+    val delete = new Thread(() => outcome = Some(b.state.deleteBadNode(hashOf(good), reachedByRoot)))
+
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      delete.start()
+      eventually(delete.getState shouldBe Thread.State.BLOCKED)
+      b.put(hashOf(good), good, 3) // the commit it waits for wrote the good node
+    }
+    delete.join(10000)
+
+    outcome shouldBe Some(BadEntryDelete.NoLongerBad)
+    b.stored(hashOf(good)).references shouldBe 3
+  }
+
+  it should "ask whether the root still reaches it under the lock, so no commit moves the root part way" taggedAs UnitTest in {
+    val b = new Basic
+    val failing = hashOf(nodeBytes(1))
+    b.put(failing, nodeBytes(2), 9)
+    var heldTheLock = false
+    b.state.deleteBadNode(
+      failing,
+      () =>
+        heldTheLock = Thread.holdsLock(ReferenceCountedStateStorage.commitLock)
+        true
+    )
+    heldTheLock shouldBe true
+  }
+
+  it should "evict the decoded node, so execution finds it absent and not bad" taggedAs UnitTest in {
+    val b = new Basic
+    val failing = hashOf(nodeBytes(1))
+    val execution = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+    b.put(failing, nodeBytes(2), 9)
+    execution.get(failing.toArray)
+
+    b.state.deleteBadNode(failing, reachedByRoot) shouldBe BadEntryDelete.Deleted
+
+    a[MissingNodeException] should be thrownBy execution.get(failing.toArray)
+  }
+
+  "deleteBadNode on archive pruning" should "be conditional in the same way" taggedAs UnitTest in {
+    val nodes = new NodeStorage(EphemDataSource())
+    val state = new ArchiveStateStorage(nodes)
+    val good = nodeBytes(1)
+    nodes.put(hashOf(good), good)
+    state.deleteBadNode(hashOf(good), reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+    nodes.get(hashOf(good)) shouldBe defined
+
+    val failing = hashOf(nodeBytes(3))
+    nodes.put(failing, nodeBytes(4))
+    state.deleteBadNode(failing, () => false) shouldBe BadEntryDelete.NotReached
+    nodes.get(failing) shouldBe defined
+    state.deleteBadNode(failing, reachedByRoot) shouldBe BadEntryDelete.Deleted
+    nodes.get(failing) shouldBe None
+  }
+
+  "deleteBadNode under in-memory pruning" should "be unsupported, as repair is" taggedAs UnitTest in {
+    val (state, _, _) = StateStorage.createTestStateStorage(EphemDataSource(), InMemoryPruning(10))
+    an[UnsupportedOperationException] should be thrownBy state.deleteBadNode(hashOf(nodeBytes(1)), reachedByRoot)
+  }
+
+  "deleteBadCode" should "delete code that fails its hash and evict it, and keep code that passes" taggedAs UnitTest in {
+    val code = new EvmCodeStorage(EphemDataSource())
+    val bytes = ByteString(nodeBytes(1))
+    val hash = hashOf(bytes.toArray)
+
+    code.put(hash, bytes).commit()
+    code.deleteBadCode(hash, reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+    code.get(hash) shouldBe Some(bytes)
+
+    val corrupt = ByteString(nodeBytes(2))
+    code.put(hash, corrupt).commit()
+    code.getForExecution(hash) // the cache now remembers the good bytes or the bad: either way it must forget them
+    code.deleteBadCode(hash, () => false) shouldBe BadEntryDelete.NotReached
+    code.get(hash) shouldBe Some(corrupt)
+
+    code.deleteBadCode(hash, reachedByRoot) shouldBe BadEntryDelete.Deleted
+    code.get(hash) shouldBe None
+    code.getForExecution(hash) shouldBe None
+    code.deleteBadCode(hash, reachedByRoot) shouldBe BadEntryDelete.NoLongerBad
+  }
+
+  "The audit's record of bad entries" should "keep its own key beside the cursors" taggedAs UnitTest in {
+    val store = new SnapSyncProgressStorage(EphemDataSource())
+    store.readAuditBadEntries() shouldBe None
+    store.writeAuditBadEntries(Array[Byte](5))
+    store.writeAuditCursors(Array[Byte](6))
+    store.clearAuditCursors()
+    store.readAuditBadEntries().get.toSeq shouldBe Seq[Byte](5)
+    noException should be thrownBy store.clearAll()
   }

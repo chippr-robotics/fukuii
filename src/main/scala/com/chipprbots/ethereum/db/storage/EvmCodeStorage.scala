@@ -103,6 +103,22 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       EvmCodeStorage.sizes.remove(cacheKey(hash))
       RepairOutcome.Written
 
+  /** [[StateStorage.deleteBadNode]] for code that fails its hash (spec 022 decision 15), under the same lock, so its
+    * look from the best root sees no commit part way. Code that passes its hash is never deleted.
+    */
+  def deleteBadCode(hash: CodeHash, stillReached: () => Boolean): BadEntryDelete =
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      dataSource.getOptimizedNoFill(namespace, hash.toArray) match
+        case None                                                                      => BadEntryDelete.NoLongerBad
+        case Some(existing) if java.util.Arrays.equals(kec256(existing), hash.toArray) => BadEntryDelete.NoLongerBad
+        case Some(_) if !stillReached()                                                => BadEntryDelete.NotReached
+        case Some(_) =>
+          remove(hash).commit()
+          EvmCodeStorage.shared.remove(cacheKey(hash))
+          EvmCodeStorage.sizes.remove(cacheKey(hash))
+          BadEntryDelete.Deleted
+    }
+
   // overriding to avoid going through IndexedSeq[Byte]
   override def storageContent: Stream[IO, Either[IterationError, (CodeHash, Code)]] =
     dataSource.iterate(namespace).map { result =>

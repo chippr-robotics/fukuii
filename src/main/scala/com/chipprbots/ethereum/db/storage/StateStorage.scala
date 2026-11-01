@@ -91,6 +91,16 @@ enum RepairOutcome:
   /** The bytes offered do not hash to the key: nothing was written. */
   case Rejected
 
+/** What a delete of a provably bad entry did. */
+enum BadEntryDelete:
+  case Deleted
+
+  /** A read now finds the entry good, or gone. */
+  case NoLongerBad
+
+  /** Still bad, and the current root no longer needs it there: it stays. */
+  case NotReached
+
 // scalastyle:off
 trait StateStorage:
   def getBackingStorage(bn: BigInt): MptStorage
@@ -132,6 +142,15 @@ trait StateStorage:
     */
   def repairNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): RepairOutcome =
     throw new UnsupportedOperationException(s"${getClass.getSimpleName} cannot repair nodes")
+
+  /** The background audit's last resort for an entry provably bad (spec 022 decision 15): one that does not unwrap, or
+    * bytes that fail their hash. Judged again here, from a read of its own, so a transient read fault behind the
+    * audit's verdict cannot delete a good node, and `stillReached` is asked here too, for whether the current root
+    * still needs this hash at the position it was found. A node that passes keccak is never deleted. Absence throws at
+    * execution, where bad bytes could go unnoticed, so the trade is a stall for a wrong answer.
+    */
+  def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
+    throw new UnsupportedOperationException(s"${getClass.getSimpleName} cannot delete nodes")
 
 class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateStorage:
 
@@ -183,6 +202,18 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
     else
       nodeStorage.put(nodeHash, nodeEncoded)
       RepairOutcome.Written
+
+  /** No lock to take: nothing here commits under one. Between the read and the delete, a block would have to write this
+    * very hash, and what that leaves is a hole import fetches.
+    */
+  override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
+    nodeStorage.get(nodeHash) match
+      case None                                                        => BadEntryDelete.NoLongerBad
+      case Some(existing) if StateStorage.hashesTo(nodeHash, existing) => BadEntryDelete.NoLongerBad
+      case Some(_) if !stillReached()                                  => BadEntryDelete.NotReached
+      case Some(_) =>
+        nodeStorage.update(Seq(nodeHash), Nil)
+        BadEntryDelete.Deleted
 
 object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
@@ -345,6 +376,24 @@ class ReferenceCountedStateStorage(
           decodedNodes.foreach(_.evict(Seq(nodeHash)))
           RepairOutcome.Written
       }
+
+  /** Under [[ReferenceCountedStateStorage.commitLock]], so no block commits between the read here, `stillReached`'s
+    * look from the best root, and the delete. The eviction comes after the delete, as in [[onBlockSave]].
+    */
+  override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      nodeStorage.get(nodeHash) match
+        case None => BadEntryDelete.NoLongerBad
+        case Some(raw) =>
+          val unwrapped = scala.util.Try(encoding.storedNodeFromBytes(raw)).toOption
+          if unwrapped.exists(node => StateStorage.hashesTo(nodeHash, node.nodeEncoded.toArray)) then
+            BadEntryDelete.NoLongerBad
+          else if !stillReached() then BadEntryDelete.NotReached
+          else
+            nodeStorage.update(Seq(nodeHash), Nil)
+            decodedNodes.foreach(_.evict(Seq(nodeHash)))
+            BadEntryDelete.Deleted
+    }
 
 class CachedReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,

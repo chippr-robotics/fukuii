@@ -182,10 +182,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapAuditAnchor(): String =
     getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
 
-  /** A node SNAP or a checkpoint finished owes one clean pass per anchor. A node that never finished either owes none.
+  /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
+    * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
+    * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
+    * none.
     */
   def isSnapAuditOwed(): Boolean =
-    isSnapSyncDone() && !getSnapAuditCleanAnchor().contains(snapAuditAnchor())
+    isSnapSyncDone() &&
+      (!getSnapAuditCleanAnchor().contains(snapAuditAnchor()) || !isBytecodeRecoveryDone() || !isStorageRecoveryDone())
 
   /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
     * is pre-invariant, whatever else it holds.

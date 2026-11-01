@@ -181,6 +181,18 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       Array(DataSourceUpdateOptimized(namespace, Seq(SnapSyncProgressStorage.AuditCursorsKey), Nil))
     ).commit()
 
+  /** The audit's record of bad entries peers could not serve (decision 15). Its own key: it outlives a pass, and the
+    * cursors do not.
+    */
+  def readAuditBadEntries(): Option[Array[Byte]] =
+    dataSource.getOptimized(namespace, SnapSyncProgressStorage.AuditBadEntriesKey)
+
+  def writeAuditBadEntries(record: Array[Byte]): Unit =
+    DataSourceBatchUpdate(
+      dataSource,
+      Array(DataSourceUpdateOptimized(namespace, Nil, Seq(SnapSyncProgressStorage.AuditBadEntriesKey -> record)))
+    ).commit()
+
   // ---- spec 022 D5: the durable excluded set -------------------------------------------------------------------------
   //
   // In the app-state column family (`s`), not this store's own namespace `p`: `clearAll` and a new SNAP cycle's resume
@@ -278,6 +290,7 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
 
 object SnapSyncProgressStorage:
   private val AuditCursorsKey: Array[Byte] = "snap.heal.auditCursors".getBytes(StorageStringCharset.UTF8Charset)
+  private val AuditBadEntriesKey: Array[Byte] = "snap.heal.auditBadEntries".getBytes(StorageStringCharset.UTF8Charset)
   private val ExcludedPrefix: Array[Byte] = "SnapExcluded/1/".getBytes(StorageStringCharset.UTF8Charset)
   // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
   private val ExcludedEnd: Array[Byte] = ExcludedPrefix :+ 0xff.toByte
