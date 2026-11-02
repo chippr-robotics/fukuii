@@ -273,6 +273,32 @@ class StateNodeFetcherSpec
       }
 
       replyToProbe.expectNoMessage(500.millis)
+
+    "keeps its attempt count when the same fetch is sent again, so a retry cannot hold off the exhaust (#1694)" taggedAs UnitTest in new TestSetup:
+      // BlockImporter re-sends the same FetchStateNode on every retry of a blocked import. Only exhausts count towards
+      // its re-SNAP, so a re-send that restarted this count would leave a hole no peer serves waiting for good (forge).
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        isByteCode = true
+      )
+      peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
+      (1 until StateNodeFetcher.MaxStateNodeFetchRetries).foreach { _ =>
+        fetcher ! StateNodeFetcher.RetryStateNodeRequest
+      }
+
+      val retriedBy: TestProbe = TestProbe()
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = retriedBy.ref,
+        isByteCode = true
+      )
+      fetcher ! StateNodeFetcher.RetryStateNodeRequest
+
+      retriedBy.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) =>
+        values shouldBe empty
+      }
+
     "does not switch to a fallback root when the wanted node IS the state root (it can only return the other root's node)" taggedAs UnitTest in new TestSetup:
       // Soak 2026-10-03: block 317603 needs the parent state root node (path []). A different root's path [] is a
       // different node, so a switch can never match and used to burn the whole retry budget on wrong-hash replies.

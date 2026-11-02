@@ -230,6 +230,35 @@ Design checked by forge and beacon before it was built; the decisions are in `.l
 
 **Left as they are.** A signal for root A, sent before A to B to A, is taken at A: the decision was A's, the window is one message, and it needs a reorg back during it. The sample at hand-off is blind to a region absent where no sampled account goes (beacon, accepted). A resume's seam is mended by discovery from the absent root, as it always was: the walk it used to be followed by looked for what discovery does not reach, which is now the audit's.
 
+
+## R-5h. Holes under newPayload: measured, and what #1694 became (2026-11-01)
+
+#1694 said a hole under `newPayload` answers SYNCING with no repair, so an Engine-driven node sits behind until the audit finds it. A design followed from that: a repair actor and a way to re-execute blocks, 600-900 lines. It was measured first, on Ephemery 165 and staging's code (`mordor-scarcity/s1694-*.sh`), and the premise did not hold.
+
+| Hole | Who met it | Repaired in |
+|---|---|---|
+| Storage, at the head (twice) | `newPayload`, then the importer | 12.8 s and 24.5 s |
+| Storage, catching up after a restart | The importer | about 0.5 s |
+| Account, catching up after a restart | The importer | about 0.5 s |
+| Code, full-sync node | The importer | about 0.1 s |
+| Code, SNAP-synced node | `newPayload`, then the importer | about 60 s, with a full-state scan |
+| Code, SNAP-synced node, with the fix below | `newPayload`, then the importer | 23.9 s, no scan |
+
+The block is stored by hash and answered ACCEPTED, not SYNCING. Nothing on the Engine path runs it again, and the consensus client did not re-send it. Regular sync's importer, which also runs post-merge, reaches the same block, fetches the node, and imports; the next payload then has a validated parent. To make `newPayload` the first to meet a hole, delete a leaf of EIP-4788's ring buffer for a future timestamp: a restart catches up through import, so a hole every block touches is met by import.
+
+**So, the user's decisions of 2026-11-01:**
+- No repair actor and no re-execution path.
+- **Code holes fetch first.** On a SNAP-synced node the first missing code went straight to the bulk scan, which stops regular sync while it reads the whole state: 98 ms over 360 accounts here, estimated at hours on Sepolia. A fetch alone took 100 ms. Now the eighth distinct miss in a process asks for the scan. This amends 5c's "bulk recovery stays as the backstop" only in when it fires: several misses show there are many to find, and fetching those one by one is what costs more.
+- **A storage hole with no position is found, not guessed.** One met writing has none (a delete collapses a branch by reading a sibling no read of the slot passed through). Asking for the storage root drew an honest reply of the wrong node, and blacklisted the peer. `StorageHolePosition` walks what is present for the reference to it, breadth first and up to 4,096 reads: every hole down to depth 3 and most at depth 4, so a trie of some thousands of slots. Where it finds none, as it mostly will not in a token's or an exchange's trie, the importer asks no peer (by hash alone it would ask by `GetNodeData`, which no eth/68+ peer serves) and takes it as an exhausted fetch, with its backoff. Locating a hole where it is met writing would close that, but that is in the trie code (a consensus file) and is left as a follow-up.
+- **A hole no peer can serve keeps its re-SNAP** after 3 exhausted fetches. That is traced, and the one case on record is Platåberget's at 320602, not measured. It is the only exit if the state really is gone, and T063 records any occurrence.
+- **Only exhausted fetches count towards it (2026-11-02).** Each 30 s retry of the blocked import also counted, since v0.6.0 (#1183) and with no reason given, so the first exhaust was usually the third and the re-SNAP came after about 2.5-3 minutes, not the 15 this section first said (found by forge and beacon in review). The user chose to stop counting retries. A retry re-sends the same fetch, and the fetcher keeps its attempt count across that (`StateNodeFetcher` de-duplicates by hash), so exhausts still arrive. Each takes at least about 160 s of fetching (30 tries 5 s apart, plus each request's own short backoff and the peer rotation), with a 5-minute backoff between, so at least about 17 minutes to the re-SNAP. A storage hole that cannot be located has no fetch to wait out: about 10 minutes, less if another import ends a backoff early.
+- **What keeps exhausts from being lost or piling up (forge's closure review, 2026-11-02).** Once retries stopped counting, three paths mattered that the old counting had hidden:
+  - An exhaust landing while a retry's import ran reached `running`, which dropped it, and the re-import started the fetch again from its first try. It is now kept, and that import's `ImportDone` ends its wait with it.
+  - The count outlived a block imported, so holes the audit filled days apart added up to a re-SNAP. A block imported now clears it.
+  - `StateNodeFetcher` is unsupervised, so any failure stops it and every later fetch goes to dead letters. Only the tick counting got the importer out of that, in about 90 s. Now `BlockFetcher` spawns it again and answers the fetch it held as exhausted, so a fetcher that dies on every fetch ends in the re-SNAP like any hole no peer serves. (Stopping `BlockFetcher` instead, the first version of this, goes through `RegularSync`'s re-spawn, which never starts the new importer: forge's closure check. That re-spawn path is older than #1694 and is left as a follow-up.)
+
+**What this does not show.** Ephemery's state is tiny, its blocks nearly empty, and its peers answered in about 40 ms. Re-execution on a large block, few peers (Sepolia's 1-9 state-serving) and a whole missing subtree, where each node costs a fetch and a re-execution, are not measured. The scan's cost at Sepolia's size is an estimate.
+
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
 
 **Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**

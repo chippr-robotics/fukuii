@@ -56,7 +56,7 @@ class EngineApiService(
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
 
-  // spec 022 FR-014: what `newPayload` answered SYNCING over. Says so and changes nothing.
+  // spec 022 FR-014: what `newPayload` could not execute a block over. Says so and changes nothing.
   private val stateHoles = new EngineStateHoles(message => log.warn(message))
 
   /*
@@ -680,12 +680,14 @@ class EngineApiService(
                   error match
                     case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
-                      // Missing state — can't validate, return SYNCING
+                      // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
+                      // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
+                      // when it reaches it (#1694).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
-                          stateHoles.report(payload.blockNumber, hole)
+                          stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
                         case _ => ()
-                      log.warn("[ENGINE-API] newPayload #{}: missing state, SYNCING", payload.blockNumber)
+                      log.warn("[ENGINE-API] newPayload #{}: missing state, not executed", payload.blockNumber)
                       None
                     case _ =>
                       // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
@@ -697,12 +699,12 @@ class EngineApiService(
                       Some(false)
             catch
               case hole: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
-                // Missing state nodes — can't execute, return SYNCING
-                stateHoles.report(payload.blockNumber, hole)
-                log.warn("[ENGINE-API] newPayload #{}: MPT error, SYNCING", payload.blockNumber)
+                // Missing state nodes: as above.
+                stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
+                log.warn("[ENGINE-API] newPayload #{}: MPT error, not executed", payload.blockNumber)
                 None
               case e: Exception =>
-                log.warn("[ENGINE-API] newPayload #{}: error={} SYNCING", payload.blockNumber, e.getMessage)
+                log.warn("[ENGINE-API] newPayload #{}: error={}, not executed", payload.blockNumber, e.getMessage)
                 None
           else None // parent not known
 
@@ -736,7 +738,7 @@ class EngineApiService(
                 _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
               )
               .add(payload.blockHash)
-            log.info("[ENGINE-API] newPayload #{}: ACCEPTED (parent unknown)", payload.blockNumber)
+            log.info("[ENGINE-API] newPayload #{}: ACCEPTED (not executed)", payload.blockNumber)
             EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
             PayloadStatusV1(Accepted)
       // end headerInvalid else

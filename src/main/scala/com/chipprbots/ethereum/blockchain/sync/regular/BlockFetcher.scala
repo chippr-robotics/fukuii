@@ -76,12 +76,19 @@ class BlockFetcher(
     )
   context.watchWith(bodiesFetcher, ChildStopped("bodies-fetcher"))
 
-  val stateNodeFetcher: ActorRef[StateNodeFetcher.StateNodeFetcherCommand] =
-    context.spawn(
-      StateNodeFetcher(peersClient, syncConfig, context.self),
-      "state-node-fetcher"
-    )
-  context.watchWith(stateNodeFetcher, ChildStopped("state-node-fetcher"))
+  // Nothing supervises it, so any failure stops it; it is then spawned again, under a new name (see ChildStopped).
+  private var stateNodeFetcherSpawns: Int = 0
+  private var stateNodeFetcher: ActorRef[StateNodeFetcher.StateNodeFetcherCommand] = spawnStateNodeFetcher()
+  // Who the last fetch handed to it answers to: a fetch it stops holding is answered as exhausted.
+  private var stateNodeReplyTo: Option[ActorRef[FetchResponse]] = None
+
+  private def spawnStateNodeFetcher(): ActorRef[StateNodeFetcher.StateNodeFetcherCommand] =
+    val name =
+      if stateNodeFetcherSpawns == 0 then "state-node-fetcher" else s"state-node-fetcher-$stateNodeFetcherSpawns"
+    stateNodeFetcherSpawns += 1
+    val fetcher = context.spawn(StateNodeFetcher(peersClient, syncConfig, context.self), name)
+    context.watchWith(fetcher, ChildStopped("state-node-fetcher"))
+    fetcher
 
   override def onMessage(message: FetchCommand): Behavior[FetchCommand] =
     message match
@@ -431,6 +438,7 @@ class BlockFetcher(
         // TrieNodes and StateNodeFetcher exhausts. The recent canonical root IS servable, and
         // the same nibble path usually still leads to the same content-addressed node.
         val fallbackRoot = state.recentCanonicalStateRoot.map(_.value).filter(r => !stateRoot.contains(r))
+        stateNodeReplyTo = Some(replyTo)
         stateNodeFetcher ! StateNodeFetcher.FetchStateNode(
           hash,
           replyTo,
@@ -489,6 +497,20 @@ class BlockFetcher(
         log.debug("New mined block {} imported from the inside", blockNr)
         val newState = state.withLastBlock(blockNr).withPossibleNewTopAt(blockNr)
         fetchBlocks(newState)
+
+      case ChildStopped("state-node-fetcher") =>
+        // Left stopped, every later fetch went to dead letters, and the importer, which escalates on exhausted fetches
+        // only (#1694), waited on a missing node for good. So it is spawned again, and the fetch it held is answered as
+        // exhausted: it did fail, and a fetcher that dies on every fetch then ends in the importer's re-SNAP, as a hole
+        // no peer serves does. Restarting this whole actor instead goes through RegularSync's re-spawn, which does not
+        // start the new importer (forge, #1694).
+        log.error(
+          "BlockFetcher child actor 'state-node-fetcher' terminated unexpectedly: spawning it again, its fetch counted as exhausted"
+        )
+        stateNodeFetcher = spawnStateNodeFetcher()
+        stateNodeReplyTo.foreach(_ ! FetchedStateNode(ETHPackets.NodeData(Nil)))
+        stateNodeReplyTo = None
+        Behaviors.same
 
       case ChildStopped(name) =>
         log.warn("BlockFetcher child actor '{}' terminated unexpectedly", name)

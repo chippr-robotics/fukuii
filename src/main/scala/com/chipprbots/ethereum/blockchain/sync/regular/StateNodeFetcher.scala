@@ -453,7 +453,8 @@ object StateNodeFetcher:
   // BestSnapPeerExcluding over StateNodeRequester.triedPeers); only when every snap peer has been tried does
   // PeersClient answer NoSuitablePeer, which backs off, resets the rotation set and consumes one attempt. (History:
   // 10 / ≈50s exhausted before a serving peer was sampled and stalled regular sync ~14 min on ETC mainnet, 2026-06-02.)
-  // Kept well under BlockImporter's ~15 min StuckEscapeThreshold so a slow fetch can't trip an unwanted SNAP re-sync.
+  // Each exhaust counts once towards BlockImporter's StuckEscapeThreshold; the importer's retries of the same fetch keep
+  // this count (see the de-dup in FetchStateNode), so they cannot hold an exhaust off.
   val MaxStateNodeFetchRetries: Int = 30
   val BackoffInterval: FiniteDuration = 5.seconds
 

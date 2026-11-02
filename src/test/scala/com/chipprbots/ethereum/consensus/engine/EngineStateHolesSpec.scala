@@ -16,9 +16,9 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 
-/** spec 022 FR-014 (beacon, 5d): the Engine path's holes. Without this `state_ondemand_fetch_total` reads zero on a
-  * post-merge node whose `newPayload` answers SYNCING, and SC-004 passes with nothing looked at. The consensus client
-  * retries every slot, so this is what keeps one hole from being a line a slot and thousands a day.
+/** spec 022 FR-014 (beacon, 5d; #1694): the Engine path's holes. Import's on-demand counter shows a hole only once the
+  * importer reaches it, so this is the first sign of one. A block can be met twice, so this is what keeps a hole to one
+  * count.
   */
 class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
 
@@ -38,7 +38,7 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
       remembered = remembered
     )
 
-  "A hole newPayload answered SYNCING over" should "count once and log with its hash, kind and position" taggedAs UnitTest in {
+  "A hole newPayload could not execute over" should "count once and log with its hash, kind and position" taggedAs UnitTest in {
     val rig = new Rig
     val position = ByteString(Array[Byte](1, 2))
     rig.holes.report(BigInt(7), new MissingStorageNodeException(hash, account, Some(position)))
@@ -50,13 +50,13 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     rig.lines.head should include(s"position=${Hex.toHexString(position.toArray)}")
   }
 
-  it should "not count or log again each slot the consensus client retries it" taggedAs UnitTest in {
+  it should "not count or log again each time it is met" taggedAs UnitTest in {
     val rig = new Rig
     (1 to 49).foreach { slot =>
       rig.clock = slot * 12_000L // ten minutes is 50 slots
       rig.holes.report(BigInt(slot), new MissingRootNodeException(hash))
     }
-    rig.counted.toSeq shouldBe Seq("root")
+    rig.counted.toSeq shouldBe Seq("node")
     rig.lines should have size 1
   }
 
@@ -69,7 +69,7 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     rig.holes.report(BigInt(3), new MissingRootNodeException(hash))
     rig.counted should have size 1
     rig.lines should have size 2
-    rig.lines(1) should include("still answers SYNCING, hit 2 more time(s)")
+    rig.lines(1) should include("still not executed, hit 2 more time(s)")
     rig.clock = 10.minutes.toMillis + 1_000L
     rig.holes.report(BigInt(4), new MissingRootNodeException(hash))
     withClue("the window starts over: ")(rig.lines should have size 2)
@@ -79,7 +79,7 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     val rig = new Rig
     rig.holes.report(BigInt(1), new MissingRootNodeException(hash))
     rig.holes.report(BigInt(1), new MissingCodeException(other, account))
-    rig.counted.toSeq shouldBe Seq("root", "code")
+    rig.counted.toSeq shouldBe Seq("node", "code")
     rig.lines should have size 2
   }
 
@@ -92,6 +92,17 @@ class EngineStateHolesSpec extends AnyFlatSpec with Matchers:
     withClue("the latest is remembered: ")(rig.counted should have size 3)
     rig.holes.report(BigInt(2), hole(1))
     withClue("the first was forgotten: ")(rig.counted should have size 4)
+  }
+
+  // beacon: the store throws MissingRootNodeException for any absent node, so that type alone would call an interior node
+  // the root, and T063 reads this label.
+  it should "call a hole the root only where it is the parent's state root" taggedAs UnitTest in {
+    val rig = new Rig
+    rig.holes.report(BigInt(1), new MissingRootNodeException(hash), Some(hash))
+    rig.holes.report(BigInt(1), new MissingRootNodeException(other), Some(hash))
+    rig.counted.toSeq shouldBe Seq("root", "node")
+    rig.lines.head should include("kind=root")
+    rig.lines(1) should include("kind=node")
   }
 
   it should "take an error with no hash, such as a node that does not decode, by what it says" taggedAs UnitTest in {
