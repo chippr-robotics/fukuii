@@ -255,10 +255,10 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
         ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           throw new MissingRootNodeException(ByteString(Array.fill[Byte](32)(0x44)))
       val block1 = buildBlock1()
-      val before = holesOf("root")
+      val before = holesOf("node")
       val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       (status.status == Accepted || status.status == Syncing) shouldBe true
-      holesOf("root") shouldBe before + 1d
+      holesOf("node") shouldBe before + 1d
 
     "execute the same block and answer VALID once the bytecode is present (no verdict was cached)" taggedAs (
       UnitTest,
