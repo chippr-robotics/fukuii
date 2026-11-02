@@ -268,6 +268,18 @@ class BlockFetcherSpec
       testKit.stop(blockFetcher)
 
     // BF-1A: ETH/69 head-following via BlockRangeUpdate
+    "should stop when its state-node fetcher stops, so regular sync re-spawns both it and the importer (#1694)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup:
+      // Nothing supervises that child. Left dead, every fetch after it went to dead letters, and the importer, which
+      // escalates on exhausted fetches only, waited on a missing node for good (forge).
+      startFetcher() // answered, so the fetcher and its children are up
+      val watcher = testKit.createTestProbe[Any]()
+      testKit.system.classicSystem.actorSelection(blockFetcher.path / "state-node-fetcher") !
+        org.apache.pekko.actor.PoisonPill
+      watcher.expectTerminated(blockFetcher, 5.seconds)
+
     "should include BlockRangeUpdateCode in peer event subscription" taggedAs (UnitTest, SyncTest) in new TestSetup:
       blockFetcher ! BlockFetcher.Start(importer.ref.toTyped[BlockImporter.Command], 0)
       val sub = peerEventBus.expectMsgType[SubscribeCmd]

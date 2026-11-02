@@ -490,6 +490,13 @@ class BlockFetcher(
         val newState = state.withLastBlock(blockNr).withPossibleNewTopAt(blockNr)
         fetchBlocks(newState)
 
+      case ChildStopped("state-node-fetcher") =>
+        // Nothing supervises it, so any failure stops it, and every fetch after that goes to dead letters. The importer,
+        // which escalates on exhausted fetches only (#1694), would then wait on a missing node for good. Stopping here
+        // has RegularSync re-spawn this fetcher and the importer, as it does whenever this actor stops.
+        log.error("BlockFetcher child actor 'state-node-fetcher' terminated unexpectedly: stopping, to be re-spawned")
+        Behaviors.stopped
+
       case ChildStopped(name) =>
         log.warn("BlockFetcher child actor '{}' terminated unexpectedly", name)
         Behaviors.same

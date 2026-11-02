@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.ResourceFixtures
 import com.chipprbots.ethereum.WordSpecBase
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
+import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
@@ -905,6 +906,9 @@ class RegularSyncSpec
               if root == stateRoot && paths == expected =>
             true
         }
+        // Located, so the fetch is waited on: nothing counts as exhausted at once (forge, #1694).
+        TestProbe().expectNoMessage(500.millis)
+        ImportCounterAccess.survivedExhausts shouldBe 0
       )
 
       "ask no peer for a storage hole that cannot be located, and back off as after an exhausted fetch" taggedAs (
@@ -952,6 +956,88 @@ class RegularSyncSpec
             TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
             ImportCounterAccess.survivedExhausts shouldBe 0
           finally BlockImporter.resolvingRetryInterval = 30.seconds
+      )
+
+      // forge, #1694: an exhaust landing while a retry of the blocked import ran was dropped, and the re-import started
+      // the fetch again from its first try. With only exhausts counting, that could hold the re-SNAP off.
+      "count an exhausted fetch that lands while a retry of the import runs" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          // Slow, so the exhaust below lands inside the retry's import rather than between imports.
+          setImportResult(
+            failingBlock,
+            IO.sleep(2.seconds) *>
+              IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
+          )
+          BlockImporter.resolvingRetryInterval = 100.millis
+          try
+            peersClient.setAutoPilot(
+              new PeersClientAutoPilot:
+                override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // the exhaust comes from the test
+                }
+            )
+
+            regularSync ! SyncProtocol.Start
+
+            peersClient.fishForSpecificMessage(max = 10.seconds) {
+              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+            }
+            // The first import has ended; its retry starts 100 ms later and runs for 2 s.
+            TestProbe().expectNoMessage(1.second)
+            ImportCounterAccess.survivedExhausts shouldBe 0
+            system.actorSelection(s"${regularSync.path}/block-importer-*") !
+              BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
+
+            awaitCond(ImportCounterAccess.survivedExhausts == 1, 5.seconds)
+            succeed
+          finally BlockImporter.resolvingRetryInterval = 30.seconds
+      )
+
+      // Only exhausts count now, so the escalation must still come from them alone.
+      "still ask for a SNAP re-sync after three exhausted fetches of one block" taggedAs (UnitTest, SyncTest) in sync(
+        new LocationlessStorageHoleFixture:
+          BlockImporter.exhaustBackoff = 200.millis
+          try
+            holeAt(kec256(ByteString("referred to by nothing present"))) // exhausts at once, each try
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            supervisor.fishForSpecificMessage(max = 15.seconds) {
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+                  if number == failingBlock.number.value =>
+                true
+            }
+            ImportCounterAccess.survivedExhausts shouldBe 0
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // forge, #1694: the counter outlived a block imported, so holes the audit filled days apart added up to a re-SNAP.
+      "clear its exhausts once a block is imported" taggedAs (UnitTest, SyncTest) in sync(
+        new LocationlessStorageHoleFixture:
+          BlockImporter.exhaustBackoff = 1.second
+          try
+            holeAt(kec256(ByteString("referred to by nothing present")))
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+            // The audit fills the hole during the backoff, so the next try imports the block.
+            setImportResult(
+              failingBlock,
+              IO.pure(
+                BlockImportedToTop(
+                  List(BlockData(failingBlock, Nil, ChainWeight.totalDifficultyOnly(failingBlock.number.value)))
+                )
+              )
+            )
+            awaitCond(ImportCounterAccess.survivedExhausts == 0, 10.seconds)
+            supervisor.receiveWhile(500.millis) { case m => m }.collect {
+              case s @ SyncController.WrappedSyncProtocol(_: SyncProtocol.RegularSyncStuck) => s
+            } shouldBe empty
+          finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
       "save fetched node" in sync(new Fixture:
