@@ -9,6 +9,8 @@ import org.apache.pekko.util.ByteString
 import scala.annotation.tailrec
 import scala.util.Try
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
 import com.chipprbots.ethereum.crypto.kec256
@@ -21,9 +23,12 @@ import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
+import com.chipprbots.ethereum.domain.Account as DomainAccount
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.HexPrefix
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 
@@ -42,6 +47,10 @@ import com.chipprbots.ethereum.mpt.MptTraversals
   * basic pruning inside a valid wrapper at the count it had, so it reads as bytes failing their hash and not as an
   * entry that does not unwrap.
   *
+  * With `address <hex> <account|storage|code>` it makes a hole under `newPayload` (#1694), where the deepest-first
+  * advice above is the wrong way round: the next block has to touch it. Name a contract every block calls (EIP-4788's)
+  * and it deletes the last node on the path to that account, or its storage root, or its code.
+  *
   * It refuses any datadir not under [[Allowed]], symlinks resolved. It writes to one thing, and a throw is its only
   * exit other than success, so `runMain` reports a refusal as a failure without taking sbt with it.
   */
@@ -51,6 +60,7 @@ object HoleInjectionTool:
 
   val Usage: String =
     "usage: HoleInjectionTool <stopped datadir under " + Allowed + "> <depth of 1 or more> [corrupt]\n" +
+      "   or: HoleInjectionTool <stopped datadir> address <hex address> <account|storage|code>\n" +
       "Deletes one trie node from the hash store, `depth` references below the best block's state root, or with `corrupt` " +
       "writes junk bytes under its key."
 
@@ -131,6 +141,60 @@ object HoleInjectionTool:
       source.updateSync(Seq(write))
       Hole(header.number.value, root, position, hash)
 
+  enum AccountPart:
+    case Account
+    case Storage
+    case Code
+
+  /** The hash-referenced nodes on the way to `key` under `root`, last first, and the value at its end. */
+  def pathTo(
+      root: ByteString,
+      key: Array[Byte],
+      read: ByteString => Option[Array[Byte]]
+  ): Either[String, (List[(AuditPosition, ByteString)], ByteString)] =
+    val nibbles = HexPrefix.bytesToNibbles(key)
+    @tailrec def go(
+        node: MptNode,
+        at: AuditPosition,
+        left: Array[Byte],
+        seen: List[(AuditPosition, ByteString)]
+    ): Either[String, (List[(AuditPosition, ByteString)], ByteString)] =
+      node match
+        case leaf: LeafNode => Right((seen, leaf.value))
+        case hash: HashNode =>
+          val id = ByteString(hash.hash)
+          read(id) match
+            case None        => Left(s"Node ${AuditWalk.hexOf(id)} at ${at.describe} is absent already")
+            case Some(bytes) => go(MptTraversals.decodeNode(bytes), at, left, (at, id) :: seen)
+        case branch: BranchNode if left.nonEmpty =>
+          go(branch.children(left.head & 0xf), at.child(left.head & 0xf), left.tail, seen)
+        case extension: ExtensionNode =>
+          go(extension.next, at.child(extension.sharedKey), left.drop(extension.sharedKey.length), seen)
+        case other => Left(s"The trie ends at ${at.describe} in ${other.getClass.getSimpleName}")
+    go(HashNode(root.toArray), AuditPosition.AccountRoot, nibbles, Nil)
+
+  /** Deletes the part of `address` that `part` names, under the best block's state root. */
+  def injectAt(source: DataSource, address: ByteString, part: AccountPart): Either[String, Hole] =
+    val best = new AppStateStorage(source).getBestBlockInfo()
+    val nodes = new NodeStorage(source)
+    def read(hash: ByteString): Option[Array[Byte]] =
+      nodes.get(hash).map(s => if ByteString(kec256(s)) == hash then s else StoredNodeTestAccess.unwrapped(s))
+    for
+      header <- new BlockHeadersStorage(source).get(best.hash).toRight(s"No header for best block ${best.number}")
+      root = header.stateRoot.value
+      found <- pathTo(root, kec256(address.toArray), read)
+      (path, value) = found
+      account <- DomainAccount(value).toEither.left.map(e => s"Not an account at ${AuditWalk.hexOf(address)}: $e")
+      target <- part match
+        case AccountPart.Account => path.headOption.toRight("No hash-referenced node on the way to the account")
+        case AccountPart.Storage => Right((path.head._1, account.storageRoot.value))
+        case AccountPart.Code    => Right((path.head._1, account.codeHash.value))
+    yield
+      val (position, hash) = target
+      val space = if part == AccountPart.Code then Namespaces.CodeNamespace else Namespaces.NodeNamespace
+      source.updateSync(Seq(DataSourceUpdateOptimized(space, Seq(hash.toArray), Nil)))
+      Hole(header.number.value, root, position, hash)
+
   private[snap] def rocksConfig(dir: Path): RocksDbConfig =
     new RocksDbConfig:
       override val createIfMissing: Boolean = false
@@ -145,6 +209,34 @@ object HoleInjectionTool:
 
   def main(args: Array[String]): Unit =
     def die(why: String): Nothing = throw new IllegalArgumentException(s"$why\n$Usage")
+    args match
+      case Array(dir, "address", hex, partText) =>
+        val part = AccountPart.values
+          .find(_.toString.equalsIgnoreCase(partText))
+          .getOrElse(die(s"Not account, storage or code: $partText"))
+        val address = ByteString(Hex.decode(hex.stripPrefix("0x")))
+        val hole = for
+          real <- checked(dir)
+          rocks <- rocksDbUnder(real)
+          found <-
+            val source = RocksDbDataSource(rocksConfig(rocks), Namespaces.nsSeq)
+            try injectAt(source, address, part)
+            finally source.close()
+        yield found
+        hole.fold(
+          die,
+          h =>
+            println(
+              s"""Deleted the $part of $hex.
+                 |  block ${h.block}
+                 |  root  ${AuditWalk.hexOf(h.root)}
+                 |  hash  ${AuditWalk.hexOf(h.hash)}
+                 |  under ${h.position.describe}""".stripMargin
+            )
+        )
+      case _ => mainByDepth(args, die)
+
+  private def mainByDepth(args: Array[String], die: String => Nothing): Unit =
     val (datadir, depthText, mode) = args match
       case Array(dir, depth)            => (dir, depth, Mode.Delete)
       case Array(dir, depth, "corrupt") => (dir, depth, Mode.Corrupt)
