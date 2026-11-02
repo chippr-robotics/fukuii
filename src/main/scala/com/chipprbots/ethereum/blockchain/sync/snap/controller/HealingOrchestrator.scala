@@ -582,6 +582,9 @@ private[snap] trait HealingOrchestrator
     // everything present is complete has just been contradicted. A clean full walk stamps again.
     healingCleanWalkRoot.set(null)
     healingDecidedRoot.set(null)
+    // The coordinator's own clean pass goes too, now and not when the re-walk answers: whatever the re-walk finds, or if
+    // it fails, the gate walks again before it decides (forge, spec 022 slice 6b). An empty queue does only that.
+    trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(Seq.empty))
     if stateIngest.appState.isSnapHealInvariantPresent() then
       ctx.log.warn("[HEAL-INVARIANT] Validation found nodes missing under a stamped datadir: marker removed")
       stateIngest.appState.clearSnapHealInvariant().commitSync()

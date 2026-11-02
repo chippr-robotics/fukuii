@@ -1444,9 +1444,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   /** Missing-node intake and peer responses (C-H5 `HealResponseProcessing`). Arms #5, #13, #15 (research.md R4c). */
   private[actors] lazy val healResponseArms: PartialFunction[Command, Behavior[Command]] = {
     case QueueMissingNodes(nodes) =>
-      // Nodes found missing outside this coordinator (validation's re-walk, today): no earlier clean pass vouches for
-      // this root any more, so the gate walks again before it decides, rather than completing on that pass once these
-      // are healed (forge, beacon: spec 022 slice 6b).
+      // Nodes found missing outside this coordinator (validation, today: an empty queue the moment it finds them, then
+      // its re-walk's nodes): no earlier clean pass vouches for this root any more, so the gate walks again before it
+      // decides, rather than completing on that pass (forge, beacon: spec 022 slice 6b).
       verificationPassComplete = false
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
       queueNodes(nodes)

@@ -596,6 +596,22 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     }
   }
 
+  // forge, spec 022 slice 6b: at the finding, not when the re-walk answers, so an empty or failed re-walk cannot complete on
+  // the coordinator's earlier clean pass either.
+  it should "have the coordinator forget its clean pass as soon as validation finds something missing" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateValidation
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.triggerHealingForMissingNodes(Seq(root.value)))
+
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.QueueMissingNodes(Seq.empty))
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+  }
+
   it should "have healing decide again when validation's re-walk finds nothing or fails" taggedAs UnitTest in {
     Seq[Command](ValidationMissingNodes(Seq.empty), ValidationRewalkFailed("walk failed")).foreach { result =>
       withClue(s"$result: ") {
