@@ -260,6 +260,56 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       (status.status == Accepted || status.status == Syncing) shouldBe true
       holesOf("node") shouldBe before + 1d
 
+    // beacon: the store throws MissingRootNodeException for any node it does not hold, so only the parent's root says this
+    // one is the root. Both call sites have to pass it, for the label T063 reads to mean anything.
+    "call a hole the root where it is the parent's state root, however execution reports it" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          throw new MissingRootNodeException(genesisHeader.stateRoot.value)
+      val block1 = buildBlock1()
+      val before = holesOf("root")
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      holesOf("root") shouldBe before + 1d
+
+    "call it the root when execution returns the error too" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          Left(BlockExecutionError.MPTError(new MissingRootNodeException(genesisHeader.stateRoot.value)))
+      val block1 = buildBlock1()
+      val before = holesOf("root")
+      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      (status.status == Accepted || status.status == Syncing) shouldBe true
+      holesOf("root") shouldBe before + 1d
+
     "execute the same block and answer VALID once the bytecode is present (no verdict was cached)" taggedAs (
       UnitTest,
       ConsensusTest
