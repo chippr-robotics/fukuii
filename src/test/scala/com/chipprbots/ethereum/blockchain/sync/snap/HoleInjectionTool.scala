@@ -49,7 +49,11 @@ import com.chipprbots.ethereum.mpt.MptTraversals
   *
   * With `address <hex> <account|storage|code>` it makes a hole under `newPayload` (#1694), where the deepest-first
   * advice above is the wrong way round: the next block has to touch it. Name a contract every block calls (EIP-4788's)
-  * and it deletes the last node on the path to that account, or its storage root, or its code.
+  * and it deletes the last node on the path to that account, or its storage root, or its code. A restart catches up
+  * through regular sync first, so those are met by import. `address <hex> slot <n>...` is for a node already following
+  * the head: it deletes the leaves of those storage slots, and EIP-4788 is a ring buffer by timestamp, so the block at
+  * a chosen future time is the only one to touch each. A code hole in a genesis contract appears to fill itself at the
+  * restart.
   *
   * It refuses any datadir not under [[Allowed]], symlinks resolved. It writes to one thing, and a throw is its only
   * exit other than success, so `runMain` reports a refusal as a failure without taking sbt with it.
@@ -195,6 +199,31 @@ object HoleInjectionTool:
       source.updateSync(Seq(DataSourceUpdateOptimized(space, Seq(hash.toArray), Nil)))
       Hole(header.number.value, root, position, hash)
 
+  /** Deletes the leaf of each of `slots` in the storage of `address`, under the best block's state root. */
+  def injectSlots(source: DataSource, address: ByteString, slots: Seq[BigInt]): Either[String, Seq[Hole]] =
+    val best = new AppStateStorage(source).getBestBlockInfo()
+    val nodes = new NodeStorage(source)
+    def read(hash: ByteString): Option[Array[Byte]] =
+      nodes.get(hash).map(s => if ByteString(kec256(s)) == hash then s else StoredNodeTestAccess.unwrapped(s))
+    def slotKey(slot: BigInt): Array[Byte] =
+      val raw = slot.toByteArray.dropWhile(_ == 0)
+      new Array[Byte](32 - raw.length) ++ raw
+    for
+      header <- new BlockHeadersStorage(source).get(best.hash).toRight(s"No header for best block ${best.number}")
+      root = header.stateRoot.value
+      found <- pathTo(root, kec256(address.toArray), read)
+      account <- DomainAccount(found._2).toEither.left.map(e => s"Not an account at ${AuditWalk.hexOf(address)}: $e")
+      leaves <- slots.foldLeft[Either[String, Seq[(AuditPosition, ByteString)]]](Right(Nil)) { (acc, slot) =>
+        for
+          so <- acc
+          at <- pathTo(account.storageRoot.value, kec256(slotKey(slot)), read)
+          leaf <- at._1.headOption.toRight(s"Slot $slot has no hash-referenced node on its path")
+        yield so :+ leaf
+      }
+    yield
+      source.updateSync(Seq(DataSourceUpdateOptimized(Namespaces.NodeNamespace, leaves.map(_._2.toArray), Nil)))
+      leaves.map { case (position, hash) => Hole(header.number.value, root, position, hash) }
+
   private[snap] def rocksConfig(dir: Path): RocksDbConfig =
     new RocksDbConfig:
       override val createIfMissing: Boolean = false
@@ -209,6 +238,27 @@ object HoleInjectionTool:
 
   def main(args: Array[String]): Unit =
     def die(why: String): Nothing = throw new IllegalArgumentException(s"$why\n$Usage")
+    args.toList match
+      case dir :: "address" :: hex :: "slot" :: slots if slots.nonEmpty =>
+        val address = ByteString(Hex.decode(hex.stripPrefix("0x")))
+        val holes = for
+          real <- checked(dir)
+          rocks <- rocksDbUnder(real)
+          found <-
+            val source = RocksDbDataSource(rocksConfig(rocks), Namespaces.nsSeq)
+            try injectSlots(source, address, slots.map(BigInt(_)))
+            finally source.close()
+        yield found
+        holes.fold(
+          die,
+          found =>
+            slots.zip(found).foreach { case (slot, h) =>
+              println(s"Deleted slot $slot leaf ${AuditWalk.hexOf(h.hash)} at block ${h.block}, ${h.position.describe}")
+            }
+        )
+      case _ => mainOthers(args, die)
+
+  private def mainOthers(args: Array[String], die: String => Nothing): Unit =
     args match
       case Array(dir, "address", hex, partText) =>
         val part = AccountPart.values
