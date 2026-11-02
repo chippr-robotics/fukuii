@@ -912,7 +912,14 @@ class RegularSyncSpec
         SyncTest
       ) in sync(new LocationlessStorageHoleFixture:
         holeAt(kec256(ByteString("referred to by nothing present")))
-        peersClient.setAutoPilot(new PeersClientAutoPilot)
+        peersClient.setAutoPilot(
+          new PeersClientAutoPilot:
+            // Left unanswered so a request, if one is sent, stays on the probe: the default answer looks the hash up as
+            // a block's, throws for a node's, and the probe then never records the request.
+            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+              case PeersClient.Request(GetNodeData(_), _, _, _) => None
+            }
+        )
 
         regularSync ! SyncProtocol.Start
 
