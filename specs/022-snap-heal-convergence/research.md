@@ -230,6 +230,29 @@ Design checked by forge and beacon before it was built; the decisions are in `.l
 
 **Left as they are.** A signal for root A, sent before A to B to A, is taken at A: the decision was A's, the window is one message, and it needs a reorg back during it. The sample at hand-off is blind to a region absent where no sampled account goes (beacon, accepted). A resume's seam is mended by discovery from the absent root, as it always was: the walk it used to be followed by looked for what discovery does not reach, which is now the audit's.
 
+
+## R-5h. Holes under newPayload: measured, and what #1694 became (2026-11-01)
+
+#1694 said a hole under `newPayload` answers SYNCING with no repair, so an Engine-driven node sits behind until the audit finds it. A design followed from that: a repair actor and a way to re-execute blocks, 600-900 lines. It was measured first, on Ephemery 165 and staging's code (`mordor-scarcity/s1694-*.sh`), and the premise did not hold.
+
+| Hole | Who met it | Repaired in |
+|---|---|---|
+| Storage, at the head (twice) | `newPayload`, then the importer | 12.8 s and 24.5 s |
+| Storage, catching up after a restart | The importer | about 0.5 s |
+| Account, catching up after a restart | The importer | about 0.5 s |
+| Code, full-sync node | The importer | about 0.1 s |
+| Code, SNAP-synced node | `newPayload`, then the importer | about 60 s, with a full-state scan |
+
+The block is stored by hash and answered ACCEPTED, not SYNCING. Nothing on the Engine path runs it again, and the consensus client did not re-send it. Regular sync's importer, which also runs post-merge, reaches the same block, fetches the node, and imports; the next payload then has a validated parent. To make `newPayload` the first to meet a hole, delete a leaf of EIP-4788's ring buffer for a future timestamp: a restart catches up through import, so a hole every block touches is met by import.
+
+**So, the user's decisions of 2026-11-01:**
+- No repair actor and no re-execution path.
+- **Code holes fetch first.** On a SNAP-synced node the first missing code went straight to the bulk scan, which stops regular sync while it reads the whole state: 98 ms over 360 accounts here, estimated at hours on Sepolia. A fetch alone took 100 ms. Now the eighth distinct miss in a process asks for the scan. This amends 5c's "bulk recovery stays as the backstop" only in when it fires: several misses show there are many to find, and fetching those one by one is what costs more.
+- **A storage hole with no position is found, not guessed.** One met writing has none (a delete collapses a branch by reading a sibling no read of the slot passed through). Asking for the storage root drew an honest reply of the wrong node, and blacklisted the peer. `StorageHolePosition` walks what is present for the reference to it, up to 4,096 reads, and asks for nothing where it finds none.
+- **A hole no peer can serve keeps its re-SNAP** after 3 exhausted fetches, about 15 minutes. That is traced, and the one case on record is Platåberget's at 320602, not measured. It is the only exit if the state really is gone, and T063 records any occurrence.
+
+**What this does not show.** Ephemery's state is tiny, its blocks nearly empty, and its peers answered in about 40 ms. Re-execution on a large block, few peers (Sepolia's 1-9 state-serving) and a whole missing subtree, where each node costs a fetch and a re-execution, are not measured. The scan's cost at Sepolia's size is an estimate.
+
 ## R-5a. Where abandoned storage accounts are recorded (T002; vault, 2026-10-28)
 
 **Verified unless marked inferred. Paths under `blockchain/sync/snap/` unless stated.**
