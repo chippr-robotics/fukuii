@@ -249,7 +249,7 @@ private[actors] trait HealDispatch extends HealDispatchApi:
       // before it is ever stored — see handleResponse (C4). The walk root used for completeness is unchanged.
       val request = GetTrieNodes(
         requestId = requestId,
-        // spec 009 T005/C1: under `movingRootDeltaHeal` collapse the fetch root to the completeness root `stateRoot`
+        // #1374 T005/C1: under `movingRootDeltaHeal` collapse the fetch root to the completeness root `stateRoot`
         // so the content-hash gate (keccak(node) == requested task hash) matches BY CONSTRUCTION — the spec-004
         // wrong-axis fix. Flag OFF: byte-identical to spec-004 (serve root when decoupled, else the walk root).
         rootHash = if movingRootDeltaHeal then stateRoot else if decoupledHealServeRoot then serveRoot else stateRoot,

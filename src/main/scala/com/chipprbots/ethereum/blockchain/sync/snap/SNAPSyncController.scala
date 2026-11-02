@@ -437,7 +437,7 @@ private class SNAPSyncControllerImpl(
   // so serve-window freshness is irrelevant, and a proactive heal-root re-peg would only supersede (and discard) it.
   val healingWalkLocalOnly: AtomicBoolean = new java.util.concurrent.atomic.AtomicBoolean(false)
   var lastHealingServeRootBlock: Option[BigInt] = None
-  // spec 009 T009/T014 (Moving-Root Delta Heal — BOUNDED re-peg last-resort). Under `movingRootDeltaHeal` the heal
+  // #1374 T009/T014 (Moving-Root Delta Heal — BOUNDED re-peg last-resort). Under `movingRootDeltaHeal` the heal
   // re-pegs the single heal root via refreshPivotInPlace (from maybeRequestHealingServeRoot). If a re-peg attempt
   // during StateHealing finds NO suitable served root (refreshPivotInPlace's newPivotOpt.isEmpty branch), this counter
   // increments; once it reaches the budget the controller takes the SAME fail-SAFE lazy-heal handoff (completeSnapSync
@@ -814,7 +814,7 @@ private class SNAPSyncControllerImpl(
     // the in-flight latch so a later tick can retry.
     case SNAPSyncController.HealingServeRoot(blockNumber, rootOpt) =>
       healingServeRootRequestInFlight = false
-      // spec 009 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
+      // #1374 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
       // refreshPivotInPlace → HealingPivotRefreshed (H-S6), NOT a serve-root push, so this reply is no longer
       // solicited on the flag path. A late HealingServeRoot (e.g. an in-flight RequestHealingServeRoot from before the
       // flag engaged) must NOT push a HealingServeRootRefresh — under single-root heal the serve root IS the walk root
@@ -1574,7 +1574,7 @@ case class SNAPSyncConfig(
     // FR-006 surfacing threshold: after this many unsatisfied heal attempts with no serve-root advance in
     // between, the coordinator surfaces the stuck task (log + metric). NEVER force-completes.
     decoupledHealMaxAttemptsNoRefresh: Int = 12,
-    // spec 009 (Moving-Root Delta Heal). Read by TrieNodeHealingCoordinator (single served heal root in
+    // moving-root delta heal (#1374). Read by TrieNodeHealingCoordinator (single served heal root in
     // requestNextBatch; seed-absent-root vs the HealingRootUnservable handoff in StartTrieNodeHealing; the
     // HealingServeRootRefresh no-op) and by SNAPSyncController (re-peg trigger in maybeRequestHealingServeRoot;
     // bounded last-resort in refreshPivotInPlace). Default true = the ETC SNAP default; flag-OFF restores the

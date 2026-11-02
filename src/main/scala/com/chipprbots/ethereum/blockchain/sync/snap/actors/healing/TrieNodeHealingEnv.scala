@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 /** TrieNodeHealingCoordinator's environment for its modules (spec 016 C-H1, characterization G9): its loggers and
   * `self`, and the constructor's settings the modules read (the spec 004 unservable threshold that the gauges report,
   * the frontier backpressure marks; the storage scheme the frontier walk reads and de-dups by, C-H2; the peer manager
-  * the `GetTrieNodes` requests go to, the request tracker, the controller, the configured batch size and the spec 009
+  * the `GetTrieNodes` requests go to, the request tracker, the controller, the configured batch size and #1374's
   * moving-root flag the dispatch reads, C-H4; the healed-code check flag the response processing reads, C-H5).
   * Constructor parameters and immutable values only, so it is a capability-like trait, counted apart from the modules'
   * `<Module>State` (research.md R14b). The coordinator Impl implements it.
