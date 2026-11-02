@@ -40,8 +40,13 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
+import com.chipprbots.ethereum.mpt.BranchNode
+import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.HexPrefix
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
@@ -61,6 +66,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
@@ -682,8 +688,9 @@ class RegularSyncSpec
         SyncTest
       ) in sync(
         new Fixture:
-          // The bulk recovery is requested once per process; this is every miss after it.
+          // The bulk recovery is requested once per process; this is every miss after it, on a node where it is allowed.
           BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
           (1 to BlockImporter.BulkCodeRecoveryAfterMisses).foreach(i =>
             BlockImporter.claimBulkCodeRecovery(ByteString(s"spent the claim $i"))
           )
@@ -828,6 +835,116 @@ class RegularSyncSpec
           }
           // The refused escalation counted nothing towards a bulk recovery.
           BlockImporter.distinctMissingCodesForTests shouldBe 0
+      )
+
+      // #1694: a storage hole met writing carries no position. It is found from the parent's root, not guessed as the
+      // storage root, which drew an honest reply of the wrong node and a blacklisting.
+      abstract class LocationlessStorageHoleFixture extends Fixture:
+        val failingBlock: Block = testBlocksChunked.head.head
+        val holder: Address = Address(ByteString(Array.fill[Byte](20)(0x2b)))
+        private val store = storagesInstance.storages.stateStorage.getBackingStorage(0)
+        // 64 slots: a storage root whose children are all referenced by hash.
+        val storageRoot: ByteString =
+          import MerklePatriciaTrie.defaultByteArraySerializable
+          val trie = (0 until 64).foldLeft(MerklePatriciaTrie[Array[Byte], Array[Byte]](store)) { (t, i) =>
+            t.put(kec256(BigInt(i).toByteArray), Array.fill[Byte](32)(i.toByte))
+          }
+          store.persist()
+          ByteString(trie.getRootHash)
+        val (holeSlot, hole): (Int, ByteString) = store.get(storageRoot.toArray) match
+          case branch: BranchNode =>
+            branch.children.zipWithIndex.collectFirst { case (HashNode(h), i) => (i, ByteString(h)) }.get
+          case other => fail(s"the storage root is no branch: $other")
+        val stateRoot: ByteString =
+          val accounts =
+            MerklePatriciaTrie[Address, Account](store).put(holder, Account(storageRoot = TrieRoot(storageRoot)))
+          store.persist()
+          ByteString(accounts.getRootHash)
+        private val parent = failingBlock.header.copy(stateRoot = TrieRoot(stateRoot))
+
+        override lazy val blockchainReader: BlockchainReader = new BlockchainReader(
+          storagesInstance.storages.blockHeadersStorage,
+          storagesInstance.storages.blockBodiesStorage,
+          storagesInstance.storages.blockNumberMappingStorage,
+          storagesInstance.storages.stateStorage,
+          storagesInstance.storages.receiptStorage,
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.chainWeightStorage,
+          storagesInstance.storages.blockAccessListStorage
+        ):
+          override def getBestBlockNumber: BigInt = BigInt(0)
+          override def getSnapSyncPivotBlock: Option[BigInt] = None
+          override def getBlockHeaderByNumber(number: BigInt): Option[BlockHeader] =
+            Some(BlockHelpers.genesis.header)
+          override def getBlockHeaderByHash(hash: com.chipprbots.ethereum.domain.BlockHash): Option[BlockHeader] =
+            if hash == failingBlock.header.parentHash then Some(parent) else super.getBlockHeaderByHash(hash)
+
+        override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
+        // The importer walks the storage trie through this; the fixture's own is a stub that reads nothing.
+        override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+
+        def holeAt(hash: ByteString): Unit =
+          setImportResult(
+            failingBlock,
+            IO.pure(BlockImportFailedDueToMissingNode(new MissingStorageNodeException(hash, holder.bytes, None)))
+          )
+
+      "ask for a storage hole with no position at the position found under the parent's root" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(new LocationlessStorageHoleFixture:
+        holeAt(hole)
+        peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+        regularSync ! SyncProtocol.Start
+
+        val expected =
+          Seq(Seq(kec256(holder.bytes), ByteString(HexPrefix.encode(Array(holeSlot.toByte), isLeaf = false))))
+        peersClient.fishForSpecificMessage(max = 10.seconds) {
+          case PeersClient.Request(GetTrieNodes(_, root, paths, _), _, _, _)
+              if root == stateRoot && paths == expected =>
+            true
+        }
+      )
+
+      "ask no peer for a storage hole that cannot be located, and back off as after an exhausted fetch" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(new LocationlessStorageHoleFixture:
+        holeAt(kec256(ByteString("referred to by nothing present")))
+        peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+        regularSync ! SyncProtocol.Start
+
+        awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+        val asked = peersClient.receiveWhile(2.seconds) { case m => m }
+        asked.collect {
+          case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
+          case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) => r
+        } shouldBe empty
+      )
+
+      // forge, beacon: a retry tick counted as an exhaust made the first real exhaust the third, so a hole no peer served
+      // for about 150 s cost a re-SNAP. The user's decision of 2026-11-02: only exhausts count.
+      "not count its retries towards the re-SNAP, only exhausted fetches" taggedAs (UnitTest, SyncTest) in sync(
+        new MissingStateNodeFixture:
+          BlockImporter.resolvingRetryInterval = 100.millis
+          try
+            peersClient.setAutoPilot(
+              new PeersClientAutoPilot:
+                override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // never answered, so never exhausted here
+                }
+            )
+
+            regularSync ! SyncProtocol.Start
+
+            peersClient.fishForSpecificMessage(max = 10.seconds) {
+              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+            }
+            TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
+            ImportCounterAccess.survivedExhausts shouldBe 0
+          finally BlockImporter.resolvingRetryInterval = 30.seconds
       )
 
       "save fetched node" in sync(new Fixture:

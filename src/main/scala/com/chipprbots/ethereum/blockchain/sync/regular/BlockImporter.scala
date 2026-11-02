@@ -54,6 +54,7 @@ import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps.*
@@ -61,8 +62,12 @@ import com.chipprbots.ethereum.utils.FunctorOps.*
 object BlockImporter:
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
-  // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
+  // Each exhaust is up to about 150 s of fetching (StateNodeFetcher's 30 tries 5 s apart), with a 5-minute backoff
+  // between them: about 15-20 minutes before the escape valve. Only exhausts count (see SyncRetryTick below).
   val StuckEscapeThreshold: Int = 3
+
+  // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
+  private[regular] var resolvingRetryInterval: FiniteDuration = 30.seconds
 
   // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
   // 128 blocks provides enough depth to cover common shallow forks without resyncing the
@@ -249,7 +254,11 @@ object BlockImporter:
     * [[Running]] — and on ETC/Mordor/Gorgoroth, where nothing is ever deferred, identical outright.
     */
   case object RunningAfterFetcherRewind extends NewBehavior
-  case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block]) extends NewBehavior
+
+  /** Waiting for a missing node. `askedNoPeer`: the import asked no peer for it (a storage node it could not locate),
+    * so the wait is answered at once as an exhausted fetch.
+    */
+  case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block], askedNoPeer: Boolean = false) extends NewBehavior
   case class ResolvingBranch(from: BigInt) extends NewBehavior
 
   sealed trait BlockImportType:
@@ -536,7 +545,9 @@ final private class BlockImporterLogic(
         // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
         // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
         // has a number→hash mapping, so branch resolution would fail for any other starting point.
-        BlockImporter.survivedExhausts += 1
+        // Not an exhaust, so it does not count towards StuckEscapeThreshold: counting it made the first exhaust the
+        // third, and a hole no peer served for about 150 s cost a re-SNAP, days on Sepolia (forge, beacon, #1694; the
+        // user's decision of 2026-11-02).
         importBlocks(blocksToRetry, blockImportType)(state)
 
       case _ => Behaviors.same
@@ -557,8 +568,10 @@ final private class BlockImporterLogic(
       case Running | RunningAfterFetcherRewind =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         running(state)
-      case ResolvingMissingNode(blocksToRetry) =>
-        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, 30.seconds)
+      case ResolvingMissingNode(blocksToRetry, askedNoPeer) =>
+        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.resolvingRetryInterval)
+        // Sent here, not from the import: there it would reach `running`, which drops an empty answer.
+        if askedNoPeer then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
         resolvingMissingNode(blocksToRetry, blockImportType)(state)
       case ResolvingBranch(from) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
@@ -665,15 +678,30 @@ final private class BlockImporterLogic(
                   hash => Try(stateStorage.getBackingStorage(failedBlock.number.value).get(hash.toArray)).toOption
                 )
                 log.info(
-                  "Missing storage node {} for account {} during import of block {}, locationKnown={}",
+                  "Missing storage node {} for account {} during import of block {}, {}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  e.location.isDefined
+                  if e.location.isDefined then "position known"
+                  else if paths.isDefined then "position found"
+                  else "position not found"
                 )
                 pendingStateNodeHash = Some(e.hash)
-                fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
-                ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+                paths match
+                  case Some(_) =>
+                    fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
+                  case None =>
+                    // With no position the fetcher would ask by hash alone (GetNodeData), which no eth/68+ peer serves,
+                    // and wait out its retries for nothing (forge, #1694). So nobody is asked: this is an exhausted
+                    // fetch at once, with its backoff, and the audit may fill the hole meanwhile.
+                    log.warning(
+                      "Storage node {} could not be located under its storage root: asking no peer, and backing off",
+                      ByteStringUtils.hash2string(e.hash)
+                    )
+                ResolvingMissingNode(
+                  NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail),
+                  askedNoPeer = paths.isEmpty
+                )
               case e: MissingCodeException
                   if SyncController.bulkCodeRecoveryAllowed(
                     blockchainReader.isSnapSyncDone,

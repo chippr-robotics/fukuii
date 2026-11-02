@@ -12,12 +12,13 @@ import com.chipprbots.ethereum.mpt.MptNode
   */
 object StorageHolePosition:
 
-  /** Reads before giving up: enough for what a block's hole sits under in any but the largest tries, and this runs on
-    * the importer's thread.
+  /** Reads before giving up, since this runs on the importer's thread. Breadth first, the first 273 read every node
+    * down to depth 2, so every hole down to depth 3 is found, and the rest find most at depth 4: a trie of some
+    * thousands of slots. A token's or an exchange's trie is deeper, and a hole in it is mostly not found.
     */
   val MaxReads: Int = 4096
 
-  /** The pathset of `hole` under `storageRoot`, breadth first, since a hole met by a block is usually shallow. None
+  /** The pathset of `hole` under `storageRoot`, breadth first, so a bounded walk covers the shallow levels whole. None
     * where nothing read refers to it, within `maxReads`.
     */
   def locate(
@@ -46,8 +47,8 @@ object StorageHolePosition:
   /** The pathsets to ask for a storage hole. Most carry their position. One met writing does not: deleting a slot
     * collapses a branch by reading its sibling, which no read of the slot passed through. Asking for the storage root
     * then, whatever the hole was, drew an honest reply of the wrong node, and the peer was blacklisted for it, so such
-    * a hole went through every peer to the re-SNAP (beacon, #1694). None where it cannot be found: no answer is better
-    * than blaming the peer for ours.
+    * a hole went through every peer to the re-SNAP (beacon, #1694). None where it cannot be found, and the importer
+    * then asks no peer at all: no answer is better than blaming a peer for ours.
     */
   def paths(
       location: Option[ByteString],
