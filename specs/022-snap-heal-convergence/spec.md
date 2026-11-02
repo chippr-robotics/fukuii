@@ -4,10 +4,10 @@
 
 **Created**: 2026-10-28
 
-**Status**: Active (2026-10-31). Slices 1–4 merged (#1682, #1684, #1685, #1688); slice 5 is four PRs (5a the download phases' gaps, 5b the restart items, 5c the audit, 5d the completion switch, which lands last), then slice 6 and the Mordor and Sepolia release gates. 0.11.0 blocker (#1671).
+**Status**: Active (2026-11-02). Slices 1–5 merged (#1682, #1684, #1685, #1688; 5a #1690, 5b #1691, 5c #1693, 5d #1695), and #1694's repair of holes under `newPayload` (#1697). Slice 6 is three PRs (6a docs and decision records, 6b dead wiring, 6c config keys), then the Mordor and Sepolia release gates. 0.11.0 blocker (#1671).
 **Tracking**: issue #1671. Release 0.11.0 (#1659). The release waits on this (user decision 2026-10-28).
 
-**In flight**: `dev-node` (local build-host session), branch `fix/022-s5a-prerequisites`
+**In flight**: `dev-node` (local build-host session), branch `fix/022-s6a-docs`
 **Release**: 0.11.0
 
 **Input**: SNAP state healing must converge on a live chain for both ETH (Path scheme) and ETC (Hash scheme). The node declares state complete when healing has nothing left to fetch from the current root, not after a full-trie verification walk. The full walk becomes a non-blocking background audit. The spec also evaluates retiring the Hash scheme. Full input: issue #1671 and its comments.

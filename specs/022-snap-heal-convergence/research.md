@@ -347,6 +347,6 @@ The block is stored by hash and answered ACCEPTED, not SYNCING. Nothing on the E
 ## R-8. Sync-direction context (not in scope; feeds the ADR)
 
 - Staged-sync research: execution reads only through the trie today (`BlockExecution.scala` ~375; `InMemoryWorldStateProxy.getAccount` ~206; `flatSlotStorage` is `None`) [V].
-- Spec 018 F3 owns flat-state execution reads. Spec 013 owns flat-state snapshot files.
+- Spec 018 F6 (FR-011) owns flat-state execution reads, on by default at F7. (This line said F3, which is path-aware node resolution.) Spec 013 owns flat-state snapshot files.
 - Execute-from-genesis on this host is an unmeasured IO model (2–3× error band): Mordor about 2–5 days, ETC mainnet about 1–3 months, Sepolia about 2–4 months.
 - Direction: #1671 first, then 018 flat reads, then 013 Phase 0. A staged mode only for Mordor/ETC, after flat reads exist.

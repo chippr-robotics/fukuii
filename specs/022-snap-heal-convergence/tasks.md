@@ -414,10 +414,14 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 ## Phase 7: Slice 6: cleanup and decision records (US5)
 
-- [ ] T058 [P] Correct every "spec 009 moving-root delta heal" reference in code comments and logs (spec 009 is Amsterdam). Search with `grep -rn "spec 009" src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap`. (FR-019)
-- [ ] T059 [P] Add supersede notes at the top of `specs/003-scoped-heal-verification/spec.md`, `specs/005-subtree-complete-verification/spec.md` and `specs/006-skip-redundant-verify-walk/spec.md`, pointing to spec 022. (FR-019)
-- [ ] T060 [P] [US5] Write the ADR in `docs/adr/` recording the completion-rule change (it supersedes spec 006's byte-for-byte completion-parity invariant). In the same ADR, record the FR-020 decision: keep Hash for 0.11.0, with retirement under spec 018 DC-9.
-- [ ] T061 [P] Write the short sync-direction ADR, the R-8 direction: #1671, then spec 018 flat execution reads, then spec 013 Phase 0. Include a staged mode for Mordor/ETC only, the measured Mordor data from 2026-10-28, and the unmeasured execute-from-genesis IO model with its 2–3× error band.
+- [x] T058 [P] Correct every "spec 009 moving-root delta heal" reference in code comments and logs (spec 009 is Amsterdam). Search with `grep -rn "spec 009" src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap`. (FR-019)
+  - **Done in PR 6a.** Moving-root delta heal came from #1374 (ported in #1381); its own spec was numbered 009 but never committed, and 009 is Amsterdam. Main and test sources now cite #1374, three log lines included. `sync.conf`'s comment on the flag is a resource, so it goes with 6c. Left as they are: the Amsterdam citations, which are right, and two ETC test comments that call the Olympia opcode cleanup "spec-009" (from the v0.8.0 squash, origin not traceable, and not moving-root).
+- [x] T059 [P] Add supersede notes at the top of `specs/003-scoped-heal-verification/spec.md`, `specs/005-subtree-complete-verification/spec.md` and `specs/006-skip-redundant-verify-walk/spec.md`, pointing to spec 022. (FR-019)
+  - The notes were added on 2026-10-30. PR 6a corrects two that said the walk was removed outright, marks CON-009 (the retired CF `g` marker), CON-011 and CON-012 superseded by CON-014, and CON-010 amended by it. Forge fact-checked both ADRs against the spec, research and tasks before merge.
+- [x] T060 [P] [US5] Write the ADR in `docs/adr/` recording the completion-rule change (it supersedes spec 006's byte-for-byte completion-parity invariant). In the same ADR, record the FR-020 decision: keep Hash for 0.11.0, with retirement under spec 018 DC-9.
+  - `docs/adr/consensus/CON-014-heal-completion-without-a-walk.md`.
+- [x] T061 [P] Write the short sync-direction ADR, the R-8 direction: #1671, then spec 018 flat execution reads, then spec 013 Phase 0. Include a staged mode for Mordor/ETC only, the measured Mordor data from 2026-10-28, and the unmeasured execute-from-genesis IO model with its 2–3× error band.
+  - `docs/adr/consensus/CON-015-sync-direction.md`. Flat execution reads are spec 018 F6 (FR-011), not F3 as research R-8 had it; R-8 is corrected.
 
 ---
 

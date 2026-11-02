@@ -74,10 +74,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // FR-006 surfacing threshold: after this many unsatisfied attempts with no serve-root advance, surface (log +
     // metric). Never force-completes.
     val decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
-    // spec 009 (Moving-Root Delta Heal). When true, the heal completes toward AND fetches against ONE current served
+    // moving-root delta heal (#1374). When true, the heal completes toward AND fetches against ONE current served
     // root: requestNextBatch (T005) collapses the fetch root to the completeness root `stateRoot`, and
     // StartTrieNodeHealing (T006) seeds an absent heal root as a frontier task and fetches it instead of handing off to
-    // lazy healing. When false, the heal uses the spec-004 walk/serve split (byte-identical to pre-spec-009). Impl
+    // lazy healing. When false, the heal uses the spec-004 walk/serve split (byte-identical to before #1374). Impl
     // default false (bare construction stays on the spec-004 path); the production default-on flows from SNAPSyncConfig
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
@@ -926,7 +926,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           self ! RestartFullRebuild(root, emptyPath)
         adoptRootForExcluded()
       else if movingRootDeltaHeal then
-        // spec 009 T006/C2 (Moving-Root Delta Heal): the heal root node's OWN bytes are absent locally, but the root
+        // #1374 T006/C2 (Moving-Root Delta Heal): the heal root node's OWN bytes are absent locally, but the root
         // IS fetchable — GetTrieNodes(rootHash=stateRoot, paths=[[emptyPath]]) returns S's root node, whose keccak ==
         // stateRoot, so the content-hash gate (byte-untouched) accepts it. The local mosaic is only a content-addressed
         // CACHE that lets discovery prune already-present subtrees. SEED the root as a frontier task (empty-path) and
@@ -940,7 +940,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         then
           log.info(
             s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} absent locally — seeding it as a frontier task " +
-              s"and fetching against the single served root (spec 009 moving-root delta heal); discovery drives the " +
+              s"and fetching against the single served root (#1374, moving-root delta heal); discovery drives the " +
               s"top-down delta from the root. NOT handing off to lazy healing."
           )
           tryRedispatchPendingTasks()
@@ -1056,7 +1056,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         flushRawNodesSync()
         dropHeld("Re-peg")
         pruneFetchCounters()
-        // spec 009 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
+        // #1374 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
@@ -1541,12 +1541,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // construction. No-op when the feature is disabled (the fetch would ignore `serveRoot` anyway, but skipping
       // keeps the observability/counter state inert so the OFF path is byte-identical to today, SC-006).
       if movingRootDeltaHeal then
-        // spec 009 T014/FR-010: under moving-root delta heal the serve root IS the walk root (the fetch collapses to
+        // #1374 T014/FR-010: under moving-root delta heal the serve root IS the walk root (the fetch collapses to
         // `stateRoot` in requestNextBatch, T005), so the spec-004 serve-root machinery is SUPERSEDED. The controller
         // re-pegs via HealingPivotRefreshed and stops requesting serve roots (H-S6/H-S2), but a late in-flight
         // HealingServeRootRefresh could still arrive — treat it as a documented no-op (serveRoot / serveRootRefreshCount
         // stay inert). Flag OFF: byte-identical to the spec-004 path below (kept one release for A/B, FR-007).
-        log.debug("[HEAL] HealingServeRootRefresh ignored — single moving root (spec 009)")
+        log.debug("[HEAL] HealingServeRootRefresh ignored — single moving root (#1374)")
       else if !decoupledHealServeRoot then
         log.debug("[HEAL-SERVE-ROOT] HealingServeRootRefresh ignored — decoupled-heal-serve-root disabled")
       else if newServeRoot.isEmpty || newServeRoot == serveRoot then
@@ -2044,7 +2044,7 @@ object TrieNodeHealingCoordinator:
       @annotation.unused frontierPersistenceEnabled: Boolean = false,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
-      // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
+      // moving-root delta heal (#1374); read by the impl (see its ctor).
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
       walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,

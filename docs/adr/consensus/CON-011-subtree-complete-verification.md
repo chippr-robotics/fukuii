@@ -1,6 +1,6 @@
 # CON-011: Subtree-complete heal verification — descend-and-stop, O(missing) completeness proof
 
-**Status**: Accepted
+**Status**: Superseded by [[CON-014]] (2026-11-02). Subtree completeness is now a write-order invariant, not a verification pass (spec 022 FR-001 to FR-004).
 
 **Date**: 2026-06-19
 

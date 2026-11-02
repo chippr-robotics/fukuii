@@ -117,7 +117,7 @@ object HealingTrieFixtures:
       frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
-      // spec 009 (Moving-Root Delta Heal). Default false so existing spec-004 tests spawn the flag-OFF coordinator
+      // moving-root delta heal (#1374). Default false so existing spec-004 tests spawn the flag-OFF coordinator
       // (unchanged); the moving-root tests pass true to exercise seed-from-absent-root / single-root fetch / re-peg.
       movingRootDeltaHeal: Boolean = false,
       // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.

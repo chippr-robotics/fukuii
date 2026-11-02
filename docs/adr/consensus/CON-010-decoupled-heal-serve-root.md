@@ -1,6 +1,6 @@
 # CON-010: Decoupled heal serve-root — fixed walk root, advancing fetch root
 
-**Status**: Accepted
+**Status**: Accepted; amended by [[CON-014]] (2026-11-02). The decoupled serve root stays. Completion is no longer judged by the walk alone: where the invariant marker stands it takes no walk.
 
 **Date**: 2026-06-17
 

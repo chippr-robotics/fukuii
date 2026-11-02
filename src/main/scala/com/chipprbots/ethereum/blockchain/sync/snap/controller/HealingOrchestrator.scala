@@ -144,7 +144,7 @@ private[snap] trait HealingOrchestrator
     // post-SNAP regular-sync fallback. This converges to a REAL Completed/regular-sync state; it is NOT a silent
     // skip-and-mark-done (finalizeSnapSync still enforces the snapStateRoot == pivotHeader.stateRoot anchor guard).
     //
-    // spec 009 FR-001/FR-008: under `movingRootDeltaHeal` this handler is the BOUNDED last-resort, NOT the default.
+    // #1374 FR-001/FR-008: under `movingRootDeltaHeal` this handler is the BOUNDED last-resort, NOT the default.
     // The coordinator's absent-root branch SEEDS the served root and fetches it (batch-2 T006) instead of emitting
     // HealingRootUnservable, so under the flag this is reached only when the controller's own re-peg budget is
     // exhausted (refreshPivotInPlace's MaxHealRepegNoRootAttempts, batch-4 H-S7) — that branch calls completeSnapSync()
@@ -563,7 +563,7 @@ private[snap] trait HealingOrchestrator
       ctx.log.warn("startStateHealing called but healing coordinator already exists — ignoring duplicate")
     else
       trieWalkInProgress = false // Reset for fresh healing phase
-      healRepegNoRootAttempts = 0 // spec 009 T014: fresh healing phase — reset the bounded re-peg last-resort budget
+      healRepegNoRootAttempts = 0 // #1374 T014: fresh healing phase — reset the bounded re-peg last-resort budget
       ctx.log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
       stateRoot.foreach { root =>
@@ -629,7 +629,7 @@ private[snap] trait HealingOrchestrator
     * an empty one).
     */
   private[snap] def maybeRequestHealingServeRoot(): Unit =
-    // spec 009 T009/C4 (moving-root re-peg trigger): the staleness MATH below is shared with the spec-004 serve-root
+    // #1374 T009/C4 (moving-root re-peg trigger): the staleness MATH below is shared with the spec-004 serve-root
     // path; only the ACTION differs by flag. Flag OFF (decoupledHealServeRoot): push a HealingServeRootRefresh (moves
     // the coordinator's SERVE root only; the walk root and the controller's stateRoot/pivot are untouched). Flag ON
     // (movingRootDeltaHeal): re-peg the SINGLE heal root via refreshPivotInPlace → completePivotRefreshWithStateRoot →
@@ -640,7 +640,7 @@ private[snap] trait HealingOrchestrator
       currentPhase == StateHealing &&
       trieNodeHealingCoordinator.isDefined &&
       !healingServeRootRequestInFlight &&
-      // spec 009: a verification walk with no heal work pending needs no peers; re-pegging now only supersedes it
+      // #1374: a verification walk with no heal work pending needs no peers; re-pegging now only supersedes it
       // (the stale walk is discarded and restarted, so a walk longer than the re-peg interval never finishes). Once a
       // pass leaves pending tasks the flag clears and the normal re-peg rules apply again. Gated on movingRootDeltaHeal:
       // the spec-004 serve-root path moves only the serve root and never invalidates the walk.
@@ -676,7 +676,7 @@ private[snap] trait HealingOrchestrator
             case None            => true
           if stale then
             if snapSyncConfig.movingRootDeltaHeal then
-              // spec 009 T009/C4: re-peg the single heal root to a fresh served root. refreshPivotInPlace selects a
+              // #1374 T009/C4: re-peg the single heal root to a fresh served root. refreshPivotInPlace selects a
               // canonical header (networkBest − margin), fetches it, and emits HealingPivotRefreshed via
               // completePivotRefreshWithStateRoot — moving completeness AND fetch (one root) while RETAINING every
               // persisted verified node and resetting verificationPassComplete so a fresh pruned descent gates
@@ -694,7 +694,7 @@ private[snap] trait HealingOrchestrator
                 // so an operator can tell which source drove this check without guessing from the numbers alone.
                 s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, target=$target, " +
                   s"margin=$HealingServeRootMarginBlocks, lastRepegBlock=${lastHealingServeRootBlock.getOrElse("none")}) " +
-                  s"— re-pegging the single heal root via refreshPivotInPlace (spec 009 moving-root delta heal)."
+                  s"— re-pegging the single heal root via refreshPivotInPlace (#1374, moving-root delta heal)."
               )
               // countsTowardHealBudget=false: this is a proactive "is there a fresher CL pivot" probe, not a
               // report that the current root is unservable. See refreshPivotInPlace's handling for the full
