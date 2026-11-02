@@ -684,7 +684,9 @@ class RegularSyncSpec
         new Fixture:
           // The bulk recovery is requested once per process; this is every miss after it.
           BlockImporter.resetBulkCodeRecoveryForTests()
-          BlockImporter.claimBulkCodeRecovery() shouldBe true
+          (1 to BlockImporter.BulkCodeRecoveryAfterMisses).foreach(i =>
+            BlockImporter.claimBulkCodeRecovery(ByteString(s"spent the claim $i"))
+          )
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -705,16 +707,55 @@ class RegularSyncSpec
           }
       )
 
-      // A node that took its state from SNAP can lack thousands of contracts' code; one fetch per contract is one full
-      // re-execution of the block each. The first miss asks SyncController for a bulk bytecode recovery instead, and
-      // does not fetch that hash on its own.
-      "ask SyncController for a bulk bytecode recovery on the first missing contract code" taggedAs (
+      // #1694: the scan stops regular sync for as long as reading the whole state takes, estimated at hours on Sepolia, and
+      // one missing contract does not earn that. A fetch took 100 ms on Ephemery.
+      "fetch the first missing contract code alone on a SNAP-synced node, with no bulk recovery" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
         new Fixture:
           BlockImporter.resetBulkCodeRecoveryForTests()
           storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
+          }
+          BlockImporter.distinctMissingCodesForTests shouldBe 1
+          val toSupervisor = supervisor.receiveWhile(1.second) { case m => m }
+          toSupervisor.collect {
+            case com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol(
+                  r: SyncProtocol.MissingCodeNeedsBulkRecovery
+                ) =>
+              r
+          } shouldBe empty
+      )
+
+      // Several distinct misses show there are many to find, as on a datadir from before healing waited on code, and one
+      // fetch per contract is one full re-execution of the block each. The miss that shows it asks for the bulk recovery
+      // instead, and does not fetch that hash on its own.
+      "ask SyncController for a bulk bytecode recovery once enough distinct contract codes have been missing" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          (1 until BlockImporter.BulkCodeRecoveryAfterMisses).foreach(i =>
+            BlockImporter.claimBulkCodeRecovery(ByteString(s"an earlier miss $i")) shouldBe false
+          )
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -740,6 +781,27 @@ class RegularSyncSpec
           seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
       )
 
+      "count a code met again once, and ask for a bulk recovery at most once a process" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        BlockImporter.resetBulkCodeRecoveryForTests()
+        val same = ByteString("the same code, met again")
+        (1 to BlockImporter.BulkCodeRecoveryAfterMisses * 2).foreach(_ =>
+          BlockImporter.claimBulkCodeRecovery(same) shouldBe false
+        )
+        BlockImporter.distinctMissingCodesForTests shouldBe 1
+        val claims = (1 to BlockImporter.BulkCodeRecoveryAfterMisses * 2).map(i =>
+          BlockImporter.claimBulkCodeRecovery(ByteString(s"miss $i"))
+        )
+        claims.count(identity) shouldBe 1
+        withClue("what it keeps is bounded: ") {
+          BlockImporter.distinctMissingCodesForTests shouldBe BlockImporter.BulkCodeRecoveryAfterMisses
+        }
+        BlockImporter.resetBulkCodeRecoveryForTests()
+        scala.concurrent.Future.successful(succeed)
+      }
+
       "fetch missing contract code alone, without asking for a bulk recovery, on a node that did not SNAP-sync" taggedAs (
         UnitTest,
         SyncTest
@@ -764,8 +826,8 @@ class RegularSyncSpec
           peersClient.fishForSpecificMessage(max = 10.seconds) {
             case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
           }
-          // The bulk-recovery slot was NOT consumed by the refused escalation.
-          BlockImporter.claimBulkCodeRecovery() shouldBe true
+          // The refused escalation counted nothing towards a bulk recovery.
+          BlockImporter.distinctMissingCodesForTests shouldBe 0
       )
 
       "save fetched node" in sync(new Fixture:
