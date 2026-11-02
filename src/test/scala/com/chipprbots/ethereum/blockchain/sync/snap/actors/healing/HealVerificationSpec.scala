@@ -54,7 +54,6 @@ private class StubHealVerificationState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var verificationPassComplete: Boolean = true
-  var trieWalkInProgress: Boolean = false
   var flushing: Boolean = false
   var markerStanding: Boolean = false
   def markerStands(): Boolean = markerStanding
@@ -232,12 +231,11 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "defer to the completion gate when work is pending, a flush is in flight or a walk is running" taggedAs UnitTest in {
-    for blocker <- Seq("pending", "flushing", "trieWalk", "verificationWalk") do
+    for blocker <- Seq("pending", "flushing", "verificationWalk") do
       val s = stub(None, StorageScheme.Hash)
       blocker match
         case "pending"  => s.isComplete = false
         case "flushing" => s.flushing = true
-        case "trieWalk" => s.trieWalkInProgress = true
         case _          => s.verificationBFSRunning = true
 
       s.reverifyCurrentRoot()

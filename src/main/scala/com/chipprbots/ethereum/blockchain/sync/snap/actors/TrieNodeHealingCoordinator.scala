@@ -190,7 +190,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
-  var trieWalkInProgress: Boolean = false
   // Verification BFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
   // verificationPassComplete = true only after a BFS traversal finds zero missing nodes.
   // verificationBFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
@@ -1101,7 +1100,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // discoverMissingChildren skips locally-held storage roots without recursing into their
         // children, so the new pivot root may be local yet have gaps in storage sub-tries.
         // spec 022 T051: that gap is what the marker rules out. Where it stands a present root is a complete one.
-        if trieWalkInProgress || verificationBFSRunning then
+        if verificationBFSRunning then
           // A walk is already running on the SHARED bfsQueue — rebuildFrontierBFS clears the queue
           // on entry, so starting a second walk here would corrupt the running one. The pivot's
           // verificationPassComplete=false (set above) guarantees HealingCheckCompletion starts a
@@ -1170,11 +1169,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if healTotal > 0 then ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
-      // walkRunning must reflect ANY active frontier walk (inline trie walk OR the BFS
-      // rebuild/verification Future) — the same OR the watchdog gates use. Rendering only
-      // trieWalkInProgress reported walkRunning=false during a live BFS rebuild, which misled
-      // operators (and matched the pre-fix watchdog bug that double-started walks).
-      val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
+      // walkRunning reflects the active frontier walk (the BFS rebuild/verification Future), the same flag the
+      // watchdog gates use. The Hash controller's own walk, once a second flag here, is gone (spec 022 slice 6).
+      val anyWalkRunning = verificationBFSRunning
       log.info(
         s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} held=${heldNodes.size} " +
@@ -1198,7 +1195,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // this watchdog catches any residual edge case (e.g. stale state after pivot race).
       // spec 022 D4, D5: not while bytecode or the excluded set holds healing up: the tick looks after those, and no walk
       // can find what they wait on.
-      if !trieWalkInProgress && !verificationBFSRunning &&
+      if !verificationBFSRunning &&
         pendingTasks.isEmpty && activeRequests.isEmpty && !heldNodes.awaitingCode && !excludedBlocking &&
         recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete && !saidComplete
       then
@@ -1218,8 +1215,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             // spec 022 review forge F1: started only once the flush buffer is written (startVerificationBFS); with a write
             // that keeps failing it is deferred, and the retry above flushes again every pulse.
             startVerificationBFS(stateRoot, rootPath)
-      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
-        trieWalkInProgress || verificationBFSRunning
+      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty || verificationBFSRunning
       then consecutiveDeadPulses = 0
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
@@ -1363,10 +1359,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       //                            or in-flight request (excludes outstanding work).
       //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
       //                            gate's flush guard; never mark complete ahead of durable state).
-      //   !trieWalkInProgress    — the controller's interleave trie walk is not running. Defense-in-depth: makes
-      //                            the early precondition EXACTLY match the HealingCheckCompletion gate, so
-      //                            guard-passes ⇒ gate-passes (no benign "guard fires, gate blocks, watchdog
-      //                            suppressed" interleave case on the re-heal path). First-heal: always false.
       //   walkRoot == stateRoot  — LOAD-BEARING (D4/FR-005): a HealingPivotRefreshed to a new root does NOT
       //                            cancel this in-flight walk, so a stale completion can land against a new
       //                            stateRoot; this excludes that stale-root completion. Explicit guard — does
@@ -1375,7 +1367,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // and the StateHealingComplete send flow through the single existing chokepoint (D1, byte-parity).
       // verificationPassComplete = true also suppresses the dead-pulse watchdog (no walk #2, FR-006). The
       // else (do nothing new) is byte-identical to today — the node idles and the watchdog runs walk #2.
-      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing && !trieWalkInProgress &&
+      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing &&
         walkRoot == stateRoot && !walkInvalidated
       then
         verificationPassComplete = true
@@ -1404,7 +1396,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case FrontierWalkFailed(_) =>
       verificationBFSRunning = false
-      trieWalkInProgress = false
       log.warn(
         "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
           "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
@@ -1428,7 +1419,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
             s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
         )
-      else if trieWalkInProgress || verificationBFSRunning then
+      else if verificationBFSRunning then
         log.info(
           "[HEAL-RESTART] Full-state rebuild not started: a frontier walk is already running. The completion check " +
             "walks the root once it has ended."
@@ -1645,7 +1636,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // drained and written. It holds both branches below: no completion while an entry counts, and no walk until the
       // pass has seeded what the walk would otherwise have to find one node at a time. The armed hand-off is the one
       // exception: it walks, and on a clean pass hands off instead of completing.
-      val mayDecide = isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning
+      val mayDecide = isComplete && !flushing && !verificationBFSRunning
       val gate = if mayDecide && flushRawNodesSync() then excludedGate() else ExcludedGate.Held
       // A held chain or a walk keeps the gate shut for a long time: the set's pass goes on regardless, or a tick would
       // never know what it wants.
@@ -1754,11 +1745,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case WalkStateChanged(inProgress) =>
-      trieWalkInProgress = inProgress
-
-      Behaviors.same
-
   }
 
   /** The catch-all (arm #26). Total, so it must stay last in `activeBehavior`'s chain. */
@@ -1840,7 +1826,6 @@ object TrieNodeHealingCoordinator:
   final case class HealingServeRootRefresh(newServeRoot: ByteString) extends Command
   case object HealingResumeDispatch extends Command
   case object HealingForceComplete extends Command
-  case class WalkStateChanged(inProgress: Boolean) extends Command
   case class UpdateMaxInFlightPerPeer(newLimit: Int) extends Command
 
   /** spec 022 D4: the bytecode of `codeHashes` has been written (the bytecode coordinator's acknowledgement, through

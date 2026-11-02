@@ -463,7 +463,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   }
 
   // walkGeneration epoch isolation model (D1 regression — commit 169c4b64c).
-  // SNAPSyncController uses a Long counter (walkGeneration) so that TrieWalk* messages
+  // SNAPSyncController uses a Long counter (walkGeneration) so that walk messages
   // carrying a stale generation are silently discarded rather than processed against
   // the wrong state root.  This test models the counter semantics as pure logic so a
   // future refactor cannot reintroduce the race without a failing test.
@@ -513,7 +513,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     var healingValidatedRoot: Option[ByteString] = None
     val rootA = ByteString("root-a".getBytes)
 
-    // TrieWalkComplete(0) sets the signal against the current root.
+    // The clean completion (`completeHealingWalkClean`) sets the signal against the current root.
     healingValidatedRoot = Some(rootA)
 
     // validateState() decision: skip if signal matches.
@@ -538,17 +538,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     // a stale signal against the OLD root must NOT short-circuit validation against the NEW root.
     val expectedRoot = rootB
     healingValidatedRoot.contains(expectedRoot) shouldBe false
-  }
-
-  it should "NOT capture signal when healing reports missing nodes (TrieWalkComplete(N>0))" taggedAs UnitTest in {
-    var healingValidatedRoot: Option[ByteString] = None
-    val rootA = ByteString("root-a".getBytes)
-
-    val totalFound = 87901 // round-1 healing case: not yet clean
-    if totalFound == 0 then healingValidatedRoot = Some(rootA)
-    // else: signal NOT set; another healing round will run.
-
-    healingValidatedRoot shouldBe None
   }
 
   it should "be invalidated by restartSnapSync (defense-in-depth)" taggedAs UnitTest in {

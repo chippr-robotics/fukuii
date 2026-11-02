@@ -152,7 +152,6 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
       19,
       Some(Verification)
     ),
-    Row("WalkStateChanged", WalkStateChanged(false), 20, Some(Verification)),
     Row("HealingStagnationCheck", HealingStagnationCheck, 21, Some(Lifecycle)),
     Row("HealingGetProgress", HealingGetProgress(TestInbox[HealingStatistics]().ref), 22, Some(Lifecycle)),
     Row("HealingRequestTimeout", HealingRequestTimeout(BigInt(1)), 23, Some(Dispatch)),

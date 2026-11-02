@@ -32,9 +32,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *   - `AccountRangeSync`: genesis pivot, one snap peer (account, bytecode and storage children);
   *   - `ByteCodeAndStorageSync`: accounts-complete recovery with storage still to download;
   *   - `StateHealing`: accounts-complete recovery with every phase done;
-  *   - `StateValidation`: from `StateHealing`, a clean walk (`TrieWalkComplete(0)`) whose finalisation stops at the A5
-  *     root guard (the pivot's stored header names another root, `parkInStateValidation`), so the controller stays in
-  *     `StateValidation`, in `syncing`'s ordinary arms;
+  *   - `StateValidation`: from `StateHealing`, the coordinator's decision (`StateHealingComplete`) whose finalisation
+  *     stops at the A5 root guard (the pivot's stored header names another root, `parkInStateValidation`), so the
+  *     controller stays in `StateValidation`, in `syncing`'s ordinary arms;
   *   - `Completed`: storage force-completed under deferred merkleization (#1371 handoff): `finalizeSnapSync` runs, but
   *     `checkAllDownloadsComplete` discards the behaviour it returns, so the controller stays in `syncing` with
   *     `currentPhase = Completed`.
@@ -106,17 +106,14 @@ class SNAPSyncingDispatchTableSpec
     "RequestStorageRanges" -> RequestStorageRanges,
     "RequestTrieNodeHealing" -> RequestTrieNodeHealing,
     "EnsureSnapServerPeersConnected" -> EnsureSnapServerPeersConnected,
-    "TrieWalkResult" -> TrieWalkResult(Seq.empty),
-    "TrieWalkBatch" -> TrieWalkBatch(Seq.empty),
-    "TrieWalkComplete" -> TrieWalkComplete(0),
-    "TrieWalkFailed" -> TrieWalkFailed("s0d table"),
+    "ValidationMissingNodes" -> ValidationMissingNodes(Seq.empty),
+    "ValidationRewalkFailed" -> ValidationRewalkFailed("s0d table"),
     "ValidateAccountTrieResult(current gen)" -> ValidateAccountTrieResult(0L, Right(Seq.empty), 0L),
     "ValidateAccountTrieResult(stale gen)" -> ValidateAccountTrieResult(99L, Right(Seq.empty), 0L),
     "ValidateStorageTriesResult(current gen)" -> ValidateStorageTriesResult(0L, Right(Seq.empty), 0L),
     "ValidateStorageTriesResult(stale gen)" -> ValidateStorageTriesResult(99L, Right(Seq.empty), 0L),
     "ValidationRetry(current gen)" -> ValidationRetry(0L),
     "ValidationRetry(stale gen)" -> ValidationRetry(99L),
-    "ScheduledTrieWalk" -> ScheduledTrieWalk,
     "PollHandshakedPeers" -> PollHandshakedPeers,
     "AccountRangeSyncComplete" -> AccountRangeSyncComplete,
     "StorageFileInfoReply" -> StorageFileInfoReply(scala.util.Failure(new RuntimeException("s0d table"))),
@@ -180,11 +177,8 @@ class SNAPSyncingDispatchTableSpec
       "HealingStagnated" -> handledOnlyIn("StateHealing"),
       "StateHealingAbandoned" -> handledOnlyIn("StateHealing"),
       "HealingRootUnservable" -> handledOnlyIn("StateHealing"),
-      "TrieWalkBatch" -> handledOnlyIn("StateHealing"),
-      "TrieWalkComplete" -> handledOnlyIn("StateHealing"),
-      "TrieWalkResult" -> handledOnlyIn("StateHealing"),
-      "ScheduledTrieWalk" -> handledOnlyIn("StateHealing"),
-      "TrieWalkFailed" -> handledOnlyIn("StateHealing"),
+      "ValidationMissingNodes" -> handledOnlyIn("StateHealing"),
+      "ValidationRewalkFailed" -> handledOnlyIn("StateHealing"),
       // Current-generation validation results are guarded on currentPhase == StateValidation (stale ones are dropped
       // by an unguarded arm first, in every phase). Generation 0 is current in every phase.
       "ValidateAccountTrieResult(current gen)" -> handledOnlyIn("StateValidation"),
