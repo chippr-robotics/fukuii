@@ -5520,36 +5520,64 @@
 <h1 id="con-014-snap-healing-completes-on-nothing-outstanding-for-the-current-root-with-no-full-trie-walk-where-the-invariant-marker-stands">CON-014: SNAP healing completes on "nothing outstanding for the current root", with no full-trie walk where the invariant marker stands<a class="headerlink" href="#con-014-snap-healing-completes-on-nothing-outstanding-for-the-current-root-with-no-full-trie-walk-where-the-invariant-marker-stands" title="Permanent link">&para;</a></h1>
 <p><strong>Status</strong>: Accepted</p>
 <p><strong>Date</strong>: 2026-11-02</p>
-<p><strong>Spec</strong>: <code>specs/022-snap-heal-convergence/</code> (FR-001 to FR-015, FR-020)</p>
-<p><strong>Supersedes</strong>: [[CON-012]] (its byte-for-byte completion-parity invariant), [[CON-011]] (subtree completeness as a verification pass)</p>
-<p><strong>Related</strong>: [[CON-009]] (healing completeness marker), [[CON-010]] (decoupled heal serve-root), issue #1671, release 0.11.0 (#1659); PRs #1682, #1684, #1685, #1688, #1690, #1691, #1693, #1695</p>
+<p><strong>Spec</strong>: <code>specs/022-snap-heal-convergence/</code> (FR-001 to FR-015, FR-020; <code>data-model.md</code> "Invariant marker")</p>
+<p><strong>Supersedes</strong>: [[CON-012]] where the marker stands (its byte-for-byte completion-parity invariant), [[CON-011]] (subtree completeness as a verification pass), [[CON-009]] (the CF <code>g</code> completeness marker, retired). <strong>Amends</strong> [[CON-010]]: the decoupled serve-root stays, but completion is no longer judged by the walk alone.</p>
+<p><strong>Related</strong>: issue #1671, release 0.11.0 (#1659); PRs #1682, #1684, #1685, #1688, #1690, #1691, #1693, #1695, #1697</p>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>Before spec 022, a node on disk did not mean the subtree under it was complete. Healing persisted a parent before its children, Path could leave deeper nodes under a shorter one, and abandoned storage could sit under an account that looked whole (research R-2). So completion rested on a full-trie verification walk that found nothing missing, and CON-012 kept that decision byte-for-byte equal to the two-walk sequence it shortened.</p>
-<p>On a live chain that walk does not finish. A walk over Sepolia's state takes about 17 hours, peers serve only the last 128 blocks or so (about 25 minutes), so the pivot re-pegs many times within one walk, and a walk that a re-peg overtakes is discarded and started again. The walk was the bottleneck the specs before 022 kept trimming (003 scoped it, 005 pruned it, 006 skipped the second one), never removed, because nothing else could say the trie was complete.</p>
+<p>Before spec 022, a node on disk did not mean the subtree under it was complete. Three things broke it:
+- Healing persisted a parent before its children (research R-2).
+- On Path, deeper nodes could be left under a shorter one (FR-008).
+- Abandoned storage could sit under an account that looked whole (FR-005).</p>
+<p>So completion rested on a full-trie verification walk that found nothing missing. CON-012 kept that decision byte-for-byte equal to the two-walk sequence it shortened.</p>
+<p>On a live chain that walk does not finish. A walk over Sepolia's state took about 17 hours (787M nodes). The pivot moves about every 12 minutes to stay inside what peers serve, and a walk a re-peg overtakes is discarded. Specs 003, 005 and 006 each made the walk cheaper: 003 scoped it, 005 pruned it, 006 skipped the second one. None removed it, because nothing else could say the trie was complete.</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Present means complete.</strong> Healing persists a node only when every child it references is on disk with a matching hash, or in the same atomic write. Parents waiting on children are held in a bounded set in memory; reaching the bound pauses requests and never forces an early write. A crash cannot leave a persisted node over an absent child (FR-001 to FR-004, slice 2). Accounts whose storage or code is incomplete are recorded durably and reached by healing (FR-005, FR-006, slice 3).</li>
+<li><strong>Present means complete, where a healing write is a RocksDB batch.</strong> Under <code>pruning.mode = archive</code> and <code>basic</code>:</li>
+<li>Healing persists a node only when every child it references is on disk with a matching hash, or in the same atomic write.</li>
+<li>Parents waiting on children are held in a bounded set in memory. Reaching the bound pauses requests; it never forces an early write.</li>
+<li>A crash cannot leave a persisted node over an absent child (FR-001 to FR-004, slice 2).</li>
+<li>Accounts whose storage or code is incomplete are recorded durably and reached by healing (FR-005, FR-006, slice 3).</li>
 <li><strong>The rule.</strong> Healing completes when nothing is pending, in flight or held for the current pivot root, the excluded-account set is clear, and the current root is present or has been fetched. The rule is the same on both schemes (FR-011).</li>
-<li><strong>No walk as a precondition where the invariant marker stands.</strong> The datadir records that its state was healed under the invariant, and the record is read at the decision. Where it stands, completion takes no full-trie walk, and the stale-discard rule and its fallback limit go with it (FR-012, slice 5d). Measured on Mordor (T057): healing start to hand-off fell from 151 s with 4 walks (pre-spec-022 jar) to 0.3 s with none.</li>
-<li><strong>Where it does not stand, the walk stays as the repair.</strong> Five cases keep it: a datadir from before the invariant, a run that lost track of what it held, a fresh Path account phase over existing nodes, <code>pruning.mode = inmemory</code> (healed nodes reach disk only as the cache evicts them), and <code>deferred-merkleization = true</code>. There the walk is what fills holes, not a parity check (T050a, T051).</li>
-<li><strong>The walk moves behind the head.</strong> After hand-off a background audit walks the full trie at a 25% duty cycle, sends what it finds to on-demand repair under its own fetcher, and does not block import (FR-013, slice 5c). On-demand fetches during import and holes under <code>newPayload</code> are counted and logged (FR-014).</li>
-<li><strong>One completion route on both schemes.</strong> The Hash controller's separate trie walk is no longer a gate: Hash completes through <code>completeHealingWalkClean</code> like Path (T052).</li>
-<li><strong>FR-020: Hash stays for 0.11.0.</strong> Moving ETC's SNAP to Path today costs an extra export scan and 2-3× disk during sync, for identical import reads and pruning (research R-6). Retiring both the scheme split and the separate Path layer is spec 018 DC-9: ETC re-syncs from a checkpoint onto the unified layout in that release (user decision 2026-10-17). Re-evaluate only if Mordor shows the export cost is small and Hash seeding much larger than estimated.</li>
+<li><strong>No walk as a precondition where the invariant marker stands.</strong></li>
+<li>The marker (<code>snap.heal.invariant</code>, version 4) says everything present was written under the invariant. It does not say the state is complete. It is read at each decision.</li>
+<li>Where it stands, completion takes no full-trie walk. The stale-discard rule and its fallback limit are bypassed there, and kept where the walk stays (FR-012, slice 5d).</li>
+<li>On Mordor (T057, Hash), healing start to hand-off fell from 151 s with 4 walks (pre-spec-022 jar) to 0.3 s with none. That run healed one node. The one run with real healing behind a no-walk completion is P4 (Path, on a local jar with the ETC guard patched out): 160,333 nodes in 8 s across one re-peg. No Hash run yet shows the rule under load: T061a, T062 and T063 are open.</li>
+<li><strong>Where the marker does not stand, the walk stays as the repair.</strong> That is five cases:</li>
+<li>a datadir from before the invariant;</li>
+<li>a run that lost track of what it held;</li>
+<li>a fresh Path account phase over existing nodes;</li>
+<li><code>pruning.mode = inmemory</code> on the Hash scheme, where healed nodes reach disk only as the node cache evicts them;</li>
+<li><code>deferred-merkleization = true</code>.</li>
 </ol>
+<p>The walk fills the holes it finds. A walk over holes that outlasts a re-peg, as at Sepolia's scale, fills what it reached and hands off lazily and unmarked, declaring no completion (T050a).
+5. <strong>The walk moves behind the head.</strong> After hand-off a background audit walks the full trie at a 25% duty cycle. It sends holes to on-demand repair under its own fetcher and does not block import (FR-013, slice 5c). It is off under <code>inmemory</code>.
+   - A pass is not a recompute of the hand-off root (decision 11). Induction holds per root, and one pass spans many roots. It covers by position, resolving each against the current best root.
+   - On-demand fetches during import, and holes under <code>newPayload</code>, are counted and logged (FR-014). Such a hole is answered ACCEPTED, and import repairs it on reaching the block (#1697).
+6. <strong>One completion route on both schemes.</strong> The Hash controller's separate trie walk is no longer a gate. Hash completes through <code>completeHealingWalkClean</code>, as Path does (T052). That walk's code is removed in spec 022 slice 6.
+7. <strong>FR-020: Hash stays for 0.11.0.</strong> Moving ETC's SNAP to Path today costs an extra export scan and more disk during sync, for identical import reads and pruning (research R-6). Forge estimated 2-3× disk; that is not measured.
+   - Retiring the scheme split is spec 018 DC-9 (user decision 2026-10-17, confirmed 2026-10-28): ETC re-syncs from a checkpoint onto the unified layout in spec 018's first release. The Hash scheme goes at F4, and <code>storage-scheme</code> is deprecated at F7.
+   - R-6's condition to re-evaluate is that Mordor shows the export cost is small and Hash seeding is much larger than estimated. One half is measured: a Mordor Path export took 120.2 s for 5.54M nodes (T054). The other half is not. So the decision stands.</p>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>CON-012's parity invariant no longer holds, by design.</strong> Completion is no longer the outcome a clean walk would reach, byte for byte: it is reached without a walk, from the invariant. The marker CON-009 describes is still written on a clean completion, and finalisation removes it on any other.</li>
-<li><strong>What the invariant does not claim</strong> is listed in <code>data-model.md</code>: holes an older binary's healing left, and nodes an import wrote over holes. The background audit is what finds those, and its first clean pass is the recompute of the hand-off root by induction (decision 11, T054).</li>
-<li><strong><code>inmemory</code> and deferred merkleization keep a walk at every completion.</strong> Operators on those settings see healing times as before.</li>
-<li><strong>Upgrade cost, accepted:</strong> an unfinished datadir from a jar before marker version 4 is treated as pre-invariant once: one walk, the code scan owed, and an audit pass.</li>
-<li><strong>Not yet measured at scale.</strong> Sepolia's first sync under this rule is release gate T063; heavy re-pegging is unit-tested (T046) until then.</li>
+<li><strong>CON-012's parity no longer holds where the marker stands, by design.</strong> There, completion is reached without a walk, from the invariant. Where the walk stays, spec 006's single-walk completion still runs.</li>
+<li><strong>The marker is stamped only in two places:</strong></li>
+<li>at a SNAP start on an empty datadir;</li>
+<li>at a completion whose root a clean full walk of the coordinator's covered.</li>
 </ul>
+<p>A completion with no walk keeps the marker as it found it and stamps nothing. Finalisation removes it with no clean decision behind the root, which includes every lazy hand-off.
+- <strong>What the invariant does not claim</strong> is listed in <code>data-model.md</code>. The parts that matter most for ETC:
+  - Code is never walked. Missing code is found by the audit, by the recovery scan, or at import.
+  - On Hash, the walk proves presence and decoding, not <code>keccak(bytes) = key</code>. The audit checks the hash.
+  - Holes an older binary's healing left, and nodes an import wrote over holes, are found when a root reaches them.
+- <strong><code>inmemory</code> on Hash keeps a walk at every completion, with no audit after it.</strong> At scale, a walk over holes there ends in a lazy hand-off, as before. Deferred merkleization also keeps the walk.
+- <strong>Upgrade cost, accepted:</strong> an unfinished datadir from a jar before marker version 4 is treated as pre-invariant once. It costs one walk, the code scan owed, and an audit pass.
+- <strong>Not yet measured where it matters.</strong> T061a (the excluded path, live) and T062 (Mordor on public peers) are open, and T063 is Sepolia's first sync under this rule. Heavy re-pegging is unit-tested (T046) until then. Forge would weigh a Mordor Hash soak before an ETC rotation, since on-demand repair is thinnest there (research R-5g).</p>
 <h2 id="alternatives-rejected">Alternatives rejected<a class="headerlink" href="#alternatives-rejected" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Keep a walk and make it faster (specs 003, 005, 006).</strong> Each removed a constant factor; none fits inside a re-peg on Sepolia.</li>
-<li><strong>Remove the walk everywhere (FR-012's first wording).</strong> In the five cases above the marker's claim is not true and nothing else repairs; removing the walk there would let a hole be declared complete.</li>
-<li><strong>Recompute the root at hand-off.</strong> By induction that is the audit's first clean pass; doing it at hand-off puts back the gate this decision removes (decision 11).</li>
-<li><strong>A hard stop when a run loses track of what it held.</strong> A node that stops cannot be helped by the audit; withdrawing the marker keeps it running and lets the walk and the audit cover the loss (research R-5e).</li>
+<li><strong>Keep a walk and make it faster</strong> (specs 003, 005, 006). Each removed a constant factor, and none fits inside a re-peg on Sepolia.</li>
+<li><strong>Remove the walk everywhere</strong> (FR-012's first wording). In the five cases above the marker's claim is not true, and nothing else repairs. Removing the walk there would let a hole be declared complete.</li>
+<li><strong>Recompute the root at hand-off.</strong> That puts back the gate this decision removes (decision 11). The hand-off takes a stratified sample instead (T054).</li>
+<li><strong>A hard stop when a run loses track of what it held.</strong> A node that stops cannot be helped by the audit. Withdrawing the marker keeps the node running, and lets the walk and the audit cover the loss (research R-5e).</li>
 </ul>
 
 

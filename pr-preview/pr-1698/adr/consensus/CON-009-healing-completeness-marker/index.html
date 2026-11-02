@@ -5529,7 +5529,7 @@
 
 
 <h1 id="con-009-post-snap-healing-completeness-marker-setclear-semantics">CON-009: Post-SNAP healing completeness marker — set/clear semantics<a class="headerlink" href="#con-009-post-snap-healing-completeness-marker-setclear-semantics" title="Permanent link">&para;</a></h1>
-<p><strong>Status</strong>: Accepted</p>
+<p><strong>Status</strong>: Superseded by [[CON-014]] (2026-11-02). The CF <code>g</code> completeness marker is retired: CF <code>g</code> is cleared once and nothing writes to it (spec 022 T040, T044). The marker that stays, <code>snap.heal.invariant</code>, says everything present was written under the invariant, not that the state is complete.</p>
 <p><strong>Date</strong>: 2026-06-13</p>
 <p><strong>Spec</strong>: <code>specs/002-bfs-heal-performance/</code> (User Story 1)</p>
 <p><strong>Related</strong>: PR #1335 (skip the rebuild walk on restart when complete), [[CON-008]] (checkpoint distribution)</p>

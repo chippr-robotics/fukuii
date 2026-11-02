@@ -5518,7 +5518,7 @@
 
 
 <h1 id="con-015-sync-direction-converging-healing-first-then-flat-execution-reads-then-state-snapshots-execute-from-genesis-only-for-etc">CON-015: Sync direction: converging healing first, then flat execution reads, then state snapshots; execute-from-genesis only for ETC<a class="headerlink" href="#con-015-sync-direction-converging-healing-first-then-flat-execution-reads-then-state-snapshots-execute-from-genesis-only-for-etc" title="Permanent link">&para;</a></h1>
-<p><strong>Status</strong>: Accepted (the direction in spec 022's plan, research R-8)</p>
+<p><strong>Status</strong>: Accepted (the direction recorded in spec 022's research R-8 and task T061)</p>
 <p><strong>Date</strong>: 2026-11-02</p>
 <p><strong>Spec</strong>: <code>specs/022-snap-heal-convergence/</code> (research R-8); <code>specs/018-storage-engine-consolidation/</code> (F6, F7); <code>specs/013-state-snapshots/</code> (Phase 0)</p>
 <p><strong>Related</strong>: [[CON-014]] (heal completion without a walk), [[CON-002]] (bootstrap checkpoints), [[CON-008]] (checkpoint distribution server), issue #1671</p>
@@ -5552,9 +5552,10 @@
 </tr>
 </tbody>
 </table>
-<p>Measured on Mordor, SNAP from scratch:
-- <strong>2026-10-28, before spec 022:</strong> 25.6 minutes. Accounts took 8 min, storage 8 min and bytecode 3.5 min. Healing then ran three full-trie walks of 4.78M nodes (48 s, 50 s and 96 s), and the hand-off came about 2.5 min after them.
-- <strong>After spec 022 slice 5d (S14, 2026-11-01):</strong> 4 min 47 s in total, with healing at 0.3 s and no walk. The bytecode phase against the one local peer varies by more than the walk costs on a trie this small. The gain the walk's removal is for is at Sepolia's scale, measured by release gate T063.</p>
+<p>Measured on Mordor, SNAP from scratch, on 2026-10-28 before spec 022: 25.6 minutes.
+- Accounts took 8 min, storage 8 min and bytecode 3.5 min.
+- Healing then ran three full-trie walks of 4.78M nodes (48 s, 50 s and 96 s), and the hand-off came about 2.5 min after them.</p>
+<p>After spec 022 slice 5d, the S14 run healed in 0.3 s with no walk, against 151 s with four walks on the pre-spec-022 jar. Its total, 4 min 47 s, is not comparable with the 25.6 minutes: host conditions and other changes differ, and a slice-2 run took 28.9 min. Total time did not improve from the walk's removal on a trie this small (S13 on 5c took 4 min 34 s), because the bytecode phase against the one local peer varies by more than the walk costs. The gain the walk's removal is for is at Sepolia's scale, measured by release gate T063.</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Spec 022 (#1671) first:</strong> healing that converges on a live chain (CON-014). Without it, SNAP on Sepolia did not reliably finish, and no other direction helps a node that cannot complete a sync.</li>
@@ -5566,7 +5567,7 @@
 <ul>
 <li><strong>No execute-from-genesis work before spec 018 F6.</strong> The figures above are a model. The first measurement comes with flat reads, on Mordor.</li>
 <li><strong>SNAP stays the default everywhere.</strong> Spec 022's background audit and on-demand repair cover what a converged SNAP leaves behind.</li>
-<li><strong>ETC's thin snap-serving peer set stays the main ETC risk until then.</strong> Forge would weigh a Mordor Hash soak before an ETC rotation (research R-5g).</li>
+<li><strong>On-demand repair is thinnest on ETC,</strong> which has few snap-serving peers, until then. Forge would weigh a Mordor Hash soak before an ETC rotation (research R-5g).</li>
 <li><strong>Hash stays for ETC through 0.11.0</strong>, and ETC moves onto spec 018's unified layout from a checkpoint (CON-014 decision 7, spec 018 DC-9).</li>
 </ul>
 <h2 id="alternatives-rejected">Alternatives rejected<a class="headerlink" href="#alternatives-rejected" title="Permanent link">&para;</a></h2>
