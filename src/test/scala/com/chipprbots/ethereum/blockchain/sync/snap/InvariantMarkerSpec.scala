@@ -1396,7 +1396,6 @@ class InvariantMarkerControllerSpec
           log.contains("rebuilding frontier") shouldBe false
           log.contains("[HEAL-VERIFY]") shouldBe false
         }
-        withClue("no controller walk: ")(log.contains("Starting trie walk") shouldBe false)
       }
     }
     appState.isSnapSyncDone() shouldBe true

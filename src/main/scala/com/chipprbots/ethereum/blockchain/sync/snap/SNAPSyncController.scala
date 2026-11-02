@@ -362,9 +362,8 @@ private class SNAPSyncControllerImpl(
   var validationInProgress: Boolean = false
   var validationGeneration: Long = 0L
 
-  // #1188: when the round-2 healing trie walk returns 0 missing, the entire
-  // account+storage trie has just been DFS-walked end-to-end. Capture the root
-  // it was clean against so `validateState()` can short-circuit the redundant
+  // #1188: when healing completes on a root (the coordinator's decision, spec 022
+  // T052), capture that root so `validateState()` can short-circuit the redundant
   // `validateAccountTrie + validateAllStorageTries` passes (which together can
   // exceed the time of the SNAP download itself on populated states).
   // Belt-and-suspenders: only honoured when the captured root *equals* the
@@ -862,7 +861,7 @@ private class SNAPSyncControllerImpl(
     * spec 022 T052: the same exit on both schemes, and no controller walk. The Hash controller's walk stops at present
     * hash nodes, so it never proved what the coordinator's gate has decided by now; Path's would read a store Path
     * never populates. Under `pruning.mode = inmemory` the gate has walked, since the marker cannot hold there. The
-    * walk's arms stay, with nothing to start them: dead wiring is slice 6's.
+    * controller's walk itself is gone (spec 022 slice 6).
     *
     * The coordinator says which root it decided on before the signal, and a re-peg can pass between that and this. So a
     * signal for any other root says nothing about this one: it is ignored, and the coordinator, which has the re-peg by

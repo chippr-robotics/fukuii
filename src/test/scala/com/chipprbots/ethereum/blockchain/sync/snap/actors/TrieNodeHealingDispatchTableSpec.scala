@@ -221,3 +221,12 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
         withClue(end(Walk))(h.impl.verificationBFSRunning shouldBe false)
       }
     }
+
+  // spec 022 slice 6b (forge, beacon): nodes found missing outside the coordinator (validation's re-walk) take back a clean
+  // pass, so the gate walks again before it decides instead of completing on that pass once they are healed.
+  it should "forget an earlier clean pass when nodes are queued as missing" taggedAs UnitTest in {
+    val h = harness()
+    h.impl.verificationPassComplete = true
+    h.kit.run(QueueMissingNodes(Seq(Seq(EmptyPath) -> Root)))
+    h.impl.verificationPassComplete shouldBe false
+  }

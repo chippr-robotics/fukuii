@@ -531,7 +531,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
       h.module.rangeDeletesAt.head should be > anchor
     }
 
-  it should "drop the dormant entries after the anchor at the clean completion, on both schemes" taggedAs UnitTest in {
+  it should "drop the dormant entries after the anchor at the clean completion" taggedAs UnitTest in {
     droppedAfterTheAnchor(_.completeHealingWalkClean())
   }
 
@@ -573,7 +573,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
   }
 
   // spec 022 slice 6: validation's re-walk feeds the coordinator, not a controller walk, and completion keeps its one route.
-  it should "queue what validation's re-walk found for the coordinator and have it decide again, with no walk scheduled" taggedAs UnitTest in {
+  it should "queue what validation's re-walk found for the coordinator and have it decide again, with no controller walk" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
     h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
@@ -591,7 +591,9 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.healingDecidedRoot.get() shouldBe null
     h.module.currentPhase shouldBe SyncPhase.StateHealing
     h.module.validations shouldBe 0
-    scheduledTimers(h.effects()) shouldBe empty
+    withClue("the peer tick the completion cancelled comes back, and no walk is scheduled: ") {
+      scheduledTimers(h.effects()) shouldBe Seq((RequestTrieNodeHealing, RequestTrieNodeHealing, 1.second))
+    }
   }
 
   it should "have healing decide again when validation's re-walk finds nothing or fails" taggedAs UnitTest in {
@@ -607,7 +609,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
 
         coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
         h.module.validations shouldBe 0
-        scheduledTimers(h.effects()) shouldBe empty
+        scheduledTimers(h.effects()) shouldBe Seq((RequestTrieNodeHealing, RequestTrieNodeHealing, 1.second))
       }
     }
   }

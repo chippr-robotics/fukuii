@@ -205,17 +205,27 @@ private[snap] trait HealingOrchestrator
     // Validation's re-walk with paths (`triggerHealingForMissingNodes`). What it found goes to the coordinator, which
     // fetches it and decides again, so completion takes its one route, `StateHealingComplete` (spec 022 T052). The
     // Hash controller's own trie walk, which these results used to feed, is gone (spec 022 slice 6).
+    // The peer tick, which the completion cancelled, comes back: the coordinator has work again (beacon).
     case ValidationMissingNodes(missingNodes) =>
-      if missingNodes.nonEmpty then
-        ctx.log.info(s"Validation's re-walk found ${missingNodes.size} missing nodes: queuing them for healing")
-        trieNodeHealingCoordinator.foreach(_ ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes))
-      else ctx.log.info("Validation's re-walk found nothing missing: healing decides again")
+      if missingNodes.isEmpty then ctx.log.info("Validation's re-walk found nothing missing: healing decides again")
+      else
+        trieNodeHealingCoordinator match
+          case Some(coordinator) =>
+            ctx.log.info(s"Validation's re-walk found ${missingNodes.size} missing nodes: queuing them for healing")
+            coordinator ! actors.TrieNodeHealingCoordinator.QueueMissingNodes(missingNodes)
+          case None =>
+            ctx.log.info(
+              s"Validation's re-walk found ${missingNodes.size} missing nodes, and no coordinator is running: a new " +
+                "one walks the root, the marker being gone"
+            )
       reopenHealing()
+      startHealingRequestScheduler()
       Behaviors.same
 
     case ValidationRewalkFailed(error) =>
       ctx.log.error(s"Validation's re-walk failed: $error. Healing decides again")
       reopenHealing()
+      startHealingRequestScheduler()
       Behaviors.same
   }
 
@@ -560,9 +570,11 @@ private[snap] trait HealingOrchestrator
       }
 
   /** Validation found missing nodes. The hashes it passes have no paths, so the trie is walked again with paths for
-    * `GetTrieNodes`, and what that finds goes to the coordinator (`ValidationMissingNodes`). Not reachable today, since
-    * every route into `validateState` sets `healingValidatedRoot` first (research.md, "Reopening healing"); kept so a
-    * later wiring cannot leave a decision standing over a state validation turned down.
+    * `GetTrieNodes`, and what that finds goes to the coordinator (`ValidationMissingNodes`), which forgets any earlier
+    * clean pass and walks again before it decides. Not reachable today, since every route into `validateState` sets
+    * `healingValidatedRoot` first (research.md, "Reopening healing"); kept so a later wiring cannot leave a decision
+    * standing over a state validation turned down. On Path the walk reads the hash store, which Path does not fill
+    * before the publish, so a finding there means only that: the coordinator's own walk is what decides.
     */
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit =
     ctx.log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")

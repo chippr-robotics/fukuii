@@ -1062,7 +1062,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // healRequests / activeRequests, below). If a future edit makes a re-peg drop trie nodes
         // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
         // fault).
-        pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
+        pendingTasks.clear() // Will be re-populated by root reseed + inline discovery
         // spec 022 FR-007/FR-010: every request (and Path alias) of the old root goes; discovery from the new root finds
         // each position that still needs a node again, each as its own request.
         healRequests.clear()
@@ -1444,6 +1444,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   /** Missing-node intake and peer responses (C-H5 `HealResponseProcessing`). Arms #5, #13, #15 (research.md R4c). */
   private[actors] lazy val healResponseArms: PartialFunction[Command, Behavior[Command]] = {
     case QueueMissingNodes(nodes) =>
+      // Nodes found missing outside this coordinator (validation's re-walk, today): no earlier clean pass vouches for
+      // this root any more, so the gate walks again before it decides, rather than completing on that pass once these
+      // are healed (forge, beacon: spec 022 slice 6b).
+      verificationPassComplete = false
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
