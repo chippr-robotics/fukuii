@@ -230,43 +230,9 @@ class StateValidator(mptStorage: MptStorage):
       case e: Exception =>
         Left(s"Trie walk failed: ${e.getMessage}")
 
-  /** Streaming variant: calls onBatch whenever batchSize missing nodes are found. Allows the healing coordinator to
-    * start working before the full walk completes — critical for mainnet-scale tries where the full walk can take
-    * hours. Returns total missing nodes found, or Left on fatal error.
-    */
-  def findMissingNodesStreaming(
-      stateRoot: ByteString,
-      batchSize: Int,
-      onBatch: Seq[(Seq[ByteString], ByteString)] => Unit
-  ): Either[String, Int] =
-    val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
-    var totalSent = 0
-
-    val flushIfFull: () => Unit = () =>
-      if result.size >= batchSize then
-        onBatch(result.toSeq)
-        totalSent += result.size
-        result.clear()
-
-    try
-      val rootNode = mptStorage.get(stateRoot.toArray)
-      walkAccountTrieDFS(rootNode, result, flushIfFull)
-      if result.nonEmpty then
-        onBatch(result.toSeq)
-        totalSent += result.size
-      Right(totalSent)
-    catch
-      case _: MerklePatriciaTrie.MissingNodeException =>
-        val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        onBatch(Seq((Seq(compactPath), stateRoot)))
-        Right(totalSent + 1)
-      case e: Exception =>
-        Left(s"Trie walk failed: ${e.getMessage}")
-
   private def walkAccountTrieDFS(
       rootNode: MptNode,
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      flushIfFull: () => Unit = () => ()
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
   ): Unit =
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
@@ -301,12 +267,11 @@ class StateValidator(mptStorage: MptStorage):
               try
                 val storageRoot = mptStorage.get(account.storageRoot.toArray)
                 // Each storage trie gets its own DFS + visited set (independent walk)
-                walkStorageTrieDFS(storageRoot, ByteString(accountHashBytes), result, flushIfFull)
+                walkStorageTrieDFS(storageRoot, ByteString(accountHashBytes), result)
               catch
                 case _: MerklePatriciaTrie.MissingNodeException =>
                   val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                   result += ((Seq(ByteString(accountHashBytes), compactPath), account.storageRoot.value))
-                  flushIfFull()
           catch
             case e: Exception =>
               // A leaf that fails to decode as an Account means its storage trie is omitted
@@ -337,13 +302,11 @@ class StateValidator(mptStorage: MptStorage):
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(compactPath), ByteString(hash.hash)))
-                flushIfFull()
 
   private def walkStorageTrieDFS(
       rootNode: MptNode,
       accountHash: ByteString,
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      flushIfFull: () => Unit
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
   ): Unit =
     val stack = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()
@@ -379,4 +342,3 @@ class StateValidator(mptStorage: MptStorage):
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
-                flushIfFull()

@@ -537,7 +537,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     h.module.trieNodesCachedInMemory = true
     h.ready()
     h.module.healingCleanWalkRoot.set(root)
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     h.module.validations shouldBe 1
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
@@ -629,12 +629,12 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       action = () => f(module)
       kit.run(PollHandshakedPeers)
 
-  "The healing orchestrator" should "stamp a datadir with no marker once the coordinator's clean full walk of this root is what the controller's clean walk completes on (Hash, T039)" taggedAs UnitTest in {
+  "The healing orchestrator" should "stamp a datadir with no marker at the completion once the coordinator's clean full walk covered this root (Hash, T039)" taggedAs UnitTest in {
     val h = new Harness()
     h.ready()
     h.module.healingCleanWalkRoot.set(root)
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe true
   }
 
@@ -651,16 +651,16 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     h.ready()
     h.module.appStateStorage.beginCheckpointImport(otherRoot, 1L).commit()
     h.module.healingCleanWalkRoot.set(root)
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe true
     h.module.appStateStorage.getCheckpointImportInProgress() shouldBe None
   }
 
-  it should "not stamp on the controller's trie walk alone: it stops at present hash nodes, so it is no repair pass" taggedAs UnitTest in {
+  it should "not stamp at a completion that no clean full walk of this root stands behind" taggedAs UnitTest in {
     val h = new Harness()
     h.ready()
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
-    withClue("healing completes as it does today: ")(h.module.validations shouldBe 1)
+    h.call(_.completeHealingWalkClean())
+    withClue("healing completes: ")(h.module.validations shouldBe 1)
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
 
@@ -668,7 +668,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val h = new Harness()
     h.ready()
     h.module.healingCleanWalkRoot.set(otherRoot)
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
 
@@ -676,18 +676,19 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val h = new Harness()
     h.ready()
     h.module.healingCleanWalkRoot.set(root)
-    h.call(_.stateHealingArms(TrieWalkComplete(3)))
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.stateHealingArms(ValidationMissingNodes(Seq(Seq(root) -> root))))
+    h.call(_.completeHealingWalkClean())
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
 
-  it should "not stamp after validation found something missing: that route's walk completes on nothing more" taggedAs UnitTest in {
+  it should "not stamp after validation found something missing, even when its re-walk then finds nothing" taggedAs UnitTest in {
     val h = new Harness()
     h.ready()
     h.module.healingCleanWalkRoot.set(root)
     h.call(_.triggerHealingForMissingNodes(Seq(root)))
     h.module.healingCleanWalkRoot.get() shouldBe null
-    h.call(_.stateHealingArms(TrieWalkResult(Seq.empty)))
+    h.call(_.stateHealingArms(ValidationMissingNodes(Seq.empty)))
+    h.call(_.completeHealingWalkClean())
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
 
@@ -751,10 +752,10 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val h = new Harness()
     h.ready()
     h.module.healingDecidedRoot.set(root)
-    h.call(_.stateHealingArms(TrieWalkComplete(3)))
+    h.call(_.stateHealingArms(ValidationMissingNodes(Seq(Seq(root) -> root))))
     h.module.healingDecidedRoot.get() shouldBe null
     h.module.healingDecidedRoot.set(root)
-    h.call(_.stateHealingArms(TrieWalkResult(Seq(Seq(root) -> root))))
+    h.call(_.stateHealingArms(ValidationRewalkFailed("walk failed")))
     h.module.healingDecidedRoot.get() shouldBe null
     h.module.healingDecidedRoot.set(root)
     h.call(_.triggerHealingForMissingNodes(Seq(root)))
@@ -766,7 +767,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     h.ready()
     h.module.healingCleanWalkRoot.set(root)
     h.module.syncedWrites.clear()
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     val marker = key(Keys.SnapHealInvariant)
     val writes = h.module.syncedWrites.toSeq
     val stamp = writes.indexWhere(_._2.contains(marker))
@@ -784,7 +785,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     h.module.healingCleanWalkRoot.set(root)
     // A store that fails only on the marker's key: the anchors go through.
     h.module.failSyncedWritesOf = Some(Keys.SnapHealInvariant)
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
     h.module.validations shouldBe 1
     h.module.appStateStorage.hasSnapHealInvariant() shouldBe false
   }
@@ -1395,7 +1396,6 @@ class InvariantMarkerControllerSpec
           log.contains("rebuilding frontier") shouldBe false
           log.contains("[HEAL-VERIFY]") shouldBe false
         }
-        withClue("no controller walk: ")(log.contains("Starting trie walk") shouldBe false)
       }
     }
     appState.isSnapSyncDone() shouldBe true

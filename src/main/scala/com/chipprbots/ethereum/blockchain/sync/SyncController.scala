@@ -2649,51 +2649,6 @@ object SyncController:
         bestBlockNum
       )
 
-    def startRegularSyncForBootstrap(): TypedActorRef[RegularSync.Command] =
-      log.info("Starting regular sync for SNAP sync bootstrap")
-
-      // Version the child names so a re-invocation does not collide with a prior
-      // instance whose context.stop has not yet completed (InvalidActorNameException).
-      bootstrapGeneration += 1
-      val gen = bootstrapGeneration
-
-      val peersClient =
-        ctx.spawn(
-          Behaviors
-            .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
-            .onFailure[Throwable](
-              // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
-              SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
-            ),
-          s"peers-client-bootstrap-$gen"
-        )
-      val regularSync = ctx
-        .spawn(
-          RegularSync.apply(
-            peersClient,
-            networkPeerManager,
-            peerEventBus,
-            consensus,
-            blockchain,
-            blockchainReader,
-            blockchainWriter,
-            stateStorage,
-            evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
-            validators.blockValidator,
-            blacklist,
-            syncConfig,
-            ommersPool,
-            pendingTransactionsManager,
-            blockTopic,
-            configBuilder,
-            ctx.self,
-            reorgState
-          ),
-          s"regular-sync-bootstrap-$gen"
-        )
-      regularSync ! SyncProtocol.Start
-      regularSync
   // scalastyle:on number.of.methods
 
   /** Pick the block to roll the recovery storage download onto: `margin` blocks back from the highest known

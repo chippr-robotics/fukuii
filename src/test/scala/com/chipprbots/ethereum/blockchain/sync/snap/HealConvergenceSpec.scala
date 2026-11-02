@@ -366,10 +366,7 @@ class HealConvergenceControllerSpec
         snap ! StateHealingComplete
         log.awaitLine("healing complete (no controller walk)")
         f.awaitProcessed(snap)
-        withClue("no trie walk starts, and no second coordinator: ") {
-          log.contains("Starting trie walk") shouldBe false
-          f.factories.healingSpawns.get() shouldBe 1
-        }
+        withClue("no second coordinator: ")(f.factories.healingSpawns.get() shouldBe 1)
       }
       f.appStateStorage.getSnapSyncStateRoot() shouldBe Some(Root)
     }

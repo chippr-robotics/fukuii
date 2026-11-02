@@ -15,13 +15,12 @@ import com.chipprbots.ethereum.mpt.MptNode
   * arms (`healVerificationArms`, the completion gate) and the code C-H4 and C-H5 will move touch them too, or rule (d)
   * keeps them in the core, so the Impl keeps them as fields. `reverifyCurrentRoot` clears `verificationPassComplete`
   * (the walk launcher it calls sets `verificationBFSRunning`, and only when the walk starts: spec 022 review hunter
-  * W1); they read the walk root `stateRoot` and the completion gate's `flushing` and `trieWalkInProgress`.
+  * W1); they read the walk root `stateRoot` and the completion gate's `flushing`.
   */
 private[actors] trait HealVerificationState:
   var stateRoot: ByteString
   var verificationBFSRunning: Boolean
   var verificationPassComplete: Boolean
-  var trieWalkInProgress: Boolean
   def flushing: Boolean
   def markerStands(): Boolean
 
@@ -70,7 +69,7 @@ private[actors] trait HealVerification extends PathVerifiedReadApi with PathVeri
     */
   def reverifyCurrentRoot(): Unit =
     verificationPassComplete = false
-    if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning && !markerStands() then
+    if isComplete && !flushing && !verificationBFSRunning && !markerStands() then
       startVerificationBFS(
         stateRoot,
         ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))

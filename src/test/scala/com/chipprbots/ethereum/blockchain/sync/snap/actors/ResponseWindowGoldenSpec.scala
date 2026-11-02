@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.StubAccountPe
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.StoragePeerDispatch
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.StubStoragePeerDispatchState
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -194,7 +195,8 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
   /** A storage whose raw-node flush fails, so nothing a test serves reaches the store. (It used to be what kept the
     * completion gate shut: a failed flush left `flushing` set. Since spec 022 T026 a failed flush ends, and since slice
-    * 2 an undecodable blob is never buffered, so `Healing` shuts the gate with `WalkStateChanged(true)` instead.)
+    * 2 an undecodable blob is never buffered. `Healing` gives it a childless root instead, so the gate's walk asks for
+    * nothing.)
     */
   final private class FlushFailsStorage extends TestMptStorage:
     override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
@@ -364,21 +366,23 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     private val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     private val peerProbe = testKit.createTestProbe[NetworkPeerManagerActor.SendMessageCmd]()
     val healer: Peer = PeerTestHelpers.createTestPeer(peerName, peerProbe.ref.toClassic)
-    private val stateRoot = kec256(ByteString(s"response-window-golden-$peerName"))
+    // A present, childless root: when the completion gate opens between the test's requests, its walk reads this leaf
+    // and finds nothing, so no request of its own enters the window under test. (The Hash controller's trie walk used to
+    // hold the gate shut here; spec 022 slice 6 removed it. An absent root would be fetched.)
+    private val storage = new FlushFailsStorage()
+    private val rootLeaf = LeafNode(ByteString(1), ByteString(1))
+    storage.putNode(rootLeaf)
+    private val stateRoot = ByteString(rootLeaf.hash)
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = stateRoot,
       networkPeerManager = network.ref,
       requestTracker = tracker,
-      mptStorage = new FlushFailsStorage(),
+      mptStorage = storage,
       batchSize = 1,
       snapSyncController = controller.ref
     )
     // Not needed for dispatch (the root is passed to the constructor); kept as the entry the other healing specs use.
     coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(stateRoot)
-    // The controller's trie walk is running: the completion gate stays shut, so no verification walk of the (absent)
-    // root sends further GetTrieNodes into the window under test. Since spec 022 slice 2 a served node that does not
-    // decode (the test blobs) is never buffered, so the failing flush below no longer keeps the gate shut on its own.
-    coordinator ! TrieNodeHealingCoordinator.WalkStateChanged(true)
     coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(healer)
 
     /** Queue the given contents as missing nodes, each at its own path; the hash is the content's keccak. */

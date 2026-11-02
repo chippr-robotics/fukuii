@@ -362,9 +362,8 @@ private class SNAPSyncControllerImpl(
   var validationInProgress: Boolean = false
   var validationGeneration: Long = 0L
 
-  // #1188: when the round-2 healing trie walk returns 0 missing, the entire
-  // account+storage trie has just been DFS-walked end-to-end. Capture the root
-  // it was clean against so `validateState()` can short-circuit the redundant
+  // #1188: when healing completes on a root (the coordinator's decision, spec 022
+  // T052), capture that root so `validateState()` can short-circuit the redundant
   // `validateAccountTrie + validateAllStorageTries` passes (which together can
   // exceed the time of the SNAP download itself on populated states).
   // Belt-and-suspenders: only honoured when the captured root *equals* the
@@ -426,7 +425,6 @@ private class SNAPSyncControllerImpl(
   var pendingPivotRefresh: Option[(BigInt, String)] = None
 
   var storageStagnationRefreshAttempted: Boolean = false
-  var trieWalkInProgress: Boolean = false
   // spec 004 (Decoupled Heal Serve-Root) T011: serve-root refresh bookkeeping. The healing coordinator fetches
   // missing nodes against an advancing SERVE root while its completeness walk stays pinned to the walk root. We
   // ask the parent for a newest-servable root (networkBest − RecentRootMarginBlocks) on the healing tick when the
@@ -679,11 +677,11 @@ private class SNAPSyncControllerImpl(
         case RequestTrieNodeHealing         => Behaviors.same
         case EnsureSnapServerPeersConnected => Behaviors.same
 
-        // ── Stale trie-walk results ───────────────────────────────────────────────────
-        case _: TrieWalkResult   => ctx.log.debug("Dropping stale TrieWalkResult in idle"); Behaviors.same
-        case _: TrieWalkBatch    => ctx.log.debug("Dropping stale TrieWalkBatch in idle"); Behaviors.same
-        case _: TrieWalkComplete => ctx.log.debug("Dropping stale TrieWalkComplete in idle"); Behaviors.same
-        case _: TrieWalkFailed   => ctx.log.debug("Dropping stale TrieWalkFailed in idle"); Behaviors.same
+        // ── Stale results of validation's re-walk ────────────────────────────────────
+        case _: ValidationMissingNodes =>
+          ctx.log.debug("Dropping stale ValidationMissingNodes in idle"); Behaviors.same
+        case _: ValidationRewalkFailed =>
+          ctx.log.debug("Dropping stale ValidationRewalkFailed in idle"); Behaviors.same
         // The TNHC seed-guard (#1371) can emit HealingRootUnservable; if it lands after the controller has left
         // StateHealing it must be dropped, not MatchError-crash the idle behavior (the StateHealing handler is guarded).
         case _: HealingRootUnservable => ctx.log.debug("Dropping stale HealingRootUnservable in idle"); Behaviors.same
@@ -693,7 +691,6 @@ private class SNAPSyncControllerImpl(
         case _: ValidateStorageTriesResult =>
           ctx.log.debug("Dropping stale ValidateStorageTriesResult in idle"); Behaviors.same
         case _: ValidationRetry => ctx.log.debug("Dropping stale ValidationRetry in idle"); Behaviors.same
-        case ScheduledTrieWalk  => ctx.log.debug("Dropping stale ScheduledTrieWalk in idle"); Behaviors.same
 
         // ── Unexpected sync-completion signals ────────────────────────────────────────
         case AccountRangeSyncComplete =>
@@ -864,7 +861,7 @@ private class SNAPSyncControllerImpl(
     * spec 022 T052: the same exit on both schemes, and no controller walk. The Hash controller's walk stops at present
     * hash nodes, so it never proved what the coordinator's gate has decided by now; Path's would read a store Path
     * never populates. Under `pruning.mode = inmemory` the gate has walked, since the marker cannot hold there. The
-    * walk's arms stay, with nothing to start them: dead wiring is slice 6's.
+    * controller's walk itself is gone (spec 022 slice 6).
     *
     * The coordinator says which root it decided on before the signal, and a re-peg can pass between that and this. So a
     * signal for any other root says nothing about this one: it is ignored, and the coordinator, which has the re-peg by
@@ -1033,8 +1030,8 @@ private class SNAPSyncControllerImpl(
       case msg if coordinatorGoneArms.isDefinedAt(msg) =>
         coordinatorGoneArms(msg)
 
-      // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
-      // (StateHealing only): stateHealingArms (P4c).
+      // StateHealingAbandoned, HealingRootUnservable, ValidationMissingNodes, ValidationRewalkFailed (StateHealing
+      // only): stateHealingArms (P4c).
 
       case StateValidationComplete =>
         ctx.log.info("State validation complete. SNAP sync finished!")
@@ -1239,11 +1236,10 @@ object SNAPSyncController:
   private[snap] case object RequestStorageRanges extends Command
   private[snap] case object RequestTrieNodeHealing extends Command
   private[snap] case object EnsureSnapServerPeersConnected extends Command
-  // Async trie-walk results
-  final private[snap] case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)]) extends Command
-  final private[snap] case class TrieWalkBatch(missingNodes: Seq[(Seq[ByteString], ByteString)]) extends Command
-  final private[snap] case class TrieWalkComplete(totalFound: Int) extends Command
-  final private[snap] case class TrieWalkFailed(error: String) extends Command
+  // Validation's re-walk with paths (`HealingOrchestrator.triggerHealingForMissingNodes`)
+  final private[snap] case class ValidationMissingNodes(missingNodes: Seq[(Seq[ByteString], ByteString)])
+      extends Command
+  final private[snap] case class ValidationRewalkFailed(error: String) extends Command
   // Async validation results (generation-stamped — stale results dropped on arrival)
   final private[snap] case class ValidateAccountTrieResult(
       generation: Long,
@@ -1256,7 +1252,6 @@ object SNAPSyncController:
       elapsedMs: Long
   ) extends Command
   final private[snap] case class ValidationRetry(generation: Long) extends Command
-  private[snap] case object ScheduledTrieWalk extends Command
   // OQ-3: drives the periodic GetHandshakedPeers poll (replaces NPMA's HandshakedPeers broadcast).
   private[snap] case object PollHandshakedPeers extends Command
   case object AccountRangeSyncComplete extends Command
