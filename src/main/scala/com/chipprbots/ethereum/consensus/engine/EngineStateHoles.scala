@@ -17,10 +17,10 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 
 /** What `newPayload` met where missing state kept it from executing a block (spec 022 FR-014, #1694). It stores the
-  * block by hash and answers ACCEPTED, and nothing on the Engine path fetches the state or runs the block again.
-  * Regular sync's importer does both once it reaches that block, which took 12.8 and 24.5 s at Ephemery's head
-  * (2026-11-01). So this is the first sign of a hole, ahead of import's on-demand counter, and holes that outlast it
-  * are the ones to look at.
+  * block by hash and answers ACCEPTED, and nothing on the Engine path fetches the state or runs the block again on its
+  * own: only the same payload sent again would. Regular sync's importer does both once it reaches that block, which
+  * took 1 to 25 s at Ephemery's head (2026-11-01). Where `newPayload` meets a hole first, this is the first sign of it,
+  * ahead of import's on-demand counter; a hole import meets first, as when catching up, never shows here.
   *
   * Counts each distinct hole once, with what it is and where, and logs it. The consensus client did not send a stalled
   * payload again in those runs, but a block can be met twice, so the same hole logs again only once per `logEvery`,

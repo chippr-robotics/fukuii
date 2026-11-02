@@ -680,8 +680,9 @@ class EngineApiService(
                   error match
                     case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
-                      // Missing state: it cannot be judged, so the block is stored by hash and answered ACCEPTED below.
-                      // Regular sync's importer fetches the state and runs it, when it reaches the block (#1694).
+                      // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
+                      // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
+                      // when it reaches it (#1694).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
                           stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
@@ -703,7 +704,7 @@ class EngineApiService(
                 log.warn("[ENGINE-API] newPayload #{}: MPT error, not executed", payload.blockNumber)
                 None
               case e: Exception =>
-                log.warn("[ENGINE-API] newPayload #{}: error={} SYNCING", payload.blockNumber, e.getMessage)
+                log.warn("[ENGINE-API] newPayload #{}: error={}, not executed", payload.blockNumber, e.getMessage)
                 None
           else None // parent not known
 
