@@ -120,11 +120,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       batches.synchronized(rangeDeletes += namespace)
       super.deleteRange(namespace, fromKey, toKeyExclusive)
 
-    def frontierWrites: Seq[String] = batches.synchronized {
-      batches.toSeq.flatMap(_._2).filter(_.namespace == FrontierNs).map(_.toString) ++
-        rangeDeletes.toSeq.filter(_ == FrontierNs).map(_ => "deleteRange")
-    }
-
     def forget(): Unit = batches.synchronized { batches.clear(); rangeDeletes.clear() }
 
   private def key(k: String): ByteString = ByteString(k.getBytes("UTF-8"))
@@ -797,7 +792,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       stored: Set[String],
       peer: ScriptedPeer,
       cleanRoot: AtomicReference[ByteString],
-      frontier: Option[HealingFrontierStorage] = None,
       queue: Option[BfsQueueStorage] = None,
       flushed: Option[CountDownLatch] = None
   ): (ActorRef[TrieNodeHealingCoordinator.Command], org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Command]) =
@@ -814,7 +808,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       mptStorage = mpt,
       batchSize = 16,
       snapSyncController = controller.ref,
-      healingFrontierStorage = frontier,
       bfsQueueStorageOpt = queue,
       movingRootDeltaHeal = true,
       cleanWalkRoot = Some(cleanRoot)
@@ -1069,12 +1062,12 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     Namespaces.nsSeq should contain(FrontierNs)
   }
 
-  /** A whole heal through the production spawn, every setting of the retired persistence on: a walk finds a hole, it is
-    * healed and flushed, a clean walk ends it, and a re-peg follows. None of that may reach CF `g`.
+  /** A whole heal through the production factory: a walk finds a hole, it is healed and flushed, a clean walk ends it,
+    * and a re-peg follows. Since spec 022 slice 6c the coordinator holds no handle to CF `g`, so nothing it does can
+    * reach that family; what is left to pin is that the heal completes, and that a Path heal writes nothing through the
+    * trie store.
     */
-  private def healWritesNothingToFrontier(scheme: StorageScheme): Unit =
-    val source = new Recording
-    val store = new HealingFrontierStorage(source)
+  private def wholeHeal(scheme: StorageScheme): Unit =
     val trie = PathHealPresenceFixtures.accountTrieOld()
     val after = PathHealPresenceFixtures.accountTrieNew()
     val peer = new ScriptedPeer(testKit)
@@ -1086,10 +1079,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       if scheme == StorageScheme.Hash then mpt.seed(Seq(n.hash -> n.encoded.toArray))
       else pns.writeNodesWithDeletes(Seq((n.accountHash, n.nibbles, n.encoded.toArray)), Nil)
     }
-    val ingest = HealingTrieFixtures.healingIngest(
-      Some(store),
-      pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns)
-    )
+    val ingest = HealingTrieFixtures.healingIngest(pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns))
     val coordinator = testKit.spawn(
       new ChildFactories {}.trieNodeHealingCoordinator(
         stateRoot = trie.root.hash,
@@ -1100,14 +1090,10 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
         snapSyncController = controller.ref,
         stateIngest = ingest,
         storageScheme = scheme,
-        movingRootDeltaHeal = true,
-        scopedHealVerification = true,
-        prunedHealVerification = true,
-        frontierPersistenceEnabled = true
+        movingRootDeltaHeal = true
       )
     )
     peer.coordinator.set(coordinator)
-    source.forget()
     coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(trie.root.hash)
     coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
       PeerTestHelpers.createTestPeer("frontier-peer", createTestProbe[Any]().ref.toClassic)
@@ -1118,7 +1104,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val probe = createTestProbe[actors.HealingStatistics]()
     coordinator ! TrieNodeHealingCoordinator.HealingGetProgress(probe.ref)
     probe.receiveMessage(30.seconds)
-    source.frontierWrites shouldBe empty
     // spec 022 review beacon: `HealInvariant.canHold` says the Path scheme holds under in-memory pruning because its heal
     // writes round the node cache, which is what this store is under that mode.
     if scheme == StorageScheme.Path then
@@ -1144,7 +1129,6 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
             batchSize = 16,
             snapSyncController = controller.ref,
             stateIngest = HealingTrieFixtures.healingIngest(
-              None,
               pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns)
             ),
             storageScheme = scheme,
@@ -1186,12 +1170,12 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     restartedOverHeldNodes(StorageScheme.Path)
   }
 
-  it should "get no write from a whole heal, under the Hash scheme" taggedAs UnitTest in {
-    healWritesNothingToFrontier(StorageScheme.Hash)
+  it should "complete a whole heal from the production factory, under the Hash scheme" taggedAs UnitTest in {
+    wholeHeal(StorageScheme.Hash)
   }
 
-  it should "get no write from a whole heal, under the Path scheme" taggedAs UnitTest in {
-    healWritesNothingToFrontier(StorageScheme.Path)
+  it should "complete a whole heal from the production factory, and write nothing through the trie store, under the Path scheme" taggedAs UnitTest in {
+    wholeHeal(StorageScheme.Path)
   }
 
   it should "get no write from a coordinator spawn under in-memory pruning (the old spawn-time clear)" taggedAs UnitTest in {

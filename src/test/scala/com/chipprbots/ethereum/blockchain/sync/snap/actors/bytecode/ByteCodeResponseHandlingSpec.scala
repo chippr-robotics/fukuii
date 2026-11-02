@@ -30,7 +30,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -98,7 +97,6 @@ private[actors] class StubByteCodeResponseHandlingState(
     def trieStore(pivot: BigInt): MptStorage = notUsed("trieStore")
     def snapProgress: SnapSyncProgressStorage = progressStore
     def storageDone: SnapStorageDoneStorage = notUsed("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notUsed("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notUsed("bfsQueue")
 
   // ByteCodeDispatchApi and ByteCodeCompletionApi, recorded

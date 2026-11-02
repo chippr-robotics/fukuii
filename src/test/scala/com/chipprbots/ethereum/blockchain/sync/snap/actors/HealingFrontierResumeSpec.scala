@@ -28,7 +28,8 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 /** spec 022 D6: a restart re-seeds from the current root. What an older binary left in CF `g` (a persisted frontier,
   * its completeness marker, subtree-complete records) is not read, whatever it says, and nothing is written there. Over
-  * a real (temp-dir) RocksDB, since the store's contents are what must make no difference.
+  * a real (temp-dir) RocksDB, since the store's contents are what must make no difference. Since spec 022 slice 6c
+  * nothing hands the coordinator a handle to the family.
   *
   * Teardown discipline (critical): the walk runs on the supplied EC. The fixture stops the actor AND drains that EC
   * before destroying the DataSource, so nothing can touch a freed column-family handle (native SIGSEGV).
@@ -99,7 +100,6 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controllerProbe.ref,
-      healingFrontierStorage = Some(store), // wired in as production wires it: what must make no difference
       healingWriterEcOverride = Some(ec)
     )
     try body(coordinator, root, store, controllerProbe)

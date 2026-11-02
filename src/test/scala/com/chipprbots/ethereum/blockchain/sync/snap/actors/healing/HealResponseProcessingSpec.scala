@@ -37,7 +37,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -66,8 +65,8 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * the coordinator's `TrieNodeHealingEnv`, and the interfaces it calls (`FrontierGaugesApi`, `FrontierWriteApi`,
   * `HealDispatchApi`, `PathVerifiedRlpApi`, `PathPresenceApi`). State is plain fields; every interface call is
   * recorded. `self` and the controller are test inboxes; the request tracker is real (a response completes its
-  * request). `stateIngest` hands out `pathNodes`, `healingFrontier` and `bytecode` (the last only when a code store is
-  * given: with the healed-code check off the module must never read it).
+  * request). `stateIngest` hands out `pathNodes` and `bytecode` (the latter only when a code store is given: with the
+  * healed-code check off the module must never read it).
   */
 private class StubHealResponseProcessingState(
     val requestTracker: SNAPRequestTracker,
@@ -139,7 +138,6 @@ private class StubHealResponseProcessingState(
     def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // The interfaces the module calls, each call recorded in order.

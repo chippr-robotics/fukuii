@@ -5,7 +5,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -16,8 +15,8 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 
 /** The module stubs' `StateIngest` (spec 016 T055): each member re-reads the stub's own store on every call. The
   * arguments are by-name, so a store a stub never provides (one that throws "not reached") is not touched until a
-  * module actually reaches it, and a store a test reassigns (a `var`) is seen by the next call. The healing stores
-  * (spec 016 C-H1) default to failing loudly; `HealingOrchestratorSpec`'s stub hands in its own.
+  * module actually reaches it, and a store a test reassigns (a `var`) is seen by the next call. The healing store (spec
+  * 016 C-H1) defaults to failing loudly; `HealingOrchestratorSpec`'s stub hands in its own.
   */
 final private[snap] class ForwardingStateIngest(
     app: => AppStateStorage,
@@ -28,7 +27,6 @@ final private[snap] class ForwardingStateIngest(
     reader: => BlockchainReader,
     writer: => BlockchainWriter,
     validators: => MptStorage => StateValidator,
-    frontier: => Option[HealingFrontierStorage] = ForwardingStateIngest.notReached("healingFrontier"),
     bfs: => Option[BfsQueueStorage] = ForwardingStateIngest.notReached("bfsQueue")
 ) extends StateIngest:
   def appState: AppStateStorage = app
@@ -48,8 +46,7 @@ final private[snap] class ForwardingStateIngest(
   var snapProgress: SnapSyncProgressStorage =
     new SnapSyncProgressStorage(new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty))
   def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
-  // The healing stores (spec 016 C-H1): the healing spawn reads them; by-name like the rest.
-  def healingFrontier: Option[HealingFrontierStorage] = frontier
+  // The healing store (spec 016 C-H1): the healing spawn reads it; by-name like the rest.
   def bfsQueue: Option[BfsQueueStorage] = bfs
 
 private[snap] object ForwardingStateIngest:
@@ -72,5 +69,4 @@ final private[snap] class ForwardingStateIngestForProgress(progress: SnapSyncPro
   def trieStore(pivot: BigInt): MptStorage = ForwardingStateIngest.notReached("trieStore")
   def snapProgress: SnapSyncProgressStorage = progress
   def storageDone: SnapStorageDoneStorage = ForwardingStateIngest.notReached("storageDone")
-  def healingFrontier: Option[HealingFrontierStorage] = ForwardingStateIngest.notReached("healingFrontier")
   def bfsQueue: Option[BfsQueueStorage] = ForwardingStateIngest.notReached("bfsQueue")

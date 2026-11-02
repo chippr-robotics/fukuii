@@ -104,7 +104,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       mptStorage = hashStore,
       batchSize = 16,
       snapSyncController = controller.ref,
-      stateIngest = HealingTrieFixtures.healingIngest(None, Some(sharedQueue.getOrElse(queue))),
+      stateIngest = HealingTrieFixtures.healingIngest(Some(sharedQueue.getOrElse(queue))),
       healingWriterEcOverride = Some(writerEc.getOrElse(ec)),
       currentRoot = currentRoot,
       movingRootDeltaHeal = movingRootDeltaHeal,

@@ -40,12 +40,6 @@ private[snap] trait CoordinatorHandles:
     */
   lazy val healingCurrentRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
-  /** spec 022 round 2 review hunter N1: the root at which the healing coordinator's pass over the excluded set last
-    * ended. Its reader, the Hash controller's clean walk, is gone (spec 022 slice 6): the coordinator still writes it,
-    * and it goes with the settings' cleanup, which changes the same spawn parameters.
-    */
-  lazy val healingExcludedPassRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
-
   /** spec 022 T043: the root of the healing coordinator's last clean full walk, set as it reports completion. What
     * backs the invariant marker: the Hash controller's own trie walk stops at present hash nodes, so it cannot vouch
     * for what is below them. Void (null) once a later look at the trie has found something missing.
