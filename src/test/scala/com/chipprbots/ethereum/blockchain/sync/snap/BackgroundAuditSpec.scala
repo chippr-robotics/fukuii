@@ -810,6 +810,15 @@ class BackgroundAuditSpec
     BackgroundAudit.enabledIn(ConfigFactory.parseString("snap-sync.background-audit.enabled = false")) shouldBe false
   }
 
+  // Spec 022 slice 6d: the key ships, and the four healing settings slice 6c stopped reading are gone from the file.
+  it should "be on in the shipped sync.conf, which names none of the healing settings spec 022 removed" taggedAs UnitTest in {
+    val sync = com.typesafe.config.ConfigFactory.parseResources("conf/base/sync.conf").resolve().getConfig("sync")
+    sync.hasPath(BackgroundAudit.EnabledPath) shouldBe true
+    BackgroundAudit.enabledIn(sync) shouldBe true
+    Seq("healing-frontier-persistence", "scoped-heal-verification", "scoped-heal-max-paths", "pruned-heal-verification")
+      .filter(key => sync.hasPath(s"snap-sync.$key")) shouldBe empty
+  }
+
   "A pass on a checkpoint-synced node" should "record the fixed value as its anchor" taggedAs UnitTest in {
     val n = new Node(pivot = None)
     n.head(10, populate(n))

@@ -79,7 +79,7 @@ object BackgroundAudit:
     */
   val LoggerName: String = "com.chipprbots.ethereum.blockchain.sync.SyncController.BackgroundAudit"
 
-  /** Under `fukuii.sync`: the key goes into `sync.conf` in slice 6, since a fix branch changes no resources. */
+  /** Under `fukuii.sync`; `sync.conf` ships it as `true`. */
   val EnabledPath: String = "snap-sync.background-audit.enabled"
 
   def enabledIn(syncConfig: com.typesafe.config.Config): Boolean =
