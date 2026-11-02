@@ -197,3 +197,42 @@ class EphemeryGenesisSpec extends AnyFlatSpec with Matchers:
     create(Bpo1Timestamp) shouldBe ForkId(0x21e55fe6L, Some(BigInt(Bpo2Timestamp)))
     create(Bpo2Timestamp) shouldBe ForkId(0x33ef7281L, None)
   }
+
+  // From ephemery-165 every fork through Amsterdam is at genesis, so block 0 has the 23-field header. fetch-genesis.sh used
+  // to refuse this as unverified. Ground truth independent of fukuii: the release's deposit_contract_block_hash.txt, and
+  // Python `zlib.crc32` over that hash for the fork id, with no fork after genesis to add.
+  private val AmsterdamGenesisHash = "9485bbe8e32e278194666d249590c9167057edeabaecc62e7a68355f68305ecc"
+
+  private lazy val amsterdamAtGenesis: BlockchainConfig =
+    blockchainsFor(
+      "ephemery",
+      new File(getClass.getResource("/ephemery/ephemery-165").toURI).getAbsolutePath
+    ).blockchainConfig
+
+  "GenesisDataLoader" should "build the published ephemery-165 genesis block, with Amsterdam active at genesis" taggedAs (
+    UnitTest
+  ) in {
+    amsterdamAtGenesis.forkTimestamps.amsterdamTimestamp shouldBe Some(0L)
+    val env = new Env
+    new GenesisDataLoader(
+      env.blockchainReader,
+      env.blockchainWriter,
+      env.storagesInstance.storages.evmCodeStorage,
+      env.storagesInstance.storages.stateStorage
+    ).loadGenesisData()(using amsterdamAtGenesis)
+
+    val header = env.blockchainReader.getBlockHeaderByNumber(0).getOrElse(fail("no genesis header was written"))
+    Hex.toHexString(header.hash.value.toArray) shouldBe AmsterdamGenesisHash
+    header.extraFields shouldBe a[BlockHeader.HeaderExtraFields.HefPostAmsterdam]
+  }
+
+  "ForkId for ephemery-165" should "be the genesis hash's checksum, with no fork after genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val genesisHash = ByteString(Hex.decode(AmsterdamGenesisHash))
+    ForkId.create(genesisHash, 1792695600L, amsterdamAtGenesis)(BigInt(0), 1792695600L) shouldBe ForkId(
+      0x09e306f7L,
+      None
+    )
+  }
