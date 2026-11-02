@@ -42,12 +42,13 @@ The healing coordinator rebuilds its "frontier" (the set of missing node hashes)
 the locally stored state trie **breadth-first, level by level** (`rebuildFrontierBFS`). The
 level queue is kept in a dedicated RocksDB column family, so memory stays flat no matter how
 wide a level gets (ETC mainnet level 7 exceeds 70M entries). Node lookups are batched (50K
-hashes per `multiGet`), the visited set is a bounded LRU
-(`healing-visited-cap`, default 4M entries ≈ 320 MB), and **exactly one walk runs at a
+hashes per `multiGet`), the visited set is bounded with insertion-order eviction
+(`healing-visited-cap`, default 4M entries ≈ 480–640 MB), and **exactly one walk runs at a
 time** (a single-flight gate covers both the rebuild and the later verification pass).
 Missing nodes stream out in batches of 1,000 while the walk is still running and are fetched
 from peers via SNAP `GetTrieNodes`. A walk that finishes clean against the current root stamps
-the invariant marker, so later completions on this datadir need no walk. Nothing resumes from a
+the invariant marker where the marker can hold (not under `pruning.mode = inmemory` on Hash, nor
+with `deferred-merkleization = true`), so later completions on this datadir need no walk. Nothing resumes from a
 saved frontier: a restart walks again from the current root.
 
 ## What you will see in the logs
@@ -60,8 +61,8 @@ A healthy mainnet-scale healing phase that walks, in order:
 [HEAL-BFS] Level 3 complete: 4096 processed, 0 frontier total, 65536 queued for L4
 [HEAL-BFS] Level 6: 12900000 nodes visited, 1 frontier found, 51467209 L7 queued
 [HEAL-FRONTIER] 1000 missing nodes identified — queuing for healing
-[HEAL-PULSE] 37% (est) | healed=56346 (+1141 last 2min) | pending=0 active=4 peers=31 | rate=230 nodes/s walkRunning=true pivotRefreshPending=false
-[HEAL-BFS] Complete: 118754095 nodes traversed, 835707 missing nodes identified
+[HEAL-PULSE] 37% (est) | healed=56346 (+1141 last 2min) | pending=0 active=4 held=0 (0 KiB) peers=31 | rate=230 nodes/s walkRunning=true pivotRefreshPending=false
+[HEAL-BFS] Complete: 118754095 nodes across 12 levels, 835707 missing nodes identified
 ```
 
 Reference points from a live ETC-mainnet run (June 2026, 4-core host, SSD-class storage):
@@ -88,6 +89,7 @@ Logged every 2 minutes:
 | `NN% (est)` | completed heal tasks vs known tasks — **not** walk progress |
 | `healed=` | trie nodes downloaded and written so far this phase (cumulative) |
 | `pending= active=` | heal tasks queued / requests in flight to peers |
+| `held= (KiB)` | healed nodes held in memory until what they reference is on disk (spec 022), and their size |
 | `peers=` | peers currently usable for healing |
 | `rate=` | recent heal throughput (nodes/s) |
 | `walkRunning=` | true while **any** frontier walk (rebuild or verification) is running |
@@ -98,12 +100,14 @@ walk is in a fully-healed region and has nothing to hand to the downloader.
 
 ### The watchdog
 
-If three consecutive pulses show no walk, no pending work, and no healing progress, the
-dead-pulse watchdog force-starts a verification walk:
+If three consecutive pulses show no walk, no pending or held work, and no healing progress, the
+dead-pulse watchdog acts. Where the invariant marker stands it runs a completion check, with no
+walk; elsewhere it force-starts a verification walk:
 
 ```
 [HEAL-WATCHDOG] Dead pulse 3/3: walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min
-[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification DFS
+[HEAL-WATCHDOG] 3 consecutive dead pulses, and the marker stands — a completion check, no walk
+[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS
 ```
 
 Seeing this once after a restart is fine. Seeing it repeatedly means peers are not serving
@@ -115,7 +119,7 @@ All under `fukuii.sync.snap-sync` (defaults from `conf/base/sync.conf`):
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `healing-visited-cap` | `4000000` | Bound on the walk's LRU visited set (~80 B/entry). At the cap the **eldest entries are evicted** (never truncating the walk) at the cost of some re-walking of shared subtries. 4M ≈ 320 MB is right for a 5 GB heap. |
+| `healing-visited-cap` | `4000000` | Bound on the walk's visited set (~120–150 B/entry, insertion-order eviction, not an LRU). At the cap the **eldest entries are evicted** (never truncating the walk) at the cost of some re-walking of shared subtries. 4M ≈ 480–640 MB. |
 | `healing-traversal-parallelism` | `4` | Sub-range workers per BFS level (large levels are split across the healing-writer thread pool). |
 | `background-audit.enabled` | `true` | The full-trie audit behind the head after hand-off. Off only by an explicit `false`; with it off, a missing node is found only when block import reaches it. |
 
@@ -156,7 +160,7 @@ the counter resets when a new walk starts).
 Where the marker stands: nothing is outstanding for the current root → `StateHealing` exits,
 SNAP sync finalizes, and the node enters regular sync, with no walk. Where the walk runs: the walk
 completes → the residual frontier heals → `StateHealing` exits once a clean walk covers the
-current root (spec 006 skips the second walk when the first was clean). Either way, the
-background audit then walks behind the head, and any stragglers are fetched on demand during
-block execution.
+current root (spec 006 skips the second walk when the first was clean). Either way, where an
+audit is owed and it is enabled (never under `inmemory`), the background audit then walks behind
+the head, and any stragglers are fetched on demand during block execution.
 See [Sync Lifecycle](sync-lifecycle.md) for the full phase walk-through.

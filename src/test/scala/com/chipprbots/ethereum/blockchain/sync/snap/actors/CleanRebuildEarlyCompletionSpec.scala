@@ -24,18 +24,18 @@ import java.util.concurrent.{Executors, TimeUnit}
 
 /** spec 006 — Skip the redundant second verification walk on a CLEAN post-SNAP heal.
   *
-  * On a restart with a persisted-but-incomplete (or empty) frontier and the root already in storage, the coordinator
-  * takes the `case None` branch and runs ONE full-state rebuild walk ([[TrieNodeHealingCoordinator.rebuildFrontierBFS]]
-  * → `FrontierRebuildComplete(missingEmitted, walkRoot)`). When that walk was genuinely clean (`missingEmitted == 0 &&
+  * On a restart with the root already in storage and no invariant marker standing, the coordinator takes
+  * `RestartFullRebuild` and runs ONE full-state rebuild walk ([[TrieNodeHealingCoordinator.rebuildFrontierBFS]] →
+  * `FrontierRebuildComplete(missingEmitted, walkRoot)`). When that walk was genuinely clean (`missingEmitted == 0 &&
   * totalNodesHealed == 0 && isComplete && !flushing && walkRoot == stateRoot`) the handler now declares completion
   * after that single walk by routing `HealingCheckCompletion` through the EXISTING completion chokepoint — instead of
   * idling until the dead-pulse watchdog force-starts a redundant second (verification) walk over the identical trie.
   *
   * Each case maps to a contract test T-1…T-5 (contracts/internal-interfaces.md):
-  *   - T-1 (FR-001/SC-001): clean rebuild → `StateHealingComplete` within 5s after ONE walk; marker set.
+  *   - T-1 (FR-001/SC-001): clean rebuild → `StateHealingComplete` within 5s after ONE walk.
   *   - T-2 (FR-003/SC-002, load-bearing): rebuild that finds a missing node → `pendingTasks > 0`, NO completion in 5s.
   *   - T-3 (FR-003/FR-005/SC-002, load-bearing): stale-root completion (walkRoot != current stateRoot) → NO completion.
-  *   - T-4 (FR-002/SC-003): the early-path completion sets the SAME completeness marker as the two-walk path.
+  *   - T-4 (FR-002/SC-003): removed in spec 022 with the CF `g` completeness marker it compared.
   *   - T-5 (FR-006/SC-004): after early completion exactly ONE `StateHealingComplete` (no watchdog walk #2 / no
   *     double-fire), the observable consequence of `verificationPassComplete == true`.
   *
@@ -78,9 +78,9 @@ class CleanRebuildEarlyCompletionSpec
 
   /** Owns the RocksDB store, a dedicated single-thread EC for the coordinator's rebuild/flush `Future`s, and the
     * coordinator. `storage`/`root` are supplied by the caller so a fixture can inject a clean trie (childless leaf) or
-    * a trie with a deliberately-missing child (`HealingTrieFixtures`). Persistence is ON, the completeness marker is
-    * ABSENT (`markComplete = false`) and the persisted frontier is EMPTY, so `StartTrieNodeHealing` takes the `case
-    * None` → full-state rebuild branch (the path spec 006 short-circuits on a clean result).
+    * a trie with a deliberately-missing child (`HealingTrieFixtures`). No invariant marker stands (`markerMayStand` is
+    * off), so `StartTrieNodeHealing` over a present root takes the full-state rebuild branch (the path spec 006
+    * short-circuits on a clean result). The RocksDB store is a leftover the coordinator never receives (class doc).
     */
   private def withRebuildFixture(
       storage: TestMptStorage,
@@ -137,8 +137,7 @@ class CleanRebuildEarlyCompletionSpec
 
   "Clean rebuild early completion" should
     "declare StateHealingComplete after ONE walk on a clean (0-missing, 0-healed) rebuild (T-1, FR-001)" taggedAs UnitTest in {
-      // Childless-leaf root in storage, persistence on, marker absent, empty frontier → the `case None`
-      // full-state rebuild walk runs, finds 0 missing and heals nothing, so the spec-006 guard fires and
+      // Childless-leaf root in storage, no marker standing → the full-state rebuild walk runs, finds 0 missing and heals nothing, so the spec-006 guard fires and
       // completion flows through HealingCheckCompletion. The 5s bound is the regression detector: WITHOUT
       // the fix nothing reaches the controller until the ~6-min dead-pulse watchdog forces walk #2.
       val storage = new TestMptStorage()
