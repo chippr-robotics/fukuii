@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
+  unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
+  against the published genesis hash and a live sync to the head.
+
 ### Known issues
 - **Plan disk for Sepolia, and for a full-history node generally: backfill has no limit and nothing stops at a full disk
   (#1483).** A SNAP sync of Sepolia needs about 300-340 GB when it hands off to regular sync. It then backfills the whole

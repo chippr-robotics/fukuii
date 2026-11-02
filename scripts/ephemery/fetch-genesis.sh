@@ -229,10 +229,6 @@ fi
 bad_alloc="$(jq -r '[.alloc[] | (.balance, .nonce) | select(. != null and type != "string")] | length' "$G")"
 [[ "$bad_alloc" == "0" ]] || die "$bad_alloc alloc balance/nonce values are not JSON strings"
 
-if [[ "$AMSTERDAM" != "null" && "$AMSTERDAM" -le "$GENESIS_TS" ]]; then
-  die "Amsterdam active at genesis: GenesisDataLoader would need slotNumber handling not verified for Ephemery"
-fi
-
 EXPECTED_HASH=""
 [[ -f "$T/deposit_contract_block_hash.txt" ]] && EXPECTED_HASH="$(tr -d '[:space:]' < "$T/deposit_contract_block_hash.txt")"
 
