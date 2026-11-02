@@ -5601,8 +5601,8 @@ launcher config) loads them from a <code>custom-chains-dir</code>.</p>
 </tbody>
 </table>
 <p>The script refuses (non-zero exit, nothing written) a release whose genesis declares something fukuii
-cannot represent: a non-zero block fork, an unknown fork key (e.g. <code>bpo3Time</code>), a non-zero TTD,
-Amsterdam at genesis, or a header quantity it cannot re-encode.</p>
+cannot represent: a non-zero block fork, an unknown fork key (e.g. <code>bpo3Time</code>), a non-zero TTD, or a header
+quantity it cannot re-encode.</p>
 <p><strong>Why a re-encoded genesis.</strong> <code>GenesisDataLoader</code> parses <code>timestamp</code>, <code>gasLimit</code>, <code>difficulty</code>,
 <code>baseFeePerGas</code>, <code>blobGasUsed</code> and <code>excessBlobGas</code> as hex even without <code>0x</code>; Ephemery writes the
 timestamp as the decimal string <code>"1790276400"</code>. Loaded verbatim, fukuii builds a genesis with timestamp
@@ -5670,9 +5670,9 @@ another node or an sbt build on the 16 GB soak host.</p>
 <h2 id="3-run-lighthouse">3. Run Lighthouse<a class="headerlink" href="#3-run-lighthouse" title="Permanent link">&para;</a></h2>
 <p>Lighthouse has no built-in Ephemery network; use the release directory as <code>--testnet-dir</code>. It reads the CL
 bootnodes from <code>boot_enr.yaml</code> in that directory, so no <code>--boot-nodes</code> flag is needed (<code>release.env</code> also
-carries them as <code>BOOTNODE_ENR_LIST</code>, from the release's <code>boot_enr.txt</code>, for other CL clients). Osaka/Fulu is
-active at genesis, so the CL must be Fulu-capable (the <code>sigp/lighthouse:v8.3.0-rc.0</code> image already on the
-host is).</p>
+carries them as <code>BOOTNODE_ENR_LIST</code>, from the release's <code>boot_enr.txt</code>, for other CL clients). From <code>ephemery-165</code>
+Amsterdam and its consensus counterpart Gloas are active at genesis, so the CL must support them:
+<code>sigp/lighthouse:v8.3.0-rc.0</code> followed <code>ephemery-165</code> to the head (2026-11-01).</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">source</span><span class="w"> </span>OUT/current/release.env<span class="w">      </span><span class="c1"># sets OUT_DIR (absolute), TESTNET_DIR</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>ephemery-lighthouse<span class="w"> </span>--network<span class="w"> </span>host<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$OUT_DIR</span><span class="s2">/ephemery-lighthouse"</span>:/data<span class="w"> </span><span class="se">\</span>
