@@ -1,6 +1,6 @@
 # CON-015: Sync direction: converging healing first, then flat execution reads, then state snapshots; execute-from-genesis only for ETC
 
-**Status**: Accepted (the direction in spec 022's plan, research R-8)
+**Status**: Accepted (the direction recorded in spec 022's research R-8 and task T061)
 
 **Date**: 2026-11-02
 
@@ -24,9 +24,11 @@ Execution in fukuii reads state only through the trie today (`BlockExecution`, `
 | ETC mainnet | about 1-3 months |
 | Sepolia | about 2-4 months |
 
-Measured on Mordor, SNAP from scratch:
-- **2026-10-28, before spec 022:** 25.6 minutes. Accounts took 8 min, storage 8 min and bytecode 3.5 min. Healing then ran three full-trie walks of 4.78M nodes (48 s, 50 s and 96 s), and the hand-off came about 2.5 min after them.
-- **After spec 022 slice 5d (S14, 2026-11-01):** 4 min 47 s in total, with healing at 0.3 s and no walk. The bytecode phase against the one local peer varies by more than the walk costs on a trie this small. The gain the walk's removal is for is at Sepolia's scale, measured by release gate T063.
+Measured on Mordor, SNAP from scratch, on 2026-10-28 before spec 022: 25.6 minutes.
+- Accounts took 8 min, storage 8 min and bytecode 3.5 min.
+- Healing then ran three full-trie walks of 4.78M nodes (48 s, 50 s and 96 s), and the hand-off came about 2.5 min after them.
+
+After spec 022 slice 5d, the S14 run healed in 0.3 s with no walk, against 151 s with four walks on the pre-spec-022 jar. Its total, 4 min 47 s, is not comparable with the 25.6 minutes: host conditions and other changes differ, and a slice-2 run took 28.9 min. Total time did not improve from the walk's removal on a trie this small (S13 on 5c took 4 min 34 s), because the bytecode phase against the one local peer varies by more than the walk costs. The gain the walk's removal is for is at Sepolia's scale, measured by release gate T063.
 
 ## Decision
 
@@ -39,7 +41,7 @@ Measured on Mordor, SNAP from scratch:
 
 - **No execute-from-genesis work before spec 018 F6.** The figures above are a model. The first measurement comes with flat reads, on Mordor.
 - **SNAP stays the default everywhere.** Spec 022's background audit and on-demand repair cover what a converged SNAP leaves behind.
-- **ETC's thin snap-serving peer set stays the main ETC risk until then.** Forge would weigh a Mordor Hash soak before an ETC rotation (research R-5g).
+- **On-demand repair is thinnest on ETC,** which has few snap-serving peers, until then. Forge would weigh a Mordor Hash soak before an ETC rotation (research R-5g).
 - **Hash stays for ETC through 0.11.0**, and ETC moves onto spec 018's unified layout from a checkpoint (CON-014 decision 7, spec 018 DC-9).
 
 ## Alternatives rejected

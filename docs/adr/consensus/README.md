@@ -20,8 +20,8 @@ Examples:
 - [CON-006: ForkId Compatibility During Initial Sync](CON-006-forkid-compatibility-during-initial-sync.md) - Accepted
 - [CON-007: ETC64 RLP Encoding Fix](CON-007-etc64-rlp-encoding-fix.md) - Accepted
 - [CON-008: Checkpoint Distribution Server](CON-008-checkpoint-distribution-server.md) - Proposed
-- [CON-009: Post-SNAP healing completeness marker — set/clear semantics](CON-009-healing-completeness-marker.md) - Accepted
-- [CON-010: Decoupled heal serve-root — fixed walk root, advancing fetch root](CON-010-decoupled-heal-serve-root.md) - Accepted
+- [CON-009: Post-SNAP healing completeness marker — set/clear semantics](CON-009-healing-completeness-marker.md) - Superseded by CON-014
+- [CON-010: Decoupled heal serve-root — fixed walk root, advancing fetch root](CON-010-decoupled-heal-serve-root.md) - Accepted, amended by CON-014
 - [CON-011: Subtree-complete heal verification](CON-011-subtree-complete-verification.md) - Superseded by CON-014
 - [CON-012: Skip the redundant second verification walk on a clean post-SNAP heal](CON-012-skip-redundant-verify-walk.md) - Superseded by CON-014
 - [CON-013: SNAP controller module form: traits, then required narrowing](CON-013-snap-controller-module-form.md) - Accepted
