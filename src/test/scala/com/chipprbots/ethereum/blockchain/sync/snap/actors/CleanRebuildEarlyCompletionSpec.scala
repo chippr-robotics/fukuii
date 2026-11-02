@@ -39,12 +39,11 @@ import java.util.concurrent.{Executors, TimeUnit}
   *   - T-5 (FR-006/SC-004): after early completion exactly ONE `StateHealingComplete` (no watchdog walk #2 / no
   *     double-fire), the observable consequence of `verificationPassComplete == true`.
   *
-  * Harness, fixtures, RocksDB config, and teardown discipline are copied verbatim from `HealingFrontierResumeSpec` /
-  * `ScopedVerificationParitySpec` in this same package (deterministic TestKit, no `Thread.sleep`). Storage is a real
-  * temp-dir RocksDB because resume/marker semantics rely on `HealingFrontierStorage` (CF iteration + the CF `g`
-  * completeness marker), which `EphemDataSource` does not provide. Teardown order: stop actor (await termination) →
-  * drain the single-thread EC (the rebuild `Future` and its `loadAll` iterator are finished) → destroy DataSource →
-  * delete temp dir, so an in-flight walk can never touch a freed native handle.
+  * Deterministic TestKit, no `Thread.sleep`. The RocksDB `HealingFrontierStorage` the fixture builds dates from when
+  * the coordinator resumed from CF `g`; since spec 022 slice 6c no coordinator receives it, and the tests ignore it
+  * (CHASE-QUEUE: drop it with the RocksDB setup). Teardown order: stop actor (await termination) → drain the
+  * single-thread EC (the rebuild `Future` and its `loadAll` iterator are finished) → destroy DataSource → delete temp
+  * dir, so an in-flight walk can never touch a freed native handle.
   */
 class CleanRebuildEarlyCompletionSpec
     extends ScalaTestWithActorTestKit()

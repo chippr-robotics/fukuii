@@ -1,5 +1,11 @@
 # Post-SNAP healing: frontier-rebuild scalability
 
+> **Status (spec 022, 0.11.0).** Where the invariant marker stands, healing completes with no full-trie walk
+> ([CON-014](../adr/consensus/CON-014-heal-completion-without-a-walk.md)); the walk below runs only in the
+> five cases CON-014 lists, and a background audit walks behind the head after hand-off. Layer 2 (the persisted
+> frontier) is retired: a restart walks from the current root, and `healing-frontier-persistence` was removed.
+> This page is kept as the design record of the walk.
+
 ## Problem
 
 After SNAP sync, `TrieNodeHealingCoordinator` heals the residual missing trie nodes. On
@@ -100,7 +106,9 @@ dispatch); clear on force-complete / pivot-refresh; resume on `[HEAL-RESTART]` l
 and skips the full-state walk, with a fail-safe fallback to the full walk on empty/absent/corrupt.
 No datadir migration (`setCreateMissingColumnFamilies(true)`). Tested in `HealingFrontierStorageSpec`
 (storage round-trip) and `HealingFrontierResumeSpec` (resume / fallback / write-on-queue).
-Enabled by default after operational validation.
+Enabled by default after operational validation. **Retired in spec 022 (D6):** nothing reads the frontier; a restart walks from the current root, and the
+one-time clear of CF `g` (`HealInvariant.retireFrontierOnce`) is all that touches the family. The setting was
+removed in slice 6c/6d.
 
 **Layer 3 — DELIVERED (superseded plan).** First-walk throughput landed via the DFS → BFS
 rewrite (PR #1323, with follow-up #1325) rather than the originally planned parallel
