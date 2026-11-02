@@ -235,7 +235,6 @@ private class SNAPSyncControllerImpl(
     StateIngest.Durability.Default,
     snapProgressStorage,
     storageDoneStorage,
-    healingFrontierStorageOpt,
     bfsQueueStorageOpt
   )
 
@@ -1530,10 +1529,6 @@ case class SNAPSyncConfig(
     // opened. Key: `sync.snap-sync.healing.held-memory-limit` (a HOCON size, e.g. `128 MiB`). Not in base/sync.conf
     // yet: the SNAP-split verifier forbids src/main/resources changes on fix branches, so the default comes from here.
     healingHeldMemoryLimit: Long = actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
-    // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
-    // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
-    healingFrontierPersistence: Boolean = false,
-    prunedHealVerification: Boolean = true, // #4 (restored): pruned post-heal verification vs full ~90M-node walk
     // Operator ceiling for BFS level parallelism. Effective =
     // min(this, min(nproc, max(healingMinParallelism, nproc - healingReservedCores))).
     healingTraversalParallelism: Int = actors.TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -1550,17 +1545,6 @@ case class SNAPSyncConfig(
     // root stays ~99.9% servable; regular sync fills any residual gap on-demand. The GENUINE all-peers-stateless
     // roll (HealingAllPeersStateless) is unaffected. Set false to restore legacy roll-on-stagnation.
     healHoldPivotOnStagnation: Boolean = true,
-    // Scoped post-heal verification (spec 003). When true (default), the post-heal completion
-    // verification re-walks ONLY the subtrees rooted at the nodes healed this round instead of
-    // re-seeding the state root and re-walking the whole trie. It engages only when the durable
-    // completeness marker proves a prior full-trie clean walk against the current root AND the
-    // healed-paths set is non-empty, in-bound, and same-root; otherwise it falls back to the
-    // unchanged full-root verification. Byte-parity of the completion decision/state root/marker is
-    // preserved. Set false to force the conservative full-root verification on every round.
-    scopedHealVerification: Boolean = true,
-    // Upper bound on the in-memory healed-paths set (spec 003 FR-011). Over-bound rounds fall back to
-    // full-root verification rather than growing the set, bounding its worst-case heap.
-    scopedHealMaxPaths: Int = 200000,
     // Decoupled heal serve-root (spec 004 FR-008). When true (default), the healing fetch targets an advancing
     // newest-servable serve root while the completeness walk stays pinned to the fixed walk root. Off ⇒ coupled
     // behaviour (fetch uses the walk root), byte-identical to today. Consensus-safety rests on the unchanged
@@ -1718,11 +1702,6 @@ object SNAPSyncConfig:
       healingHeldMemoryLimit =
         if snapConfig.hasPath("healing.held-memory-limit") then snapConfig.getBytes("healing.held-memory-limit")
         else actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
-      healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
-        snapConfig.getBoolean("healing-frontier-persistence"),
-      prunedHealVerification =
-        if snapConfig.hasPath("pruned-heal-verification") then snapConfig.getBoolean("pruned-heal-verification")
-        else true,
       healingTraversalParallelism =
         if snapConfig.hasPath("healing-traversal-parallelism") then snapConfig.getInt("healing-traversal-parallelism")
         else actors.TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -1742,12 +1721,6 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("heal-hold-pivot-on-stagnation") then
           snapConfig.getBoolean("heal-hold-pivot-on-stagnation")
         else true,
-      scopedHealVerification =
-        if snapConfig.hasPath("scoped-heal-verification") then snapConfig.getBoolean("scoped-heal-verification")
-        else true,
-      scopedHealMaxPaths =
-        if snapConfig.hasPath("scoped-heal-max-paths") then snapConfig.getInt("scoped-heal-max-paths")
-        else 200000,
       decoupledHealServeRoot =
         if snapConfig.hasPath("decoupled-heal-serve-root") then snapConfig.getBoolean("decoupled-heal-serve-root")
         else true,

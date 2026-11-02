@@ -20,7 +20,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage
 import com.chipprbots.ethereum.domain.Account
@@ -320,15 +319,6 @@ private[snap] trait HealingOrchestrator
       stateRoot.map(r => stateIngest.appState.putSnapSyncStateRoot(r.value))
     anchors.reduceOption(_.and(_)).foreach(_.commitSync())
 
-  /** The handle `stateIngest.healingFrontier` hands out (spec 016 C-H1), by-name, so it is still built on the first
-    * spawn. Nothing reads or writes through it since CF `g` was retired (spec 022 D6); `SNAPSyncControllerPinSpec` pins
-    * when it exists, so it goes with a `# pins:` change, with the settings above.
-    */
-  private[snap] lazy val healingFrontierStorageOpt: Option[HealingFrontierStorage] =
-    if snapSyncConfig.healingFrontierPersistence || snapSyncConfig.prunedHealVerification then
-      Some(new HealingFrontierStorage(stateIngest.flatSlots.dataSource))
-    else None
-
   // The frontier-rebuild BFS queue, always `Some` (the coordinator falls back to an in-memory queue only on `None`).
   // The healing coordinator reads it as `stateIngest.bfsQueue` (spec 016 C-H2), by-name: once per coordinator
   // construction (its `bfsQueue` val), so it is built at the first coordinator's setup, on that coordinator's thread.
@@ -338,8 +328,7 @@ private[snap] trait HealingOrchestrator
   /** spec 016 M6a: the healing-coordinator spawn, for `startStateHealing` (the second route, the Hash controller's
     * walk, is gone: spec 022 slice 6). It opens the pivot's trie store, spawns the supervised coordinator with the
     * forwarded healing settings, sends it `StartTrieNodeHealing`, the healing in-flight budget and the current snap
-    * peers, and (re)starts the 1 s peer-availability timer. The `pruned-heal-verification` setting is still not
-    * forwarded (#1502).
+    * peers, and (re)starts the 1 s peer-availability timer.
     *
     * Under in-memory pruning on the Hash scheme (spec 022 review vault V3, R1) healed nodes reach the node cache, not
     * disk: the cache writes them as it evicts them, one by one, least recently used first (parents before children
@@ -351,10 +340,6 @@ private[snap] trait HealingOrchestrator
     * for this mode, and `markerMayStand` is what keeps it there (spec 022 T051). So it is under `deferred-merkleization
     * \= true`, where no trie was built, and on any datadir whose marker does not stand. Where one stands, a present
     * root is a complete one and the coordinator's gate completes with no walk.
-    *
-    * Four settings forwarded here no longer do anything: `scopedHealVerification`, `scopedHealMaxPaths`,
-    * `prunedHealVerification`, `frontierPersistenceEnabled` (CF `g` is retired, spec 022 D6). They stay in the
-    * factory's signature because `SNAPSyncControllerPinSpec` pins this call; they go with a `# pins:` change.
     */
   private def spawnHealingCoordinator(root: TrieRoot): Unit =
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
@@ -386,27 +371,20 @@ private[snap] trait HealingOrchestrator
               concurrency = snapSyncConfig.healingConcurrency,
               visitedCap = snapSyncConfig.healingVisitedCap,
               stateIngest = stateIngest,
-              // #1319/spec-002 (restored): gate the coordinator's frontier-mirror writes +
-              // completeness markers ON, matching store presence (dropped by #1384's stale base).
-              frontierPersistenceEnabled = snapSyncConfig.healingFrontierPersistence && !trieNodesCachedInMemory,
               traversalParallelism = snapSyncConfig.healingTraversalParallelism,
               healingMinParallelism = snapSyncConfig.healingMinParallelism,
               healingReservedCores = snapSyncConfig.healingReservedCores,
               storageScheme = snapSyncConfig.storageScheme,
               frontierHighWater = snapSyncConfig.healingFrontierHighWater,
               frontierLowWater = snapSyncConfig.healingFrontierLowWater,
-              scopedHealVerification = snapSyncConfig.scopedHealVerification && !trieNodesCachedInMemory,
-              scopedHealMaxPaths = snapSyncConfig.scopedHealMaxPaths,
               decoupledHealServeRoot = snapSyncConfig.decoupledHealServeRoot,
               decoupledHealMaxAttemptsNoRefresh = snapSyncConfig.decoupledHealMaxAttemptsNoRefresh,
               movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
               healedCodeCheck = true,
               walkLocalOnly = Some(healingWalkLocalOnly),
               heldMemoryLimit = snapSyncConfig.healingHeldMemoryLimit,
-              prunedHealVerification = !trieNodesCachedInMemory,
               excludedAccounts = true,
               currentRoot = Some(healingCurrentRoot),
-              excludedPassRoot = Some(healingExcludedPassRoot),
               cleanWalkRoot = Some(healingCleanWalkRoot),
               decidedRoot = Some(healingDecidedRoot),
               markerMayStand = markerCanHold

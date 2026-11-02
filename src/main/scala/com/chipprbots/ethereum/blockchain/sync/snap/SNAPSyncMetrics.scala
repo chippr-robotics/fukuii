@@ -258,45 +258,6 @@ object SNAPSyncMetrics extends MetricsContainer:
   final private val HealingInflationRatioGauge =
     metrics.registry.gauge("snapsync.healing.inflation_ratio.gauge", new AtomicDouble(0d))
 
-  // ===== Scoped Post-Heal Verification (spec 003 C6 — observation-only, FR-010) =====
-  //
-  // Distinguish the scoped post-heal verification path (re-walks only the healed subtrees) from the
-  // full-root fallback, and report how much it covered / how long it took. These NEVER gate any
-  // consensus or completion decision — pure instrumentation pushed by `TrieNodeHealingCoordinator`.
-
-  /** 1 = the last post-heal verification engaged the SCOPED path; 0 = it took the full-root fallback. */
-  final private val HealingScopedVerificationGauge =
-    metrics.registry.gauge("snapsync.healing.scoped_verification.gauge", new AtomicLong(0L))
-
-  /** Number of healed subtrees (seed count) the scoped verification re-walked. */
-  final private val HealingScopedSubtreesGauge =
-    metrics.registry.gauge("snapsync.healing.scoped_subtrees.gauge", new AtomicLong(0L))
-
-  /** Wall time (ms) of the last scoped verification, from launch to the clean-pass completion. */
-  final private val HealingScopedDurationMsGauge =
-    metrics.registry.gauge("snapsync.healing.scoped_duration_ms.gauge", new AtomicLong(0L))
-
-  // ===== Pruned (descend-and-stop) Verification (spec 005 C8/FR-009 — observation-only) =====
-  //
-  // Report whether the last verification engaged the descend-and-stop oracle (vs the full-trie walk), how many
-  // present subtrees it pruned (the savings), how many nodes it visited, and how long it took. These NEVER gate any
-  // consensus or completion decision — pure instrumentation pushed by `TrieNodeHealingCoordinator`. Nodes-visited
-  // reuses the existing `HealingRebuildVisitedGauge` (`snapsync.healing.rebuild_visited.gauge`).
-
-  /** 1 = the last verification engaged the PRUNED (descend-and-stop) path; 0 = full-trie walk (flag off / Path / no
-    * store).
-    */
-  final private val HealingPrunedVerificationGauge =
-    metrics.registry.gauge("snapsync.healing.pruned_verification.gauge", new AtomicLong(0L))
-
-  /** Number of present, recorded-complete subtrees the pruned verification skipped (descend-and-stop hits). */
-  final private val HealingPrunedSubtreesGauge =
-    metrics.registry.gauge("snapsync.healing.pruned_subtrees.gauge", new AtomicLong(0L))
-
-  /** Wall time (ms) of the last pruned verification, from launch to the clean-pass completion. */
-  final private val HealingPrunedDurationMsGauge =
-    metrics.registry.gauge("snapsync.healing.pruned_duration_ms.gauge", new AtomicLong(0L))
-
   // ===== Decoupled Heal Serve-Root (spec 004 C9/FR-010 — observation-only) =====
   //
   // Distinguish the fixed completeness WALK root from the advancing SERVE root used to fetch missing nodes,
@@ -538,16 +499,6 @@ object SNAPSyncMetrics extends MetricsContainer:
   def setHealingGcPauseMs(ms: Long): Unit = HealingGcPauseMsGauge.set(ms)
   def setHealingGcFraction(fraction: Double): Unit = HealingGcFractionGauge.set(fraction)
   def setHealingInflationRatio(ratio: Double): Unit = HealingInflationRatioGauge.set(ratio)
-
-  // spec 003 C6/T016 — scoped post-heal verification (observation-only)
-  def setHealingScopedVerification(scoped: Long): Unit = HealingScopedVerificationGauge.set(scoped)
-  def setHealingScopedSubtrees(count: Long): Unit = HealingScopedSubtreesGauge.set(count)
-  def setHealingScopedDurationMs(ms: Long): Unit = HealingScopedDurationMsGauge.set(ms)
-
-  // spec 005 C8/FR-009 — pruned (descend-and-stop) verification observability (never gates completion).
-  def setHealingPrunedVerification(pruned: Long): Unit = HealingPrunedVerificationGauge.set(pruned)
-  def setHealingPrunedSubtrees(count: Long): Unit = HealingPrunedSubtreesGauge.set(count)
-  def setHealingPrunedDurationMs(ms: Long): Unit = HealingPrunedDurationMsGauge.set(ms)
 
   // spec 004 C9/T019 — decoupled heal serve-root (observation-only)
   def setHealingDecoupledEngaged(engaged: Boolean): Unit = HealingDecoupledEngagedGauge.set(if engaged then 1L else 0L)

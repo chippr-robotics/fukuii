@@ -34,9 +34,6 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 
-// The adoption map for the snap-split verify adoption mode (spec 016 C-H1): the dropped parameter and its member.
-// adopt-map: healingFrontierStorage -> healingFrontier
-
 /** TrieNodeHealingCoordinator manages the healing phase of SNAP sync.
   *
   * State healing downloads missing trie nodes (intermediate branch/extension nodes that snap sync skips) by requesting
@@ -97,8 +94,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // spec 022 D5: whether this coordinator works the durable excluded set (`stateIngest.snapProgress`). The production
     // spawn passes true; false (bare construction, most specs) never reads the store.
     excludedAccounts: Boolean = false,
-    // spec 022 round 2 review hunter N1: where this coordinator says at which root its pass over the set last ended.
-    excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
     // spec 022 T043: where this coordinator says which root its last clean full walk, reported as completion, covered.
     cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
     // spec 022 5d: where this coordinator says, before the signal goes out, which root it decided is complete, with a
@@ -479,7 +474,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     */
   private def stepExcluded(seeding: ExcludedAccountSeeding): Unit =
     val step = seeding.step(stateRoot)
-    if !step.more then excludedPassRoot.foreach(_.set(stateRoot))
     if step.seeds.nonEmpty then
       queueNodes(step.seeds)
       tryRedispatchPendingTasks()
@@ -494,7 +488,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def adoptRootForExcluded(): Unit =
     excludedSeeding.foreach { seeding =>
       seeding.restart()
-      excludedPassRoot.foreach(_.set(null)) // a pass that ended earlier, even at this same root, is not this one's
       excludedCodeAsked.clear()
       try
         if seeding.blocking then
@@ -1921,11 +1914,6 @@ object TrieNodeHealingCoordinator:
   // warning), so a stalled drain (no peers, dead actor) can't deadlock the walk.
   val FrontierBackpressureMaxWaitMs: Long = 10.minutes.toMillis
 
-  /** The default of `sync.snap-sync.scoped-heal-max-paths`, which no longer does anything: the scoped verification it
-    * bounded went with the completeness marker it stood on (spec 022 D6).
-    */
-  val DefaultScopedHealMaxPaths: Int = 200_000
-
   /** Default FR-006 surfacing threshold (spec 004): after this many unsatisfied heal attempts with no serve-root
     * advance in between, the coordinator surfaces the stuck task (log + metric). It NEVER force-completes — a task no
     * serve root can supply keeps the completeness walk from finding zero, so completion can never be falsely declared.
@@ -2025,12 +2013,6 @@ object TrieNodeHealingCoordinator:
       frontierHighWater: Int = DefaultFrontierHighWater,
       frontierLowWater: Int = DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = FrontierBackpressureMaxWaitMs,
-      // spec 022 D6: these four no longer do anything (CF `g` is retired). `ChildFactoriesSpec` pins this factory's
-      // defaults by position and `SNAPSyncControllerPinSpec` the call that passes them, so they go with a `# pins:` change.
-      @annotation.unused scopedHealVerification: Boolean = true,
-      @annotation.unused scopedHealMaxPaths: Int = DefaultScopedHealMaxPaths,
-      @annotation.unused prunedHealVerification: Boolean = true,
-      @annotation.unused frontierPersistenceEnabled: Boolean = false,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
       // moving-root delta heal (#1374); read by the impl (see its ctor).
@@ -2042,7 +2024,6 @@ object TrieNodeHealingCoordinator:
       // spec 022 T038b: the controller's current heal root, which it sets before it sends a re-peg. A supervisor restart
       // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
       markerMayStand: Boolean = false
@@ -2093,7 +2074,6 @@ object TrieNodeHealingCoordinator:
           walkLocalOnly = walkLocalOnly,
           heldMemoryLimit = heldMemoryLimit,
           excludedAccounts = excludedAccounts,
-          excludedPassRoot = excludedPassRoot,
           cleanWalkRoot = cleanWalkRoot,
           decidedRoot = decidedRoot,
           markerMayStand = markerMayStand

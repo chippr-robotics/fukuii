@@ -22,12 +22,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -70,13 +68,12 @@ private class FailingBfsQueue extends InMemoryBfsQueueStorage:
 /** `FrontierRebuildBfs`'s state, environment, Path read and drain wait as plain fields (spec 016 C-H2). Both
   * dispatchers are `ExecutionContext.parasitic`, so the launcher's Future runs the walk inline, and the walk caps keep
   * it on the serial branch. `readPathVerifiedNode` records each read and serves the node by hash from the trie store;
-  * `awaitFrontierDrain` counts its calls. `stateIngest` hands out only `healingFrontier`.
+  * `awaitFrontierDrain` counts its calls. `stateIngest` hands out nothing: the walk reads no store through it.
   */
 private class StubFrontierRebuildState(
     val mptStorage: CountingMptStorage,
     val bfsQueue: BfsQueueStorage,
     val storageScheme: StorageScheme,
-    frontierStore: Option[HealingFrontierStorage],
     val FrontierBatchSize: Int
 ) extends FrontierRebuildBfsState
     with TrieNodeHealingEnv
@@ -110,7 +107,6 @@ private class StubFrontierRebuildState(
   val healedCodeCheck: Boolean = false
   val selfInbox: TestInbox[TrieNodeHealingCoordinator.Command] = TestInbox[TrieNodeHealingCoordinator.Command]()
   val self: ActorRef[TrieNodeHealingCoordinator.Command] = selfInbox.ref
-  val frontierPersistenceEnabled: Boolean = false
   val decoupledHealServeRoot: Boolean = false
   val decoupledHealMaxAttemptsNoRefresh: Int = 3
   val frontierHighWater: Int = 100
@@ -129,7 +125,6 @@ private class StubFrontierRebuildState(
     def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = frontierStore
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // PathVerifiedReadApi
@@ -150,9 +145,9 @@ private class StubFrontierRebuildState(
   * and hands the walk's missing-node count to `onComplete`; each missing node is emitted once as `FrontierRebuilt`
   * (with its pathset) behind one drain wait per batch, on the branch and the extension de-dup arms; the scratch queue
   * is empty after the walk; a walk that throws reports `FrontierWalkFailed` and never calls `onComplete`; the spec 005
-  * descend-and-stop oracle prunes a recorded subtree only when `prunedEnabled`; several seeds share one visited set;
-  * and the per-scheme reads and de-dup keys (Hash: one batched hash read per chunk and one visit per node hash; Path: a
-  * path-verified read per entry and one visit per location).
+  * descend-and-stop oracle prunes a recorded subtree only when `prunedEnabled`; and the per-scheme reads and de-dup
+  * keys (Hash: one batched hash read per chunk and one visit per node hash; Path: a path-verified read per entry and
+  * one visit per location).
   */
 class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
@@ -163,12 +158,11 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
   private def stub(
       fixture: HealingTrieFixtures.SharedAncestorFixture,
       scheme: StorageScheme = StorageScheme.Hash,
-      store: Option[HealingFrontierStorage] = None,
       queue: BfsQueueStorage = new InMemoryBfsQueueStorage(),
       batchSize: Int = 1000
   ): StubFrontierRebuildState & FrontierRebuildBfs =
     val trie = new CountingMptStorage(fixture.storage)
-    new StubFrontierRebuildState(trie, queue, scheme, store, batchSize) with FrontierRebuildBfs
+    new StubFrontierRebuildState(trie, queue, scheme, batchSize) with FrontierRebuildBfs
 
   private def emitted(s: StubFrontierRebuildState): Seq[Seq[HealingEntry]] =
     s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries, _) => entries }
@@ -226,20 +220,6 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     completed shouldBe None
     s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get))
     s.verificationBFSRunning shouldBe true // left for the core's FrontierWalkFailed arm
-  }
-
-  // spec 022 D6, T043: this is what makes the walk a repair pass. An older binary's records say nothing it can trust.
-  it should "descend a present subtree an older binary recorded as complete, and find the hole in it" taggedAs UnitTest in {
-    val fixture = HealingTrieFixtures.sharedAncestor()
-    val store = new HealingFrontierStorage(EphemDataSource())
-    store.markSubtreeComplete(fixture.sharedAncestorHash)
-    store.markSubtreeComplete(fixture.rootHash)
-
-    val s = stub(fixture, store = Some(store))
-    var completed: Option[Long] = None
-    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
-    completed shouldBe Some(1L)
-    emitted(s).flatten.map(_.hash) shouldBe Seq(fixture.missingNodeHash)
   }
 
   // ---- the storage descent, on Hash (spec 022 review forge F3): no other test pins it now the oracle's are gone --------
@@ -389,23 +369,6 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.walkSkips.get() shouldBe 0L
   }
 
-  it should "share one visited set across several seeds" taggedAs UnitTest in {
-    val fixture = HealingTrieFixtures.sharedAncestor()
-    val root = fixture.storage.get(fixture.rootHash.toArray).asInstanceOf[com.chipprbots.ethereum.mpt.BranchNode]
-    def child(i: Int): ByteString =
-      ByteString(root.children(i).asInstanceOf[com.chipprbots.ethereum.mpt.HashNode].hashNode)
-    val s = stub(fixture)
-    var completed: Option[Long] = None
-
-    s.startFrontierBFS(
-      Seq((child(0), Seq(compact(0)), false), (child(1), Seq(compact(1)), false)),
-      (_: Long, n: Long) => completed = Some(n)
-    )
-
-    completed shouldBe Some(1L)
-    emitted(s).flatten shouldBe Seq(HealingEntry(Seq(compact(0, 0, 2)), fixture.missingNodeHash))
-  }
-
   it should "tag its batches with the root the walk was launched on (spec 022 review W1)" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
     def roots(s: StubFrontierRebuildState): Seq[ByteString] =
@@ -416,15 +379,6 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     rootWalk.stateRoot = ByteString(Array.fill[Byte](32)(9))
     rootWalk.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, _: Long) => ())
     roots(rootWalk) shouldBe Seq(fixture.rootHash)
-
-    // A subtree walk (scoped verification) carries the walk root at launch.
-    val root = fixture.storage.get(fixture.rootHash.toArray).asInstanceOf[com.chipprbots.ethereum.mpt.BranchNode]
-    val seed = ByteString(root.children(0).asInstanceOf[com.chipprbots.ethereum.mpt.HashNode].hashNode)
-    val subtreeWalk = stub(fixture)
-    val atLaunch = ByteString(Array.fill[Byte](32)(5))
-    subtreeWalk.stateRoot = atLaunch
-    subtreeWalk.startFrontierBFS(Seq((seed, Seq(compact(0)), false)), (_: Long, _: Long) => ())
-    roots(subtreeWalk) shouldBe Seq(atLaunch)
   }
 
   it should "start no walk while its own runs or another walk holds the queue, and give the queue back as a walk ends (spec 022 fix round 4)" taggedAs UnitTest in {

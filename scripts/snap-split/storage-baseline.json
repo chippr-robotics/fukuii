@@ -14,16 +14,16 @@
     "storage_members": []
   },
   "counter": 2,
-  "storage_refs_total": 551,
+  "storage_refs_total": 544,
   "storage_refs": {
     "controller/SnapResumePlanner.scala": 95,
-    "SNAPSyncController.scala": 74,
+    "SNAPSyncController.scala": 73,
     "controller/PivotSelector.scala": 49,
     "controller/SnapFinalization.scala": 45,
     "controller/DownloadSupervisor.scala": 42,
     "actors/StorageRangeCoordinator.scala": 39,
     "controller/ChildFactories.scala": 38,
-    "controller/HealingOrchestrator.scala": 29,
+    "controller/HealingOrchestrator.scala": 23,
     "controller/SyncLifecycle.scala": 18,
     "actors/TrieNodeHealingCoordinator.scala": 17,
     "actors/AccountRangeCoordinator.scala": 16,
@@ -59,7 +59,7 @@
   "capabilities": {
     "StateIngest": {
       "file": "controller/StateIngest.scala",
-      "members": 14,
+      "members": 13,
       "raw_imports": []
     }
   }

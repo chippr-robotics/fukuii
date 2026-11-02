@@ -2055,9 +2055,8 @@ object SyncController:
           val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
           val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
           val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
-          // The healing stores (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
-          // out none (the core's are HealingOrchestrator's lazy vals, never built here).
-          val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None
+          // The healing store (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
+          // out none (the core's is HealingOrchestrator's lazy val, never built here).
           val bfsQueueStorageOpt: Option[BfsQueueStorage] = None
           val stateIngest: StateIngest = StateIngest(
             appStateStorage,
@@ -2071,7 +2070,6 @@ object SyncController:
             StateIngest.Durability.Default,
             snapProgressStorage,
             storageDoneStorage,
-            healingFrontierStorageOpt,
             bfsQueueStorageOpt
           )
 

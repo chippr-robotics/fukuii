@@ -560,7 +560,6 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
               batchSize = 16,
               snapSyncController = controller.ref,
               stateIngest = HealingTrieFixtures.healingIngest(
-                None,
                 bfsQueueStore = Some(queue),
                 pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns),
                 appStateStore = Some(appState)
@@ -780,7 +779,6 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
               snapSyncController = controller.ref,
               concurrency = 16,
               stateIngest = HealingTrieFixtures.healingIngest(
-                None,
                 pathNodeStore = Option.when(scheme == StorageScheme.Path)(pns),
                 appStateStore = Some(appState)
               ),

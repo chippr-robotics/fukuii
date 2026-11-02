@@ -25,7 +25,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -99,7 +98,6 @@ object ChildSpawn:
       snapSyncController: ActorRef[SNAPSyncController.Command],
       concurrency: Int,
       visitedCap: Int,
-      healingFrontierStorage: Option[HealingFrontierStorage],
       healingWriterEcOverride: Option[ExecutionContext],
       healingReaderEcOverride: Option[ExecutionContext],
       traversalParallelism: Int,
@@ -111,10 +109,6 @@ object ChildSpawn:
       frontierHighWater: Int,
       frontierLowWater: Int,
       frontierBackpressureMaxWaitMs: Long,
-      scopedHealVerification: Boolean,
-      scopedHealMaxPaths: Int,
-      prunedHealVerification: Boolean,
-      frontierPersistenceEnabled: Boolean,
       decoupledHealServeRoot: Boolean,
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
@@ -333,10 +327,6 @@ final class RecordingChildFactories(
       frontierHighWater: Int,
       frontierLowWater: Int,
       frontierBackpressureMaxWaitMs: Long,
-      scopedHealVerification: Boolean,
-      scopedHealMaxPaths: Int,
-      prunedHealVerification: Boolean,
-      frontierPersistenceEnabled: Boolean,
       decoupledHealServeRoot: Boolean,
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
@@ -345,7 +335,6 @@ final class RecordingChildFactories(
       heldMemoryLimit: Long,
       excludedAccounts: Boolean,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
       cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
       decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
       markerMayStand: Boolean
@@ -362,7 +351,6 @@ final class RecordingChildFactories(
       snapSyncController,
       concurrency,
       visitedCap,
-      stateIngest.healingFrontier,
       healingWriterEcOverride,
       healingReaderEcOverride,
       traversalParallelism,
@@ -374,10 +362,6 @@ final class RecordingChildFactories(
       frontierHighWater,
       frontierLowWater,
       frontierBackpressureMaxWaitMs,
-      scopedHealVerification,
-      scopedHealMaxPaths,
-      prunedHealVerification,
-      frontierPersistenceEnabled,
       decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal,

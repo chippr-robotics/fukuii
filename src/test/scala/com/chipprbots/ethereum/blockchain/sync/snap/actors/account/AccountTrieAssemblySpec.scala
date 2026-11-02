@@ -40,7 +40,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -139,7 +138,6 @@ private[actors] class StubAccountTrieAssemblyState(
     def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   private def notReached(member: String): Nothing =

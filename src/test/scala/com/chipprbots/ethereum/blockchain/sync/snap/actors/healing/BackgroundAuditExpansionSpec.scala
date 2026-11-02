@@ -71,7 +71,6 @@ class BackgroundAuditExpansionSpec extends AnyFlatSpec with Matchers:
       new CountingMptStorage(store),
       new InMemoryBfsQueueStorage(),
       StorageScheme.Hash,
-      None,
       1000
     ) with FrontierRebuildBfs
     s.startFrontierBFS(ByteString(root.hash), emptyPath, isStor = false, (_: Long, _: Long) => ())

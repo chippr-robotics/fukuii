@@ -39,7 +39,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -172,9 +171,8 @@ private[snap] class StubHealingOrchestratorState(
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None
 
-  // The healing stores the healing spawn reads through `stateIngest` (spec 016 C-H1); in production they are the
-  // controller's `HealingOrchestrator` lazy vals, here plain stores over the stub's data source.
-  lazy val healingFrontierStore: Option[HealingFrontierStorage] = Some(new HealingFrontierStorage(dataSource))
+  // The healing store the healing spawn reads through `stateIngest` (spec 016 C-H1); in production it is the
+  // controller's `HealingOrchestrator` lazy val, here a plain in-memory store.
   lazy val bfsQueueStore: Option[BfsQueueStorage] = Some(new InMemoryBfsQueueStorage())
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
@@ -187,7 +185,6 @@ private[snap] class StubHealingOrchestratorState(
     blockchainReader,
     blockchainWriter,
     validatorFactory,
-    healingFrontierStore,
     bfsQueueStore
   )
 
@@ -311,8 +308,6 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     withClue("spec 022 5d: `SNAPSyncConfig` defers merkleization by default, and no marker can hold there: ") {
       spawn.markerMayStand shouldBe false
     }
-    spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
-    spawn.healingFrontierStorage shouldBe defined
     spawn.bfsQueueStorageOpt shouldBe defined
     h.kit.childInbox[TrieNodeHealingCoordinator.Command]("trie-node-healing-coordinator-3").receiveAll() shouldBe Seq(
       TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value),
@@ -515,7 +510,6 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.stateIngest.snapProgress =
       new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(h.module.appStateStorage.dataSource)
     h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
-    h.module.healingExcludedPassRoot.set(root.value)
     h.module.syncedWrites.clear()
     h.module.rangeDeletesAt.clear()
 
