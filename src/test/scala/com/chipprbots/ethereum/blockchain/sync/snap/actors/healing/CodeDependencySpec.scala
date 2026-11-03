@@ -417,6 +417,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks)
       rig.available()
       rig.settle()
+      rig.peer.awaitRequested(rig.t.root.pathset)
       withClue("asked for the root: ")(rig.peer.requests.flatten should contain(rig.t.root.pathset))
       val deadline = 30.seconds.fromNow
       val pause = createTestProbe[Any]()
