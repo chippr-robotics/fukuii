@@ -98,8 +98,11 @@ src/main/scala/com/chipprbots/ethereum/
 ├── export/                                   # NEW package (justification below)
 │   ├── record/                               # pure: depends on domain, rlp, crypto only (018 F2 can reuse it)
 │   │   ├── Record.scala                      # enum RecordType; Record, BlockBody, AccountEntry, SlotEntry, CodeEntry
-│   │   ├── RecordCodec.scala                 # version byte + RLP encode/decode, canonical ordering, netting
-│   │   └── StateDiff.scala                    # the semantic diff model (prev/new) the recorder produces
+│   │   └── RecordCodec.scala                 # version byte + RLP encode/decode (body, diff), canonical ordering, netting
+│   │
+│   │   (the semantic diff model is `domain/statediff/StateDiff.scala`, shared with 026 and 018 F2: account entry
+│   │    addressHash/address/prev/next/slots, slot entry slotHash/slotKey/prev/next, code new-only; its creating
+│   │    task is shared with 026's and idempotent)
 │   ├── capture/
 │   │   ├── BlockWriteSetRecorder.scala       # key collection per persist; block-end resolution (research R-1)
 │   │   └── RecordBuilder.scala               # Block + receipts + StateDiff → Record

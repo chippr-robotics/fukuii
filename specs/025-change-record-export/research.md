@@ -100,6 +100,18 @@ table in `plan.md`.
   along because the indexer's balance tables are by address and `eth_getBalance` (SC-004) takes an address; without
   them the record cannot be checked against an archive node. The preimage is 20 + 32 bytes per entry; it is the
   cheapest field in the record and the one every external consumer needs first.
+- The block body rides in the record (`transactions`, `uncles`, `withdrawals`; alignment analysis F1). Spec 026's
+  followers serve `eth_getTransactionReceipt`, `eth_getTransactionBy*` and full-transaction blocks, which need
+  `BlockBodiesStorage` and `TransactionMappingStorage` rows that cannot be derived from a header, receipts and a state
+  diff alone; shipping the body in the record keeps the record self-contained (DC-2) and spares followers a second
+  fetch channel. It costs no new trust: each item is verifiable against the header roots the follower already checks
+  (`transactionsRoot`, `ommersHash`, `withdrawalsRoot`; `contracts/record-schema.md` §3 rule 5). Transactions reuse the
+  node's own block-body encoding (typed transactions as one byte string, `ETHPackets.scala:459-467`,
+  `domain/BlockBody.scala:68-89`), uncles reuse `BlockHeaderEnc`, withdrawals reuse `WithdrawalEnc`
+  (`domain/Withdrawal.scala:27`), so no new transaction encoder exists to drift.
+- The decoded diff type is `com.chipprbots.ethereum.domain.statediff.StateDiff`, shared with spec 026 and spec 018 F2
+  (account entry: `addressHash`, `address`, `prev`, `next`, `slots`; slot entry: `slotHash`, `slotKey`, `prev`,
+  `next`; `code` entries new-only). The task that creates it is shared with 026's and is idempotent.
 - Code entries are `[codeHash, code]`, new blobs only. Code is content-addressed and immutable, so "previous value" is
   always absent for a hash that appears; a hash that already existed is not listed. Backward application leaves code
   in place (a follower may garbage-collect by reference count; the record does not require it). This is the one place

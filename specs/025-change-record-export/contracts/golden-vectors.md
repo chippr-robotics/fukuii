@@ -6,7 +6,8 @@
 
 One vector set pins the bytes of every record type so that (a) this spec's codec tests, (b) spec 018 F2's changeset
 tests and (c) any external consumer's decoder agree byte for byte (SC-005: "the vectors are identical files"). A change
-to any reused encoder (`BlockHeaderEnc`, `ReceiptCodecs`, `AccountEnc`, `rlpBigIntSerializer`) that alters these bytes
+to any reused encoder (`BlockHeaderEnc`, `ReceiptCodecs`, `AccountEnc`, `rlpBigIntSerializer`, the block-body
+transaction and `WithdrawalEnc` encoders) that alters these bytes
 fails the test and forces a schema-version decision instead of a silent format drift.
 
 ## 2. Location
@@ -23,6 +24,12 @@ src/test/resources/export/golden/v1/
 │                                #   slot absent (netting)
 ├── block-selfdestruct.hex       # ETC-style destruction: newAccount "", all previous slots listed with newValue ""
 ├── block-typed-receipts.hex     # type 0x02 and 0x03 receipts with logs (ETH family)
+├── block-typed-body-withdrawals.hex  # ETH family (Sepolia shape): one EIP-1559 (0x02) and one EIP-4844 (0x03)
+│                                #   transaction beside one legacy transaction in `transactions`, empty `uncles`,
+│                                #   two withdrawals (EIP-4895) with a non-empty `withdrawalsRoot`; the three body
+│                                #   roots in the manifest equal the header's (record-schema.md §3 rule 5)
+├── block-etc-uncle.hex          # ETC family (Mordor shape): one legacy transaction, one uncle header in `uncles`,
+│                                #   `withdrawals = []`, `ommersHash` = keccak(RLP(uncles))
 ├── retraction.hex
 ├── finality-genesis.hex         # ETC genesis watermark
 ├── finality-eth.hex             # ETH-family watermark at a non-zero height

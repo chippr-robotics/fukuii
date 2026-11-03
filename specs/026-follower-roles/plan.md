@@ -277,8 +277,8 @@ No Constitution Check violation; nothing to justify.
 6. **023 T-004 (error codes).** 023's registry owns `-32020 not served by this role` (final message text is 023's) and
    the follower entries `-32023`, `-32024`, `-32025`, `-32026` (data-model §7); 026 adopts them and verified they
    collide with nothing in `JsonRpcError.scala`.
-7. **023 FR-004 (health shape).** Followers add `retentionWindow {fromBlock, toBlock}`, `fault`, `seedBlock` (data-model §8); 023 T-005
-   should leave room for role-specific members.
+7. **023 FR-004 (health shape).** Followers add `retentionWindow {fromBlock, toBlock}`, `fault`, `seedBlock` (data-model §8);
+   023 T-005 should leave room for role-specific members.
 8. **024 FR-007 (profiles).** The `replica` profile key is `retention-window-blocks`, defaults 6,650 (ETC family) and
    7,200 (ETH family); 024's loader validates it as a positive integer and 026 reads it through `FollowConfig`.
 9. **022.** The follower never reads `snap.heal.invariant`; the seed import sets the SNAP done flags as the checkpoint

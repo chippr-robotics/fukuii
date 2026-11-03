@@ -206,7 +206,7 @@ transaction. A block's transaction bytes are bounded by its gas limit, because c
 under the EIP-7623 floor: at a 60M gas limit that is at most about 6 MB of transactions (a blob transaction carries
 versioned hashes, not blob data). The largest Sepolia blocks are a few MB. Receipts and the state diff add the same
 order of magnitude in the worst case, so the worst-case record is below 16 MiB and the default is **not raised**; the
-Oversize halt (research R-6) remains the guard. T078 re-measures the largest record on Mordor and Platåberget; a chain
+Oversize halt (research R-6) remains the guard. T084 re-measures the largest record on Mordor and Platåberget; a chain
 whose gas limit rises toward 150M needs `max-request-size` and the broker's `message.max.bytes` (`contracts/topic.md`
 §3) raised together.
 

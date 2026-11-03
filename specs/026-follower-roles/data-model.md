@@ -305,8 +305,8 @@ entries 023 registered for 026. They collide with nothing in `jsonrpc/JsonRpcErr
 (`jsonrpc/EthSimulateService.scala:1343`), which is not a `JsonRpcError`.
 
 Echo of the pinned block for scalar results: the HTTP header `Fukuii-Pinned-Block` by default; the response extension
-member `"pinnedBlock": {"number": "0x…", "hash": "0x…"}` only when `fukuii.follow.rpc.pin-member = true` (research R-6;
-contracts/follower-rpc.md §3).
+member `"pinnedBlock": {"number": "0x…", "hash": "0x…"}` only when `fukuii.follow.rpc.pin-member = true`
+(research R-6; contracts/follower-rpc.md §3).
 
 ---
 
