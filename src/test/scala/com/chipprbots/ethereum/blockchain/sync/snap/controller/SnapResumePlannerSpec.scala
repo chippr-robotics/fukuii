@@ -577,15 +577,56 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.appStateStorage.stampSnapHealInvariant().commitSync()
     h.module.appStateStorage
 
-  it should "withdraw the marker when a Path account phase resumes cursors" taggedAs UnitTest in {
+  // The user's decision, 2026-11-01: only a fresh phase over nodes already there withdraws. The audit covers a resume.
+  it should "keep the marker when a Path account phase resumes cursors, over nodes already there" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-marker-resume")
     val h = new Harness(pathConfig)
     val app = stamped(h)
-    h.module.preservedRangeProgress = aCursor
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    h.module.preservedRangeProgress = layoutCursors(4)
+    h.module.preservedTaskFiles = Some(validTaskFiles(dir, "resumed"))
     h.module.preservedAtPivotBlock = Some(BigInt(1_000))
 
-    h.call(m => m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100)))
+    var carried: Option[ContractTaskFiles] = None
+    h.call(m => carried = m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100))._2)
 
+    withClue("the launch does resume: ")(carried shouldBe defined)
+    app.hasSnapHealInvariant() shouldBe true
+    deleteDir(dir)
+  }
+
+  // beacon 1: cursors alone are no resume. Without the task files every partial range starts over from its start, so this
+  // is a fresh phase over those nodes, whatever the cursors say.
+  it should "withdraw the marker with cursors and no task files: every partial range starts over" taggedAs UnitTest in {
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    h.module.preservedRangeProgress = layoutCursors(4)
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+
+    var cursors: Map[ByteString, ByteString] = Map.empty
+    h.call(m => cursors = m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100))._1)
+
+    withClue("the cursors do reach the launch: ")(cursors should not be empty)
     app.isSnapHealInvariantPresent() shouldBe false
+  }
+
+  it should "withdraw the marker with cursors whose task files are rejected: the same" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-marker-rejected")
+    val h = new Harness(pathConfig)
+    val app = stamped(h)
+    h.module.pathNodeStorageOpt.get.writeAccountNode(Array[Byte](1), Array[Byte](1, 2))
+    h.module.preservedRangeProgress = layoutCursors(4)
+    // Counts more entries than the files hold, so `checkResumable` turns them down.
+    h.module.preservedTaskFiles = Some(contractTaskFiles(dir, "short"))
+    h.module.preservedAtPivotBlock = Some(BigInt(1_000))
+
+    var carried: Option[ContractTaskFiles] = Some(contractTaskFiles(dir, "unset"))
+    h.call(m => carried = m.selectAccountResume(TrieRoot(savedRoot), 4, BigInt(1_100))._2)
+
+    withClue("they are turned down: ")(carried shouldBe None)
+    app.isSnapHealInvariantPresent() shouldBe false
+    deleteDir(dir)
   }
 
   it should "withdraw the marker when a fresh Path account phase starts over nodes already there" taggedAs UnitTest in {

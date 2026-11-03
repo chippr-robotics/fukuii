@@ -77,7 +77,8 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       absentFromBoth: Set[String] = Set.empty,
       sharedQueue: Option[com.chipprbots.ethereum.db.storage.BfsQueueStorage] = None,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      writerEc: Option[scala.concurrent.ExecutionContext] = None
+      writerEc: Option[scala.concurrent.ExecutionContext] = None,
+      movingRootDeltaHeal: Boolean = false
   ):
     val ec = new ManualExecutionContext
     val trie: PathHealPresenceFixtures.Trie = PathHealPresenceFixtures.accountTrieOld()
@@ -103,9 +104,10 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       mptStorage = hashStore,
       batchSize = 16,
       snapSyncController = controller.ref,
-      stateIngest = HealingTrieFixtures.healingIngest(None, Some(sharedQueue.getOrElse(queue))),
+      stateIngest = HealingTrieFixtures.healingIngest(Some(sharedQueue.getOrElse(queue))),
       healingWriterEcOverride = Some(writerEc.getOrElse(ec)),
       currentRoot = currentRoot,
+      movingRootDeltaHeal = movingRootDeltaHeal,
       cleanWalkRoot = Some(cleanWalkRoot)
     )
 
@@ -412,6 +414,55 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     rig.drive(c)
     rig.awaitComplete()
     withClue("what the clean walk covered is the current root: ")(rig.cleanWalkRoot.get() shouldBe rig.otherRoot)
+  }
+
+  // ---- spec 022 T050a, hunter N3: nothing brings a restarted coordinator back but itself --------------------------------
+
+  it should "walk the current root at once after a supervisor restart, with nothing sent to it (N3)" taggedAs UnitTest in {
+    val current = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+    val rig = new Rig(otherOnDisk = true, currentRoot = Some(current))
+    current.set(rig.trie.root.hash)
+    val c = rig.spawnSupervised()
+    current.set(rig.otherRoot)
+    rig.crash(c)
+    rig.settle(c)
+    withClue("its rebuild is queued, not waiting for the dead-pulse watchdog: ")(rig.ec.pending should be > 0)
+    rig.drive(c)
+    rig.awaitComplete()
+    rig.cleanWalkRoot.get() shouldBe rig.otherRoot
+  }
+
+  it should "seed an absent current root at once after a supervisor restart, and fetch it (N3)" taggedAs UnitTest in {
+    val current = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+    val rig = new Rig(absentFromBoth = Set("root"), currentRoot = Some(current), movingRootDeltaHeal = true)
+    current.set(rig.trie.root.hash)
+    val c = rig.spawnSupervised()
+    rig.crash(c)
+    c ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+      com.chipprbots.ethereum.testing.PeerTestHelpers.createTestPeer("n3-peer", createTestProbe[Any]().ref.toClassic)
+    )
+    val sent = rig.peers.fishForMessage(30.seconds) {
+      case NetworkPeerManagerActor.SendMessageCmd(message, _) =>
+        message.underlyingMsg match
+          case _: com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes => FishingOutcomes.complete
+          case _                                                                 => FishingOutcomes.continueAndIgnore
+      case _ => FishingOutcomes.continueAndIgnore
+    }
+    val paths = sent.collect { case NetworkPeerManagerActor.SendMessageCmd(message, _) =>
+      message.underlyingMsg.asInstanceOf[com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes].paths
+    }
+    paths.last shouldBe Seq(Seq(rig.emptyPath))
+  }
+
+  it should "not start a second walk when the start the restart lost was already in its mailbox" taggedAs UnitTest in {
+    val rig = new Rig(otherOnDisk = true)
+    val c = rig.spawnSupervised()
+    rig.crash(c) // incarnation 2's own start goes first
+    c ! StartTrieNodeHealing(rig.trie.root.hash)
+    rig.settle(c)
+    withClue("one rebuild queued: ")(rig.ec.pending shouldBe 1)
+    rig.drive(c)
+    rig.awaitComplete()
   }
 
   // ---- spec 022 T038c, slice-2 notes ----------------------------------------------------------------------------------

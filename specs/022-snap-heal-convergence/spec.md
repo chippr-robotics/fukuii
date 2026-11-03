@@ -4,10 +4,10 @@
 
 **Created**: 2026-10-28
 
-**Status**: Active (2026-10-31). Slices 1–4 merged (#1682, #1684, #1685, #1688); slice 5 is four PRs (5a the download phases' gaps, 5b the restart items, 5c the audit, 5d the completion switch, which lands last), then slice 6 and the Mordor and Sepolia release gates. 0.11.0 blocker (#1671).
+**Status**: Active (2026-11-02). Slices 1–5 merged (#1682, #1684, #1685, #1688; 5a #1690, 5b #1691, 5c #1693, 5d #1695), and #1694's repair of holes under `newPayload` (#1697). Slice 6 is three PRs (6a docs and decision records, 6b dead wiring, 6c config keys), then the Mordor and Sepolia release gates. 0.11.0 blocker (#1671).
 **Tracking**: issue #1671. Release 0.11.0 (#1659). The release waits on this (user decision 2026-10-28).
 
-**In flight**: `dev-node` (local build-host session), branch `fix/022-s5a-prerequisites`
+**In flight**: `dev-node` (local build-host session), branch `fix/022-s6a-docs`
 **Release**: 0.11.0
 
 **Input**: SNAP state healing must converge on a live chain for both ETH (Path scheme) and ETC (Hash scheme). The node declares state complete when healing has nothing left to fetch from the current root, not after a full-trie verification walk. The full walk becomes a non-blocking background audit. The spec also evaluates retiring the Hash scheme. Full input: issue #1671 and its comments.
@@ -165,7 +165,7 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
   - On Hash, nodes already flushed cannot be recalled, so the account's storage root and code are seeded for healing, resolved against the current root on every pivot move.
   - *Original wording:* "MUST NOT commit to the account trie an account whose storage or code is incomplete". This cannot be implemented on Hash, because the account trie is built before the storage outcome is known (research.md R-2).
 - **FR-006** *(amended 2026-10-30; decided by the user)*: Every account excluded under FR-005 MUST be reachable by healing from the current root, and MUST be fetched before completion is declared.
-  - If unservable bytecode is the only thing still blocking healing after 30 idle minutes, the node writes the chains waiting only on that code, verifies the rest of the trie with a walk, and takes a lazy hand-off with `bytecodeRecoveryDone` unset. Healing MUST NOT report complete in this case: no `StateHealingComplete` and no completeness marker. The node reaches the head, fetches missing code on demand, and runs the recovery scan at next start.
+  - If unservable bytecode is the only thing still blocking healing after 30 idle minutes, the node writes the chains waiting only on that code, verifies the rest of the trie with a walk where the invariant marker does not stand, and takes a lazy hand-off with `bytecodeRecoveryDone` unset. Healing MUST NOT report complete in this case: no `StateHealingComplete` and no completeness marker. The node reaches the head, fetches missing code on demand, and the background audit, or with it off the recovery scan at the next start, looks for it.
   - If anything else is still blocking, no such commit is made, and the existing abandon and re-peg paths apply.
 - **FR-007** (Path): When one node is needed at more than one position, every position MUST be recorded, filled when the node arrives, and re-discovered if a pivot move drops the request.
 - **FR-008** (Path): When a node is written at a position that replaces a deeper subtree, nodes left at deeper positions under it MUST be removed, or MUST be guaranteed never to be read as valid.
@@ -175,12 +175,10 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
 - **FR-009**: Healing MUST walk down from the current pivot root. It MUST skip a node already present with a matching hash (at its position, for Path), and MUST NOT descend below it.
 - **FR-010**: On a pivot move, healing MUST restart from the new root. It MUST keep everything on disk and MUST drop held, unpersisted nodes. Keeping pending requests across the move (task #86) MAY be added as an optimisation, but correctness MUST NOT depend on it.
 - **FR-011**: The node MUST declare state complete when healing has no pending, in-flight or held work for the current pivot root, and no account excluded under FR-005 is outstanding. This rule MUST be the same on both schemes.
-- **FR-012**: A full-trie verification walk MUST NOT be a precondition for declaring completion on either scheme. This replaces:
-  - the stale-discard rule and its fallback limit;
-  - the requirement for a walk that finds nothing;
-  - the separate controller walk on the Hash scheme.
+- **FR-012** *(amended 2026-11-01, PR 5d)*: A full-trie verification walk MUST NOT be a precondition for declaring completion on either scheme where the invariant marker stands (read at the decision; FR-015). There it replaces the stale-discard rule and its fallback limit, and the requirement for a walk that finds nothing, and the current root MUST be present or be fetched first. Where the marker does not stand the walk stays as what repairs: a pre-invariant datadir, a run that lost track, a fresh Path account phase over existing nodes, `pruning.mode = inmemory`, `deferred-merkleization = true`. The separate controller walk on the Hash scheme is replaced everywhere.
+  - *Original wording:* "A full-trie verification walk MUST NOT be a precondition for declaring completion on either scheme." The walk could go only where the marker's claim is true, and elsewhere nothing else repairs (tasks.md T050a, T051).
 - **FR-013**: After handoff, the node MUST be able to run the full-trie walk as a background audit that does not block block import. Any missing node it finds MUST go to on-demand repair and MUST be logged with its position.
-- **FR-014**: Every on-demand state fetch during block import after handoff MUST be counted and logged, with the account or storage position, so operators can tell residual holes from expected misses.
+- **FR-014**: Every on-demand state fetch during block import after handoff MUST be counted and logged, with the account or storage position, so operators can tell residual holes from expected misses. A hole that keeps the Engine API from executing a block MUST be counted and logged the same way: it answers ACCEPTED and the importer repairs it on reaching the block, so this is the first sign of one (research R-5h).
 
 **Existing datadirs and compatibility**
 
@@ -194,7 +192,7 @@ The user's direction: "we do not need to keep hash if it is inefficient." The te
   - pending and in-flight heal requests;
   - accounts excluded under FR-005 and still outstanding;
   - time since the current pivot root was adopted.
-- **FR-018**: The completion log MUST state the pivot root, the number of nodes healed, and that no full-trie gate walk ran.
+- **FR-018**: The completion log MUST state the pivot root, the number of nodes healed, and that no full-trie gate walk ran, or that one did and what it decided: a walk that ran and did not decide must not read as no walk.
 
 **Cleanup and evaluation**
 

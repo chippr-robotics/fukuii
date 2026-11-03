@@ -63,29 +63,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     config.maxSnapSyncFailures should be > 0
   }
 
-  // spec-005 (spec 016 T015): the pruned post-heal verification is on by default, both in the case class and when the
-  // key is absent from config, and the key can turn it off. The store gate and the forwarded value are pinned through
-  // the controller in SNAPSyncControllerPinSpec.
-  it should "spec-005: default prunedHealVerification to true in the case class" taggedAs UnitTest in {
-    SNAPSyncConfig().prunedHealVerification shouldBe true
-  }
-
-  it should "spec-005: default prunedHealVerification to true when pruned-heal-verification is absent" taggedAs UnitTest in {
-    val sync = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
-    val absent = sync.withoutPath("snap-sync.pruned-heal-verification")
-    absent.hasPath("snap-sync.pruned-heal-verification") shouldBe false
-    SNAPSyncConfig.fromConfig(absent).prunedHealVerification shouldBe true
-  }
-
-  it should "spec-005: parse pruned-heal-verification = false" taggedAs UnitTest in {
-    val sync = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
-    val off = sync.withValue(
-      "snap-sync.pruned-heal-verification",
-      com.typesafe.config.ConfigValueFactory.fromAnyRef(false)
-    )
-    SNAPSyncConfig.fromConfig(off).prunedHealVerification shouldBe false
-  }
-
   // Regression for #1162: chain backfill is decoupled from SNAP completion. The new
   // `chainBackfillConcurrentRequests` budget controls how many in-flight ETH requests background
   // backfill is allowed once regular sync has taken over. Default must be small (yield to regular sync).
@@ -220,7 +197,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "run healing when deferred merkleization is OFF" taggedAs UnitTest in {
-    // spec 009 T013: the non-deferred path ALWAYS runs healing (returns false). The historical rationale was FALSE —
+    // #1374 T013: the non-deferred path ALWAYS runs healing (returns false). The historical rationale was FALSE —
     // the non-deferred path writes per-task FRAGMENT roots, NOT the pivot/heal root, so that root node is typically
     // ABSENT locally. Healing still works because under movingRootDeltaHeal the coordinator SEEDS the absent served
     // root and FETCHES it (it does not need a local coherent root). The routing decision here is unchanged on BOTH
@@ -463,7 +440,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   }
 
   // walkGeneration epoch isolation model (D1 regression — commit 169c4b64c).
-  // SNAPSyncController uses a Long counter (walkGeneration) so that TrieWalk* messages
+  // SNAPSyncController uses a Long counter (walkGeneration) so that walk messages
   // carrying a stale generation are silently discarded rather than processed against
   // the wrong state root.  This test models the counter semantics as pure logic so a
   // future refactor cannot reintroduce the race without a failing test.
@@ -513,7 +490,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     var healingValidatedRoot: Option[ByteString] = None
     val rootA = ByteString("root-a".getBytes)
 
-    // TrieWalkComplete(0) sets the signal against the current root.
+    // The clean completion (`completeHealingWalkClean`) sets the signal against the current root.
     healingValidatedRoot = Some(rootA)
 
     // validateState() decision: skip if signal matches.
@@ -538,17 +515,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     // a stale signal against the OLD root must NOT short-circuit validation against the NEW root.
     val expectedRoot = rootB
     healingValidatedRoot.contains(expectedRoot) shouldBe false
-  }
-
-  it should "NOT capture signal when healing reports missing nodes (TrieWalkComplete(N>0))" taggedAs UnitTest in {
-    var healingValidatedRoot: Option[ByteString] = None
-    val rootA = ByteString("root-a".getBytes)
-
-    val totalFound = 87901 // round-1 healing case: not yet clean
-    if totalFound == 0 then healingValidatedRoot = Some(rootA)
-    // else: signal NOT set; another healing round will run.
-
-    healingValidatedRoot shouldBe None
   }
 
   it should "be invalidated by restartSnapSync (defense-in-depth)" taggedAs UnitTest in {

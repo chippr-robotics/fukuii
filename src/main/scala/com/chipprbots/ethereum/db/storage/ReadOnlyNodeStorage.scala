@@ -42,6 +42,17 @@ class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesK
       else missKeys.zip(wrapped.multiGet(missKeys)).toMap
     keys.map(k => buffer.getOrElse(k, missResults.getOrElse(k, None)))
 
+  /** [[multiGet]]'s buffer-shadows-wrapped semantics over the wrapped store's raw read. */
+  override def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    val missKeys = keys.filterNot(buffer.contains)
+    val missResults: Map[NodeHash, RawNodeRead] =
+      if missKeys.isEmpty then Map.empty else missKeys.zip(wrapped.multiGetRaw(missKeys)).toMap
+    keys.map { k =>
+      buffer.get(k) match
+        case Some(buffered) => buffered.fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_))
+        case None           => missResults.getOrElse(k, RawNodeRead.Absent)
+    }
+
   /** This function updates the KeyValueStore by deleting, updating and inserting new (key-value) pairs.
     *
     * @param toRemove

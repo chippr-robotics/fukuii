@@ -6,6 +6,7 @@ import cats.effect.IO
 
 import fs2.Stream
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage.*
@@ -71,9 +72,11 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     else getForExecution(hash).map(_.length)
 
   /** A removal through this storage evicts the code from the execution cache, so deleting code (the missing-code
-    * scenarios in tests, a future repair path) is seen by the very next execution read. The eviction happens when the
-    * batch is built: a read that races the commit may cache the not-yet-deleted code again, which only matters to
-    * something that deletes code while executing blocks, and nothing does.
+    * scenarios in tests, the background audit's [[deleteBadCode]]) is seen by the very next execution read. The
+    * eviction happens when the batch is built: a read that races the commit may cache the not-yet-deleted code again.
+    * The audit does delete while blocks execute, and evicts again after its commit; a reader that read before the
+    * commit and caches after that eviction keeps bad code cached, which is accepted: rare, on code already rare (spec
+    * 022 R-5f).
     */
   override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]) =
     toRemove.foreach { h =>
@@ -81,6 +84,45 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       EvmCodeStorage.sizes.remove(cacheKey(h))
     }
     super.update(toRemove, toUpsert)
+
+  /** One result per hash, for a long walk: no block-cache fill and no execution cache, so what comes back is what the
+    * store holds, unchecked (spec 022 T053).
+    */
+  def multiGetNoFill(hashes: Seq[CodeHash]): Seq[Option[Code]] =
+    dataSource.multiGetOptimizedNoFill(namespace, hashes.map(_.toArray)).map(_.map(ByteString.fromArrayUnsafe))
+
+  /** The background audit's write (spec 022 decision 1): `code` goes in only if `hash` is absent or holds bytes that
+    * fail their hash. No lock: nothing counts references to code, and two writers of one hash write the same bytes. The
+    * execution caches may hold the bad bytes, so they go, after the write: [[update]] evicts only what it removes.
+    */
+  def repairCode(hash: CodeHash, code: Code): RepairOutcome =
+    def hashesTo(bytes: Array[Byte]): Boolean = java.util.Arrays.equals(kec256(bytes), hash.toArray)
+    if !hashesTo(code.toArray) then RepairOutcome.Rejected
+    else if dataSource.getOptimizedNoFill(namespace, hash.toArray).exists(hashesTo) then RepairOutcome.AlreadyValid
+    else
+      put(hash, code).commit()
+      EvmCodeStorage.shared.remove(cacheKey(hash))
+      EvmCodeStorage.sizes.remove(cacheKey(hash))
+      RepairOutcome.Written
+
+  /** [[StateStorage.deleteBadNode]] for code that fails its hash (spec 022 decision 15), under the same lock, so its
+    * look from the best root sees no block commit part way. That lock is not what writes code on demand, so the bytes
+    * are read again after the look. Code that passes its hash is never deleted.
+    */
+  def deleteBadCode(hash: CodeHash, stillReached: () => Boolean): BadEntryDelete =
+    def kept: Option[BadEntryDelete] =
+      Option.when(
+        dataSource
+          .getOptimizedNoFill(namespace, hash.toArray)
+          .forall(existing => java.util.Arrays.equals(kec256(existing), hash.toArray))
+      )(BadEntryDelete.NoLongerBad)
+    ReferenceCountedStateStorage.commitLock.synchronized {
+      StateStorage.deleteUnless(kept, stillReached) { () =>
+        remove(hash).commit()
+        EvmCodeStorage.shared.remove(cacheKey(hash))
+        EvmCodeStorage.sizes.remove(cacheKey(hash))
+      }
+    }
 
   // overriding to avoid going through IndexedSeq[Byte]
   override def storageContent: Stream[IO, Either[IterationError, (CodeHash, Code)]] =

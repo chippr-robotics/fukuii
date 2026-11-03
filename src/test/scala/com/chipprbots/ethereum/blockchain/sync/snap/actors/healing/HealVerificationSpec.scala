@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -36,10 +35,9 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** `HealVerification`'s state, environment, walk launchers and completion check as plain fields (spec 016 C-H3). The
-  * launchers record their seeds and keep `onComplete`, so a test can finish the walk by hand; `isComplete` is a
-  * settable flag. `stateIngest` hands out only `pathNodes` (the spec's Path store, or `None` for the Hash scheme) and
-  * `healingFrontier` (`None`).
+/** `HealVerification`'s state, environment, walk launcher and completion check as plain fields (spec 016 C-H3). The
+  * launcher records its seed and keeps `onComplete`, so a test can finish the walk by hand; `isComplete` is a settable
+  * flag. `stateIngest` hands out only `pathNodes` (the spec's Path store, or `None` for the Hash scheme).
   */
 private class StubHealVerificationState(
     pathStore: Option[PathNodeStorage],
@@ -54,8 +52,9 @@ private class StubHealVerificationState(
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var verificationBFSRunning: Boolean = false
   var verificationPassComplete: Boolean = true
-  var trieWalkInProgress: Boolean = false
   var flushing: Boolean = false
+  var markerStanding: Boolean = false
+  def markerStands(): Boolean = markerStanding
 
   // TrieNodeHealingEnv
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[HealVerificationSpec])
@@ -91,13 +90,11 @@ private class StubHealVerificationState(
     def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = None
     def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   // FrontierRebuildApi: record each launch, set the running flag as the real launcher does when a walk starts, and keep
   // its completion callback (called with a walk token and the missing count)
   val singleSeedLaunches: mutable.Buffer[(ByteString, ByteString, Boolean)] = mutable.Buffer.empty
-  val multiSeedLaunches: mutable.Buffer[Seq[(ByteString, Seq[ByteString], Boolean)]] = mutable.Buffer.empty
   var lastOnComplete: Option[(Long, Long) => Unit] = None
   def startFrontierBFS(
       root: ByteString,
@@ -106,11 +103,6 @@ private class StubHealVerificationState(
       onComplete: (Long, Long) => Unit
   ): Boolean =
     singleSeedLaunches += ((root, rootPath, isStor))
-    if walkStarts then verificationBFSRunning = true
-    lastOnComplete = Some(onComplete)
-    walkStarts
-  def startFrontierBFS(seeds: Seq[(ByteString, Seq[ByteString], Boolean)], onComplete: (Long, Long) => Unit): Boolean =
-    multiSeedLaunches += seeds
     if walkStarts then verificationBFSRunning = true
     lastOnComplete = Some(onComplete)
     walkStarts
@@ -217,20 +209,30 @@ class HealVerificationSpec extends AnyFlatSpec with Matchers:
     s.selfInbox.receiveAll() shouldBe Seq(VerificationBFSComplete(s.stateRoot, 3L, 7L))
   }
 
+  // spec 022 5d: this launcher runs no gate, so a re-peg under the fallback walk could start a walk no marker read decided.
+  it should "defer to the completion gate where the marker stands, and start no walk" taggedAs UnitTest in {
+    val s = stub(None, StorageScheme.Hash)
+    s.markerStanding = true
+
+    s.reverifyCurrentRoot()
+
+    s.singleSeedLaunches shouldBe empty
+    s.verificationPassComplete shouldBe false
+    s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
+  }
+
   it should "defer to the completion gate when work is pending, a flush is in flight or a walk is running" taggedAs UnitTest in {
-    for blocker <- Seq("pending", "flushing", "trieWalk", "verificationWalk") do
+    for blocker <- Seq("pending", "flushing", "verificationWalk") do
       val s = stub(None, StorageScheme.Hash)
       blocker match
         case "pending"  => s.isComplete = false
         case "flushing" => s.flushing = true
-        case "trieWalk" => s.trieWalkInProgress = true
         case _          => s.verificationBFSRunning = true
 
       s.reverifyCurrentRoot()
 
       withClue(blocker) {
         s.singleSeedLaunches shouldBe empty
-        s.multiSeedLaunches shouldBe empty
         s.verificationPassComplete shouldBe false
         s.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
       }

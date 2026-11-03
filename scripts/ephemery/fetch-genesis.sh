@@ -185,7 +185,8 @@ done < <(jq -r --argjson f "$BLOB_FORKS" '(.config.blobSchedule // {}) as $s
 # 0x1790276400 and a genesis hash no peer accepts — silently. Convert every such field to 0x-hex here.
 # Top-level genesis keys. GenesisDataLoader reads only the header fields below (+ alloc) and derives every other
 # header field itself (parentHash, number and gasUsed are zero; withdrawalsRoot, parentBeaconBlockRoot, requestsHash
-# are the empty values). Any other key, or a non-zero value of the derived ones, would be dropped silently.
+# and, with Amsterdam at genesis, blockAccessListHash are the empty values, and slotNumber is zero). Any other key, or a
+# non-zero value of the derived ones, would be dropped silently, so a genesis declaring its own slotNumber is refused.
 KNOWN_TOP_KEYS='["config","alloc","nonce","mixHash","mixhash","difficulty","extraData","gasLimit","coinbase",
   "timestamp","baseFeePerGas","blobGasUsed","excessBlobGas","parentHash","number","gasUsed"]'
 unknown_top="$(jq -r --argjson k "$KNOWN_TOP_KEYS" 'keys - $k | join(",")' "$G")"
@@ -228,10 +229,6 @@ fi
 # Account fields must be JSON strings for GenesisAccountSerializer.
 bad_alloc="$(jq -r '[.alloc[] | (.balance, .nonce) | select(. != null and type != "string")] | length' "$G")"
 [[ "$bad_alloc" == "0" ]] || die "$bad_alloc alloc balance/nonce values are not JSON strings"
-
-if [[ "$AMSTERDAM" != "null" && "$AMSTERDAM" -le "$GENESIS_TS" ]]; then
-  die "Amsterdam active at genesis: GenesisDataLoader would need slotNumber handling not verified for Ephemery"
-fi
 
 EXPECTED_HASH=""
 [[ -f "$T/deposit_contract_block_hash.txt" ]] && EXPECTED_HASH="$(tr -d '[:space:]' < "$T/deposit_contract_block_hash.txt")"
@@ -444,4 +441,5 @@ fi
 
 info "wrote $DEST (chain id $CHAIN_ID, genesis $GENESIS_TS, expected genesis hash ${EXPECTED_HASH:-unknown})"
 info "next reset: $(date -u -d "@$RESET_TIME" 2>/dev/null || echo "$RESET_TIME")"
+info "check it: block 0 on a node started from these files must have the expected genesis hash. A mismatch means peers reject it"
 echo "$DEST"

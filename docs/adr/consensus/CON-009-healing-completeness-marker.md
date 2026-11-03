@@ -1,6 +1,6 @@
 # CON-009: Post-SNAP healing completeness marker — set/clear semantics
 
-**Status**: Accepted
+**Status**: Superseded by [[CON-014]] (2026-11-02). The CF `g` completeness marker is retired: CF `g` is cleared once and nothing writes to it (spec 022 T040, T044). The marker that stays, `snap.heal.invariant`, says everything present was written under the invariant, not that the state is complete.
 
 **Date**: 2026-06-13
 

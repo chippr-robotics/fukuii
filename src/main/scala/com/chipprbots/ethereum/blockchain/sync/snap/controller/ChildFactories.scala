@@ -160,10 +160,6 @@ trait ChildFactories:
       frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
       frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
-      scopedHealVerification: Boolean = true,
-      scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
-      prunedHealVerification: Boolean = true,
-      frontierPersistenceEnabled: Boolean = false,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal: Boolean = false,
@@ -172,8 +168,9 @@ trait ChildFactories:
       heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       excludedAccounts: Boolean = false,
       currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      markerMayStand: Boolean = false
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -194,10 +191,6 @@ trait ChildFactories:
       frontierHighWater = frontierHighWater,
       frontierLowWater = frontierLowWater,
       frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,
-      scopedHealVerification = scopedHealVerification,
-      scopedHealMaxPaths = scopedHealMaxPaths,
-      prunedHealVerification = prunedHealVerification,
-      frontierPersistenceEnabled = frontierPersistenceEnabled,
       decoupledHealServeRoot = decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal = movingRootDeltaHeal,
@@ -206,8 +199,9 @@ trait ChildFactories:
       heldMemoryLimit = heldMemoryLimit,
       excludedAccounts = excludedAccounts,
       currentRoot = currentRoot,
-      excludedPassRoot = excludedPassRoot,
-      cleanWalkRoot = cleanWalkRoot
+      cleanWalkRoot = cleanWalkRoot,
+      decidedRoot = decidedRoot,
+      markerMayStand = markerMayStand
     )
 
   def byteCodeCoordinator(

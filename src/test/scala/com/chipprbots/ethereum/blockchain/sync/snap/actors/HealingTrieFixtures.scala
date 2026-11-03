@@ -13,7 +13,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -53,22 +52,21 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   */
 object HealingTrieFixtures:
 
-  /** The healing coordinator's `StateIngest` (spec 016 C-H1, C-H2, C-H3, C-H5): through it the coordinator reads only
-    * `healingFrontier`, the spec's frontier store (or `None`), `bfsQueue`, the spec's BFS queue (or `None`, the
-    * coordinator's in-memory fallback), `pathNodes`, the spec's Path-scheme node store (or `None`, the Hash scheme),
-    * and `bytecode`, the spec's code store, read only with the healed-code check on (`None`: the check is off and the
-    * member throws); every other member throws, so a test that reaches one is a change in what healing reads through
-    * the capability.
+  /** The healing coordinator's `StateIngest` (spec 016 C-H2, C-H3, C-H5): through it the coordinator reads only
+    * `bfsQueue`, the spec's BFS queue (or `None`, the coordinator's in-memory fallback), `pathNodes`, the spec's
+    * Path-scheme node store (or `None`, the Hash scheme), and `bytecode`, the spec's code store, read only with the
+    * healed-code check on (`None`: the check is off and the member throws); every other member throws, so a test that
+    * reaches one is a change in what healing reads through the capability.
     */
   def healingIngest(
-      frontier: Option[HealingFrontierStorage],
       bfsQueueStore: Option[BfsQueueStorage] = None,
       pathNodeStore: Option[PathNodeStorage] = None,
       codeStore: Option[EvmCodeStorage] = None,
-      progressStore: Option[SnapSyncProgressStorage] = None
+      progressStore: Option[SnapSyncProgressStorage] = None,
+      appStateStore: Option[AppStateStorage] = None
   ): StateIngest =
     new StateIngest:
-      def appState: AppStateStorage = notReached("appState")
+      def appState: AppStateStorage = appStateStore.getOrElse(notReached("appState"))
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = pathNodeStore
@@ -80,7 +78,6 @@ object HealingTrieFixtures:
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
       def snapProgress: SnapSyncProgressStorage = progressStore.getOrElse(notReached("snapProgress"))
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-      def healingFrontier: Option[HealingFrontierStorage] = frontier
       def bfsQueue: Option[BfsQueueStorage] = bfsQueueStore
 
   private def notReached(member: String): Nothing =
@@ -102,7 +99,6 @@ object HealingTrieFixtures:
       snapSyncController: org.apache.pekko.actor.typed.ActorRef[SNAPSyncController.Command],
       concurrency: Int = 16,
       visitedCap: Int = TrieNodeHealingCoordinator.DefaultVisitedCap,
-      healingFrontierStorage: Option[HealingFrontierStorage] = None,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       healingReaderEcOverride: Option[ExecutionContext] = None,
       traversalParallelism: Int = TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -116,7 +112,7 @@ object HealingTrieFixtures:
       frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
-      // spec 009 (Moving-Root Delta Heal). Default false so existing spec-004 tests spawn the flag-OFF coordinator
+      // moving-root delta heal (#1374). Default false so existing spec-004 tests spawn the flag-OFF coordinator
       // (unchanged); the moving-root tests pass true to exercise seed-from-absent-root / single-root fetch / re-peg.
       movingRootDeltaHeal: Boolean = false,
       // Where bytecode lives; Some(_) makes the coordinator report healed accounts whose code is absent from it.
@@ -125,8 +121,12 @@ object HealingTrieFixtures:
       heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
       // Where the excluded set lives; Some(_) makes the coordinator work it (spec 022 D5).
       excludedStore: Option[SnapSyncProgressStorage] = None,
-      excludedPassRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
-      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      // spec 022 5d. Where the invariant marker lives, and whether the coordinator may read it. With `markerMayStand` off
+      // and no store, a read of the key would throw: bare construction never reads it.
+      markerStore: Option[AppStateStorage] = None,
+      markerMayStand: Boolean = false
   )(implicit testKit: ActorTestKit): TypedActorRef[TrieNodeHealingCoordinator.Command] =
     testKit.spawn(
       TrieNodeHealingCoordinator(
@@ -138,8 +138,13 @@ object HealingTrieFixtures:
         snapSyncController = snapSyncController,
         concurrency = concurrency,
         visitedCap = visitedCap,
-        stateIngest =
-          healingIngest(healingFrontierStorage, bfsQueueStorageOpt, pathNodeStorageOpt, evmCodeStorage, excludedStore),
+        stateIngest = healingIngest(
+          bfsQueueStorageOpt,
+          pathNodeStorageOpt,
+          evmCodeStorage,
+          excludedStore,
+          markerStore
+        ),
         healingWriterEcOverride = healingWriterEcOverride,
         healingReaderEcOverride = healingReaderEcOverride,
         traversalParallelism = traversalParallelism,
@@ -156,8 +161,9 @@ object HealingTrieFixtures:
         walkLocalOnly = walkLocalOnly,
         heldMemoryLimit = heldMemoryLimit,
         excludedAccounts = excludedStore.isDefined,
-        excludedPassRoot = excludedPassRoot,
-        cleanWalkRoot = cleanWalkRoot
+        cleanWalkRoot = cleanWalkRoot,
+        decidedRoot = decidedRoot,
+        markerMayStand = markerMayStand
       )
     )
 

@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
@@ -90,7 +89,6 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
       def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   private def notReached(member: String): Nothing =

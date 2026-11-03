@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -47,6 +46,7 @@ import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 
 /** Everything `StorageOrderedApply` needs, as a stub (spec 016 FR-016 (b), C-S2): its `StorageOrderedApplyState`, the
   * coordinator's `StorageRangeEnv` (with a `StateIngest` whose only live member is `pathNodes`), the
@@ -58,7 +58,8 @@ private[actors] class StubStorageOrderedApplyState(
     val snapSyncController: ActorRef[SNAPSyncController.Command],
     val storageScheme: StorageScheme,
     val deferredMerkleization: Boolean,
-    pathNodeStore: Option[PathNodeStorage]
+    pathNodeStore: Option[PathNodeStorage],
+    val mptStorage: TestMptStorage = new TestMptStorage()
 ) extends StorageOrderedApplyState
     with StorageRangeEnv
     with StorageApplyCoreApi
@@ -94,7 +95,6 @@ private[actors] class StubStorageOrderedApplyState(
   val maxConcurrentStorageAccounts: Int = 256
   val intakeBudget: Option[SnapIntakeBudget] = None
   val processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline
-  val mptStorage: TestMptStorage = new TestMptStorage()
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = true, log)
   val stateIngest: StateIngest = new StateIngest:
@@ -112,7 +112,6 @@ private[actors] class StubStorageOrderedApplyState(
     lazy val snapProgress: SnapSyncProgressStorage =
       new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notReached("StateIngest.healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("StateIngest.bfsQueue")
   val flatBatchEntryThreshold: Int = 1000
 
@@ -319,6 +318,37 @@ class StorageOrderedApplySpec extends AnyFlatSpec with Matchers:
     m.trieNodeWrites shouldBe empty
     store.foreachStorageNodeChunk(1000)(chunk => stored += chunk.size)
     stored should be > 0
+  }
+
+  // spec 022 T050a (beacon): the marker holds on Path under pruning.mode = inmemory only because a Path write never goes
+  // through the trie store, which is the node cache there. Only a heal was pinned.
+  private def appliedThroughSpy(scheme: StorageScheme): (TrieStoreSpy, PathNodeStorage) =
+    val controller = TestInbox[SNAPSyncController.Command]()
+    val store = new PathNodeStorage(EphemDataSource())
+    val spy = new TrieStoreSpy
+    val pathNodes = Option.when(scheme == StorageScheme.Path)(store)
+    val m = new StubStorageOrderedApplyState(controller.ref, scheme, false, pathNodes, spy) with StorageOrderedApply
+    val served = slots(0x10, 0x20, 0x30)
+    m.applyOrderedStorageChunk(
+      peer("p1"),
+      StorageTask(Account, hashRoot(served), m.zeroSlotHash, key(0x7f)),
+      served,
+      Seq.empty
+    )
+    m.flushTrieNodeWrites()
+    (spy, store)
+
+  it should "write nothing through the trie store on Path" taggedAs UnitTest in {
+    val (spy, store) = appliedThroughSpy(StorageScheme.Path)
+    var stored = 0
+    store.foreachStorageNodeChunk(1000)(chunk => stored += chunk.size)
+    withClue("it did write: ")(stored should be > 0)
+    spy.writes shouldBe 0
+  }
+
+  it should "write through the trie store on Hash, so the spy's zero on Path means something" taggedAs UnitTest in {
+    val (spy, _) = appliedThroughSpy(StorageScheme.Hash)
+    spy.writes should be > 0
   }
 
   it should "not reach the Path node store when it flushes an empty buffer" taggedAs UnitTest in {

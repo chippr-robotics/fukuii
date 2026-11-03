@@ -21,6 +21,13 @@ trait MptStorage:
   def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
     hashes.map(h => scala.util.Try(get(h)).toOption)
 
+  /** One [[RawNodeRead]] per hash: the node's RLP as stored, or why not. Unlike [[multiGetNodes]] one entry that cannot
+    * be read fails that entry and not the batch, nothing is decoded, and the block cache is not filled. The background
+    * audit's read (spec 022 T053). The default is for the stores it never reads.
+    */
+  def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    hashes.map(hash => RawNodeRead.decoding(RawNodeRead.Bytes(get(hash.toArray).encode)))
+
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
     *
@@ -65,6 +72,9 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
       .multiGet(hashes.map(ByteString(_)))
       .zip(hashes)
       .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
+
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    if hashes.isEmpty then Seq.empty else storage.multiGetRaw(hashes)
 
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     storage.update(Seq.empty, nodes)

@@ -96,14 +96,90 @@ class ExcludedTaskFileSpec extends AnyFlatSpec with Matchers:
   it should "tell its work to stop, when finished or cancelled" taggedAs UnitTest in {
     val sweep = new ExcludedSweep
     var flag: () => Boolean = () => false
-    val token = sweep.start(scala.concurrent.ExecutionContext.parasitic) { cancelled =>
-      flag = cancelled
+    val token = sweep.start(scala.concurrent.ExecutionContext.parasitic) { work =>
+      flag = work.cancelled
       ExcludedTaskFile.Outcome.Cancelled
     }((_, _) => ())
     flag() shouldBe false
     sweep.cancel()
     flag() shouldBe true
     sweep.finish(token) shouldBe true
+  }
+
+  // spec 022 T050a (vault W2): the sweep's limit is "no chunk finished", not a cap on the whole of it.
+  it should "say whether a chunk finished since the watchdog last looked, and nothing of a sweep not running" taggedAs UnitTest in {
+    val sweep = new ExcludedSweep
+    var handle: Option[ExcludedSweep.Work] = None
+    val token = sweep.start(scala.concurrent.ExecutionContext.parasitic) { work =>
+      handle = Some(work)
+      ExcludedTaskFile.Outcome.Cancelled
+    }((_, _) => ())
+    withClue("no look before this one, so no verdict: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true))
+    withClue("a whole look with nothing finished: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(false))
+    handle.get.chunkDone()
+    handle.get.chunkDone()
+    sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true)
+    withClue("nothing since that look: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(false))
+    handle.get.chunkDone()
+    sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true)
+    sweep.chunkFinishedSinceLastLook(token + 1) shouldBe None
+    sweep.finish(token) shouldBe true
+    sweep.chunkFinishedSinceLastLook(token) shouldBe None
+    sweep.lastRun should include("3 chunk(s)")
+  }
+
+  // spec 022 T050a (beacon F4): the sweep runs on a one-thread dispatcher shared with flat-batch writes, so it can wait
+  // longer than the watchdog's look. Not begun is not hung, and nor is one that began just before a look.
+  it should "give no verdict until a whole look has passed since the work began" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val sweep = new ExcludedSweep
+    var handle: Option[ExcludedSweep.Work] = None
+    val token = sweep.start(ec) { work =>
+      handle = Some(work)
+      ExcludedTaskFile.Outcome.Cancelled
+    }((_, _) => ())
+    withClue("queued: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true))
+    withClue("still queued: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true))
+    ec.runNext()
+    withClue("began since the last look, so it has had no whole look: ") {
+      sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true)
+    }
+    withClue("a whole look with nothing finished: ")(sweep.chunkFinishedSinceLastLook(token) shouldBe Some(false))
+    handle.get.chunkDone()
+    sweep.chunkFinishedSinceLastLook(token) shouldBe Some(true)
+    sweep.chunkFinishedSinceLastLook(token) shouldBe Some(false)
+  }
+
+  it should "report how long the work ran, not how long it waited, and say so when it never began" taggedAs UnitTest in {
+    val ec = new com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.ManualExecutionContext
+    val sweep = new ExcludedSweep
+    val token = sweep.start(ec)(_ => ExcludedTaskFile.Outcome.Cancelled)((_, _) => ())
+    sweep.finish(token) shouldBe true
+    sweep.lastRun should include("did not begin")
+  }
+
+  it should "count each chunk that ends, and none that fails" taggedAs UnitTest in {
+    var done = 0
+    ExcludedTaskFile.recordMissingCode(
+      file((h(0) ++ h(1) ++ h(2)).toArray),
+      Some(3L),
+      _ => true,
+      _ => (),
+      chunkEntries = 1,
+      chunkDone = () => done += 1
+    ) shouldBe ExcludedTaskFile.Outcome.Recorded(0L)
+    done shouldBe 3
+
+    done = 0
+    ExcludedTaskFile.recordMissingCode(
+      file((h(0) ++ h(1) ++ h(2)).toArray),
+      Some(3L),
+      _ => false,
+      _ => throw new RuntimeException("the write failed"),
+      chunkEntries = 1,
+      chunkDone = () => done += 1
+    ) shouldBe a[ExcludedTaskFile.Outcome.StoreFailed]
+    done shouldBe 0
   }
 
   it should "report a refused executor as worth trying again" taggedAs UnitTest in {

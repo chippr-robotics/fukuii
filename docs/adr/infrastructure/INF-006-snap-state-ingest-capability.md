@@ -97,6 +97,12 @@ become members, which takes the cap from 12 to 14:
 - **Ratchet.** The core's accessor names the two handles, +2 (590 to 592); the coordinator adoptions C-H1
   (`healingFrontierStorage`) and C-H2 (`bfsQueueStorageOpt`) take it back.
 
+**Note: `healingFrontier` removed (spec 022 slice 6c, 2026-11-02).** Since spec 022 D6 a restart walks from the
+current root and nothing reads the persisted frontier, so the member, its by-name parameter and `HealingOrchestrator`'s
+`healingFrontierStorageOpt` are gone, and the cap goes from 14 to 13. `HealingFrontierStorage` stays for the one-time
+clear of CF `g` (`HealInvariant.retireFrontierOnce`, called from `SyncController`). The table above records the C-H1
+decision.
+
 **Note: session values stay explicit parameters (spec 016 T064, user decision 2026-10-13).** A named exception to
 "storage only through `StateIngest`" (FR-042). A coordinator's pivot-bound `MptStorage` (the core's per-pivot cached
 instance) and ARC's per-spawn `Option[SnapStorageDoneStorage]` are session values, not capabilities: they stay explicit

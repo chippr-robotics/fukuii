@@ -9,6 +9,7 @@ import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.Placed
@@ -205,6 +206,15 @@ object HealRequestFixtures:
 
     /** Every request so far, in arrival order. */
     def requests: Seq[Seq[Seq[ByteString]]] = recorded.asScala.toSeq.map(_._2)
+
+    /** Wait, up to `within`, until a request for `pathset` is recorded. The coordinator sends and this actor records,
+      * so a settled coordinator does not mean a recorded request: read [[requests]] straight after a settle and a
+      * request already sent can be missing (CI, PR #1701).
+      */
+    def awaitRequested(pathset: Seq[ByteString], within: FiniteDuration = 30.seconds): Unit =
+      val deadline = within.fromNow
+      val pause = testKit.createTestProbe[Any]()
+      while !requests.flatten.contains(pathset) && deadline.hasTimeLeft() do pause.expectNoMessage(20.millis)
 
     /** The requests answered automatically (those received while `serveFrom` was set). */
     def autoRequests: Seq[Seq[Seq[ByteString]]] = recorded.asScala.toSeq.collect { case (true, r) => r }

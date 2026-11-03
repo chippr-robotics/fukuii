@@ -184,7 +184,8 @@ class TrieNodeHealingCoordinatorSpec
     statusProbe.expectMessageType[HealingStatistics]
   }
 
-  it should "signal StateHealingComplete to controller on HealingForceComplete" taggedAs UnitTest in {
+  // spec 022 T047: StateHealingAbandoned on Hash as on Path. This relied on the controller's own walk, which no longer runs.
+  it should "signal StateHealingAbandoned to controller on HealingForceComplete" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("force-complete-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
@@ -202,7 +203,7 @@ class TrieNodeHealingCoordinatorSpec
 
     coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
 
-    snapSyncController.expectMessage(SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMessage(SNAPSyncController.StateHealingAbandoned)
   }
 
   it should "accept HealingPivotRefreshed and re-seed new root — HealingCheckCompletion deferred" taggedAs UnitTest in {
@@ -363,7 +364,8 @@ class TrieNodeHealingCoordinatorSpec
     statusProbe.expectMessageType[HealingStatistics]
   }
 
-  it should "signal StateHealingComplete on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
+  // spec 022 T047: as above.
+  it should "signal StateHealingAbandoned on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
     // HealingForceComplete is the SNAPSyncController's nuclear option: when the pivot has
     // advanced beyond the SNAP serve window, healing must abandon pending tasks immediately
     // rather than waiting for them to drain normally.
@@ -403,9 +405,9 @@ class TrieNodeHealingCoordinatorSpec
     snapSyncController.expectMessage(SNAPSyncController.HealingRootUnservable(stateRoot))
     networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd] // queued task dispatched
 
-    // ForceComplete while tasks are in-flight: abandon all, signal complete immediately
+    // ForceComplete while tasks are in-flight: abandon all, and say so immediately
     coordinator ! TrieNodeHealingCoordinator.HealingForceComplete
-    snapSyncController.expectMessage(SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMessage(SNAPSyncController.StateHealingAbandoned)
   }
 
   // ── Category 1e: HealingStagnated counter semantics ───────────────────────────────────────────
@@ -1222,10 +1224,10 @@ class TrieNodeHealingCoordinatorSpec
     snapSyncController.expectNoMessage(300.millis)
   }
 
-  // ─── spec 009 (Moving-Root Delta Heal) flag-ON behavioral coverage ───────────────────────────────────────────────
+  // ─── moving-root delta heal (#1374) flag-ON behavioral coverage ───────────────────────────────────────────────
   //
   // These tests spawn the coordinator with `movingRootDeltaHeal = true`. The factory/impl default is `false`, so every
-  // test ABOVE keeps exercising the spec-004 flag-OFF path unchanged (flag-OFF is byte-identical to pre-spec-009).
+  // test ABOVE keeps exercising the spec-004 flag-OFF path unchanged (flag-OFF is byte-identical to before #1374).
 
   /** Extract the underlying `GetTrieNodes` from a captured `SendMessageCmd` (the coordinator wraps the request in a
     * `GetTrieNodesEnc`, a `MessageSerializable`; `underlyingMsg` is the original message).
@@ -1246,7 +1248,7 @@ class TrieNodeHealingCoordinatorSpec
       storage.get(hash.toArray); true
     catch case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException => false
 
-  "Moving-root delta heal (spec 009 US2, C1)" should
+  "Moving-root delta heal (#1374 US2, C1)" should
     "store served root + internal nodes when the fetch root == heal root (content gate matches by construction)" taggedAs UnitTest in {
       // C1 (the spec-004 wrong-axis fix): under the flag the GetTrieNodes fetch root is collapsed to the completeness
       // root `stateRoot`, so a peer serving that exact root returns nodes whose keccak == the requested task hash → the
@@ -1308,7 +1310,7 @@ class TrieNodeHealingCoordinatorSpec
       healedTotal shouldBe 2L // both served nodes accepted by the content-hash gate (fetch root == heal root, C1)
     }
 
-  "Moving-root delta heal (spec 009 US2, C2)" should
+  "Moving-root delta heal (#1374 US2, C2)" should
     "fetch an absent heal root (NOT hand off HealingRootUnservable) and seed the frontier" taggedAs UnitTest in {
       // C2: under the flag an absent heal root is SEEDED as a frontier task (empty-path) and fetched against the single
       // served root — NOT handed off to lazy healing. This is the same seed HealingPivotRefreshed performs.
@@ -1343,7 +1345,7 @@ class TrieNodeHealingCoordinatorSpec
       req.paths.head shouldBe Seq(MovingRootDeltaHealFixtures.emptyPath) // empty-path root seed
     }
 
-  "Moving-root delta heal (spec 009 US3, C4 re-peg retains nodes)" should
+  "Moving-root delta heal (#1374 US3, C4 re-peg retains nodes)" should
     "preserve persisted verified nodes across HealingPivotRefreshed and not grow the frontier" taggedAs UnitTest in {
       // C4: heal the root against root A so it is durably persisted, then re-peg to a different root. HealingPivotRefreshed
       // clears ONLY in-memory frontier — it MUST NOT delete trie nodes. Assert the healed root is STILL readable from
@@ -1400,7 +1402,7 @@ class TrieNodeHealingCoordinatorSpec
       healPendingTasks(coordinator) should be <= 1
     }
 
-  "Moving-root delta heal (spec 009 US3, C5 sound completion)" should
+  "Moving-root delta heal (#1374 US3, C5 sound completion)" should
     "NOT complete on delta-discovery alone when a present node has an absent child — only after the gap is healed" taggedAs UnitTest in {
       // C5 (THE consensus invariant): the download mosaic can leave a PRESENT interior node whose grandchild is ABSENT.
       // Pure delta-discovery does not descend into a present node, so it would declare pending==0 with a real hole — a
@@ -1457,10 +1459,10 @@ class TrieNodeHealingCoordinatorSpec
       }
     }
 
-  "Moving-root delta heal (spec 009 US1, T016b flag-OFF byte-unchanged)" should
+  "Moving-root delta heal (#1374 US1, T016b flag-OFF byte-unchanged)" should
     "take the spec-004 HealingRootUnservable handoff for an absent root when the flag is OFF" taggedAs UnitTest in {
       // T016b: flag OFF ⇒ the legacy spec-004 decoupled path is byte-unchanged. An absent heal root is NOT seeded; the
-      // coordinator signals HealingRootUnservable (the spec-004 lazy-heal handoff) exactly as before spec 009. This is
+      // coordinator signals HealingRootUnservable (the spec-004 lazy-heal handoff) exactly as before #1374. This is
       // the direct A/B contrast to the flag-ON C2 test (which SEEDS the same absent root instead) — the single fork.
       val fx = MovingRootDeltaHealFixtures.deltaTrie() // same absent-root fixture as the flag-ON C2 test
       val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
@@ -1478,13 +1480,13 @@ class TrieNodeHealingCoordinatorSpec
 
       coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(fx.rootHash)
 
-      // Flag OFF: the absent root is NOT seeded — the spec-004 handoff fires (byte-identical to pre-spec-009).
+      // Flag OFF: the absent root is NOT seeded — the spec-004 handoff fires (byte-identical to before #1374).
       snapSyncController.expectMessage(3.seconds, SNAPSyncController.HealingRootUnservable(fx.rootHash))
       // And no frontier task was seeded (the seed-from-absent-root behavior is gated entirely behind the flag).
       healPendingTasks(coordinator) shouldBe 0
     }
 
-  "Moving-root delta heal (spec 009 US1, T016c A/B parity)" should
+  "Moving-root delta heal (#1374 US1, T016c A/B parity)" should
     "reach completion against the SAME root under flag OFF and flag ON for an already-complete trie (no divergent root)" taggedAs UnitTest in {
       // T016c (SC-005 unit proxy): for a controlled fixture whose trie is already fully present locally (root present,
       // zero missing nodes), BOTH the flag-OFF (spec-004) and the flag-ON (moving-root) paths run the SAME pruned

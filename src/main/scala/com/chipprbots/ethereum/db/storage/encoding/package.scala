@@ -12,6 +12,13 @@ package object encoding:
 
   private[storage] def storedNodeFromBytes(encoded: Array[Byte]): StoredNode = decode(encoded)(storedNodeEncDec)
 
+  /** The node bytes in a stored-node wrapper, whatever state its counters are in. None if it is not a wrapper at all.
+    */
+  private[storage] def nodeBytesInWrapper(encoded: Array[Byte]): Option[Array[Byte]] =
+    scala.util.Try(rawDecode(encoded)).toOption.collect { case RLPList(nodeEncoded, _, _) =>
+      byteArrayFromEncodeable(nodeEncoded)
+    }
+
   private[storage] def snapshotFromBytes(encoded: Array[Byte]): StoredNodeSnapshot = decode(encoded)(snapshotEncDec)
 
   private[storage] def snapshotsCountToBytes(value: BigInt): Array[Byte] = rlpEncode(value)(bigIntEncDec)
@@ -32,7 +39,7 @@ package object encoding:
           intFromEncodeable(references),
           bigIntFromEncodeable(lastUsedByBlock)
         )
-      case _ => throw new RuntimeException("Error when decoding stored node")
+      case _ => throw RLPException("Error when decoding stored node")
 
     override def encode(obj: StoredNode): RLPEncodeable = RLPList(
       toEncodeable(obj.nodeEncoded),

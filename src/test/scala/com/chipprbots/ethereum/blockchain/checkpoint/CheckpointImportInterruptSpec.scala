@@ -165,7 +165,11 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     keyWrite.map(_._2.toSet) shouldBe Some(
       Set(
         Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress)),
-        Op(AppNs, delete = true, key(Keys.SnapHealInvariant))
+        Op(AppNs, delete = true, key(Keys.SnapHealInvariant)),
+        // The state is being replaced, on an anchor every checkpoint import shares, so the audit's claim on it goes too.
+        Op(AppNs, delete = true, key(Keys.SnapAuditCleanAnchor)),
+        Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditCursors")),
+        Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditBadEntries"))
       )
     )
     appState.hasSnapHealInvariant() shouldBe false

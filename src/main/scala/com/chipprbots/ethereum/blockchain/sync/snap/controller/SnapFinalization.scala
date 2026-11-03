@@ -290,20 +290,13 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 D5: what the excluded set still says at a lazy hand-off. Each flag claims only its own kind of entry,
           // and a set that cannot be read claims nothing.
           val progress = stateIngest.snapProgress
+          val appState = stateIngest.appState
           val (accountsExcluded, codeExcluded) =
             try (progress.hasExcludedAccounts, progress.hasExcludedCode)
             catch
               case scala.util.control.NonFatal(e) =>
                 ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
                 (true, true)
-          val bytecodeComplete =
-            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) && !codeExcluded
-          if !bytecodeComplete then
-            ctx.log.warn(
-              s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
-                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted) — " +
-                "bytecodeRecoveryDone NOT set"
-            )
           // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
           // in the node cache, not in the WAL; flush them to the data source BEFORE the flags, so the flags' synced
           // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
@@ -312,22 +305,52 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 T043: a hand-off with no clean full walk of this root behind it, whichever route brought it here, takes
           // a marker stamped earlier. From here regular sync fetches what is missing on demand, one node at a time, each
           // present over children that may be absent. Before the flags: a crash in between only resumes SNAP unmarked.
-          if !stateRoot.exists(_.value == healingCleanWalkRoot.get()) && stateIngest.appState
-              .isSnapHealInvariantPresent()
+          // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
+          // the clean route alone, so every hand-off still takes the marker here.
+          if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
+            stateIngest.appState.isSnapHealInvariantPresent()
           then
-            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean full walk of this root: marker removed")
+            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
             stateIngest.appState.clearSnapHealInvariant().commitSync()
-          if accountsExcluded then
-            ctx.log.warn(
-              "[HEAL-EXCLUDED] Accounts in the excluded set at finalisation: storage incomplete, or not shown complete — " +
-                "storageRecoveryDone NOT set"
-            )
+          // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
+          // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where
+          // unfinished accounts were never recorded, so an empty excluded set does not show them complete (forge W1). It
+          // costs no second scan: the one pass looks at both.
+          //
+          // Read here, just before the batch that clears it, because `lostTrack` runs on other actors' threads and one
+          // landing between this read and that batch is cleared unseen. That leaves a few instructions. It does not close
+          // it: the key has no compare-and-clear. A key that cannot be read counts as owed.
+          val codeScanOwed =
+            try appState.getSnapCodeScanOwed()
+            catch
+              case scala.util.control.NonFatal(e) =>
+                ctx.log.error("[HEAL-INVARIANT] Could not read whether a code scan is owed: taking it as owed", e)
+                Some("the key could not be read")
+          val bytecodeComplete =
+            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
+              !codeExcluded && codeScanOwed.isEmpty
+          val storageComplete = !accountsExcluded && codeScanOwed.isEmpty
           // The set stays: it is the only record of those accounts, and only a cycle that starts from nothing wipes it.
-          val snapDone = stateIngest.appState.snapSyncDone()
+          // Withheld is written, not left out: a datadir SNAP has been through before can hold `true` from that cycle.
+          // The scan's debt moves to these flags here, in one write, so nothing charges a later cycle for it.
           val storageFlag =
-            if accountsExcluded then snapDone else snapDone.and(stateIngest.appState.storageRecoveryDone())
-          (if bytecodeComplete then storageFlag.and(stateIngest.appState.bytecodeRecoveryDone()) else storageFlag)
-            .commitSync()
+            if storageComplete then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone()
+          val codeFlag =
+            if bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
+          appState.snapSyncDone().and(storageFlag).and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
+
+          if !bytecodeComplete then
+            ctx.log.warn(
+              s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
+                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted, " +
+                s"code entries: $codeExcluded, scan owed: ${codeScanOwed.getOrElse("no")}) — " +
+                "bytecodeRecoveryDone NOT set"
+            )
+          if !storageComplete then
+            ctx.log.warn(
+              s"[HEAL-EXCLUDED] storage not shown complete at finalisation (account entries: $accountsExcluded, " +
+                s"scan owed: ${codeScanOwed.getOrElse("no")}) — storageRecoveryDone NOT set"
+            )
 
           ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
 
@@ -434,7 +457,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           if a + s - lastLogged >= 1000000L then
             lastLogged = a + s
             self ! PathPublishProgress(a, s),
-        stateRoot = Some(pivotRoot)
+        stateRoot = Some(pivotRoot),
+        codePresent = hash => stateIngest.bytecode.get(hash).isDefined
       )
     }(blockingEc)
     ctx.pipeToSelf(work) {
@@ -448,9 +472,22 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private[snap] def onPathPublishDone(result: PathToHashExporter.Result, millis: Long): Behavior[Command] =
     ctx.log.info(
-      s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms; " +
-        s"verified ${result.sampledAccountLeaves} sampled account leaves and ${result.sampledStorageRoots} storage roots"
+      s"[PATH-PUBLISH] done: ${result.accountNodes} account + ${result.storageNodes} storage nodes in $millis ms " +
+        s"(export ${result.exportMillis} ms, sample ${result.sampleMillis} ms); looked up " +
+        s"${result.sampledAccountLeaves} sampled account leaves (${result.sampledAccountMisses} stale or with a node " +
+        s"absent on the way); ${result.sampledStorageRoots} sampled storage roots present; looked up " +
+        s"${result.sampledLargeTrieLeaves} leaves of the largest storage tries and ${result.sampledEmbedded} embedded leaves " +
+        s"(${result.sampledStale} stale in the path store, ${result.sampledMissing} with a node absent on the way); " +
+        s"${result.sampledCodeAbsent} of ${result.sampledCode} sampled code hashes absent"
     )
+    val sampleMisses =
+      result.sampledAccountMisses + result.sampledStale + result.sampledMissing + result.sampledCodeAbsent
+    if sampleMisses > 0 then
+      ctx.log.warn(
+        s"[PATH-PUBLISH] The hand-off's sample missed $sampleMisses time(s), under the rate that fails a hand-off. A stale " +
+          "path node is harmless, but a node absent on the way is a hole: import's on-demand path and the background audit " +
+          "are what finds the rest of one"
+      )
     pathPublish match
       case Some((pivot, pivotRoot)) =>
         pathPublish = None

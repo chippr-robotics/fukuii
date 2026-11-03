@@ -181,6 +181,7 @@ private[snap] class StubDownloadSupervisorState(
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = notUsed("triggerHealingForMissingNodes")
   var healingStarts: Int = 0
   def startStateHealing(): Unit = healingStarts += 1
+  def reopenHealing(): Unit = ()
   val launches: mutable.ArrayBuffer[(TrieRoot, Int)] = mutable.ArrayBuffer.empty
   def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -534,6 +535,27 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.launches shouldBe empty
     h.module.dormantReasons shouldBe empty
     running.hasMessages shouldBe false
+  }
+
+  // spec 022 PR 5b, hunter 3: since `coordinatorGoneArms` clears the account handle once accounts are complete, the handle
+  // no longer says a phase has run. A timer outliving a fast account phase must not start a second one mid-storage.
+  it should "have nothing to do at a capability check once accounts are complete: no second account phase, no dormancy" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(root)
+    h.module.accountsComplete = true
+    h.module.accountRangeCoordinator = None
+    var result: Option[Behavior[Command]] = None
+
+    h.module.downloadPeers = Map(peer("a"))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+
+    h.module.downloadPeers = Map(peer("b", snap = false))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+    h.module.dormantReasons shouldBe empty
   }
 
   it should "offer the snap-serving peers on each download tick arm" taggedAs UnitTest in {

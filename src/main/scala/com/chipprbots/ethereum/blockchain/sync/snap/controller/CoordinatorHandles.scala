@@ -22,7 +22,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP
   * Invariants kept from the code this replaces:
   *   - `stopAll()` stops exactly the four coordinators, in the order the stop sites always used (account, bytecode,
   *     storage, healing). It never stops the ChainDownloader (it survives restart and dormancy) and never the heap
-  *     watchdog. There is no `ctx.watch`, and supervision is unchanged.
+  *     watchdog. Supervision is unchanged. Each spawn site watches its coordinator with `CoordinatorGone`, which only
+  *     the handle it stops under counts (`SyncLifecycle.coordinatorGoneArms`): `stopAll()` clears a handle as it stops
+  *     it.
   *   - Each fan-out sends to the coordinators that exist, in the order the replaced call sites used.
   */
 private[snap] trait CoordinatorHandles:
@@ -38,17 +40,18 @@ private[snap] trait CoordinatorHandles:
     */
   lazy val healingCurrentRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
-  /** spec 022 round 2 review hunter N1: the root at which the healing coordinator's pass over the excluded set last
-    * ended. What the Hash controller's clean walk reads before it treats a dormant entry as nothing: a later page may
-    * hold an entry this root revives, and a walk does not see missing code.
-    */
-  lazy val healingExcludedPassRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
-
   /** spec 022 T043: the root of the healing coordinator's last clean full walk, set as it reports completion. What
     * backs the invariant marker: the Hash controller's own trie walk stops at present hash nodes, so it cannot vouch
     * for what is below them. Void (null) once a later look at the trie has found something missing.
     */
   lazy val healingCleanWalkRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
+  /** spec 022 5d: the root the healing coordinator decided is complete, set before the signal, walk or no walk. Not by
+    * a hand-off. The controller takes `StateHealingComplete` only for the root it is on, and finalisation lets a marker
+    * stand on this or on [[healingCleanWalkRoot]]. Only the clean walk's root stamps: this one is no proof, and a
+    * `lostTrack` that lands after the decision must not be undone.
+    */
+  lazy val healingDecidedRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)

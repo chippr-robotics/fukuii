@@ -235,7 +235,6 @@ private class SNAPSyncControllerImpl(
     StateIngest.Durability.Default,
     snapProgressStorage,
     storageDoneStorage,
-    healingFrontierStorageOpt,
     bfsQueueStorageOpt
   )
 
@@ -250,12 +249,13 @@ private class SNAPSyncControllerImpl(
   // the storage-task markers below and by the healing spawn (spec 022 review vault V3).
   val trieNodesCachedInMemory: Boolean = stateStorage.isInstanceOf[CachedReferenceCountedStateStorage]
 
-  // Markers are recorded only where a marker's claim holds once written: under Hash scheme + building the trie during
-  // the download (deferredMerkleization = false) + cached ("inmemory") pruning, storage trie nodes go through
-  // CachedReferenceCountedStorage.update into an in-memory cache, not RocksDB, so they could be lost with a marker on
-  // disk. Path scheme writes through PathNodeStorage; archive/basic pruning write through; deferred builds no trie.
+  // Markers are recorded only where a marker's claim holds once written (HealInvariant.doneMarkersHold).
   val recordStorageDone: Boolean =
-    snapSyncConfig.storageScheme == StorageScheme.Path || snapSyncConfig.deferredMerkleization || !trieNodesCachedInMemory
+    HealInvariant.doneMarkersHold(
+      snapSyncConfig.storageScheme,
+      snapSyncConfig.deferredMerkleization,
+      trieNodesCachedInMemory
+    )
   if !recordStorageDone then
     ctx.log.info(
       "Storage-task completion markers off (Hash scheme + in-memory pruning buffers storage trie nodes): " +
@@ -361,9 +361,8 @@ private class SNAPSyncControllerImpl(
   var validationInProgress: Boolean = false
   var validationGeneration: Long = 0L
 
-  // #1188: when the round-2 healing trie walk returns 0 missing, the entire
-  // account+storage trie has just been DFS-walked end-to-end. Capture the root
-  // it was clean against so `validateState()` can short-circuit the redundant
+  // #1188: when healing completes on a root (the coordinator's decision, spec 022
+  // T052), capture that root so `validateState()` can short-circuit the redundant
   // `validateAccountTrie + validateAllStorageTries` passes (which together can
   // exceed the time of the SNAP download itself on populated states).
   // Belt-and-suspenders: only honoured when the captured root *equals* the
@@ -425,7 +424,6 @@ private class SNAPSyncControllerImpl(
   var pendingPivotRefresh: Option[(BigInt, String)] = None
 
   var storageStagnationRefreshAttempted: Boolean = false
-  var trieWalkInProgress: Boolean = false
   // spec 004 (Decoupled Heal Serve-Root) T011: serve-root refresh bookkeeping. The healing coordinator fetches
   // missing nodes against an advancing SERVE root while its completeness walk stays pinned to the walk root. We
   // ask the parent for a newest-servable root (networkBest − RecentRootMarginBlocks) on the healing tick when the
@@ -436,7 +434,7 @@ private class SNAPSyncControllerImpl(
   // so serve-window freshness is irrelevant, and a proactive heal-root re-peg would only supersede (and discard) it.
   val healingWalkLocalOnly: AtomicBoolean = new java.util.concurrent.atomic.AtomicBoolean(false)
   var lastHealingServeRootBlock: Option[BigInt] = None
-  // spec 009 T009/T014 (Moving-Root Delta Heal — BOUNDED re-peg last-resort). Under `movingRootDeltaHeal` the heal
+  // #1374 T009/T014 (Moving-Root Delta Heal — BOUNDED re-peg last-resort). Under `movingRootDeltaHeal` the heal
   // re-pegs the single heal root via refreshPivotInPlace (from maybeRequestHealingServeRoot). If a re-peg attempt
   // during StateHealing finds NO suitable served root (refreshPivotInPlace's newPivotOpt.isEmpty branch), this counter
   // increments; once it reaches the budget the controller takes the SAME fail-SAFE lazy-heal handoff (completeSnapSync
@@ -513,7 +511,11 @@ private class SNAPSyncControllerImpl(
       HealInvariant.atSnapStart(
         stateIngest.appState,
         stateIngest.pathNodes,
-        HealInvariant.canHold(snapSyncConfig.storageScheme, trieNodesCachedInMemory)
+        HealInvariant.canHold(
+          snapSyncConfig.storageScheme,
+          snapSyncConfig.deferredMerkleization,
+          trieNodesCachedInMemory
+        )
       )
     )
     ctx.log.info("SNAP Sync Controller initialized")
@@ -538,12 +540,14 @@ private class SNAPSyncControllerImpl(
       case HealInvariant.AtSnapStart.PreInvariant(reason) =>
         ctx.log.warn(
           s"[HEAL-INVARIANT] Pre-invariant datadir ($reason): this run's clean verification walk is its repair pass, " +
-            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked"
+            "and stamps the marker. A walk over holes that outlasts a re-peg fills what it found and hands off unmarked. " +
+            "The walk reads no code, so the recovery flags are withheld and the recovery scan runs at the next start"
         )
       case HealInvariant.AtSnapStart.CannotHold(clearedOne) =>
         ctx.log.warn(
-          "[HEAL-INVARIANT] pruning.mode = inmemory on the Hash scheme: no marker can hold here, and the verification " +
-            s"walk stays at every start and completion${if clearedOne then " (a marker found here was removed)" else ""}"
+          "[HEAL-INVARIANT] No marker can hold here (pruning.mode = inmemory on the Hash scheme, or " +
+            "deferred-merkleization = true), and the verification walk stays at every start and completion" +
+            (if clearedOne then " (a marker found here was removed)" else "")
         )
 
   /** OQ-3: ask NetworkPeerManagerActor for the current handshaked peers; the reply (`HandshakedPeers`) is bridged back
@@ -652,6 +656,7 @@ private class SNAPSyncControllerImpl(
         case _: PivotProbeTimeout     => ctx.log.debug("Dropping stale PivotProbeTimeout in idle"); Behaviors.same
         case DormantWakeUp            => ctx.log.debug("Dropping stale DormantWakeUp in idle"); Behaviors.same
         case _: DelayedRestart        => ctx.log.debug("Dropping stale DelayedRestart in idle"); Behaviors.same
+        case _: CoordinatorGone       => ctx.log.debug("Dropping stale CoordinatorGone in idle"); Behaviors.same
 
         // ── Coordinator progress (stale after sync stops) ────────────────────────────
         case _: AccountRangeProgressCmd =>
@@ -671,11 +676,11 @@ private class SNAPSyncControllerImpl(
         case RequestTrieNodeHealing         => Behaviors.same
         case EnsureSnapServerPeersConnected => Behaviors.same
 
-        // ── Stale trie-walk results ───────────────────────────────────────────────────
-        case _: TrieWalkResult   => ctx.log.debug("Dropping stale TrieWalkResult in idle"); Behaviors.same
-        case _: TrieWalkBatch    => ctx.log.debug("Dropping stale TrieWalkBatch in idle"); Behaviors.same
-        case _: TrieWalkComplete => ctx.log.debug("Dropping stale TrieWalkComplete in idle"); Behaviors.same
-        case _: TrieWalkFailed   => ctx.log.debug("Dropping stale TrieWalkFailed in idle"); Behaviors.same
+        // ── Stale results of validation's re-walk ────────────────────────────────────
+        case _: ValidationMissingNodes =>
+          ctx.log.debug("Dropping stale ValidationMissingNodes in idle"); Behaviors.same
+        case _: ValidationRewalkFailed =>
+          ctx.log.debug("Dropping stale ValidationRewalkFailed in idle"); Behaviors.same
         // The TNHC seed-guard (#1371) can emit HealingRootUnservable; if it lands after the controller has left
         // StateHealing it must be dropped, not MatchError-crash the idle behavior (the StateHealing handler is guarded).
         case _: HealingRootUnservable => ctx.log.debug("Dropping stale HealingRootUnservable in idle"); Behaviors.same
@@ -685,7 +690,6 @@ private class SNAPSyncControllerImpl(
         case _: ValidateStorageTriesResult =>
           ctx.log.debug("Dropping stale ValidateStorageTriesResult in idle"); Behaviors.same
         case _: ValidationRetry => ctx.log.debug("Dropping stale ValidationRetry in idle"); Behaviors.same
-        case ScheduledTrieWalk  => ctx.log.debug("Dropping stale ScheduledTrieWalk in idle"); Behaviors.same
 
         // ── Unexpected sync-completion signals ────────────────────────────────────────
         case AccountRangeSyncComplete =>
@@ -806,7 +810,7 @@ private class SNAPSyncControllerImpl(
     // the in-flight latch so a later tick can retry.
     case SNAPSyncController.HealingServeRoot(blockNumber, rootOpt) =>
       healingServeRootRequestInFlight = false
-      // spec 009 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
+      // #1374 T014/FR-010: under moving-root delta heal the stale-move trigger re-pegs the single heal root via
       // refreshPivotInPlace → HealingPivotRefreshed (H-S6), NOT a serve-root push, so this reply is no longer
       // solicited on the flag path. A late HealingServeRoot (e.g. an in-flight RequestHealingServeRoot from before the
       // flag engaged) must NOT push a HealingServeRootRefresh — under single-root heal the serve root IS the walk root
@@ -849,30 +853,30 @@ private class SNAPSyncControllerImpl(
       Behaviors.same
   }
 
-  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
+  /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19):
     * `StateHealingComplete`, the healing coordinator's completion signal. `commonSyncingArms` delegates to it at the
     * arm's original position, so the arm order is unchanged.
+    *
+    * spec 022 T052: the same exit on both schemes, and no controller walk. The Hash controller's walk stops at present
+    * hash nodes, so it never proved what the coordinator's gate has decided by now; Path's would read a store Path
+    * never populates. Under `pruning.mode = inmemory` the gate has walked, since the marker cannot hold there. The
+    * controller's walk itself is gone (spec 022 slice 6).
+    *
+    * The coordinator says which root it decided on before the signal, and a re-peg can pass between that and this. So a
+    * signal for any other root says nothing about this one: it is ignored, and the coordinator, which has the re-peg by
+    * now, is asked again.
     */
   private[snap] lazy val stateHealingCompleteArms: PartialFunction[Command, Behavior[Command]] = {
     case StateHealingComplete =>
-      progressMonitor.startPhase(StateHealing)
-      ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
-      if snapSyncConfig.storageScheme == StorageScheme.Path then
-        // Path scheme: the controller's trie walk and StateValidator read the hash-keyed store, which Path never
-        // populates, so they would report the root missing every round and never reach "0 missing". The coordinator
-        // only sends StateHealingComplete once a path-aware walk of its current root in that incarnation found zero
-        // missing nodes (verificationPassComplete: a clean verification walk, or the clean full rebuild walk), so
-        // that signal IS the clean walk: take the same exit as TrieWalkComplete(0) rather than running a second,
-        // blind, full-trie walk.
-        if currentPhase == StateHealing then completeHealingWalkClean()
-        else ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
-      else if trieWalkInProgress then
-        // A trie walk is already running — its result will determine next step
-        ctx.log.info("Trie walk in progress, waiting for result...")
+      if currentPhase != StateHealing then
+        ctx.log.debug("Ignoring StateHealingComplete outside StateHealing (phase={})", currentPhase)
+      else if !stateRoot.exists(_.value == healingDecidedRoot.get()) then
+        ctx.log.info("[HEAL-COMPLETE] The signal is for a root healing has left (a re-peg passed it): asking again")
+        askHealingAgain()
       else
-        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
-        // create a fresh coordinator before the walk so inline discovery can run concurrently.
-        startStateHealingWithInterleave()
+        progressMonitor.startPhase(StateHealing)
+        ctx.log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
+        completeHealingWalkClean()
       Behaviors.same
   }
 
@@ -1021,8 +1025,12 @@ private class SNAPSyncControllerImpl(
       case msg if stateHealingCompleteArms.isDefinedAt(msg) =>
         stateHealingCompleteArms(msg)
 
-      // StateHealingAbandoned, HealingRootUnservable, TrieWalkBatch/Complete/Result, ScheduledTrieWalk, TrieWalkFailed
-      // (StateHealing only): stateHealingArms (P4c).
+      // spec 022 T050a: a coordinator that gave up after its last restart.
+      case msg if coordinatorGoneArms.isDefinedAt(msg) =>
+        coordinatorGoneArms(msg)
+
+      // StateHealingAbandoned, HealingRootUnservable, ValidationMissingNodes, ValidationRewalkFailed (StateHealing
+      // only): stateHealingArms (P4c).
 
       case StateValidationComplete =>
         ctx.log.info("State validation complete. SNAP sync finished!")
@@ -1227,11 +1235,10 @@ object SNAPSyncController:
   private[snap] case object RequestStorageRanges extends Command
   private[snap] case object RequestTrieNodeHealing extends Command
   private[snap] case object EnsureSnapServerPeersConnected extends Command
-  // Async trie-walk results
-  final private[snap] case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)]) extends Command
-  final private[snap] case class TrieWalkBatch(missingNodes: Seq[(Seq[ByteString], ByteString)]) extends Command
-  final private[snap] case class TrieWalkComplete(totalFound: Int) extends Command
-  final private[snap] case class TrieWalkFailed(error: String) extends Command
+  // Validation's re-walk with paths (`HealingOrchestrator.triggerHealingForMissingNodes`)
+  final private[snap] case class ValidationMissingNodes(missingNodes: Seq[(Seq[ByteString], ByteString)])
+      extends Command
+  final private[snap] case class ValidationRewalkFailed(error: String) extends Command
   // Async validation results (generation-stamped — stale results dropped on arrival)
   final private[snap] case class ValidateAccountTrieResult(
       generation: Long,
@@ -1244,7 +1251,6 @@ object SNAPSyncController:
       elapsedMs: Long
   ) extends Command
   final private[snap] case class ValidationRetry(generation: Long) extends Command
-  private[snap] case object ScheduledTrieWalk extends Command
   // OQ-3: drives the periodic GetHandshakedPeers poll (replaces NPMA's HandshakedPeers broadcast).
   private[snap] case object PollHandshakedPeers extends Command
   case object AccountRangeSyncComplete extends Command
@@ -1275,6 +1281,11 @@ object SNAPSyncController:
       replayed: Boolean = false
   ) extends Command
   case object StateHealingComplete extends Command
+
+  /** A coordinator stopped: its supervisor's last restart failed, or something stopped it on purpose. Only its handle
+    * still naming it counts (`SyncLifecycle.coordinatorGoneArms`).
+    */
+  final private[snap] case class CoordinatorGone(ref: org.apache.pekko.actor.typed.ActorRef[Nothing]) extends Command
 
   /** Coordinator gave up (HealingForceComplete) WITHOUT a verification walk. Never a clean-walk signal: under Path the
     * controller routes it to the lazy-heal handoff instead of declaring the trie validated.
@@ -1518,10 +1529,6 @@ case class SNAPSyncConfig(
     // opened. Key: `sync.snap-sync.healing.held-memory-limit` (a HOCON size, e.g. `128 MiB`). Not in base/sync.conf
     // yet: the SNAP-split verifier forbids src/main/resources changes on fix branches, so the default comes from here.
     healingHeldMemoryLimit: Long = actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
-    // Layer 2: persist the outstanding healing frontier so a restart resumes (O(frontier)) instead of
-    // re-walking the full state. Default false (ships dark). See docs/design/healing-frontier-scale.md.
-    healingFrontierPersistence: Boolean = false,
-    prunedHealVerification: Boolean = true, // #4 (restored): pruned post-heal verification vs full ~90M-node walk
     // Operator ceiling for BFS level parallelism. Effective =
     // min(this, min(nproc, max(healingMinParallelism, nproc - healingReservedCores))).
     healingTraversalParallelism: Int = actors.TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -1538,17 +1545,6 @@ case class SNAPSyncConfig(
     // root stays ~99.9% servable; regular sync fills any residual gap on-demand. The GENUINE all-peers-stateless
     // roll (HealingAllPeersStateless) is unaffected. Set false to restore legacy roll-on-stagnation.
     healHoldPivotOnStagnation: Boolean = true,
-    // Scoped post-heal verification (spec 003). When true (default), the post-heal completion
-    // verification re-walks ONLY the subtrees rooted at the nodes healed this round instead of
-    // re-seeding the state root and re-walking the whole trie. It engages only when the durable
-    // completeness marker proves a prior full-trie clean walk against the current root AND the
-    // healed-paths set is non-empty, in-bound, and same-root; otherwise it falls back to the
-    // unchanged full-root verification. Byte-parity of the completion decision/state root/marker is
-    // preserved. Set false to force the conservative full-root verification on every round.
-    scopedHealVerification: Boolean = true,
-    // Upper bound on the in-memory healed-paths set (spec 003 FR-011). Over-bound rounds fall back to
-    // full-root verification rather than growing the set, bounding its worst-case heap.
-    scopedHealMaxPaths: Int = 200000,
     // Decoupled heal serve-root (spec 004 FR-008). When true (default), the healing fetch targets an advancing
     // newest-servable serve root while the completeness walk stays pinned to the fixed walk root. Off ⇒ coupled
     // behaviour (fetch uses the walk root), byte-identical to today. Consensus-safety rests on the unchanged
@@ -1557,7 +1553,7 @@ case class SNAPSyncConfig(
     // FR-006 surfacing threshold: after this many unsatisfied heal attempts with no serve-root advance in
     // between, the coordinator surfaces the stuck task (log + metric). NEVER force-completes.
     decoupledHealMaxAttemptsNoRefresh: Int = 12,
-    // spec 009 (Moving-Root Delta Heal). Read by TrieNodeHealingCoordinator (single served heal root in
+    // moving-root delta heal (#1374). Read by TrieNodeHealingCoordinator (single served heal root in
     // requestNextBatch; seed-absent-root vs the HealingRootUnservable handoff in StartTrieNodeHealing; the
     // HealingServeRootRefresh no-op) and by SNAPSyncController (re-peg trigger in maybeRequestHealingServeRoot;
     // bounded last-resort in refreshPivotInPlace). Default true = the ETC SNAP default; flag-OFF restores the
@@ -1706,11 +1702,6 @@ object SNAPSyncConfig:
       healingHeldMemoryLimit =
         if snapConfig.hasPath("healing.held-memory-limit") then snapConfig.getBytes("healing.held-memory-limit")
         else actors.TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
-      healingFrontierPersistence = snapConfig.hasPath("healing-frontier-persistence") &&
-        snapConfig.getBoolean("healing-frontier-persistence"),
-      prunedHealVerification =
-        if snapConfig.hasPath("pruned-heal-verification") then snapConfig.getBoolean("pruned-heal-verification")
-        else true,
       healingTraversalParallelism =
         if snapConfig.hasPath("healing-traversal-parallelism") then snapConfig.getInt("healing-traversal-parallelism")
         else actors.TrieNodeHealingCoordinator.DefaultBfsParallelism,
@@ -1730,12 +1721,6 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("heal-hold-pivot-on-stagnation") then
           snapConfig.getBoolean("heal-hold-pivot-on-stagnation")
         else true,
-      scopedHealVerification =
-        if snapConfig.hasPath("scoped-heal-verification") then snapConfig.getBoolean("scoped-heal-verification")
-        else true,
-      scopedHealMaxPaths =
-        if snapConfig.hasPath("scoped-heal-max-paths") then snapConfig.getInt("scoped-heal-max-paths")
-        else 200000,
       decoupledHealServeRoot =
         if snapConfig.hasPath("decoupled-heal-serve-root") then snapConfig.getBoolean("decoupled-heal-serve-root")
         else true,

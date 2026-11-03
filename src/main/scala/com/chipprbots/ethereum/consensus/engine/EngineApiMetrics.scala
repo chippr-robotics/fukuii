@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.engine
 
 import java.util.concurrent.atomic.AtomicLong
 
+import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.Gauge
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
@@ -58,6 +59,12 @@ object EngineApiMetrics extends MetricsContainer:
       case "VALID"   => _newPayloadValidCount.incrementAndGet()
       case "SYNCING" => _newPayloadSyncingCount.incrementAndGet()
       case _         => _newPayloadInvalidCount.incrementAndGet()
+
+  /** One distinct hole in the state that `newPayload` could not execute over, as `engine_state_hole_total{kind}`: see
+    * [[EngineStateHoles]].
+    */
+  def recordStateHole(kind: String): Unit =
+    Counter.builder("engine.state.hole").tag("kind", kind).register(metrics.registry).increment()
 
   /** One block reported consensus-invalid by the p2p import path (not by an engine_newPayload call). */
   def recordImportPathInvalidReport(): Unit =

@@ -115,6 +115,34 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     ds.cacheStats shouldBe None
   }
 
+  // spec 022 T053: a long walk reads each node once, and its reads must not push import's working set out of the cache.
+  "RocksDbDataSource.multiGetOptimizedNoFill" should "answer as multiGetOptimized does, and leave the block cache cold" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val writer = RocksDbDataSource(config(dbPath, statisticsEnabled = true), Namespaces.nsSeq)
+    writer.update(Seq(DataSourceUpdate(Ns, Nil, (0 until N).map(i => key(i) -> value(i)))))
+    writer.close()
+
+    val reader = RocksDbDataSource(config(dbPath, statisticsEnabled = true), Namespaces.nsSeq)
+    def misses: Long = reader.cacheStats.get._2
+    val keys = (0 until N).map(i => key(i).toArray) :+ (Array.fill[Byte](31)(1) :+ 2.toByte)
+    try
+      val noFill = reader.multiGetOptimizedNoFill(Ns, keys)
+      noFill.last shouldBe None
+
+      val beforeSecondPass = misses
+      reader.multiGetOptimizedNoFill(Ns, keys)
+      withClue("nothing was kept, so a second pass misses again: ")(misses should be > beforeSecondPass)
+
+      // The control: the filling read answers the same, and its second pass misses nothing.
+      noFill.map(_.map(_.toSeq)) shouldBe reader.multiGetOptimized(Ns, keys).map(_.map(_.toSeq))
+      val filled = misses
+      reader.multiGetOptimized(Ns, keys)
+      misses shouldBe filled
+    finally reader.destroy()
+  }
+
   // ---------------------------------------------------------------------------------------
   // issue #1355 — iterateSyncRange: self-contained refill batches, locked + closed per batch.
   // The fix shipped in 92fc8f6b5 / v0.8.0 (e16855453); these are the two regression tests the

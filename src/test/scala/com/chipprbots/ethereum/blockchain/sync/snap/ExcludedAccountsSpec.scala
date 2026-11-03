@@ -116,7 +116,6 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     seed(trie.nodes.filterNot(n => absent(n.label)))
     val peer = new ScriptedPeer(testKit)
     val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
-    val passRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
     val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
@@ -129,8 +128,7 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       pathNodeStorageOpt = Option.when(scheme == StorageScheme.Path)(pns),
       movingRootDeltaHeal = true,
       evmCodeStorage = Some(codes),
-      excludedStore = Some(progress),
-      excludedPassRoot = Some(passRoot)
+      excludedStore = Some(progress)
     )
     peer.coordinator.set(coordinator)
 
@@ -347,6 +345,25 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       }
     }
 
+    // T055, FR-017: what the last pass to end left, since a count of the set would read the store at each tick.
+    it should s"report at each tick how many entries the last pass left, on $scheme" taggedAs UnitTest in {
+      val trie = PathHealPresenceFixtures.storageTrieOld()
+      val gone = ByteString(Array.fill(32)(0x7a.toByte))
+      val rig = new Rig(scheme, trie, absent = Set.empty, Seq(ExcludedAccount(gone, ExcludedReason.StorageSkipped)))
+      rig.serve(trie)
+      rig.peerAvailable()
+      rig.start()
+      rig.awaitComplete()
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+      rig.settle()
+      com.chipprbots.ethereum.metrics.Metrics
+        .get()
+        .registry
+        .find("snap.heal.excluded.accounts")
+        .gauge()
+        .value() shouldBe 1d
+    }
+
     // Spec 022 review W-1: on a live chain a re-peg comes every 14 to 26 minutes and heals the spine. Neither a re-peg nor
     // that heal is a blocker shrinking, so the count goes on through both.
     it should s"count idle minutes across a re-peg and a heal, and hand off, when only code blocks, on $scheme (W-1)" taggedAs UnitTest in {
@@ -499,21 +516,6 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       accountKey(com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedAccountSeeding.accountNibbles(a0))
     )
     keys should not contain accountKey(nibbles(1))
-  }
-
-  // Review hunter BC-2, forge N-b: a pass ends at A, a re-peg's pass does not end, and the root goes back to A. The roots
-  // match, but no pass has looked from there since, so the controller's hold must not take the old one for it.
-  it should "forget the root a pass ended at once the pass starts over" taggedAs UnitTest in {
-    val source = new ScanFailingDataSource
-    val gone = ExcludedAccount(ByteString(Array.fill(32)(0x7a.toByte)), ExcludedReason.StorageSkipped)
-    val rig = new Rig(StorageScheme.Path, fixture(), absent = Set.empty, Seq(gone), progressSource = source)
-    rig.start()
-    rig.drive()
-    rig.passRoot.get() shouldBe fixture().root.hash
-    source.failing = true
-    rig.coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(fixture(acct1Nonce = 3L).root.hash)
-    rig.drive()
-    rig.passRoot.get() shouldBe null
   }
 
   "The blocked tick" should "not count while a fetch is in flight: that is the stagnation paths' business" taggedAs UnitTest in {

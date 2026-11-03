@@ -8,6 +8,7 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -28,6 +29,11 @@ import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.*
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.*
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping.PingEnc
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
@@ -176,6 +182,101 @@ class PeerRequestHandlerSpec
     // Correct peer responds
     peerEventBus ! PublishCmd(MessageFromPeer(Pong(), peerId))
     replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[Pong]]
+
+  // spec 022 T053: import's fetcher and the background audit's each have their own PeersClient, and can each have a SNAP
+  // request in flight to one peer. A reply to one, taken by the other, reads there as a wrong hash, and blacklists an
+  // honest peer in import's blacklist. Every peer echoes the id (snap/1).
+  it should "take a SNAP reply only for its own request id, when two requests are in flight to one peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new Fixtures:
+    val npmProbe = TestProbe()(testKit.system.toClassic)
+    given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
+    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
+      testKit.spawn(
+        PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
+          peer = peer,
+          responseTimeout = 5.seconds,
+          networkPeerManager = npmProbe.ref,
+          peerEventBus = peerEventBus,
+          requestMsg = GetTrieNodes(id, ByteString(Array.fill[Byte](32)(1)), Seq(Seq(ByteString(0))), 1024),
+          responseMsgCode = SNAP.Codes.TrieNodesCode,
+          replyTo = to,
+          requestId = id
+        ),
+        s"prh-${java.util.UUID.randomUUID()}"
+      )
+    val other = testKit.createTestProbe[PeerRequestHandler.Result]()
+    request(11, replyTo.ref)
+    request(22, other.ref)
+    npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+
+    // Each handler enqueued its subscriptions before its send, and both sends are seen above, so this publish is after
+    // them in the bus's mailbox.
+    peerEventBus ! PublishCmd(MessageFromPeer(TrieNodes(22, Seq(ByteString(1))), peerId))
+    other.expectMessageType[PeerRequestHandler.ResponseReceived[TrieNodes]].response.requestId shouldBe BigInt(22)
+    replyTo.expectNoMessage(200.millis)
+
+    peerEventBus ! PublishCmd(MessageFromPeer(TrieNodes(11, Seq(ByteString(2))), peerId))
+    replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[TrieNodes]].response.requestId shouldBe BigInt(11)
+
+  it should "take a ByteCodes reply only for its own request id, as it does a TrieNodes reply" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new Fixtures:
+    val npmProbe = TestProbe()(testKit.system.toClassic)
+    given (GetByteCodes => MessageSerializable) = new GetByteCodes.GetByteCodesEnc(_)
+    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
+      testKit.spawn(
+        PeerRequestHandler.behavior[GetByteCodes, ByteCodes](
+          peer = peer,
+          responseTimeout = 5.seconds,
+          networkPeerManager = npmProbe.ref,
+          peerEventBus = peerEventBus,
+          requestMsg = GetByteCodes(id, Seq(ByteString(Array.fill[Byte](32)(1))), 1024),
+          responseMsgCode = SNAP.Codes.ByteCodesCode,
+          replyTo = to,
+          requestId = id
+        ),
+        s"prh-${java.util.UUID.randomUUID()}"
+      )
+    val other = testKit.createTestProbe[PeerRequestHandler.Result]()
+    request(11, replyTo.ref)
+    request(22, other.ref)
+    npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+
+    peerEventBus ! PublishCmd(MessageFromPeer(ByteCodes(22, Seq(ByteString(1))), peerId))
+    other.expectMessageType[PeerRequestHandler.ResponseReceived[ByteCodes]].response.requestId shouldBe BigInt(22)
+    replyTo.expectNoMessage(200.millis)
+
+    peerEventBus ! PublishCmd(MessageFromPeer(ByteCodes(11, Seq(ByteString(2))), peerId))
+    replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[ByteCodes]].response.requestId shouldBe BigInt(11)
+
+  it should "time out when the only reply has no matching id" taggedAs (UnitTest, NetworkTest) in new Fixtures:
+    val npmProbe = TestProbe()(testKit.system.toClassic)
+    given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
+    testKit.spawn(
+      PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
+        peer = peer,
+        responseTimeout = 2.seconds,
+        networkPeerManager = npmProbe.ref,
+        peerEventBus = peerEventBus,
+        requestMsg = GetTrieNodes(11, ByteString(Array.fill[Byte](32)(1)), Seq(Seq(ByteString(0))), 1024),
+        responseMsgCode = SNAP.Codes.TrieNodesCode,
+        replyTo = replyTo.ref,
+        requestId = 11
+      ),
+      s"prh-${java.util.UUID.randomUUID()}"
+    )
+    npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+
+    peerEventBus ! PublishCmd(MessageFromPeer(TrieNodes(99, Seq(ByteString(1))), peerId))
+    replyTo.expectNoMessage(200.millis)
+
+    manualTime.timePasses(3.seconds)
+    replyTo.expectMessage(PeerRequestHandler.RequestFailed(11, peer, "request timeout"))
 
   it should "ignore a disconnect event for a different peer" taggedAs (UnitTest, NetworkTest) in new Fixtures:
     val npmProbe = TestProbe()(testKit.system.toClassic)

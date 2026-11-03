@@ -8,7 +8,7 @@
 **Input**: User description: "Scope post-heal verification to only the healed subtrees instead of a full-root re-walk."
 
 **Closed** (2026-10-30):
-- Reason: spec 022 FR-019 names this spec superseded; the verify-walk gate is removed by 022 slice 5.
+- Reason: spec 022 FR-019 names this spec superseded; the verify-walk gate is bypassed by 022 slice 5 where the invariant marker stands (CON-014).
 - Lives on in: the background audit of 022 FR-013.
 
 ## Overview

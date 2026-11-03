@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-19
 
-**Status**: Superseded by 022 (2026-10-30). Shipped (14 of 18 tasks; CON-012), then replaced: spec 022 FR-012 removes the verification walk as a completion precondition altogether (022 FR-019).
+**Status**: Superseded by 022 (2026-10-30). Shipped (14 of 18 tasks; CON-012), then replaced: spec 022 FR-012 removes the verification walk as a completion precondition where the invariant marker stands, and keeps it as the repair where it does not (022 FR-019, CON-014).
 **Input**: User description: "Eliminate the redundant second full-trie verification walk on a clean post-SNAP heal, so a node that finishes its rebuild walk finding zero missing nodes (and having healed nothing) declares StateHealingComplete after ONE walk instead of two — halving clean-node post-SNAP completion time (~30-40h → ~16-20h on ETC mainnet) with byte-for-byte identical completion semantics."
 
 **Closed** (2026-10-30):

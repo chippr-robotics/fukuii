@@ -273,6 +273,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.bytecodesEstimatedTotal = 500L
     m.healingValidatedRoot = Some(root)
     m.healingCleanWalkRoot.set(root.value)
+    m.healingDecidedRoot.set(root.value)
     m.coordinatorGeneration = 4L
     m.validationGeneration = 6L
     m.validationInProgress = true
@@ -331,6 +332,31 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.calls shouldBe empty
   }
 
+  // spec 022 T050a: `stopAll()` takes a handle as it stops the coordinator, so its report matches nothing. At the controller
+  // that report mostly lands in `bootstrapping` or `dormantRetry`, which drop it, so a controller test does not see this
+  // (`SNAPCoordinatorGoneSpec`). It matters when a stop takes long enough for the controller to be back in `syncing`.
+  it should "cost nothing for a report from a coordinator stopAll stopped, for each of the four" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    m.appStateStorage.stampSnapHealInvariant().commit()
+    val account = TestInbox[AccountRangeCoordinator.Command]()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    val byteCode = TestInbox[ByteCodeCoordinator.Command]()
+    val healing = TestInbox[TrieNodeHealingCoordinator.Command]()
+    m.accountRangeCoordinator = Some(account.ref)
+    m.storageRangeCoordinator = Some(storage.ref)
+    m.bytecodeCoordinator = Some(byteCode.ref)
+    m.trieNodeHealingCoordinator = Some(healing.ref)
+    h.call(_.stopAll())
+
+    Seq[ActorRef[Nothing]](account.ref, storage.ref, byteCode.ref, healing.ref).foreach { ref =>
+      h.call(_.coordinatorGoneArms(CoordinatorGone(ref)))
+    }
+
+    m.appStateStorage.getSnapCodeScanOwed() shouldBe None
+    m.appStateStorage.hasSnapHealInvariant() shouldBe true
+  }
+
   it should "stay dormant at wake-up without a SNAP peer, doubling the backoff" taggedAs UnitTest in {
     val h = new Harness()
     h.become(_.enterDormantMode("first"))
@@ -362,6 +388,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
     withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
+    withClue("spec 022: nor an earlier decision: ")(m.healingDecidedRoot.get() shouldBe null)
     m.coordinatorGeneration shouldBe 5L
     m.validationGeneration shouldBe 7L
     m.validationInProgress shouldBe false
@@ -421,6 +448,7 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
     withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
+    withClue("spec 022: nor an earlier decision: ")(m.healingDecidedRoot.get() shouldBe null)
     m.appStateStorage.isSnapSyncAccountsComplete() shouldBe false
     m.appStateStorage.isSnapSyncStorageComplete() shouldBe false
     m.appStateStorage.isSnapSyncBytecodeComplete() shouldBe false

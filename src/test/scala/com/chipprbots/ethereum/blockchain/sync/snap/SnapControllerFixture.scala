@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.HeapWatchdogStart
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -111,6 +112,9 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
   val byteCodeInbox: TestProbe[ByteCodeCoordinator.Command] = testKit.createTestProbe[ByteCodeCoordinator.Command]()
   val chainInbox: TestProbe[ChainDownloader.Command] = testKit.createTestProbe[ChainDownloader.Command]()
 
+  // The kinds of child that fail at every message, as `RecordingChildFactories` reads it.
+  val dying: AtomicReference[Set[String]] = new AtomicReference(Set.empty)
+
   val factories = new RecordingChildFactories(
     spawns.ref,
     accountInbox = Some(accountInbox.ref),
@@ -118,7 +122,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     healingInbox = Some(healingInbox.ref),
     byteCodeInbox = Some(byteCodeInbox.ref),
     chainInbox = Some(chainInbox.ref),
-    stopped = Some(stops.ref)
+    stopped = Some(stops.ref),
+    dying = () => dying.get()
   )
 
   // ── #1501 seams ──────────────────────────────────────────────────────────────────────────────
@@ -153,7 +158,8 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
       config: SNAPSyncConfig,
       isPoS: Boolean = false,
       validatorFactory: MptStorage => StateValidator = new StateValidator(_),
-      failedFinalizationPivot: Option[BigInt] = None
+      failedFinalizationPivot: Option[BigInt] = None,
+      stateStorage: Option[StateStorage] = None
   ): ActorRef[SNAPSyncController.Command] =
     given ExecutionContext = testKit.system.executionContext
     val snap = testKit.spawn(
@@ -161,7 +167,7 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
         blockchainReader,
         blockchainWriter,
         appStateStorage,
-        storagesInstance.storages.stateStorage,
+        stateStorage.getOrElse(storagesInstance.storages.stateStorage),
         storagesInstance.storages.evmCodeStorage,
         storagesInstance.storages.flatSlotStorage,
         npmStub,
@@ -382,15 +388,21 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     expectSpawn[ChildSpawn.Healing]
     snap
 
-  /** From `StateHealing`: a clean walk takes the controller to `StateValidation`, and it stays there: finalisation
-    * stops at the A5 root guard, because the pivot's stored header now names another root. (The phase otherwise lasts
-    * one mailbox turn: a clean walk's validation short-circuits.) The guard's `HealingImpossible` goes to the parent
-    * probe, which does nothing with it.
+  /** spec 022 5d: what a real coordinator does before it sends `StateHealingComplete`: says which root it decided on.
+    */
+  def decideHealing(root: ByteString): Unit =
+    factories.lastHealingDecidedRoot.get().foreach(_.set(root))
+
+  /** From `StateHealing`: the coordinator's decision takes the controller to `StateValidation`, and it stays there:
+    * finalisation stops at the A5 root guard, because the pivot's stored header now names another root. (The phase
+    * otherwise lasts one mailbox turn: the completion's validation short-circuits.) The guard's `HealingImpossible`
+    * goes to the parent probe, which does nothing with it.
     */
   def parkInStateValidation(snap: ActorRef[SNAPSyncController.Command], pivot: BigInt = Pivot): Unit =
     storeHeaderAt(pivot, ByteString(Array.fill(32)(0x7b.toByte)))
     scala.util.Using.resource(new SnapLogCapture) { log =>
-      snap ! SNAPSyncController.TrieWalkComplete(0)
+      decideHealing(Root)
+      snap ! SNAPSyncController.StateHealingComplete
       log.awaitLine("SNAP finalization aborted")
     }
     awaitProcessed(snap)
@@ -404,9 +416,12 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     seedStorageResume(Pivot, Root)
     val snap = spawnController(config)
     snap ! SNAPSyncController.Start
-    expectSpawn[ChildSpawn.StorageRange]
+    spawnedStorageRecordsDone = Some(expectSpawn[ChildSpawn.StorageRange].recordStorageDone)
     awaitProcessed(snap)
     snap
+
+  /** What [[enterStorageResume]]'s spawn was told about done markers. */
+  var spawnedStorageRecordsDone: Option[Boolean] = None
 
   /** `ByteCodeAndStorageSync` with both the storage and the bytecode child (both still downloading). */
   def enterStorageAndByteCodeResume(

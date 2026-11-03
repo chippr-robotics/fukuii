@@ -112,9 +112,19 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       val t: Trie = trie(),
       served: Option[Map[Seq[ByteString], ByteString]] = None,
       awaited: Set[ByteString] = Set(hash0, hash1),
-      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+      marked: Boolean = false
   ):
     val ec = new ManualExecutionContext
+    val appState = new com.chipprbots.ethereum.db.storage.AppStateStorage(new EphemDataSource(Map.empty))
+    if marked then appState.stampSnapHealInvariant().commit()
+    val decidedRoot = new java.util.concurrent.atomic.AtomicReference[ByteString]()
+    // A walk clears its queue as it starts.
+    val walkClears = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val walkQueue = new com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage:
+      override def clear(): Unit =
+        walkClears.incrementAndGet()
+        super.clear()
     val hashStore = new TestMptStorage()
     val pathSource = new FailingSource
     val pns = new PathNodeStorage(pathSource)
@@ -138,7 +148,11 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
       evmCodeStorage = Some(codes),
       excludedStore = Option.when(withSet)(progress),
       heldMemoryLimit = heldMemoryLimit,
-      cleanWalkRoot = Some(cleanWalkRoot)
+      cleanWalkRoot = Some(cleanWalkRoot),
+      decidedRoot = Some(decidedRoot),
+      bfsQueueStorageOpt = Some(walkQueue),
+      markerStore = Option.when(marked)(appState),
+      markerMayStand = marked
     )
     peer.coordinator.set(coordinator)
     peer.serveFrom.set(Some(served.getOrElse(t.served)))
@@ -367,6 +381,101 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
         rig.cleanWalkRoot.get() shouldBe null
       }
       rig.progress.hasExcludedCode shouldBe true
+    }
+
+    // spec 022 5d: the marker stands, so what the walk would look for cannot be there, and the root is on disk once the
+    // chains are written. Still a hand-off, with no record: finalisation takes the marker.
+    it should s"hand off with no walk where the marker stands, the root written with the chains, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, withSet = true, marked = true)
+      rig.begin()
+      rig.seen()
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks)
+      rig.drive()
+      withClue("the waiting chains are written, whole: ") {
+        Seq("acct0", "acct1", "root").foreach(l => withClue(s"$l: ")(rig.onDisk(l) shouldBe true))
+      }
+      val end = rig.seen()
+      end should contain(SNAPSyncController.StateHealingAbandoned)
+      end should not contain SNAPSyncController.StateHealingComplete
+      withClue("no walk: ")(rig.walkClears.get() shouldBe 0)
+      withClue("no record, so finalisation takes the marker: ") {
+        rig.decidedRoot.get() shouldBe null
+        rig.cleanWalkRoot.get() shouldBe null
+      }
+      rig.progress.hasExcludedCode shouldBe true
+    }
+
+    it should s"seed the root first when it is absent at a hand-off where the marker stands, on $scheme" taggedAs UnitTest in {
+      // No chain to write: a code entry alone blocks, and the root has not been fetched.
+      val other = kec256(ByteString("code-dependency/never-served"))
+      val rig = new Rig(scheme, withSet = true, marked = true, awaited = Set(other))
+      rig.progress.recordExcluded(Seq(ExcludedAccount(other, ExcludedReason.CodeMissing)))
+      rig.ack(code0)
+      rig.ack(code1)
+      rig.seen()
+      withClue("not on disk yet: ")(rig.onDisk("root") shouldBe false)
+      rig.ticks(TrieNodeHealingCoordinator.MaxBlockedTicks)
+      rig.available()
+      rig.settle()
+      rig.peer.awaitRequested(rig.t.root.pathset)
+      withClue("asked for the root: ")(rig.peer.requests.flatten should contain(rig.t.root.pathset))
+      val deadline = 30.seconds.fromNow
+      val pause = createTestProbe[Any]()
+      var ended = false
+      while !ended do
+        withClue("the hand-off within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        rig.drive()
+        rig.ticks(1) // the armed gate looks again each idle minute
+        ended = rig.seen().contains(SNAPSyncController.StateHealingAbandoned)
+        pause.expectNoMessage(5.millis)
+      rig.onDisk("root") shouldBe true
+      withClue("no walk: ")(rig.walkClears.get() shouldBe 0)
+      rig.decidedRoot.get() shouldBe null
+    }
+
+    // spec 022 T050: nothing to change, and this is what says so. With the marker standing and the walk gone, the gate rests
+    // on `isComplete` having `heldNodes.isEmpty`: a leaf waiting on its code is held, so nothing above it is on disk.
+    it should s"not complete with the marker standing while a held leaf waits on code, on $scheme" taggedAs UnitTest in {
+      val rig = new Rig(scheme, marked = true)
+      rig.begin()
+      val before = rig.seen()
+      before should not contain SNAPSyncController.StateHealingComplete
+      rig.coordinator ! TrieNodeHealingCoordinator.HealingCheckCompletion
+      rig.drive()
+      rig.seen() should not contain SNAPSyncController.StateHealingComplete
+      rig.onDisk("root") shouldBe false
+      rig.decidedRoot.get() shouldBe null
+      rig.ack(code0)
+      rig.ack(code1)
+      rig.drive()
+      rig.onDisk("root") shouldBe true
+      rig.seen() should contain(SNAPSyncController.StateHealingComplete)
+      withClue("with no walk: ") {
+        rig.walkClears.get() shouldBe 0
+        rig.cleanWalkRoot.get() shouldBe null
+      }
+      rig.decidedRoot.get() shouldBe rig.t.root.hash
+    }
+
+    // And the excluded set stays the gate's last conjunct, not part of `isComplete`, which is read elsewhere too.
+    it should s"not complete with the marker standing while an entry of the excluded set counts, on $scheme" taggedAs UnitTest in {
+      val other = kec256(ByteString("code-dependency/never-served"))
+      val rig = new Rig(scheme, withSet = true, marked = true, awaited = Set(hash0, hash1, other))
+      rig.progress.recordExcluded(Seq(ExcludedAccount(other, ExcludedReason.CodeMissing)))
+      rig.begin()
+      rig.ack(code0)
+      rig.ack(code1)
+      rig.drive()
+      withClue("the root is on disk, with nothing held: ")(rig.onDisk("root") shouldBe true)
+      rig.seen() should not contain SNAPSyncController.StateHealingComplete
+      rig.decidedRoot.get() shouldBe null
+      rig.ack(ByteString("code-dependency/never-served"))
+      rig.drive()
+      withClue("the entry is gone, and with it what held completion: ") {
+        rig.seen() should contain(SNAPSyncController.StateHealingComplete)
+      }
+      rig.decidedRoot.get() shouldBe rig.t.root.hash
+      rig.cleanWalkRoot.get() shouldBe null
     }
 
     it should s"hand off the same way when a code entry already in the set is part of what blocks, on $scheme" taggedAs UnitTest in {
