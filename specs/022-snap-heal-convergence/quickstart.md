@@ -59,7 +59,7 @@ A full Mordor SNAP sync against a local snap server. It isolates fukuii's own co
    - no `[HEAL-VERIFY]` gate walk;
    - `[HEAL-COMPLETE]` logged with the root.
 3. **At handoff:** the exported root equals the pivot header's `stateRoot`.
-4. Follow the head for 24 h. **Expect:** no root mismatch, and `state_ondemand_fetch_total{cause=hole}` = 0 or each case explained (SC-003, SC-004).
+4. Follow the head for 24 h. **Expect:** no root mismatch, and `state_ondemand_fetch_total{source="import"}` (`cause` is `node` or `code`) = 0 or each case explained (SC-003, SC-004).
 5. Record the time from storage-done to handoff (SC-002 baseline).
 
 ## 3. Gate 2: Sepolia fresh sync (ETH/Path)
