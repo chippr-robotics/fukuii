@@ -30,9 +30,21 @@ Identity = `(chainKey, type, blockNumber, blockHash)`; a duplicate identity is a
 | # | Field | Type | Source in the node |
 |---|-------|------|--------------------|
 | 0 | `header` | `BlockHeader` RLP (`BlockHeaderEnc.toRLPEncodable`, `domain/BlockHeader.scala:250`) | `Block.header` |
-| 1 | `receipts` | list of receipt RLP (`ReceiptCodecs`, eth/68 bloom-inclusive form; typed receipts prefixed by type byte) | `BlockData.receipts` |
-| 2 | `accounts` | list of **account entries** (§2.1), ordered by `addressHash` ascending | `BlockWriteSetRecorder` (research R-1) |
-| 3 | `code` | list of **code entries** (§2.2), ordered by `codeHash` ascending | recorder: union of `accountCodes` snapshots |
+| 1 | `transactions` | list of transaction items, block order: legacy as RLP list, typed as `txType ++ RLP(payload)` byte string (eth/68 body form, `ETHPackets.scala:459-467`) | `Block.body.transactionList` (`domain/BlockBody.scala:14`) |
+| 2 | `uncles` | list of `BlockHeader` RLP (ETC family; empty on the ETH family) | `Block.body.uncleNodesList` (`domain/BlockBody.scala:15`) |
+| 3 | `withdrawals` | list of `[index, validatorIndex, address, amount]` (EIP-4895); empty when the fork has none | `Block.body.withdrawals: Option[Seq[Withdrawal]]` (`domain/BlockBody.scala:16`; `None` encodes as empty) |
+| 4 | `receipts` | list of receipt RLP (`ReceiptCodecs`, eth/68 bloom-inclusive form; typed receipts prefixed by type byte) | `BlockData.receipts` |
+| 5 | `accounts` | list of **account entries** (§2.1), ordered by `addressHash` ascending | `BlockWriteSetRecorder` (research R-1) |
+| 6 | `code` | list of **code entries** (§2.2), ordered by `codeHash` ascending | recorder: union of `accountCodes` snapshots |
+
+The decoded state-diff type is `com.chipprbots.ethereum.domain.statediff.StateDiff`, **shared with spec 026 and spec
+018 F2** (one type; 026 `StateReplay` consumes it directly). Its account entry carries `addressHash`, `address`
+(preimage), `prev`, `next` and `slots`; its slot entry carries `slotHash`, `slotKey` (preimage), `prev` and `next`;
+`code` entries are new-only. §2.1–§2.2 are the wire view of the same fields.
+
+The body items (`transactions`, `uncles`, `withdrawals`) are verified against `header.transactionsRoot`,
+`header.ommersHash` and `header.withdrawalsRoot` (`contracts/record-schema.md` §3 rule 5). They are what lets a
+follower write `BlockBodiesStorage` and `TransactionMappingStorage` (026 FR-004).
 
 Ordering is fixed so that the bytes of a record are a function of its content alone (DC-2: byte-identical across
 layouts). The diff is netted over the whole block: an entry whose previous and new values are equal is absent.
@@ -160,7 +172,7 @@ fukuii {
       client-id-template = "fukuii-ingest-{chainKey}"
       acks = "all"                        # fixed; not a tuning knob
       compression = "zstd"
-      max-request-size = 16MiB            # a record above this halts export with exportLastError
+      max-request-size = 16MiB            # a record above this halts export with exportLastError (see below)
       request-timeout = 30s
       delivery-timeout = 120s
       properties = {}                     # passthrough for security.protocol, sasl.*, ssl.* (deployment)
@@ -188,6 +200,15 @@ fukuii {
   }
 }
 ```
+
+`max-request-size` re-checked against the block body (alignment analysis F1): the record now carries every
+transaction. A block's transaction bytes are bounded by its gas limit, because calldata costs at least 10 gas per byte
+under the EIP-7623 floor: at a 60M gas limit that is at most about 6 MB of transactions (a blob transaction carries
+versioned hashes, not blob data). The largest Sepolia blocks are a few MB. Receipts and the state diff add the same
+order of magnitude in the worst case, so the worst-case record is below 16 MiB and the default is **not raised**; the
+Oversize halt (research R-6) remains the guard. T078 re-measures the largest record on Mordor and Platåberget; a chain
+whose gas limit rises toward 150M needs `max-request-size` and the broker's `message.max.bytes` (`contracts/topic.md`
+§3) raised together.
 
 Retention guidance for the topic (operator-side, not a node config): `retention.ms` ≥ the longest tolerated follower
 outage; 7 days default; `cleanup.policy = delete`, never `compact` (contracts/topic.md).

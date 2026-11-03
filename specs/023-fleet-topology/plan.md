@@ -89,7 +89,7 @@ Deleted: `runtime/` (122 lines), `conf/multi-instance.conf`, `MetricsMultiInstan
 | **III. Tests, deterministic, ≥ 70 %** | Every behavioural slice ships ScalaTest specs (tasks list them by path); no `Thread.sleep`; harness scenarios are build-host fixtures, not tier tests. Deleting `MetricsMultiInstanceSpec` removes 3 trivial assertions; new specs (`RoleSpec`, `LifecycleControllerSpec`, `HealthReporterSpec`, `AdminHttpServerSpec`, `RoleMethodPolicySpec`, `StartPlanSpec`, `TxForwarderSpec`, AppState additions) more than replace them. `testEssential` before and after S1 (SC-001). | **PASS** |
 | **IV. Idiomatic Scala 3, scalafmt/scalafix** | `Role` is a Scala 3 `enum`; `RoleProfile` and `LifecycleState` are enums/case classes; `given`/`using` only; no `return`. `sbt scalafmtAll` per slice, `sbt pp` before each PR. | **PASS** |
 | **V. Quality gates** | One PR per slice (§Delivery slices), each green on `compile-all`, `testEssential`, `formatCheck`; `prism` review on every non-consensus slice. | **PASS** |
-| **VI. Security & operational safety** | New listener (admin) defaults to `localhost`; `POST /lifecycle/*` is unauthenticated **by design on localhost only** — Orbita reaches it through the container's loopback or a sidecar; the runbook forbids exposing it and the validator warns when `fukuii.admin.interface` is not loopback. `fukuii.tx-forward.endpoint` is an outbound HTTP client to a trusted `ingest`; secrets none. The datadir legacy detector fails loudly rather than starting a fresh sync beside a synced store. | **REVIEW** — admin surface exposure reviewed by `prism` (security lens) in S4; documented in `contracts/admin-api.md` §Security |
+| **VI. Security & operational safety** | New listener (admin) defaults to `localhost`; `POST /lifecycle/*` is unauthenticated **by design on localhost only** — Orbita reaches it through the container's loopback or a sidecar; the runbook forbids exposing it and the validator warns when `fukuii.admin.interface` is not loopback. `fukuii.tx-forward.endpoint` is an outbound HTTP client to a trusted `ingest`; secrets none. The datadir legacy detector adopts the legacy path for `ingest` (INFO) and fails loudly for followers and `sim` rather than starting a fresh sync beside a synced store. | **REVIEW** — admin surface exposure reviewed by `prism` (security lens) in S4; documented in `contracts/admin-api.md` §Security |
 | **VII. Versioning & records** | Breaking changes flagged in CHANGELOG: `fukuii runtime` removed, default datadir moves (migration note in the operating-modes runbook), new admin port. A short ADR `docs/adr/architecture/ARCH-0xx-one-process-one-chain-one-role.md` records D-1/D-4 (task T081). | **PASS** |
 | **Technology constraints** | No new dependency. New package `admin/` under `com.chipprbots.ethereum`; it depends on `jsonrpc/`, `db/`, `blockchain/sync/` (downward only). | **PASS** |
 
@@ -248,7 +248,7 @@ fork-choice output); the "Consensus" column records what a reviewer checks to co
 | --- | --- | --- |
 | New package `admin/` (one more top-level package) | Lifecycle + health + admin listener are one reviewable surface, neither chain RPC nor node assembly | Putting the admin routes on the JSON-RPC server violates FR-009 (admin port never serves chain RPC; separate port); scattering lifecycle into `nodebuilder/` hides the fence's write order from `vault` |
 | Unauthenticated `POST /lifecycle/*` | Orbita needs signals without a key-distribution scheme in the first release; the surface binds loopback | JWT like the Engine API adds a secret per process that Orbita must manage before it exists; mTLS same. Reconsidered when the admin interface is ever non-loopback (validator warns) |
-| Default datadir moves to `~/.fukuii/<chainKey>/<role>` and US1 AS1 says "no config change" | OQ-3 decided the layout and the migration note; a synced 0.10.17 datadir at `~/.fukuii/<chainKey>` must never be silently abandoned for a fresh sync | Auto-adopting the legacy path for `ingest` keeps US1 literal but makes the "default datadir" depend on disk state and defers the move forever; the plan fails loudly with both remedies (`DatadirLayout`). **Surfaced as open risk R-1 for the user** |
+| Default datadir moves to `~/.fukuii/<chainKey>/<role>` and US1 AS1 says "no config change" | OQ-3 decided the layout and the migration note; a synced 0.10.17 datadir at `~/.fukuii/<chainKey>` must never be silently abandoned for a fresh sync | Auto-adopting the legacy path for `ingest` keeps US1 literal but makes the "default datadir" depend on disk state and defers the move; accepted (F6). `ingest` adopts the legacy path (INFO log) and followers/`sim` fail loudly with `LegacyDatadirLayout` (`DatadirLayout`). **Resolved as R-1** |
 | `SyncProtocol.Pause/Resume` touches `blockchain/sync/` | FR-005 "stops importing" needs a control message; none exists (`SyncProtocol.scala:37` has `Start`, no stop/pause) | Stopping the `SyncController` actor loses `GetStatus` for health and cannot resume on `unfence` without a restart |
 | A block-import duration timer added to `RegularSyncMetrics` | SC-002/SC-003 need per-block import time; today only `regularsync.blocks.imported.total` and propagation timers exist (`RegularSyncMetrics.scala:14-31`) | Deriving import time from logs is brittle and host-dependent |
 
@@ -260,13 +260,15 @@ fork-choice output); the "Consensus" column records what a reviewer checks to co
    becomes true at S1.
 2. **024 chain-registry**: S2 keeps `App.knownNetworks` for the positional form and accepts `--chain` over the same
    set; 024 FR-002 removes the set and makes `--chain` accept any ChainSpec `chainKey`. `InstanceConfig.chainKey`
-   (this plan) is the field 024's loader fills. The first-start record `fleet.chainKey` (S2) and 024 DC-6/FR-005's
-   genesis-and-fork-schedule record should share one write and one "recorded at first start" read path; 024's plan
-   should extend `AppStateStorage.recordFleetIdentity` rather than add a parallel key.
+   (this plan) is the field 024's loader fills. `AppStateStorage.recordFleetIdentity` (S2) is the one write path for
+   first-start identity (`fleet.chainKey`, `fleet.role`); 024 DC-6/FR-005 extends it with the genesis hash and the
+   fork-schedule digest in the same synced batch rather than adding a parallel key, and the read path
+   (`fleetIdentity()`) is shared (analysis F7).
 3. **025 change-record-export**: S5 exposes `LifecycleController.registerFenceable(hook)`; 025 T-005's exporter
    registers to persist its export position on fence (025 FR-004). S4 exposes `HealthSources.exporter:
    Option[ExporterHealthSource]`; 025 T-007 implements it (exportLag, exportQueueDepth, exportBufferBytes,
-   exportLastError). Until 025 lands, an `ingest` reports those four fields as `null`. SC-004's "no gap" half uses
+   exportLastError). Until 025 lands, an `ingest` reports those four fields, and `exportState` (0 running, 1 halted,
+   2 fenced), as `null`. SC-004's "no gap" half uses
    025 SC-003's checker; `sc004` records "checker: pending 025" until then.
 4. **026 follower-roles**: S4 exposes `HealthSources.retention: Option[RetentionWindowSource]` and the follower
    readiness bound `fukuii.admin.ready-lag-blocks`; 026 implements the source and sets the default from its retention
@@ -281,8 +283,10 @@ fork-choice output); the "Consensus" column records what a reviewer checks to co
 
 ## Open risks
 
-- **R-1 datadir default vs US1 AS1** (Complexity Tracking row 3): the plan fails loudly on a legacy layout; the user
-  may prefer auto-adoption for `ingest`. Decide before S2 opens.
+- **R-1 datadir default vs US1 AS1** (Complexity Tracking row 3) — **resolved** (analysis F6, 2026-10-31; spec
+  FR-001): for `role = ingest` only, when `~/.fukuii/<chainKey>/ingest` does not exist and `~/.fukuii/<chainKey>`
+  already holds a datadir, the node adopts the legacy path and logs at INFO; followers and `sim` finding only a
+  legacy layout refuse with `LegacyDatadirLayout` (research D-4). US1 AS1 needs no config change.
 - **R-2 020 PR 5 membership** of the Phase B files is unverified in the tree (§Sequencing); T001 resolves it.
 - **R-3 `sim` state source**: a remote block-pinned state client for EVM execution over follower RPC is the largest
   new piece of S9 and has no precedent in the codebase; if it needs changes under `ledger/`, S9 routes through

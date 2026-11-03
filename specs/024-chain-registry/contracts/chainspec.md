@@ -47,7 +47,7 @@ Rules of thumb:
 | `dns-discovery-domains` | array of `enrtree://` URLs | optional | both | |
 | `allowed-miners` | array of hex public keys | optional | etc | `restricted-pow` miner set. |
 | `mess { enabled, ecbp1100-block-number, ecbp1100-deactivate-block-number, ecbp1100-reactivate-block-number }` | object; `enabled` required | ethash-pow: yes; engine-api: forbidden | etc | ECIP-1100 MESS. Must be declared explicitly so the choice is visible; the default and the recommended value is `false`. |
-| `resources.{ingest,replica,archive,sim}` | `{ heap-hint, engine-memory-budget, retention-window (replica only) }` | optional | both | Resource defaults for Orbita and operators. fukuii never enforces them. |
+| `resources.{ingest,replica,archive,sim}` | `{ heap-hint, engine-memory-budget, retention-window-blocks (replica only; positive integer, blocks) }` | optional | both | Resource defaults for Orbita and operators. fukuii never enforces them. |
 
 Derived (not keys; an entry that sets them fails with `UnknownField`): `finality-rule`, `fork-dispatch`,
 `storage-scheme`, `mining.protocol`.
@@ -112,7 +112,7 @@ Derived (not keys; an entry that sets them fails with `UnknownField`): `finality
 
   resources {
     ingest  { heap-hint = "4g", engine-memory-budget = "2g" }
-    replica { heap-hint = "3g", engine-memory-budget = "2g", retention-window = "24h" }
+    replica { heap-hint = "3g", engine-memory-budget = "2g", retention-window-blocks = 7200 }
   }
 }
 ```

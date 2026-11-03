@@ -48,7 +48,7 @@ touches the Path column families (`t`, `u`). It verifies the root on a **staged*
 | `EvmCodeStorage` (`c`) | codeHash → bytes | code diff | content-addressed; never deleted |
 | `BlockHeadersStorage` (`h`) + `BlockNumberMappingStorage` (`i`) | hash → header; number → hash | record header | `BlockchainWriter.storeBlockHeader` (`domain/BlockchainWriter.scala:96-98`) |
 | `ReceiptStorage` (`r`) | block hash → receipts | record receipts | `BlockchainWriter.storeReceipts` |
-| `BlockBodiesStorage` (`b`) + `TransactionMappingStorage` (`l`) | hash → body; txHash → location | **not in the 025 record today** | see Cross-spec note 1 in plan.md |
+| `BlockBodiesStorage` (`b`) + `TransactionMappingStorage` (`l`) | hash → body; txHash → location | record `body` (025 DC-2) | `BlockchainWriter.storeBlockBody` (`domain/BlockchainWriter.scala:146`); resolved, plan.md Cross-spec note 1 |
 | new CF `FollowRecordNamespace` | `blockNumber(8 BE) ++ blockHash` → record bytes | the record as received | kept for the window (R-4) |
 | `AppStateStorage` (`s`) | `follow.*` keys (data-model.md) | derived | head, verified root, source position |
 
@@ -198,17 +198,19 @@ re-delivery (the single partition is already ordered, FR-003 of 025; any out-of-
 - The resolution happens **once per request**; the resolved `(number, hash)` is attached to the response. For results
   that carry block fields (`eth_getBlockBy*`, `eth_getTransactionReceipt`, `eth_getLogs`) the fields already say it;
   for scalar results (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount`, `eth_getProof`)
-  the follower adds the JSON-RPC response extension member `"pinnedBlock": {"number": "0x…", "hash": "0x…"}` to the
-  response object and, on the HTTP transport, the header `Fukuii-Pinned-Block: <number>:<hash>` so a router can read it
-  without parsing the body. `JsonRpcResponse` (`jsonrpc/JsonRpcResponse.scala:8`) gains an optional field, encoded only
+  the follower emits, on the HTTP transport, the header `Fukuii-Pinned-Block: <number>:<hash>` by default
+  (`fukuii.follow.rpc.pin-header`) so a router can read it without parsing the body. The JSON-RPC response extension
+  member `"pinnedBlock": {"number": "0x…", "hash": "0x…"}` is opt-in (`fukuii.follow.rpc.pin-member`, default `false`);
+  on WS and IPC, which have no headers, it is the only echo. `JsonRpcResponse` (`jsonrpc/JsonRpcResponse.scala:8`) gains an optional field, encoded only
   on follower roles; `ingest` responses are byte-identical to today.
 - `eth_getLogs`: both range edges are resolved and window-checked (FR-004); `EthFilterService.getLogs` today clamps
   `toBlock` to the best block and resolves tags implicitly (`EthFilterService.scala:112-114`); on a follower it goes
   through the resolver, and `filterManager` is asked with explicit numbers only.
 
 **Rationale.** 023 DC-6 wants a router to pin a session to a height and detect drift from the response alone; the
-extension member is the one place Orbita reads, and the header is cheap. Strict JSON-RPC 2.0 clients that reject
-unknown members are a known risk, logged in plan.md; followers are behind Orbita's gateway (023), not public.
+header is cheap and keeps the body strict JSON-RPC 2.0, so it is the default (analysis-2026-10-31 F11). The member is
+available to deployments whose router or WS clients need it; strict clients that reject unknown members are a known
+risk, logged in plan.md, and followers are behind Orbita's gateway (023), not public.
 
 **Alternatives rejected.** Changing result shapes (breaks every client); echoing only in a header (WS and IPC have
 none);
@@ -321,7 +323,7 @@ in `snap/controller`); deriving the mode from config only (the role is the sourc
 **Decision.** Readiness (DC-8) = `!halted && sourceLag ≤ fukuii.follow.lag-bound && lastVerifiedRoot ==
 header(appliedHead).stateRoot`,
 where `sourceLag` = the highest `blockNumber` seen from the source (Kafka end offset's record, or the newest record
-observed) minus `appliedHead`. The 023 FR-004 shape gains, for followers, `window: {low, high}`, `fault`, and
+observed) minus `appliedHead`. The 023 FR-004 shape gains, for followers, `retentionWindow: {fromBlock, toBlock}`, `fault`, and
 `seedBlock`; metrics twins `fukuii_follow_applied_head`, `fukuii_follow_source_lag`, `fukuii_follow_window_low`,
 `fukuii_follow_apply_seconds` (histogram), `fukuii_follow_queue_depth`, `fukuii_follow_halted` (0/1). The admin
 surface is 023 FR-009's; 026 only contributes the fields. Today's `NodeJsonRpcHealthChecker` requires peers

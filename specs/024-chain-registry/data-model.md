@@ -104,7 +104,7 @@ hash to every built-in (slice 4) and `fetch-genesis.sh` already knows Ephemery's
 ```hocon
 resources {
   ingest  { heap-hint = "8g",  engine-memory-budget = "6g" }
-  replica { heap-hint = "6g",  engine-memory-budget = "4g", retention-window = "24h" }
+  replica { heap-hint = "6g",  engine-memory-budget = "4g", retention-window-blocks = 7200 }
   archive { heap-hint = "16g", engine-memory-budget = "12g" }
   sim     { heap-hint = "6g",  engine-memory-budget = "4g" }
 }
@@ -114,7 +114,7 @@ resources {
 | --- | --- | --- | --- |
 | `heapHint` | HOCON size string (`"8g"`), parsed with `Config.getBytes` | any | Orbita / operator tooling; `fukuii chains list --verbose` prints it |
 | `engineMemoryBudget` | size string | any | Orbita; maps onto `db.rocksdb.memory-budget` (`InstanceConfig.scala:187-189`) only if the operator copies it — fukuii never does |
-| `retentionWindow` | HOCON duration (`"24h"`); 026's default is 24 h of blocks | `replica` only (`UnknownField` elsewhere) | spec 026 (`ChainSpec.resourceProfile(Role.Replica).retentionWindow`) |
+| `retentionWindowBlocks: Option[Int]` | positive integer of blocks (`retention-window-blocks = 7200`); no duration form | `replica` only (`UnknownField` elsewhere) | spec 026 (`ChainSpec.resourceProfile(Role.Replica).retentionWindowBlocks`) |
 
 Unknown keys inside a profile are `UnknownField`. Absent profiles are `Map.empty`; 026 applies its own default.
 
@@ -167,7 +167,7 @@ ADT are what the template needs; `source` is the entry's `ChainSpecSource`.
 | `GenesisMismatch` | `source`, `declared`, `computed` | `genesis-hash` ≠ computed header hash; also datadir genesis ≠ ChainSpec genesis | FR-004, FR-005 |
 | `ProfileConsensusMismatch` | `chainKey`, `key` (`mining.protocol` \| `sync.snap-sync.storage-scheme`), `profileValue`, `profileOrigin`, `derivedValue`, `consensus` | profile sets a consensus-derived key to an incompatible value | DC-5 |
 | `EngineApiNotConfigured` | `chainKey`, `missingKeys` | `engine-api` chain, role `ingest` (single-node default), `network.engine-api.enabled` false or `jwt-secret-path` unset; skipped by offline tools (`chains validate`, `import`, `export`) | edge case |
-| `DatadirChainKeyMismatch` | `recorded`, `requested`, `datadir` | AppState `chain.spec.chainKey` ≠ selected key | DC-3, DC-6 |
+| `DatadirChainKeyMismatch` | `recorded`, `requested`, `datadir` | AppState `fleet.chainKey` ≠ resolved ChainSpec key | DC-3, DC-6 |
 | `ForkScheduleIncompatible` | `fork`, `recorded`, `requested`, `head` (number or timestamp), `datadir` | geth `CheckCompatible` rule: activation changed and recorded or requested activation ≤ head | FR-005, DC-6 |
 
 Errors are **collected, not short-circuited**, per entry and across entries (a `validate` run reports all of them), with
@@ -177,17 +177,20 @@ one exception: a parse error stops further checks on that entry.
 
 ## 7. Datadir compatibility record (`DatadirChainRecord`)
 
-Stored in AppState (`AppStateStorage`, string→string, `db/storage/AppStateStorage.scala:17-27`), keys added to
-`AppStateStorage.Keys` beside spec 022's markers (`:652-655`):
+Stored in AppState (`AppStateStorage`, string→string, `db/storage/AppStateStorage.scala:17-27`). Spec 023 writes
+`fleet.chainKey` and `fleet.role` at first start through `AppStateStorage.recordFleetIdentity` in one synced batch.
+024 EXTENDS that same API and batch with the two keys below (added to `AppStateStorage.Keys` beside spec 022's markers,
+`:652-655`); it adds no parallel key set and no second write path. The compatibility check compares `fleet.chainKey`
+(023's key, not a 024 key) against the resolved ChainSpec key.
 
 | Key | Value | Written |
 | --- | --- | --- |
-| `chain.spec.chainKey` | `chainKey` | first genesis store; backfill |
+| `fleet.chainKey` (023) | `chainKey`; read, never written by 024 except to backfill through `recordFleetIdentity` | first start (023); backfill |
 | `chain.spec.genesisHash` | `0x` + 64 hex of the stored genesis header hash | same |
 | `chain.spec.forkSchedule` | `v1;<name>=<value>;...` sorted by `<name>`; names are the HOCON keys (`atlantis-block-number`, `shanghai-timestamp`, `terminal-total-difficulty`, ...); values decimal; `Long.MaxValue` / `10^18` sentinels and `None` rendered as `-` | same; rewritten after a compatible change |
 
-Written in one `updateSync` batch (the `onFirstStored` hook, `GenesisDataLoader.scala:128`, already runs after the
-genesis write). Read-only on every open; the `v1;` prefix lets a later version re-render. The check
+Written in one `updateSync` batch, the `recordFleetIdentity` batch (the `onFirstStored` hook,
+`GenesisDataLoader.scala:128`, already runs after the genesis write). Read-only on every open; the `v1;` prefix lets a later version re-render. The check
 (`DatadirCompatibility.check(record, spec, head): Either[ChainSpecError, Option[DatadirChainRecord]]`) is a pure
 function unit-tested against a table of (recorded, requested, head) cases, with `Some(newRecord)` meaning "compatible
 with a change; rewrite".

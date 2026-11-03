@@ -99,10 +99,10 @@ src/main/scala/com/chipprbots/ethereum/
 │   ├── record/                               # pure: depends on domain, rlp, crypto only (018 F2 can reuse it)
 │   │   ├── Record.scala                      # enum RecordType; Record, BlockBody, AccountEntry, SlotEntry, CodeEntry
 │   │   ├── RecordCodec.scala                 # version byte + RLP encode/decode, canonical ordering, netting
-│   │   └── WriteSet.scala                    # the semantic diff model (prev/new) the recorder produces
+│   │   └── StateDiff.scala                    # the semantic diff model (prev/new) the recorder produces
 │   ├── capture/
 │   │   ├── BlockWriteSetRecorder.scala       # key collection per persist; block-end resolution (research R-1)
-│   │   └── RecordBuilder.scala               # Block + receipts + WriteSet → Record
+│   │   └── RecordBuilder.scala               # Block + receipts + StateDiff → Record
 │   ├── buffer/
 │   │   ├── ExportBufferStorage.scala         # CF x: staged records + emission log (typed over DataSource)
 │   │   ├── ExportPosition.scala              # AppState keys export.{position,finality,bufferBytes,halted}
@@ -219,7 +219,7 @@ One PR each; each leaves `main` releasable; slices 0 is phase A, 1–5 are phase
 | Slice | Content | Owner / reviewers | Gate |
 |-------|---------|-------------------|------|
 | **0** (phase A) | `contracts/*`, `data-model.md` §1–§5, `export/record/` codec, golden vectors + manifest, `RecordCodecSpec`, `RecordCodecPropertySpec`, ADR INF-010 draft, this GT-2 table signed | main session; **vault** (GT-1 with 018 F2), **forge + beacon** (GT-2 table), **prism** (codec readability) | GT-1, GT-2 |
-| **1** | `BlockWriteSetRecorder`, `RecordBuilder`, `Option` threading in `BlockExecution`/`BlockPreparator`, staged-record put at X0, CF `x` + `ExportBufferStorage` (staged half), `export.bufferBytes`; config `enabled` flag; `BlockWriteSetRecorderSpec`; SC-002 pre-measurement with export off vs on-but-no-sink | main; **forge + beacon** (X0/X1), **vault** (CF, batch composition), **eye** | Compile-all; `testOnly *BlockExecution* *BlockPreparator* *WriteSet*`; import p99 within band |
+| **1** | `BlockWriteSetRecorder`, `RecordBuilder`, `Option` threading in `BlockExecution`/`BlockPreparator`, staged-record put at X0, CF `x` + `ExportBufferStorage` (staged half), `export.bufferBytes`; config `enabled` flag; `BlockWriteSetRecorderSpec`; SC-002 pre-measurement with export off vs on-but-no-sink | main; **forge + beacon** (X0/X1), **vault** (CF, batch composition), **eye** | Compile-all; `testOnly *BlockExecution* *BlockPreparator* *StateDiff*`; import p99 within band |
 | **2** | Emission log (CF `x` second key space), `CanonicalCommitObserver`, `FinalityWatermark`, the three `extra` params in `BlockchainWriter`, hooks E1/E2/E4/H1/F1/B1, AppState keys, `ExportPosition`; `CanonicalCommitObserverSpec`, `ExportBufferStorageSpec` | main; **forge** (E1–E4), **beacon** (H1–H3, F1), **vault** (signatures, key layout, housekeeping) | `testOnly *ConsensusImpl* *ForkChoiceManager* *BlockImporter* *CanonicalCommit*` |
 | **3 (MVP)** | `RecordSink` seam, `FileRecordSink`, `Exporter` drain loop with position-after-ack and halt states, `ReferenceConsumer`, `ReorgFixtures` (five shapes), US1 at unit level (SC-001 on fixtures, both pruning modes), `ExporterSpec`, `FileRecordSinkSpec`, `ExportMetrics` | main; **flow** (drain loop, wake queue, no backpressure into hooks), **forge** (deep ETC reorg semantics in fixtures), **eye** | SC-001 unit-level green; `testEssential` baseline unchanged |
 | **4** | `KafkaRecordSink`, `kafka-clients` dependency, topic checks (partition count), health fields on `/healthcheck`, fence/unfence API for 023, `KafkaRecordSinkSpec` (MockProducer); harness scenarios for SC-002/SC-003 (US2) | main; **flow** (ack/timeout handling), **conduit** (health fields), **eye** (harness) | SC-002, SC-003 in the 023 harness |
@@ -261,7 +261,7 @@ callable without them. Slice 0 lands beside 022 and touches none of its files (`
   `export/record/` with no dependency above `domain`/`rlp`/`crypto`, so 018's `db/` code can import it.
 - **018 (row 7, `StateReplay`).** The diff keys 026 applies are exactly `addressHash`, `addressHash ++ slotHash`,
   `codeHash` (`record-schema.md` §3 rule 2); `prevAccount`/`prevValue` give the backward direction. `StateReplay.apply(
-  diff, Forward | Backward): IO[Root]` can be typed over `export.record.WriteSet` directly.
+  diff, Forward | Backward): IO[Root]` can be typed over `domain.statediff.StateDiff` directly.
 - **018 (row 8, Track H demoted).** Confirmed by DC-7: the node's only sinks are the Kafka topic and the test file
   sink; no `ColdStore` write adapter is referenced anywhere in this plan.
 - **023.** Health fields are added as `HealthcheckResult` entries named `exportLag`, `exportQueueDepth`,

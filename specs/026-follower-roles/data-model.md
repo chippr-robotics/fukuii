@@ -13,7 +13,8 @@ in `com.chipprbots.ethereum.domain.statediff`.
 
 These are the *decoded* form of the 025 record's state diff (025 DC-2, FR-008). 025 owns the wire encoding (RLP with a
 leading schema-version byte) and the golden vectors; 018 F2 stores the same bytes; 026 applies the decoded value. One
-type, three users (025 DC-9). Keys are already hashed (research R-2).
+type, three users (025 DC-9). Apply keys are already hashed (research R-2); each entry also carries its preimage so a
+consumer that needs the address or slot key (025 `WriteSet` consumers, 018 F2) does not have to recover it.
 
 ```scala
 package com.chipprbots.ethereum.domain.statediff
@@ -28,9 +29,20 @@ opaque type SlotKey = ByteString
 
 final case class Change[A](previous: Option[A], next: Option[A])   // None = absent / deleted
 
+final case class AccountEntry(
+    addressHash: AccountKey,          // apply key
+    address: Address,                 // 20-byte preimage
+    change: Change[Account]
+)
+final case class SlotEntry(
+    slotHash: SlotKey,                // apply key
+    slotKey: ByteString,              // 32-byte preimage (the unhashed slot index)
+    change: Change[BigInt]            // next = None means value 0
+)
+
 final case class StateDiff(
-    accounts: Vector[(AccountKey, Change[Account])],              // key-ascending, no duplicates
-    slots: Vector[(SlotKey, Change[BigInt])],                      // key-ascending; next = None means value 0
+    accounts: Vector[AccountEntry],                               // addressHash-ascending, no duplicates
+    slots: Vector[SlotEntry],                                      // slotHash-ascending, no duplicates
     code: Vector[(ByteString /* codeHash */, ByteString /* bytes */)]  // new code only; content-addressed
 ):
   def inverse: StateDiff  // swaps previous/next for accounts and slots; code unchanged
@@ -38,18 +50,36 @@ final case class StateDiff(
 
 Invariants (checked by `StateDiff.validate`, tested by property): keys sorted and unique; every slot key's first 32
 bytes name an account present in `accounts` or already existing; every account `next` whose `codeHash` is not the empty
-code hash has its code in `code` or already in `EvmCodeStorage` (025 FR-008 "code is a dependency of its leaf").
+code hash has its code in `code` or already in `EvmCodeStorage` (025 FR-008 "code is a dependency of its leaf");
+every account entry satisfies `keccak(address) == addressHash` and every slot entry `keccak(slotKey) == slotHash`
+(the first 32 bytes of the 64-byte `SlotKey` name the owner, the last 32 are `slotHash`); a mismatch is
+`InvalidDiff`, which the follower reports as `FollowFault.InvalidRecord`. `StateReplay` applies by the hashed keys
+only; the preimages are not read on the apply path.
+
+The type is shared with 025 and 018 F2 (025 DC-9). The task that creates it (tasks.md T012) is idempotent with 025's:
+whichever lands first creates `domain/statediff/StateDiff.scala` as defined here and the other verifies it matches
+(025 T-001 schema freeze) instead of redefining it.
 
 ```scala
 sealed trait FollowRecord:
   def chainKey: String; def blockNumber: BigInt; def blockHash: ByteString
 
-final case class BlockRecord(chainKey: String, header: BlockHeader, receipts: Seq[Receipt], diff: StateDiff,
-    raw: ByteString /* the bytes as received, kept for the window */) extends FollowRecord
+final case class BlockRecord(chainKey: String, header: BlockHeader, body: BlockBody, receipts: Seq[Receipt],
+    diff: StateDiff, raw: ByteString /* the bytes as received, kept for the window */) extends FollowRecord
 final case class Retraction(chainKey: String, blockNumber: BigInt, blockHash: ByteString) extends FollowRecord
 final case class Finality(chainKey: String, finalizedNumber: BigInt, finalizedHash: ByteString) extends FollowRecord
 // 025 FR-012 `witness` records are ignored by followers in this spec.
 ```
+
+`body: BlockBody` is the existing `domain.BlockBody(transactionList, uncleNodesList, withdrawals)`
+(`domain/BlockBody.scala:13`; it is the second field of `Block(header, body)`, `domain/Block.scala:18`). 025's block
+record carries `transactions`, `uncles` and `withdrawals` (025 DC-2), each verifiable against the header roots; the
+025 codec decodes them into this type. The follower writes the body and the transaction mappings in the same per-block
+commit batch as the header and receipts: `BlockchainWriter.storeBlockBody` (`domain/BlockchainWriter.scala:146-147`)
+puts `BlockBodiesStorage` (`db/storage/BlockBodiesStorage.scala:18`, CF `b`) and, through `saveTxsLocations`
+(`BlockchainWriter.scala:306`), `TransactionMappingStorage` (`db/storage/TransactionMappingStorage.scala:13`, CF `l`)
+into the `extra` batch passed to `StateReplay.applyForward`. On a retraction the mappings of the retracted block are
+removed in the backward batch.
 
 `parentHash` is `header.parentHash` on a `BlockRecord`. Decoding is 025's codec; 026 depends on its `decode(bytes):
 Either[DecodeError, FollowRecord]`, which MUST fail on an unknown schema version (025 FR-011).
@@ -150,7 +180,7 @@ Rules:
 | `follow.appliedHead` | `<number>:<hash hex>` | every block batch (forward and backward) | resolver `latest`; restart |
 | `follow.lastVerifiedRoot` | root hex | every block batch | readiness (equals `header(appliedHead).stateRoot`) |
 | `follow.finalized` | `<number>:<hash hex>` | finality record (ETC: genesis once) | resolver `safe`/`finalized`; FinalizedRetraction check |
-| `follow.windowLow` | number | every block batch (`replica` only; absent on `archive`) | window check; health `window.low` |
+| `follow.windowLow` | number | every block batch (`replica` only; absent on `archive`) | window check; health `retentionWindow.fromBlock` |
 | `follow.sourcePosition` | source-specific string (Kafka `<partition>:<offset>`; file `<fileIndex>:<recordIndex>`) | every block batch | restart resume |
 | `follow.halt` | JSON `{fault, blockNumber, blockHash, expected, computed, at}` | on halt, `updateSync` | start (halted), health `fault`, RPC refusal |
 | `follow.halt.record` | hash of the offending record (bytes live in the record CF) | on halt | diagnosis |
@@ -217,7 +247,7 @@ final case class FollowStatus(
     role: Role, chainKey: String, chainId: BigInt,
     head: Applied, finalized: Option[Applied], seedBlock: Applied,
     sourceHead: Option[BigInt], sourceLag: Option[BigInt],
-    window: Option[(BigInt, BigInt)],         // replica only
+    retentionWindow: Option[(BigInt, BigInt)],  // (fromBlock, toBlock); replica only
     lastVerifiedRoot: ByteString,
     halted: Option[(FollowFault, BigInt)],    // fault and block
     queueDepth: Int,
@@ -239,7 +269,7 @@ arrives. All others halt (research R-7).
 | `fukuii.follow.source.kafka.bootstrap-servers` | string list | — | broker list |
 | `fukuii.follow.source.kafka.topic` | string | `fukuii.records.<chainKey>` (025 FR-003 name) | one topic per `chainKey` |
 | `fukuii.follow.source.kafka.group-id` | string | `fukuii-<role>-<datadir hash>` | consumer group; offsets are *also* kept in `follow.sourcePosition` |
-| `fukuii.follow.window` | int (blocks) | ChainSpec `profiles.replica.retention-window-blocks` (Mordor/ETC 6650, Sepolia/Platåberget 7200) | `W`; ignored on `archive` |
+| `fukuii.follow.window` | int (blocks) | ChainSpec `resources.replica.retention-window-blocks` (Mordor/ETC 6650, Sepolia/Platåberget 7200) | `W`; ignored on `archive` |
 | `fukuii.follow.lag-bound` | int (blocks) | 8 | readiness bound (DC-8) and pruning margin |
 | `fukuii.follow.queue-bound` | int (records) | 1024 | ordered queue size |
 | `fukuii.follow.queue-bytes` | bytes | 256 MiB | ordered queue bytes |
@@ -248,7 +278,8 @@ arrives. All others halt (research R-7).
 | `fukuii.follow.seed.path` | path | — | 013 v2 snapshot directory or manifest |
 | `fukuii.follow.seed.trusted-block-hash` | hex | — | ETC anchor / offline anchor (013 §5.4) |
 | `fukuii.follow.min-free-bytes-per-block` | bytes | per-chain default from the seed manifest | start-time sizing check for `replica` |
-| `fukuii.follow.rpc.pin-header` | boolean | `true` | also emit `Fukuii-Pinned-Block` on HTTP |
+| `fukuii.follow.rpc.pin-header` | boolean | `true` | emit the `Fukuii-Pinned-Block` header on HTTP (the default echo) |
+| `fukuii.follow.rpc.pin-member` | boolean | `false` | opt in to the top-level `pinnedBlock` response member (HTTP, WS, IPC); on WS the member is the only echo available |
 
 Derived, never set by the operator: `pruning.mode = "basic"`, `pruning.history = window + lag-bound` on `replica`;
 `pruning.mode = "archive"` on `archive` (until GT-2). A profile that sets `sync.do-snap-sync = true`, `mining`, or a
@@ -260,15 +291,22 @@ P2P port for a follower role is a 024 validator error (023 DC-9).
 
 | Code | Message | `data` | When |
 |---|---|---|---|
-| `-39010` | `outside retention window` | `{requested: {number, hash?}, window: {low, high}, head}` | any block or range edge below `windowLow` on a `replica` (DC-3) |
-| `-39011` | `not served by this role` | `{role, method}` | 023 DC-9; `pending` on any follower (DC-6); `eth_call`/`eth_simulateV1`/`debug_trace*` on a `replica`; writes without a forwarding endpoint (023 FR-010). **023 T-004 owns the final code**; 026 uses whatever 023 defines and proposes `-39011` |
-| `-39012` | `follower halted` | `{fault, blockNumber, blockHash}` | every chain-RPC read while `follow.halt` is set (FR-003) |
-| `-39013` | `block not applied` | `{requested, head}` | a number or hash above the applied head (never guess ahead) |
-| `-39014` | `executor saturated` | `{method, queue}` | `archive` heavy reads when the 018 FR-027 executor's queue is full (phase D) |
+| `-32023` | `outside retention window` | `{requested: {number, hash?}, retentionWindow: {fromBlock, toBlock}, head}` | any block or range edge below `windowLow` on a `replica` (DC-3) |
+| `-32020` | `not served by this role` | `{role, method}` | 023 DC-9; `pending` on any follower (DC-6); `eth_call`/`eth_simulateV1`/`debug_trace*` on a `replica`; writes without a forwarding endpoint (023 FR-010). Owned by 023's registry (023 T-004 implements it; 023 owns the final message text); 026 uses it |
+| `-32024` | `follower halted` | `{fault, blockNumber, blockHash}` | every chain-RPC read while `follow.halt` is set (FR-003) |
+| `-32025` | `block not applied` | `{requested, head}` | a number or hash above the applied head (never guess ahead) |
+| `-32026` | `executor saturated` | `{method, queue}` | `archive` heavy reads when the 018 FR-027 executor's queue is full (phase D) |
 
-Codes sit outside the `-32000..-32099` server-error range and the `-38010..-38026` `eth_simulateV1` family already
-used (`jsonrpc/JsonRpcError.scala:44-70`). Response extension member for pinned scalar results:
-`"pinnedBlock": {"number": "0x…", "hash": "0x…"}` (research R-6; contracts/follower-rpc.md).
+The codes sit inside the `-32000..-32099` server-error range and belong to spec 023's registry: 023 defines
+`-32020`..`-32022` (not served by this role, fenced, forwarding cap) and `-32023`..`-32026` above are the follower
+entries 023 registered for 026. They collide with nothing in `jsonrpc/JsonRpcError.scala`, which defines `-32005`
+(line 34), `-32700` (36), `-32600`..`-32603` (37-40), `-32000` (41), `200` (49) and the `eth_simulateV1` family
+`-38010`..`-38026` (52-64); the only other `-320xx` literal in main sources is `-32015` in a simulate result entry
+(`jsonrpc/EthSimulateService.scala:1343`), which is not a `JsonRpcError`.
+
+Echo of the pinned block for scalar results: the HTTP header `Fukuii-Pinned-Block` by default; the response extension
+member `"pinnedBlock": {"number": "0x…", "hash": "0x…"}` only when `fukuii.follow.rpc.pin-member = true` (research R-6;
+contracts/follower-rpc.md §3).
 
 ---
 
@@ -281,9 +319,10 @@ used (`jsonrpc/JsonRpcError.scala:44-70`). Response extension member for pinned 
   "finalized": {"number": 0, "hash": "0x…"},
   "sourceLag": 2, "ready": true, "fenced": false,
   "seedBlock": {"number": 12340000, "hash": "0x…"},
-  "window": {"low": 12339028, "high": 12345678},
+  "retentionWindow": {"fromBlock": 12339028, "toBlock": 12345678},
   "fault": null
 }
 ```
 
-`window` is absent on `archive`; `fault` is the `FollowFault.name` or `null`. Metrics: research R-11.
+`retentionWindow` is absent on `archive`; `fault` is the `FollowFault.name` or `null`; `seedBlock` and `fault` are the
+follower members 023 adds to its health shape. Metrics: research R-11.

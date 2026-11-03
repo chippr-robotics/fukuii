@@ -136,7 +136,7 @@ src/main/scala/com/chipprbots/ethereum/
 └── jsonrpc/
     ├── PinnedBlockResolver.scala       # role-aware resolver (contracts/follower-rpc.md §2)
     ├── JsonRpcResponse.scala           # + pinnedBlock: Option[PinnedBlock]
-    ├── JsonRpcError.scala              # + -39010..-39014 (data-model §7)
+    ├── JsonRpcError.scala              # + -32020, -32023..-32026 (data-model §7; 023 registry)
     ├── EthUserService.scala, EthProofService.scala, EthBlocksService.scala, EthFilterService.scala  # resolver
     ├── FollowerMethodGate.scala        # per-role method matrix (contracts/follower-rpc.md §1) over 023's role error
     └── server/http/JsonRpcHttpServer.scala  # Fukuii-Pinned-Block header
@@ -180,12 +180,12 @@ docs/adr/infrastructure/INF-010-state-replay-capability.md
 | D3 | GT-1 runs through `fukuii follow-bench` on the 025 file sink; the prior is apply; re-execution is the fallback | R-3 |
 | D4 | Rollback = backward replay of the retracted block's own record (prev values) tagged with its number; no `onBlockRollback`/`onBlocksAbandoned`; round-trip identity incl. reference counts is the gate | R-4 |
 | D5 | A pure bounded `OrderedRecordQueue`; duplicates no-op; replacement without retraction = `UnexpectedFork`; `PersistentGap` after the timeout, non-halting; retraction below the window = `ReseedRequired` | R-5 |
-| D6 | `PinnedBlockResolver` resolves once per request; `pending` refused; scalar results carry `pinnedBlock` + `Fukuii-Pinned-Block` header; `ingest` responses unchanged | R-6 |
+| D6 | `PinnedBlockResolver` resolves once per request; `pending` refused; HTTP responses carry the `Fukuii-Pinned-Block` header by default, the `pinnedBlock` member is opt-in (`pin-member`); `ingest` responses unchanged | R-6 |
 | D7 | `W` in blocks from the ChainSpec profile (6,650 ETC-family, 7,200 ETH-family), overridable; `pruning.history = W + lag-bound`; halt is durable, refuses all chain reads, never self-clears | R-7 |
 | D8 | Seed = 013 v2 for both families via `SeedImporter` over the 013 importer, final atomic batch as `CheckpointImporter`; devnet MVP seed = genesis + records from 1 | R-8 |
 | D9 | GT-2 measures 018 changesets-only (default) vs Hash `ArchivePruning` (available today) vs history indices (paper) | R-9 |
 | D10 | `SyncMode.Follow` added to `SyncController.SyncMode`; follower roles never spawn `SyncController`; `StdNode.start()` branches on role | R-10 |
-| D11 | Readiness = not halted ∧ lag ≤ bound ∧ last root verified; health gains `window`, `fault`, `seedBlock` | R-11 |
+| D11 | Readiness = not halted ∧ lag ≤ bound ∧ last root verified; health gains `retentionWindow`, `fault`, `seedBlock` | R-11 |
 | D12 | One `commit()` per block; `commitSync` every 64 blocks and on halt/drain/stop; restart resumes from `follow.sourcePosition − 1` with duplicates as no-ops | R-12 |
 
 ## Delivery slices (one PR each, in order; owner → reviewers)
@@ -197,12 +197,12 @@ docs/adr/infrastructure/INF-010-state-replay-capability.md
 | **S2** `RecordSource` seam + `FileRecordSource` + `OrderedRecordQueue` | C | fs2 source over the 025 file sink; the pure queue; `TestControl` tests for the gap timeout | follower thread → `flow` (queue stage, backpressure, no silent drops) | 025 T-003 file format |
 | **S3** `SyncMode.Follow` + role gating + wiring | C | `SyncController.SyncMode.Follow`, `selectSyncMode(role, config)`, `StdNode.start()` follower branch, `NodeBuilder` construction of `StateReplay`/`FollowController` for follower roles only, `follow.conf`, `FollowerRoleGatingSpec` (no P2P/discovery/Engine/miner start) | follower thread → `herald` (what is not started), `eye` | 023 T-003 (`--role`, `InstanceConfig.role`), 023 T-004 (gating, role error); 017 row 3 accepted (else the enum case carries the amendment marker); scheduled around 020 PR 5 |
 | **S4** `FollowController` + `BlockApplier` + halt + health fields | C | the loop, forward/backward apply through `StateReplay`, receipts-root check, `FollowFault`, durable halt, `FollowStatus` into the 023 health shape and metrics, `follow inspect-halt` | follower thread → `vault` (batch composition, sync cadence), `forge`/`beacon` (retraction semantics per family), `eye` | S1–S3; 023 T-005 (health shape) |
-| **S5** `replica` RPC: resolver, window, echo, method gate | C | `PinnedBlockResolver`, `JsonRpcResponse.pinnedBlock`, header, `-39010..-39013`, `FollowerMethodGate`, `EthFilterService` range handling on followers; `ingest` byte-identity test | `conduit` → `prism` | 023 T-004 (role error code) |
+| **S5** `replica` RPC: resolver, window, echo, method gate | C | `PinnedBlockResolver`, `JsonRpcResponse.pinnedBlock`, header, `-32023..-32025`, `FollowerMethodGate`, `EthFilterService` range handling on followers; `ingest` byte-identity test | `conduit` → `prism` | 023 T-004 (role error code) |
 | **S6** `SeedImporter` (013 reuse) | C | wraps the 013 importer; `follow.*` seed keys; role stamp; ETC anchor via `--trusted-block-hash` or stream linkage; refusal path | follower thread → `vault`, `beacon` (ETH anchor), `forge` (ETC anchor) | **013 §11 rows 2, 6, 8 accepted and 013 Phases 1–2 landed**; until then the MVP uses the genesis seed |
 | **S7** `KafkaRecordSource` | C | consumer over 025's topic, position in `follow.sourcePosition`, re-delivery as duplicates | follower thread → `flow`, `herald` (client config) | 025 T-004 (Kafka implementation and client choice) |
 | **S8** Harness scenarios SC-001, SC-002, SC-004, SC-005 (+ US4) | C | `src/it` scenarios against 023 FR-007 fixtures; `corrupt-record.sh`; the 025 FR-009 deep-reorg fixture | `eye` | 023 T-007/T-008 (harness); 025 T-006 (fixtures) |
 | **S9** GT-2 measurement | D | archive basis A vs B on Mordor; OQ-1 recorded in spec.md and "GT-2 result" below | `eye` → `vault` | 018 Track F slice F2 (changesets) for option A; option B runs today |
-| **S10** `archive` serving (FR-005) | D | `eth_call`, `eth_simulateV1`, `debug_trace*` on 018 FR-027 executors; `-39014`; SC-003 against core-geth/Geth archives | `conduit` → `forge`/`beacon` (execution at historical roots), `prism` | **018 Track R slice R1** (executors), GT-2 result, 018 row 5 (archive pruning mode) |
+| **S10** `archive` serving (FR-005) | D | `eth_call`, `eth_simulateV1`, `debug_trace*` on 018 FR-027 executors; `-32026`; SC-003 against core-geth/Geth archives | `conduit` → `forge`/`beacon` (execution at historical roots), `prism` | **018 Track R slice R1** (executors), GT-2 result, 018 row 5 (archive pruning mode) |
 | **S11** `StateReplay` v2 on the unified layout | D | same trait over 018 F6/F11; differential against v1; followers move with 018 Track F | `vault` → `forge`, `beacon` | 018 Track E then F |
 
 **Explicitly blocked** (no code for these lands before the named item):
@@ -245,8 +245,8 @@ batch bytes/block, disk growth per 1,000 blocks, wall time; FR-002 default per f
 | Risk | Mitigation |
 |---|---|
 | Reference-count identity on backward replay (R-4) cannot be made exact under basic pruning | L1 property test fails early in S1; fallback decided in S1 by `vault` (tag + cleanup), never by weakening the test |
-| 025's record lacks bodies, so `eth_getTransactionReceipt` and full-tx blocks cannot be served (contracts/follower-rpc.md §6) | Cross-spec note 1; until amended the method returns `-39011` and the matrix test pins that |
-| Strict JSON-RPC 2.0 clients reject the `pinnedBlock` extension member | Followers sit behind Orbita's gateway; the header is the alternative; `fukuii.follow.rpc.pin-header` is on by default |
+| ~~025's record lacks bodies~~ | Resolved by 025 DC-2 (record carries `transactions`, `uncles`, `withdrawals`); the follower writes bodies and mappings in the block batch (contracts/follower-rpc.md §6) |
+| Strict JSON-RPC 2.0 clients reject the `pinnedBlock` extension member | Followers sit behind Orbita's gateway; the header is the default echo (`fukuii.follow.rpc.pin-header`, on) and the member is opt-in (`fukuii.follow.rpc.pin-member`, off) |
 | 013 ETC coverage slips, leaving Mordor followers without a production seed | MVP on genesis seed is still valid for GT-1 option (c) and SC-002/SC-004; production ETC `replica` waits for S6 |
 | Apply does not meet the chain's block time on the reference host | GT-1 says so before S4; the re-execution fallback (FR-002) is designed in but not built unless GT-1 requires it |
 | `ArchivePruning` on an `archive` grows without bound before GT-2 | `archive` is phase D; S9 runs before S10; the Hash basis is measured, not assumed |
@@ -257,11 +257,11 @@ No Constitution Check violation; nothing to justify.
 
 ## Cross-spec notes (for the owners of 013, 017, 018, 023, 024, 025; no spec text changed here)
 
-1. **025 (block record contents).** The record carries header, receipts and state diff, not the block **body**.
-   Without transactions a follower cannot write `BlockBodiesStorage`/`TransactionMappingStorage`, so
-   `eth_getTransactionReceipt`, `eth_getTransactionBy*` and `fullTransactions = true` blocks are unservable
-   (contracts/follower-rpc.md §6). Request: add the body (or the transaction list) to the block record in 025 T-001;
-   026 FR-004 lists `eth_getTransactionReceipt` as a `replica` method and cannot meet it otherwise.
+1. **025 (block record contents). RESOLVED by 025 DC-2.** The record now carries `transactions`, `uncles` and
+   `withdrawals`, each verifiable against the header roots (analysis-2026-10-31 F1). 026 adds `body: BlockBody` to
+   `BlockRecord` and writes `BlockBodiesStorage` and `TransactionMappingStorage` in the block batch, so
+   `eth_getTransactionReceipt`, `eth_getTransactionBy*` and `fullTransactions = true` blocks are served
+   (contracts/follower-rpc.md §6).
 2. **025 and 018 (shared decoded type).** 026 proposes `domain/statediff/StateDiff` as the one decoded diff type
    (data-model §1); 025's codec should decode into it and 018 F2 store its encoding, so 025 DC-9 holds in code, not
    only in bytes. 025 T-001 should adopt or amend the type before S1.
@@ -274,9 +274,10 @@ No Constitution Check violation; nothing to justify.
 5. **013 §11 rows 2, 6, 8.** S6 depends on all three. 026 adds one request: the v2 importer should expose a hook to add
    writes to its final atomic batch (so `SeedImporter` stamps `follow.*` keys in the same `commitSync`), mirroring how
    `CheckpointImporter` composes `appStateStorage.*` into its last batch.
-6. **023 T-004 (role error code).** 026 proposes `-39011 not served by this role` and reserves `-39010`, `-39012`,
-   `-39013`, `-39014` beside it (data-model §7); 023 owns the final value and 026 adopts it.
-7. **023 FR-004 (health shape).** Followers add `window {low, high}`, `fault`, `seedBlock` (data-model §8); 023 T-005
+6. **023 T-004 (error codes).** 023's registry owns `-32020 not served by this role` (final message text is 023's) and
+   the follower entries `-32023`, `-32024`, `-32025`, `-32026` (data-model §7); 026 adopts them and verified they
+   collide with nothing in `JsonRpcError.scala`.
+7. **023 FR-004 (health shape).** Followers add `retentionWindow {fromBlock, toBlock}`, `fault`, `seedBlock` (data-model §8); 023 T-005
    should leave room for role-specific members.
 8. **024 FR-007 (profiles).** The `replica` profile key is `retention-window-blocks`, defaults 6,650 (ETC family) and
    7,200 (ETH family); 024's loader validates it as a positive integer and 026 reads it through `FollowConfig`.

@@ -315,23 +315,25 @@ quickstart US3.
       (tags `IntegrationTest, DatabaseTest`): `Storages` over `EphemDataSource` seeded with a genesis and best block
       past Spiral on the shipped `mordor` entry; a ChainSpec with `spiral-block-number` moved later → the runner
       returns the error and a probe records that `loadGenesisData` and the actor system were never reached; the
-      record is unchanged; first start on an empty store writes the three keys in one batch; a pre-record store with
+      record is unchanged; first start on an empty store writes `fleet.chainKey`, `fleet.role` and both 024 keys in the one
+      `recordFleetIdentity` batch; a pre-record store with
       a matching genesis gets backfilled
 - [ ] T057 [US3] `./scripts/fukuii-test only "*Datadir*"` → FAIL
 
 #### Implementation
 
-- [ ] T058 [US3] Edit `src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala`: `Keys.ChainSpecChainKey
-      = "chain.spec.chainKey"`, `ChainSpecGenesisHash = "chain.spec.genesisHash"`, `ChainSpecForkSchedule =
-      "chain.spec.forkSchedule"`; `getDatadirChainRecord(): Option[...]` (all three or none) and
-      `putDatadirChainRecord(r): DataSourceBatchUpdate` (one batch) — `vault` reviews names and batch
+- [ ] T058 [US3] Edit `src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala`: EXTEND spec 023's
+      `recordFleetIdentity` (same API, same synced batch that writes `fleet.chainKey` and `fleet.role`) with
+      `Keys.ChainSpecGenesisHash = "chain.spec.genesisHash"` and `ChainSpecForkSchedule = "chain.spec.forkSchedule"`;
+      no parallel key set; `getDatadirChainRecord(): Option[...]` (`fleet.chainKey` + both, or none) — `vault`
+      reviews names and batch
 - [ ] T059 [P] [US3] Write `src/main/scala/com/chipprbots/ethereum/chainspec/DatadirChainRecord.scala` (pure
       render/parse) and `DatadirCompatibility.scala` (pure `check` + `run(storages, spec, chainKey, offline)` that
       reads best block / best header timestamp as `StdNode.scala:428-434` does and writes the record with
       `updateSync` unless offline)
 - [ ] T060 [US3] Edit `src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala` (after 020 PR
-      5): `onFirstStored` also writes the record from the active `ChainSpec` in the same batch as the genesis-related
-      marker (`:128`); switch the genesis read to a `Reader` (no `mkString`, `:70, :79`) — behaviour of parsing
+      5): `onFirstStored` also writes the genesis hash and fork-schedule digest from the active `ChainSpec` through the
+      extended `recordFleetIdentity` batch (`:128`); the check compares `fleet.chainKey` to the resolved ChainSpec key; switch the genesis read to a `Reader` (no `mkString`, `:70, :79`) — behaviour of parsing
       unchanged
 - [ ] T061 [US3] Edit `src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala` (after 020 PR 5): first
       statement of `start()` (before `loadGenesisData()` at `:60`) runs `DatadirCompatibility.run`; on `Left` log the
@@ -366,6 +368,14 @@ warning.
 - [ ] T069 Run quickstart.md end to end (US1, US2, US3) on a built distribution; record `VERIFY:` lines in the PR
 - [ ] T070 `sbt pp` on the clean branch; `eye` runs `./scripts/fukuii-test essential` and both ethereum/tests jobs →
       baseline; open slice 6 PR
+- [ ] T071 [P] Write `src/test/scala/com/chipprbots/ethereum/chainspec/ResourceProfileSpec.scala` (tags `UnitTest`)
+      (FR-007, FR-008): `resources.replica.retention-window-blocks` parses as `Option[Int]`; `0`, negative, a string
+      or a duration is rejected; the key under `ingest`/`archive`/`sim` is `UnknownField`; `heap-hint` and
+      `engine-memory-budget` parse as sizes; `finalityRule` is `genesis-only` for `ethash-pow` and
+      `consensus-layer` for `engine-api`, and an entry that sets `finality-rule` fails with `UnknownField`
+- [ ] T072 [P] Write `src/test/scala/com/chipprbots/ethereum/chainspec/ProfileCommentSpec.scala` (tags `UnitTest`)
+      (SC-004): `conf/sepolia.conf` has no `mining.protocol` warning comment and carries the one-line reference; no
+      file under `conf/` sets `mining.protocol` except `testmode.conf`
 
 ---
 
@@ -455,8 +465,8 @@ Task: "BlockchainsConfigSpec shadow tests (T029)"  Task: "ChainsCliSpec (T030)"
 | US2 | T013–T026 (14) |
 | US1 | T027–T043 (17) |
 | US3 | T044–T064 (21) |
-| Polish | T065–T070 (6) |
-| **Total** | **70** |
+| Polish | T065–T072 (8) |
+| **Total** | **72** |
 
 ## Notes
 
@@ -467,3 +477,20 @@ Task: "BlockchainsConfigSpec shadow tests (T029)"  Task: "ChainsCliSpec (T030)"
 - `sbt compile-all` after every file edit; `./scripts/fukuii-test only "*X*"` per phase; `./scripts/fukuii-test
   essential` once per slice at the end; `sbt scalafmtAll` before every commit.
 - `VERIFY: ran <command> — result: PASS | FAIL | DID NOT RUN` in every PR description.
+
+## Requirement coverage
+
+| Requirement | Implementing tasks | Test tasks |
+| --- | --- | --- |
+| FR-001 | T022, T023, T024, T036 | T015, T029, T009 |
+| FR-002 | T034 | T028 |
+| FR-003 | T002, T019 | T014, T044 |
+| FR-004 | T021, T048 | T014, T027, T045 |
+| FR-005 | T058, T059, T060, T061 | T054, T055, T056 |
+| FR-006 | T035, T062 | T030 |
+| FR-007 | T003, T019, T066 | T071 |
+| FR-008 | T002, T019 | T071 |
+| SC-001 | T041 | T041, T028 |
+| SC-002 | T022, T023 | T007, T013 |
+| SC-003 | T032, T033 | T027, T056 |
+| SC-004 | T051 | T072 |

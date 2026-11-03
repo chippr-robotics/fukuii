@@ -67,11 +67,15 @@ of role.
 | `exportQueueDepth` | integer or `null` | ingest only | 025 FR-006 |
 | `exportBufferBytes` | integer or `null` | ingest only | 025 FR-006 |
 | `exportLastError` | string or `null` | ingest only | 025 FR-006; `null` when none |
+| `exportState` | integer: `0` running, `1` halted, `2` fenced | ingest only | 025 exporter state, beside the four `export*` fields; `null` until 025's exporter registers |
 | `retentionWindow` | object `{ "fromBlock": integer, "toBlock": integer }` or `null` | **followers only** (`replica`, `archive`) | 026 DC-3; `archive` reports `fromBlock = 0`; `null` until 026's source registers |
+| `fault` | string or `null` | **followers only** (`replica`, `archive`) | 026: the follower fault name (the name of the fault that halted the apply loop); `null` when healthy |
+| `seedBlock` | object `{ "number": integer, "hash": string }` | followers only | 026: the block the follower was seeded from; `null` object fields until seeded |
 | `version` | string | all | `InstanceConfig.clientVersion` |
 | `timestamp` | integer (epoch ms) | all | when the snapshot was taken |
 
-Example (ingest, Sepolia, running):
+Follower roles add `fault` and `seedBlock` beside `retentionWindow` (which keeps its `{fromBlock, toBlock}` names);
+`retentionWindow` is `null` on `archive` until 026's source registers. Example (ingest, Sepolia, running):
 
 ```json
 {
@@ -80,6 +84,7 @@ Example (ingest, Sepolia, running):
   "finalized": { "number": 9123392, "hash": "0x2c…9a" },
   "sourceLag": 0, "ready": true, "fenced": false, "lifecycle": "running",
   "exportLag": null, "exportQueueDepth": null, "exportBufferBytes": null, "exportLastError": null,
+  "exportState": null,
   "version": "fukuii/v0.12.0/linux-amd64/openjdk-25", "timestamp": 1793490000000
 }
 ```
@@ -87,6 +92,9 @@ Example (ingest, Sepolia, running):
 The same figures are exported as Prometheus gauges with tags `role`, `chain` (`FleetMetrics`, prefix `app_`):
 `app_fleet_head_number`, `app_fleet_finalized_number`, `app_fleet_source_lag` (−1 when unknown), `app_fleet_ready`
 (0/1), `app_fleet_fenced` (0/1), `app_fleet_lifecycle_state` (0 running, 1 draining, 2 fenced, 3 stopping).
+
+A follower example, abridged: `"retentionWindow": { "fromBlock": 1200000, "toBlock": 1206400 }, "fault": null,
+"seedBlock": { "number": 1200000, "hash": "0x4d…07" }`.
 
 A JSON Schema for validation lives in the harness at `ops/fleet-harness/schema/health.schema.json` (task T076).
 
@@ -113,6 +121,10 @@ def setFenced(nowMillis: Long): DataSourceBatchUpdate
 def clearFenced(): DataSourceBatchUpdate
 ```
 
+`recordFleetIdentity` is the **one write path** for first-start identity. Spec 024 extends it with the genesis hash
+and the fork-schedule digest, written in the same synced batch (one `updateSync`), so no second identity key or
+second write exists; the read path (`fleetIdentity()`) is shared by 023 and 024.
+
 Backfill for pre-023 datadirs: on first start after upgrade, `fleet.chainKey`/`fleet.role` are absent; the node
 records `(chainKey, role)` from its own `InstanceConfig` (the operator's declared identity). This is the only
 "migration"; nothing else on disk changes.
@@ -125,7 +137,7 @@ records `(chainKey, role)` from its own `InstanceConfig` (the operator's declare
 | --- | --- | --- | --- | --- |
 | `fukuii.chain` | string | `${fukuii.blockchains.network}` | `--chain <key>` → `-Dfukuii.chain` | the `chainKey`; until 024 lands it must be one of today's `knownNetworks`; 024 makes it any ChainSpec key |
 | `fukuii.role` | string | `"ingest"` | `--role <role>` → `-Dfukuii.role` | parsed by `Role.fromString`; invalid → exit 2 |
-| `fukuii.datadir` | path | `${user.home}"/.fukuii/"${fukuii.chain}"/"${fukuii.role}` (was `…/${fukuii.blockchains.network}`, `fukuii.conf:6`) | profile or operator | legacy layout detector (research D-4); every derived path follows |
+| `fukuii.datadir` | path | `${user.home}"/.fukuii/"${fukuii.chain}"/"${fukuii.role}` (was `…/${fukuii.blockchains.network}`, `fukuii.conf:6`) | profile or operator | legacy layout detector (research D-4): `ingest` adopts a legacy `~/.fukuii/<chainKey>` datadir; followers and `sim` refuse; every derived path follows |
 | `fukuii.admin.enabled` | boolean | `true` | — | `false` only for tests/tools; the harness and Orbita require it |
 | `fukuii.admin.interface` | string | `"localhost"` | — | validator **warns** when not loopback (constitution VI) |
 | `fukuii.admin.port` | int | `8560` | — | validator fails on clash with RPC HTTP/WS, Engine API, metrics, P2P ports (`ConfigValidator.checkPortClash`, `ConfigValidator.scala:83`) |
@@ -139,18 +151,31 @@ Removed keys (S1): the root block `fukuii-runtime.instances` — presence is a *
 `fukuii-runtime.instances is no longer supported: run one process per chain and role (fukuii <network> is
 --chain <network> --role ingest); see docs/runbooks/operating-modes.md`.
 
-## 6. JSON-RPC error codes (additive)
+## 6. JSON-RPC error codes: the fleet registry (additive)
 
 `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcError.scala`
 
-| Code | Name | Message | When |
-| --- | --- | --- | --- |
-| `-32020` | `NotServedByRole` | `method <m> is not served by role <r>` ; `data: { "role": "<r>", "method": "<m>" }` | `RoleMethodPolicy` refuses the method for this role; also `eth_sendRawTransaction` on a non-ingest role with no `tx-forward.endpoint` |
-| `-32021` | `IngestFenced` | `ingest is fenced; transactions are not accepted` | any transaction submission (local or forwarded) while `Fenced` |
-| `-32022` | `ForwardRateCapExceeded` | `transaction forwarding rate cap exceeded` ; `data: { "maxPerSecond": n }` | `TxForwarder` bucket empty |
+This table is the registry for every fleet role and every fleet spec (023 to 026); a new fleet code is added here.
+`Owner` is the spec that defines the code's semantics and implements its constructor.
+
+| Code | Name | Owner | Message | When |
+| --- | --- | --- | --- | --- |
+| `-32020` | `NotServedByRole` | 023 | `method <m> is not served by role <r>` ; `data: { "role": "<r>", "method": "<m>" }` | `RoleMethodPolicy` refuses the method for this role; also `eth_sendRawTransaction` on a non-ingest role with no `tx-forward.endpoint` |
+| `-32021` | `IngestFenced` | 023 | `ingest is fenced; transactions are not accepted` | any transaction submission (local or forwarded) while `Fenced` |
+| `-32022` | `ForwardRateCapExceeded` | 023 | `transaction forwarding rate cap exceeded` ; `data: { "maxPerSecond": n }` | `TxForwarder` bucket empty |
+| `-32023` | outside retention window | 026 | defined by 026 `data-model.md` | a block-pinned read below the follower's `retentionWindow.fromBlock` |
+| `-32024` | follower halted | 026 | defined by 026 `data-model.md` | the follower's apply loop is halted (health `fault` is non-null) |
+| `-32025` | block not applied | 026 | defined by 026 `data-model.md` | a read above the follower's applied head |
+| `-32026` | executor saturated | 026 | defined by 026 `data-model.md` | the bounded executor rejects a request (full queue or timeout) |
+
+Collision check against `JsonRpcError.scala` (read 2026-11-03): the file's numeric codes are `-32005` (line 34),
+`-32700` (36), `-32600` (37), `-32601` (38), `-32602` (39), `-32603` (40), `-32000` (41), `200` (49), `-38010..-38026`
+(52-64) and `3` (66); none lies in `-32020..-32026`. A repository grep of `src/` for `-3202[0-6]` also finds nothing.
+The `-380xx` codes are the `eth_simulateV1` set and stay with it.
 
 Unchanged: `-32601 MethodNotFound` keeps meaning "no such method / namespace not enabled". The 018 R1 executor
-rejection error (full queue, timeout) is defined by 018 and surfaces unchanged from `sim`.
+rejection error (full queue, timeout) is defined by 018 and surfaces unchanged from `sim`; T055 reconciles it with
+`-32026` (026's executor-saturated code) before either ships.
 
 ## 7. Harness result record
 

@@ -42,11 +42,21 @@ Identity of a record is `(chainKey, type, blockNumber, blockHash)`. Two records 
 ## 3. Block record (`type = 0`)
 
 ```
-body     := [ header, receipts, accounts, code ]
+body     := [ header, transactions, uncles, withdrawals, receipts, accounts, code ]
 
 header   := RLP(BlockHeader)       -- exactly the bytes fukuii hashes to obtain blockHash
                                    -- (domain/BlockHeader.scala BlockHeaderEnc.toRLPEncodable);
                                    -- keccak(header) == blockHash
+transactions := [ tx* ]           -- block order; each tx is the exact item the node stores in a block body
+                                   -- transaction list: a legacy transaction as its RLP list, a typed transaction
+                                   -- (EIP-2718) as one byte string txType ++ RLP(payload), as in the eth/68 block
+                                   -- body (network/p2p/messages/ETHPackets.scala:459-467 `txListItem`;
+                                   -- domain/BlockBody.scala:68-89 `blockBodyToRlpEncodable`)
+uncles       := [ RLP(BlockHeader)* ]  -- ommer headers, same bytes as `header`; ETC family only, always [] on the
+                                   -- ETH family post-merge (domain/BlockBody.scala:15 `uncleNodesList`)
+withdrawals  := [ withdrawal* ]    -- EIP-4895; [] when the fork has no withdrawals, including the whole ETC family
+withdrawal   := [ index, validatorIndex, address20, amount ]   -- domain/Withdrawal.scala:27-34 `WithdrawalEnc`
+                                   -- (all uint; amount in Gwei); domain/BlockBody.scala:16 `withdrawals`
 receipts := [ receipt* ]           -- one per transaction, in transaction order
 receipt  := legacyReceipt | typedReceipt
 legacyReceipt := [ postStateOrStatus, cumulativeGasUsed, logsBloom, logs ]
@@ -91,11 +101,17 @@ Rules:
    already be known to the consumer from an earlier record or its seed. A producer that cannot know the consumer's
    seed includes it whenever the hash first appears in `accountCodes` for the block (new deployments); redeployment of
    an existing blob is permitted and harmless.
-5. **Completeness.** From the consumer's pre-state, applying `accounts` and `code` forward yields a state whose root is
-   `header.stateRoot`; applying them backward yields the pre-state (DC-2). The receipts root computed from `receipts`
-   equals `header.receiptsRoot`.
-6. **No layout data.** No trie node, node hash, path, column-family name or reference count appears anywhere.
-7. **Empty block.** A block with no state change still produces a block record with empty `accounts` and `code`.
+5. **Body completeness.** The body items are verifiable against the header without any other input:
+   `keccak(trie(transactions))` equals `header.transactionsRoot` (trie keyed by `RLP(index)`, values the tx items
+   above); `keccak(RLP(uncles))` equals `header.ommersHash`; when `header.withdrawalsRoot` is present, the root of the
+   withdrawals trie equals it, and when it is absent `withdrawals` MUST be `[]`. A producer that cannot satisfy this
+   for a block it has executed has a bug and halts export (it never emits a partial body).
+6. **State completeness.** From the consumer's pre-state, applying `accounts` and `code` forward yields a state whose
+   root is `header.stateRoot`; applying them backward yields the pre-state (DC-2). The receipts root computed from
+   `receipts` equals `header.receiptsRoot`.
+7. **No layout data.** No trie node, node hash, path, column-family name or reference count appears anywhere.
+8. **Empty block.** A block with no state change still produces a block record with empty `accounts` and `code`; a
+   block with no transactions, uncles or withdrawals carries `[]` for each.
 
 ## 4. Retraction record (`type = 1`)
 

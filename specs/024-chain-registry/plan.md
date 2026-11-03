@@ -17,8 +17,8 @@ eight built-in entries stay byte-identical (GT-1, golden fixtures committed firs
 `storage-scheme` and the default sync mode are derived from `consensus` and injected into the deployment config; a
 profile that contradicts them is refused (DC-5), which retires the 15-line comment in `conf/sepolia.conf`.
 `App.knownNetworks` goes; `fukuii <key>` accepts any registry key and fails with the key list otherwise.
-`fukuii chains list|validate` expose the loader. A versioned AppState record (chainKey, genesis hash, fork schedule)
-written at first genesis store implements geth's `CheckCompatible` rule on every open (DC-6). Research:
+`fukuii chains list|validate` expose the loader. A versioned AppState record (023's `fleet.chainKey`, plus genesis
+hash and fork schedule) written at first start implements geth's `CheckCompatible` rule on every open (DC-6). Research:
 [research.md](./research.md); entities: [data-model.md](./data-model.md); contracts: [contracts/](./contracts/).
 
 ## Technical Context
@@ -32,7 +32,8 @@ for `fukuii chains`, json4s for genesis parsing (`GenesisDataLoader.scala:89-96`
 R-2).
 
 **Storage**: RocksDB through `AppStateStorage` (string→string, `db/storage/AppStateStorage.scala:17-27`) for the
-datadir compatibility record; three new keys beside spec 022's markers (`:652-655`). `EphemDataSource` in tests.
+datadir compatibility record; two new keys (genesis hash, fork schedule) beside spec 022's markers (`:652-655`),
+written through 023's `recordFleetIdentity` batch. `EphemDataSource` in tests.
 
 **Testing**: ScalaTest (`AnyFlatSpec` + `Matchers`, tags from `testing/Tags.scala`: `UnitTest`, `ConsensusTest`,
 `IntegrationTest`, `DatabaseTest`), ScalaCheck for the record renderer round-trip, no `Thread.sleep`. Commands per
@@ -120,7 +121,7 @@ src/main/scala/com/chipprbots/ethereum/
 ├── utils/InstanceConfig.scala                  # EDIT: config = DeploymentDerivation.apply(raw, spec); blockchains from registry
 ├── nodebuilder/StdNode.scala                   # EDIT: DatadirCompatibility.run first in start()  (after 020 PR 5)
 ├── blockchain/data/GenesisDataLoader.scala     # EDIT: Reader-based parse; onFirstStored writes the record (after 020 PR 5)
-└── db/storage/AppStateStorage.scala            # EDIT: Keys.ChainSpecChainKey / ChainSpecGenesisHash / ChainSpecForkSchedule + accessors
+└── db/storage/AppStateStorage.scala            # EDIT: extend recordFleetIdentity; Keys.ChainSpecGenesisHash / ChainSpecForkSchedule
 
 src/main/resources/conf/
 ├── base/blockchains.conf                       # EDIT: registry { enabled, allow-shadow } keys
@@ -169,6 +170,15 @@ the package.
   this value is rejected by `MiningConfig.readProtocol` today (DID NOT RUN). Slice 4 removes the line; the user may
   want a `fix:` ahead of it.
 
+**Escalated, not resolved here** (alignment analysis `specs/023-fleet-topology/analysis-2026-10-31.md`, F8 and F9):
+- **D-1** (GT-1 byte-identical capture vs DC-2's explicit `mess` block on the four ETH entries and `test-chain.conf`)
+  is escalated to the user. Analysis recommendation: an enumerated delta allowlist in the golden test, signed by
+  `beacon` (four ETH entries) and `forge` (`test`); alternative: the loader synthesises the block for ETH. Slice 4
+  waits for the answer.
+- **D-2** (`conf/gorgoroth.conf:32` `protocol = "ethash"`, unknown to `Protocol.KnownProtocolNames`) is escalated to
+  the user. Analysis recommendation: out of 024's scope; a separate one-line fix PR (`"pow"`) with a start test,
+  ahead of 024's derivation.
+
 ## Delivery slices (one PR each; every slice leaves `testEssential` at baseline)
 
 Alignment-review placement: slice 1 is phase A (test-only; the review names "024 T-001 golden capture" there).
@@ -206,14 +216,17 @@ additive; an older binary ignores the three keys; 6 — docs.
 
 - **023 fleet-topology**: `--chain <chainKey>` (023 T-003) must call `ChainRegistry.resolve(key)` and report
   `UnknownChainKey` through `ConfigValidator`; `InstanceConfig.chainKey` is the registry key, and 023's default
-  datadir `~/.fukuii/<chainKey>/<role>` must be what the DC-6 record's `chain.spec.chainKey` is compared against.
+  datadir `~/.fukuii/<chainKey>/<role>`. 023 writes `fleet.chainKey` and `fleet.role` at first start through
+  `AppStateStorage.recordFleetIdentity` in one synced batch; 024 EXTENDS that same API and batch with the genesis
+  hash and the fork-schedule digest (no parallel key set), and the DC-6 check compares `fleet.chainKey` against the
+  resolved ChainSpec key.
   023's harness (FR-007) gains the SC-001 fixture from slice 6. 023 T-002 deletes `runtime/FukuiiRuntime.scala`; its
   call to `ConfigValidator.removedKeyWarnings` (`:79-80`) needs no change from this spec. `EngineApiNotConfigured`
   applies to role `ingest` only; 023's role gating must pass the role to `DeploymentDerivation`.
 - **025 change-record-export**: read `ChainSpec.finalityRule`, `chainKey`, `chainId` from the registry
   (`ChainRegistry.spec(key)`), never from `BlockchainConfig` alone (which has no key or finality field).
-- **026 follower-roles**: `ChainSpec.resourceProfile(Role.Replica).retentionWindow` is an `Option[FiniteDuration]`;
-  026 owns the 24 h default when it is `None`.
+- **026 follower-roles**: `ChainSpec.resourceProfile(Role.Replica).retentionWindowBlocks: Option[Int]` (positive
+  integer of blocks); 026 owns the defaults when it is `None`: 6,650 (ETC family) and 7,200 (ETH family).
 - **018 storage-engine-consolidation**: when DC-9 unifies the layout, remove the `storage-scheme` row from
   `DeploymentDerivation` and add `sync.snap-sync.storage-scheme` to `ConfigValidator.RemovedKeys`; the
   `SyncController.scala:466-472` `require` goes with it.

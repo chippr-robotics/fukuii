@@ -25,24 +25,25 @@ ls src/main/scala/com/chipprbots/ethereum/runtime 2>&1 | grep -q "No such file" 
 ./scripts/fukuii-test only "*ProfileLoadSpec*"    # every conf/*.conf profile parses into an InstanceConfig
 ```
 
-**AS1 — a 0.10.17 datadir starts with `fukuii <network>`** (after S2; the datadir moved once, per the migration note):
+**AS1 — an existing 0.10.17 datadir starts with `fukuii <network>`, no config change** (after S2; FR-001, F6):
 
 ```bash
-# One-time migration of a legacy layout (documented in docs/runbooks/operating-modes.md):
-mv ~/.fukuii/sepolia ~/.fukuii/sepolia.ingest.tmp && mkdir -p ~/.fukuii/sepolia && mv ~/.fukuii/sepolia.ingest.tmp ~/.fukuii/sepolia/ingest
+# ~/.fukuii/sepolia/rocksdb exists (pre-0.12 layout) and ~/.fukuii/sepolia/ingest does not. Nothing is moved or edited.
 ./target/universal/stage/bin/fukuii sepolia        # == --chain sepolia --role ingest, RPC on, P2P on
 curl -s localhost:8560/health | jq '{role, chainKey, chainId, lifecycle}'
-# Expected: {"role":"ingest","chainKey":"sepolia","chainId":11155111,"lifecycle":"running"}; log shows
-# "ActorSystem fukuii_sepolia"; datadir ~/.fukuii/sepolia/ingest; RPC on 8545 serves eth_blockNumber.
+# Expected: {"role":"ingest","chainKey":"sepolia","chainId":11155111,"lifecycle":"running"}; log shows an INFO line
+# "adopting legacy datadir ~/.fukuii/sepolia (role path ~/.fukuii/sepolia/ingest does not exist)", then
+# "ActorSystem fukuii_sepolia"; datadir ~/.fukuii/sepolia; RPC on 8545 serves eth_blockNumber; no fresh sync starts.
+# Optional later move to the role path: docs/runbooks/operating-modes.md "Datadir layout change in 0.12".
 ```
 
-**Legacy layout detector** (the fail-loud path, before moving the datadir):
+**Legacy layout detector** (the fail-loud path, for roles other than `ingest`):
 
 ```bash
-./target/universal/stage/bin/fukuii sepolia; echo "exit=$?"
-# Expected when ~/.fukuii/sepolia/rocksdb exists and ~/.fukuii/sepolia/ingest does not:
-#   ERROR LegacyDatadirLayout: found a datadir at ~/.fukuii/sepolia (pre-0.12 layout) ... move it to
-#   ~/.fukuii/sepolia/ingest or set fukuii.datadir explicitly.   exit=2
+./target/universal/stage/bin/fukuii --chain sepolia --role replica; echo "exit=$?"
+# Expected when ~/.fukuii/sepolia/rocksdb exists and ~/.fukuii/sepolia/replica does not:
+#   ERROR LegacyDatadirLayout: found only a pre-0.12 datadir at ~/.fukuii/sepolia; a replica never adopts an ingest
+#   store; seed ~/.fukuii/sepolia/replica or set fukuii.datadir explicitly.   exit=2
 ```
 
 **AS2 — the retired runtime fails by name**:
@@ -92,7 +93,7 @@ curl -s -X POST localhost:8645 -H 'content-type: application/json' \
 cd ops/fleet-harness && python3 -I harness.py up --wait-ready 600
 python3 -I harness.py sc005
 # Expected: every container's GET /health validates against schema/health.schema.json; `ingest` bodies carry the
-# four exporter fields (null until 025); followers carry retentionWindow (null until 026); followers report
+# exporter fields and exportState (null until 025); followers carry retentionWindow, fault, seedBlock (026); followers report
 # ready=true with net_peerCount == 0x0; results/sc005-<date>-<sha>.json verdict PASS.
 curl -s localhost:18560/health | jq .          # eth-ingest (host port mapping in docker-compose.yml)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:18660/ready    # eth-replica → 200

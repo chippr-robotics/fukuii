@@ -308,10 +308,10 @@
       "properties": {
         "heap-hint": { "$ref": "#/$defs/sizeString" },
         "engine-memory-budget": { "$ref": "#/$defs/sizeString" },
-        "retention-window": {
-          "description": "HOCON duration; spec 026 default is 24h of blocks.",
-          "type": "string",
-          "pattern": "^[0-9]+\\s*(ms|s|m|h|d|seconds?|minutes?|hours?|days?)$"
+        "retention-window-blocks": {
+          "description": "Replica retention window in blocks (positive integer); spec 026 owns the defaults.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

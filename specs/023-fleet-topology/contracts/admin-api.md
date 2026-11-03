@@ -29,8 +29,13 @@ gives Orbita the whole picture). Body: the health shape of [data-model.md §3](.
 curl -s localhost:8560/health
 → 200 { "role": "replica", "chainKey": "mordor", "chainId": 63, "head": {...}, "finalized": {"number": 0, "hash": "0x…"},
         "sourceLag": 3, "ready": true, "fenced": false, "lifecycle": "running",
-        "retentionWindow": { "fromBlock": 1200000, "toBlock": 1206400 }, "version": "…", "timestamp": … }
+        "retentionWindow": { "fromBlock": 1200000, "toBlock": 1206400 }, "fault": null,
+        "seedBlock": { "number": 1200000, "hash": "0x…" }, "version": "…", "timestamp": … }
 ```
+
+Follower roles (`replica`, `archive`) carry `fault` (string or `null`: the follower fault name) and `seedBlock`
+(`{number, hash}`) beside `retentionWindow`. `ingest` carries `exportLag`, `exportQueueDepth`, `exportBufferBytes`,
+`exportLastError` and `exportState` (integer: `0` running, `1` halted, `2` fenced). Definitions: data-model.md §3.
 
 ### `GET /ready`
 

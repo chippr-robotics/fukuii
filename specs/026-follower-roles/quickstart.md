@@ -43,26 +43,27 @@ Expected log lines (INFO), in order:
 Checks:
 
 ```
-$ curl -s localhost:8547/healthcheck | jq '{role, head, sourceLag, ready, window, fault}'
+$ curl -s localhost:8547/healthcheck | jq '{role, head, sourceLag, ready, retentionWindow, fault}'
 {"role":"replica","head":{"number":12340600,...},"sourceLag":0,"ready":true,
- "window":{"low":12340000,"high":12340600},"fault":null}
+ "retentionWindow":{"fromBlock":12340000,"toBlock":12340600},"fault":null}
 
 $ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":["0x…","latest"]}' -i
 HTTP/1.1 200 OK
 Fukuii-Pinned-Block: 12340600:0x7c…
-{"jsonrpc":"2.0","id":1,"result":"0x…","pinnedBlock":{"number":"0xbc49f8","hash":"0x7c…"}}
+{"jsonrpc":"2.0","id":1,"result":"0x…"}
 
 $ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":2,"method":"eth_getBalance","params":["0x…","0xbc47a0"]}'
-{"jsonrpc":"2.0","id":2,"error":{"code":-39010,"message":"outside retention window",
- "data":{"requested":{"number":12339104},"window":{"low":12340000,"high":12340600},"head":12340600}}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32023,"message":"outside retention window",
+ "data":{"requested":{"number":12339104},"retentionWindow":{"fromBlock":12340000,"toBlock":12340600},"head":12340600}}}
 
 $ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":3,"method":"eth_getBalance","params":["0x…","pending"]}'
-{"jsonrpc":"2.0","id":3,"error":{"code":-39011,"message":"not served by this role",
+{"jsonrpc":"2.0","id":3,"error":{"code":-32020,"message":"not served by this role",
  "data":{"role":"replica","method":"eth_getBalance"}}}
 ```
 
 **SC-001**: the first `eth_getBalance` answered after `ready` is at `lastVerifiedRoot`
-(`curl …/healthcheck | jq .head.hash` equals the `pinnedBlock.hash`). **SC-002** is scenario 1b.
+(`curl …/healthcheck | jq .head.hash` equals the hash in the `Fukuii-Pinned-Block` header; with `-Dfukuii.follow.rpc.pin-member=true` the body also
+carries `pinnedBlock`). **SC-002** is scenario 1b.
 
 ### 1b. US1 — a corrupted record halts the replica within the block
 
@@ -82,7 +83,7 @@ Expected:
 $ curl -s localhost:8547/healthcheck | jq '{ready, fault, head}'
 {"ready":false,"fault":"root-mismatch","head":{"number":12340776,...}}
 $ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":["0x…","latest"]}'
-{"jsonrpc":"2.0","id":1,"error":{"code":-39012,"message":"follower halted",
+{"jsonrpc":"2.0","id":1,"error":{"code":-32024,"message":"follower halted",
  "data":{"fault":"root-mismatch","blockNumber":12340777,"blockHash":"0x…"}}}
 ```
 
@@ -99,18 +100,20 @@ $ fukuii --chain mordor --role archive \
 ```
 
 ```
-$ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":["0x…","0x1e8480"]}'
-{"jsonrpc":"2.0","id":1,"result":"0x…","pinnedBlock":{"number":"0x1e8480","hash":"0x…"}}   # block 2,000,000
-$ curl -s localhost:8546 \
+$ curl -si localhost:8546 -d '{"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":["0x…","0x1e8480"]}'
+Fukuii-Pinned-Block: 2000000:0x…                                                          # block 2,000,000
+{"jsonrpc":"2.0","id":1,"result":"0x…"}
+$ curl -si localhost:8546 \
     -d '{"jsonrpc":"2.0","id":2,"method":"eth_call","params":[{"to":"0x…","data":"0x70a08231…"},"0x1e8480"]}'
-{"jsonrpc":"2.0","id":2,"result":"0x…","pinnedBlock":{...}}
+Fukuii-Pinned-Block: 2000000:0x…
+{"jsonrpc":"2.0","id":2,"result":"0x…"}
 ```
 
 **SC-003** harness step: `scripts/follow/compare-archive.sh --fukuii localhost:8546 --reference
 http://core-geth-archive:8545 \
 --samples 1000` samples blocks across the whole chain and diffs `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
 `eth_getProof` and `eth_call` byte for byte; exit code 0 means identical. A `replica` asked the same `0x1e8480` returns
-`-39010` (US2 scenario 2).
+`-32023` (US2 scenario 2).
 
 ## 3. US3 — a deep ETC reorg is survived or reported (slice S5 with the 025 FR-009 fixture)
 
@@ -130,7 +133,7 @@ $ fukuii --chain mordor-dev --role replica -Dfukuii.follow.window=50 \
 ```
 
 **SC-004**: the archive's final state equals the reference consumer's clean derivation (025 FR-010) at every sampled
-account; the replica's health shows `fault: "reseed-required"` and every read returns `-39012`.
+account; the replica's health shows `fault: "reseed-required"` and every read returns `-32024`.
 
 ## 4. US4 — a `sim` pool reads a follower (023 harness; slice S5 plus 023 T-006)
 
@@ -142,9 +145,9 @@ $ fukuii --chain plataberget-dev --role sim -Dfukuii.sim.follower=http://replica
 The harness load generator pins each `sim` session to a block (`Fukuii-Pinned-Block` from the first response) and
 issues `eth_call` with that explicit block for 10 minutes while the chain advances. Expected:
 
-- every response's `pinnedBlock` equals the pinned block (no drift, DC-6);
-- when the pinned block falls below `window.low` the `sim` receives `-39010` with `data.window`, re-pins to
-  `window.high` and continues (US4 scenario); the harness asserts zero responses at a block other than the pinned one.
+- every response's `Fukuii-Pinned-Block` header equals the pinned block (no drift, DC-6);
+- when the pinned block falls below `retentionWindow.fromBlock` the `sim` receives `-32023` with
+  `data.retentionWindow`, re-pins to `retentionWindow.toBlock` and continues (US4 scenario); the harness asserts zero responses at a block other than the pinned one.
 
 This is 023 SC-002's follower side.
 
@@ -168,5 +171,5 @@ SC-001's bound.
 ```
 $ ss -lntu | grep -E ':30303|:8551'      # nothing: no P2P, discovery or Engine API port on a follower
 $ curl -s localhost:8546 -d '{"jsonrpc":"2.0","id":1,"method":"admin_peers","params":[]}'
-{"jsonrpc":"2.0","id":1,"error":{"code":-39011,"message":"not served by this role",...}}
+{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"not served by this role",...}}
 ```

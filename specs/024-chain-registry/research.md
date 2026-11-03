@@ -186,15 +186,18 @@ config gets the current config written ("Found genesis block without chain confi
 
 **Decision**: a versioned record in AppState (`db/storage/AppStateStorage.scala`, string→string under
 `Namespaces.AppStateNamespace`), following the key style of spec 022's markers (`snap.heal.invariant`,
-`checkpoint.import.inProgress`, `AppStateStorage.scala:652-655`):
+`checkpoint.import.inProgress`, `AppStateStorage.scala:652-655`). Spec 023 already writes `fleet.chainKey` and
+`fleet.role` at first start through `AppStateStorage.recordFleetIdentity` in one synced batch; 024 EXTENDS that same
+API and batch with the genesis hash and the fork-schedule digest instead of adding a parallel key set, and the
+compatibility check compares `fleet.chainKey` against the resolved ChainSpec key (analysis F7):
 
 | Key | Value |
 | --- | --- |
-| `chain.spec.chainKey` | the `chainKey` the datadir was created for |
+| `fleet.chainKey` (023) | the `chainKey` the datadir was created for; written by 023, compared by 024 |
 | `chain.spec.genesisHash` | `0x` + 64 hex (the stored genesis header's hash) |
 | `chain.spec.forkSchedule` | `v1;` then `name=value;` pairs sorted by name: every `ForkBlockNumbers` field, every `ForkTimestamps` field, `terminal-total-difficulty`, rendered in decimal, `Long.MaxValue` sentinels and `None` rendered as `-` |
 
-Written in one `updateSync` batch when the genesis is first stored (the `onFirstStored` hook already exists,
+Written in one `updateSync` batch (the extended `recordFleetIdentity` batch) when the genesis is first stored (the `onFirstStored` hook already exists,
 `GenesisDataLoader.scala:128`). On every open: no record → **backfill**: compare the ChainSpec's `genesis-hash` (or
 the computed genesis hash) with `BlockchainReader.genesisHeader.hash` (`BlockchainReader.scala:142`); equal → write
 the record from the current ChainSpec (geth's "without chain config" rule); different → `GenesisMismatch`. Record

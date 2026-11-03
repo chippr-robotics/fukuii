@@ -179,21 +179,28 @@ on; alternatives are recorded so the premise can be challenged. File:line citati
 - **Alternatives**: deriving role from the config file name (`sepolia-replica.conf`) — rejected (hides the role from
   the process arguments Orbita and `ps` see); a `fukuii.roles = [...]` list — rejected (DC-1, one role per process).
 
-### D-4 Datadir layout and migration
+### D-4 Datadir layout and legacy adoption
 
 - **Decision**: `conf/base/fukuii.conf:6` becomes
   `datadir = ${user.home}"/.fukuii/"${fukuii.chain}"/"${fukuii.role}`; every derived path (`tmpdir`, `node-key-file`,
   `keystore-dir`, `logs-dir`, `rocksdb.path`, IPC socket) already hangs off `${fukuii.datadir}` (`fukuii.conf:11,14`,
   `keystore.conf:3`, `logging.conf:6`, `db.conf:4`, `network.conf:311`) and follows. A `utils/DatadirLayout` check runs
-  in `Fukuii.main` before `StdNode` is built: if `fukuii.datadir` is the default-derived path, the new path has no
-  `rocksdb/`, and `~/.fukuii/<chainKey>/rocksdb` exists, the process exits 2 with error `LegacyDatadirLayout` naming
-  both paths and the two remedies (`mv ~/.fukuii/<chainKey> ~/.fukuii/<chainKey>/ingest` done safely via a temp name,
-  or set `fukuii.datadir` explicitly). The operating-modes runbook carries the same note (OQ-3).
+  in `Fukuii.main` before `StdNode` is built, only when `fukuii.datadir` is the default-derived path and the role
+  path `~/.fukuii/<chainKey>/<role>` has no `rocksdb/` (analysis F6, 2026-10-31; spec FR-001):
+  - `role = ingest` and `~/.fukuii/<chainKey>` already holds a datadir (`~/.fukuii/<chainKey>/rocksdb` exists): the
+    node **adopts the legacy path** as its datadir, logs the adoption at INFO (both paths), and starts. No config
+    change is needed, so US1 AS1 holds for an existing operator.
+  - `role` is `replica`, `archive` or `sim` and only the legacy layout exists: the process exits 2 with the named
+    error `LegacyDatadirLayout` naming both paths (a follower never adopts an ingest store).
+  - An explicit `fukuii.datadir`, or an existing role path, is never touched. The operating-modes runbook describes
+    the optional move to the role path (OQ-3).
 - **Rationale**: two roles for one chain on one host must not collide (OQ-3); a synced store must never be silently
-  abandoned for a fresh sync ("fail loudly"); the detector costs one `Files.exists`.
-- **Alternatives**: auto-adopt the legacy path for `ingest` with a WARN — rejected by the plan (default would depend
-  on disk state; the move is deferred forever) but **surfaced as risk R-1** because US1 AS1 says "no config change";
-  a symlink created by the node — rejected (the node does not restructure the operator's filesystem).
+  abandoned for a fresh sync, and an existing operator must not need a config change (US1 AS1); the detector costs one
+  `Files.exists`. The adoption is logged, not silent.
+- **Alternatives**: fail loudly for every role with a migration note (the earlier plan; rejected: it contradicts US1
+  AS1 for the one role that has a legacy layout); a symlink created by the node — rejected (the node does not
+  restructure the operator's filesystem). Cost accepted: for `ingest` the effective default datadir depends on disk
+  state, and an operator who never moves it stays on the legacy path.
 
 ### D-5 Durable fence marker and first-start identity (AppState)
 

@@ -105,7 +105,8 @@ Single sbt project: `src/main/scala/...`, `src/test/scala/...`, `src/it/scala/..
 - [ ] T014 [P] Create `src/test/scala/com/chipprbots/ethereum/admin/HealthReporterSpec.scala`: fake `HealthSources`
       per role; asserts field presence/absence per role, `ready` truth table (follower ready with `peerCount = 0`;
       ingest not ready in `Draining`; sim ready iff follower ready ∧ lag ≤ bound), ETC finalized is genesis, JSON keys
-      match data-model.md §3 exactly (golden string compare on a fixed snapshot).
+      match data-model.md §3 exactly (golden string compare on a fixed snapshot); follower snapshots carry `fault` and `seedBlock`, `ingest` carries
+      `exportState` (F4).
 - [ ] T015 Create `src/main/scala/com/chipprbots/ethereum/admin/AdminHttpServer.scala`: Pekko HTTP `Route` with `GET
       /health` (200 always), `GET /ready` (200/503), `POST /lifecycle/{drain,fence,unfence,stop}` with the status codes
       and error envelope of contracts/admin-api.md; everything else 404; `def run(): Future[Http.ServerBinding]` using
@@ -260,18 +261,21 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
       `logging.conf:6`, `db.conf:4`, `network.conf:311`); grep `ops/` and `docker/` for hard-coded `/app/data/<chain>`
       mounts and point them at `/app/data/<chain>/ingest` (or set `fukuii.datadir` explicitly in the compose file).
 - [ ] T042 [US1] Create `src/main/scala/com/chipprbots/ethereum/utils/DatadirLayout.scala`: `def
-      legacyLayoutProblem(home: Path, chainKey: String, role: Role, configuredDatadir: Path): Option[String]` returning
-      the `LegacyDatadirLayout` message (quickstart.md §1) when `configuredDatadir == home/.fukuii/chainKey/role.key`,
-      `!(configuredDatadir/"rocksdb").exists` and `(home/.fukuii/chainKey/"rocksdb").exists`; call it in
-      `src/main/scala/com/chipprbots/ethereum/Fukuii.scala` before `new StdNode` (after `ConfigValidator`),
-      `sys.exit(2)`
-      on `Some`. Create `src/test/scala/com/chipprbots/ethereum/utils/DatadirLayoutSpec.scala` with
-      `Files.createTempDirectory`
-      fixtures covering: legacy present → Some; new present → None; explicit non-default datadir → None; role replica
-      with legacy ingest store → None (a replica never adopts an ingest store).
+      resolve(home: Path, chainKey: String, role: Role, configuredDatadir: Path): Either[String, DatadirChoice]`
+      where `DatadirChoice` is `Configured(path)` or `AdoptedLegacy(path)`. When `configuredDatadir ==
+      home/.fukuii/chainKey/role.key` and `!(configuredDatadir/"rocksdb").exists` and
+      `(home/.fukuii/chainKey/"rocksdb").exists`: `role == Ingest` → `Right(AdoptedLegacy(home/.fukuii/chainKey))` and
+      the caller logs at INFO naming both paths; any other role → `Left` with the `LegacyDatadirLayout` message
+      (quickstart.md §1). Call it in `src/main/scala/com/chipprbots/ethereum/Fukuii.scala` before `new StdNode` (after
+      `ConfigValidator`), override `fukuii.datadir` with the adopted path (every derived path follows), `sys.exit(2)`
+      on `Left`. Create `src/test/scala/com/chipprbots/ethereum/utils/DatadirLayoutSpec.scala` with
+      `Files.createTempDirectory` fixtures covering: ingest with legacy only → `AdoptedLegacy`; ingest with the role
+      path present → `Configured`; explicit non-default datadir → `Configured`; replica, archive and sim with legacy
+      only → `Left(LegacyDatadirLayout)` (a follower never adopts an ingest store).
 - [ ] T043 [US1] `src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala`: add `Keys.FleetChainKey =
       "fleet.chainKey"`, `Keys.FleetRole = "fleet.role"`, `fleetIdentity()`, `recordFleetIdentity(chainKey, roleKey)`
-      (one `update` batch); in `nodebuilder/StdNode.scala` `BaseNode.start()` Phase 1, after `fixDatabase()`: if
+      (one `update` batch; this is the one write path for first-start identity, which spec 024 extends with the genesis
+      hash and fork-schedule digest in the same synced batch; the read path is shared); in `nodebuilder/StdNode.scala` `BaseNode.start()` Phase 1, after `fixDatabase()`: if
       `fleetIdentity()` is `None` → `recordFleetIdentity(...).commitSync()`; if `Some((c, r))` differs → `log.error`
       with
       `DatadirOwnedByOtherChain`/`DatadirOwnedByOtherRole` and `shutdown()`+`sys.exit(2)` before any listener binds.
@@ -279,8 +283,9 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
       absent → None; record → Some; survives a second `AppStateStorage` over the same source. `vault` reviews.
 - [ ] T044 [P] [US1] `docs/runbooks/operating-modes.md`: new section "Roles and the fleet profile" (the role table of
       `specs/023-fleet-topology/contracts/role-matrix.md` copied verbatim, the single-node profile sentence, the
-      `--chain`/`--role` flags) and "Datadir layout change in 0.12" with the exact `mv` sequence of quickstart.md §1
-      and the `fukuii.datadir` alternative; `docs/runbooks/node-configuration.md`: `fukuii.chain`, `fukuii.role`,
+      `--chain`/`--role` flags) and "Datadir layout change in 0.12" (`ingest` adopts a legacy datadir automatically; the optional `mv` to the role
+      path; followers and `sim` refuse a legacy-only layout with `LegacyDatadirLayout`; the `fukuii.datadir`
+      alternative); `docs/runbooks/node-configuration.md`: `fukuii.chain`, `fukuii.role`,
       `fukuii.admin.*`, `fukuii.tx-forward.*` rows.
 
 ### Slice S3 — role-gated start and the "not served by this role" error
@@ -304,7 +309,8 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
       (T009 already makes the misconfiguration fatal; this is the belt).
 - [ ] T049 [P] [US1] `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcError.scala`: add
       `def NotServedByRole(role: Role, method: String): JsonRpcError` (-32020, data `{role, method}`),
-      `val IngestFenced` (-32021), `def ForwardRateCapExceeded(maxPerSecond: Int)` (-32022) per data-model.md §6; add
+      `val IngestFenced` (-32021), `def ForwardRateCapExceeded(maxPerSecond: Int)` (-32022) per data-model.md §6
+      (the fleet registry; -32023..-32026 are 026's and are added by 026); add
       the json4s encoders where `RateLimitInformation` has its (line 33 pattern).
 - [ ] T050 [US1] Create `src/main/scala/com/chipprbots/ethereum/jsonrpc/RoleMethodPolicy.scala`: `def
       servedBy(role: Role, method: String): Boolean` implemented as a table of namespace prefixes and method names from
@@ -330,6 +336,12 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
       repair steps; `fenced = true` on `Ingest` removes `StartSyncController` and `StartEngineApiServer`.
 
 **Checkpoint US1**: quickstart.md §1 and §2 pass; `testEssential` at baseline; S1, S2, S3 PRs merged (phase B).
+- [ ] T084 [P] [US1] FR-002: create `src/test/scala/com/chipprbots/ethereum/nodebuilder/RoleMatrixSpec.scala`
+      asserting that `RoleProfile` for each role (listeners bound, sync mode, served namespaces, readiness kind,
+      transaction admission, mining only on `ingest`) equals the rows of
+      `specs/023-fleet-topology/contracts/role-matrix.md` and the "Role table (FR-002)" of
+      `specs/023-fleet-topology/quickstart.md` (parse the markdown tables from the repository checkout; fail with the
+      differing cell). T044 copies that same table into the runbook.
 
 ---
 
@@ -493,10 +505,12 @@ peers for roles without them (FR-004, SC-005), plus metric twins.
       `HealthReporterSpec`.
 - [ ] T073 [US5] Define `trait ExporterHealthSource { def exportLag: Option[Long]; def exportQueueDepth: Option[Long];
       def exportBufferBytes: Option[Long]; def exportLastError: Option[String] }` in `admin/HealthReporter.scala` and a
-      `registerExporter(src)` on `AdminServerBuilder`; with none registered an `Ingest` emits the four fields as `null`
+      `registerExporter(src)` on `AdminServerBuilder`; add `def exportState: Option[Int]` (0 running, 1 halted, 2 fenced);
+      with none registered an `Ingest` emits the four fields and `exportState` as `null`
       (spec 025 T-007 registers the real one). Golden JSON case in `HealthReporterSpec`.
 - [ ] T074 [US5] Define `trait RetentionWindowSource { def window: Option[(BigInt, BigInt)] }` and `registerRetention`
-      likewise; followers emit `retentionWindow: null` until 026 registers; `archive` reports `fromBlock = 0` when
+      likewise, plus `FollowerFaultSource { def fault: Option[String]; def seedBlock: Option[(BigInt, ByteString)] }`
+      for `fault` and `seedBlock`; followers emit `retentionWindow: null` until 026 registers; `archive` reports `fromBlock = 0` when
       registered. Golden JSON case in `HealthReporterSpec`.
 - [ ] T075 [P] [US5] Create `src/test/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcHttpServerHealthRoutesSpec.scala`
       (`ScalatestRouteTest` over `JsonRpcHttpServer.route` with a stub controller and health checker): `GET /health`,
@@ -504,7 +518,8 @@ peers for roles without them (FR-004, SC-005), plus metric twins.
       `ops/*/docker-compose.yml`
       probe them), so the admin surface is provably additive.
 - [ ] T076 [US5] Create `ops/fleet-harness/schema/health.schema.json` (JSON Schema draft 2020-12 of data-model.md §3
-      with `role`-conditional `required` for the exporter and retention fields) and implement `sc005` in
+      with `role`-conditional `required` for the exporter (incl. `exportState`) and follower (`retentionWindow`, `fault`,
+      `seedBlock`) fields) and implement `sc005` in
       `ops/fleet-harness/harness.py`: for every fukuii container GET `/health` and validate (stdlib validator for the
       subset used: types, required, enum, conditional); assert followers report `ready: true` with `net_peerCount`
       `0x0`; assert `GET /ready` status matches `ready`; write `results/sc005-*.json`.
@@ -647,8 +662,32 @@ Task: "T025 metrics.py"                               Task: "T027 results/README
 
 ## Notes
 
-- 83 tasks: Setup 4 · Foundational 23 (2A 14, 2B 9) · US1 25 · US2 6 · US3 3 · US4 10 · US5 7 · Polish 5.
+- 84 tasks: Setup 4 · Foundational 23 (2A 14, 2B 9) · US1 26 · US2 6 · US3 3 · US4 10 · US5 7 · Polish 5.
 - No task edits another spec's files; cross-spec needs are in `plan.md` §"Cross-spec notes".
 - No task changes `consensus/`, `vm/`, `mpt/`, `ledger/`; the two `blockchain/sync/` touches (T024 metrics, T064
   control messages) route through `eye`, and T053 stops and routes if it would need `ledger/`.
 - `Thread.sleep` is forbidden in every spec listed here; use `eventually`, TestKit probes or `TestControl`.
+
+## Requirement coverage
+
+Every requirement of `spec.md` mapped to its implementing tasks and the tasks that test it (analysis F10). SC rows
+list the harness or verification tasks that measure the criterion.
+
+| Requirement | Implementing tasks | Test tasks |
+| --- | --- | --- |
+| FR-001 `--chain`/`--role`, `fukuii <network>`, datadir, legacy adoption | T005, T007, T008, T039, T041, T042, T043, T044 | T006, T040, T042, T043 |
+| FR-002 per-role defaults documented | T044, T045, T072, T084 | T052, T084 |
+| FR-003 `sim` bounded executors | T053, T054, T055 | T058, T057 |
+| FR-004 one health shape and metrics | T013, T015, T018, T056, T072, T073, T074 | T014, T016, T075, T076, T077 |
+| FR-005 lifecycle signals, durable fence | T011, T062, T063, T064, T065, T066, T067, T068 | T012, T069, T070 |
+| FR-006 retire the in-process runtime | T028, T029, T030, T031, T032, T033, T034, T035, T036 | T037, T038 |
+| FR-007 fleet test harness | T004, T019, T020, T021, T022, T023, T024, T025, T027 | T026 |
+| FR-008 role gates subsystem start | T045, T046, T047, T048, T049, T050 | T051, T052 |
+| FR-009 admin HTTP surface, SIGTERM | T009, T015, T017, T068 | T010, T016, T069 |
+| FR-010 transaction ingress and forwarding | T049, T066, T079 | T079, T080 |
+| SC-001 runtime removed, profiles start, baseline | T028, T029, T030, T031, T032, T033, T034, T035, T036 | T037, T038, T002, T083 |
+| SC-002 `sim` saturation | T053, T054, T055, T056 | T057, T058 |
+| SC-003 chain isolation | T060 | T026, T059, T061 |
+| SC-004 fence, restart, no gap | T062, T063, T064, T065, T066, T067, T071 | T069, T070 |
+| SC-005 uniform health, readiness | T072, T073, T074, T076 | T014, T075, T076, T077 |
+| SC-006 forwarded load figures | T079, T080 | T080 |

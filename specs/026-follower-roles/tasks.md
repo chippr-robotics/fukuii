@@ -113,7 +113,7 @@ within the block (SC-001, SC-002).
 - [ ] T033 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/BlockApplierSpec.scala`: a `BlockRecord` becomes one batch (header, number→hash, receipts, record copy, `BestBlockInfo`, `follow.appliedHead`, `follow.lastVerifiedRoot`, `follow.windowLow`, `follow.sourcePosition`) committed through `StateReplay.applyForward`; a `RootMismatch` commits nothing and yields `FollowFault.RootMismatch`; `ReceiptsRootMismatch` likewise; `ChainKeyMismatch` on a foreign `chainKey`; `UnknownSchemaVersion` on a bad version byte; a `Finality` record updates `follow.finalized` only
 - [ ] T034 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/FollowControllerSpec.scala` (fs2 + `TestControl`): applies a generated chain from a seed in order; out-of-order delivery is reordered; duplicates are no-ops; `ready` flips true only when lag ≤ bound and the last root verified; a corrupted record halts: `follow.halt` written synced, queue stops, status `ready = false`, `fault = root-mismatch`, the bad record is kept under `follow.halt.record`; restart with `follow.halt` present starts halted; `drain`/`stop` complete; `commitSync` every `sync-every` blocks (count `updateSync` calls on a counting `DataSource`)
 - [ ] T035 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/SeedImporterSpec.scala`: genesis seed stamps `follow.role`, `follow.seedBlock = 0`, `follow.appliedHead = 0`, `follow.lastVerifiedRoot = genesis.stateRoot`, SNAP done flags, in one synced batch; a datadir stamped `replica` refuses to start as `archive` or `ingest`; a seed whose root mismatches its header is refused and writes no pointer (013 §5.4 path; mocked 013 importer until S6)
-- [ ] T036 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/PinnedBlockResolverSpec.scala` per contracts/follower-rpc.md §8: tags, numbers, hashes, `pending` → `-39011`, above head → `-39013`, below window → `-39010` with `data.window`, halt-first → `-39012`, `windowLow` served and `windowLow − 1` refused
+- [ ] T036 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/PinnedBlockResolverSpec.scala` per contracts/follower-rpc.md §8: tags, numbers, hashes, `pending` → `-32020`, above head → `-32025`, below window → `-32023` with `data.window`, halt-first → `-32024`, `windowLow` served and `windowLow − 1` refused
 - [ ] T037 [P] [US1] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/PinnedBlockEchoSpec.scala`: scalar results carry `pinnedBlock`; HTTP responses carry `Fukuii-Pinned-Block`; WS carries the member only; batch elements each carry their own; `ingest` responses byte-identical to existing `JsonRpcControllerSpec` fixtures
 
 ### Implementation for User Story 1
@@ -124,7 +124,7 @@ within the block (SC-001, SC-002).
 - [ ] T041 [US1] Implement `src/main/scala/com/chipprbots/ethereum/blockchain/follow/SeedImporter.scala` with the genesis-seed path now and the 013 v2 path behind the 013 importer interface (research R-8); role stamp; refusal path; start-time disk sizing check (`min-free-bytes-per-block × W`) for `replica` **[013 v2 path BLOCKED: 013 §11 rows 2/6/8, 013 Phases 1–2]**
 - [ ] T042 [US1] Implement `src/main/scala/com/chipprbots/ethereum/jsonrpc/PinnedBlockResolver.scala` per contracts/follower-rpc.md §2 and route `EthUserService`, `EthProofService` (replace the private resolver at `EthProofService.scala:212-237`), `EthBlocksService` through it on follower roles [conduit]
 - [ ] T043 [US1] Add `pinnedBlock: Option[PinnedBlock]` to `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcResponse.scala`, encode it only on follower roles, and emit `Fukuii-Pinned-Block` in `src/main/scala/com/chipprbots/ethereum/jsonrpc/server/http/JsonRpcHttpServer.scala` when `fukuii.follow.rpc.pin-header` is on [conduit]
-- [ ] T044 [US1] Add `-39010 OutsideRetentionWindow`, `-39012 FollowerHalted`, `-39013 BlockNotApplied` to `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcError.scala` with `data` payloads per data-model.md §7; adopt 023's role error for `-39011` [conduit] **[BLOCKED: 023 T-004 final code]**
+- [ ] T044 [US1] Add `-32023 OutsideRetentionWindow`, `-32024 FollowerHalted`, `-32025 BlockNotApplied` to `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcError.scala` with `data` payloads per data-model.md §7; adopt 023's role error for `-32020` [conduit] **[BLOCKED: 023 T-004 final code]**
 - [ ] T045 [US1] Implement `src/main/scala/com/chipprbots/ethereum/blockchain/follow/FollowInspectCli.scala` (`fukuii follow inspect-halt --datadir`) printing `follow.halt`, both roots and the kept record summary; register in `src/main/scala/com/chipprbots/ethereum/cli/CliCommands.scala`
 - [ ] T046 [US1] Implement `src/main/scala/com/chipprbots/ethereum/blockchain/follow/FollowBenchCli.scala` (`fukuii follow-bench`, research R-3) with `--dry-run`, apply and `--reexecute` arms and the JSON report; register in `CliCommands.scala`
 - [ ] T047 [US1] [eye] Run GT-1 on Mordor and Platåberget with the 025 file sink (quickstart.md §5); paste the report into plan.md "GT-1 result"; record FR-002's default per family and SC-001's bound **[BLOCKED: 025 T-003 file sink]**
@@ -140,26 +140,26 @@ its window, and halts on corruption. Deliver and measure before US2–US4.
 ## Phase 4: User Story 2 — historical state is served by the `archive` role (Priority: P1)
 
 **Goal**: `archive` answers FR-004 methods, `eth_call`, `eth_simulateV1`, `debug_trace*` at any block on bounded
-executors, byte-identical to a reference archive (SC-003); a `replica` outside its window returns `-39010` (US2
+executors, byte-identical to a reference archive (SC-003); a `replica` outside its window returns `-32023` (US2
 scenario 2, delivered with US1's resolver and re-asserted here).
 
 **Independent Test**: quickstart.md §2 and `scripts/follow/compare-archive.sh`.
 
 ### Tests for User Story 2
 
-- [ ] T050 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/FollowerRpcMatrixSpec.scala`: the contracts/follower-rpc.md §1 matrix, one request per method per role, asserting served or the exact error code; `replica` `eth_call` → `-39011`; `archive` `eth_call` served; `eth_getTransactionReceipt` → `-39011` while the 025 record carries no body (pinned until Cross-spec note 1 lands)
-- [ ] T051 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/FollowerGetLogsSpec.scala` per contracts/follower-rpc.md §4: `blockHash` form, range inside window, range straddling `windowLow` → `-39010`, `toBlock` above head → `-39013`, default range `latest..latest`, `blockHash` of a retracted block → `-39013`
-- [ ] T052 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/ArchiveExecutorSpec.scala`: `eth_call` at a historical block runs on the FR-027 executor; a full queue returns `-39014 executor saturated`; the executor shares no pool with the follow loop **[BLOCKED: 018 Track R slice R1]**
+- [ ] T050 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/FollowerRpcMatrixSpec.scala`: the contracts/follower-rpc.md §1 matrix, one request per method per role, asserting served or the exact error code; `replica` `eth_call` → `-32020`; `archive` `eth_call` served; `eth_getTransactionReceipt` → `-32020` while the 025 record carries no body (pinned until Cross-spec note 1 lands)
+- [ ] T051 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/FollowerGetLogsSpec.scala` per contracts/follower-rpc.md §4: `blockHash` form, range inside window, range straddling `windowLow` → `-32023`, `toBlock` above head → `-32025`, default range `latest..latest`, `blockHash` of a retracted block → `-32025`
+- [ ] T052 [P] [US2] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/ArchiveExecutorSpec.scala`: `eth_call` at a historical block runs on the FR-027 executor; a full queue returns `-32026 executor saturated`; the executor shares no pool with the follow loop **[BLOCKED: 018 Track R slice R1]**
 
 ### Implementation for User Story 2
 
 - [ ] T053 [US2] Implement `src/main/scala/com/chipprbots/ethereum/jsonrpc/FollowerMethodGate.scala` (per-role method matrix on top of 023's role error) and install it in `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcController.scala` for follower roles [conduit]
 - [ ] T054 [US2] Route `EthFilterService.getLogs` (`src/main/scala/com/chipprbots/ethereum/jsonrpc/EthFilterService.scala:104-146`) through `PinnedBlockResolver` on follower roles: both edges resolved and window-checked, explicit numbers to `FilterManager`, no clamping [conduit]
 - [ ] T055 [US2] [eye] GT-2 on Mordor (research R-9): basis A (018 changesets-only) vs B (`ArchivePruning` on today's layout); disk per 1M blocks, `eth_getBalance`/`eth_call` p50/p99 at 1/10k/100k/1M behind head; record OQ-1 in spec.md and plan.md "GT-2 result" **[BLOCKED: 018 F2 for basis A; basis B runs now]**
-- [ ] T056 [US2] Wire `archive` serving of `eth_call`, `eth_estimateGas`, `eth_simulateV1`, `debug_trace*` at historical roots on 018 FR-027 executors in `src/main/scala/com/chipprbots/ethereum/jsonrpc/{EthInfoService,EthSimulateService,DebugTracingService}.scala` (historical world built with `InMemoryWorldStateProxy` over `getBackingMptStorage(blockNumber)` as `EthUserService.getCode` does); add `-39014` [conduit] [forge] [beacon] **[BLOCKED: 018 Track R slice R1, 018 row 5, GT-2]**
+- [ ] T056 [US2] Wire `archive` serving of `eth_call`, `eth_estimateGas`, `eth_simulateV1`, `debug_trace*` at historical roots on 018 FR-027 executors in `src/main/scala/com/chipprbots/ethereum/jsonrpc/{EthInfoService,EthSimulateService,DebugTracingService}.scala` (historical world built with `InMemoryWorldStateProxy` over `getBackingMptStorage(blockNumber)` as `EthUserService.getCode` does); add `-32026` [conduit] [forge] [beacon] **[BLOCKED: 018 Track R slice R1, 018 row 5, GT-2]**
 - [ ] T057 [US2] Make `FollowConfig` select `pruning.mode = archive` (or the GT-2 basis) for `archive` and skip window deletes in `BlockApplier` for `archive`
 - [ ] T058 [US2] Add `scripts/follow/compare-archive.sh` (samples N blocks across the chain; diffs `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getProof`, `eth_call` against a reference archive; exit 0 iff identical)
-- [ ] T059 [US2] [eye] Integration scenario `src/it/scala/com/chipprbots/ethereum/follow/ArchiveHistoricalSpec.scala`: SC-003 on Mordor against core-geth archive and on Platåberget/Sepolia against Geth or Reth; and US2 scenario 2 (`replica` outside window → `-39010`) **[BLOCKED: 023 T-007 harness; reference archives in the harness]**
+- [ ] T059 [US2] [eye] Integration scenario `src/it/scala/com/chipprbots/ethereum/follow/ArchiveHistoricalSpec.scala`: SC-003 on Mordor against core-geth archive and on Platåberget/Sepolia against Geth or Reth; and US2 scenario 2 (`replica` outside window → `-32023`) **[BLOCKED: 023 T-007 harness; reference archives in the harness]**
 
 **Checkpoint**: US1 and US2 work independently; the `archive` role is complete on the GT-2 basis.
 
@@ -174,7 +174,7 @@ ends equal to a clean derivation; a `replica` with `W` below the depth halts wit
 
 ### Tests for User Story 3
 
-- [ ] T060 [P] [US3] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/FollowControllerReorgSpec.scala`: two-block reorg (retract 2, apply 2') → head and roots equal a clean derivation; retractions delivered newest-first are applied in that order; a retraction for a lower block delivered before a higher one is held; `archive` with a 100-block reorg ends equal to the reference consumer fold (025 FR-010 oracle, unit-level file-sink replay); `replica` with `W = 50` and depth 100 → `ReseedRequired`, nothing written past the halt, every read `-39012`
+- [ ] T060 [P] [US3] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/FollowControllerReorgSpec.scala`: two-block reorg (retract 2, apply 2') → head and roots equal a clean derivation; retractions delivered newest-first are applied in that order; a retraction for a lower block delivered before a higher one is held; `archive` with a 100-block reorg ends equal to the reference consumer fold (025 FR-010 oracle, unit-level file-sink replay); `replica` with `W = 50` and depth 100 → `ReseedRequired`, nothing written past the halt, every read `-32024`
 - [ ] T061 [P] [US3] Test `src/test/scala/com/chipprbots/ethereum/blockchain/follow/FinalizedRetractionSpec.scala`: ETH-family `archive` receiving a retraction at or below `follow.finalized` → `FinalizedRetraction` halt; ETC family (finalized = genesis) accepts any depth above 0
 - [ ] T062 [P] [US3] Extend `StateReplayRoundTripSpec.scala` with a multi-block property: forward N blocks then backward N blocks leaves the store identical to the seed state (reference counts included), under `BasicPruning(history ≥ N)` [vault] [forge]
 
@@ -190,20 +190,20 @@ ends equal to a clean derivation; a `replica` with `W` below the depth halts wit
 
 ## Phase 6: User Story 4 — a simulation pool reads a follower (Priority: P2)
 
-**Goal**: `sim` sessions pinned to a block always get that block; when it leaves the window they get `-39010` with the
+**Goal**: `sim` sessions pinned to a block always get that block; when it leaves the window they get `-32023` with the
 window and re-pin (023 SC-002's follower side).
 
 **Independent Test**: quickstart.md §4.
 
 ### Tests for User Story 4
 
-- [ ] T066 [P] [US4] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/PinnedReadStabilitySpec.scala`: with the head advancing concurrently (controlled `Ref`), 1,000 `eth_call`-shaped reads at a fixed explicit block all return the same `pinnedBlock`; a read at a block that has just left the window returns `-39010` with `data.window.high == head`
+- [ ] T066 [P] [US4] Test `src/test/scala/com/chipprbots/ethereum/jsonrpc/PinnedReadStabilitySpec.scala`: with the head advancing concurrently (controlled `Ref`), 1,000 `eth_call`-shaped reads at a fixed explicit block all return the same `pinnedBlock`; a read at a block that has just left the window returns `-32023` with `data.window.high == head`
 
 ### Implementation for User Story 4
 
 - [ ] T067 [US4] Ensure `PinnedBlockResolver` reads `follow.appliedHead` and `follow.windowLow` from one consistent snapshot of `FollowStatus` per request (no torn read between head and window) in `src/main/scala/com/chipprbots/ethereum/jsonrpc/PinnedBlockResolver.scala`
-- [ ] T068 [US4] Wire 023 FR-010 transaction forwarding into the follower's `JsonRpcController` (`eth_sendRawTransaction` → `ingest` endpoint or `-39011`) [conduit] **[BLOCKED: 023 T-004 forwarder]**
-- [ ] T069 [US4] [eye] Harness scenario `src/it/scala/com/chipprbots/ethereum/follow/SimReadsReplicaSpec.scala`: `sim` pool against a `replica` with `W = 300`, head advancing, assert zero reads answered at a block other than the pinned one and a re-pin on `-39010` **[BLOCKED: 023 T-006 `sim`, T-007 harness]**
+- [ ] T068 [US4] Wire 023 FR-010 transaction forwarding into the follower's `JsonRpcController` (`eth_sendRawTransaction` → `ingest` endpoint or `-32020`) [conduit] **[BLOCKED: 023 T-004 forwarder]**
+- [ ] T069 [US4] [eye] Harness scenario `src/it/scala/com/chipprbots/ethereum/follow/SimReadsReplicaSpec.scala`: `sim` pool against a `replica` with `W = 300`, head advancing, assert zero reads answered at a block other than the pinned one and a re-pin on `-32023` **[BLOCKED: 023 T-006 `sim`, T-007 harness]**
 
 **Checkpoint**: all four stories pass; 023 SC-002 can use US4.
 

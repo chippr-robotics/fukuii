@@ -75,7 +75,7 @@ ethereum/`, integration `src/it/scala/com/chipprbots/ethereum/`, resources `src/
       `Finality`, `Witness`), `final case class RecordId(chainKey, chainId: BigInt, blockNumber: BigInt, blockHash,
       parentHash)`, `Record(id, body)`, `BlockBody(header, receipts, accounts, code)`, `AccountEntry`, `SlotEntry`,
       `CodeEntry`, `WitnessBody(format: Byte, bytes)` per `contracts/record-schema.md`
-- [ ] T009 Create `E/export/record/WriteSet.scala`: the semantic diff model `WriteSet(accounts: Map[Address,
+- [ ] T009 Create `E/domain/statediff/StateDiff.scala`: the semantic diff model `StateDiff(accounts: Map[Address,
       AccountChange], code: Map[CodeHash, ByteString])` with `AccountChange(prev: Option[Account], next:
       Option[Account], slots: Map[UInt256, SlotChange])`, `netted` (drops equal prev/new), `toEntries` (hashes keys,
       sorts) — the type 018 F2 / 026 `StateReplay` will consume
@@ -118,7 +118,7 @@ Slices 1, 2 and 3 of `plan.md`.
 - [ ] T019 [P] [US1] Write `T/export/capture/BlockWriteSetRecorderSpec.scala`: given a world built on an
       `EphemDataSource` parent state, two transactions touching the same slot (write 5 then 7), one slot cleared, one
       account created then deleted (EIP-161), one contract destroyed with 3 slots, one code deployment — assert the
-      block-level `WriteSet`: prev from the parent root, new from the final world, netted, destroyed storage listed,
+      block-level `StateDiff`: prev from the parent root, new from the final world, netted, destroyed storage listed,
       code hash = `kec256(code)`
 - [ ] T020 [P] [US1] Write `T/export/buffer/ExportBufferStorageSpec.scala` (staged half): `putStaged` key layout
       `0x01 ++ number(8 BE) ++ hash`, `getStaged`, `bufferBytes` counter in the same batch, recount on open
@@ -130,16 +130,16 @@ Slices 1, 2 and 3 of `plan.md`.
 
 - [ ] T022 [US1] Create `E/export/capture/BlockWriteSetRecorder.scala`: `observe(world: InMemoryWorldStateProxy):
       Unit` collects `accountsStateTrie.cache.keys`, `contractStorages.map(_.cache.keys)`, `accountCodes`;
-      `resolve(parentRoot, storage: MptStorage, finalWorld, ethCompatibleStorage): Either[Throwable, WriteSet]`
+      `resolve(parentRoot, storage: MptStorage, finalWorld, ethCompatibleStorage): Either[Throwable, StateDiff]`
       opens `MerklePatriciaTrie[Address, Account](parentRoot, storage)(Address.hashedAddressEncoder,
       Account.accountSerializer)` and per-account storage tries; walks destroyed storage (research R-1 step 4)
-- [ ] T023 [US1] Create `E/export/capture/RecordBuilder.scala`: `(Block, Seq[Receipt], WriteSet, chainKey, chainId)
+- [ ] T023 [US1] Create `E/export/capture/RecordBuilder.scala`: `(Block, Seq[Receipt], StateDiff, chainKey, chainId)
       → Record` of type Block
 - [ ] T024 [US1] Modify `E/ledger/BlockExecution.scala`: add `recorderFactory: () => Option[BlockWriteSetRecorder]`
       constructor param (default `() => None`); in `executeBlockUntimed` (`:265-331`) create the recorder, pass it to
       `executeBlockTransactions`, call `observe` before the closing persist (`:311`) and the system-call persists
-      (`:882`, `:1082`), call `resolve` after `worldPersisted`; return the `Either[Throwable, WriteSet]` in
-      `BlockResult` as `writeSet: Option[Either[Throwable, WriteSet]]`
+      (`:882`, `:1082`), call `resolve` after `worldPersisted`; return the `Either[Throwable, StateDiff]` in
+      `BlockResult` as `writeSet: Option[Either[Throwable, StateDiff]]`
 - [ ] T025 [US1] Modify `E/ledger/BlockPreparator.scala`: thread `Option[BlockWriteSetRecorder]` into
       `executeTransactions` (`:894`) and `executeTransaction` (`:462`); call `recorder.foreach(_.observe(w))` in the
       composition at `:689-693` immediately before `persistStateFn`
@@ -343,7 +343,7 @@ the oracle for 026 GT-1 and for 018 F2.
 
 - [ ] T075 [US3] Create `E/export/tools/BalanceAudit.scala` (`runMain`): reads file segments or a Kafka topic from a
       position, seeds from an archive JSON-RPC endpoint at `from − 1`, folds with the production codec and a
-      main-code port of the consumer's fold (`E/export/record/WriteSet.applyForward/applyBackward`, which 026's
+      main-code port of the consumer's fold (`E/domain/statediff/StateDiff.applyForward/applyBackward`, which 026's
       `StateReplay` v1 reuses), compares balances per block, prints the record-size distribution
 - [ ] T076 [US3] Run the audit on Mordor range 9,400,000–9,401,000 (or the current head − 1,000 at run time) against
       an archive reference; record the result and the figures in `research.md` R-9
