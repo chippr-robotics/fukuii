@@ -93,7 +93,8 @@ curl -s -X POST localhost:8645 -H 'content-type: application/json' \
 cd ops/fleet-harness && python3 -I harness.py up --wait-ready 600
 python3 -I harness.py sc005
 # Expected: every container's GET /health validates against schema/health.schema.json; `ingest` bodies carry the
-# exporter fields and exportState (null until 025); followers carry retentionWindow, fault, seedBlock (026); followers report
+# exporter fields and exportState (null until 025); followers carry retentionWindow, fault, seedBlock (026);
+# followers report
 # ready=true with net_peerCount == 0x0; results/sc005-<date>-<sha>.json verdict PASS.
 curl -s localhost:18560/health | jq .          # eth-ingest (host port mapping in docker-compose.yml)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:18660/ready    # eth-replica → 200

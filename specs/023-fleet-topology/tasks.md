@@ -105,8 +105,8 @@ Single sbt project: `src/main/scala/...`, `src/test/scala/...`, `src/it/scala/..
 - [ ] T014 [P] Create `src/test/scala/com/chipprbots/ethereum/admin/HealthReporterSpec.scala`: fake `HealthSources`
       per role; asserts field presence/absence per role, `ready` truth table (follower ready with `peerCount = 0`;
       ingest not ready in `Draining`; sim ready iff follower ready ∧ lag ≤ bound), ETC finalized is genesis, JSON keys
-      match data-model.md §3 exactly (golden string compare on a fixed snapshot); follower snapshots carry `fault` and `seedBlock`, `ingest` carries
-      `exportState` (F4).
+      match data-model.md §3 exactly (golden string compare on a fixed snapshot); follower snapshots carry `fault` and
+      `seedBlock`, `ingest` carries `exportState` (F4).
 - [ ] T015 Create `src/main/scala/com/chipprbots/ethereum/admin/AdminHttpServer.scala`: Pekko HTTP `Route` with `GET
       /health` (200 always), `GET /ready` (200/503), `POST /lifecycle/{drain,fence,unfence,stop}` with the status codes
       and error envelope of contracts/admin-api.md; everything else 404; `def run(): Future[Http.ServerBinding]` using
@@ -275,17 +275,18 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
 - [ ] T043 [US1] `src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala`: add `Keys.FleetChainKey =
       "fleet.chainKey"`, `Keys.FleetRole = "fleet.role"`, `fleetIdentity()`, `recordFleetIdentity(chainKey, roleKey)`
       (one `update` batch; this is the one write path for first-start identity, which spec 024 extends with the genesis
-      hash and fork-schedule digest in the same synced batch; the read path is shared); in `nodebuilder/StdNode.scala` `BaseNode.start()` Phase 1, after `fixDatabase()`: if
-      `fleetIdentity()` is `None` → `recordFleetIdentity(...).commitSync()`; if `Some((c, r))` differs → `log.error`
-      with
+      hash and fork-schedule digest in the same synced batch; the read path is shared); in `nodebuilder/StdNode.scala`
+      `BaseNode.start()` Phase 1, after `fixDatabase()`: if `fleetIdentity()` is `None` →
+      `recordFleetIdentity(...).commitSync()`; if `Some((c, r))` differs → `log.error` with
       `DatadirOwnedByOtherChain`/`DatadirOwnedByOtherRole` and `shutdown()`+`sys.exit(2)` before any listener binds.
-      Create `src/test/scala/com/chipprbots/ethereum/db/storage/AppStateStorageFleetSpec.scala` over `EphemDataSource`:
-      absent → None; record → Some; survives a second `AppStateStorage` over the same source. `vault` reviews.
+      Create `src/test/scala/com/chipprbots/ethereum/db/storage/AppStateStorageFleetSpec.scala` over
+      `EphemDataSource`: absent → None; record → Some; survives a second `AppStateStorage` over the same source.
+      `vault` reviews.
 - [ ] T044 [P] [US1] `docs/runbooks/operating-modes.md`: new section "Roles and the fleet profile" (the role table of
       `specs/023-fleet-topology/contracts/role-matrix.md` copied verbatim, the single-node profile sentence, the
-      `--chain`/`--role` flags) and "Datadir layout change in 0.12" (`ingest` adopts a legacy datadir automatically; the optional `mv` to the role
-      path; followers and `sim` refuse a legacy-only layout with `LegacyDatadirLayout`; the `fukuii.datadir`
-      alternative); `docs/runbooks/node-configuration.md`: `fukuii.chain`, `fukuii.role`,
+      `--chain`/`--role` flags) and "Datadir layout change in 0.12" (`ingest` adopts a legacy datadir automatically;
+      the optional `mv` to the role path; followers and `sim` refuse a legacy-only layout with `LegacyDatadirLayout`;
+      the `fukuii.datadir` alternative); `docs/runbooks/node-configuration.md`: `fukuii.chain`, `fukuii.role`,
       `fukuii.admin.*`, `fukuii.tx-forward.*` rows.
 
 ### Slice S3 — role-gated start and the "not served by this role" error
@@ -505,24 +506,24 @@ peers for roles without them (FR-004, SC-005), plus metric twins.
       `HealthReporterSpec`.
 - [ ] T073 [US5] Define `trait ExporterHealthSource { def exportLag: Option[Long]; def exportQueueDepth: Option[Long];
       def exportBufferBytes: Option[Long]; def exportLastError: Option[String] }` in `admin/HealthReporter.scala` and a
-      `registerExporter(src)` on `AdminServerBuilder`; add `def exportState: Option[Int]` (0 running, 1 halted, 2 fenced);
-      with none registered an `Ingest` emits the four fields and `exportState` as `null`
-      (spec 025 T-007 registers the real one). Golden JSON case in `HealthReporterSpec`.
+      `registerExporter(src)` on `AdminServerBuilder`; add `def exportState: Option[Int]` (0 running, 1 halted, 2
+      fenced); with none registered an `Ingest` emits the four fields and `exportState` as `null` (spec 025 T-007
+      registers the real one). Golden JSON case in `HealthReporterSpec`.
 - [ ] T074 [US5] Define `trait RetentionWindowSource { def window: Option[(BigInt, BigInt)] }` and `registerRetention`
       likewise, plus `FollowerFaultSource { def fault: Option[String]; def seedBlock: Option[(BigInt, ByteString)] }`
-      for `fault` and `seedBlock`; followers emit `retentionWindow: null` until 026 registers; `archive` reports `fromBlock = 0` when
-      registered. Golden JSON case in `HealthReporterSpec`.
+      for `fault` and `seedBlock`; followers emit `retentionWindow: null` until 026 registers; `archive` reports
+      `fromBlock = 0` when registered. Golden JSON case in `HealthReporterSpec`.
 - [ ] T075 [P] [US5] Create `src/test/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcHttpServerHealthRoutesSpec.scala`
       (`ScalatestRouteTest` over `JsonRpcHttpServer.route` with a stub controller and health checker): `GET /health`,
       `/readiness`, `/healthcheck`, `/buildinfo` keep today's status codes and bodies (hive and
       `ops/*/docker-compose.yml`
       probe them), so the admin surface is provably additive.
 - [ ] T076 [US5] Create `ops/fleet-harness/schema/health.schema.json` (JSON Schema draft 2020-12 of data-model.md §3
-      with `role`-conditional `required` for the exporter (incl. `exportState`) and follower (`retentionWindow`, `fault`,
-      `seedBlock`) fields) and implement `sc005` in
-      `ops/fleet-harness/harness.py`: for every fukuii container GET `/health` and validate (stdlib validator for the
-      subset used: types, required, enum, conditional); assert followers report `ready: true` with `net_peerCount`
-      `0x0`; assert `GET /ready` status matches `ready`; write `results/sc005-*.json`.
+      with `role`-conditional `required` for the exporter (incl. `exportState`) and follower (`retentionWindow`,
+      `fault`, `seedBlock`) fields) and implement `sc005` in `ops/fleet-harness/harness.py`: for every fukuii
+      container GET `/health` and validate (stdlib validator for the subset used: types, required, enum, conditional);
+      assert followers report `ready: true` with `net_peerCount` `0x0`; assert `GET /ready` status matches `ready`;
+      write `results/sc005-*.json`.
 - [ ] T077 [P] [US5] In `sc005` also scrape `/metrics` of one container per role and assert the six `app_fleet_*`
       series exist with `role`/`chain` tags equal to the health body.
 - [ ] T078 [P] [US5] Docs: add the `app_fleet_*` rows to `docs/operations/metrics-reference.md`; create
