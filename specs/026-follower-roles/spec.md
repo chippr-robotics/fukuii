@@ -201,8 +201,9 @@ configured lag bound of the source head it observes in the record stream and its
 - **FR-004** `replica` MUST serve `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount`,
   `eth_getProof`, `eth_getBlockByNumber/Hash`, `eth_getTransactionReceipt` and `eth_getLogs` (any range **inside the
   window**) at explicit blocks within its window, and return the DC-3 error for any block or range edge outside it.
-  Its window `W` defaults to **24 hours of blocks per chain**, declared in the ChainSpec resource profile (024
-  FR-007) and operator-overridable.
+  Its window `W` defaults to **24 hours of blocks per chain** (6,650 on the ETC family, 7,200 on the ETH family),
+  declared as `resources.replica.retention-window-blocks` in the ChainSpec resource profile (024 FR-007) and
+  operator-overridable through `fukuii.follow.window`.
 - **FR-005** `archive` MUST serve the FR-004 methods, `eth_call`, `eth_simulateV1` and the `debug_trace*` methods at
   **any** canonical block, on the storage basis GT-2 selects, using 018 FR-027's bounded executors for the heavy ones.
 - **FR-006** Followers MUST apply reorgs by rolling back changesets (DC-4); a `replica` whose window is exceeded MUST

@@ -235,7 +235,8 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
 - [ ] T037 [P] [US1] Create `src/test/scala/com/chipprbots/ethereum/utils/ProfileLoadSpec.scala`: for every
       `src/main/resources/conf/*.conf` except `faucet.conf`, `testmode.conf`, `enterprise-template.conf`:
       `ConfigFactory.parseResources("conf/<name>.conf").withFallback(ConfigFactory.load()).resolve()`
-      `.getConfig("fukuii")` constructs an `InstanceConfig` without throwing and `role == Role.Ingest`, `chainKey == blockchains.network`.
+      `.getConfig("fukuii")` constructs an `InstanceConfig` without throwing and `role == Role.Ingest`,
+      `chainKey == blockchains.network`.
 - [ ] T038 [US1] SC-001: run the grep of quickstart.md §1 (only KEEP rows remain); `sbt compile-all`; `sbt
       scalafmtAll`; `./scripts/fukuii-test essential` and compare with T002 (`eye`); open the S1 PR (`prism` review).
 

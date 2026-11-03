@@ -34,6 +34,9 @@ genesis only).
   reserves the type now, 017's plan decides when it is produced.
 - Defaults accepted without a question: receipts and logs ride **inside the block record** (OQ-4); the stream
   **starts at the export position** on first start, with no backfill of pre-exporter history (OQ-5).
+- Alignment analysis (2026-10-31, F1/F2): the block record also carries the **block body** (transactions, uncles,
+  withdrawals), and the decoded diff type is `domain/statediff/StateDiff` (shared with spec 026 and 018 F2), whose
+  entries carry the `address` and `slotKey` preimages beside the hashed keys.
 
 ## Problem
 
@@ -120,9 +123,12 @@ engine or flat-layout work (alignment review §2).
 RLP-encoded with the schema version as the leading byte. `chainKey` is the partitioning identity;
 `chainId` is informational (024 DC-3).
 
-**DC-2: The block record is complete, self-contained and layout-independent.** It contains the header, every receipt
-with its logs, and the semantic state diff with **both previous and new values** for every touched account, slot and
-code blob. A consumer can (a) apply it forward to reach the post-state, (b) apply it backward to reach the pre-state,
+**DC-2: The block record is complete, self-contained and layout-independent.** It contains the header, the **block
+body** (transactions in order; uncle headers on the ETC family; withdrawals on the ETH family where the fork defines
+them), every receipt with its logs, and the semantic state diff with **both previous and new values** for every
+touched account, slot and code blob. *(Body added 2026-10-31, alignment analysis F1: without transactions a follower
+cannot serve receipt or transaction lookups; the body is verifiable against `header.transactionsRoot`, `ommersHash`
+and `withdrawalsRoot`.)* A consumer can (a) apply it forward to reach the post-state, (b) apply it backward to reach the pre-state,
 and (c) recompute the post-state root from its own commitment trie and compare with `header.stateRoot` (026 DC-1),
 with no other input than the pre-state. The record MUST NOT contain trie nodes or any key that names a storage
 namespace; a record produced on the Hash scheme, the Path scheme or the 018 unified layout is byte-identical.

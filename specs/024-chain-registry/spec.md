@@ -198,8 +198,9 @@ Platåberget treated as if it were not built in), using a ChainSpec entry and a 
 - **FR-006** fukuii MUST provide `fukuii chains list` (keys, chainId, family, consensus, source path) and
   `fukuii chains validate [<dir>]` (run the loader and report every error without starting a node).
 - **FR-007** A ChainSpec MAY declare default resource profiles per role (heap hint, RocksDB/engine memory budget,
-  retention window for `replica`); they are defaults an operator or Orbita overrides, never limits fukuii enforces
-  (kept, 2026-10-31). A ChainSpec MUST declare the chain's default sync mode (`sync.do-snap-sync`); the deployment
+  `resources.replica.retention-window-blocks` as a positive integer of blocks for `replica`); they are defaults an
+  operator or Orbita overrides, never limits fukuii enforces (kept, 2026-10-31; unit fixed to blocks by the alignment
+  analysis F5, because ETC has no fixed block time to convert a duration with). A ChainSpec MUST declare the chain's default sync mode (`sync.do-snap-sync`); the deployment
   profile MAY override it. Ports, datadir, RPC APIs and peer limits are deployment keys and MUST NOT appear in a
   ChainSpec.
 - **FR-008** The ChainSpec MUST carry `finalityRule` (`genesis-only` | `consensus-layer`), derived from `consensus`

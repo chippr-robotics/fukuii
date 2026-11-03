@@ -325,8 +325,11 @@ T-002.
   chain in one role per process. `fukuii <network>` (today's CLI) MUST remain valid and MUST mean
   `--chain <network> --role ingest` with RPC serving enabled (the single-node operator profile). The role and
   `chainKey` MUST be available to every component through `InstanceConfig`, not through a new global. The
-  ActorSystem is named `fukuii_<chainKey>`; the default datadir is `~/.fukuii/<chainKey>/<role>` (single-node profile:
-  the `ingest` path), and the operator docs carry the migration note for datadirs at today's `~/.fukuii/<chainKey>`.
+  ActorSystem is named `fukuii_<chainKey>`; the default datadir is `~/.fukuii/<chainKey>/<role>`. For `role = ingest`
+  only, when `~/.fukuii/<chainKey>/ingest` does not exist and `~/.fukuii/<chainKey>` already holds a datadir, the node
+  MUST adopt the legacy path and log it at INFO, so US1 AS1 ("no config change") holds for existing operators; a
+  follower or `sim` role finding only a legacy layout MUST refuse with a named error. *(Alignment analysis F6,
+  2026-10-31: replaces the "migration note" reading of OQ-3.)*
 - **FR-002** Role defaults MUST be documented per role: which servers listen, which RPC namespaces are served, which
   sync mode runs (017 `SyncMode`, with `Follow` for followers), what readiness means, and how transactions are admitted
   (FR-010) (table in `quickstart.md`, produced by `/speckit-plan`). ETC PoW mining is a single-node-profile option on
@@ -386,7 +389,8 @@ T-002.
 - **OQ-1** *(resolved 2026-10-31)*: per-client quotas, priority and gas-budget admission are **Orbita's**; fukuii's
   part is the FR-003 caps.
 - **OQ-2** *(resolved 2026-10-31)*: admin HTTP on a dedicated localhost port; `SIGTERM` = drain then stop (FR-009).
-- **OQ-3** *(resolved 2026-10-31)*: `fukuii_<chainKey>`; datadir `~/.fukuii/<chainKey>/<role>` (FR-001).
+- **OQ-3** *(resolved 2026-10-31)*: `fukuii_<chainKey>`; datadir `~/.fukuii/<chainKey>/<role>`; legacy
+  `~/.fukuii/<chainKey>` auto-adopted by `ingest` only (FR-001, analysis F6).
 - **OQ-4** *(resolved 2026-10-31)*: RPC to a follower first; read-only store later, gated on 018 request 1 (DC-5).
 - **OQ-5** *(resolved 2026-10-31)*: forward to `ingest` (FR-010); a `relay` role becomes spec 027 only if the harness
   shows `ingest` admission is the bottleneck (SC-006 measures it).
