@@ -4,11 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Clarified (2026-10-31). OQ-1..OQ-5 resolved in the Clarifications session; ready for `/speckit-plan`. The Evidence figures from
-the originating notes were re-measured on `staging` 0f1a904 (0.10.17) and corrected in [research.md](./research.md) §1;
-the T-001 retirement inventory is done ([research.md](./research.md) §2). **Revised 2026-10-30**: the cross-spec
-[alignment review](./alignment-review.md) added FR-010 (transaction ingress), OQ-5 (`relay` role), the Engine API
-clause of FR-005, and a sequenced plan for 013 and 017–026. Nothing here is implemented.
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan, data model, contracts, quickstart and 84 tasks written; cross-spec analysis `analysis-2026-10-31.md` applied. Phase B start (after spec 020 PR 5); T001 checks the PR 5 file list first.
 
 **Input**: User direction, 2026-10-30: "the eventual goal will be to have a scalable fukuii 'cluster' running that is
 capable of syncing and managing multiple EVM networks", feeding a larger pipeline for **analytics and transactional

@@ -4,8 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Clarified (2026-10-31). OQ-1..OQ-3 resolved; ready for `/speckit-plan`. Companion of spec 023 (fleet topology); independent
-of 025 and 026 and of spec 018. Can start now.
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan, JSON Schema, contracts, quickstart and 72 tasks written; D-1 (GT-1 vs DC-2 mess block) and D-2 (gorgoroth `protocol = "ethash"`) escalated to the user; slices 1–3 can start now.
 
 **Input**: Spec 023 Goal 2 and the user decision D-6 (MESS off by default): adding a network whose consensus type fukuii
 already implements must be a registry entry and a genesis file, with no code change and no release.

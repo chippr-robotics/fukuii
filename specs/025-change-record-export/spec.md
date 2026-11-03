@@ -4,12 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Clarified (2026-10-31). OQ-1..OQ-6 resolved (OQ-7 is a plan-time figure); ready for `/speckit-plan`. Companion of spec 023. **Time-critical part**: the
-record schema (GT-1) must be agreed with spec 018's `data-model.md` owner before 018 slice F2 freezes the changeset
-format. **Revised 2026-10-30 (alignment review, [023/alignment-review.md](../023-fleet-topology/alignment-review.md)
-§2)**: the state diff is the **semantic write set** (accounts, slots, code by address), never trie nodes, so the
-exporter is built on today's storage layout and does **not** wait for 018 Track F. 018 F2 shares the exportable part of
-the format and keeps its trie-node undo records local.
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C.
 
 **Input**: Spec 023 Goal "define the change-record contract on Kafka that replicas, the archive role, the indexer and
 history tables all consume, with reorg and finality semantics". User decisions D-3 (Kafka) and D-6 (ETC finality is

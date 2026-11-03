@@ -4,14 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Clarified (2026-10-31). OQ-2, OQ-3 and two FR ambiguities resolved; OQ-1 and OQ-4 wait on GT-2 and GT-1
-measurements; ready for `/speckit-plan`. Companion of spec 023. Depends on spec 013 (seed)
-and spec 025 (the record stream); on spec 018 only for the `archive` basis (GT-2) and for the later move to the
-unified layout. **Revised 2026-10-30 (alignment review,
-[023/alignment-review.md](../023-fleet-topology/alignment-review.md)
-§2)**: followers apply the **semantic diff** of 025 through a `StateReplay` capability (018 amendment request 7) and
-update their own commitment trie from the changed keys, so a `replica` MVP exists on today's storage layout before 018
-Track F. Its two gates (GT-1, GT-2) can start as soon as a file-sink record stream exists (025 T-003).
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan, `StateReplay` and follower-RPC contracts, 84 tasks. Phase C on today's layout after 025's file sink; archive (GT-2) in phase D; blocked on 013 §11 rows 2/6/8 for the production seed.
 
 **Input**: Spec 023 Goals "replica bootstrap and following so initial sync happens once per chain, not once per
 replica" and user decision D-5 (an archive-capable role is sufficient for historical state).
