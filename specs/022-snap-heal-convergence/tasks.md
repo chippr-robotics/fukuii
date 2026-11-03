@@ -430,14 +430,37 @@ Within each slice, **tests come before implementation**, and the tests must fail
 
 **Purpose**: the 0.11.0 gates on #1659, run from quickstart.md. All of slices 1–5 must be merged.
 
-- [ ] T061a **Exercise the excluded path live, before any release or any Sepolia or Platåberget jar rotation (forge and beacon, slice 3 round 3).** A core-geth outage cannot do it (T038): it takes a peer that answers but cannot serve what is asked. Needed: on Mordor (Hash) one exclusion and one unservable code hash, reaching the real hand-off; on a Path chain the code wait, and an induced force-complete if it can be had. Some way to induce this has to be built for the run.
+- [x] T061a **Exercise the excluded path live, before any release or any Sepolia or Platåberget jar rotation (forge and beacon, slice 3 round 3).** A core-geth outage cannot do it (T038): it takes a peer that answers but cannot serve what is asked. Needed: on Mordor (Hash) one exclusion and one unservable code hash, reaching the real hand-off; on a Path chain the code wait, and an induced force-complete if it can be had. Some way to induce this has to be built for the run.
+  - **Done 2026-11-02 on Mordor; forge and beacon signed off (both MET, no blockers).** Six runs on local, never-committed fault-injection jars. A system property makes every peer's answer for one account's storage read as the stale-root verification failure, and filters one code hash out of ByteCodes replies; on Path the ETC-requires-Hash guard was removed, as for the earlier P runs. The targets are two old, untouched contracts, picked read-only from core-geth's state (2,719,168 accounts). Public peers plus the local core-geth served the runs.
+    - **Hash, Run A (code withheld throughout).**
+      - Storage give-up after 3 failures from 2 peers, recorded durably.
+      - Healing seeded the account's storage root and cleared it in 8 s.
+      - `Skipping 1 bytecode hashes after 50 failures`, then the 30 idle-minute code wait, then `Nothing else is missing: a lazy hand-off`.
+      - `[HEAL-INVARIANT] … marker removed`, `bytecodeRecoveryDone NOT set`, no `[HEAL-COMPLETE]`.
+      - Audit pass 1 found exactly one hole, the code, and repaired it in 80 ms; pass 2 was clean (5,536,662 nodes).
+    - **Hash, Run B (code released mid-wait).** The next minute's re-ask stored the code, then `[HEAL-COMPLETE] … no full-trie gate walk`, with the marker kept.
+    - **Path, PC.** Negative control for the held form: the excluded account's positions were deleted at heal start (T034) and re-healed, then `[HEAL-COMPLETE]` with no code wait.
+    - **Path, PA (the storage and code targets are the same account).**
+      - Its leaf was re-healed and held on its code: `Healing waits on 1 bytecode(s): 872935ac of 02b43d44…`. The wait survived two re-pegs.
+      - At the arm, `writing 6 node(s) waiting only on 1 bytecode(s)`, then the lazy hand-off, the Path publish and the audit repair; pass 2 was clean.
+      - `storage not shown complete` is expected when the two targets are one account (forge: the safe direction; the audit's pass end sets both flags).
+    - **Path, PB.** Release, then `code stored: hashes=1 released=1`, then `[HEAL-COMPLETE]` 2 s later with no walk.
+    - **Path, PC2.** A real `ForceCompleteStorage`, triggered mid account phase, recorded 384 accounts durably. Heal start deleted the positions of 385, all re-healed in 19 s; audit 0 holes over 5,537,254 nodes.
+    - **None of the six showed:** an ERROR line, a walk, an import-sourced on-demand fetch, or a #1555 line.
+    - **Not proven live:**
+      - that real verification produces the forged error;
+      - the empty-reply and root-mismatch exclusion sources;
+      - the storage task-file sweep at a force-complete (PC2 had no task file; T063 is the first live chance);
+      - a phase-ending force-complete;
+      - partially flushed storage tries under an abandoned account on Path.
+    - **Follow-up found (pre-existing since 0.7.0, not a spec 022 regression).** `StoragePeerDispatch` force-completes storage on consecutive failures in any phase. During AccountRangeSync the controller ignores that, but `forceCompleteExecuted` is never reset. So a later genuine stall in ByteCodeAndStorageSync can never force-complete: a hang, not corruption.
 - [ ] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
   - Also, from forge's read of the give-up: inject a stored node that does not read or decode (`HoleInjectionTool ... corrupt`) on a Hash datadir, and record what healing and then import do when they touch it. Peers cannot cause this state and on-demand repair does not key on it, so the hand-off defers it (R-5g). Forge would want this before an ETC rotation.
   - Stop `coregeth-mordor.service` first, so it can't be discovered.
   - Use a fresh datadir; never `/home/dontpanic/mordor-data`. It must be created by this jar: one an older jar made has no `snap.heal.datadirCreated`, so it is not empty, and it pays a walk.
   - JFR during healing.
   - Root at handoff equals the pivot `stateRoot`.
-  - 24 h following the head, with `state_ondemand_fetch_total{cause=hole}` = 0 or each case explained.
+  - 24 h following the head, with import-sourced on-demand fetches (`state_ondemand_fetch_total{source="import"}`, `cause` is `node` or `code`; there is no `cause=hole` label) = 0 or each case explained.
   - Record SC-002 (time from storage-done to handoff).
 - [ ] T063 [US1] **Gate 2, Sepolia fresh sync on public peers.**
   - **Disk first (measured 2026-11-01).** A fresh sync needs about 300-340 GB at hand-off: about 170 GB to the end of state, from the kept datadir, plus about 150 GB for the hash copy the Path publish writes, by Mordor's ratio. The path families stay. Full history is another 500-900 GB or so, from a public-RPC sample at block 12.04M, and nothing stops at a full disk. So:
