@@ -6,7 +6,7 @@
 Lifecycle, vocabulary and closure procedure: [docs/development/spec-lifecycle.md](../docs/development/spec-lifecycle.md). Directories are never moved or renumbered; the Spec Kit
 scripts allocate the next number from the highest `NNN-` prefix present here.
 
-**26 specs**: Draft 9, Active 4, Done 7, Superseded 5, Parked 1.
+**26 specs**: Draft 5, Planned 4, Active 4, Done 7, Superseded 5, Parked 1.
 
 ## Open
 
@@ -23,10 +23,10 @@ Tasks are `done / open` boxes in `tasks.md`; a closed spec keeps its boxes as th
 | [020](./020-scala-3-9-lts-migration/spec.md) | Scala 3.9 LTS Toolchain Migration | Active | 2026-10-30 | — | — | PR 5 regeneration waits on spec 022 slices 4–6 | PR 3 landed (Scala 3.9.0, sbt 1.13.0, `-source:3.6` with DC-3 sites applied); PR 5's 187-file rewrite is regenerated after spec 022 lands, then PR 6–7. |
 | [021](./021-fixed-width-uint256/spec.md) | Fixed-Width UInt256 (allocation-light EVM arithmetic, byte-identical) | Draft | 2026-10-30 | — | — | — | (stub). Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's |
 | [022](./022-snap-heal-convergence/spec.md) | SNAP State Healing That Converges on a Live Chain | Active | 2026-11-02 | 0.11.0 | 103 / 24 | `dev-node` (local build-host session), branch `fix/022-s6a-docs` | Slices 1–5 merged (#1682, #1684, #1685, #1688; 5a #1690, 5b #1691, 5c #1693, 5d #1695), and #1694's repair of holes under `newPayload` (#1697). Slice 6 is three PRs (6a docs and decision records, 6b dead wiring, 6c config keys), then the Mordor and Sepolia release gates. 0.11.0 blocker (#1671). |
-| [023](./023-fleet-topology/spec.md) | Fleet Topology — Process Model, Roles and the Contract to Orbita | Draft | 2026-10-30 | — | — | — | Decisions recorded, ready for `/speckit-clarify` on OQ-1..OQ-5 below. The Evidence figures from |
-| [024](./024-chain-registry/spec.md) | Chain Registry (ChainSpec) — A Chain Is Data | Draft | 2026-10-30 | — | — | — | Ready for `/speckit-clarify` on OQ-1..OQ-3. Companion of spec 023 (fleet topology); independent |
-| [025](./025-change-record-export/spec.md) | Change-Record Export Contract (Kafka) | Draft | 2026-10-30 | — | — | — | Ready for `/speckit-clarify` on OQ-1..OQ-6. Companion of spec 023. **Time-critical part**: the |
-| [026](./026-follower-roles/spec.md) | Follower Roles — `replica` and `archive` | Draft | 2026-10-30 | — | — | — | Ready for `/speckit-clarify` on OQ-1..OQ-4. Companion of spec 023. Depends on spec 013 (seed) |
+| [023](./023-fleet-topology/spec.md) | Fleet Topology — Process Model, Roles and the Contract to Orbita | Planned | 2026-11-03 | — | 0 / 84 | — | Clarified 2026-10-31; plan, data model, contracts, quickstart and 84 tasks written; cross-spec analysis `analysis-2026-10-31.md` applied. Phase B start (after spec 020 PR 5); T001 checks the PR 5 file list first. |
+| [024](./024-chain-registry/spec.md) | Chain Registry (ChainSpec) — A Chain Is Data | Planned | 2026-11-03 | — | 0 / 72 | — | Clarified 2026-10-31; plan, JSON Schema, contracts, quickstart and 72 tasks written; D-1 (GT-1 vs DC-2 mess block) and D-2 (gorgoroth `protocol = "ethash"`) escalated to the user; slices 1–3 can start now. |
+| [025](./025-change-record-export/spec.md) | Change-Record Export Contract (Kafka) | Planned | 2026-11-03 | — | 0 / 91 | — | Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C. |
+| [026](./026-follower-roles/spec.md) | Follower Roles — `replica` and `archive` | Planned | 2026-11-03 | — | 0 / 84 | — | Clarified 2026-10-31; plan, `StateReplay` and follower-RPC contracts, 84 tasks. Phase C on today's layout after 025's file sink; archive (GT-2) in phase D; blocked on 013 §11 rows 2/6/8 for the production seed. |
 
 ## Closed
 
