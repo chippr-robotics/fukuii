@@ -277,28 +277,14 @@ class StateNodeFetcher(
                 case None if stateNodeRequester.onFallbackRoot =>
                   // At the fallback root the path is the parent root's, and the subtree under it may have changed since
                   // (a hot account changes every block): an honest peer serves what is there now, which is not the
-                  // wanted node. So no blacklist (spec 022 T062, where 776 honest peers were). Two different peers
-                  // sending the same nodes show the wanted one is not there, so the fetch ends now rather than asking
-                  // every peer in turn, and the importer backs off and retries from the parent root.
-                  stateNodeRequester.fallbackMismatch match
-                    case Some((other, previous)) if other != peer.id && previous == nodes =>
-                      log.warn(
-                        "SNAP TrieNodes: peers {} and {} sent the same {} node(s) at the fallback root, none of them " +
-                          "{}: it is not under that path there, ending this fetch (no blacklist)",
-                        other,
-                        peer.id,
-                        nodes.size,
-                        ByteStringUtils.hash2string(stateNodeRequester.hash)
-                      )
-                      stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq.empty))
-                      requester = None
-                    case _ =>
-                      log.warn(
-                        "SNAP TrieNodes: got {} nodes at the fallback root but none matched target hash, rotating peer " +
-                          "(no blacklist: the subtree may have moved since the parent root)",
-                        nodes.size
-                      )
-                      rotateToNextPeer(stateNodeRequester.copy(fallbackMismatch = Some(peer.id -> nodes)), peer.id)
+                  // wanted node. So no blacklist (spec 022 T062, where 776 honest peers were); the fetch rotates and
+                  // spends its retry budget as for an empty reply.
+                  log.warn(
+                    "SNAP TrieNodes: got {} nodes at the fallback root but none matched target hash, rotating peer " +
+                      "(no blacklist: the subtree may have moved since the parent root)",
+                    nodes.size
+                  )
+                  rotateToNextPeer(stateNodeRequester, peer.id)
                   Behaviors.same[StateNodeFetcherCommand]
                 case None =>
                   log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, rotating peer", nodes.size)
@@ -515,7 +501,5 @@ object StateNodeFetcher:
       // different server. Reset when we switch roots or cycle through the whole pool.
       triedPeers: Set[PeerId] = Set.empty,
       // Asking at the fallback root, where a node that does not match is no proof a peer is lying (spec 022 T062).
-      onFallbackRoot: Boolean = false,
-      // The last non-matching TrieNodes reply at the fallback root, and the peer that sent it.
-      fallbackMismatch: Option[(PeerId, Seq[ByteString])] = None
+      onFallbackRoot: Boolean = false
   )

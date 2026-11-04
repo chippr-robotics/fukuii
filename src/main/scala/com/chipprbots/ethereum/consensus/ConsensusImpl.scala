@@ -358,7 +358,7 @@ class ConsensusImpl(
         BranchExecutionFailure(
           executedBlocks.map(_.block),
           failingBlock.hash.value,
-          s"Error while trying to reorganise chain: $error"
+          s"$ReorganiseFailurePrefix$error"
         )
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?

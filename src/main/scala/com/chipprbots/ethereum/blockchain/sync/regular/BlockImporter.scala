@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.Bro
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.Command
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.StorageHolePosition
+import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
@@ -64,9 +65,11 @@ import com.chipprbots.ethereum.utils.FunctorOps.*
 object BlockImporter:
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
-  // Each exhaust is at least about 160 s of fetching (StateNodeFetcher's 30 tries, 5 s apart plus each request's own
-  // short backoff), with a 5-minute backoff between them: at least about 17 minutes before the escape valve. Only
-  // exhausts count (see SyncRetryTick below), and a block imported clears them.
+  // A fetch that runs exhausts after about 160 s (StateNodeFetcher's 30 tries, 5 s apart plus each request's own short
+  // backoff), and a 5-minute backoff follows each exhaust: about 18 minutes to the escape valve. An import that asks no
+  // peer (a storage hole it cannot place, or a local state fault, spec 022 T062) is exhausted at once, so the escape
+  // comes after the two backoffs alone: about 10 minutes. Only exhausts count (see SyncRetryTick below), and a block
+  // imported clears them.
   val StuckEscapeThreshold: Int = 3
 
   // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
@@ -111,19 +114,6 @@ object BlockImporter:
     missingCodes.clear()
 
   private[regular] def distinctMissingCodesForTests: Int = missingCodes.size
-
-  /** How a block execution's `MPTError` reads once it reaches the importer as a `BlockImportFailed` string:
-    * `BlockExecutionError.MPTError(e).toString`, which `ConsensusImpl` passes on as it is when the branch extends the
-    * head, and after this prefix when it reorganises.
-    */
-  private val LocalStateFaultPrefixes: Seq[String] =
-    Seq("MPTError(", "Error while trying to reorganise chain: MPTError(")
-
-  /** True when a block failed on a trie error that is not a missing node: this node's own state is bad (spec 022 T062),
-    * and neither the block nor the peer that sent it is. A missing node never reaches here as a string: it comes as
-    * `BlockImportFailedDueToMissingNode`, and a stored entry that does not decode is one (`CorruptNodeException`).
-    */
-  private[regular] def isLocalStateFault(error: String): Boolean = LocalStateFaultPrefixes.exists(error.startsWith)
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
     * un-canonicalises.
@@ -882,7 +872,7 @@ final private class BlockImporterLogic(
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     RunningAfterFetcherRewind
-              case BlockImportFailed(error) if BlockImporter.isLocalStateFault(error) =>
+              case BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
                 // This node's trie is bad, and no fetch can name what to fetch. So this is an exhausted fetch at once:
                 // the fetcher is rewound without blacklisting the honest provider, the block waits out the exhaust
                 // backoff, and the third in a row asks for a SNAP re-sync, the only exit (spec 022 T062).
@@ -951,7 +941,7 @@ final private class BlockImporterLogic(
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
           // is detected (spec 022 T062). The caller backs off and escalates instead.
-          case err @ BlockImportFailed(error) if BlockImporter.isLocalStateFault(error) =>
+          case err @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
             IO.pure((importedBlocks, Some(err)))
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
@@ -1017,9 +1007,9 @@ final private class BlockImporterLogic(
       catch
         case NonFatal(e) =>
           log.error(
-            "[STATE-CORRUPT] could not check stored trie node {} for corruption: {}; fetching it anyway",
-            ByteStringUtils.hash2string(hash),
-            e
+            e,
+            "[STATE-CORRUPT] could not check stored trie node {} for corruption; fetching it anyway",
+            ByteStringUtils.hash2string(hash)
           )
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
@@ -1069,7 +1059,7 @@ final private class BlockImporterLogic(
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             announceAdopted(adopted, internally)
             IO.raiseError(missingNodeException)
-          case BlockImportFailed(error) if informFetcherOnFail && !BlockImporter.isLocalStateFault(error) =>
+          case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
         }

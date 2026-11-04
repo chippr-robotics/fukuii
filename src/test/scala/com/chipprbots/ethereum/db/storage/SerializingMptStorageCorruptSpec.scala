@@ -92,6 +92,22 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
     corruptAt(b.state.getBackingStorage(0), leafHash).detail should not be empty
   }
 
+  it should "keep what reading the entry threw as the cause, through the trie's walk too" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val arc = new Archive
+    arc.nodes.put(leafHash, Array(0xc1.toByte))
+    val thrown = corruptAt(arc.store, leafHash)
+    thrown.getCause should not be null
+    thrown.getCause.isInstanceOf[CorruptNodeException] shouldBe false
+    (thrown.withLocation(ByteString(Array[Byte](0))).getCause should be).theSameInstanceAs(thrown.getCause)
+    withClue("a bare value that fails its hash threw nothing, so it has no cause: ") {
+      arc.nodes.put(leafHash, Array(0x80.toByte))
+      corruptAt(arc.store, leafHash).getCause shouldBe null
+    }
+  }
+
   it should "still decode the empty trie's root, the one bare value stored under its own hash" taggedAs (
     UnitTest,
     StateTest
@@ -176,4 +192,54 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
     corruptAt(reader, leafHash)
     cache.entries shouldBe 0
     reader.nodesLoaded shouldBe 0L
+  }
+
+  // spec 022 T062, vault: a node is written by counting a reference to what is stored under its hash. A wrapper there
+  // that does not unwrap threw a raw decode error, no MPTException, so block execution did not catch it and the import
+  // blamed the peer that sent the block.
+  "Writing a node under basic pruning" should "fail as a corrupt node where the stored wrapper does not unwrap, writing nothing" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val b = new Basic
+    val junk = Array[Byte](1, 2, 3)
+    b.nodes.put(leafHash, junk)
+    val backing = b.state.getBackingStorage(1)
+    val leafNode = MptTraversals.decodeNode(leaf)
+    val thrown = intercept[CorruptNodeException](backing.updateNodesInStorage(Some(leafNode), Nil))
+    thrown.hash shouldBe leafHash
+    thrown shouldBe a[MissingNodeException]
+    withClue("it threw before the write: ") {
+      b.nodes.get(leafHash).map(_.toSeq) shouldBe Some(junk.toSeq)
+    }
+    withClue("and the same through storeRawNodes, healing's write: ") {
+      intercept[CorruptNodeException](backing.storeRawNodes(Seq(leafHash -> leaf))).hash shouldBe leafHash
+    }
+  }
+
+  // spec 022 T062, vault Q1: why a corrupt node is a failure in a heal walk and not a hole to fetch. Healing writes a node
+  // through storeRawNodes, which under basic pruning counts a reference to the entry already there and keeps its bytes:
+  // the good node fetched for a corrupt entry does not replace it. Pinned as it is today.
+  it should "keep a corrupt entry's bytes when healing writes the good node over it" taggedAs (UnitTest, StateTest) in {
+    classes.foreach { case (name, bytes) =>
+      withClue(s"$name in a valid wrapper: ") {
+        val b = new Basic
+        b.nodes.put(leafHash, b.wrap(bytes))
+        val backing = b.state.getBackingStorage(1)
+        backing.storeRawNodes(Seq(leafHash -> leaf))
+        corruptAt(backing, leafHash)
+        withClue("only the reference count moved: ") {
+          val stored = storedNodeFromBytes(b.nodes.get(leafHash).get)
+          stored.nodeEncoded.toSeq shouldBe bytes.toSeq
+          stored.references shouldBe 2
+        }
+      }
+    }
+    withClue("a wrapper that does not unwrap fails the write itself, and stays: ") {
+      val b = new Basic
+      b.nodes.put(leafHash, Array[Byte](1, 2, 3))
+      val backing = b.state.getBackingStorage(1)
+      intercept[CorruptNodeException](backing.storeRawNodes(Seq(leafHash -> leaf)))
+      corruptAt(backing, leafHash)
+    }
   }

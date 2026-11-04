@@ -81,7 +81,8 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
       case e: MissingNodeException             => throw e
       case e: RocksDbDataSourceException       => throw e
       case e: RocksDbDataSourceClosedException => throw e
-      case NonFatal(e) => throw SerializingMptStorage.corrupt(key, s"${e.getClass.getSimpleName}: ${e.getMessage}")
+      case NonFatal(e) =>
+        throw SerializingMptStorage.corrupt(key, s"${e.getClass.getSimpleName}: ${e.getMessage}", Some(e))
 
   override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
     val (collapsed, toUpdate) = MptStorage.collapseNode(newRoot)
@@ -121,11 +122,20 @@ object SerializingMptStorage extends Logger:
   private[storage] def firstReport(hash: ByteString): Boolean =
     loggedCorrupt.synchronized(loggedCorrupt.put(hash, java.lang.Boolean.TRUE) == null)
 
-  private def corrupt(hash: ByteString, detail: String): CorruptNodeException =
-    val error = new CorruptNodeException(hash, detail)
+  /** The exception for a stored entry that is not the node `hash` names, logged the first time that hash is met. At
+    * ERROR: a corrupt node on disk is a failure an operator acts on, and this package logs at ERROR only by default
+    * (logback.xml), where a WARN never showed (spec 022 T062, live run). `cause` is what reading it threw.
+    */
+  private[storage] def corrupt(
+      hash: ByteString,
+      detail: String,
+      cause: Option[Throwable] = None
+  ): CorruptNodeException =
+    val error = new CorruptNodeException(hash, detail, cause = cause)
     if firstReport(hash) then
-      log.warn(
-        s"[CORRUPT-NODE] ${error.getMessage}: reads of it fail as a missing node until it is deleted or replaced"
+      log.error(
+        s"[CORRUPT-NODE] ${error.getMessage}: reads of it fail as a missing node until it is deleted or replaced",
+        error
       )
     error
 

@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -1144,18 +1145,17 @@ class RegularSyncSpec
         val error = BlockExecutionError.MPTError(new MPTException("Invalid Node"))
         // Pinned: ConsensusImpl passes `error.toString` on as it is when the branch extends the head...
         error.toString should startWith("MPTError(")
-        BlockImporter.isLocalStateFault(error.toString) shouldBe true
-        // ...and after this prefix when it reorganises.
-        BlockImporter.isLocalStateFault(s"Error while trying to reorganise chain: $error") shouldBe true
+        Consensus.isLocalStateFault(error.toString) shouldBe true
+        // ...and after the shared prefix when it reorganises (ConsensusImplSpec drives the text ConsensusImpl writes).
+        Consensus.isLocalStateFault(s"${Consensus.ReorganiseFailurePrefix}$error") shouldBe true
         // A missing node never arrives as text, and nothing else that does is this node's own state.
-        BlockImporter.isLocalStateFault("test error") shouldBe false
-        BlockImporter.isLocalStateFault(
+        Consensus.isLocalStateFault("test error") shouldBe false
+        Consensus.isLocalStateFault(
           BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
         ) shouldBe false
-        BlockImporter.isLocalStateFault(
-          s"Error while trying to reorganise chain: ${BlockExecutionError.MissingParentError}"
-        ) shouldBe
-          false
+        Consensus.isLocalStateFault(
+          s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.MissingParentError}"
+        ) shouldBe false
         scala.concurrent.Future.successful(succeed)
       }
 

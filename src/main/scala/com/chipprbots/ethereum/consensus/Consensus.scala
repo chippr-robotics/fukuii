@@ -65,6 +65,25 @@ object Consensus:
   case class BranchExecutionFailure(blockToEnqueue: List[Block], failingBlockHash: ByteString, error: String)
       extends ConsensusResult
 
+  /** What a [[BranchExecutionFailure]]'s `error` starts with when the branch was a reorganisation, ahead of the
+    * execution error's own text. One constant for the text written and the text read (spec 022 T062): the importer
+    * tells this node's own state faults from the block's by it, so a reworded copy would put the blame back on peers.
+    */
+  val ReorganiseFailurePrefix: String = "Error while trying to reorganise chain: "
+
+  /** How a block execution's `MPTError` reads in a [[BranchExecutionFailure]]:
+    * `BlockExecutionError.MPTError(e).toString` as it is when the branch extends the head, and after
+    * [[ReorganiseFailurePrefix]] when it reorganises.
+    */
+  private val MptErrorText: String = "MPTError("
+
+  /** True when a branch failed on a trie error that is not a missing node: this node's own state is bad (spec 022
+    * T062), and neither the block nor the peer that sent it is. A missing node never arrives as text: it is a
+    * [[ConsensusErrorDueToMissingNode]], and a stored entry that is not its node is one (`CorruptNodeException`).
+    */
+  def isLocalStateFault(error: String): Boolean =
+    error.startsWith(MptErrorText) || error.startsWith(ReorganiseFailurePrefix + MptErrorText)
+
   /** An error external the the blocks in the branch occured, which prevents the branch from being executed. Usually
     * this is due to an inconsistency in the database.
     */
