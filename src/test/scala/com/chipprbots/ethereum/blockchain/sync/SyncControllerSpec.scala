@@ -1159,7 +1159,10 @@ class SyncControllerSpec
       val first = startRegularSync()
       val trigger = SyncProtocol.MissingCodeNeedsBulkRecovery(500, codeHash)
       syncController ! SyncController.WrappedSyncProtocol(trigger)
-      syncController ! SyncController.WrappedSyncProtocol(trigger)
+      // The repeat checks that a trigger arriving while a scan runs is dropped. With no readable root the scan cannot
+      // run: it ends in about a millisecond and regular sync resumes, where a repeat is a new request and a second
+      // failure (#1566). So send it only where the scan is still running.
+      if !prunedEverywhere then syncController ! SyncController.WrappedSyncProtocol(trigger)
       eventually {
         someTimePasses()
         assert(
