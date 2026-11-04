@@ -26,8 +26,10 @@ import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -332,6 +334,57 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
     blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
 
+  // spec 022 T062: the importer tells this node's own state fault from a bad block by the text that reaches it, and
+  // blames no peer for the first. These drive that text through ConsensusImpl itself, so a reworded message fails here
+  // instead of quietly putting the blame back on peers.
+  private val localStateFault = MPTError(new MPTException("Invalid Node"))
+
+  it should "write a trie error that is not a missing node as a local state fault when extending the head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val extension: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    setFailingBlockWith(extension.head, localStateFault)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(extension)).unsafeToFuture()) {
+      case BranchExecutionFailure(_, _, error) => Consensus.isLocalStateFault(error) shouldBe true
+      case other                               => fail(s"expected BranchExecutionFailure, got $other")
+    }
+
+    val partly: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+    setFailingBlockWith(partly(1), localStateFault)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(partly)).unsafeToFuture()) {
+      case ExtendedCurrentBestBranchPartially(_, BranchExecutionFailure(_, _, error)) =>
+        Consensus.isLocalStateFault(error) shouldBe true
+      case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
+    }
+
+  it should "write a trie error that is not a missing node as a local state fault when reorganising, and nothing else" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    def heavier(from: Block): List[Block] =
+      BlockHelpers.generateChain(3, from, b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000))))
+
+    val reorg = heavier(initialChain(2))
+    setFailingBlockWith(reorg(1), localStateFault)
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(reorg)).unsafeToFuture()) {
+      case BranchExecutionFailure(_, _, error) =>
+        error should startWith(Consensus.ReorganiseFailurePrefix)
+        Consensus.isLocalStateFault(error) shouldBe true
+      case other => fail(s"expected BranchExecutionFailure, got $other")
+    }
+
+    withClue("a block that fails validation is still the block's fault: ") {
+      val invalid = heavier(initialChain(1))
+      setFailingBlockWith(invalid(1), ValidationAfterExecError("Block has invalid state root"))
+      whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(invalid)).unsafeToFuture()) {
+        case BranchExecutionFailure(_, _, error) =>
+          error should startWith(Consensus.ReorganiseFailurePrefix)
+          Consensus.isLocalStateFault(error) shouldBe false
+        case other => fail(s"expected BranchExecutionFailure, got $other")
+      }
+    }
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
@@ -351,8 +404,10 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
           blocks
             .find(b => failingBlockHash.contains(b.hash))
             .map(b =>
-              if missingNodeFailure then MPTError(new MissingNodeException(b.hash.value))
-              else ValidationAfterExecError("test error")
+              failureOverride.getOrElse(
+                if missingNodeFailure then MPTError(new MissingNodeException(b.hash.value))
+                else ValidationAfterExecError("test error")
+              )
             )
         )
       }
@@ -386,6 +441,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     private var failingBlockHash: Option[ByteString] = None
     private var missingNodeFailure: Boolean = false
+    private var failureOverride: Option[BlockExecutionError] = None
 
     implicit val runtime: IORuntime = IORuntime.global
 
@@ -393,6 +449,9 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     def setMissingNodeAt(block: Block): Unit =
       failingBlockHash = Some(block.hash.value)
       missingNodeFailure = true
+    def setFailingBlockWith(block: Block, error: BlockExecutionError): Unit =
+      failingBlockHash = Some(block.hash.value)
+      failureOverride = Some(error)
 
     def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
       new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)

@@ -11,9 +11,20 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
+/** Walks a state trie for what healing must fetch.
+  *
+  * A node the store does not hold is a hole, queued for healing. A node it holds that is not that node (a
+  * `CorruptNodeException`, spec 022 T062) is not: under basic pruning, the ETC default, healing's write
+  * (`storeRawNodes`, then `ReferenceCountNodeStorage.update`) keeps the stored entry and only counts a reference, so
+  * the "healed" node would keep its bad bytes and the next walk queue it again, a quiet spin. So every walk here lets a
+  * corrupt node through its hole arms, and its entry point returns `Left` for it.
+  */
 class StateValidator(mptStorage: MptStorage):
 
   private val log = LoggerFactory.getLogger(classOf[StateValidator])
+
+  private def corruptFailure(e: MerklePatriciaTrie.CorruptNodeException): String =
+    s"Corrupt trie node, not a hole: ${e.getMessage}"
 
   /** Validate the account trie by traversing it and detecting missing nodes.
     *
@@ -33,6 +44,7 @@ class StateValidator(mptStorage: MptStorage):
         if missingNodes.isEmpty then Right(Seq.empty)
         else Right(missingNodes.toSeq)
       catch
+        case e: MerklePatriciaTrie.CorruptNodeException => Left(corruptFailure(e))
         case _: MerklePatriciaTrie.MissingNodeException =>
           Left(s"Missing root node: ${stateRoot.take(8).toHex}")
         case e: Exception =>
@@ -53,6 +65,7 @@ class StateValidator(mptStorage: MptStorage):
           collectAccounts(rootNode, mptStorage, accounts)
           Right(())
         catch
+          case e: MerklePatriciaTrie.CorruptNodeException => Left(corruptFailure(e))
           case e: Exception =>
             log.warn(s"Failed to traverse account trie for storage validation: ${e.getMessage}", e)
             Left("Cannot validate storage tries: failed to traverse account trie")
@@ -66,6 +79,7 @@ class StateValidator(mptStorage: MptStorage):
                 val storageRootNode = mptStorage.get(account.storageRoot.toArray)
                 traverseForMissingNodes(storageRootNode, mptStorage, missingStorageNodes)
               catch
+                case e: MerklePatriciaTrie.CorruptNodeException => throw e
                 case e: MerklePatriciaTrie.MissingNodeException =>
                   missingStorageNodes += e.hash
                 case e: Exception =>
@@ -83,6 +97,7 @@ class StateValidator(mptStorage: MptStorage):
           if missingStorageNodes.isEmpty then Right(Seq.empty)
           else Right(missingStorageNodes.toSeq)
     catch
+      case e: MerklePatriciaTrie.CorruptNodeException => Left(corruptFailure(e))
       case e: Exception =>
         Left(s"Storage validation error: ${e.getMessage}")
 
@@ -123,13 +138,14 @@ class StateValidator(mptStorage: MptStorage):
             val resolvedNode = storage.get(hash.hash)
             traverseForMissingNodes(resolvedNode, storage, missingNodes, visited)
           catch
+            case e: MerklePatriciaTrie.CorruptNodeException => throw e
             case _: MerklePatriciaTrie.MissingNodeException =>
               missingNodes += ByteString(hash.hash)
             case e: Exception =>
-              // Intentional: an unreadable node (corrupt RLP, I/O error) is conservatively
-              // treated as missing so healing re-fetches and overwrites it. Logged so a
-              // persistent non-missing fault (e.g. StorageException) is visible rather than
-              // silently indistinguishable from an ordinary missing node.
+              // A read that fails for another reason (the store, not the bytes: a node that does not decode is a
+              // CorruptNodeException, above) is queued as missing, so a later pass reads it again. Not because
+              // healing would overwrite it: under basic pruning its write keeps an entry that is already there.
+              // Logged so a persistent fault is visible rather than indistinguishable from an ordinary missing node.
               log.warn(
                 s"Unexpected error resolving node ${ByteString(hash.hash).take(8).toHex}; treating as missing: ${e.getMessage}",
                 e
@@ -191,7 +207,9 @@ class StateValidator(mptStorage: MptStorage):
             // Either case means the account subtree below this hash is skipped, so its
             // accounts' storage tries are not validated. The account-trie completeness is
             // checked separately by validateAccountTrie/findMissingNodes; here we only need
-            // observability so a non-missing fault (corrupt DB) is not silently masked.
+            // observability so a non-missing fault (corrupt DB) is not silently masked. A corrupt node fails the
+            // collection instead: the storage tries under it would go unvalidated.
+            case e: MerklePatriciaTrie.CorruptNodeException => throw e
             case _: MerklePatriciaTrie.MissingNodeException =>
               log.debug(s"Missing account-trie node ${ByteString(hash.hash).take(8).toHex} during account collection")
             case e: Exception =>
@@ -223,6 +241,7 @@ class StateValidator(mptStorage: MptStorage):
       walkAccountTrieDFS(rootNode, result)
       Right(result.toSeq)
     catch
+      case e: MerklePatriciaTrie.CorruptNodeException => Left(corruptFailure(e))
       case _: MerklePatriciaTrie.MissingNodeException =>
         val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
         result += ((Seq(compactPath), stateRoot))
@@ -269,11 +288,14 @@ class StateValidator(mptStorage: MptStorage):
                 // Each storage trie gets its own DFS + visited set (independent walk)
                 walkStorageTrieDFS(storageRoot, ByteString(accountHashBytes), result)
               catch
+                case e: MerklePatriciaTrie.CorruptNodeException => throw e
                 case _: MerklePatriciaTrie.MissingNodeException =>
                   val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                   result += ((Seq(ByteString(accountHashBytes), compactPath), account.storageRoot.value))
           catch
-            case e: Exception =>
+            // Not swallowed with the decode failures below: it ends the walk.
+            case e: MerklePatriciaTrie.CorruptNodeException => throw e
+            case e: Exception                               =>
               // A leaf that fails to decode as an Account means its storage trie is omitted
               // from the healing walk. Log so corrupt account data is visible rather than
               // silently producing a false "no missing nodes" completion signal.
@@ -299,6 +321,7 @@ class StateValidator(mptStorage: MptStorage):
           if !visited.contains(hashKey) then
             try mptStorage.get(hash.hash) // proven subtree — discoverMissingChildren handles children
             catch
+              case e: MerklePatriciaTrie.CorruptNodeException => throw e
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(compactPath), ByteString(hash.hash)))
@@ -339,6 +362,7 @@ class StateValidator(mptStorage: MptStorage):
               val resolvedNode = mptStorage.get(hash.hash)
               stack.prepend((resolvedNode, nibblePath))
             catch
+              case e: MerklePatriciaTrie.CorruptNodeException => throw e
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))

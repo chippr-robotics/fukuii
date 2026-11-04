@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.metrics.Metrics
+import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -338,4 +340,44 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
         )
         .unsafeRunSync()
       fcu.toOption.map(_.payloadStatus.status) should not be Some(Invalid)
+  }
+
+  // spec 022 T062, beacon: the sender's account leaf in the parent state holds 0x80, which decodes to an empty value.
+  // It read as "no account" before, so newPayload executed this valid block against a sender with no balance, found it
+  // invalid, removed it and recorded the verdict. A stored entry that is not its node is a missing node now: the block
+  // waits for its state. Nothing is stubbed: the engine's own producer builds the block, and execution reads the archive
+  // store the corrupt bytes are planted in.
+  "engine_newPayload over a stored account node that is not that node" should {
+
+    "answer ACCEPTED/SYNCING, never INVALID, keep the block, and answer VALID once the node is repaired" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val block1 = buildBlock1()
+      val nodes = storagesInstance.storages.nodeStorage
+      val senderLeaf: ByteString =
+        MerklePatriciaTrie[Address, Account](genesisHeader.stateRoot.value.toArray, blockchain.getBackingMptStorage(0))(
+          Address.hashedAddressEncoder,
+          Account.accountSerializer
+        ).getProof(sender).flatMap(_.lastOption) match
+          case Some(leaf: LeafNode) => ByteString(leaf.hash)
+          case other                => fail(s"no account leaf for the sender: $other")
+      val good: Array[Byte] = nodes.get(senderLeaf).getOrElse(fail("the sender's leaf is not stored by its hash"))
+      nodes.put(senderLeaf, Array(0x80.toByte))
+
+      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+
+      withClue(s"status=${status.status} validationError=${status.validationError}: ") {
+        (status.status == Accepted || status.status == Syncing) shouldBe true
+      }
+      status.latestValidHash shouldBe None
+      engineApi.invalidBlocksSnapshot shouldBe empty
+      withClue("the block is kept, by hash: ") {
+        blockchainReader.getBlockHeaderByHash(block1.hash) shouldBe defined
+      }
+
+      nodes.put(senderLeaf, good)
+      val repaired = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
+      engineApi.invalidBlocksSnapshot shouldBe empty
   }

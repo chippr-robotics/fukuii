@@ -8,7 +8,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.ReferenceCountedStateStorage
+import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -196,6 +200,84 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers:
         foundMissingNodes should contain(missingStorageRoot)
       case Left(foundError) =>
         fail(s"Expected to detect missing storage root, but got error: $foundError")
+  }
+
+  // spec 022 T062: a stored entry that is not its node reads as a CorruptNodeException, a missing node. Queued for healing
+  // as one, it would be fetched and written through storeRawNodes, which under basic pruning (the ETC default) keeps the
+  // entry already there (SerializingMptStorageCorruptSpec pins it): the next walk queues it again, a quiet spin. So
+  // every walk fails on it, where an absent node stays a hole.
+  private val corruptClasses: Seq[(String, Array[Byte])] =
+    Seq("invalid-node" -> Array(0x01.toByte), "out-of-bounds" -> Array(0xc1.toByte), "null-node" -> Array(0x80.toByte))
+
+  /** Basic pruning over `accounts` accounts that share one 64-slot storage trie. One account makes the state root that
+    * account's leaf, which is how the heal walk reaches a storage trie: it reads the nodes it holds, and only checks
+    * that their hash children are present.
+    */
+  private class BasicPrunedState(accounts: Int):
+    val nodes: NodeStorage = new NodeStorage(EphemDataSource())
+    val mpt: MptStorage = new ReferenceCountedStateStorage(nodes, 64, 0L).getBackingStorage(0)
+    val storageRoot: ByteString = ByteString(
+      (0 until 64)
+        .foldLeft(MerklePatriciaTrie[ByteString, ByteString](mpt)) { (trie, i) =>
+          trie.put(ByteString(kec256(BigInt(i).toByteArray)), ByteString(Array.fill[Byte](32)(i.toByte)))
+        }
+        .getRootHash
+    )
+    val stateRoot: ByteString = ByteString(
+      (0 until accounts)
+        .foldLeft(MerklePatriciaTrie[ByteString, Account](mpt)) { (trie, i) =>
+          trie.put(
+            ByteString(kec256(BigInt(1000 + i).toByteArray)),
+            Account(nonce = 1, balance = 100, storageRoot = TrieRoot(storageRoot))
+          )
+        }
+        .getRootHash
+    )
+    def hashChildOf(parent: ByteString): ByteString = mpt.get(parent.toArray) match
+      case branch: BranchNode => branch.children.collectFirst { case HashNode(h) => ByteString(h) }.get
+      case other              => fail(s"not a branch: $other")
+    def corrupt(hash: ByteString, junk: Array[Byte]): Unit =
+      nodes.put(hash, StoredNodeTestAccess.wrapped(junk, 1)): Unit
+    def drop(hash: ByteString): Unit = nodes.remove(hash): Unit
+    def validator: StateValidator = new StateValidator(mpt)
+
+  private def failed(result: Either[String, ?]): Unit = withClue(s"got $result: ")(result.isLeft shouldBe true)
+
+  it should "fail every walk on a corrupt node under basic pruning, never queue it for healing (spec 022 T062)" taggedAs UnitTest in {
+    corruptClasses.foreach { case (name, junk) =>
+      Seq("account root", "account node").foreach { position =>
+        withClue(s"$name at the $position: ") {
+          val s = new BasicPrunedState(32)
+          s.corrupt(if position == "account root" then s.stateRoot else s.hashChildOf(s.stateRoot), junk)
+          failed(s.validator.findMissingNodesWithPaths(s.stateRoot))
+          failed(s.validator.validateAccountTrie(s.stateRoot))
+          failed(s.validator.validateAllStorageTries(s.stateRoot))
+        }
+      }
+      Seq("storage root", "storage node").foreach { position =>
+        withClue(s"$name at the $position: ") {
+          val s = new BasicPrunedState(1)
+          s.corrupt(if position == "storage root" then s.storageRoot else s.hashChildOf(s.storageRoot), junk)
+          failed(s.validator.findMissingNodesWithPaths(s.stateRoot))
+          failed(s.validator.validateAllStorageTries(s.stateRoot))
+        }
+      }
+    }
+  }
+
+  it should "still queue an absent node at the same positions as a hole" taggedAs UnitTest in {
+    val accountsState = new BasicPrunedState(32)
+    val accountNode = accountsState.hashChildOf(accountsState.stateRoot)
+    accountsState.drop(accountNode)
+    accountsState.validator.findMissingNodesWithPaths(accountsState.stateRoot).map(_.map(_._2)) shouldBe
+      Right(Seq(accountNode))
+
+    val storageState = new BasicPrunedState(1)
+    val storageNode = storageState.hashChildOf(storageState.storageRoot)
+    storageState.drop(storageNode)
+    storageState.validator.findMissingNodesWithPaths(storageState.stateRoot).map(_.map(_._2)) shouldBe
+      Right(Seq(storageNode))
+    storageState.validator.validateAllStorageTries(storageState.stateRoot) shouldBe Right(Seq(storageNode))
   }
 
   /** Simple in-memory test storage for MPT nodes */

@@ -153,7 +153,24 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
   ): Option[(StoredNode, StoredNodeSnapshot)] =
     storedNodes
       .get(nodeKey)
-      .orElse(nodeStorage.get(nodeKey).map(storedNodeFromBytes).map(sn => sn -> StoredNodeSnapshot(nodeKey, Some(sn))))
+      .orElse(
+        nodeStorage.get(nodeKey).map(unwrapStored(nodeKey, _)).map(sn => sn -> StoredNodeSnapshot(nodeKey, Some(sn)))
+      )
+
+  /** The wrapper stored under `nodeKey`, read to count a reference to it. One that does not unwrap is a corrupt node,
+    * as a read of it is (spec 022 T062): thrown raw, a decode error is no `MPTException`, so block execution did not
+    * catch it and the import blamed the peer that sent the block. It throws before `update` writes anything. The read
+    * itself is outside the check: a failing database goes through as it is.
+    */
+  private def unwrapStored(nodeKey: NodeHash, stored: Array[Byte]): StoredNode =
+    try storedNodeFromBytes(stored)
+    catch
+      case NonFatal(e) =>
+        throw SerializingMptStorage.corrupt(
+          nodeKey,
+          s"stored wrapper does not unwrap: ${e.getClass.getSimpleName}: ${e.getMessage}",
+          Some(e)
+        )
 
 object ReferenceCountNodeStorage extends PruneSupport with Logger:
 

@@ -447,7 +447,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     storageScheme match
       case StorageScheme.Hash =>
         try Some(mptStorage.get(hash.toArray))
-        catch case _: MerklePatriciaTrie.MissingNodeException => None
+        catch
+          // A node that does not decode is a read that fails, as it was before it read as a CorruptNodeException: taken
+          // for absent, it would be fetched and stored under basic pruning's upsert, which keeps the bad bytes.
+          case e: MerklePatriciaTrie.CorruptNodeException => throw e
+          case _: MerklePatriciaTrie.MissingNodeException => None
       case StorageScheme.Path => readPathVerifiedNode(hash, pathset)
 
   /** spec 022 T034, Path, at heal start: delete every account-trie position on each excluded account's key, so healing

@@ -36,6 +36,29 @@ object MerklePatriciaTrie:
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
 
+  /** The store holds an entry under `hash`, and it is not that node: it does not decode, or it decodes to a shape a
+    * stored node never has (a bare empty value or a 32-byte hash reference) and fails its hash.
+    *
+    * It extends [[MissingNodeException]] on purpose, as [[MissingCodeException]] does: the node this hash names is not
+    * in the store, which says nothing about the block being executed, so every consumer that handles a missing node
+    * (the importer's delete-then-fetch, the Engine API's SYNCING answer, the RPC services' "state unavailable") handles
+    * this the same way. Thrown as a plain decode error it was a block import failure, blamed on the honest peer that
+    * sent the block (spec 022 T062). `detail` says what was wrong with the bytes, and `cause` is what reading them
+    * threw, kept so that a fault taken for corruption still shows where it came from.
+    */
+  class CorruptNodeException(
+      hash: ByteString,
+      val detail: String,
+      override val location: Option[ByteString] = None,
+      cause: Option[Throwable] = None
+  ) extends MissingNodeException(
+        hash,
+        s"Stored trie node ${Hex.toHexString(hash.toArray)} is corrupt ($detail), treated as missing"
+      ):
+    cause.foreach(initCause)
+    override def withLocation(loc: ByteString): CorruptNodeException =
+      new CorruptNodeException(hash, detail, Some(loc), Option(getCause))
+
   class MissingStorageNodeException(
       hash: ByteString,
       val accountAddress: ByteString,
