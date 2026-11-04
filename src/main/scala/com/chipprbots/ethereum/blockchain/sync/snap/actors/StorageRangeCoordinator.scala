@@ -187,9 +187,9 @@ private[actors] class StorageRangeCoordinatorImpl(
 
   // Idempotency guard: ForceCompleteStorage may arrive 10× simultaneously if SNAPSyncController
   // queues multiple stagnation-check responses before the first ForceCompleted reply comes back.
-  // The handler does not clear `tasks`/`activeTasks`, so all duplicates would see identical state
-  // and log the same WARN. Execute at most once per phase: a force-complete during the account phase, which the controller
-  // ignores there, is re-armed when NoMoreStorageTasks arrives (spec 022 T061a follow-up, forge and beacon).
+  // The handler does not clear `tasks`, so all duplicates would see the same queue and log the same WARN. Execute at
+  // most once per phase: a force-complete before NoMoreStorageTasks is re-armed when that arrives (spec 022 T061a
+  // follow-up, forge and beacon).
   private var forceCompleteExecuted: Boolean = false
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
@@ -897,14 +897,17 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
 
       case NoMoreStorageTasks =>
-        // A force-complete that ran before this, during the account phase, did not end the phase: the controller ignores
-        // it there (DownloadSupervisor) and this coordinator went on taking tasks. Left latched, a genuine stall from here
-        // on could never force-complete, and the wanted flag would turn a later clean end into one (onTaskFileSwept).
-        // The failure count starts again too, or the first failure re-fires at once (StoragePeerDispatch). What the
-        // earlier one recorded stays in the excluded set: over-recording is safe, healing drops what is complete.
+        // A force-complete that ran before this may not have ended the phase: during the account phase the controller
+        // ignores it (DownloadSupervisor) and this coordinator goes on taking tasks; on the recovery path it was
+        // honoured. Left latched, a genuine stall from here on could never force-complete. The failure count starts
+        // again too, or the first failure re-fires at once (StoragePeerDispatch); the wanted flag is cleared with the
+        // guard it belongs to. What the earlier one recorded stays in the excluded set: over-recording is safe, healing
+        // drops what is complete. A force-complete already queued before this still runs after it, on old evidence: it
+        // abandons work that healing then recovers, no worse than before this change.
         if !noMoreTasksExpected && forceCompleteExecuted then
           log.warn(
-            "[STORAGE-FORCE-COMPLETE] Re-arming: the force-complete during the account phase did not end the phase"
+            "[STORAGE-FORCE-COMPLETE] Re-arming at the end of the account phase: the earlier force-complete may not " +
+              "have ended the phase (the recovery path honours it)"
           )
           forceCompleteExecuted = false
           forceCompleteWanted = false

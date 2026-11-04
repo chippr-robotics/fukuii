@@ -525,7 +525,7 @@ class StorageRangeCoordinatorSpec
 
   // spec 022 T061a follow-up (forge, beacon): a force-complete during the account phase, which the controller ignores
   // there, must not latch: a genuine stall after NoMoreStorageTasks has to be able to force-complete again.
-  private def forceCompleteCoordinator(name: String) =
+  private def forceCompleteCoordinator(name: String, recordExcluded: Boolean = false) =
     val stateRoot = kec256(ByteString(s"$name-root"))
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val coordinator = srcProps(
@@ -537,7 +537,8 @@ class StorageRangeCoordinatorSpec
       maxAccountsPerBatch = 8,
       maxInFlightRequests = 4,
       requestTimeout = 30.seconds,
-      snapSyncController = snapSyncController.ref
+      snapSyncController = snapSyncController.ref,
+      recordExcluded = recordExcluded
     )
     coordinator ! StorageRangeCoordinator.StartStorageRangeSync(stateRoot)
     def task(n: Int) =
@@ -566,7 +567,33 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectNoMessage(300.millis)
   }
 
-  it should "start the failure count again when it re-arms, so the first failure after does not fire" taggedAs UnitTest in {
+  it should "record what each force-complete abandons when it re-arms, with the excluded set on" taggedAs UnitTest in {
+    val (coordinator, snapSyncController, task) = forceCompleteCoordinator("rearm-recorded", recordExcluded = true)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(task(1)))
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage // during the account phase
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(task(2)))
+    coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    excluded(task(1).accountHash) shouldBe defined
+    excluded(task(2).accountHash) shouldBe defined
+  }
+
+  it should "leave the failure count alone at the end of the account phase when no force-complete ran" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("no-rearm-count-root"))
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = testKit.createTestProbe[SNAPSyncController.Command]().ref
+    )
+    kit.run(StorageRangeCoordinator.StartStorageRangeSync(stateRoot))
+    impl.consecutiveTaskFailures = 50
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    impl.consecutiveTaskFailures shouldBe 50
+  }
+
+  it should "start the failure count again when it re-arms" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("rearm-count-root"))
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val (impl, kit) = newImpl(
