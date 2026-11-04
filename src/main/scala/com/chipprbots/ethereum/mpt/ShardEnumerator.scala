@@ -47,10 +47,14 @@ object ShardEnumerator:
     case other       => other
 
   /** A node below the root. Absent, it stays the unresolved HashNode it is; a node that fails to decode still throws.
+    * The store reports such a node as a `CorruptNodeException`, a missing node for execution's sake, so it is let
+    * through first: here it is a failure, not a hole (spec 022 T062).
     */
   private def resolveBelowRoot(node: MptNode, storage: MptStorage): MptNode =
     try resolve(node, storage)
-    catch case _: MerklePatriciaTrie.MissingNodeException => node
+    catch
+      case e: MerklePatriciaTrie.CorruptNodeException => throw e
+      case _: MerklePatriciaTrie.MissingNodeException => node
 
   private def expand(prefix: ByteString, node: MptNode, storage: MptStorage, depth: Int): Vector[Shard] =
     node match

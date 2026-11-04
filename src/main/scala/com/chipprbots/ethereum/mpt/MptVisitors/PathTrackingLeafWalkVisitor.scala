@@ -43,6 +43,9 @@ class PathTrackingLeafWalkVisitor(
       case Some(report) =>
         try ResolveResult(storage.get(hashNode.hash))
         catch
+          // A node that does not decode reads as a CorruptNodeException, a missing node for execution's sake. Here it
+          // still ends the walk: only an absent node is a hole (spec 022 T062).
+          case e: MerklePatriciaTrie.CorruptNodeException => throw e
           case _: MerklePatriciaTrie.MissingNodeException =>
             report(pathPrefix)
             Result(())
