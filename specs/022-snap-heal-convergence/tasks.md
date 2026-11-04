@@ -454,7 +454,19 @@ Within each slice, **tests come before implementation**, and the tests must fail
       - a phase-ending force-complete;
       - partially flushed storage tries under an abandoned account on Path.
     - **Follow-up found (pre-existing since 0.7.0, not a spec 022 regression).** `StoragePeerDispatch` force-completes storage on consecutive failures in any phase. During AccountRangeSync the controller ignores that, but `forceCompleteExecuted` is never reset. So a later genuine stall in ByteCodeAndStorageSync can never force-complete: a hang, not corruption.
-- [ ] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
+- [x] T062 [US2] **Gate 1, Mordor fresh sync on public peers.**
+  - **Done 2026-11-04.** Staging jar at 6b5d7c526, Hash scheme, fresh datadir, `coregeth-mordor` stopped, started 2026-11-02 23:55.
+    - **Hand-off** 239 s after start, pivot 17318105. Root at hand-off = the pivot `stateRoot` 2d6464a8…, as on the public RPC. SC-002: storage done 23:59:01.002, hand-off 23:59:01.933 (under 1 s). JFR kept for the SNAP phase and as a ring.
+    - **24 h following the head** (24 hourly checks): lag 0 (one check at 1); import-sourced on-demand fetches 0; audit fetches 0; stuck 0; root mismatches 0; ERROR lines 0. Background audit pass 1 ended clean at 00:42 on 11-03: 5,537,369 nodes, 0 holes.
+    - **Load.** Mordor carries little traffic, so a generator sent 71,682 transactions over 11.7 h (3,294 blocks, 0 RPC errors or anomalies). Caveat: legacy and type-1 only (ETC has no type-2), from one funded account; the other ~12 h ran on Mordor's own traffic.
+    - **Peers** drifted from 13 to about 7: peers announcing on a not-yet-fetched branch are blacklisted for UNKNOWN_PARENT. Logged for herald; not a gate failure.
+    - **Corrupt stored node (forge's item).** Before the fix, the account leaf of Mordor's top miner was corrupted three ways.
+      - invalid-node blacklisted 1,986 honest peers and evicted 348 blocks.
+      - out-of-bounds "failed unexpectedly" 2,578 times.
+      - null-node blacklisted 2,200 peers, evicted 401 blocks and served a balance of 0x0 for a funded account.
+      - Fixed by #1709 (fix A). Re-run live on the fix A jar, all four cases passed: the three classes on a stale datadir, plus null-node at the head. Each was caught in 14-53 s and deleted. It was then repaired by one on-demand fetch, or by re-SNAP after 3 exhausts (about 10 min, re-SNAP 6.5 min). The balance and stateRoot then matched the public RPC, with 0 evicts, 0 FORK-DETECT and 0 hash-mismatch blacklists.
+    - The storage force-complete latch that T061a PC2 found is fixed by #1708 (fix B).
+    - **Known limit, logged.** The heal coordinator's frontier walk does not classify a corrupt node and retries without limit, so a corrupt node that import never touched can still stall a re-SNAP's heal phase. This is pre-existing (CHASE-QUEUE).
   - Also, from forge's read of the give-up: inject a stored node that does not read or decode (`HoleInjectionTool ... corrupt`) on a Hash datadir, and record what healing and then import do when they touch it. Peers cannot cause this state and on-demand repair does not key on it, so the hand-off defers it (R-5g). Forge would want this before an ETC rotation.
   - Stop `coregeth-mordor.service` first, so it can't be discovered.
   - Use a fresh datadir; never `/home/dontpanic/mordor-data`. It must be created by this jar: one an older jar made has no `snap.heal.datadirCreated`, so it is not empty, and it pays a walk.
