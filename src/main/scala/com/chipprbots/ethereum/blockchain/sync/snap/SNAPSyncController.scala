@@ -296,7 +296,7 @@ private class SNAPSyncControllerImpl(
     )
 
   // The hubs implement `SnapSharedState` (spec 016 T041a).
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   var currentPhase: SyncPhase = Idle
 

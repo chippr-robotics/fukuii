@@ -87,7 +87,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty.value), true)
@@ -144,7 +144,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty.value), true)
@@ -179,7 +179,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, Nil, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty.value), true)
@@ -213,7 +213,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, Nil, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
 
@@ -349,7 +349,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
 
@@ -454,7 +454,7 @@ class EthMiningServiceSpec
         _: Address,
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
+      )(using _: BlockchainConfig))
       .expects(parentBlock, Nil, testEtherbaseAddress, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
 

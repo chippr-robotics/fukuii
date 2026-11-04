@@ -33,7 +33,7 @@ class SimulationOverridesAmsterdamSpec extends AnyFlatSpec with Matchers with Si
       preState,
       EthAmsterdam.header,
       accessList = Some(builder)
-    )(EthAmsterdam.config) match
+    )(using EthAmsterdam.config) match
       case Right(result) =>
         val outcome = BlockOutcome(
           result.worldState.stateRootHash,

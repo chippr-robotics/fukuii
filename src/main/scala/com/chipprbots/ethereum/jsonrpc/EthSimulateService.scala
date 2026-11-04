@@ -1439,7 +1439,7 @@ class EthSimulateService(
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
       val trie = MerklePatriciaTrie[Int, SignedTransaction](source = stateStorage)(
-        MptListValidator.intByteArraySerializable,
+        using MptListValidator.intByteArraySerializable,
         SignedTransaction.byteArraySerializable
       )
       ByteString(txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)
@@ -1449,7 +1449,7 @@ class EthSimulateService(
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
       val trie = MerklePatriciaTrie[Int, Receipt](source = stateStorage)(
-        MptListValidator.intByteArraySerializable,
+        using MptListValidator.intByteArraySerializable,
         Receipt.byteArraySerializable
       )
       ByteString(receipts.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)

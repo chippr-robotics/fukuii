@@ -27,7 +27,7 @@ package object domain:
 
     def storageMpt(rootHash: ByteString, nodeStorage: MptStorage): MerklePatriciaTrie[BigInt, BigInt] =
       MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(
-        HashByteArraySerializable(byteArrayBigIntSerializer),
+        using HashByteArraySerializable(byteArrayBigIntSerializer),
         rlpBigIntSerializer
       )
 
@@ -41,6 +41,6 @@ package object domain:
 
     def storageMpt(rootHash: ByteString, nodeStorage: MptStorage): MerklePatriciaTrie[BigInt, BigInt] =
       MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(
-        HashByteArraySerializable(bigIntSerializer),
+        using HashByteArraySerializable(bigIntSerializer),
         bigIntSerializer
       )

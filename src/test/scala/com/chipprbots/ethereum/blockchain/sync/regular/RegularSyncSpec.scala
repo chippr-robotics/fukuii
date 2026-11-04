@@ -483,11 +483,11 @@ class RegularSyncSpec
           (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
-            .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+            .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
           (consensusAdapter
-            .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+            .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((nel, _, _) => fakeEvaluateBatch(nel))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
@@ -552,11 +552,11 @@ class RegularSyncSpec
         (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
-          .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+          .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((block, _, _) => fakeEvaluateBlock(block))
         (consensusAdapter
-          .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+          .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((nel, _, _) => fakeEvaluateBatch(nel))
         override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
@@ -1245,7 +1245,7 @@ class RegularSyncSpec
         // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
         // Use assertForDuration to continuously verify the mock is never called
         assertForDuration(
-          (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(),
+          (consensusAdapter.evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(),
           remainingOrDefault
         )
       )

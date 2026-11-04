@@ -427,10 +427,10 @@ class BlockFetcherSpec
   }
 
   trait TestSetup extends TestSyncConfig:
-    val peersClient: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val peerEventBus: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val importer: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val regularSync: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val peersClient: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val peerEventBus: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val importer: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val regularSync: TestProbe = TestProbe()(using testKit.system.classicSystem)
 
     lazy val validators = new MockValidatorsAlwaysSucceed
 
@@ -443,7 +443,7 @@ class BlockFetcherSpec
       peerResponseTimeout = 5.minutes
     )
 
-    val fakePeerActor: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val fakePeerActor: TestProbe = TestProbe()(using testKit.system.classicSystem)
     val fakePeer: Peer = Peer(PeerId("fakePeer"), new InetSocketAddress("127.0.0.1", 9000), fakePeerActor.ref, false)
 
     lazy val blockFetcher: ActorRef[BlockFetcher.FetchCommand] = testKit.spawn(

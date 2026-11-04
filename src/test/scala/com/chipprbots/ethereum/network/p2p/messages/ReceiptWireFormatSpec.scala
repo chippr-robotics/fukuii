@@ -96,7 +96,7 @@ class ReceiptWireFormatSpec extends AnyFlatSpec with Matchers:
   /** The receipts-trie root, built as `MptListValidator.isValid` builds it for block validation. */
   private def receiptsRootOf(rs: Seq[Receipt]): String =
     val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(
-      MptListValidator.intByteArraySerializable,
+      using MptListValidator.intByteArraySerializable,
       Receipt.byteArraySerializable
     )
     Hex.toHexString(rs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)

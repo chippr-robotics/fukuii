@@ -226,7 +226,7 @@ object PeerActor:
     private val log = context.log
 
     private def schedule(delay: FiniteDuration, msg: Command): Cancellable =
-      context.system.scheduler.scheduleOnce(delay, () => context.self ! msg)(context.executionContext)
+      context.system.scheduler.scheduleOnce(delay, () => context.self ! msg)(using context.executionContext)
 
     // Spawn (or, in tests, obtain) a fresh RLPx child for each (re)connection attempt — mirrors the Classic
     // createRlpxConnection lifecycle (the RLPx child stops itself on failure, freeing the "rlpx-connection" name

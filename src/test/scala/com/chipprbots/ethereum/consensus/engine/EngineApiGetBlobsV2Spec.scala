@@ -26,7 +26,7 @@ class EngineApiGetBlobsV2Spec extends AnyWordSpec with Matchers:
   implicit val ioRuntime: IORuntime = IORuntime.global
 
   private val stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def getPayload(payloadId: ByteString): IO[Either[String, com.chipprbots.ethereum.domain.Block]] =
         IO.pure(Left("stub"))
       override def getPayloadReceipts(payloadId: ByteString) = Nil

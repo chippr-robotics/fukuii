@@ -102,7 +102,7 @@ object ServerActor:
     Behaviors.setup { ctx =>
       val classicSystem = ctx.system.toClassic
       // Tests supply their own ActorRef (TestProbe) to avoid real port binding.
-      val tcpManager: ActorRef = tcpManagerRef.getOrElse(IO(Tcp)(classicSystem))
+      val tcpManager: ActorRef = tcpManagerRef.getOrElse(IO(Tcp)(using classicSystem))
 
       // Classic bridge: the `Bind` handler that the TCP extension notifies of Bound/CommandFailed/Connected.
       // Captures sender() for Connected (the connection actor) before lifting into the typed Command ADT.
@@ -302,7 +302,7 @@ object ServerActor:
         case RefreshExternalIP if wasAutoDetected && detectionMode != DetectionMode.None =>
           // Same off-thread pattern as the initial detection, and the same injected `detect` function —
           // production re-runs the real cascade; tests supply a stub.
-          ctx.pipeToSelf(Future(detect(detectionMode))(ctx.executionContext)) {
+          ctx.pipeToSelf(Future(detect(detectionMode))(using ctx.executionContext)) {
             case Success(ip) => RefreshedIP(ip)
             case Failure(_)  => RefreshedIP(None)
           }

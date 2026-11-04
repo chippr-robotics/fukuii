@@ -94,7 +94,7 @@ class PendingTransactionsManagerPoolRulesSpec
       state
         .foldLeft(
           MerklePatriciaTrie[Array[Byte], Account](stateStorage.getBackingStorage(0))(
-            defaultByteArraySerializable,
+            using defaultByteArraySerializable,
             Account.accountSerializer
           )
         ) { case (trie, (address, account)) => trie.put(crypto.kec256(address.toArray), account) }

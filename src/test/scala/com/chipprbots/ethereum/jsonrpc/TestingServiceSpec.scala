@@ -438,7 +438,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     lazy val service = new TestingService(
       engineApi,
@@ -448,7 +448,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = GasLimitTarget
-    )(blockchainConfig)
+    )(using blockchainConfig)
 
     val senderKeys: org.bouncycastle.crypto.AsymmetricCipherKeyPair = crypto.generateKeyPair(
       new java.security.SecureRandom()

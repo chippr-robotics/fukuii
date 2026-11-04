@@ -125,4 +125,4 @@ class PoWMiningCoordinator private (
     mine(miner, bestBlock)
 
   private def mine(miner: Miner, bestBlock: Block): Unit =
-    miner.processMining(bestBlock).foreach(_ => context.self ! MineNext)(context.executionContext)
+    miner.processMining(bestBlock).foreach(_ => context.self ! MineNext)(using context.executionContext)

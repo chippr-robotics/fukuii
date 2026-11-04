@@ -206,7 +206,7 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(CheckpointImportInterruptSpec.this.system.classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using CheckpointImportInterruptSpec.this.system.classicSystem.scheduler),
       mptStorage = stateTries.getBackingStorage(header.blockHeader.number.value),
       batchSize = 16,
       snapSyncController = controller.ref,

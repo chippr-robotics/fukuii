@@ -146,7 +146,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   private def arcWindow(): Window =
     val controller = TestInbox[SNAPSyncController.Command]()
     val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     var captured: StubAccountPeerDispatchState & AccountPeerDispatch = null
     var action: () => Unit = () => ()
     val kit = BehaviorTestKit(Behaviors.setup[AccountRangeCoordinator.Command] { ctx =>
@@ -172,7 +172,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   private def srcWindow(): Window =
     val controller = TestInbox[SNAPSyncController.Command]()
     val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     var captured: StubStoragePeerDispatchState & StoragePeerDispatch = null
     var action: () => Unit = () => ()
     val kit = BehaviorTestKit(Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -360,7 +360,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
   /** A healing coordinator with one peer; each queued node becomes a one-node request. */
   final private class Healing(peerName: String):
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     val network: TestProbe[NetworkPeerManagerActor.Command] =
       testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     private val controller = testKit.createTestProbe[SNAPSyncController.Command]()

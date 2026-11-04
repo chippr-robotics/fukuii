@@ -64,7 +64,7 @@ class DecoupledHealServeRootSpec extends ScalaTestWithActorTestKit() with AnyFla
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = stateRoot,
       networkPeerManager = networkPeerManager.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = snapSyncController.ref,

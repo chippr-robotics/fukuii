@@ -155,9 +155,9 @@ private[actors] trait StorageResponseProcessing:
         val skip = jobTasks.iterator.map(_.accountHash).filter(abandonedAccounts.contains).toSet
         val prebuildScheme = Option.when(!deferredMerkleization)(storageScheme)
         val selfRef = self
-        Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(processingEc)
+        Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(using processingEc)
           .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(
-            ExecutionContext.parasitic
+            using ExecutionContext.parasitic
           )
 
   /** Apply ready responses from the head of the queue, in arrival order. */

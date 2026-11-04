@@ -432,7 +432,7 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     )
     for ts <- Seq(0L, AmsterdamTs, Long.MaxValue / 2) do
       withClue(s"ETC at timestamp $ts: ") {
-        BlockExecution.systemCallTargets(Timestamp(ts))(etc) shouldBe Seq(
+        BlockExecution.systemCallTargets(Timestamp(ts))(using etc) shouldBe Seq(
           (WithdrawalQueueAddress, WithdrawalRequestType),
           (ConsolidationQueueAddress, ConsolidationRequestType)
         )

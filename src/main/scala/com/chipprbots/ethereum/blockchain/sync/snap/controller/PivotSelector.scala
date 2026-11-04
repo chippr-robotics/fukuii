@@ -101,7 +101,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
             snapPeersForPivot
-              .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+              .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
               .headOption
               .map(_.peerInfo.maxBlockNumber)
 
@@ -388,7 +388,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
       .filter(_.peerInfo.remoteStatus.supportsSnap)
       .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
-      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
       .headOption
       .map(_.peerInfo.maxBlockNumber)
 
@@ -599,7 +599,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
     val networkBestBlockOpt =
       snapPeersForPivot
-        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
         .headOption
         .map(_.peerInfo.maxBlockNumber)
 
@@ -608,7 +608,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     // advertising the real network head yet (or those peers are excluded/blacklisted/disconnected).
     val topPeerHeights =
       peersToDownloadFrom.values.toList
-        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
         .take(5)
         .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
         .mkString(", ")

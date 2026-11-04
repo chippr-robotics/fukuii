@@ -54,7 +54,7 @@ class HealingFrontierStorage(val dataSource: DataSource)
     */
   def loadAll(): Seq[(ByteString, Seq[ByteString])] =
     storageContent.compile.toList
-      .unsafeRunSync()(IORuntime.global)
+      .unsafeRunSync()(using IORuntime.global)
       .map {
         case Right(entry) => entry
         case Left(err)    => throw new RuntimeException(s"HealingFrontierStorage iteration error: $err")

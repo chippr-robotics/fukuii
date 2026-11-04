@@ -41,7 +41,7 @@ class RestrictedEthashBlockHeaderValidatorSpec
     ConsensusTest
   ) in new TestSetup:
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
-      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set()))
+      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(using createBlockchainConfig(Set()))
     assert(validationResult == Right(BlockHeaderValid))
 
   it should "fail validation of header with too long extra data field" taggedAs (
@@ -52,12 +52,12 @@ class RestrictedEthashBlockHeaderValidatorSpec
       ByteString.fromArrayUnsafe(new Array[Byte](RestrictedEthashBlockHeaderValidator.ExtraDataMaxSize + 1))
     )
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
-      RestrictedEthashBlockHeaderValidator.validate(tooLongExtraData, validParent)(createBlockchainConfig(Set()))
+      RestrictedEthashBlockHeaderValidator.validate(tooLongExtraData, validParent)(using createBlockchainConfig(Set()))
     assert(validationResult == Left(RestrictedPoWHeaderExtraDataError))
 
   it should "correctly validate header with valid key" taggedAs (UnitTest, ConsensusTest) in new TestSetup:
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
-      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set(validKey)))
+      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(using createBlockchainConfig(Set(validKey)))
     assert(validationResult == Right(BlockHeaderValid))
 
   it should "fail to validate header with invalid key" taggedAs (UnitTest, ConsensusTest) in new TestSetup:
@@ -66,7 +66,7 @@ class RestrictedEthashBlockHeaderValidatorSpec
 
     // correct header is signed by different key that the one generated here
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
-      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set(keyBytes)))
+      RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(using createBlockchainConfig(Set(keyBytes)))
     assert(validationResult == Left(RestrictedPoWHeaderExtraDataError))
 
   it should "fail to validate header re-signed by valid signer" taggedAs (UnitTest, ConsensusTest) in new TestSetup:
@@ -79,7 +79,7 @@ class RestrictedEthashBlockHeaderValidatorSpec
 
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(reSignedHeader, validParent)(
-        createBlockchainConfig(Set(keyBytes, validKey))
+        using createBlockchainConfig(Set(keyBytes, validKey))
       )
     assert(validationResult == Left(HeaderPoWError))
 

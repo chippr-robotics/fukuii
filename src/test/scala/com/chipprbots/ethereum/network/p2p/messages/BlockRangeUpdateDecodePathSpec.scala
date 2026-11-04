@@ -81,9 +81,9 @@ class BlockRangeUpdateDecodePathSpec
       NetworkTest
     ) in {
       val cs = testKit.system.classicSystem
-      val rlpxProbe = TestProbe()(cs)
-      val eventBusProbe = TestProbe()(cs)
-      val knownProbe = TestProbe()(cs)
+      val rlpxProbe = TestProbe()(using cs)
+      val eventBusProbe = TestProbe()(using cs)
+      val knownProbe = TestProbe()(using cs)
       val peer: TestActorRef[Nothing] = TestActorRef(
         PropsAdapter(
           PeerActor.apply(
@@ -96,14 +96,14 @@ class BlockRangeUpdateDecodePathSpec
             MockHandshakerAlwaysSucceeds(dummyStatus, BigInt(0), true)
           )
         )
-      )(cs)
+      )(using cs)
 
       peer ! ConnectTo(testUri)
       rlpxProbe.expectMsg(RLPxConnectionHandler.ConnectTo(testUri))
       rlpxProbe.send(peer, RLPxConnectionHandler.ConnectionEstablished(ByteString.empty))
 
       // MockHandshakerAlwaysSucceeds → immediate HandshakeSuccess; expectMsg syncs on Handshaked state.
-      val statusProbe = TestProbe()(cs)
+      val statusProbe = TestProbe()(using cs)
       peer ! GetStatus(statusProbe.ref.toTyped[StatusResponse])
       statusProbe.expectMsg(StatusResponse(PeerActor.Status.Handshaked))
 
@@ -118,9 +118,9 @@ class BlockRangeUpdateDecodePathSpec
       NetworkTest
     ) in {
       val cs = testKit.system.classicSystem
-      val rlpxProbe = TestProbe()(cs)
-      val eventBusProbe = TestProbe()(cs)
-      val knownProbe = TestProbe()(cs)
+      val rlpxProbe = TestProbe()(using cs)
+      val eventBusProbe = TestProbe()(using cs)
+      val knownProbe = TestProbe()(using cs)
       val peer: TestActorRef[Nothing] = TestActorRef(
         PropsAdapter(
           PeerActor.apply(
@@ -133,13 +133,13 @@ class BlockRangeUpdateDecodePathSpec
             MockHandshakerAlwaysSucceeds(dummyStatus, BigInt(0), true)
           )
         )
-      )(cs)
+      )(using cs)
 
       peer ! ConnectTo(testUri)
       rlpxProbe.expectMsg(RLPxConnectionHandler.ConnectTo(testUri))
       rlpxProbe.send(peer, RLPxConnectionHandler.ConnectionEstablished(ByteString.empty))
 
-      val statusProbe = TestProbe()(cs)
+      val statusProbe = TestProbe()(using cs)
       peer ! GetStatus(statusProbe.ref.toTyped[StatusResponse])
       statusProbe.expectMsg(StatusResponse(PeerActor.Status.Handshaked))
 
@@ -170,10 +170,10 @@ class BlockRangeUpdateDecodePathSpec
   // ─── FetcherSetup ────────────────────────────────────────────────────────────
 
   trait FetcherSetup extends TestSyncConfig:
-    val peersClient: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val peerEventBus: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val supervisor: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val importer: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val peersClient: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val peerEventBus: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val supervisor: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val importer: TestProbe = TestProbe()(using testKit.system.classicSystem)
 
     lazy val validators = new MockValidatorsAlwaysSucceed
 

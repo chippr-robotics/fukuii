@@ -48,7 +48,7 @@ class HealingFrontierResumeSpec extends ScalaTestWithActorTestKit() with AnyFlat
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controller.ref

@@ -237,7 +237,7 @@ object StdBlockValidator extends BlockValidator:
       )
       val trie = com.chipprbots.ethereum.mpt.MerklePatriciaTrie[Int, Withdrawal](
         source = stateStorage
-      )(MptListValidator.intByteArraySerializable, serializable)
+      )(using MptListValidator.intByteArraySerializable, serializable)
       val root = withdrawals.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
       ByteString(root)
 

@@ -804,7 +804,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = mpt,
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -844,7 +844,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -1084,7 +1084,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       new ChildFactories {}.trieNodeHealingCoordinator(
         stateRoot = trie.root.hash,
         networkPeerManager = peer.ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = mpt,
         batchSize = 16,
         snapSyncController = controller.ref,
@@ -1124,7 +1124,7 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
           new ChildFactories {}.trieNodeHealingCoordinator(
             stateRoot = trie.root.hash,
             networkPeerManager = peer.ref,
-            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
             mptStorage = mpt,
             batchSize = 16,
             snapSyncController = controller.ref,

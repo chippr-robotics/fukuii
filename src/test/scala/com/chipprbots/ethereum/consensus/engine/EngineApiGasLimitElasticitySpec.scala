@@ -86,7 +86,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val genesisStateRoot =
       val world = InMemoryWorldStateProxy(
@@ -150,7 +150,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
         )
       )
       val block = Block(template, BlockBody(Nil, Nil, withdrawals = Some(Nil)))
-      blockExec.executeBlockNoValidation(block)(blockchainConfig) match
+      blockExec.executeBlockNoValidation(block)(using blockchainConfig) match
         case Right((_, gasUsed, computedStateRoot)) =>
           Block(
             template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)),

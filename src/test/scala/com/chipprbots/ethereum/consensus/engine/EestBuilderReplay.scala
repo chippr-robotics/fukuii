@@ -125,7 +125,7 @@ object EestBuilderReplay:
             blockExecution,
             new ForkChoiceManager(blockchainReader, blockchainWriter),
             None
-          )(config, null)
+          )(using config, null)
 
           val JArray(blocks) = t \ "blocks": @unchecked
           val outcomes: Seq[Either[String, Unit]] = blocks.zipWithIndex.flatMap { case (b, i) =>

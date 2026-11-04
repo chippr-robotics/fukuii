@@ -139,7 +139,7 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
     blockchainWriter.saveBestKnownBlocks(withoutList.header.hash, BigInt(3))
 
     val controller = new EngineApiController(
-      new EngineApiService(blockchainReader, blockchainWriter, null, null, None)(amsterdamConfig, null),
+      new EngineApiService(blockchainReader, blockchainWriter, null, null, None)(using amsterdamConfig, null),
       None,
       amsterdamConfig
     )
@@ -278,7 +278,7 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
   "engine_exchangeCapabilities" should {
 
     "advertise both payload-bodies V2 methods beside their V1 methods" taggedAs UnitTest in {
-      val service = new EngineApiService(null, null, null, null, None)(null, null)
+      val service = new EngineApiService(null, null, null, null, None)(using null, null)
       val response = new EngineApiController(service, None, amsterdamConfig)
         .handleRequest(
           JsonRpcRequest("2.0", "engine_exchangeCapabilities", Some(JArray(List(JArray(Nil)))), Some(JInt(1)))

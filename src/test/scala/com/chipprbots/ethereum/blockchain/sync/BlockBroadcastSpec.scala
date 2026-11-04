@@ -603,7 +603,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   ) in {
     // Both PoW and PoS configurations must send NewBlock to ETH68 peers
     for isPoW <- Seq(true, false) do
-      val pm: TestProbe = TestProbe()(testKit.system.classicSystem)
+      val pm: TestProbe = TestProbe()(using testKit.system.classicSystem)
       val bb = new BlockBroadcast(pm.ref, isPoWChain = isPoW)
 
       val blockHeader: BlockHeader = Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(1001))
@@ -628,7 +628,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
         Peer(
           PeerId(s"eth68peer-$isPoW"),
           new java.net.InetSocketAddress("127.0.0.1", 0),
-          TestProbe()(testKit.system.classicSystem).ref.toTyped[PeerActor.Command],
+          TestProbe()(using testKit.system.classicSystem).ref.toTyped[PeerActor.Command],
           false
         )
 

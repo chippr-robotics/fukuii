@@ -184,7 +184,7 @@ object HealCrashChild:
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = oldTrie.root.hash,
       networkPeerManager = peerManager,
-      requestTracker = new SNAPRequestTracker()(testKit.system.classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using testKit.system.classicSystem.scheduler),
       mptStorage = mpt,
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -230,7 +230,7 @@ object HealCrashChild:
       HealingTrieFixtures.spawnCoordinator(
         stateRoot = oldTrie.root.hash,
         networkPeerManager = peerManager,
-        requestTracker = new SNAPRequestTracker()(testKit.system.classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using testKit.system.classicSystem.scheduler),
         mptStorage = mpt,
         batchSize = 16,
         snapSyncController = controller.ref,

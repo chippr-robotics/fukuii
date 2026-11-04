@@ -76,7 +76,7 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = mpt,
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -205,7 +205,7 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = mpt,
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -414,7 +414,7 @@ class HeldNodeSetSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike w
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = mpt,
       batchSize = batchSize,
       concurrency = concurrency,

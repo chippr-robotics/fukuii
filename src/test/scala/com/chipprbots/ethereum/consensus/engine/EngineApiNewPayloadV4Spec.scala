@@ -80,7 +80,7 @@ class EngineApiNewPayloadV4Spec extends AnyWordSpec with Matchers:
     )
 
   private def stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] =
         IO.pure(PayloadStatusV1(PayloadStatus.Syncing, latestValidHash = None, validationError = None))
 

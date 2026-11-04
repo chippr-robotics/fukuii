@@ -72,7 +72,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
     implicit lazy val typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
 
     lazy val engineApi = new EngineApiService(blockchainReader, blockchainWriter, blockExec, forkChoiceManager, None)(
-      blockchainConfig,
+      using blockchainConfig,
       typedScheduler
     )
     lazy val controller = new EngineApiController(engineApi)

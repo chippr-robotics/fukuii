@@ -22,7 +22,7 @@ class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers:
   import PoWBlockHeaderValidatorSpec.*
 
   "PoWBlockHeaderValidator" should "validate Ethash block headers" taggedAs (UnitTest, ConsensusTest, SlowTest) in {
-    PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(blockchainConfig) shouldBe Right(BlockHeaderValid)
+    PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(using blockchainConfig) shouldBe Right(BlockHeaderValid)
   }
 
 object PoWBlockHeaderValidatorSpec:

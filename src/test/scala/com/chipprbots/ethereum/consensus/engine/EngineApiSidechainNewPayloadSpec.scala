@@ -101,7 +101,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private def transfer(nonce: BigInt): SignedTransaction =
       SignedTransaction.sign(

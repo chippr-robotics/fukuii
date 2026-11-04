@@ -96,7 +96,7 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = if scheme == StorageScheme.Hash then hashStore else new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -555,7 +555,7 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
             new ChildFactories {}.trieNodeHealingCoordinator(
               stateRoot = trie.root.hash,
               networkPeerManager = peer.ref,
-              requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+              requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
               mptStorage = mpt,
               batchSize = 16,
               snapSyncController = controller.ref,
@@ -724,7 +724,7 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = trie.root.hash,
         networkPeerManager = new ScriptedPeer(testKit).ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = hashStore,
         batchSize = 16,
         snapSyncController = controller,
@@ -773,7 +773,7 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
               timers,
               initialStateRoot = trie.root.hash,
               networkPeerManager = peer.ref,
-              requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+              requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
               mptStorage = new TestMptStorage(),
               batchSize = 16,
               snapSyncController = controller.ref,

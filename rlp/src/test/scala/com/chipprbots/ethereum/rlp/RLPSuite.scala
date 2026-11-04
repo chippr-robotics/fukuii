@@ -530,14 +530,14 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val expected = "c88363617483646f67"
     val data = RLP.encode(RLPList("cat", "dog"))
     assert(expected == Hex.toHexString(data))
-    val dataObtained = decode[Seq[String]](data)(stringSeqEncDec)
+    val dataObtained = decode[Seq[String]](data)(using stringSeqEncDec)
     val obtained = dataObtained
     assert(Seq("cat", "dog").equals(obtained))
 
     val expected2 = "cc83646f6783676f6483636174"
     val data2 = RLP.encode(RLPList("dog", "god", "cat"))
     assert(expected2 == Hex.toHexString(data2))
-    val dataObtained2 = decode[Seq[String]](data2)(stringSeqEncDec)
+    val dataObtained2 = decode[Seq[String]](data2)(using stringSeqEncDec)
     val obtained2 = dataObtained2
     assert(Seq("dog", "god", "cat").equals(obtained2))
   }
@@ -548,7 +548,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
       "f83e83636174b8384c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974"
     val data = RLP.encode(RLPList(list.map(i => toEncodeable(i))*))
     assert(expected == Hex.toHexString(data))
-    val dataObtained = decode[Seq[String]](data)(stringSeqEncDec)
+    val dataObtained = decode[Seq[String]](data)(using stringSeqEncDec)
     val obtained = dataObtained
     assert(list.equals(obtained))
   }
@@ -556,7 +556,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   test("Encode multilist", UnitTest, RLPTest) {
     val expected = "cc01c48363617483646f67c102"
     val multilist1 = MultiList1(1, Seq("cat"), "dog", Seq(2))
-    val data = encode(multilist1)(MultiList1.encDec)
+    val data = encode(multilist1)(using MultiList1.encDec)
     assert(expected == Hex.toHexString(data))
     val dataObtained = decode[MultiList1](data)
     val obtained = dataObtained
@@ -564,7 +564,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
 
     val multilist2 = MultiList2(Seq("cat", "dog"), Seq(1, 2))
     val expected2 = "cdc88363617483646f67c20102c0"
-    val data2 = encode(multilist2)(MultiList2.encDec)
+    val data2 = encode(multilist2)(using MultiList2.encDec)
     assert(expected2 == Hex.toHexString(data2))
     val dataObtained2 = decode[MultiList2](data2)
     val obtained2 = dataObtained2
@@ -574,7 +574,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   test("Encode Empty List Of List", UnitTest, RLPTest) {
     val emptyListOfList = EmptyListOfList()
     val expected = "c4c2c0c0c0"
-    val data = encode(emptyListOfList)(EmptyListOfList.encDec)
+    val data = encode(emptyListOfList)(using EmptyListOfList.encDec)
     assert(expected == Hex.toHexString(data))
     val dataObtained = decode[EmptyListOfList](data)
     val obtained = dataObtained
@@ -584,7 +584,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   test("Encode Rep Of Two List Of List", UnitTest, RLPTest) {
     val twoListOfList = RepOfTwoListOfList()
     val expected = "c7c0c1c0c3c0c1c0"
-    val data = encode(twoListOfList)(RepOfTwoListOfList.encDec)
+    val data = encode(twoListOfList)(using RepOfTwoListOfList.encDec)
     assert(expected == Hex.toHexString(data))
     val dataObtained = decode[RepOfTwoListOfList](data)
     val obtained = dataObtained
@@ -606,7 +606,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val tx1 = TestSimpleTransaction(2, "dog")
 
     val block = TestSimpleBlock(127, -127: Short, "horse", 1000, Seq(tx0, tx1), Seq(1, 2))
-    val data = encode(block)(TestSimpleBlock.encDec)
+    val data = encode(block)(using TestSimpleBlock.encDec)
     val dataObtained = decode[TestSimpleBlock](data)
     val obtained: TestSimpleBlock = dataObtained
     assert(block.equals(obtained))

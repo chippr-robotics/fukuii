@@ -317,7 +317,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
           // so a fork-join-backed EC (e.g. a test EC) compensates; on the production thread-pool dispatcher it
           // is a harmless no-op but documents intent.
           val futures = subRanges.map { case (from, to) =>
-            Future(processSubRange(from, to, levelIndex))(healingReaderEc)
+            Future(processSubRange(from, to, levelIndex))(using healingReaderEc)
           }
           scala.concurrent.blocking(TrieNodeHealingCoordinator.awaitSubRanges(futures)).flatten
 
@@ -502,14 +502,14 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
       missingEmitted match
         case Some(missing) => onComplete(walk, missing)
         case None          => selfRef ! FrontierWalkFailed(walk)
-    }(healingWriterEc)
+    }(using healingWriterEc)
     // spec 022 review vault: an executor that refuses the body (it is shutting down) fails this Future without running a
     // line of it, and the lease would stay taken for the life of the process. Parasitic: that executor refuses this too.
     running.failed.foreach { e =>
       asyncLog.error(s"[HEAL-BFS] Frontier walk $walk did not run", e)
       walkLease.release(walk)
       selfRef ! FrontierWalkFailed(walk)
-    }(ExecutionContext.parasitic)
+    }(using ExecutionContext.parasitic)
 
   // ---- frontier-walk de-dup keys -----------------------------------------------------------------------------------
   // `rebuildFrontierBFS` de-dups the nodes it enqueues in a bounded `visited` set, so a subtrie reachable by two

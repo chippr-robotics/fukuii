@@ -154,7 +154,7 @@ private[snap] class StubHealingOrchestratorState(
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.StateHealing
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers, snapSyncConfig, syncController, networkPeerManager and childFactories are
   // constructor vals)

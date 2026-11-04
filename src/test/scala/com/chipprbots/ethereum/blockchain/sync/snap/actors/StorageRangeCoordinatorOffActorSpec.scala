@@ -83,7 +83,7 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
       useOwnedPool: Boolean = false
   ): Fixture =
     val ec = new ManualEc
-    val tracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val pathNodes = new PathNodeStorage(EphemDataSource())
     val mpt = new RecordingMptStorage
     var captured: StorageRangeCoordinatorImpl = null

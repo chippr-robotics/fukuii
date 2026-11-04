@@ -43,7 +43,7 @@ class AccountRangeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       coordinator: TestProbe[AccountRangeCoordinator.Command],
       networkPeerManager: TestProbe[NetworkPeerManagerActor.Command]
   ): org.apache.pekko.actor.typed.ActorRef[AccountRangeWorker.Command] =
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     testKit.spawn(
       AccountRangeWorker(coordinator.ref, networkPeerManager.ref, requestTracker)
     )

@@ -183,7 +183,7 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     val mpt: RecordingMptStorage = new RecordingMptStorage
     private val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    private val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    private val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     private var action: () => Unit = () => ()
     private var captured: StubAccountTrieAssemblyState & AccountTrieAssembly = null
     val kit: BehaviorTestKit[AccountRangeCoordinator.Command] =

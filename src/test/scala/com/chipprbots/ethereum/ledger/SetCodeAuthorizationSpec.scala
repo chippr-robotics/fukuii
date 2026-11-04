@@ -98,7 +98,7 @@ class SetCodeAuthorizationSpec extends AnyFlatSpec with Matchers:
     SignedTransaction.sign(tx, senderKeyPair, Some(olympiaConfig.chainId.value))
 
   private def execTx(stx: SignedTransaction, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
-    setup.prep.executeTransaction(stx, senderAddress, olympiaHeader, world)(olympiaConfig).worldState
+    setup.prep.executeTransaction(stx, senderAddress, olympiaHeader, world)(using olympiaConfig).worldState
 
   // ── Tests ────────────────────────────────────────────────────────────────
 
@@ -196,10 +196,10 @@ class SetCodeAuthorizationSpec extends AnyFlatSpec with Matchers:
         senderAddress,
         olympiaHeader,
         buildWorld(extra = Map(authority -> Account(nonce = UInt256(0), balance = UInt256(100))))
-      )(olympiaConfig)
+      )(using olympiaConfig)
       .gasUsed
     val gasWithoutExisting = setup.prep
-      .executeTransaction(stx, senderAddress, olympiaHeader, buildWorld())(olympiaConfig)
+      .executeTransaction(stx, senderAddress, olympiaHeader, buildWorld())(using olympiaConfig)
       .gasUsed
 
     gasWithExisting should be < gasWithoutExisting

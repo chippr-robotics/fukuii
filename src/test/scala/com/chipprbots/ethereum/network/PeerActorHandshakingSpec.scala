@@ -317,7 +317,7 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers:
     )
 
     def expectStatus(peer: TestActorRef[Nothing], expected: StatusResponse): Unit =
-      val statusProbe: TestProbe = TestProbe()(classicSystem)
+      val statusProbe: TestProbe = TestProbe()(using classicSystem)
       peer ! GetStatus(statusProbe.ref.toTyped[StatusResponse])
       statusProbe.expectMsg(expected)
 

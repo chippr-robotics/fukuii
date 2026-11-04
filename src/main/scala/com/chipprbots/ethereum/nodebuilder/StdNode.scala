@@ -171,7 +171,7 @@ abstract class BaseNode extends Node:
         storagesInstance.storages.blockNumberMappingStorage,
         storagesInstance.storages.blockHeadersStorage,
         shutdown
-      )(log)
+      )(using log)
 
   private def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnectingCmd
 

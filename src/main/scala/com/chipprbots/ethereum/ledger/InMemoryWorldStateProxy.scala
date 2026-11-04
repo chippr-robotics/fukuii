@@ -135,7 +135,7 @@ object InMemoryWorldStateProxy:
       MerklePatriciaTrie[Address, Account](
         stateRootHash.toArray[Byte],
         accountsStorage
-      )(Address.hashedAddressEncoder, accountSerializer),
+      )(using Address.hashedAddressEncoder, accountSerializer),
       readMemos.accounts[Address, Account]
     )
 

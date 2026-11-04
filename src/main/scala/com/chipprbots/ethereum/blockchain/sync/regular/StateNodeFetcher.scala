@@ -405,7 +405,7 @@ class StateNodeFetcher(
     )
     liveRequestIds += request.requestId
     val resp = makeRequest(
-      Request.create(request, BestSnapPeerExcluding(excludePeers))((msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
+      Request.create(request, BestSnapPeerExcluding(excludePeers))(using (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {
@@ -431,7 +431,7 @@ class StateNodeFetcher(
     )
     liveRequestIds += request.requestId
     val resp = makeRequest(
-      Request.create(request, BestSnapPeerExcluding(excludePeers))((msg: GetByteCodes) => new GetByteCodesEnc(msg)),
+      Request.create(request, BestSnapPeerExcluding(excludePeers))(using (msg: GetByteCodes) => new GetByteCodesEnc(msg)),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {

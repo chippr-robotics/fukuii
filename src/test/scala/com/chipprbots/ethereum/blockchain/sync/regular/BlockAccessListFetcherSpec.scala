@@ -77,7 +77,7 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
     ) in new Fixture:
       val (b1, b2) = (bal(1), bal(2))
       val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       get.blockHashes shouldBe blocks.map(_.header.hash.value)
       req.replyTo ! PeersClient.Response(
@@ -93,7 +93,7 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
     ) in new Fixture:
       val (good, other) = (bal(1), bal(2))
       val blocks = Seq(amsterdamBlock(1, good.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(peer, ETHPackets.BlockAccessLists(get.requestId, Seq(other.toRLPEncodable)))
       await(result) shouldBe empty
@@ -104,7 +104,7 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
 
     "treats the empty string as unavailable, without penalty" taggedAs (UnitTest, NetworkTest) in new Fixture:
       val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(
         peer,
@@ -116,7 +116,7 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
     "keeps the valid entries around an unavailable one" taggedAs (UnitTest, NetworkTest) in new Fixture:
       val (b1, b3) = (bal(1), bal(3))
       val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, bal(2).hash), amsterdamBlock(3, b3.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(
         peer,
@@ -133,7 +133,7 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
     ) in new Fixture:
       val (b1, b2) = (bal(1), bal(2))
       val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req1, get1) = request()
       req1.replyTo ! PeersClient.Response(peer, ETHPackets.BlockAccessLists(get1.requestId, Seq(b1.toRLPEncodable)))
       val (req2, get2) = request()
@@ -146,13 +146,13 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       NetworkTest
     ) in new Fixture:
       val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()._1.replyTo ! PeersClient.NoSuitablePeer
       await(result) shouldBe empty
-      await(fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)) shouldBe empty
+      await(fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)) shouldBe empty
       client.expectNoMessage(100.millis)
       clock += BlockAccessListFetcher.SuppressionMs + 1
-      val again = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val again = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()._1.replyTo ! PeersClient.NoSuitablePeer
       await(again) shouldBe empty
 
@@ -160,13 +160,13 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       300.millis
     ):
       val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()
       await(result) shouldBe empty
 
     "sends nothing for blocks without a block access list hash" taggedAs (UnitTest, NetworkTest) in new Fixture:
       await(
-        fetcher.fetch(Seq(plainBlock(1), plainBlock(2))).unsafeToFuture()(cats.effect.unsafe.IORuntime.global)
+        fetcher.fetch(Seq(plainBlock(1), plainBlock(2))).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       ) shouldBe empty
       client.expectNoMessage(200.millis)
   }

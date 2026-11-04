@@ -67,7 +67,7 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
   private val UnsupportedFork = -38005
 
   /** Records what reaches the service; answers VALID, with a payload ID when there are attributes. */
-  private class RecordingService extends EngineApiService(null, null, null, null, None)(null, null):
+  private class RecordingService extends EngineApiService(null, null, null, null, None)(using null, null):
     val calls = new ConcurrentLinkedQueue[(ForkChoiceState, Option[PayloadAttributes])]()
     override def forkchoiceUpdated(
         forkChoiceState: ForkChoiceState,
@@ -291,7 +291,7 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
       null, // never reached: nothing is executed or built
       forkChoiceManager,
       None
-    )(config, null)
+    )(using config, null)
     val genesis: Block = Block(
       BlockHeader(
         parentHash = BlockHash(ByteString(new Array[Byte](32))),

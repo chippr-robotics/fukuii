@@ -191,7 +191,7 @@ object BalPrefetcher extends Logger:
         committedHash.contains(bal.hash) && bal.validateFor(transactionCount, gasLimit).isRight
       if valid then
         val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(
-          Address.hashedAddressEncoder,
+          using Address.hashedAddressEncoder,
           Account.accountSerializer
         )
         // Distinct addresses with the distinct slots listed for each (a slot may appear as read and as changed).

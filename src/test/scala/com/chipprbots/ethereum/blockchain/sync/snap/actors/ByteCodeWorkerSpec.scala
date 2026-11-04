@@ -35,7 +35,7 @@ class ByteCodeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       coordinator: TestProbe[ByteCodeCoordinator.Command],
       networkPeerManager: TestProbe[NetworkPeerManagerActor.Command]
   ): org.apache.pekko.actor.typed.ActorRef[ByteCodeWorker.Command] =
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     testKit.spawn(
       ByteCodeWorker(coordinator.ref, networkPeerManager.ref, requestTracker)
     )

@@ -144,7 +144,7 @@ object EestEngineReplay:
             blockExecution,
             new ForkChoiceManager(blockchainReader, blockchainWriter),
             None
-          )(config, null) // no pool, so no scheduler: nothing is asked of an actor
+          )(using config, null) // no pool, so no scheduler: nothing is asked of an actor
           val controller = new EngineApiController(service, None, config)
           var requestId = 0
           def call(method: String, params: List[JValue]): JsonRpcResponse =

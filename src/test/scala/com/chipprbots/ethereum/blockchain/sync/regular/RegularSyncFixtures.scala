@@ -154,7 +154,7 @@ trait RegularSyncFixtures:
       val adapter = stub[ConsensusAdapter]
       // Per-block path: mined/broadcast blocks via importBlock
       (adapter
-        .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+        .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
         .when(*, *, *)
         .onCall { case (block: Block, _, _) =>
           importedBlocksSet.add(block)
@@ -164,7 +164,7 @@ trait RegularSyncFixtures:
         }
       // Batch path: regular sync blocks via tryImportBlocks
       (adapter
-        .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+        .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
         .when(*, *, *)
         .onCall { case (nel: (NonEmptyList[Block] @unchecked), _, _) =>
           def go(remaining: List[Block], acc: List[BlockData]): IO[BlockImportResult] =
@@ -479,7 +479,7 @@ trait RegularSyncFixtures:
     branchResolution.resolveBranch.when(*).returns(NewBetterBranch(Nil))
 
     (consensusAdapter
-      .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+      .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
       .when(*, *, *)
       .onCall { (block, _, _) =>
         if block == newBlock then
@@ -493,7 +493,7 @@ trait RegularSyncFixtures:
       }
 
     (consensusAdapter
-      .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+      .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
       .when(*, *, *)
       .onCall { case (nel: (NonEmptyList[Block] @unchecked), _, _) =>
         if nel.toList.contains(testBlocks.last) then importedLastTestBlock = true

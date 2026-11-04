@@ -679,7 +679,7 @@ class InvalidChainReportingSpec
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
       .when(*, *, *, *)
       .anyNumberOfTimes()
       .onCall { (blocks, _, _, _) =>
@@ -720,7 +720,7 @@ class InvalidChainReportingSpec
       blockExecution,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
   /** hive's `Invalid Missing Ancestor Syncing ReOrg, GasUsed, CanonicalReOrg=True`, at the moment the peer delivers the
     * side chain.
@@ -767,7 +767,7 @@ class InvalidChainReportingSpec
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
       .when(*, *, *, *)
       .anyNumberOfTimes()
       .onCall { (blocks, weight, _, _) =>
@@ -784,7 +784,7 @@ class InvalidChainReportingSpec
 
     lazy val engineApi: EngineApiService =
       new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(
-        blockchainConfig,
+        using blockchainConfig,
         typedScheduler
       )
 
@@ -860,7 +860,7 @@ class InvalidChainReportingSpec
       blockExec,
       forkChoiceManager,
       None
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
 object InvalidChainReportingSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)

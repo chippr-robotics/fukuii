@@ -205,7 +205,7 @@ class GraphQLHttpRouteSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     val controller: MockableJsonRpcControllerForGraphQL = mock[MockableJsonRpcControllerForGraphQL]
     val healthChecker: JsonRpcHealthChecker = mock[JsonRpcHealthChecker]
 
-    val server: JsonRpcHttpServer = new GraphQLFakeServer(controller, healthChecker, cfg, graphQLSvc)(system)
+    val server: JsonRpcHttpServer = new GraphQLFakeServer(controller, healthChecker, cfg, graphQLSvc)(using system)
 
     // Pre-populate the chain so { chainID } returns something deterministic.
     val block: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)

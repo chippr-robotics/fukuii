@@ -115,7 +115,7 @@ class JsonRpcHttpServerSpec
     buildInfoRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
       status shouldEqual StatusCodes.OK
 
-      val expected = Extraction.decompose(BuildInfo.toMap)(DefaultFormats)
+      val expected = Extraction.decompose(BuildInfo.toMap)(using DefaultFormats)
       val jsonResponse = JsonMethods.parse(responseAs[String])
       val diff = expected.diff(jsonResponse)
 

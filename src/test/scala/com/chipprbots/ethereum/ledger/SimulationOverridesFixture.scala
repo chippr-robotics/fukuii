@@ -248,11 +248,11 @@ trait SimulationOverridesFixture extends AmsterdamFixtureVectors with Matchers:
       precompileRelocations = Relocation,
       traceTransfers = true,
       blobBaseFeeOverride = Some(BlobFeeOverride)
-    )(chain.config)
+    )(using chain.config)
 
   /** eth_simulateV1's call into the shared preparator for a request that sets none. */
   def simulateWithoutOverrides(chain: Chain, stx: SignedTransaction, world: InMemoryWorldStateProxy): TxResult =
-    setup.prep.executeTransactionForSimulation(stx, senderAddress, chain.header, world)(chain.config)
+    setup.prep.executeTransactionForSimulation(stx, senderAddress, chain.header, world)(using chain.config)
 
   /** The held simulate call's own transaction: a call to the [[Pauser]], carrying a blob on ETH so its fee is in play.
     */
@@ -327,7 +327,7 @@ trait SimulationOverridesFixture extends AmsterdamFixtureVectors with Matchers:
     * preparator.
     */
   def importBlock(chain: Chain): BlockOutcome =
-    setup.prep.executeTransactions(importedTxs(chain), preState, chain.header)(chain.config) match
+    setup.prep.executeTransactions(importedTxs(chain), preState, chain.header)(using chain.config) match
       case Right(result) =>
         BlockOutcome(
           result.worldState.stateRootHash,
@@ -356,8 +356,8 @@ trait SimulationOverridesFixture extends AmsterdamFixtureVectors with Matchers:
     // As StxLedger prepares a call: the sender pays upfront, then the frame runs.
     val world = setup.prep.updateSenderAccountBeforeExecution(stx, senderAddress, preState)
     val result =
-      if traced then setup.prep.runVMWithTracer(stx, senderAddress, chain.header, world, new SilentTracer)(chain.config)
-      else setup.prep.runVM(stx, senderAddress, chain.header, world)(chain.config)
+      if traced then setup.prep.runVMWithTracer(stx, senderAddress, chain.header, world, new SilentTracer)(using chain.config)
+      else setup.prep.runVM(stx, senderAddress, chain.header, world)(using chain.config)
     RpcOutcome(result.returnData, result.gasRemaining, result.logs, result.error)
 
   /** eth_call and eth_estimateGas: StxLedger.simulateTransaction -> BlockPreparator.runVM. */

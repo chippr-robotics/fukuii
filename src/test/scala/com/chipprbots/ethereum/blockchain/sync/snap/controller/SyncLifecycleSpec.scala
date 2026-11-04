@@ -127,7 +127,7 @@ private[snap] class StubSyncLifecycleState(
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.AccountRangeSync
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers and snapSyncConfig are constructor vals)
   private val dataSource = EphemDataSource()

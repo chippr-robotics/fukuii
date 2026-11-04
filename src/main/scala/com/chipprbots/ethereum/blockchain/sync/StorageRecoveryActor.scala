@@ -185,7 +185,7 @@ object StorageRecoveryActor:
           )
           ctx.pipeToSelf(
             Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(
-              ctx.executionContext
+              using ctx.executionContext
             )
           ) {
             case Success(result) => ScanResult(result)
@@ -218,7 +218,7 @@ object StorageRecoveryActor:
               coordinatorForTesting match
                 case Some(testRef) => testRef.toTyped[actors.StorageRangeCoordinator.Command]
                 case None =>
-                  val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
+                  val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
                   val mptStorage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
                   val wiring = coordinatorWiring(snapSyncConfig, stateIngest)
                   ctx.spawn(

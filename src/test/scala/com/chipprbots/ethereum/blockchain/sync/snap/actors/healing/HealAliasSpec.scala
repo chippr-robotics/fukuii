@@ -69,7 +69,7 @@ class HealAliasSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike wit
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,

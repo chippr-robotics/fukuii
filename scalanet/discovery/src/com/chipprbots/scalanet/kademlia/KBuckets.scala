@@ -86,8 +86,8 @@ class KBuckets[T <: BitVector] private (
 
     if n == 1 then
       // special case to avoid sorting the bucket
-      orderedBucketsIterator.find(_.nonEmpty).map(_.min(ordering)).toList
-    else orderedBucketsIterator.flatMap(_.sorted(ordering)).take(n).toList
+      orderedBucketsIterator.find(_.nonEmpty).map(_.min(using ordering)).toList
+    else orderedBucketsIterator.flatMap(_.sorted(using ordering)).take(n).toList
 
   /** Add a node record into the KBuckets.
     *

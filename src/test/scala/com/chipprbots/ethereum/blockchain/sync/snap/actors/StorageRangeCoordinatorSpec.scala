@@ -172,7 +172,7 @@ class StorageRangeCoordinatorSpec
           timers,
           initialStateRoot = stateRoot,
           networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-          requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+          requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
           mptStorage = new TestMptStorage(),
           maxAccountsPerBatch = maxAccountsPerBatch,
           maxInFlightRequests = maxInFlightRequests,
@@ -197,7 +197,7 @@ class StorageRangeCoordinatorSpec
   "StorageRangeCoordinator" should "initialize correctly" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -219,7 +219,7 @@ class StorageRangeCoordinatorSpec
   it should "handle peer availability" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -249,7 +249,7 @@ class StorageRangeCoordinatorSpec
   it should "handle task completion" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -275,7 +275,7 @@ class StorageRangeCoordinatorSpec
   it should "report completion when no storage tasks" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -305,7 +305,7 @@ class StorageRangeCoordinatorSpec
   it should "handle task failures" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -331,7 +331,7 @@ class StorageRangeCoordinatorSpec
   it should "accept AddStorageTasks and remain operational" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -361,7 +361,7 @@ class StorageRangeCoordinatorSpec
   it should "accept StoragePivotRefreshed and update state root" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("old-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -390,7 +390,7 @@ class StorageRangeCoordinatorSpec
     // the coordinator must complete immediately on NoMoreStorageTasks + StorageCheckCompletion.
     val stateRoot = kec256(ByteString("empty-state-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -425,7 +425,7 @@ class StorageRangeCoordinatorSpec
     // This spec's `srcProps` runs the coordinator's default `deferredMerkleization = true`, which builds no trie.
     val stateRoot = kec256(ByteString("proof-of-absence-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -494,7 +494,7 @@ class StorageRangeCoordinatorSpec
   it should "signal StorageRangeSyncForceCompleted immediately on ForceCompleteStorage even with pending tasks" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("force-complete-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -531,7 +531,7 @@ class StorageRangeCoordinatorSpec
     val coordinator = srcProps(
       stateRoot = stateRoot,
       networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
       maxAccountsPerBatch = 8,
@@ -617,7 +617,7 @@ class StorageRangeCoordinatorSpec
     // tick must be a no-op — not trigger a spurious pivot refresh that aborts the sync.
     val stateRoot = kec256(ByteString("no-stall-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -893,7 +893,7 @@ class StorageRangeCoordinatorSpec
   it should "construct and accept lifecycle messages" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("storage-stacktrie-construct-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -930,7 +930,7 @@ class StorageRangeCoordinatorSpec
   it should "emit StorageBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("backpressure-root"))
     val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -1893,14 +1893,14 @@ class StorageRangeCoordinatorSpec
     (coordinator, snapSyncController)
 
   it should "cancel its in-flight request timers when it stops" taggedAs UnitTest in {
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val (coordinator, _) = startWithOneRequestInFlight(requestTracker)
     testKit.stop(coordinator)
     requestTracker.pendingCount shouldBe 0
   }
 
   it should "cancel its in-flight request timers when it is force-completed" taggedAs UnitTest in {
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val (coordinator, snapSyncController) = startWithOneRequestInFlight(requestTracker)
     coordinator ! StorageRangeCoordinator.ForceCompleteStorage
     snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
@@ -2383,7 +2383,7 @@ class StorageRangeCoordinatorSpec
           StorageRangeCoordinator(
             stateRoot = kec256(ByteString("excluded-restart-root")),
             networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-            requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+            requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
             mptStorage = new TestMptStorage(),
             maxAccountsPerBatch = 8,
             maxInFlightRequests = 8,
@@ -3138,7 +3138,7 @@ class StorageRangeCoordinatorSpec
     val coordinator = srcProps(
       stateRoot = stateRoot,
       networkPeerManager = networkPeerManager.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       flatSlotStorage = flatSlots,
       maxAccountsPerBatch = 1,

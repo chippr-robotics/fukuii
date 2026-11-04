@@ -73,7 +73,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
         blockExec,
         forkChoiceManager,
         Some(pendingTxManager)
-      )(blockchainConfig, typedScheduler)
+      )(using blockchainConfig, typedScheduler)
 
       private val genesisStateRoot =
         val world = InMemoryWorldStateProxy(
@@ -139,7 +139,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
           )
         )
         val candidate = Block(template, BlockBody(Nil, Nil, withdrawals = Some(Nil)))
-        blockExec.executeBlockNoValidation(candidate)(blockchainConfig) match
+        blockExec.executeBlockNoValidation(candidate)(using blockchainConfig) match
           case Right((_, gasUsed, computedStateRoot)) =>
             Block(
               template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)),
@@ -295,7 +295,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
       val (_, block2) = buildWithheldParentAndChild()
       blockchainWriter.storeBlockByHashOnly(block2).commit()
 
-      val probe: TestProbe = TestProbe()(classicSystem)
+      val probe: TestProbe = TestProbe()(using classicSystem)
       forkChoiceManager.setListener(probe.ref)
 
       forkChoiceManager.notifyBeaconHead(syncingForkChoice(block2.header.hash.value))

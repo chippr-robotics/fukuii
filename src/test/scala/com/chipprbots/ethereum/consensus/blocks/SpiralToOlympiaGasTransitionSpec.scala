@@ -294,7 +294,7 @@ class SpiralToOlympiaGasTransitionSpec
         )
         val minerWith60MConfig = new TestableGen(BigInt(60_000_000))
         val preOlympiaBlock = olympiaBlock - 1
-        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(configWithSpiralSchedule)
+        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(using configWithSpiralSchedule)
         result shouldBe SpiralGasLimit
       }
 
@@ -312,7 +312,7 @@ class SpiralToOlympiaGasTransitionSpec
         )
         val minerWith60MConfig = new TestableGen(BigInt(60_000_000))
         val preOlympiaBlock = olympiaBlock - 1
-        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(configNoSchedule)
+        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(using configNoSchedule)
         result should be > SpiralGasLimit
       }
     }

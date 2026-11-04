@@ -108,7 +108,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val random = new SecureRandom()
     private val to = Address(ByteString(Array.fill(20)(0x16.toByte)))

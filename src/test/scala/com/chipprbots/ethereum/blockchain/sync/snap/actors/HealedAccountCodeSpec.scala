@@ -50,7 +50,7 @@ class HealedAccountCodeSpec extends ScalaTestWithActorTestKit() with AnyFlatSpec
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = rootHash,
       networkPeerManager = networkPeerManager.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = snapSyncController.ref,

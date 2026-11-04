@@ -75,7 +75,7 @@ class EthashBlockHeaderValidatorSpec
     }.toSeq.flatten
 
     forAll(cases) { (blockHeader, parentBlock, supportsDaoFork, valid) =>
-      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(createBlockchainConfig(supportsDaoFork)) match
+      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(using createBlockchainConfig(supportsDaoFork)) match
         case Right(_)                      => assert(valid)
         case Left(DaoHeaderExtraDataError) => assert(!valid)
         case _                             => fail()
@@ -120,7 +120,7 @@ class EthashBlockHeaderValidatorSpec
   ) in {
     val zero = validBlockHeader.copy(difficulty = Difficulty.Zero)
     val mergeConfig = blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
-    MockedPowBlockHeaderValidator.validate(zero, validParent.header)(mergeConfig) shouldBe Right(BlockHeaderValid)
+    MockedPowBlockHeaderValidator.validate(zero, validParent.header)(using mergeConfig) shouldBe Right(BlockHeaderValid)
   }
 
   it should "return a failure if created based on invalid gas used" taggedAs (UnitTest, ConsensusTest) in {
@@ -302,7 +302,7 @@ class EthashBlockHeaderValidatorSpec
     val blockTimestamp: Timestamp = parentHeader.unixTimestamp + 6
 
     val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(
-      blockchainConfigWithoutDifficultyBombRemoval
+      using blockchainConfigWithoutDifficultyBombRemoval
     )
     val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096265")
 

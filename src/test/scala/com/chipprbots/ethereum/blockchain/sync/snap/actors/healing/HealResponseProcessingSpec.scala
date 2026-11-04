@@ -212,7 +212,7 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
       decoupled: Boolean = false
   ):
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     val module: StubHealResponseProcessingState & HealResponseProcessing =
       new StubHealResponseProcessingState(
         tracker,

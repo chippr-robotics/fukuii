@@ -465,7 +465,7 @@ object BackgroundAudit:
             else
               val step = AuditWalk.walkBatch(frames, head, reader, filter)
               BatchOutcome.Walked(head, step, nanoTime() - started, watch)
-      }(readEc)
+      }(using readEc)
       ctx.pipeToSelf(read)(outcome => BatchDone(gen, frames, outcome))
 
     private def putBack(frames: Vector[AuditFrame]): Unit =
@@ -604,7 +604,7 @@ object BackgroundAudit:
           case Some(head) if head.stateRoot == hole.root => AuditWalk.Settled.Hole(hole)
           case Some(head) =>
             AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
-      }(readEc)
+      }(using readEc)
       ctx.pipeToSelf(work)(outcome => HoleRefreshed(gen, hole, outcome))
 
     private def onHoleRefreshed(hole: AuditHole, outcome: Try[AuditWalk.Settled]): Behavior[Command] =

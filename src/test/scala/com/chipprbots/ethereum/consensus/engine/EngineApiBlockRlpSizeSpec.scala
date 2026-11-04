@@ -86,7 +86,7 @@ class EngineApiBlockRlpSizeSpec extends AnyWordSpec with Matchers:
 
   private def mptRoot[T](items: Seq[T], ser: ByteArraySerializable[T]): ByteString =
     val storage = new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(EphemDataSource())))
-    val trie = items.zipWithIndex.foldLeft(MerklePatriciaTrie[Int, T](storage)(intByteArraySerializable, ser)) {
+    val trie = items.zipWithIndex.foldLeft(MerklePatriciaTrie[Int, T](storage)(using intByteArraySerializable, ser)) {
       case (t, (item, index)) => t.put(index, item)
     }
     ByteString(trie.getRootHash)
@@ -152,7 +152,7 @@ class EngineApiBlockRlpSizeSpec extends AnyWordSpec with Matchers:
       blockExecution,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
-    )(config, null)
+    )(using config, null)
 
     /** Block 1 at `timestamp` carrying `txs`, with every header field execution determines filled in. */
     def block1(timestamp: Long, txs: Seq[SignedTransaction]): Block =

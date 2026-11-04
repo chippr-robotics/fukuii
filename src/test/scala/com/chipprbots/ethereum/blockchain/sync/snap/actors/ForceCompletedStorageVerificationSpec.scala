@@ -113,7 +113,7 @@ class ForceCompletedStorageVerificationSpec
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = ByteString(startRoot.hash),
       networkPeerManager = npm.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controller.ref,

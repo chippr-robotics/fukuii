@@ -92,7 +92,7 @@ object PeerDiscoveryManager:
           .onComplete {
             case Failure(ex)     => ctx.self ! StartAttempt(Left(ex))
             case Success(result) => ctx.self ! StartAttempt(Right(result))
-          }(runtime.compute)
+          }(using runtime.compute)
 
       def stopDiscoveryService(release: IO[Unit]): Unit =
         given IORuntime = runtime
@@ -101,7 +101,7 @@ object PeerDiscoveryManager:
           .onComplete {
             case Failure(ex) => ctx.self ! StopAttempt(Left(ex))
             case Success(_)  => ctx.self ! StopAttempt(Right(()))
-          }(runtime.compute)
+          }(using runtime.compute)
 
       def sendDiscoveredNodesInfo(
           maybeService: Option[v4.DiscoveryService],
@@ -123,7 +123,7 @@ object PeerDiscoveryManager:
             case Success(Right(result)) => replyTo ! result
             case Success(Left(ex))      => log.error("Failed to get discovered nodes: {}", ex.getMessage)
             case Failure(ex)            => log.error("Unexpected failure getting discovered nodes: {}", ex.getMessage)
-          }(runtime.compute)
+          }(using runtime.compute)
 
       def sendRandomNodeInfo(
           randomNodes: RandomNodes,
@@ -146,7 +146,7 @@ object PeerDiscoveryManager:
             case Success(Right(None))         => ()
             case Success(Left(ex))            => log.error("Failed to get random node: {}", ex.getMessage)
             case Failure(ex)                  => log.error("Unexpected failure getting random node: {}", ex.getMessage)
-          }(runtime.compute)
+          }(using runtime.compute)
 
       // The service hasn't been started yet; serves static known nodes only.
       def init(): Behavior[Command] = Behaviors.receiveMessage {

@@ -36,7 +36,7 @@ class StorageRangeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       coordinator: TestProbe[StorageRangeCoordinator.Command]
   ): org.apache.pekko.actor.typed.ActorRef[StorageRangeWorker.Command] =
     val networkPeerManager = ClassicTestProbe()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     testKit.spawn(
       StorageRangeWorker(coordinator.ref, networkPeerManager.ref, requestTracker)
     )

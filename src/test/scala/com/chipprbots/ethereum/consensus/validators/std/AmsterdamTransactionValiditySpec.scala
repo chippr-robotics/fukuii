@@ -39,7 +39,7 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
       config: BlockchainConfig
   ): Either[SignedTransactionError, SignedTransactionValid] =
     val upfront = UInt256(stx.tx.gasLimit.value * BigInt(1_000_000_000))
-    StdSignedTransactionValidator.validate(stx, sender, header, upfront, 0)(config)
+    StdSignedTransactionValidator.validate(stx, sender, header, upfront, 0)(using config)
 
   /** 1,000 non-zero bytes to an EOA, zero value. Amsterdam: intrinsic 15,000 + 16,000 = 31,000, floor 15,000 + 64,000 =
     * 79,000. Osaka: intrinsic 21,000 + 16,000 = 37,000, EIP-7623 floor 21,000 + 4,000 x 10 = 61,000.
@@ -143,20 +143,20 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
     ConsensusTest
   ) in {
     SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(78999, amsterdamAtGenesis)), Head)(
-      amsterdamAtGenesis
+      using amsterdamAtGenesis
     ) shouldBe empty
     SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(79000, amsterdamAtGenesis)), Head)(
-      amsterdamAtGenesis
+      using amsterdamAtGenesis
     ) should have size 1
   }
 
   it should "drop a transaction whose floor exceeds TX_MAX_GAS_LIMIT" taggedAs (UnitTest, ConsensusTest) in {
     val stx = dynamicFeeTx(Some(recipient), 0, 17777240, payload = nonZeros(261910), config = amsterdamAtGenesis)
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(stx), Head)(amsterdamAtGenesis) shouldBe empty
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(stx), Head)(using amsterdamAtGenesis) shouldBe empty
   }
 
   it should "keep applying the intrinsic rule alone before Amsterdam" taggedAs (UnitTest, ConsensusTest) in {
     SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(
-      osakaAtGenesis
+      using osakaAtGenesis
     ) should have size 1
   }

@@ -110,7 +110,7 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
   ):
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     val module: StubHealDispatchState & HealDispatch =
       new StubHealDispatchState(peerManager.ref, tracker, controller.ref, batchSize, decoupled, movingRoot)
         with HealDispatch
