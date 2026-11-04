@@ -45,6 +45,8 @@ import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
@@ -1039,6 +1041,123 @@ class RegularSyncSpec
             } shouldBe empty
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
+
+      // spec 022 T062: on Mordor a corrupt account leaf blacklisted the honest provider on every import attempt, and a
+      // fetched node saved later could not clear it under basic pruning's upsert. A stored entry that is not its node now
+      // reads as a missing node; the importer deletes the entry, then fetches, and blames nobody.
+      "delete a stored entry that is not its node before fetching it, and blacklist no peer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          // Archive pruning, which can delete a bad entry; the fixture's own state storage is a stub.
+          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          val corrupt: ByteString = kec256(ByteString("a trie node this node holds junk for"))
+          storagesInstance.storages.nodeStorage.put(corrupt, Array(0x01.toByte))
+          // What execution raises for it: the world state rewraps the corrupt node as a missing account node.
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingAccountNodeException(corrupt, ByteString(Array.fill[Byte](20)(0x2b)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot) // GetTrieNodes is left unanswered
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case b: PeersClient.BlacklistPeer                  => fail(s"a peer was blamed for a local fault: $b")
+            case PeersClient.Request(_: GetTrieNodes, _, _, _) => true
+          }
+          withClue("the entry was deleted before the fetch went out: ") {
+            storagesInstance.storages.nodeStorage.get(corrupt) shouldBe None
+          }
+          peersClient.receiveWhile(1.second) { case m => m }.collect { case b: PeersClient.BlacklistPeer => b } shouldBe
+            empty
+      )
+
+      "leave a good stored node alone when a missing node is met under its hash" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          val node: Array[Byte] = MerklePatriciaTrie.EmptyEncoded
+          val hash: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
+          storagesInstance.storages.nodeStorage.put(hash, node)
+          setImportResult(failingBlock, IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(hash))))
+          peersClient.setAutoPilot(
+            new PeersClientAutoPilot:
+              override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                case PeersClient.Request(GetNodeData(_), _, _, _) => None
+              }
+          )
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetNodeData(h :: Nil), _, _, _) if h == hash => true
+          }
+          storagesInstance.storages.nodeStorage.get(hash).map(_.toSeq) shouldBe Some(node.toSeq)
+      )
+
+      // spec 022 T062: a trie error that is not a missing node reached the importer as a string and took the invalid-block
+      // path: the honest provider blacklisted each attempt, evicted at three strikes, fork detection at five, and never
+      // an escalation (1,986 blacklistings in 45 minutes on Mordor). It is this node's fault: no peer is blamed, and it
+      // escalates like exhausted fetches.
+      "treat a trie error that is not a missing node as its own fault: no peer blamed, a re-SNAP at the third" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          BlockImporter.exhaustBackoff = 200.millis
+          try
+            setImportResult(
+              failingBlock,
+              IO.pure(BlockImportFailed(BlockExecutionError.MPTError(new MPTException("Invalid Node")).toString))
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            supervisor.fishForSpecificMessage(max = 15.seconds) {
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+                  if number == failingBlock.number.value =>
+                true
+            }
+            ImportCounterAccess.survivedExhausts shouldBe 0
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
+                b
+              } shouldBe
+                empty
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        val error = BlockExecutionError.MPTError(new MPTException("Invalid Node"))
+        // Pinned: ConsensusImpl passes `error.toString` on as it is when the branch extends the head...
+        error.toString should startWith("MPTError(")
+        BlockImporter.isLocalStateFault(error.toString) shouldBe true
+        // ...and after this prefix when it reorganises.
+        BlockImporter.isLocalStateFault(s"Error while trying to reorganise chain: $error") shouldBe true
+        // A missing node never arrives as text, and nothing else that does is this node's own state.
+        BlockImporter.isLocalStateFault("test error") shouldBe false
+        BlockImporter.isLocalStateFault(
+          BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+        ) shouldBe false
+        BlockImporter.isLocalStateFault(
+          s"Error while trying to reorganise chain: ${BlockExecutionError.MissingParentError}"
+        ) shouldBe
+          false
+        scala.concurrent.Future.successful(succeed)
+      }
 
       "save fetched node" in sync(new Fixture:
         val failingBlock: Block = testBlocksChunked.head.head

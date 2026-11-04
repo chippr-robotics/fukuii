@@ -200,6 +200,19 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     stats.codes shouldBe 0L
   }
 
+  // spec 022 T062, beacon: a stored entry that is not its node now throws CorruptNodeException from the reader. For the
+  // prefetch that is one more failed hint, as a missing node is, and nothing of it is cached for execution.
+  it should "survive a corrupt node the same way, caching nothing of it" taggedAs (UnitTest, StateTest) in {
+    val f = new Fixture
+    f.nodeStorage.put(f.root, Array(0x01.toByte))
+    val run = f.start(f.bal, Some(f.bal.hash))
+    run.awaitIdle(30000) shouldBe true
+    val stats = run.finish()
+    stats.errors should be >= (f.contracts + 1).toLong
+    stats.codes shouldBe 0L
+    f.cache.entries shouldBe 0
+  }
+
   it should "cancel: finish returns at once, drains, and nothing runs afterwards" taggedAs (UnitTest, StateTest) in {
     val f = new Fixture
     val many = BlockAccessList(

@@ -468,6 +468,64 @@ class StateNodeFetcherSpec
         BestSnapPeerExcluding(Set(p1.id))
       peersClientProbe.expectNoMessage(100.millis)
 
+    "blacklists a peer whose TrieNodes do not match at the parent root, with no fallback root to switch to" taggedAs UnitTest in new ManualClockSetup:
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(ByteString(Array.fill[Byte](32)(0x11.toByte))),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte)))))
+      )
+      nextRequest()
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
+      peersClientProbe.expectMessageType[PeersClient.BlacklistPeer].peerId shouldBe p1.id
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p1.id))
+
+    // spec 022 T062: on Mordor the parent root was 2,000 blocks old, so the fetch switched to a recent root, where the
+    // account's node had a different hash (its balance changed every block): 776 honest peers were blacklisted for
+    // answering correctly. There a mismatch blames nobody, and two peers agreeing on it end the fetch.
+    "blacklists nobody for a mismatch at the fallback root, and ends the fetch when two peers send the same nodes" taggedAs UnitTest in new ManualClockSetup:
+      val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x11.toByte))
+      val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(stateRoot),
+        paths = Some(Seq(Seq(ByteString(Array(0x01.toByte))))),
+        fallbackStateRoot = Some(fallbackRoot)
+      )
+      nextRequest().message.asInstanceOf[GetTrieNodes].rootHash shouldBe stateRoot
+      val moved: Seq[ByteString] = Seq(ByteString(Array.fill[Byte](40)(1)))
+      val movedElsewhere: Seq[ByteString] = Seq(ByteString(Array.fill[Byte](40)(2)))
+      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      val p3 = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
+      val p4 = PeerTestHelpers.createTestPeer("p4", TestProbe().ref)
+
+      // At the parent root a mismatch switches roots, as it always did: no blacklist.
+      fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, moved))
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe
+        fallbackRoot
+
+      // At the fallback root: rotated, and the very next message is the request, not a BlacklistPeer.
+      fetcher ! StateNodeFetcher.AdaptedMessage(p2, TrieNodes(2, moved))
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe BestSnapPeerExcluding(Set(p2.id))
+      withClue("the same peer saying it again proves nothing: ") {
+        fetcher ! StateNodeFetcher.AdaptedMessage(p2, TrieNodes(3, moved))
+        peersClientProbe.expectMessageType[PeersClient.Request[?]]
+        replyToProbe.expectNoMessage(100.millis)
+      }
+      fetcher ! StateNodeFetcher.AdaptedMessage(p3, TrieNodes(4, movedElsewhere))
+      peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
+        BestSnapPeerExcluding(Set(p2.id, p3.id))
+      replyToProbe.expectNoMessage(100.millis)
+
+      // A second peer with the same nodes: the wanted one is not under that path at that root, so the fetch ends.
+      fetcher ! StateNodeFetcher.AdaptedMessage(p4, TrieNodes(5, movedElsewhere))
+      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) => values shouldBe empty }
+      peersClientProbe.expectNoMessage(100.millis)
+
     "an EMPTY ByteCodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(hash = targetHash, originalSender = replyToProbe.ref, isByteCode = true)
       nextRequest()

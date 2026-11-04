@@ -18,6 +18,7 @@ import cats.implicits.*
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
@@ -34,6 +35,7 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
@@ -109,6 +111,19 @@ object BlockImporter:
     missingCodes.clear()
 
   private[regular] def distinctMissingCodesForTests: Int = missingCodes.size
+
+  /** How a block execution's `MPTError` reads once it reaches the importer as a `BlockImportFailed` string:
+    * `BlockExecutionError.MPTError(e).toString`, which `ConsensusImpl` passes on as it is when the branch extends the
+    * head, and after this prefix when it reorganises.
+    */
+  private val LocalStateFaultPrefixes: Seq[String] =
+    Seq("MPTError(", "Error while trying to reorganise chain: MPTError(")
+
+  /** True when a block failed on a trie error that is not a missing node: this node's own state is bad (spec 022 T062),
+    * and neither the block nor the peer that sent it is. A missing node never reaches here as a string: it comes as
+    * `BlockImportFailedDueToMissingNode`, and a stored entry that does not decode is one (`CorruptNodeException`).
+    */
+  private[regular] def isLocalStateFault(error: String): Boolean = LocalStateFaultPrefixes.exists(error.startsWith)
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
     * un-canonicalises.
@@ -676,6 +691,7 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
@@ -708,6 +724,7 @@ final private class BlockImporterLogic(
                   else if paths.isDefined then "position found"
                   else "position not found"
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
                 paths match
                   case Some(_) =>
@@ -787,6 +804,7 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
@@ -864,6 +882,18 @@ final private class BlockImporterLogic(
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     RunningAfterFetcherRewind
+              case BlockImportFailed(error) if BlockImporter.isLocalStateFault(error) =>
+                // This node's trie is bad, and no fetch can name what to fetch. So this is an exhausted fetch at once:
+                // the fetcher is rewound without blacklisting the honest provider, the block waits out the exhaust
+                // backoff, and the third in a row asks for a SNAP re-sync, the only exit (spec 022 T062).
+                val failedBlock = notImportedBlocks.head
+                log.error(
+                  "[LOCAL-STATE-FAULT] block {} failed on this node's own state, no peer blamed: {}",
+                  failedBlock.number,
+                  error
+                )
+                pendingStateNodeHash = None
+                ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -919,6 +949,11 @@ final private class BlockImporterLogic(
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
 
+          // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
+          // is detected (spec 022 T062). The caller backs off and escalates instead.
+          case err @ BlockImportFailed(error) if BlockImporter.isLocalStateFault(error) =>
+            IO.pure((importedBlocks, Some(err)))
+
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             val failedBlock = nel.head
             log.error(
@@ -956,6 +991,36 @@ final private class BlockImporterLogic(
               selfRef ! StartForkRecovery(failedBlock.number.value)
             IO.pure((importedBlocks, Some(err)))
         }
+
+  /** Before a missing node is fetched, the entry under its hash goes if it is not that node (spec 022 T062).
+    *
+    * A stored entry that does not decode, or fails its hash, reads as a missing node (`CorruptNodeException`), but that
+    * type is gone by the time it gets here: the trie and the world state rewrap it with a position and an account. So
+    * this runs for every missing node, and it is safe to: `deleteBadNode` reads the entry again itself (under the
+    * commit lock, where the store has one) and removes only bytes that fail keccak, and an absent entry is
+    * `NoLongerBad`. It runs before any escalation, so a re-SNAP after exhausted fetches never upserts over the junk,
+    * which basic pruning's upsert would keep. A store that cannot delete, or a read that fails, leaves the fetch to go
+    * ahead as before.
+    */
+  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt): Unit =
+    if stateStorage.canRepairNodes then
+      try
+        stateStorage.deleteBadNode(hash, () => true) match
+          case BadEntryDelete.Deleted =>
+            log.error(
+              "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
+                "fetching it from peers",
+              ByteStringUtils.hash2string(hash),
+              blockNumber
+            )
+          case _ => ()
+      catch
+        case NonFatal(e) =>
+          log.error(
+            "[STATE-CORRUPT] could not check stored trie node {} for corruption: {}; fetching it anyway",
+            ByteStringUtils.hash2string(hash),
+            e
+          )
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
     * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest
@@ -1004,7 +1069,7 @@ final private class BlockImporterLogic(
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             announceAdopted(adopted, internally)
             IO.raiseError(missingNodeException)
-          case BlockImportFailed(error) if informFetcherOnFail =>
+          case BlockImportFailed(error) if informFetcherOnFail && !BlockImporter.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
         }
