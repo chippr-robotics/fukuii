@@ -523,6 +523,65 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
   }
 
+  // spec 022 T061a follow-up (forge, beacon): a force-complete during the account phase, which the controller ignores
+  // there, must not latch: a genuine stall after NoMoreStorageTasks has to be able to force-complete again.
+  private def forceCompleteCoordinator(name: String) =
+    val stateRoot = kec256(ByteString(s"$name-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = srcProps(
+      stateRoot = stateRoot,
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      mptStorage = new TestMptStorage(),
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      maxAccountsPerBatch = 8,
+      maxInFlightRequests = 4,
+      requestTimeout = 30.seconds,
+      snapSyncController = snapSyncController.ref
+    )
+    coordinator ! StorageRangeCoordinator.StartStorageRangeSync(stateRoot)
+    def task(n: Int) =
+      StorageTask.createStorageTask(kec256(ByteString(s"$name-account-$n")), kec256(ByteString(s"$name-storage-$n")))
+    (coordinator, snapSyncController, task)
+
+  it should "force-complete again after NoMoreStorageTasks when an earlier force-complete ran in the account phase" taggedAs UnitTest in {
+    val (coordinator, snapSyncController, task) = forceCompleteCoordinator("rearm")
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(task(1)))
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage // during the account phase
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(task(2))) // the account phase goes on
+    coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage // a genuine stall after the phase switch
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+  }
+
+  it should "stay latched when the force-complete followed NoMoreStorageTasks" taggedAs UnitTest in {
+    val (coordinator, snapSyncController, task) = forceCompleteCoordinator("latched")
+    coordinator ! StorageRangeCoordinator.AddStorageTasks(Seq(task(1)))
+    coordinator ! StorageRangeCoordinator.NoMoreStorageTasks
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    coordinator ! StorageRangeCoordinator.NoMoreStorageTasks // a repeat re-arms nothing
+    coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+    snapSyncController.expectNoMessage(300.millis)
+  }
+
+  it should "start the failure count again when it re-arms, so the first failure after does not fire" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("rearm-count-root"))
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val (impl, kit) = newImpl(
+      stateRoot = stateRoot,
+      flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+      snapSyncControllerRef = snapSyncController.ref
+    )
+    kit.run(StorageRangeCoordinator.StartStorageRangeSync(stateRoot))
+    kit.run(StorageRangeCoordinator.ForceCompleteStorage) // during the account phase
+    snapSyncController.expectMessage(SNAPSyncController.StorageRangeSyncForceCompleted)
+    impl.consecutiveTaskFailures = 100 // at the threshold when the phase switches
+    kit.run(StorageRangeCoordinator.NoMoreStorageTasks)
+    impl.consecutiveTaskFailures shouldBe 0
+  }
+
   // ── K5: No false stall signal when task queue is empty (BUG fix b07c363e9) ─
 
   it should "not emit PivotStateUnservable when no storage tasks are pending" taggedAs UnitTest in {

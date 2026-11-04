@@ -188,7 +188,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Idempotency guard: ForceCompleteStorage may arrive 10× simultaneously if SNAPSyncController
   // queues multiple stagnation-check responses before the first ForceCompleted reply comes back.
   // The handler does not clear `tasks`/`activeTasks`, so all duplicates would see identical state
-  // and log the same WARN. Execute at most once per coordinator lifetime.
+  // and log the same WARN. Execute at most once per phase: a force-complete during the account phase, which the controller
+  // ignores there, is re-armed when NoMoreStorageTasks arrives (spec 022 T061a follow-up, forge and beacon).
   private var forceCompleteExecuted: Boolean = false
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
@@ -896,6 +897,18 @@ private[actors] class StorageRangeCoordinatorImpl(
         Behaviors.same
 
       case NoMoreStorageTasks =>
+        // A force-complete that ran before this, during the account phase, did not end the phase: the controller ignores
+        // it there (DownloadSupervisor) and this coordinator went on taking tasks. Left latched, a genuine stall from here
+        // on could never force-complete, and the wanted flag would turn a later clean end into one (onTaskFileSwept).
+        // The failure count starts again too, or the first failure re-fires at once (StoragePeerDispatch). What the
+        // earlier one recorded stays in the excluded set: over-recording is safe, healing drops what is complete.
+        if !noMoreTasksExpected && forceCompleteExecuted then
+          log.warn(
+            "[STORAGE-FORCE-COMPLETE] Re-arming: the force-complete during the account phase did not end the phase"
+          )
+          forceCompleteExecuted = false
+          forceCompleteWanted = false
+          consecutiveTaskFailures = 0
         noMoreTasksExpected = true
         log.info(
           s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}, " +
