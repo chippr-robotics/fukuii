@@ -105,8 +105,8 @@ class EngineReorgRefCountSpec extends AnyFlatSpec with Matchers:
     val execution = new SimExecution(chain)
     val handler: ReorgStateHandler = if undoEnabled then chain else ReorgStateHandler.NoOp
     val fcm = new ForkChoiceManager(reader, writer, handler)
-    val service = new EngineApiService(reader, writer, execution, fcm, None, reorgState = handler)(
-      using blockchainConfig,
+    val service = new EngineApiService(reader, writer, execution, fcm, None, reorgState = handler)(using
+      blockchainConfig,
       null
     )
 

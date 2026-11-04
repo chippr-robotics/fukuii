@@ -1245,7 +1245,10 @@ class RegularSyncSpec
         // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
         // Use assertForDuration to continuously verify the mock is never called
         assertForDuration(
-          (consensusAdapter.evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(),
+          (consensusAdapter
+            .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
+            .verify(*, *, *)
+            .never(),
           remainingOrDefault
         )
       )

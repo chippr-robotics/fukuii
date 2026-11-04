@@ -496,7 +496,8 @@ object PendingTransactionsManager:
           case Some(bestBlock) =>
             val mptStorage = stateStorage.getReadOnlyStorage
             val stateTrie = MerklePatriciaTrie[Array[Byte], Account](bestBlock.header.stateRoot.toArray, mptStorage)(
-              using defaultByteArraySerializable,
+              using
+              defaultByteArraySerializable,
               Account.accountSerializer
             )
 

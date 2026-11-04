@@ -308,8 +308,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
       .persistState(worldState.saveAccount(address1, Account(0, 100)).saveAccount(address2, Account(0, 200)))
       .stateRootHash
     val leafHash: ByteString =
-      MerklePatriciaTrie[Address, Account](root.toArray, blockchain.getBackingMptStorage(-1))(
-        using Address.hashedAddressEncoder,
+      MerklePatriciaTrie[Address, Account](root.toArray, blockchain.getBackingMptStorage(-1))(using
+        Address.hashedAddressEncoder,
         Account.accountSerializer
       ).getProof(address1).flatMap(_.lastOption) match
         case Some(leaf: LeafNode) => ByteString(leaf.hash)

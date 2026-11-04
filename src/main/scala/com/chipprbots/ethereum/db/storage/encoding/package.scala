@@ -19,7 +19,8 @@ package object encoding:
       byteArrayFromEncodeable(nodeEncoded)
     }
 
-  private[storage] def snapshotFromBytes(encoded: Array[Byte]): StoredNodeSnapshot = decode(encoded)(using snapshotEncDec)
+  private[storage] def snapshotFromBytes(encoded: Array[Byte]): StoredNodeSnapshot =
+    decode(encoded)(using snapshotEncDec)
 
   private[storage] def snapshotsCountToBytes(value: BigInt): Array[Byte] = rlpEncode(value)(using bigIntEncDec)
 

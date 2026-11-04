@@ -142,11 +142,11 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(78999, amsterdamAtGenesis)), Head)(
-      using amsterdamAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(78999, amsterdamAtGenesis)), Head)(using
+      amsterdamAtGenesis
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(79000, amsterdamAtGenesis)), Head)(
-      using amsterdamAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(79000, amsterdamAtGenesis)), Head)(using
+      amsterdamAtGenesis
     ) should have size 1
   }
 
@@ -156,7 +156,7 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
   }
 
   it should "keep applying the intrinsic rule alone before Amsterdam" taggedAs (UnitTest, ConsensusTest) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(
-      using osakaAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(using
+      osakaAtGenesis
     ) should have size 1
   }

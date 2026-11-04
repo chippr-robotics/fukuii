@@ -93,8 +93,8 @@ class PendingTransactionsManagerPoolRulesSpec
     private val stateRoot: Array[Byte] =
       state
         .foldLeft(
-          MerklePatriciaTrie[Array[Byte], Account](stateStorage.getBackingStorage(0))(
-            using defaultByteArraySerializable,
+          MerklePatriciaTrie[Array[Byte], Account](stateStorage.getBackingStorage(0))(using
+            defaultByteArraySerializable,
             Account.accountSerializer
           )
         ) { case (trie, (address, account)) => trie.put(crypto.kec256(address.toArray), account) }

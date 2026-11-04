@@ -539,8 +539,8 @@ trait NetServiceBuilder:
 
   lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(instanceConfig.config)
 
-  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(
-    using classicSystem.toTyped.scheduler
+  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(using
+    classicSystem.toTyped.scheduler
   )
 
 /** The node's [[com.chipprbots.ethereum.transactions.TxGossipGate]]: shared by sync (SNAP/recovery close it, regular
@@ -841,8 +841,8 @@ trait AdminServiceBuilder:
       import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
       syncController.askForTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status](replyTo =>
         SyncController.WrappedSyncProtocol(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.GetStatus(replyTo))
-      )(
-        using timeout = org.apache.pekko.util.Timeout(
+      )(using
+        timeout = org.apache.pekko.util.Timeout(
           instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
         ),
         scheduler = classicSystem.toTyped.scheduler

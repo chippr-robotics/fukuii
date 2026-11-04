@@ -67,7 +67,9 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     admitted(Seq(selfTransfer(11999)), atAmsterdam) shouldBe empty
 
     // And through sender recovery: the self-transfer is admitted with its real sender.
-    SignedTransactionWithSender.getSignedTransactions(Seq(selfTransfer(12000)), atAmsterdam)(using amsterdamConfig) shouldBe
+    SignedTransactionWithSender.getSignedTransactions(Seq(selfTransfer(12000)), atAmsterdam)(using
+      amsterdamConfig
+    ) shouldBe
       Seq(SignedTransactionWithSender(selfTransfer(12000), senderAddress))
   }
 
@@ -105,7 +107,9 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     ConsensusTest
   ) in {
     val txs = (0 until 20).map(n => dynamicFeeTx(Some(senderAddress), 1, 12000, nonce = n, config = amsterdamConfig))
-    SignedTransactionWithSender.getSignedTransactionsOfBlock(amsterdamHeader(46, 460), txs)(using amsterdamConfig) shouldBe
+    SignedTransactionWithSender.getSignedTransactionsOfBlock(amsterdamHeader(46, 460), txs)(using
+      amsterdamConfig
+    ) shouldBe
       txs.map(SignedTransactionWithSender(_, senderAddress))
   }
 

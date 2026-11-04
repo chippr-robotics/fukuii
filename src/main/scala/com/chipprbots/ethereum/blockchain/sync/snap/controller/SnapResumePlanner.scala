@@ -133,8 +133,8 @@ private[snap] trait SnapResumePlanner
     scala.concurrent
       .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(using snapValidationEc)
       .failed
-      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(
-        using snapValidationEc
+      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(using
+        snapValidationEc
       )
 
   /** Task files handed to accounts-complete recovery (never swept while referenced). */

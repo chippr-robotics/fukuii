@@ -75,7 +75,9 @@ class EthashBlockHeaderValidatorSpec
     }.toSeq.flatten
 
     forAll(cases) { (blockHeader, parentBlock, supportsDaoFork, valid) =>
-      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(using createBlockchainConfig(supportsDaoFork)) match
+      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(using
+        createBlockchainConfig(supportsDaoFork)
+      ) match
         case Right(_)                      => assert(valid)
         case Left(DaoHeaderExtraDataError) => assert(!valid)
         case _                             => fail()
@@ -301,8 +303,8 @@ class EthashBlockHeaderValidatorSpec
     val blockNumber: BigInt = (parentHeader.number + 1).value
     val blockTimestamp: Timestamp = parentHeader.unixTimestamp + 6
 
-    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(
-      using blockchainConfigWithoutDifficultyBombRemoval
+    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(using
+      blockchainConfigWithoutDifficultyBombRemoval
     )
     val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096265")
 

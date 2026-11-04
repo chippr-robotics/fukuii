@@ -253,7 +253,9 @@ object JsonRpcHttpServer extends Logger:
     config.mode match
       case "http" =>
         Right(
-          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using actorSystem)
+          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using
+            actorSystem
+          )
         )
       case "https" =>
         Right(

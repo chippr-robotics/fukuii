@@ -164,7 +164,8 @@ class EthInfoService(
   def syncing(@unused req: SyncingRequest): ServiceResponse[SyncingResponse] =
     syncingController
       .askForTyped[SyncProtocol.Status](replyTo => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(replyTo)))(
-        using timeout = askTimeout,
+        using
+        timeout = askTimeout,
         scheduler = typedScheduler
       )
       .map {

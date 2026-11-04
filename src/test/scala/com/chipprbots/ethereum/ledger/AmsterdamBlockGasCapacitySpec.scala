@@ -186,8 +186,8 @@ class AmsterdamBlockGasCapacitySpec extends AnyFlatSpec with Matchers with Amste
 
   "blockGasCapacityError" should "select the rule by the block's timestamp" taggedAs (UnitTest, ConsensusTest) in {
     def check(ts: Long, txGas: BigInt) =
-      StdSignedTransactionValidator.blockGasCapacityError(txGas, 1000000, Timestamp(ts), 565130, 75530, 489600)(
-        using amsterdamConfig
+      StdSignedTransactionValidator.blockGasCapacityError(txGas, 1000000, Timestamp(ts), 565130, 75530, 489600)(using
+        amsterdamConfig
       )
     check(359, 500000).isDefined shouldBe true // Osaka: 500,000 + 565,130 > 1,000,000
     check(360, 500000) shouldBe None // Amsterdam: fits both dimensions

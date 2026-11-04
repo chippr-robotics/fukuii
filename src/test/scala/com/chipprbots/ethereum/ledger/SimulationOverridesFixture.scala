@@ -356,7 +356,8 @@ trait SimulationOverridesFixture extends AmsterdamFixtureVectors with Matchers:
     // As StxLedger prepares a call: the sender pays upfront, then the frame runs.
     val world = setup.prep.updateSenderAccountBeforeExecution(stx, senderAddress, preState)
     val result =
-      if traced then setup.prep.runVMWithTracer(stx, senderAddress, chain.header, world, new SilentTracer)(using chain.config)
+      if traced then
+        setup.prep.runVMWithTracer(stx, senderAddress, chain.header, world, new SilentTracer)(using chain.config)
       else setup.prep.runVM(stx, senderAddress, chain.header, world)(using chain.config)
     RpcOutcome(result.returnData, result.gasRemaining, result.logs, result.error)
 

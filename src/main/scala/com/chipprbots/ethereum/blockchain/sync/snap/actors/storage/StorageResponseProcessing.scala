@@ -156,8 +156,8 @@ private[actors] trait StorageResponseProcessing:
         val prebuildScheme = Option.when(!deferredMerkleization)(storageScheme)
         val selfRef = self
         Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(using processingEc)
-          .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(
-            using ExecutionContext.parasitic
+          .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(using
+            ExecutionContext.parasitic
           )
 
   /** Apply ready responses from the head of the queue, in arrival order. */

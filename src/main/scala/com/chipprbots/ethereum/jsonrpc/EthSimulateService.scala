@@ -1438,8 +1438,8 @@ class EthSimulateService(
     if txs.isEmpty then EmptyMpt
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
-      val trie = MerklePatriciaTrie[Int, SignedTransaction](source = stateStorage)(
-        using MptListValidator.intByteArraySerializable,
+      val trie = MerklePatriciaTrie[Int, SignedTransaction](source = stateStorage)(using
+        MptListValidator.intByteArraySerializable,
         SignedTransaction.byteArraySerializable
       )
       ByteString(txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)
@@ -1448,8 +1448,8 @@ class EthSimulateService(
     if receipts.isEmpty then EmptyMpt
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
-      val trie = MerklePatriciaTrie[Int, Receipt](source = stateStorage)(
-        using MptListValidator.intByteArraySerializable,
+      val trie = MerklePatriciaTrie[Int, Receipt](source = stateStorage)(using
+        MptListValidator.intByteArraySerializable,
         Receipt.byteArraySerializable
       )
       ByteString(receipts.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)

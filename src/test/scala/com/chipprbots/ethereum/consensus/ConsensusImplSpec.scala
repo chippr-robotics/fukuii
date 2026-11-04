@@ -420,8 +420,8 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         _: ChainWeight,
         _: Boolean,
         _: Map[ByteString, BlockAccessList]
-      )(
-        using _: BlockchainConfig
+      )(using
+        _: BlockchainConfig
       ))
       .when(*, *, *, *, *)
       .anyNumberOfTimes()

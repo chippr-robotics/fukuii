@@ -184,8 +184,8 @@ object StorageRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(
-              using ctx.executionContext
+            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(using
+              ctx.executionContext
             )
           ) {
             case Success(result) => ScanResult(result)

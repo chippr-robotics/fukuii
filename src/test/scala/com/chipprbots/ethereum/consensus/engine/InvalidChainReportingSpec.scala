@@ -783,8 +783,8 @@ class InvalidChainReportingSpec
     lazy val fcm: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
     lazy val engineApi: EngineApiService =
-      new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(
-        using blockchainConfig,
+      new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(using
+        blockchainConfig,
         typedScheduler
       )
 

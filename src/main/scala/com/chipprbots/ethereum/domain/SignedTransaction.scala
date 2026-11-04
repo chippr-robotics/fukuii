@@ -301,7 +301,9 @@ object SignedTransaction:
       .flatten
       .grouped(batchSize)
 
-    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(using ioRuntime)
+    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs)
+      .void
+      .unsafeRunAndForget()(using ioRuntime)
 
   private def calculateSendersForTxs(txs: Seq[SignedTransaction])(implicit
       blockchainConfig: BlockchainConfig

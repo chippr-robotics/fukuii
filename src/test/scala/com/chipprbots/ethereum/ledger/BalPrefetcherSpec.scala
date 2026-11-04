@@ -67,8 +67,8 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     def bal: BlockAccessList =
       BlockAccessList(
         (addresses :+ eoa)
-          .sortBy(_.bytes.toArray.toSeq.map(_ & 0xff))(
-            using Ordering.Implicits.seqOrdering[Seq, Int]
+          .sortBy(_.bytes.toArray.toSeq.map(_ & 0xff))(using
+            Ordering.Implicits.seqOrdering[Seq, Int]
           )
           .map(a => AccountChanges(a, Nil, (1 to slots).map(i => UInt256(i)), Nil, Nil, Nil))
       )
@@ -120,8 +120,8 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     // The execution's own walk (a CachingMptStorage on the same cache) now never reaches the database.
     val counting = new CountingStorage(f.mpt)
     val exec = new CachingMptStorage(counting, f.cache)
-    val trie = MerklePatriciaTrie[Address, Account](f.root.toArray, exec)(
-      using Address.hashedAddressEncoder,
+    val trie = MerklePatriciaTrie[Address, Account](f.root.toArray, exec)(using
+      Address.hashedAddressEncoder,
       Account.accountSerializer
     )
     (f.addresses :+ f.eoa).foreach(a => trie.get(a) shouldBe defined)

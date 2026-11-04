@@ -68,8 +68,8 @@ class GasUsedReceiptsProofSpec extends AnyFlatSpec with Matchers:
 
   /** The receipts-trie root, built exactly as `MptListValidator.isValid` builds it. */
   private def receiptsRootOf(receipts: Seq[Receipt]): ByteString =
-    val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(
-      using MptListValidator.intByteArraySerializable,
+    val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(using
+      MptListValidator.intByteArraySerializable,
       Receipt.byteArraySerializable
     )
     ByteString(receipts.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)

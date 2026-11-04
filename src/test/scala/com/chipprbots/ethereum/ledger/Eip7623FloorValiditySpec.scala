@@ -177,11 +177,11 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, osakaAtGenesis)), Head)(
-      using osakaAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, osakaAtGenesis)), Head)(using
+      osakaAtGenesis
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(
-      using osakaAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, osakaAtGenesis)), Head)(using
+      osakaAtGenesis
     ) should have size 1
   }
 
@@ -189,8 +189,8 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     UnitTest,
     ConsensusTest
   ) in {
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, cancunAtGenesis)), Head)(
-      using cancunAtGenesis
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, cancunAtGenesis)), Head)(using
+      cancunAtGenesis
     ) should have size 1
   }
 
@@ -214,14 +214,14 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     // the latest configured fork as its "now" and could not tell which floor applied here, so it applied none and kept
     // this 37,000-gas transaction. It now takes the fork from the head, and Osaka's rule is EIP-7623's.
     val osakaHead = Timestamp(300L)
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, amsterdamConfig)), osakaHead)(
-      using amsterdamConfig
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(37000, amsterdamConfig)), osakaHead)(using
+      amsterdamConfig
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, amsterdamConfig)), osakaHead)(
-      using amsterdamConfig
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(60999, amsterdamConfig)), osakaHead)(using
+      amsterdamConfig
     ) shouldBe empty
-    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, amsterdamConfig)), osakaHead)(
-      using amsterdamConfig
+    SignedTransactionWithSender.getStatelessValidTransactions(Seq(heavyCall(61000, amsterdamConfig)), osakaHead)(using
+      amsterdamConfig
     ) should have size 1
   }
 
@@ -236,16 +236,16 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
     ConsensusTest
   ) in {
     val result =
-      validatingPreparator.executeTransactions(Seq(heavyCall(60999, preAmsterdamConfig)), block45World, atPrague)(
-        using preAmsterdamConfig
+      validatingPreparator.executeTransactions(Seq(heavyCall(60999, preAmsterdamConfig)), block45World, atPrague)(using
+        preAmsterdamConfig
       )
     result.left.map(_.reason).left.toOption.getOrElse("") should startWith("INTRINSIC_GAS_BELOW_FLOOR_GAS_COST")
   }
 
   it should "execute when the transaction carries exactly its floor" taggedAs (UnitTest, ConsensusTest) in {
     val result =
-      validatingPreparator.executeTransactions(Seq(heavyCall(61000, preAmsterdamConfig)), block45World, atPrague)(
-        using preAmsterdamConfig
+      validatingPreparator.executeTransactions(Seq(heavyCall(61000, preAmsterdamConfig)), block45World, atPrague)(using
+        preAmsterdamConfig
       )
     result.map(_.receipts.map(_.cumulativeGasUsed)) shouldBe Right(Seq(BigInt(61000)))
   }
