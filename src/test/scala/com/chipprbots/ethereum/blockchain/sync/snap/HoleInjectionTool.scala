@@ -65,6 +65,9 @@ object HoleInjectionTool:
   val Usage: String =
     "usage: HoleInjectionTool <stopped datadir under " + Allowed + "> <depth of 1 or more> [corrupt]\n" +
       "   or: HoleInjectionTool <stopped datadir> address <hex address> <account|storage|code>\n" +
+      "   or: HoleInjectionTool <stopped datadir> address <hex address> <account|storage> corrupt " +
+      "<invalid-node|out-of-bounds|null-node>\n" +
+      "   or: HoleInjectionTool <stopped datadir> delete-hash <hex node hash>\n" +
       "Deletes one trie node from the hash store, `depth` references below the best block's state root, or with `corrupt` " +
       "writes junk bytes under its key."
 
@@ -177,8 +180,23 @@ object HoleInjectionTool:
         case other => Left(s"The trie ends at ${at.describe} in ${other.getClass.getSimpleName}")
     go(HashNode(root.toArray), AuditPosition.AccountRoot, nibbles, Nil)
 
-  /** Deletes the part of `address` that `part` names, under the best block's state root. */
-  def injectAt(source: DataSource, address: ByteString, part: AccountPart): Either[String, Hole] =
+  /** What `address <hex> <account|storage> corrupt <class>` writes in place of the node, each a different failure on
+    * read (spec 022 T062, forge): `invalid-node` (0x01) fails to decode as an MPT node, `out-of-bounds` (0xc1) is an
+    * RLP list that claims a byte it does not have, `null-node` (0x80) decodes as an empty node, so the trie reads as
+    * wrong rather than as broken.
+    */
+  val CorruptClasses: Map[String, Array[Byte]] =
+    Map("invalid-node" -> Array(0x01.toByte), "out-of-bounds" -> Array(0xc1.toByte), "null-node" -> Array(0x80.toByte))
+
+  /** Deletes the part of `address` that `part` names, under the best block's state root, or with `corruptWith` writes
+    * those bytes under its key instead (inside basic pruning's wrapper, at the count it had).
+    */
+  def injectAt(
+      source: DataSource,
+      address: ByteString,
+      part: AccountPart,
+      corruptWith: Option[Array[Byte]] = None
+  ): Either[String, Hole] =
     val best = new AppStateStorage(source).getBestBlockInfo()
     val nodes = new NodeStorage(source)
     def read(hash: ByteString): Option[Array[Byte]] =
@@ -193,10 +211,22 @@ object HoleInjectionTool:
         case AccountPart.Account => path.headOption.toRight("No hash-referenced node on the way to the account")
         case AccountPart.Storage => Right((path.head._1, account.storageRoot.value))
         case AccountPart.Code    => Right((path.head._1, account.codeHash.value))
+      _ <-
+        if corruptWith.isDefined && part == AccountPart.Code then
+          Left("Code is not a trie node: corrupt takes account or storage")
+        else Right(())
     yield
       val (position, hash) = target
       val space = if part == AccountPart.Code then Namespaces.CodeNamespace else Namespaces.NodeNamespace
-      source.updateSync(Seq(DataSourceUpdateOptimized(space, Seq(hash.toArray), Nil)))
+      val write = corruptWith match
+        case None => DataSourceUpdateOptimized(space, Seq(hash.toArray), Nil)
+        case Some(junk) =>
+          val stored = nodes.get(hash).get
+          val bytes =
+            if ByteString(kec256(stored)) == hash then junk
+            else StoredNodeTestAccess.wrapped(junk, StoredNodeTestAccess.references(stored))
+          DataSourceUpdateOptimized(space, Nil, Seq(hash.toArray -> bytes))
+      source.updateSync(Seq(write))
       Hole(header.number.value, root, position, hash)
 
   /** Deletes the leaf of each of `slots` in the storage of `address`, under the best block's state root. */
@@ -260,31 +290,56 @@ object HoleInjectionTool:
 
   private def mainOthers(args: Array[String], die: String => Nothing): Unit =
     args match
-      case Array(dir, "address", hex, partText) =>
-        val part = AccountPart.values
-          .find(_.toString.equalsIgnoreCase(partText))
-          .getOrElse(die(s"Not account, storage or code: $partText"))
-        val address = ByteString(Hex.decode(hex.stripPrefix("0x")))
-        val hole = for
+      case Array(dir, "address", hex, partText) => mainAddress(dir, hex, partText, None, die)
+      case Array(dir, "delete-hash", hex)       =>
+        // spec 022 T062: the repair forge names for a corrupt node (a walk to it would fail on the node itself).
+        val hash = Hex.decode(hex.stripPrefix("0x"))
+        val done = for
           real <- checked(dir)
           rocks <- rocksDbUnder(real)
-          found <-
-            val source = RocksDbDataSource(rocksConfig(rocks), Namespaces.nsSeq)
-            try injectAt(source, address, part)
-            finally source.close()
-        yield found
-        hole.fold(
-          die,
-          h =>
-            println(
-              s"""Deleted the $part of $hex.
+        yield
+          val source = RocksDbDataSource(rocksConfig(rocks), Namespaces.nsSeq)
+          try
+            val present = new NodeStorage(source).get(ByteString(hash)).isDefined
+            source.updateSync(Seq(DataSourceUpdateOptimized(Namespaces.NodeNamespace, Seq(hash), Nil)))
+            present
+          finally source.close()
+        done.fold(die, present => println(s"Deleted node $hex (it was ${if present then "present" else "absent"})"))
+      case Array(dir, "address", hex, partText, "corrupt", cls) =>
+        mainAddress(dir, hex, partText, Some(CorruptClasses.getOrElse(cls, die(s"Not a corrupt class: $cls"))), die)
+      case _ => mainByDepth(args, die)
+
+  private def mainAddress(
+      dir: String,
+      hex: String,
+      partText: String,
+      corruptWith: Option[Array[Byte]],
+      die: String => Nothing
+  ): Unit =
+    val part = AccountPart.values
+      .find(_.toString.equalsIgnoreCase(partText))
+      .getOrElse(die(s"Not account, storage or code: $partText"))
+    val address = ByteString(Hex.decode(hex.stripPrefix("0x")))
+    val hole = for
+      real <- checked(dir)
+      rocks <- rocksDbUnder(real)
+      found <-
+        val source = RocksDbDataSource(rocksConfig(rocks), Namespaces.nsSeq)
+        try injectAt(source, address, part, corruptWith)
+        finally source.close()
+    yield found
+    val did = corruptWith.fold("Deleted")(b => s"Corrupted (0x${Hex.toHexString(b)})")
+    hole.fold(
+      die,
+      h =>
+        println(
+          s"""$did the $part of $hex.
                  |  block ${h.block}
                  |  root  ${AuditWalk.hexOf(h.root)}
                  |  hash  ${AuditWalk.hexOf(h.hash)}
                  |  under ${h.position.describe}""".stripMargin
-            )
         )
-      case _ => mainByDepth(args, die)
+    )
 
   private def mainByDepth(args: Array[String], die: String => Nothing): Unit =
     val (datadir, depthText, mode) = args match
