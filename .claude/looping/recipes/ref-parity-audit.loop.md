@@ -2,7 +2,7 @@
 
 Pull all reference client upstream branches, compare Fukuii's implementation
 against current upstream behavior, and produce a drift report. Read-only. No code
-changes. Drift findings are recorded in SPRINT-QUEUE or DEFERRED-BACKLOG for
+changes. Drift findings are recorded in SPRINT-QUEUE or CHASE-QUEUE (`DEFER` entries) for
 follow-up via spec-conformance recipe instances.
 
 **When to reach for it:** Schedule weekly via `/loop 1w .claude/looping/bin/run-loop.sh ref-parity-audit`
@@ -20,7 +20,7 @@ gates: [conformance]
 refresh_refs: true
 constraints:
   - read-only; no source code changes in this recipe
-  - audit findings must be written to DEFERRED-BACKLOG or SPRINT-QUEUE, not fixed inline
+  - audit findings must be written to CHASE-QUEUE (`DEFER` entries) or SPRINT-QUEUE, not fixed inline
   - if drift is found, open a spec-conformance recipe instance to track and fix it
   - do not upgrade any dependency as part of this audit
 budget:
@@ -78,7 +78,7 @@ Each checker produces a domain drift report in the ledger. The orchestrator
 consolidates into a single finding list and writes to:
 
 ```
-working-docs/DEFERRED-BACKLOG.md   # for long-horizon items
+working-docs/CHASE-QUEUE.md        # for long-horizon items (type DEFER)
 working-docs/SPRINT-QUEUE.md       # for items ready for next sprint
 ```
 
