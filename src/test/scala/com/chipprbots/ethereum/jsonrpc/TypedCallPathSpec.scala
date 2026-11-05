@@ -475,8 +475,8 @@ class TypedCallPathSpec
     est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
       com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)
     )
-    CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe
-      "invalid opcode: opcode 0xfe not defined"
+    // geth `OpCode.String()`: 0xFE is named INVALID (geth v1.17.9 on Ephemery answers "invalid opcode: INVALID")
+    CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe "invalid opcode: INVALID"
     est(spin).left.value shouldBe StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (100000)")
 
   it should "keep go-ethereum's floor-data-gas message, and map only intrinsic gas to the allowance message" taggedAs (
@@ -582,11 +582,13 @@ class TypedCallPathSpec
     val spin: Address = Address(0xfeeb)
     val invalid: Address = Address(0xfeec)
     val reverter: Address = Address(0xfeed)
+    val undefined: Address = Address(0xfeee)
     val overrides: Option[Map[Address, StateOverride]] = Some(
       Map(
         spin -> StateOverride(code = Some(code("5b600056"))), // JUMPDEST PUSH1 0 JUMP: only ever runs out of gas
         invalid -> StateOverride(code = Some(code("fe"))),
-        reverter -> StateOverride(code = Some(code("60006000fd")))
+        reverter -> StateOverride(code = Some(code("60006000fd"))),
+        undefined -> StateOverride(code = Some(code("0c"))) // a byte geth names nothing
       )
     )
     def rpc(to: Address): Either[JsonRpcError, CallResponse] =
@@ -595,8 +597,40 @@ class TypedCallPathSpec
         .unsafeRunSync()
     // geth v1.17.9 on Ephemery answers the `spin` call with {"code":-32000,"message":"out of gas"}; fukuii answered "0x"
     rpc(spin) shouldBe Left(JsonRpcError(-32000, "out of gas", None))
-    rpc(invalid) shouldBe Left(JsonRpcError(-32000, "invalid opcode: opcode 0xfe not defined", None))
+    // geth's OpCode.String(): the name where geth has one, else "opcode 0x.. not defined". Both as geth v1.17.9 on
+    // Ephemery answers these two calls
+    rpc(invalid) shouldBe Left(JsonRpcError(-32000, "invalid opcode: INVALID", None))
+    rpc(undefined) shouldBe Left(JsonRpcError(-32000, "invalid opcode: opcode 0xc not defined", None))
     rpc(reverter).left.value.code shouldBe 3
+
+  "CallErrors.opCodeName" should "name an opcode as go-ethereum's OpCode.String() does, enabled by the fork or not" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    def name(op: Int): String = CallErrors.opCodeName(op.toByte)
+    // geth's names, not fukuii's (SHA3)
+    name(0x20) shouldBe "KECCAK256"
+    name(0x44) shouldBe "DIFFICULTY"
+    // PUSH0 before Shanghai, CLZ before Osaka, BASEFEE on ETC before Olympia: named all the same
+    name(0x5f) shouldBe "PUSH0"
+    name(0x1e) shouldBe "CLZ"
+    name(0x48) shouldBe "BASEFEE"
+    name(0x60) shouldBe "PUSH1"
+    name(0x7f) shouldBe "PUSH32"
+    name(0x8f) shouldBe "DUP16"
+    name(0x9f) shouldBe "SWAP16"
+    name(0xa4) shouldBe "LOG4"
+    name(0xe6) shouldBe "DUPN"
+    name(0xfe) shouldBe "INVALID"
+    name(0xff) shouldBe "SELFDESTRUCT"
+    // unnamed bytes
+    name(0x0c) shouldBe "opcode 0xc not defined"
+    name(0x21) shouldBe "opcode 0x21 not defined"
+    name(0xa5) shouldBe "opcode 0xa5 not defined"
+    name(0xef) shouldBe "opcode 0xef not defined"
+    // 170 named, as geth's opCodeToString
+    (0 to 255).count(op => !name(op).endsWith("not defined")) shouldBe 170
+  }
 
   /** The beacon deposit contract as the Amsterdam fixture's pre-state deploys it: its code and the 31 zero-hash slots
     * its constructor writes, with no deposit made yet.
