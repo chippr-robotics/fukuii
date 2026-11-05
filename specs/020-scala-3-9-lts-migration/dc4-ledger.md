@@ -66,7 +66,7 @@ Manifest synthesis deprecations, and the one-off deprecations below.
 | `_` type wildcard | 5 | 0 | 0 | cleared by the 3.4 rewrite | **error**: `` msg=`_` is deprecated for wildcard arguments of types `` |
 | `with` type operator (E003) | 2 | 0 | 0 | cleared by the 3.4 rewrite | **error**: `msg=with as a type operator has been deprecated` |
 | Inaccessible-companion implicits | 0 | 0 | **0 at 3.9.0** | none exist (`grep -ci inaccessible` of every log = 0) | none needed |
-| Ascription after pattern | 4 | **5** | 0 | fixed. 3 test sites (one added after GT-1, by #1697) and 2 in `vm/PrecompiledContracts.scala` (own commit, javap-checked, for forge) | the compiler no longer accepts the construct |
+| Ascription after pattern | 4 | **5** | 0 | fixed. 3 test sites (one added after GT-1, by #1697) and 2 in `vm/PrecompiledContracts.scala` (own commit, javap-checked, for forge) | **error**: `msg=Type ascriptions after patterns other than`. At 3.9.0 the construct is still accepted with a warning ("are no longer supported"), so the ratchet is what stops it coming back |
 | `trait App` deprecated | 2 | 2 | 0 emitted, 2 suppressed | deferred (rows 1 and 2) | narrow `@nowarn` |
 | Unused `@nowarn` | 2 | 2 | 0 | deleted (`CalibratePivotTDSpec`, `CommonFakePeer`) | `-Wunused:all` reports any new one |
 | E029, new at 3.9 | 2 | 2 | 0 emitted, 2 suppressed | deferred (rows 3 and 4) | narrow `@nowarn` |
@@ -91,6 +91,7 @@ R-6 expected about 85 plus 4 suppressed sites; this tree is lower because Manife
 "-Wconf:msg=Alphanumeric method .* is not declared infix:error"
 "-Wconf:msg=`_` is deprecated for wildcard arguments of types:error"
 "-Wconf:msg=with as a type operator has been deprecated:error"
+"-Wconf:msg=Type ascriptions after patterns other than:error"
 ```
 
 R-6's draft `using` filter dropped the backticks. It does not match: the compiler's text is
@@ -98,3 +99,9 @@ R-6's draft `using` filter dropped the backticks. It does not match: the compile
 at `-source:3.9` (a warning without the flag, an error with it; E205 at `-source:3.7-migration`), and in the real build
 with one temporary `src/main` file holding the four 3.9-visible constructs, which failed `sbt compile` with exactly five
 errors (E028, E003, `_`, `using`, infix). The file was deleted before the commit.
+
+The ascription filter was added in the review round. The compiler's message is multi-line ("Type ascriptions after patterns
+other than:" then two bullets, then "are no longer supported"). The filter uses the first line without its colon, since a
+colon would end the filter. A scratch file `val (a, b): (Int, String) = t` at `-source:3.9` warns without the flag and errors
+with it (a filter on the last line also matches; the same construct with the ascription on the right-hand side stays clean).
+A temporary `src/main` file with that construct failed `sbt compile` with exactly one error; it was deleted before the commit.

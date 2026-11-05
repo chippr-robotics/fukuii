@@ -70,11 +70,12 @@ val scala3Options = Seq(
   // Spec 020 PR 6 (DC-4) ratchets. In Scala 3.9 the LAST matching -Wconf wins, so add new ones below existing ones.
   "-Wconf:id=E205:error", // Given prioritisation (DC-3): inert at -source:3.9, errors if a 3.6- or -migration source level returns
   "-Wconf:id=E028:error", // Illegal literal: write `(-98).toByte`, not `-98.toByte`
-  // Migration warnings have no id, so the next four match the message. Keep the backticks: the compiler's own text has them.
+  // Migration warnings have no id, so the next five match the message. Keep the backticks: the compiler's own text has them.
   "-Wconf:msg=Implicit parameters should be provided with a `using` clause:error",
   "-Wconf:msg=Alphanumeric method .* is not declared infix:error", // write a.m(b) or a `m` b
   "-Wconf:msg=`_` is deprecated for wildcard arguments of types:error", // write `?`
   "-Wconf:msg=with as a type operator has been deprecated:error", // write `&`
+  "-Wconf:msg=Type ascriptions after patterns other than:error", // `val (a, b): (A, B) = e`: ascribe e instead
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
