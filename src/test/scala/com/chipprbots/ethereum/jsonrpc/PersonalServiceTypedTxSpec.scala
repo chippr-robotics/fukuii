@@ -247,7 +247,8 @@ class PersonalServiceTypedTxSpec
       maxPriorityFeePerGas = Some(1),
       nonce = Some(3)
     )
-    def sign(a: TxArgs): Either[JsonRpcError, SignTransactionResponse] = personal.signTransaction(SignTransactionRequest(a, None)).unsafeRunSync()
+    def sign(a: TxArgs): Either[JsonRpcError, SignTransactionResponse] =
+      personal.signTransaction(SignTransactionRequest(a, None)).unsafeRunSync()
     sign(full.copy(gas = None)) shouldBe Left(LogicError("gas not specified"))
     sign(full.copy(maxFeePerGas = None)) shouldBe Left(
       LogicError("missing gasPrice or maxFeePerGas/maxPriorityFeePerGas")
@@ -330,7 +331,8 @@ class PersonalServiceTypedTxSpec
       gasPrice = Some(GasPrice(7)),
       nonce = Some(4)
     )
-    val res: Either[JsonRpcError, SignTransactionResponse] = personal.signTransaction(SignTransactionRequest(args, Some(passphrase))).unsafeRunSync()
+    val res: Either[JsonRpcError, SignTransactionResponse] =
+      personal.signTransaction(SignTransactionRequest(args, Some(passphrase))).unsafeRunSync()
     res.map(_.result.stx) shouldBe Right(
       wallet.signTx(LegacyTransaction(4, GasPrice(7), GasAmount(21000), Some(to), 0, ByteString.empty), Some(1)).tx
     )

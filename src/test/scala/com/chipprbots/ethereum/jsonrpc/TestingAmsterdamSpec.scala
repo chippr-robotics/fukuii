@@ -289,7 +289,8 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       val head: Block = blockchainReader.getBestBlock.getOrElse(fail("no head"))
       head.header.hash.value shouldBe committed.blockHash
       head.header.slotNumber shouldBe Some(BigInt(4))
-      val stored: ByteString = blockchainReader.getBlockAccessListByHash(head.header.hash).getOrElse(fail("no stored list"))
+      val stored: ByteString =
+        blockchainReader.getBlockAccessListByHash(head.header.hash).getOrElse(fail("no stored list"))
       head.header.blockAccessListHash shouldBe Some(ByteString(kec256(stored.toArray)))
 
       // eth_getBlockByNumber("latest") now shows the Amsterdam fields.

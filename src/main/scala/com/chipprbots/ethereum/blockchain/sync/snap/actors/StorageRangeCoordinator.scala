@@ -450,7 +450,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   /** Fully-downloaded `(accountHash, storageRoot, lastSlotBatch)` whose marker is not written yet. Package-private for
     * tests.
     */
-  val pendingDoneMarkers: ArrayBuffer[(ByteString, ByteString, Long)] = mutable.ArrayBuffer.empty[(ByteString, ByteString, Long)]
+  val pendingDoneMarkers: ArrayBuffer[(ByteString, ByteString, Long)] =
+    mutable.ArrayBuffer.empty[(ByteString, ByteString, Long)]
 
   /** Set once a flat batch failed: this coordinator writes no further markers. Package-private for tests. */
   var doneMarkersDisabled: Boolean = false

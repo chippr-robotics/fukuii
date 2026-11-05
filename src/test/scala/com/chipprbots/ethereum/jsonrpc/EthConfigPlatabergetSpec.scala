@@ -104,7 +104,8 @@ class EthConfigPlatabergetSpec
     UnitTest,
     RPCTest
   ) in new PlatabergetSetup(headTimestamp = AmsterdamTimestamp):
-    val contracts: Map[String, Address] = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value.current.value.systemContracts
+    val contracts: Map[String, Address] =
+      ethService.config(ConfigRequest()).unsafeRunSync().toOption.value.current.value.systemContracts
     contracts("BUILDER_DEPOSIT_CONTRACT_ADDRESS") shouldBe BlockExecution.BuilderDepositQueueAddress
     contracts("BUILDER_EXIT_CONTRACT_ADDRESS") shouldBe BlockExecution.BuilderExitQueueAddress
     contracts should have size 7

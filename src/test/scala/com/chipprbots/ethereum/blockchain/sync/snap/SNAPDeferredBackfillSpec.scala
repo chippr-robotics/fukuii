@@ -178,13 +178,15 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       // BLOCKHASH for the block after the pivot walks parentHash through the stored headers.
       val executing: BlockHeader = pivotHeader.copy(number = BlockNumber(pivot + 1), parentHash = pivotHeader.hash)
       val blockHashes: AncestorBlockHashes = AncestorBlockHashes.forBlock(executing, blockchainReader)
-      val byNumber: Map[BigInt, BlockHeader] = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
+      val byNumber: Map[BigInt, BlockHeader] =
+        (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
       blockHashes(pivot - 1) shouldBe Some(byNumber(pivot - 1).hash.value)
       blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
     )
 
   it should "restart the chain downloader, and keep holding, when the header cursor stalls during the hold" taggedAs UnitTest in new Fixture:
-    val snap: TypedActorRef[Command] = start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)
+    val snap: TypedActorRef[Command] =
+      start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)
     awaitProcessed(snap)
     eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
     snap ! SNAPSyncController.HealingRootUnservable(root)

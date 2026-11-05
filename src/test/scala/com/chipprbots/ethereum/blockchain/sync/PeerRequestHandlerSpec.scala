@@ -65,7 +65,10 @@ class PeerRequestHandlerSpec
 
     given (Ping => MessageSerializable) = PingEnc(_)
 
-    def spawnPRH(npmProbe: TestProbe, timeout: FiniteDuration = 5.seconds): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
+    def spawnPRH(
+        npmProbe: TestProbe,
+        timeout: FiniteDuration = 5.seconds
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[Ping, Pong](
           peer = peer,
@@ -193,7 +196,10 @@ class PeerRequestHandlerSpec
   ) in new Fixtures:
     val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
-    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
+    def request(
+        id: Int,
+        to: TypedActorRef[PeerRequestHandler.Result]
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
           peer = peer,
@@ -207,7 +213,8 @@ class PeerRequestHandlerSpec
         ),
         s"prh-${java.util.UUID.randomUUID()}"
       )
-    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] = testKit.createTestProbe[PeerRequestHandler.Result]()
+    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] =
+      testKit.createTestProbe[PeerRequestHandler.Result]()
     request(11, replyTo.ref)
     request(22, other.ref)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
@@ -228,7 +235,10 @@ class PeerRequestHandlerSpec
   ) in new Fixtures:
     val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     given (GetByteCodes => MessageSerializable) = new GetByteCodes.GetByteCodesEnc(_)
-    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
+    def request(
+        id: Int,
+        to: TypedActorRef[PeerRequestHandler.Result]
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[GetByteCodes, ByteCodes](
           peer = peer,
@@ -242,7 +252,8 @@ class PeerRequestHandlerSpec
         ),
         s"prh-${java.util.UUID.randomUUID()}"
       )
-    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] = testKit.createTestProbe[PeerRequestHandler.Result]()
+    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] =
+      testKit.createTestProbe[PeerRequestHandler.Result]()
     request(11, replyTo.ref)
     request(22, other.ref)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]

@@ -92,12 +92,13 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
 
       // Records, at the synced (flags) write, whether the node had already reached the data source.
       val ds = new FlagsProbeDataSource(rootHash)
-      val inMemory: FixedDataSource & LocalPruningConfigBuilder & (FixedPruningMode & DefaultStorages) = new EphemDataSourceComponent
-        with CheckpointImporterSpec.FixedDataSource(ds)
-        with LocalPruningConfigBuilder
-        with CheckpointImporterSpec.FixedPruningMode(InMemoryPruning(10))
-        with Storages.DefaultStorages
-        with com.chipprbots.ethereum.TestInstanceConfigProvider
+      val inMemory: FixedDataSource & LocalPruningConfigBuilder & (FixedPruningMode & DefaultStorages) =
+        new EphemDataSourceComponent
+          with CheckpointImporterSpec.FixedDataSource(ds)
+          with LocalPruningConfigBuilder
+          with CheckpointImporterSpec.FixedPruningMode(InMemoryPruning(10))
+          with Storages.DefaultStorages
+          with com.chipprbots.ethereum.TestInstanceConfigProvider
       val importer = new CheckpointImporter(
         BlockchainWriter(inMemory.storages),
         inMemory.storages.stateStorage,

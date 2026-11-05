@@ -325,7 +325,8 @@ class TypedCallPathSpec
 
   it should "raise eth_estimateGas by the authorization's cost" taggedAs (UnitTest, RPCTest) in new Node:
     val without: BigInt = estimate(args(authority)).value
-    val withAuth: BigInt = estimate(args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))).value
+    val withAuth: BigInt =
+      estimate(args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))).value
     withAuth should be > without
 
   it should "refuse an empty list as go-ethereum does" taggedAs (UnitTest, RPCTest) in new Node:

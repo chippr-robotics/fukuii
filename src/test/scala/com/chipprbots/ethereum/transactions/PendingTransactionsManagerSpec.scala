@@ -1164,7 +1164,8 @@ class PendingTransactionsManagerSpec
     headNumber = shippedChain("eth").forkBlockNumbers.olympiaBlockNumber,
     baseFee = Some(BaseFeeCalculator.InitialBaseFee)
   ):
-    val stx: SignedTransactionWithSender = signedBy(dynamicFee(chainConfig.chainId.value), crypto.generateKeyPair(secureRandom))
+    val stx: SignedTransactionWithSender =
+      signedBy(dynamicFee(chainConfig.chainId.value), crypto.generateKeyPair(secureRandom))
     pendingTransactionsManager ! AddTransactions(stx)
     eventually {
       pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx) shouldBe Seq(stx)

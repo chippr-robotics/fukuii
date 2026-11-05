@@ -462,7 +462,11 @@ final class HookedDataSource(underlying: DataSource, gate: KillGate) extends Dat
     underlying.getOptimized(namespace, key)
   override def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
     underlying.multiGetOptimized(namespace, keys)
-  def scanRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] =
+  def scanRange(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExclusive: Array[Byte]
+  ): Iterator[(Array[Byte], Array[Byte])] =
     underlying.scanRange(namespace, fromKey, toKeyExclusive)
   def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
     underlying.deleteRange(namespace, fromKey, toKeyExclusive)

@@ -236,7 +236,8 @@ class EthMiningServiceSpec
 
     blockGenerator.getPrepared.expects(powHash).returning(Some(PendingBlock(block, Nil)))
 
-    val submitRequest: SubmitWorkRequest = SubmitWorkRequest(ByteString("nonce"), powHash, ByteString(Hex.decode("01" * 32)))
+    val submitRequest: SubmitWorkRequest =
+      SubmitWorkRequest(ByteString("nonce"), powHash, ByteString(Hex.decode("01" * 32)))
     val response1: Either[JsonRpcError, SubmitWorkResponse] = ethMiningService.submitWork(submitRequest).unsafeRunSync()
     response1 shouldEqual Right(SubmitWorkResponse(true))
 

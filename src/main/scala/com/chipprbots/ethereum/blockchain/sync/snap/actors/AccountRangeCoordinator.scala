@@ -167,7 +167,8 @@ private[actors] class AccountRangeCoordinatorImpl(
   //   * any successful response from peer → recordPeerSuccess clears strikes
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
-  val emptyResponseStrikes: scala.collection.mutable.Map[PeerId, Int] = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  val emptyResponseStrikes: scala.collection.mutable.Map[PeerId, Int] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   var pivotRefreshRequested = false
 
   // Task management — resume ranges from saved positions (core-geth parity).
@@ -232,7 +233,8 @@ private[actors] class AccountRangeCoordinatorImpl(
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
-  val activeTasks: scala.collection.mutable.Map[BigInt, (AccountTask, ActorRef[WorkerMessage], Peer)] = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
+  val activeTasks: scala.collection.mutable.Map[BigInt, (AccountTask, ActorRef[WorkerMessage], Peer)] =
+    mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
   // Seeded with the ranges already complete on resume (#1597): every snapshot builds its cursor map from pending,
   // active, storing and completed tasks, so a skipped range left out of here dropped out of every later checkpoint, and
   // the next restart saw one cursor fewer than the layout and rejected the whole record.

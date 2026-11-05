@@ -379,7 +379,8 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
-    val theWrite: Seq[Set[String]] = syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
+    val theWrite: Seq[Set[String]] =
+      syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
     theWrite.size shouldBe 1
     theWrite.head should contain(AppStateStorage.Keys.BytecodeRecoveryDone)
     theWrite.head should contain(AppStateStorage.Keys.StorageRecoveryDone)

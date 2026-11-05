@@ -272,7 +272,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -309,7 +310,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       // Synchronous end-to-end inside the Start handler (accounts already complete, no peers to bootstrap a
       // header from): by the time this returns, currentPhase == StateHealing and the coordinator is spawned
@@ -359,14 +361,16 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     "pivot header's root (A5 guard must not be weakened)" taggedAs UnitTest in (new Fixture:
       val pivotX: BigInt = BigInt(10_000)
       val persistedRoot: ByteString = fakeRoot(0x11) // what AppStateStorage says
-      val realHeaderRoot: ByteString = fakeRoot(0x99) // what the pivot header ACTUALLY stored on disk says — genuinely different
+      val realHeaderRoot: ByteString =
+        fakeRoot(0x99) // what the pivot header ACTUALLY stored on disk says — genuinely different
 
       storeGenesis()
       storeHeaderAt(pivotX, realHeaderRoot)
       seedResumeState(pivotX, persistedRoot)
 
       peers.set(Map.empty)
-      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -405,7 +409,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -529,7 +534,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] =
+        spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -604,7 +610,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     storeHeaderAt(pivot0, fakeRoot(0xe7))
     seedResumeState(pivot0, fakeRoot(0xe7))
     peers.set(Map.empty)
-    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] =
+      spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -666,7 +673,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     storeHeaderAt(pivot0, fakeRoot(0xe2))
     seedResumeState(pivot0, fakeRoot(0xe2))
     peers.set(Map.empty)
-    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] =
+      spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -685,7 +693,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     storeHeaderAt(pivot0, fakeRoot(0xe3))
     seedResumeState(pivot0, fakeRoot(0xe3))
     peers.set(Map.empty)
-    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] =
+      spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -721,7 +730,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     blockchainWriter.storeBlock(Block(posHeader, BlockBody.empty)).commit()
     seedResumeState(pivot0, fakeRoot(0xe4))
     peers.set(Map.empty)
-    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] =
+      spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)

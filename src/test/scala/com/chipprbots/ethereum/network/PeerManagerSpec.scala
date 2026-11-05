@@ -1405,7 +1405,8 @@ class PeerManagerSpec
     UnitTest,
     NetworkTest
   ) in new SnapGoodSetup:
-    val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+    val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] =
+      testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
     peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
     start()
     val tp: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
@@ -1414,7 +1415,8 @@ class PeerManagerSpec
 
   it should "not take a failed-dial strike while the outgoing table is full" taggedAs (UnitTest, NetworkTest) in
     new SnapGoodSetup:
-      val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+      val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] =
+        testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
       peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
       // Maintained peers bypass the limit and fill the reserved budget (2 slots) before the first re-dial.
       peerManager ! PeerManagerActor.AddMaintainedPeerCmd(

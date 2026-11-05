@@ -41,7 +41,12 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 final private class ScanFailingDataSource extends EphemDataSource(Map.empty):
   @volatile var failing: Boolean = false
   @volatile var pageReads: Int = 0 // reads of a page, not the one-entry reads that ask whether there is anything
-  override def scanRangeLimit(ns: IndexedSeq[Byte], from: Array[Byte], to: Array[Byte], limit: Int): Iterator[(Array[Byte], Array[Byte])] =
+  override def scanRangeLimit(
+      ns: IndexedSeq[Byte],
+      from: Array[Byte],
+      to: Array[Byte],
+      limit: Int
+  ): Iterator[(Array[Byte], Array[Byte])] =
     if failing then throw new RuntimeException("injected excluded-set read failure")
     if limit > 1 then pageReads += 1
     super.scanRangeLimit(ns, from, to, limit)

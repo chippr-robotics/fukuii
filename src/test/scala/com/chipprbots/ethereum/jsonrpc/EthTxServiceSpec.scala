@@ -583,7 +583,8 @@ class EthTxServiceSpec
     RPCTest
   ) in new BlobAdmissibleSetup:
     pendingTransactionsManager.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
-    val res: Either[JsonRpcError, SendRawTransactionResponse] = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
+    val res: Either[JsonRpcError, SendRawTransactionResponse] =
+      ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
 
     res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
       Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")

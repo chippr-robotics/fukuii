@@ -89,7 +89,8 @@ class JsonRpcControllerTypedTxSpec
         "input" -> "0x"
       )
     )
-    val response: JsonRpcResponse = jsonRpcController.handleRequest(newJsonRpcRequest("eth_signTransaction", params)).unsafeRunSync()
+    val response: JsonRpcResponse =
+      jsonRpcController.handleRequest(newJsonRpcRequest("eth_signTransaction", params)).unsafeRunSync()
     response should haveResult(SignTransactionResult.encode(result))
     seen.map(_.passphrase) shouldBe Some(None)
     seen.flatMap(_.tx.maxFeePerGas) shouldBe Some(BigInt(0x684ee180))
@@ -174,7 +175,8 @@ class JsonRpcControllerTypedTxSpec
     seen.map(_.tx.callData) shouldBe Some(ByteString(0x12, 0x34))
 
   it should "reject data and input that differ" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
-    val params: List[JObject] = List(JObject("from" -> from.toString, "to" -> to.toString, "data" -> "0x01", "input" -> "0x02"))
+    val params: List[JObject] =
+      List(JObject("from" -> from.toString, "to" -> to.toString, "data" -> "0x01", "input" -> "0x02"))
     jsonRpcController.handleRequest(newJsonRpcRequest("eth_sendTransaction", params)).unsafeRunSync() should haveError(
       TxArgsError.DataInputMismatch.toJsonRpcError
     )

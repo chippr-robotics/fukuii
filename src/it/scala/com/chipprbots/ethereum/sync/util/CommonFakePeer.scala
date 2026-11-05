@@ -204,7 +204,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val statSlotDuration: FiniteDuration = 1.minute
     override val statSlotCount: Int = 30
 
-  lazy val peerEventBus: org.apache.pekko.actor.typed.ActorRef[Command] = system.spawn(PeerEventBusActor.behavior(), "peer-event-bus")
+  lazy val peerEventBus: org.apache.pekko.actor.typed.ActorRef[Command] =
+    system.spawn(PeerEventBusActor.behavior(), "peer-event-bus")
 
   private val handshakerConfiguration: NetworkHandshakerConfiguration =
     new NetworkHandshakerConfiguration:

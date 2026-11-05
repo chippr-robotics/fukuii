@@ -489,7 +489,8 @@ class EthBlocksServiceSpec
     val response: ServiceResponse[CapabilitiesResponse] = ethBlocksService.capabilities(CapabilitiesRequest())
     val result: CapabilitiesResponse = response.unsafeRunSync().toOption.value
 
-    val fullyRetained: CapabilitiesResource = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    val fullyRetained: CapabilitiesResource =
+      CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
     result.headNumber shouldEqual blockToRequest.number.value
     result.headHash shouldEqual blockToRequest.hash.value
     result.state shouldEqual fullyRetained
@@ -521,7 +522,8 @@ class EthBlocksServiceSpec
     )
     result.stateproofs shouldEqual result.state
 
-    val fullyRetained: CapabilitiesResource = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    val fullyRetained: CapabilitiesResource =
+      CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
     result.tx shouldEqual fullyRetained
     result.logs shouldEqual fullyRetained
     result.receipts shouldEqual fullyRetained

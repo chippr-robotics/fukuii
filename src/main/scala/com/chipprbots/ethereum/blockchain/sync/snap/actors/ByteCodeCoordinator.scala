@@ -76,8 +76,10 @@ private[actors] class ByteCodeCoordinatorImpl(
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
   var maxInFlightPerPeer: Int = cooldownConfig.maxInFlightPerPeer
 
-  val peerFailureCounts: scala.collection.mutable.Map[PeerId, Int] = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  val peerCooldownUntilMillis: scala.collection.mutable.Map[PeerId, Long] = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+  val peerFailureCounts: scala.collection.mutable.Map[PeerId, Int] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  val peerCooldownUntilMillis: scala.collection.mutable.Map[PeerId, Long] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
 
   // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
   // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
@@ -99,7 +101,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   // Task management
   val pendingTasks: Queue[ByteCodeTask] = mutable.Queue[ByteCodeTask]()
 
-  val activeTasks: scala.collection.mutable.Map[BigInt, ActiveByteCodeRequest] = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
+  val activeTasks: scala.collection.mutable.Map[BigInt, ActiveByteCodeRequest] =
+    mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
 
   // Completion bookkeeping (#1233). Previously `completedTasks: mutable.ArrayBuffer[ByteCodeTask]`
   // retained the full task object — including `task.bytecodes: Seq[ByteString]`, the actual
@@ -133,7 +136,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   // diagnostics so operators can correlate force-completes with later BytecodeRecoveryActor activity.
   private var bytecodesAbandoned: Long = 0
 
-  val peerResponseBytesTarget: scala.collection.mutable.Map[PeerId, BigInt] = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
+  val peerResponseBytesTarget: scala.collection.mutable.Map[PeerId, BigInt] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
 
   // preStart equivalent: record start time, schedule the recurring status pulse, log. Called once by the
   // behavior factory. The Typed `startTimerWithFixedDelay` replaces the Classic Cancellable; it auto-cancels

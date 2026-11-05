@@ -277,7 +277,8 @@ class BlockFetcherSpec
       // Nothing supervises that child. Left dead, every fetch after it went to dead letters, and the importer, which
       // escalates on exhausted fetches only, waited on a missing node for good (forge).
       startFetcher() // answered, so the fetcher and its children are up
-      val importerReplies: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FetchResponse] = testKit.createTestProbe[FetchResponse]()
+      val importerReplies: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FetchResponse] =
+        testKit.createTestProbe[FetchResponse]()
       def fetchCode(): Unit =
         blockFetcher ! BlockFetcher.FetchStateNode(
           ByteString(Array.fill[Byte](32)(0x5a)),
