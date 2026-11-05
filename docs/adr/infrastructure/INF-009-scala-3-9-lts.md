@@ -57,6 +57,10 @@ The audit is in `docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`. Spec 020's GT-1 i
   ruleset must be updated in the same step.
 - New code from spec 017 on is written once against 3.9. Spec 019 targets 3.9 TASTy.
 - `scalafix` and `scalafmt` both run as CI gates on every module once spec 020's ratchet PR lands.
+  - **Correction, 2026-11-05:** "every module" overstates the scalafix half. `formatCheck` (`build.sbt`) checks scalafmt
+    on all six modules (root, `bytes`, `crypto`, `rlp`, `scalanet`, `scalanetDiscovery`) but runs `scalafixAll --check` on
+    the root, `bytes`, `crypto` and `rlp` only. Scalafix on the two scalanet modules is a logged follow-up. The decision
+    above is unchanged.
 
 ## References
 
