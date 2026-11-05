@@ -94,11 +94,12 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
     storage.persist()
 
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
-    if hashes.isEmpty then return Seq.empty
-    storage
-      .multiGet(hashes.map(ByteString(_)))
-      .zip(hashes)
-      .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
+    if hashes.isEmpty then Seq.empty
+    else
+      storage
+        .multiGet(hashes.map(ByteString(_)))
+        .zip(hashes)
+        .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
 
   override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
     if hashes.isEmpty then Seq.empty else storage.multiGetRaw(hashes)
