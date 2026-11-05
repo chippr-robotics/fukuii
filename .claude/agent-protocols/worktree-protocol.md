@@ -132,7 +132,7 @@ No spaces. Use kebab-case. Keep IDs short but recognisable from the backlog.
    The path resolves to the worktree working tree, which is correct — the
    main thread reads it from there.
 
-7. **`sbt scalafmtAll` before committing**, same as on the main branch.
+7. **`sbt formatAll` before committing**, same as on the main branch.
 
 ---
 

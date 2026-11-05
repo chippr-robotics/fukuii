@@ -269,7 +269,7 @@ def m_unmapped_principle(root: Path) -> None:
 def m_enforced_by_informational(root: Path) -> None:
     """C9 — a rule claiming `enforced` via a non-required gate."""
     edit(root, "docs/governance/constitution-enforcement.md",
-         "| IV.1 | All code passes `scalafmt` | `enforced` | `gate:ci-test-build` — `sbt scalafmtCheckAll` |",
+         "| IV.1 | All code passes `scalafmt` | `enforced` | `gate:ci-test-build` — `sbt formatCheck` (scalafmt check on all six modules; spec 020 PR 6b-3, #1721). Plain `scalafmtCheckAll` covers the root project only. |",
          "| IV.1 | All code passes `scalafmt` | `enforced` | `gate:hive-graphql` — pretend |")
 
 

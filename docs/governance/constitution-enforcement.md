@@ -71,11 +71,11 @@ matrix schedules the promotions; this file records what is true today.
 
 | # | Rule | Status | Enforced by / substitute |
 |---|---|---|---|
-| IV.1 | All code passes `scalafmt` | `enforced` | `gate:ci-test-build` — `sbt scalafmtCheckAll` |
-| IV.2 | All code passes `scalafix` (DisableSyntax, ExplicitResultTypes, OrganizeImports, RemoveUnused, …) | `aspirational` | **Formally deferred** (#1404, FR-020). `scalafixAll` is not in the CI path — only `scalafmtCheckAll` is. The codebase carries pre-existing violations, which is why `sbt formatAll` is documented as "pre-PR on a clean codebase ONLY". Owner realcodywburns; ratchet target 2027-03-31; approach per `.claude/agent-protocols/warning-ratchet.md`. |
-| IV.3 | Import group order, `com.chipprbots.ethereum.*` last | `aspirational` | Part of the deferred `scalafix` ratchet above (OrganizeImports). |
-| IV.4 | No new `io.iohk` / `mantis` package or config references | `aspirational` | Human: review. Mechanisable as a grep gate; folded into the IV.2 ratchet. |
-| IV.5 | Explicit result types on public definitions | `aspirational` | Part of the deferred `scalafix` ratchet above (ExplicitResultTypes). |
+| IV.1 | All code passes `scalafmt` | `enforced` | `gate:ci-test-build` — `sbt formatCheck` (scalafmt check on all six modules; spec 020 PR 6b-3, #1721). Plain `scalafmtCheckAll` covers the root project only. |
+| IV.2 | All code passes `scalafix` (DisableSyntax, ExplicitResultTypes, OrganizeImports, RemoveUnused, …) | `enforced` | `gate:ci-test-build` — `sbt formatCheck` runs `scalafixAll --check` on the root, `bytes`, `crypto` and `rlp` (spec 020 PR 6b, #1719–#1721; formerly deferred under #1404, FR-020). **Scope caveat:** `scalanet` and `scalanetDiscovery` are not scalafix-checked (a logged follow-up), and `vm/PrecompiledContracts.scala` carries 9 line-level `scalafix:ok DisableSyntax.return` suppressions. |
+| IV.3 | Import group order, `com.chipprbots.ethereum.*` last | `enforced` | `gate:ci-test-build` — the OrganizeImports rule in the IV.2 `scalafixAll --check`, same scope caveat. |
+| IV.4 | No new `io.iohk` / `mantis` package or config references | `aspirational` | Human: review. Mechanisable as a grep gate; none of the scalafix rules covers it. |
+| IV.5 | Explicit result types on public definitions | `enforced` | `gate:ci-test-build` — the ExplicitResultTypes rule in the IV.2 `scalafixAll --check`, same scope caveat. |
 
 ## Principle V — Quality Gates Are Mandatory
 
@@ -116,7 +116,7 @@ with an owner and a date, so "aspirational" cannot quietly become "forever" (FR-
 | Rule | What would enforce it | Owner | Target |
 |---|---|---|---|
 | III.2 | `scalafix` `DisableSyntax` rule banning `Thread.sleep` in test sources | realcodywburns | 2026-12-31 |
-| IV.2–IV.5 | `scalafixAll` in the CI path, reached via the warning-ratchet protocol | realcodywburns | 2027-03-31 |
+| IV.2, IV.3, IV.5 | `scalafixAll --check` on `scalanet` and `scalanetDiscovery` (logged follow-up; the other four modules are in the CI path) | realcodywburns | not set |
 | IV.4 | grep gate on `io.iohk` / `mantis` package and config references | realcodywburns | 2027-03-31 |
 | V.6 | promotion of the `first_required_slice` gates to `required` | realcodywburns | 2026-12-31 |
 | VI.1 | pre-merge secret-scan gate | realcodywburns | 2027-03-31 |

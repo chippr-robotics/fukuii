@@ -30,7 +30,7 @@ To contribute to Fukuii, you'll need:
 
 ### Scala Version Support
 
-Fukuii is built with **Scala 3.3.7 (LTS)**, the latest long-term support version of Scala 3, providing modern language features, improved type inference, and better tooling support.
+Fukuii is built with **Scala 3.9.0 (LTS)** at `-source:3.9`, the current long-term support line of Scala 3, providing modern language features, improved type inference, and better tooling support. The compiler flags and the warning ratchet are described in [Scala 3 build layout](scala-build.md).
 
 ### Setting Up Your Development Environment
 
@@ -81,13 +81,15 @@ We use [Scalafmt](https://scalameta.org/scalafmt/) for consistent code formattin
 
 **Format your code:**
 ```bash
-sbt scalafmtAll
+sbt formatAll
 ```
 
 **Check formatting without changes:**
 ```bash
-sbt scalafmtCheckAll
+sbt formatCheck
 ```
+
+`sbt scalafmtAll` and `sbt scalafmtCheckAll` cover the root project only: the root has no `aggregate`, so they skip `bytes`, `crypto`, `rlp`, `scalanet` and `scalanetDiscovery`. `formatAll` and `formatCheck` (see "Combined Commands") cover every module. The scalafmt version is pinned to 3.8.3 in `.scalafmt.conf`.
 
 ### Static Analysis with Scalafix
 
@@ -103,6 +105,10 @@ sbt scalafixAll
 sbt scalafixAll --check
 ```
 
+These run on the root project; `formatAll` and `formatCheck` also run scalafix on `bytes`, `crypto` and `rlp`, but not on `scalanet` or `scalanetDiscovery`. The tree has had no scalafix findings since spec 020 PR 6b, so a finding is new and should be fixed, not suppressed. `return` is banned (`DisableSyntax.noReturns`), as are Scala 2 wildcard imports (`import x._`): write `import x.*`.
+
+**Test files and scalafix's parser.** scalafix 0.14.9 bundles scalameta 4.17.4, which cannot parse a fewer-braces template opened on a continuation line, such as `it should "x" in` followed by `new X:` on the next line. Write `in (new X: ... )` with parentheses instead. See `.claude/agent-protocols/testing-protocol.md` for the details.
+
 ### Static Bug Detection with Scapegoat
 
 We use [Scapegoat](https://github.com/scapegoat-scala/scapegoat) for static code analysis to detect common bugs, anti-patterns, and code smells. Configuration is in `build.sbt`.
@@ -112,7 +118,7 @@ We use [Scapegoat](https://github.com/scapegoat-scala/scapegoat) for static code
 sbt runScapegoat
 ```
 
-This generates both XML and HTML reports in `target/scala-3.3/scapegoat-report/`. The HTML report is especially useful for reviewing findings in a browser.
+This generates both XML and HTML reports in `target/scala-3.9.0/scapegoat-report/`. The HTML report is especially useful for reviewing findings in a browser.
 
 **Note**: Scapegoat automatically excludes generated code (protobuf files, BuildInfo, etc.) from analysis.
 
@@ -128,12 +134,12 @@ sbt testCoverage
 This will:
 1. Enable coverage instrumentation
 2. Run all tests across all modules
-3. Generate coverage reports in `target/scala-3.3.7/scoverage-report/`
+3. Generate coverage reports in `target/scala-3.9.0/scoverage-report/`
 4. Aggregate coverage across all modules
 
 **Coverage reports locations:**
-- HTML report: `target/scala-3.3.7/scoverage-report/index.html`
-- XML report: `target/scala-3.3.7/scoverage-report/cobertura.xml`
+- HTML report: `target/scala-3.9.0/scoverage-report/index.html`
+- XML report: `target/scala-3.9.0/scoverage-report/cobertura.xml`
 
 **Coverage thresholds:**
 - Minimum statement coverage: 70%
@@ -150,20 +156,23 @@ This will:
 ```bash
 sbt formatAll
 ```
+This compiles, then runs scalafix and scalafmt on `bytes`, `crypto`, `rlp` and the root, and scalafmt on `scalanet` and `scalanetDiscovery`. It rewrites files, so read the diff afterwards.
 
 **Check all formatting and style (runs in CI):**
 ```bash
 sbt formatCheck
 ```
+The read-only form of `formatAll`; CI runs it in the required "Test and Build" job.
 
-**Prepare for PR submission (format, style, and test):**
+**Prepare for PR submission (compile, format, and test):**
 ```bash
 sbt pp
 ```
+`pp` compiles, runs scalafmt on `bytes`, `crypto`, `rlp` and the root, then runs `rlp / test`, `testQuick` and `IntegrationTest / test`. It does not run scalafix, so run `sbt formatCheck` as well.
 
 ### Scala 3 Development
 
-Fukuii uses **Scala 3.3.7 (LTS)** and **JDK 25 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
+Fukuii uses **Scala 3.9.0 (LTS)** and **JDK 25 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
 
 **Key Scala 3 Features in Use:**
 - Native `given`/`using` syntax for implicit parameters
@@ -181,7 +190,8 @@ sbt testAll      # Run all tests
 **Notes:**
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
-- CI pipeline tests on Scala 3.3.7 with JDK 25
+- CI pipeline tests on Scala 3.9.0 with JDK 25
+- The build compiles with `-source:3.9`; from 0.11.0 the published modules (`bytes`, `crypto`, `rlp`, `scalanet`, `scalanetDiscovery`) carry Scala 3.9 TASTy, so a project still on Scala 3.3 cannot consume them
 - See [INF-001: Scala 3 Migration](../adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
 - See [Migration History](../historical/MIGRATION_HISTORY.md) for details on the completed migration
 
@@ -200,19 +210,11 @@ Create a pre-commit hook that runs formatting and style checks:
    
    echo "Running pre-commit checks..."
    
-   # Run scalafmt check
-   echo "Checking code formatting with scalafmt..."
-   sbt scalafmtCheckAll
+   # Run the same format and scalafix check as CI (every module)
+   echo "Checking code formatting with scalafmt and scalafix..."
+   sbt formatCheck
    if [ $? -ne 0 ]; then
-     echo "❌ Code formatting check failed. Run 'sbt scalafmtAll' to fix."
-     exit 1
-   fi
-   
-   # Run scalafix check
-   echo "Checking code with scalafix..."
-   sbt "scalafixAll --check"
-   if [ $? -ne 0 ]; then
-     echo "❌ Scalafix check failed. Run 'sbt scalafixAll' to fix."
+     echo "❌ Format check failed. Run 'sbt formatAll' to fix."
      exit 1
    fi
    
@@ -235,13 +237,9 @@ cat > .git/hooks/pre-commit << 'EOF'
 
 echo "Running pre-commit auto-fix..."
 
-# Auto-format code
-echo "Auto-formatting with scalafmt..."
-sbt scalafmtAll
-
-# Auto-fix with scalafix
-echo "Auto-fixing with scalafix..."
-sbt scalafixAll
+# Auto-format and auto-fix every module (scalafmt, and scalafix where it runs)
+echo "Auto-formatting with scalafmt and scalafix..."
+sbt formatAll
 
 # Add any formatted files back to the commit
 git add -u
@@ -486,7 +484,7 @@ task
 
 ### Continuous Integration
 
-Our CI pipeline automatically runs on Scala 3.3.7:
+Our CI pipeline automatically runs on Scala 3.9.0:
 - ✅ Compilation (`compile-all`)
 - ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
 - ✅ Static bug detection (`runScapegoat`)
@@ -601,7 +599,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/main/.github/A
 ### Reminders
 
 - **JDK Compatibility**: Code must work on JDK 25
-- **Scala Version**: Code must compile on Scala 3.3.7 (LTS)
+- **Scala Version**: Code must compile on Scala 3.9.0 (LTS) at `-source:3.9`
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" (IOHK) to "Fukuii" (Chippr Robotics) — update any remaining "mantis" or "io.iohk" references
@@ -651,7 +649,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/main/.github/A
 2. Check the GitHub Advisory Database for known vulnerabilities
 3. Verify compatibility with project requirements:
    - JDK 25 compatibility
-   - Scala 3.3.7 support (primary version)
+   - Scala 3.9 support (primary version)
 4. Test thoroughly on JDK 25
 5. Update version numbers in project/Dependencies.scala
 6. Document any breaking changes or migration steps

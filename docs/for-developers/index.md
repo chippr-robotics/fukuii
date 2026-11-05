@@ -36,8 +36,8 @@ sbt test
 sbt compile           # Compile all modules
 sbt test              # Unit tests (~5 min)
 sbt it:test           # Integration tests
-sbt scalafmtAll       # Format all code
-sbt pp                # Pre-PR: format + style + tests
+sbt formatAll         # Format all code (every module)
+sbt pp                # Pre-PR: scalafmt + tests (run formatCheck too)
 sbt assembly          # Build fat JAR
 ```
 
@@ -74,7 +74,7 @@ All code uses the package prefix `com.chipprbots.ethereum`.
 ## Before Submitting a PR
 
 ```bash
-sbt scalafmtCheckAll   # Formatting check
+sbt formatCheck         # Format and scalafix check (what CI runs)
 sbt compile-all        # Compilation
 sbt test               # All tests pass
 ```

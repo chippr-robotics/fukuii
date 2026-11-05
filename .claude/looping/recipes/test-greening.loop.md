@@ -25,7 +25,7 @@ constraints:
     from the test runner; they stall under CI load
   - do not add @Ignore, @Tag("DisabledTest"), or similar tags to make tests pass
   - do not delete failing tests; fix the underlying code or skip with a tracked
-    entry in DEFERRED-BACKLOG if genuinely untestable
+    entry in CHASE-QUEUE (type `DEFER`) if genuinely untestable
 budget:
   max_iterations: 25
   max_wallclock: 90m

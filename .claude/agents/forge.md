@@ -140,7 +140,7 @@ ECIP-1017 block-reward schedule (20% reduction every 5M blocks):
   and ECIP-1111 basefee→Treasury routing. Treat with the same care as vm/.
 - extvm: `src/main/scala/com/chipprbots/ethereum/extvm/` — **HIBERNATED. Do not modify.**
   IOHK/Mantis experimental gRPC bridge to external EVM. Upstream archived September 2021.
-  All tests `@Ignored`. Default `vm.mode = "internal"`. Deletion tracked in DEFERRED-BACKLOG Part 6a.
+  All tests `@Ignored`. Default `vm.mode = "internal"`. Deletion is deferred, per the CHASE-QUEUE `DEFER` convention (see `dead-code-review.md`).
 
 ## Hard constraints
 

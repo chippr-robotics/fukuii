@@ -147,7 +147,8 @@ Owns: idiomatic Scala 3 functional style.
   - Is a companion's given imported with `import X.*` alone? It needs `import X.{given, *}`, or `import X.given` when
     no terms are used (G1).
 - Formatting (braces, indentation, line breaks) is scalafmt's job: `rewrite.scala3.removeOptionalBraces` is on and
-  `sbt scalafmtCheckAll` is the check. Do not raise layout findings; say if that check fails.
+  `sbt formatCheck` is the check (plain `scalafmtCheckAll` covers the root project only). Do not raise layout findings;
+  say if that check fails.
 
 ## Reference repos
 
