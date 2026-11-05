@@ -1,6 +1,29 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.1.1 → 1.1.2 (PATCH)
+Rationale: spec 020 PR 6b-3 (#1721) makes `sbt formatCheck` the format gate in CI's required "Test and Build" job, in
+place of `scalafmtCheckAll`, which checks the root project only (the root has no `aggregate`). `formatCheck` runs
+`scalafixAll --check` on the root, bytes, crypto and rlp, and `scalafmtCheckAll` on all six modules. Wording-only: no
+principle is added, removed or redefined. Merge this amendment after #1721; before it, CI still runs `scalafmtCheckAll`.
+
+Changes:
+  - Principle V, Rules, CI MUST pass: "format check (`scalafmtCheckAll`)" → "format check (`formatCheck`)".
+  - Version bumped to 1.1.2; Last Amended updated. ADR INF-009 (Consequences) carries the matching scalafix-coverage
+    correction.
+
+Templates & artifacts reviewed for alignment:
+  - .specify/templates/plan-template.md  (no change required)
+  - .specify/templates/spec-template.md  (no change required)
+  - .specify/templates/tasks-template.md (no change required)
+  - .specify/templates/checklist-template.md (no change required)
+
+Last Amended: 2026-11-05
+-->
+
+<!--
+SYNC IMPACT REPORT
+==================
 Version change: 1.1.0 → 1.1.1 (PATCH)
 Rationale: spec 020 (Scala 3.9 LTS toolchain migration), GT-3. The technology section named "sbt 1.10.7+"; the
 build has used sbt 1.13.0 since #1631 (spec 020 PR 1), and the compiler moves to the 3.9 LTS line from 0.11.0.
@@ -203,7 +226,7 @@ keeps diffs about behavior, not formatting.
 Rules:
 - Before opening a PR, contributors MUST run `sbt pp` (compile-all → scalafmt →
   fast tests + integration tests) locally and resolve all findings.
-- CI MUST pass: format check (`scalafmtCheckAll`), `compile-all`, Tier-1
+- CI MUST pass: format check (`formatCheck`), `compile-all`, Tier-1
   `testEssential`, Tier-2 `testStandard` with coverage, KPI baselines, and the
   ethereum/tests integration job, plus the assembly/dist build.
 - PRs require at least one approving review and resolution of all review
@@ -308,4 +331,4 @@ provide operational detail.
   plan for execution context; this file defines the standards those plans must
   satisfy.
 
-**Version**: 1.1.1 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-10-20
+**Version**: 1.1.2 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-11-05
