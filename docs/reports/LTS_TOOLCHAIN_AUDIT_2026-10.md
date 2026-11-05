@@ -65,26 +65,28 @@ straddle a compiler change), as its own spec, and before any 017 code lands. Rec
 
 - **1.x**: 1.10.7 → 1.12.15 is a drop-in bump (same plugin ABI `_2.12_1.0`). 1.13.0 exists on Maven Central
   (2026-08-20); take it only after reading its notes. The `dependency-check.yml` and CI "Set up SBT" steps follow
-  `build.properties`.
+  `build.properties`. **Done 2026-10-18 (#1631, spec 020 PR 1): the build is on sbt 1.13.0.**
 - **2.x**: 2.0.0 released 2026-06-14, 2.0.10 current. Builds and plugins run on Scala 3 (3.8.4), bare settings apply to
   all subprojects (replaces the `ThisBuild` idiom the build uses), project matrix is built in, `compile` and `test` are
-  cached tasks. Plugin availability for sbt 2 (`_sbt2_3` artifacts on Maven Central, checked 2026-10-17):
+  cached tasks. Plugin availability for sbt 2 (`_sbt2_3` artifacts on Maven Central, checked 2026-10-17). The "sbt 1
+pinned" column shows the pins in `project/plugins.sbt` on 2026-11-05, with the 2026-10-17 value in parentheses; the other
+columns are the 2026-10-17 record:
 
 | Plugin | sbt 1 pinned | sbt 1 latest | sbt 2 artifact | Note |
 | --- | --- | --- | --- | --- |
-| sbt-scalafmt | 2.5.2 | 2.6.2 | 2.6.2 | ✅ |
-| sbt-scalafix | 0.13.0 | 0.14.9 | 0.14.9 | ✅ |
-| sbt-scoverage | 2.2.2 | 2.4.4 | 2.4.4 | ✅ |
-| sbt-native-packager | 1.10.4 | 1.13.0 | 1.13.0 | ✅ |
-| sbt-assembly | 2.3.0 | 2.5.0 | 2.5.0 | ✅ |
-| sbt-buildinfo | 0.12.0 | 0.13.2 | present | ✅ |
-| sbt-ci-release | 1.9.2 | 1.12.1 | present | ✅ |
-| sbt-git | 2.0.1 | 2.2.0 | 3.0.0-RC1 | ⚠️ RC only |
-| sbt-javaagent | `com.lightbend.sbt` 0.1.6 | moved to `com.github.sbt` 0.3.0 | present | ⚠️ organisation changed; the 0.1.6 artifact is orphaned |
-| sbt-updates | 0.6.4 | 0.7.1 | present | ✅ |
-| sbt-api-mappings | 3.0.2 | 3.1.0 | present | ✅ |
-| sbt-kanela-runner | 2.1.0 | 2.1.1 | **none** | ❌ blocker (Kamon agent for metrics) |
-| sbt-scapegoat | 1.2.13 | 1.2.13 | **none** | ❌ blocker, or drop the plugin (scalafix + the ratchet cover most of it) |
+| sbt-scalafmt | 2.6.2 (was 2.5.2) | 2.6.2 | 2.6.2 | ✅ |
+| sbt-scalafix | 0.14.9 (was 0.13.0) | 0.14.9 | 0.14.9 | ✅ |
+| sbt-scoverage | 2.4.4 (was 2.2.2) | 2.4.4 | 2.4.4 | ✅ |
+| sbt-native-packager | 1.13.0 (was 1.10.4) | 1.13.0 | 1.13.0 | ✅ |
+| sbt-assembly | 2.5.0 (was 2.3.0) | 2.5.0 | 2.5.0 | ✅ |
+| sbt-buildinfo | 0.13.2 (was 0.12.0) | 0.13.2 | present | ✅ |
+| sbt-ci-release | 1.12.1 (was 1.9.2) | 1.12.1 | present | ✅ |
+| sbt-git | 2.2.0 (was 2.0.1) | 2.2.0 | 3.0.0-RC1 | ⚠️ RC only |
+| sbt-javaagent | `com.github.sbt` 0.3.0 (was `com.lightbend.sbt` 0.1.6) | moved to `com.github.sbt` 0.3.0 | present | ⚠️ organisation changed; the 0.1.6 artifact is orphaned |
+| sbt-updates | 0.7.1 (was 0.6.4) | 0.7.1 | present | ✅ |
+| sbt-api-mappings | 3.1.0 (was 3.0.2) | 3.1.0 | present | ✅ |
+| sbt-kanela-runner | 2.1.1 (was 2.1.0) | 2.1.1 | **none** | ❌ blocker (Kamon agent for metrics) |
+| sbt-scapegoat | 1.2.13 (unchanged) | 1.2.13 | **none** | ❌ blocker, or drop the plugin (scalafix + the ratchet cover most of it) |
 
 sbt 2 is therefore a migration, not a bump: two plugins have no sbt 2 build, one is an RC, and the build definition's
 `ThisBuild` and `inConfig` usage needs review. Recommendation R-3.
