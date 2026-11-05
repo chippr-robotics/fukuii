@@ -157,7 +157,8 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
 
     "answer -38002, not -38003, when the safe block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
       val unknown: ByteString = ByteString(Array.fill(32)(0x5a.toByte))
-      val response: JsonRpcResponse = fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       response.result shouldBe None
       // Nothing was applied: the forkchoice state was refused before it reached the ForkChoiceManager.
@@ -165,7 +166,8 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
 
     "answer -38002, not -38003, when the finalized block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
       val unknown: ByteString = ByteString(Array.fill(32)(0x5b.toByte))
-      val response: JsonRpcResponse = fcu(3, block1.header.hash.value, finalized = unknown, payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, finalized = unknown, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
@@ -192,7 +194,8 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
 
     "answer SYNCING, not -38003, when the head is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
       // hive `Invalid PayloadAttributes, Missing BeaconRoot, Syncing=True`.
-      val response: JsonRpcResponse = fcu(3, ByteString(Array.fill(32)(0x7d.toByte)), payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse =
+        fcu(3, ByteString(Array.fill(32)(0x7d.toByte)), payloadAttributes = Some(missingBeaconRoot))
       response.error shouldBe None
       payloadStatusOf(response) shouldBe Some("SYNCING")
 
@@ -208,7 +211,8 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
 
     "answer -38002 when the safe block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
       val unknown: ByteString = ByteString(Array.fill(32)(0x5c.toByte))
-      val response: JsonRpcResponse = fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(wellFormedV3))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(wellFormedV3))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
@@ -294,6 +298,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
         "withdrawals" -> JArray(Nil),
         "parentBeaconBlockRoot" -> JString("0x" + "ab" * 32)
       )
-      val response: JsonRpcResponse = send(3, stateWith("safeBlockHash", Some(JString(hex(zero32)))), Some(noPrevRandao))
+      val response: JsonRpcResponse =
+        send(3, stateWith("safeBlockHash", Some(JString(hex(zero32)))), Some(noPrevRandao))
       response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
   }

@@ -353,7 +353,8 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
       val headHash = genesis.header.hash.value
       val zero: ByteString = ByteString(new Array[Byte](32))
       val slotless: PayloadAttributes = attributes(12, slot = None)
-      val outcome: Either[String, ForkchoiceUpdatedResponse] = service.forkchoiceUpdated(ForkChoiceState(headHash, zero, zero), Some(slotless)).unsafeRunSync()
+      val outcome: Either[String, ForkchoiceUpdatedResponse] =
+        service.forkchoiceUpdated(ForkChoiceState(headHash, zero, zero), Some(slotless)).unsafeRunSync()
 
       outcome shouldBe Left("ATTR:" + EngineApiService.AmsterdamSlotNumberMissing)
       forkChoiceManager.getHeadBlockHash shouldBe Some(headHash)

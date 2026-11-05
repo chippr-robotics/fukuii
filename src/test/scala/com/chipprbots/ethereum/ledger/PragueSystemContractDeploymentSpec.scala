@@ -145,7 +145,8 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val world: InMemoryWorldStateProxy = withCode(withCode(emptyWorld, WithdrawalQueueAddress, someCode), ConsolidationQueueAddress, someCode)
+    val world: InMemoryWorldStateProxy =
+      withCode(withCode(emptyWorld, WithdrawalQueueAddress, someCode), ConsolidationQueueAddress, someCode)
     exec.requireRequestPredeploysPresent(block, world) shouldBe Right(())
 
   it should "not apply before Prague (ETC, and ETH before the fork)" taggedAs (

@@ -53,8 +53,10 @@ class BlockAccessListBuilderSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in new Setup:
     val alice: Address = addr(1)
-    val before: InMemoryWorldStateProxy = persist(emptyWorld.saveAccount(alice, Account.empty().increaseBalance(UInt256(100))))
-    val after: InMemoryWorldStateProxy = persist(before.saveAccount(alice, before.getGuaranteedAccount(alice).increaseBalance(UInt256(5))))
+    val before: InMemoryWorldStateProxy =
+      persist(emptyWorld.saveAccount(alice, Account.empty().increaseBalance(UInt256(100))))
+    val after: InMemoryWorldStateProxy =
+      persist(before.saveAccount(alice, before.getGuaranteedAccount(alice).increaseBalance(UInt256(5))))
     val builder = new BlockAccessListBuilder
     builder.addIndex(1L, recorderFor(Seq(alice)), before, after)
     val account: AccountChanges = onlyAccount(builder)
@@ -67,7 +69,8 @@ class BlockAccessListBuilderSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in new Setup:
     val bob: Address = addr(2)
-    val world: InMemoryWorldStateProxy = persist(emptyWorld.saveAccount(bob, Account.empty().increaseBalance(UInt256(7))))
+    val world: InMemoryWorldStateProxy =
+      persist(emptyWorld.saveAccount(bob, Account.empty().increaseBalance(UInt256(7))))
     val builder = new BlockAccessListBuilder
     // Same world before and after: a pure read (e.g. a zero-value transfer recipient, or an EXTCODEHASH target).
     builder.addIndex(1L, recorderFor(Seq(bob)), world, world)
@@ -115,7 +118,8 @@ class BlockAccessListBuilderSpec extends AnyFlatSpec with Matchers:
     val c: Address = addr(5)
     // slot 1 holds 9 at the index start; within the index the tx set it to 0 then back to 9, so the two ends of the
     // index carry the same value and the write nets to no change — it surfaces as a read.
-    val start: InMemoryWorldStateProxy = persist(emptyWorld.saveAccount(c, Account.empty()).saveStorage(c, emptyWorld.getStorage(c).store(1, 9)))
+    val start: InMemoryWorldStateProxy =
+      persist(emptyWorld.saveAccount(c, Account.empty()).saveStorage(c, emptyWorld.getStorage(c).store(1, 9)))
     val end = start
     val builder = new BlockAccessListBuilder
     builder.addIndex(1L, recorderFor(Seq(c), slots = Seq(c -> UInt256(1))), start, end)
@@ -165,7 +169,8 @@ class BlockAccessListBuilderSpec extends AnyFlatSpec with Matchers:
   ) in new Setup:
     val high: Address = addr(0xff)
     val low: Address = addr(0x01)
-    val before: InMemoryWorldStateProxy = persist(emptyWorld.saveAccount(low, Account.empty()).saveAccount(high, Account.empty()))
+    val before: InMemoryWorldStateProxy =
+      persist(emptyWorld.saveAccount(low, Account.empty()).saveAccount(high, Account.empty()))
     // low: write slot 0x100 then slot 0x02 — numeric order is 0x02 before 0x100 (they sort the other way as RLP bytes).
     val after: InMemoryWorldStateProxy = persist(
       before

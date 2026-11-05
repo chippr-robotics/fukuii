@@ -90,7 +90,12 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
 
     /** The estimate is valid, one gas less is not (with `belowError`), and executing the estimate charges exactly it.
       */
-    def assertTight(tx: BigInt => SignedTransaction, header: BlockHeader, expected: BigInt, belowError: Any): Assertion =
+    def assertTight(
+        tx: BigInt => SignedTransaction,
+        header: BlockHeader,
+        expected: BigInt,
+        belowError: Any
+    ): Assertion =
       estimate(tx(Cap), header) shouldBe expected
       validate(tx(expected), header) shouldBe Right(SignedTransactionValid)
       validate(tx(expected - 1), header) shouldBe Left(belowError)

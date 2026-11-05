@@ -365,7 +365,8 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       executedBlocks shouldBe empty
 
       // The same blocks minus the canonical prefix go to importToTop and execute.
-      val onlyTheExtension: NonEmptyList[Block] = NonEmptyList.fromListUnsafe(postRewindBatch.drop(canonicalPrefix.size))
+      val onlyTheExtension: NonEmptyList[Block] =
+        NonEmptyList.fromListUnsafe(postRewindBatch.drop(canonicalPrefix.size))
       whenReady(posConsensus.evaluateBranch(onlyTheExtension).unsafeToFuture()) {
         _ shouldBe a[ExtendedCurrentBestBranch]
       }

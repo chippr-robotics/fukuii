@@ -392,7 +392,8 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       val tail: List[Block] = extendQuiet(this, b2, 5)
       phase("extending the new chain")(node.importEach(tail))
 
-      val finalState: Map[Int, Option[ByteString]] = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+      val finalState: Map[Int, Option[ByteString]] =
+        phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
       finalState(3) shouldBe Some(value("g3"))
       finalState(7) shouldBe Some(value("bOnly"))
       finalState(1) shouldBe Some(value("a1"))
@@ -423,7 +424,8 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
     val tail: List[Block] = extendQuiet(this, a3, 5)
     phase("extending the a chain")(node.importEach(tail))
 
-    val finalState: Map[Int, Option[ByteString]] = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+    val finalState: Map[Int, Option[ByteString]] =
+      phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
     finalState(3) shouldBe Some(value("aOnly"))
     finalState(8) shouldBe Some(value("a3"))
     finalState(7) shouldBe Some(value("g7"))

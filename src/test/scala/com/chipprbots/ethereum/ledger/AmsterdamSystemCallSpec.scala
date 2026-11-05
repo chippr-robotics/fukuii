@@ -199,7 +199,8 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     StateTest
   ) in new Setup:
     // EEST test_system_call_execution_grant[beacon] / [history]: the probe must run, so GAS lands in slot 0.
-    val world: InMemoryWorldStateProxy = withCode(withCode(emptyWorld, BeaconRootContractAddress, StoreGas), HistoryStorageAddress, StoreGas)
+    val world: InMemoryWorldStateProxy =
+      withCode(withCode(emptyWorld, BeaconRootContractAddress, StoreGas), HistoryStorageAddress, StoreGas)
     val after: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, world)
     storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(29999998)
     storageOf(after, HistoryStorageAddress, 0) shouldBe BigInt(29999998)
@@ -231,7 +232,8 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     // execution-specs process_unchecked_system_transaction: the failure is ignored. PUSH1 1 PUSH1 0 SSTORE INVALID
     // writes a slot and then halts, so the write must not survive; the history call after it still runs.
     val failing: ByteString = ByteString(Hex.decode("6001600055fe"))
-    val world: InMemoryWorldStateProxy = withCode(withCode(emptyWorld, BeaconRootContractAddress, failing), HistoryStorageAddress, HistoryCode)
+    val world: InMemoryWorldStateProxy =
+      withCode(withCode(emptyWorld, BeaconRootContractAddress, failing), HistoryStorageAddress, HistoryCode)
     val after: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, world)
     storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(0)
     storageOf(after, HistoryStorageAddress, 35) shouldBe BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)

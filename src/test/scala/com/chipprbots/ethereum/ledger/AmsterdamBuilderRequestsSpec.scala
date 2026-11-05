@@ -290,7 +290,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val block: Block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
     val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
 
     // The user path ran: it wrote the queue count (slot 1) and tail (slot 3) and the 6 record words (slots 4..9).
@@ -329,7 +330,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val block: Block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
     val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
     val (_, requests) = exec.processPragueSystemCalls(block, afterTx.worldState)
 
@@ -385,7 +387,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
   // ── The system call is not metered into the block ───────────────────────────
 
   it should "contribute nothing to block gasUsed" taggedAs (UnitTest, StateTest) in new Setup:
-    val block: Block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
     val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
 
     val (afterSystemCall, requests) = exec.processPragueSystemCalls(block, afterTx.worldState)
@@ -469,7 +472,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
         tx(ConsolidationQueueAddress, 1, consolidationCalldata, nonce = 1)
       )
     )
-    val queued: InMemoryWorldStateProxy = exec.executeBlockTransactions(setupBlock, worldWithQueuePredeploys).toOption.get.worldState
+    val queued: InMemoryWorldStateProxy =
+      exec.executeBlockTransactions(setupBlock, worldWithQueuePredeploys).toOption.get.worldState
 
     // Guard against a vacuous comparison: both queues must actually be non-empty before the system call runs.
     withClue("the withdrawal queue must be non-empty, or the arms compare nothing: ") {
