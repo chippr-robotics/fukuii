@@ -339,16 +339,16 @@ object PeerManagerActor:
     private def effectiveMaxOutgoing: Int =
       maxOutgoingPeersOverride.getOrElse(peerConfiguration.maxOutgoingPeers)
 
-    implicit private class ConnectedPeersOps(connectedPeers: ConnectedPeers):
+    extension (connectedPeers: ConnectedPeers)
 
       /** Number of new connections the node should try to open at any given time. Uses effectiveMaxOutgoing so
         * admin_maxPeers overrides take effect.
         */
-      def outgoingConnectionDemand: Int =
+      private def outgoingConnectionDemand: Int =
         if connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers then 0
         else effectiveMaxOutgoing - connectedPeers.outgoingPeersCount
 
-      def canConnectTo(node: Node): Boolean =
+      private def canConnectTo(node: Node): Boolean =
         val socketAddress = node.tcpSocketAddress
         val alreadyConnected =
           connectedPeers.isConnectionHandled(socketAddress) ||

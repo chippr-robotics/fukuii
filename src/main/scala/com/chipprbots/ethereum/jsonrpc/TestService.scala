@@ -469,5 +469,4 @@ class TestService(
 
   private val emptyLogRlpHash: ByteString = ByteString(crypto.kec256(rlp.encode(RLPList())))
 
-  implicit private class RichResponse[A](response: A):
-    def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))
+  extension [A](response: A) private def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))

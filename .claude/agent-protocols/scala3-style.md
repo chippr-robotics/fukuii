@@ -78,8 +78,10 @@ the implicit to a `given`. Order: **S3 → S4 → S5 → S6**.
 (note below).
 
 ```bash
-grep -rn "implicit class\b" src/main/ --include="*.scala" | grep -v "//\|consensus/\|vm/" | grep -v "Enc("
-# Target: 0 hits
+grep -rnE "implicit +((final|sealed|abstract|private(\[[A-Za-z_]+\])?|protected(\[[A-Za-z_]+\])?) +)*class\b" src/main/ --include="*.scala" | grep -v "//" | grep -v "Enc("
+# Target: 0 hits (same-line forms, modifiers included; the old `consensus/` and `vm/` excludes are gone)
+# `implicit` and `class` on different lines, or an annotation between them:
+rg -U --pcre2 -n -g '*.scala' 'implicit\b(?:\s|@\w+(?:\([^)]*\))?)+(?:(?:final|sealed|abstract|private(?:\[\w+\])?|protected(?:\[\w+\])?|case)\s+)*class\b' src/main | grep -v "Enc("
 ```
 
 Fix: `implicit class Foo(val x: T) { def bar = ... }` → `extension (x: T) def bar = ...`
@@ -90,9 +92,11 @@ wrappers (`XEnc(val underlyingMsg) extends MessageSerializableImplicit`), the co
 the `ReceiptBloom*` ones, `MptNodeEnc`) and bytes' `ByteString{Self,Array,Byte}Element`. Each adds a supertype
 (`RLPSerializable`, `MessageSerializableImplicit`, `ByteStringElement`) that an `extension` cannot give, so the grep
 above excludes them with `grep -v "Enc("`. **They must be converted (for example to `given Conversion`) before any move
-to `-source:future`, which rejects `implicit class`.** The grep does not see `implicit final class` / `implicit private
-class`: three remain in `src/main` (`RichMining`, `RichResponse`, `ConnectedPeersOps`) and one in scalanet
-(`DiscoveryNetwork.ChannelOps`), none of them in the 5b scope.
+to `-source:future`, which rejects `implicit class`.** The first version of the grep (`implicit class\b`) missed the
+modifier forms (`implicit final class`, `implicit private class`); the five sites it hid (`RichMining`, `RichResponse`,
+`ConnectedPeersOps` in `src/main`; `DiscoveryNetwork.ChannelOps` and `Discv5SyncResponder.IterableHasAsScala` in
+scalanetDiscovery) were converted in PR 5b, C6. In the published modules the only `implicit class` left are bytes'
+`ByteString{Self,Array,Byte}Element` wrappers and scalanet's dead `BufferConversionOps`.
 
 ---
 
