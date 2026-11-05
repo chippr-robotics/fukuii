@@ -74,15 +74,25 @@ the implicit to a `given`. Order: **S3 → S4 → S5 → S6**.
 ---
 
 ### S4 — Extension methods over `implicit class`
-**Status:** Not yet started (Part 3b, after Part 3a — P3a now complete).
+**Status:** Done for the extension-type sites (spec 020 PR 5b, 2026-11-04). The conversion wrappers are kept by decision
+(note below).
 
 ```bash
-grep -rn "implicit class\b" src/main/ --include="*.scala" | grep -v "//\|consensus/\|vm/"
+grep -rn "implicit class\b" src/main/ --include="*.scala" | grep -v "//\|consensus/\|vm/" | grep -v "Enc("
 # Target: 0 hits
 ```
 
 Fix: `implicit class Foo(val x: T) { def bar = ... }` → `extension (x: T) def bar = ...`
-**Do not start until Part 3a complete.**
+
+**Note (2026-11-04, spec 020 PR 5b):** the conversion wrappers stay `implicit class` by user decision: the 54 message
+wrappers (`XEnc(val underlyingMsg) extends MessageSerializableImplicit`), the consensus encoders (`BlockHeaderEnc`,
+`BlockBodyEnc`, `AccountEnc`, `WithdrawalEnc`, `BlockEnc`, `OmmersSeqEnc`, `ECDSASignatureEnc`, `SignedTransactionEnc`,
+the `ReceiptBloom*` ones, `MptNodeEnc`) and bytes' `ByteString{Self,Array,Byte}Element`. Each adds a supertype
+(`RLPSerializable`, `MessageSerializableImplicit`, `ByteStringElement`) that an `extension` cannot give, so the grep
+above excludes them with `grep -v "Enc("`. **They must be converted (for example to `given Conversion`) before any move
+to `-source:future`, which rejects `implicit class`.** The grep does not see `implicit final class` / `implicit private
+class`: three remain in `src/main` (`RichMining`, `RichResponse`, `ConnectedPeersOps`) and one in scalanet
+(`DiscoveryNetwork.ChannelOps`), none of them in the 5b scope.
 
 ---
 
