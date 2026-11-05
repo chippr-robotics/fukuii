@@ -72,13 +72,16 @@ jobs:
           scripts/ci/test_check_scala_imports.sh
           scripts/ci/check_scala_imports.sh
 
-      - name: Check formatting
-        run: sbt scalafmtCheckAll
+      - name: Compile all modules
+        run: sbt compile-all
         env:
           FUKUII_DEV: true
 
-      - name: Compile all modules
-        run: sbt compile-all
+      # scalafix --check and scalafmtCheckAll on every module, scalanet and scalanetDiscovery included
+      # (the `formatCheck` alias in build.sbt; spec 020 PR 6b, #1656). After the compile, so a compile
+      # error is reported as one, not as a lint failure.
+      - name: Check formatting and lint (scalafmt + scalafix, all modules)
+        run: sbt formatCheck
         env:
           FUKUII_DEV: true
       
