@@ -61,7 +61,9 @@ val baseScalacOptions = Seq(
 
 // Scala 3 warning and feature options
 val scala3Options = Seq(
-  "-source:3.9", // spec 020 DC-2 step 3.9 (3.8 and 3.9 rewrites applied: no diff); `import x.*` is enforced by scripts/ci/check_scala_imports.sh
+  // -source:3.8 and later enable SIP-62 "better fors": for-comprehension elaboration changes with no rewrite and no
+  // warning, so the "no rewrite diff" 3.8 step is NOT elaboration-neutral. See dc4-ledger.md, "Better fors".
+  "-source:3.9", // spec 020 DC-2 step 3.9; `import x.*` is enforced by scripts/ci/check_scala_imports.sh
   "-language:adhocExtensions", // Allow extending non-open classes (TestKit, Pekko test patterns)
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
   "-Wconf:id=E198:error", // Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)

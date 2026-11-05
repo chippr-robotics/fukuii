@@ -10,7 +10,7 @@ measures differently from R-6, this file records the measurement.
 
 | Step | Flags (one-off, reverted after) | Rewrite diff | Errors | Warnings | E205 | `using` |
 |---|---|---|---|---|---|---|
-| 3.8 | `-rewrite -source:3.8-migration`, `clean compile-all` | **none** (`git status` shows only `build.sbt`; 0 `[patched file` lines) | 0 | 81 | 0 | 0 |
+| 3.8 | `-rewrite -source:3.8-migration`, `clean compile-all` | **none** (`git status` shows only `build.sbt`; 0 `[patched file` lines). Not elaboration-neutral: see "Better fors" | 0 | 81 | 0 | 0 |
 | 3.9 | `-rewrite -source:3.9-migration`, `clean compile-all` | **none** | 0 | 81 | 0 | 0 |
 | flag | `-source:3.9`, `clean compile-all` | n/a | 0 | 81 | 0 | 0 |
 | ratchet | the commits below, `clean compile-all` after cleaning every module | n/a | 0 | **70** | 0 | 0 |
@@ -81,6 +81,33 @@ Manifest synthesis deprecations, and the one-off deprecations below.
 Checks of the sum: step (c) is 59 Manifest + 5 ascription + 4 E029 + 2 E194 + 2 `trait App` + 2 diffx + 2 unused `@nowarn` +
 1 E121 + 4 one-off deprecations = 81. Final is 59 Manifest + 2 E029 + 2 E194 + 2 diffx + 1 E121 + 4 one-off deprecations = 70.
 R-6 expected about 85 plus 4 suppressed sites; this tree is lower because Manifest synthesis measures 59, not 69.
+
+## Better fors: the silent 3.8 change
+
+The 3.8 and 3.9 rewrite steps printed no diff and no warning, but they are **not elaboration-neutral**. From `-source:3.8` the
+compiler enables SIP-62 "better fors" (`SourceVersion.enablesBetterFors = isAtLeast(3.8)`, found in the forge and beacon review
+of PR 6; it was off at 3.7 without `-preview`). It changes how a `for` comprehension is desugared, and no rewrite or warning
+announces it: a trailing `map(identity)` after the last generator is dropped, and a value definition inside the `for`
+(`y = ...`) is desugared without the tuple wrapping.
+
+Evidence:
+
+- **Jar comparison (forge):** 159 jar entries differ between the 3.7 and 3.9 builds.
+- **Receiver multisets (forge):** the `map` / `flatMap` / `foreach` / `withFilter` receivers were compared across every changed
+  class. The net change is `map` removals on lawful single-valued monads only (Either, Option, Try, EitherT, IO, Resource, scodec
+  `Attempt`), where `fa.map(identity)` is `fa`. There is no change on List, Seq, Vector, Iterator, Array, Map, Future, Pekko
+  `Source` or fs2.
+- **Shared ETC/ETH classes touched:** `BlockExecution`, `StxLedger`, `PrecompiledContracts` (the `Bn128Add` and `Bn128Mul`
+  lambdas), `BlockchainReader`, `ForkIdValidator`, `GenesisDataLoader`, `TxAdmission`, and `BlockAccessList` (ETH).
+- **Scratch confirmation (this review round):** `for { x <- o; y = x + 1 } yield y` on an `Option` and on a `List`, compiled at
+  `-source:3.7` and `-source:3.9` and read with `javap -c`: the `Option.map` call sites go from 3 to 1 and the `List.map` sites
+  from 2 to 1, and the `Tuple2` allocations disappear. So the effect is real and also reaches `List`-shaped value definitions;
+  forge's receiver comparison found no such site in this tree.
+- **Proof of behaviour (DC-5, run by the main session on this branch):** `testEssential` 7,219 / 0; the differential against the
+  0.10.0 GT-2 jar, all runs passing (Mordor compute-only within budget, Ephemery faster; PR 6 against its PR 5b staging base equal
+  or faster everywhere); ethereum/tests 66 / 0 (2 canceled).
+
+The `-source:3.9` comment in `build.sbt` says so, so nobody reads the "no rewrite diff" steps as a no-op.
 
 ## Promotions: the exact filters
 
