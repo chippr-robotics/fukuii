@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.ledger
 
-import org.apache.pekko.util.ByteString
-
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -154,7 +154,7 @@ class BlockImportGateSpec extends AnyFlatSpec with Matchers:
     given BlockchainConfig = blockchainConfig
     val (s, r1, r2) = race(engine(_), importer(_))
     s.executions.get() shouldBe 1
-    val single = reference(engine(_))
+    val single: Setup = reference(engine(_))
     s.refCounts.min shouldBe 0
     s.refCounts.max shouldBe 1
     // the same state a single execution leaves (the importer additionally stores its block records)

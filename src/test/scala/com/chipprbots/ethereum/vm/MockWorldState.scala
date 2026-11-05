@@ -1,10 +1,11 @@
 package com.chipprbots.ethereum.vm
 
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
-import org.apache.pekko.util.ByteString
 
 object MockWorldState:
   type TestVM = VM[MockWorldState, MockStorage]

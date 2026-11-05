@@ -14,9 +14,12 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportError
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportResult
+import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedDataSource
+import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedPruningMode
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.components.Storages.DefaultStorages
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.NodeStorage
@@ -83,18 +86,19 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
 
     "write the imported nodes to the data source before the completion flags under inmemory pruning (#1581)" taggedAs UnitTest in new Setup:
       val header = checkpointHeader
-      val rootHash = hash("rootNode")
+      val rootHash: ByteString = hash("rootNode")
       val nodes: Seq[(ByteString, Array[Byte])] = Seq((rootHash, Array.fill[Byte](48)(0xab.toByte)))
       val bytes: Array[Byte] = encodeArchive(header, nodes, Nil)
 
       // Records, at the synced (flags) write, whether the node had already reached the data source.
       val ds = new FlagsProbeDataSource(rootHash)
-      val inMemory = new EphemDataSourceComponent
-        with CheckpointImporterSpec.FixedDataSource(ds)
-        with LocalPruningConfigBuilder
-        with CheckpointImporterSpec.FixedPruningMode(InMemoryPruning(10))
-        with Storages.DefaultStorages
-        with com.chipprbots.ethereum.TestInstanceConfigProvider
+      val inMemory: FixedDataSource & LocalPruningConfigBuilder & (FixedPruningMode & DefaultStorages) =
+        new EphemDataSourceComponent
+          with CheckpointImporterSpec.FixedDataSource(ds)
+          with LocalPruningConfigBuilder
+          with CheckpointImporterSpec.FixedPruningMode(InMemoryPruning(10))
+          with Storages.DefaultStorages
+          with com.chipprbots.ethereum.TestInstanceConfigProvider
       val importer = new CheckpointImporter(
         BlockchainWriter(inMemory.storages),
         inMemory.storages.stateStorage,

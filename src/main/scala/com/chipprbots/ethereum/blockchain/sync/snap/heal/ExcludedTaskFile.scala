@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.heal
 
-import org.apache.pekko.util.ByteString
-
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 import scala.concurrent.ExecutionContext

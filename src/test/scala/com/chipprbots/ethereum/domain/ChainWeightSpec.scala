@@ -5,8 +5,8 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.testing.Tags.*
 
 class ChainWeightSpec extends AnyFlatSpec with Matchers:
 

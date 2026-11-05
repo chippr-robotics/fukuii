@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.ledger
 
 import org.apache.pekko.util.ByteString
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -47,7 +48,7 @@ class AmsterdamTreasuryInertnessSpec extends AnyFlatSpec with Matchers:
       forkBlockNumbers = baseConfig.forkBlockNumbers.copy(olympiaBlockNumber = olympiaBlock)
     )
 
-    val senderKeyPair = generateKeyPair(secureRandom)
+    val senderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
     val senderAddress: Address = Address(senderKeyPair)
     val recipient: Address = Address(0x515151)
 

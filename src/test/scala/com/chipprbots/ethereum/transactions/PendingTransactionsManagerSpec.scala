@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.transactions
 import java.net.InetSocketAddress
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -24,24 +25,27 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.BlobVersionedHash
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
-import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes72
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.NoRandomAccessSeq
@@ -349,7 +353,7 @@ class PendingTransactionsManagerSpec
     // served in its network form (tx, blobs, commitments, proofs). 131,330 bytes is one blob's
     // network form in hive's "Request Blob Pooled Transactions" test, which was announced at 146,
     // the bare tx.
-    val blobTx = BlobTransaction(
+    val blobTx: BlobTransaction = BlobTransaction(
       chainId = 0x3d,
       nonce = 0,
       maxPriorityFeePerGas = 1,
@@ -362,8 +366,8 @@ class PendingTransactionsManagerSpec
       maxFeePerBlobGas = 1,
       blobVersionedHashes = List(BlobVersionedHash(ByteString(Array.fill[Byte](32)(1))))
     )
-    val signed = SignedTransaction.sign(blobTx, keyPair1, Some(0x3d))
-    val networkForm = ByteString(Array.fill[Byte](131330)(0))
+    val signed: SignedTransaction = SignedTransaction.sign(blobTx, keyPair1, Some(0x3d))
+    val networkForm: ByteString = ByteString(Array.fill[Byte](131330)(0))
 
     pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
     pendingTransactionsManager ! AddOrOverrideTransaction(signed, Some(networkForm))
@@ -391,7 +395,7 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(7))
-    val announcement = ETHPackets.NewPooledTransactionHashes72(
+    val announcement: NewPooledTransactionHashes72 = ETHPackets.NewPooledTransactionHashes72(
       types = Seq(Transaction.Type02),
       sizes = Seq(BigInt(123)),
       hashes = Seq(unknownHash),
@@ -410,7 +414,7 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     val unknownHash: ByteString = ByteString(Array.fill[Byte](32)(9))
-    val announcement = ETHPackets.NewPooledTransactionHashes(
+    val announcement: NewPooledTransactionHashes = ETHPackets.NewPooledTransactionHashes(
       types = Seq(Transaction.Type02),
       sizes = Seq(BigInt(456)),
       hashes = Seq(unknownHash)
@@ -431,7 +435,7 @@ class PendingTransactionsManagerSpec
     pendingTransactionsManager ! AddTransactions(Set(stx))
     etcPeerManager.expectNoMessage(100.millis) // no connected peers yet — nothing to announce to
 
-    val announcement = ETHPackets.NewPooledTransactionHashes72(
+    val announcement: NewPooledTransactionHashes72 = ETHPackets.NewPooledTransactionHashes72(
       types = Seq(0.toByte),
       sizes = Seq(BigInt(1)),
       hashes = Seq(stx.tx.hash.value),
@@ -511,7 +515,7 @@ class PendingTransactionsManagerSpec
         peer1.id
       )
     )
-    val requests = Seq.fill(3)(requestedFrom(this))
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(3)(requestedFrom(this))
     requests.map(_._1).distinct shouldBe Seq(peer1.id)
     requests.map(_._2.size) shouldBe Seq(256, 256, 88)
     requests.flatMap(_._2) shouldBe hashes
@@ -530,7 +534,7 @@ class PendingTransactionsManagerSpec
       override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val announcementFetchTimeout: FiniteDuration = Timeouts.veryLongTimeout
-    val ptm = spawnPtm(config = noFetchTimeout)
+    val ptm: ActorRef[Command] = spawnPtm(config = noFetchTimeout)
     def hashesFrom(first: Int, count: Int): Seq[ByteString] =
       (first until first + count).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
     def announce(peer: Peer, hashes: Seq[ByteString]): Unit =
@@ -542,16 +546,16 @@ class PendingTransactionsManagerSpec
         )
       )
 
-    val hashes = hashesFrom(1, 5000)
+    val hashes: Seq[ByteString] = hashesFrom(1, 5000)
     announce(peer1, hashes)
-    val requests = Seq.fill(16)(requestedFrom(this))
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(16)(requestedFrom(this))
     requests.map(_._1).distinct shouldBe Seq(peer1.id)
     requests.map(_._2.size) shouldBe Seq.fill(16)(256)
     requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
     etcPeerManager.expectNoMessage(200.millis) // the other 904 are dropped, not requested
 
     // peer1 is at the cap: its next announcement is dropped whole.
-    val more = hashesFrom(10001, 10)
+    val more: Seq[ByteString] = hashesFrom(10001, 10)
     announce(peer1, more)
     etcPeerManager.expectNoMessage(200.millis)
     // The cap is per peer: another peer announcing the same hashes is asked for them.
@@ -601,8 +605,8 @@ class PendingTransactionsManagerSpec
       override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val announcementFetchTimeout: FiniteDuration = 500.millis
-    val ptm = spawnPtm(config = shortFetchTimeout)
-    val hash = ByteString(Array.fill[Byte](32)(7))
+    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout)
+    val hash: ByteString = ByteString(Array.fill[Byte](32)(7))
     Seq(peer1, peer2, peer3).foreach(announceFrom(ptm, _, hash))
 
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
@@ -614,7 +618,7 @@ class PendingTransactionsManagerSpec
   it should "request a hash from the next announcer as soon as its requester disconnects" taggedAs (
     UnitTest
   ) in new TestSetup:
-    val hash = ByteString(Array.fill[Byte](32)(8))
+    val hash: ByteString = ByteString(Array.fill[Byte](32)(8))
     announceFrom(pendingTransactionsManager, peer1, hash)
     announceFrom(pendingTransactionsManager, peer2, hash)
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
@@ -912,9 +916,9 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     val gate = new TxGossipGate()
-    val ptm = spawnPtm(gate = gate)
-    val blob = blobStx(keyPair1)
-    val sidecar = networkForm(131330)
+    val ptm: ActorRef[Command] = spawnPtm(gate = gate)
+    val blob: SignedTransaction = blobStx(keyPair1)
+    val sidecar: ByteString = networkForm(131330)
 
     ptm ! WrappedPeerEvent(
       PeerEvent.MessageFromPeer(
@@ -941,7 +945,7 @@ class PendingTransactionsManagerSpec
       )
     )
 
-    val response = pool(this, ptm)
+    val response: PendingTransactionsResponse = pool(this, ptm)
     response.pendingTransactions shouldBe empty
     response.blobTxNetworkBytes shouldBe empty
     etcPeerManager.expectNoMessage(300.millis) // no GetPooledTransactions
@@ -951,7 +955,7 @@ class PendingTransactionsManagerSpec
     UnitTest
   ) in new TestSetup:
     val gate = new TxGossipGate()
-    val ptm = spawnPtm(gate = gate)
+    val ptm: ActorRef[Command] = spawnPtm(gate = gate)
     def announce(hash: ByteString): Unit =
       ptm ! WrappedPeerEvent(
         PeerEvent.MessageFromPeer(
@@ -961,7 +965,7 @@ class PendingTransactionsManagerSpec
       )
 
     gate.markSynced("test")
-    val first = ByteString(Array.fill[Byte](32)(3))
+    val first: ByteString = ByteString(Array.fill[Byte](32)(3))
     announce(first)
     etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd].message.underlyingMsg match
       case ETHPackets.GetPooledTransactions(_, requested) => requested shouldBe Seq(first)
@@ -974,10 +978,10 @@ class PendingTransactionsManagerSpec
   it should "keep a delivered blob tx's sidecar only if the pool admits the tx" taggedAs (UnitTest) in new TestSetup:
     // Sender 1 already has nonce 5 pending, so its blob tx at nonce 0 is rejected; sender 2's is admitted.
     pendingTransactionsManager ! AddTransactions(newStx(5, tx.copy(nonce = 5), keyPair1))
-    val rejected = blobStx(keyPair1, nonce = 0)
-    val admitted = blobStx(keyPair2, nonce = 0)
-    val rejectedSidecar = networkForm(131330)
-    val admittedSidecar = networkForm(131331)
+    val rejected: SignedTransaction = blobStx(keyPair1, nonce = 0)
+    val admitted: SignedTransaction = blobStx(keyPair2, nonce = 0)
+    val rejectedSidecar: ByteString = networkForm(131330)
+    val admittedSidecar: ByteString = networkForm(131331)
 
     pendingTransactionsManager ! WrappedPeerEvent(
       PeerEvent.MessageFromPeer(
@@ -990,13 +994,13 @@ class PendingTransactionsManagerSpec
       )
     )
 
-    val response = pool(this, pendingTransactionsManager)
+    val response: PendingTransactionsResponse = pool(this, pendingTransactionsManager)
     response.pendingTransactions.map(_.stx.tx.hash) should contain(admitted.hash)
     response.pendingTransactions.map(_.stx.tx.hash) shouldNot contain(rejected.hash)
     response.blobTxNetworkBytes shouldBe Map(admitted.hash.value -> admittedSidecar)
 
   it should "drop a blob tx's sidecar when the tx is removed" taggedAs (UnitTest) in new TestSetup:
-    val blob = blobStx(keyPair1)
+    val blob: SignedTransaction = blobStx(keyPair1)
     pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
     pool(this, pendingTransactionsManager).blobTxNetworkBytes.keySet shouldBe Set(blob.hash.value)
 
@@ -1009,45 +1013,45 @@ class PendingTransactionsManagerSpec
     pool(this, pendingTransactionsManager).blobTxNetworkBytes should have size 2
 
     pendingTransactionsManager ! ClearPendingTransactions
-    val response = pool(this, pendingTransactionsManager)
+    val response: PendingTransactionsResponse = pool(this, pendingTransactionsManager)
     response.pendingTransactions shouldBe empty
     response.blobTxNetworkBytes shouldBe empty
 
   it should "drop a blob tx's sidecar when a tx with the same sender and nonce replaces it" taggedAs (
     UnitTest
   ) in new TestSetup:
-    val blob = blobStx(keyPair1, nonce = 0)
+    val blob: SignedTransaction = blobStx(keyPair1, nonce = 0)
     pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
-    val replacement = newStx(0, tx.copy(nonce = 0), keyPair1).tx
+    val replacement: SignedTransaction = newStx(0, tx.copy(nonce = 0), keyPair1).tx
     pendingTransactionsManager ! AddOrOverrideTransaction(replacement)
 
-    val response = pool(this, pendingTransactionsManager)
+    val response: PendingTransactionsResponse = pool(this, pendingTransactionsManager)
     response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(replacement.hash)
     response.blobTxNetworkBytes shouldBe empty
 
   it should "keep a blob tx's sidecar when the same tx is submitted again" taggedAs (UnitTest) in new TestSetup:
-    val blob = blobStx(keyPair1)
-    val sidecar = networkForm(131330)
+    val blob: SignedTransaction = blobStx(keyPair1)
+    val sidecar: ByteString = networkForm(131330)
     pendingTransactionsManager ! AddOrOverrideTransaction(blob, Some(sidecar))
     pendingTransactionsManager ! AddOrOverrideTransaction(blob)
 
-    val response = pool(this, pendingTransactionsManager)
+    val response: PendingTransactionsResponse = pool(this, pendingTransactionsManager)
     response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(blob.hash)
     response.blobTxNetworkBytes shouldBe Map(blob.hash.value -> sidecar)
 
   it should "drop a blob tx's sidecar when the pool evicts the tx for size" taggedAs (UnitTest) in new TestSetup:
-    val ptm = spawnPtm(config = poolConfig(size = 1))
-    val blob = blobStx(keyPair1)
+    val ptm: ActorRef[Command] = spawnPtm(config = poolConfig(size = 1))
+    val blob: SignedTransaction = blobStx(keyPair1)
     ptm ! AddOrOverrideTransaction(blob, Some(networkForm(131330)))
-    val other = newStx(0, tx, keyPair2).tx
+    val other: SignedTransaction = newStx(0, tx, keyPair2).tx
     ptm ! AddOrOverrideTransaction(other)
 
-    val response = pool(this, ptm)
+    val response: PendingTransactionsResponse = pool(this, ptm)
     response.pendingTransactions.map(_.stx.tx.hash) shouldBe Seq(other.hash)
     response.blobTxNetworkBytes shouldBe empty
 
   it should "drop a blob tx's sidecar when the tx times out" taggedAs (UnitTest) in new TestSetup:
-    val ptm = spawnPtm(config = poolConfig(timeout = 1.second))
+    val ptm: ActorRef[Command] = spawnPtm(config = poolConfig(timeout = 1.second))
     ptm ! AddOrOverrideTransaction(blobStx(keyPair1), Some(networkForm(131330)))
     pool(this, ptm).blobTxNetworkBytes should have size 1
 
@@ -1060,20 +1064,20 @@ class PendingTransactionsManagerSpec
   it should "evict the oldest blob txs, sidecar and tx together, past the sidecar byte budget" taggedAs (
     UnitTest
   ) in new TestSetup:
-    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
-    val keyPair3 = crypto.generateKeyPair(secureRandom)
-    val blobs = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
+    val ptm: ActorRef[Command] = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
+    val keyPair3: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val blobs: Seq[SignedTransaction] = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
     blobs.foreach(blob => ptm ! AddOrOverrideTransaction(blob, Some(networkForm(131330))))
 
-    val response = pool(this, ptm)
+    val response: PendingTransactionsResponse = pool(this, ptm)
     response.blobTxNetworkBytes.keySet shouldBe blobs.drop(1).map(_.hash.value).toSet
     response.blobTxNetworkBytes.values.map(_.length.toLong).sum should be <= 300000L
     response.pendingTransactions.map(_.stx.tx.hash).toSet shouldBe blobs.drop(1).map(_.hash).toSet
 
   it should "enforce the sidecar byte budget on blob txs delivered by peers" taggedAs (UnitTest) in new TestSetup:
-    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
-    val keyPair3 = crypto.generateKeyPair(secureRandom)
-    val blobs = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
+    val ptm: ActorRef[Command] = spawnPtm(config = poolConfig(sidecarBudget = 300000L))
+    val keyPair3: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val blobs: Seq[SignedTransaction] = Seq(keyPair1, keyPair2, keyPair3).map(blobStx(_))
     blobs.zipWithIndex.foreach { case (blob, i) =>
       ptm ! WrappedPeerEvent(
         PeerEvent.MessageFromPeer(
@@ -1084,15 +1088,15 @@ class PendingTransactionsManagerSpec
       )
     }
 
-    val response = pool(this, ptm)
+    val response: PendingTransactionsResponse = pool(this, ptm)
     response.blobTxNetworkBytes.keySet shouldBe blobs.drop(1).map(_.hash.value).toSet
     response.pendingTransactions.map(_.stx.tx.hash).toSet shouldBe blobs.drop(1).map(_.hash).toSet
 
   it should "not pool a blob tx whose sidecar alone exceeds the sidecar byte budget" taggedAs (UnitTest) in new TestSetup:
-    val ptm = spawnPtm(config = poolConfig(sidecarBudget = 100000L))
+    val ptm: ActorRef[Command] = spawnPtm(config = poolConfig(sidecarBudget = 100000L))
     ptm ! AddOrOverrideTransaction(blobStx(keyPair1), Some(networkForm(131330)))
 
-    val response = pool(this, ptm)
+    val response: PendingTransactionsResponse = pool(this, ptm)
     response.pendingTransactions shouldBe empty
     response.blobTxNetworkBytes shouldBe empty
 
@@ -1110,7 +1114,7 @@ class PendingTransactionsManagerSpec
   ) in new TestSetupAtHead(shippedChain("mordor"), headNumber = 10_000_000, baseFee = None):
     val id: BigInt = chainConfig.chainId.value
     val keyPair: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
-    val legacyStx = SignedTransactionWithSender(
+    val legacyStx: SignedTransactionWithSender = SignedTransactionWithSender(
       SignedTransaction.sign(
         LegacyTransaction(
           0,
@@ -1125,8 +1129,8 @@ class PendingTransactionsManagerSpec
       ),
       Address(keyPair)
     )
-    val type2 = signedBy(dynamicFee(id), crypto.generateKeyPair(secureRandom))
-    val type4 = signedBy(
+    val type2: SignedTransactionWithSender = signedBy(dynamicFee(id), crypto.generateKeyPair(secureRandom))
+    val type4: SignedTransactionWithSender = signedBy(
       com.chipprbots.ethereum.domain.SetCodeTransaction(
         id,
         0,
@@ -1160,7 +1164,8 @@ class PendingTransactionsManagerSpec
     headNumber = shippedChain("eth").forkBlockNumbers.olympiaBlockNumber,
     baseFee = Some(BaseFeeCalculator.InitialBaseFee)
   ):
-    val stx = signedBy(dynamicFee(chainConfig.chainId.value), crypto.generateKeyPair(secureRandom))
+    val stx: SignedTransactionWithSender =
+      signedBy(dynamicFee(chainConfig.chainId.value), crypto.generateKeyPair(secureRandom))
     pendingTransactionsManager ! AddTransactions(stx)
     eventually {
       pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx) shouldBe Seq(stx)
@@ -1172,7 +1177,7 @@ class PendingTransactionsManagerSpec
     baseFee = None
   ):
     val id: BigInt = chainConfig.chainId.value
-    val accessList = com.chipprbots.ethereum.domain.TransactionWithAccessList(
+    val accessList: TransactionWithAccessList = com.chipprbots.ethereum.domain.TransactionWithAccessList(
       id,
       0,
       GasPrice(BigInt(2_000_000_000)),
@@ -1182,8 +1187,8 @@ class PendingTransactionsManagerSpec
       ByteString.empty,
       Nil
     )
-    val refused = signedBy(accessList, crypto.generateKeyPair(secureRandom))
-    val admitted = signedBy(
+    val refused: SignedTransactionWithSender = signedBy(accessList, crypto.generateKeyPair(secureRandom))
+    val admitted: SignedTransactionWithSender = signedBy(
       LegacyTransaction(0, GasPrice(BigInt(2_000_000_000)), GasAmount(21_000), Some(Address(42)), 1, ByteString.empty),
       crypto.generateKeyPair(secureRandom)
     )

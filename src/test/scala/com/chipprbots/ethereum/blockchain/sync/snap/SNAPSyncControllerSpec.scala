@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.util.ByteString
-
 import java.util.concurrent.CountDownLatch
+
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
@@ -11,6 +11,14 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.ChainId
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.Timestamp
+import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -18,14 +26,6 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.utils.NetworkType
-import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.domain.BlockHash
-import com.chipprbots.ethereum.domain.BlockNumber
-import com.chipprbots.ethereum.domain.Timestamp
-import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.domain.ChainId
 
 class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
   import SNAPSyncController.SyncPhase.*

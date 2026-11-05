@@ -137,7 +137,6 @@ package object rlp:
         override def decode(rlp: RLPEncodeable): T = dec.decode(rlp)
 
     extension [A](codec: RLPCodec[A])
-
       /** Given a codec for type A, make a coded for type B. */
       def xmap[B](f: A => B, g: B => A): RLPCodec[B] =
         new RLPEncoder[B] with RLPDecoder[B]:

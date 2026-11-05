@@ -2,12 +2,12 @@ package com.chipprbots.ethereum.crypto
 
 import java.util.concurrent.Executors
 
+import org.apache.pekko.util.ByteString
+
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
-
-import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.digests.KeccakDigest
 import org.bouncycastle.util.encoders.Hex

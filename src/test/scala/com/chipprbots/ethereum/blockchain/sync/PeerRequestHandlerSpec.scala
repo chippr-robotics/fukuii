@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync
 
 import java.net.InetSocketAddress
+import java.util.concurrent.CopyOnWriteArrayList
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ManualTime
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
@@ -10,7 +11,7 @@ import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
-import java.util.concurrent.CopyOnWriteArrayList
+import scala.concurrent.duration.*
 
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -19,15 +20,15 @@ import org.scalatest.time.Millis
 import org.scalatest.time.Seconds
 import org.scalatest.time.Span
 
-import scala.concurrent.duration.*
-
+import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Result
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
-import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.*
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.*
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
@@ -64,7 +65,10 @@ class PeerRequestHandlerSpec
 
     given (Ping => MessageSerializable) = PingEnc(_)
 
-    def spawnPRH(npmProbe: TestProbe, timeout: FiniteDuration = 5.seconds) =
+    def spawnPRH(
+        npmProbe: TestProbe,
+        timeout: FiniteDuration = 5.seconds
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[Ping, Pong](
           peer = peer,
@@ -83,10 +87,10 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
 
-    val sent = npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    val sent: SendMessageCmd = npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     sent.peerId shouldEqual peerId
     npmProbe.expectNoMessage(100.millis)
 
@@ -99,7 +103,7 @@ class PeerRequestHandlerSpec
     // network peer manager and the bus, so both sends come from one sender to one receiver and their recorded order is
     // exactly the order the handler issued them in.
     val orderLog = new CopyOnWriteArrayList[String]()
-    val recorder = testKit.spawn(Behaviors.receiveMessage[Any] { msg =>
+    val recorder: TypedActorRef[Any] = testKit.spawn(Behaviors.receiveMessage[Any] { msg =>
       orderLog.add(msg.getClass.getSimpleName)
       Behaviors.same
     })
@@ -126,8 +130,8 @@ class PeerRequestHandlerSpec
 
     import scala.jdk.CollectionConverters.*
     val order = orderLog.asScala.toList
-    val subscribeIndices = order.zipWithIndex.collect { case ("SubscribeCmd", i) => i }
-    val sendIndex = order.indexOf("SendMessageCmd")
+    val subscribeIndices: List[Int] = order.zipWithIndex.collect { case ("SubscribeCmd", i) => i }
+    val sendIndex: Int = order.indexOf("SendMessageCmd")
     subscribeIndices should have size 2
     all(subscribeIndices) should be < sendIndex
 
@@ -135,7 +139,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -150,7 +154,7 @@ class PeerRequestHandlerSpec
     }
 
   it should "reply RequestFailed when the response timer fires" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe, timeout = 2.seconds)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -162,7 +166,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -171,7 +175,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessage(PeerRequestHandler.RequestFailed(0, peer, "connection closed"))
 
   it should "ignore a response from a different peer" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -190,9 +194,12 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
-    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
+    def request(
+        id: Int,
+        to: TypedActorRef[PeerRequestHandler.Result]
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
           peer = peer,
@@ -206,7 +213,8 @@ class PeerRequestHandlerSpec
         ),
         s"prh-${java.util.UUID.randomUUID()}"
       )
-    val other = testKit.createTestProbe[PeerRequestHandler.Result]()
+    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] =
+      testKit.createTestProbe[PeerRequestHandler.Result]()
     request(11, replyTo.ref)
     request(22, other.ref)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
@@ -225,9 +233,12 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     given (GetByteCodes => MessageSerializable) = new GetByteCodes.GetByteCodesEnc(_)
-    def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
+    def request(
+        id: Int,
+        to: TypedActorRef[PeerRequestHandler.Result]
+    ): TypedActorRef[com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.Command] =
       testKit.spawn(
         PeerRequestHandler.behavior[GetByteCodes, ByteCodes](
           peer = peer,
@@ -241,7 +252,8 @@ class PeerRequestHandlerSpec
         ),
         s"prh-${java.util.UUID.randomUUID()}"
       )
-    val other = testKit.createTestProbe[PeerRequestHandler.Result]()
+    val other: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[Result] =
+      testKit.createTestProbe[PeerRequestHandler.Result]()
     request(11, replyTo.ref)
     request(22, other.ref)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
@@ -255,7 +267,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[ByteCodes]].response.requestId shouldBe BigInt(11)
 
   it should "time out when the only reply has no matching id" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
     testKit.spawn(
       PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
@@ -279,7 +291,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessage(PeerRequestHandler.RequestFailed(11, peer, "request timeout"))
 
   it should "ignore a disconnect event for a different peer" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(using testKit.system.toClassic)
+    val npmProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 

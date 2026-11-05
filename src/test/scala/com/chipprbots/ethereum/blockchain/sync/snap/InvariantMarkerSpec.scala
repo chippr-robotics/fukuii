@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingStatistics
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.Trie
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFixtures.Op
@@ -58,11 +59,11 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
-import com.chipprbots.ethereum.db.storage.BfsQueueStorage
-import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.AppStateStorage.Keys
+import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
@@ -80,9 +81,9 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
-import com.chipprbots.ethereum.testing.TrieStoreSpy
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 
 /** spec 022 T039, T040, V-N2 (2): the marker that says everything present was written under "present implies complete",
   * and the retirement of the persisted frontier (CF `g`). Each datadir here is a fresh store.
@@ -1362,7 +1363,7 @@ class InvariantMarkerControllerSpec
 
   // spec 022 T047, T051, end to end: the real coordinator, and the walk that is gone.
   "A heal over a standing marker" should "finalise with no walk, no stamp to make, and the marker still standing (T047)" taggedAs UnitTest in new Fixture:
-    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val trie: Trie = PathHealPresenceFixtures.accountTrieOld()
     storeState(trie)
     appState.stampSnapHealInvariant().commit()
     resumableAt(trie.root.hash)
@@ -1391,7 +1392,7 @@ class InvariantMarkerControllerSpec
 
   // spec 022 5d: a 5a jar's run could lose track with its marker standing, and that jar never read the marker for a walk.
   "A heal over a version 3 marker" should "take it as not standing: one walk, and the stamp of this version (T043)" taggedAs UnitTest in new Fixture:
-    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val trie: Trie = PathHealPresenceFixtures.accountTrieOld()
     storeState(trie)
     appState.put(Keys.SnapHealInvariant, "3").commit()
     resumableAt(trie.root.hash)
@@ -1407,10 +1408,10 @@ class InvariantMarkerControllerSpec
     withClue("a repair run owes the code scan: ")(appState.isBytecodeRecoveryDone() shouldBe false)
 
   "A clean heal" should "repair a pre-invariant datadir once and leave the marker: walk, stamp, finalise (T039)" taggedAs UnitTest in new Fixture:
-    val trie = PathHealPresenceFixtures.accountTrieOld()
+    val trie: Trie = PathHealPresenceFixtures.accountTrieOld()
     storeState(trie)
     resumableAt(trie.root.hash)
-    val snap = spawn()
+    val snap: TypedActorRef[Command] = spawn()
     appState.hasSnapHealInvariant() shouldBe false
     snap ! SNAPSyncController.Start
     awaitFinalized()
@@ -1418,10 +1419,10 @@ class InvariantMarkerControllerSpec
     appState.hasSnapHealInvariant() shouldBe true
 
   "A lazy hand-off" should "take away a marker it finds: what regular sync fetches on demand breaks the rule (T043)" taggedAs UnitTest in new Fixture:
-    val root = ByteString(Array.fill[Byte](32)(0x11))
+    val root: ByteString = ByteString(Array.fill[Byte](32)(0x11))
     appState.stampSnapHealInvariant().commit()
     resumableAt(root)
-    val snap = spawn()
+    val snap: TypedActorRef[Command] = spawn()
     appState.hasSnapHealInvariant() shouldBe true
     snap ! SNAPSyncController.Start
     snap ! SNAPSyncController.HealingRootUnservable(root)

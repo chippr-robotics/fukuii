@@ -100,7 +100,7 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers:
       val fresh = new Secp256k1SigAlg
       val signature: Signature.Tagged = fresh.sign(privateKey, data)
       fresh.recoverPublicKey(signature, data).require shouldBe publicKey
-      val other = data ++ BitVector.fromByte(1)
+      val other: BitVector = data ++ BitVector.fromByte(1)
       fresh.recoverPublicKey(signature, other).toOption should not contain publicKey
 
   it should "evict the least recently used entry once full" taggedAs (UnitTest, NetworkTest) in {

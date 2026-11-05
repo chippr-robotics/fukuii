@@ -13,11 +13,6 @@ import cats.syntax.all.*
 
 import scala.concurrent.duration.*
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import scodec.Codec
-import scodec.codecs
-
 import com.chipprbots.scalanet.discovery.crypto.SigAlg
 import com.chipprbots.scalanet.discovery.ethereum.Node
 import com.chipprbots.scalanet.discovery.ethereum.v4
@@ -31,6 +26,10 @@ import com.chipprbots.scalanet.peergroup.PeerGroup
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
 import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+import scodec.Codec
+import scodec.codecs
 
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
 import com.chipprbots.ethereum.testing.Tags.*

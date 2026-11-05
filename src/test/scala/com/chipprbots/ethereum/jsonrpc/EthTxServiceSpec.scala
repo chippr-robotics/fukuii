@@ -12,6 +12,7 @@ import scala.concurrent.Future
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.duration.FiniteDuration
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.OptionValues
@@ -515,8 +516,8 @@ class EthTxServiceSpec
       storagesInstance.storages.transactionMappingStorage,
       system.toTyped.scheduler
     )
-    val sender = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
-    val other = crypto.keyPairFromPrvKey(BigInt(0xb0b))
+    val sender: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val other: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(0xb0b))
     def pending(key: org.bouncycastle.crypto.AsymmetricCipherKeyPair, nonce: Int): PendingTransaction =
       val stx = SignedTransaction.sign(
         TransactionWithDynamicFee(
@@ -571,7 +572,7 @@ class EthTxServiceSpec
     UnitTest,
     RPCTest
   ) in new BlobAdmissibleSetup:
-    val res =
+    val res: Either[JsonRpcError, SendRawTransactionResponse] =
       ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithoutSidecar))).unsafeRunSync()
 
     res shouldBe Left(JsonRpcError.LogicError("missing sidecar in blob transaction"))
@@ -582,7 +583,8 @@ class EthTxServiceSpec
     RPCTest
   ) in new BlobAdmissibleSetup:
     pendingTransactionsManager.setAutoPilot(com.chipprbots.ethereum.transactions.testing.AcceptLocalSubmissions)
-    val res = ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
+    val res: Either[JsonRpcError, SendRawTransactionResponse] =
+      ethTxService.sendRawTransaction(SendRawTransactionRequest(ByteString(blobTxWithSidecar))).unsafeRunSync()
 
     res.map(r => Hex.toHexString(r.transactionHash.toArray)) shouldBe
       Right("05d85f6a761cac82cfdf06dd168952838ac452b10641aabccdfdad46e03d2f0b")

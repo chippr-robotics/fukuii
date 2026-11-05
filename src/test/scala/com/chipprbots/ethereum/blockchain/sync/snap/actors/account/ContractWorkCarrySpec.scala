@@ -21,7 +21,6 @@ import scala.concurrent.duration.FiniteDuration
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
 import com.google.common.hash.PrimitiveSink
-
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 

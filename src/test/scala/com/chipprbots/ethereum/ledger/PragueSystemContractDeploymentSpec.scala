@@ -107,7 +107,7 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in new TestSetup:
     blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) shouldBe true
-    val world = runBlock(emptyWorld)
+    val world: InMemoryWorldStateProxy = runBlock(emptyWorld)
     world.getAccount(HistoryStorageAddress) shouldBe None
     world.getCode(HistoryStorageAddress) shouldBe ByteString.empty
 
@@ -115,8 +115,8 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val world = runBlock(withCode(emptyWorld, HistoryStorageAddress, HistoryStorageCode))
-    val slot = (block.header.number.value - 1) % HistoryServeWindow
+    val world: InMemoryWorldStateProxy = runBlock(withCode(emptyWorld, HistoryStorageAddress, HistoryStorageCode))
+    val slot: BigInt = (block.header.number.value - 1) % HistoryServeWindow
     world.getStorage(HistoryStorageAddress).load(slot) shouldBe UInt256(block.header.parentHash.value).toBigInt
     world.getAccount(HistoryStorageAddress).map(_.nonce) shouldBe Some(UInt256(1))
 
@@ -124,7 +124,7 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val world = withCode(emptyWorld, ConsolidationQueueAddress, someCode)
+    val world: InMemoryWorldStateProxy = withCode(emptyWorld, ConsolidationQueueAddress, someCode)
     exec.requireRequestPredeploysPresent(block, world) match
       case Left(ValidationAfterExecError(reason)) =>
         reason should include("SYSTEM_CONTRACT_EMPTY")
@@ -132,19 +132,21 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
       case other => fail(s"expected SYSTEM_CONTRACT_EMPTY, got $other")
 
   it should "reject a Prague block when the consolidation queue has no code" taggedAs (UnitTest, ConsensusTest) in
-    new TestSetup:
-      val world = withCode(emptyWorld, WithdrawalQueueAddress, someCode)
+    (new TestSetup:
+      val world: InMemoryWorldStateProxy = withCode(emptyWorld, WithdrawalQueueAddress, someCode)
       exec.requireRequestPredeploysPresent(block, world) match
         case Left(ValidationAfterExecError(reason)) =>
           reason should include("SYSTEM_CONTRACT_EMPTY")
           reason should include(ConsolidationQueueAddress.toString)
         case other => fail(s"expected SYSTEM_CONTRACT_EMPTY, got $other")
+    )
 
   it should "accept a Prague block when both predeploys have code (e.g. deployed by this block's own txs)" taggedAs (
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val world = withCode(withCode(emptyWorld, WithdrawalQueueAddress, someCode), ConsolidationQueueAddress, someCode)
+    val world: InMemoryWorldStateProxy =
+      withCode(withCode(emptyWorld, WithdrawalQueueAddress, someCode), ConsolidationQueueAddress, someCode)
     exec.requireRequestPredeploysPresent(block, world) shouldBe Right(())
 
   it should "not apply before Prague (ETC, and ETH before the fork)" taggedAs (

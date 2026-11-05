@@ -63,9 +63,9 @@ class ReadOnlyNodeStorageSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new TestSetup:
-    val keyA = ByteString("node-a").toArray[Byte]
-    val keyB = ByteString("node-b").toArray[Byte]
-    val readOnlyNodeStorage = ReadOnlyNodeStorage(new ArchiveNodeStorage(nodeStorage))
+    val keyA: Array[Byte] = ByteString("node-a").toArray[Byte]
+    val keyB: Array[Byte] = ByteString("node-b").toArray[Byte]
+    val readOnlyNodeStorage: ReadOnlyNodeStorage = ReadOnlyNodeStorage(new ArchiveNodeStorage(nodeStorage))
 
     readOnlyNodeStorage.update(Nil, Seq(ByteString(keyA) -> Array[Byte](1)))
     // root A -> root B: the replaced node A is listed for removal, but an earlier root may still reference it

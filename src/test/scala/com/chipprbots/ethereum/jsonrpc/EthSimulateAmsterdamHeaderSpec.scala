@@ -10,11 +10,11 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
-import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie

@@ -214,10 +214,10 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
 
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
 
       withClue(s"status=${status.status} validationError=${status.validationError}: ") {
         (status.status == Accepted || status.status == Syncing) shouldBe true
@@ -230,9 +230,9 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
-      val before = holesOf("code")
+      val before: Double = holesOf("code")
       engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       holesOf("code") shouldBe before + 1d
@@ -256,9 +256,9 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
             blockchainConfig: BlockchainConfig
         ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           throw new MissingRootNodeException(ByteString(Array.fill[Byte](32)(0x44)))
-      val block1 = buildBlock1()
-      val before = holesOf("node")
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("node")
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       (status.status == Accepted || status.status == Syncing) shouldBe true
       holesOf("node") shouldBe before + 1d
 
@@ -284,8 +284,8 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
             blockchainConfig: BlockchainConfig
         ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           throw new MissingRootNodeException(genesisHeader.stateRoot.value)
-      val block1 = buildBlock1()
-      val before = holesOf("root")
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("root")
       engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       holesOf("root") shouldBe before + 1d
 
@@ -306,9 +306,9 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
             blockchainConfig: BlockchainConfig
         ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
           Left(BlockExecutionError.MPTError(new MissingRootNodeException(genesisHeader.stateRoot.value)))
-      val block1 = buildBlock1()
-      val before = holesOf("root")
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("root")
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       (status.status == Accepted || status.status == Syncing) shouldBe true
       holesOf("root") shouldBe before + 1d
 
@@ -316,12 +316,12 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
       engineApi.newPayload(toPayload(block1)).unsafeRunSync().status should not be Invalid
 
       restoreCode()
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
       engineApi.invalidBlocksSnapshot shouldBe empty
 
@@ -329,11 +329,11 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
       engineApi.newPayload(toPayload(block1)).unsafeRunSync()
 
-      val fcu = engineApi
+      val fcu: Either[String, ForkchoiceUpdatedResponse] = engineApi
         .forkchoiceUpdated(
           ForkChoiceState(block1.hash.value, ByteString(new Array[Byte](32)), ByteString(new Array[Byte](32))),
           None
@@ -353,7 +353,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       val nodes = storagesInstance.storages.nodeStorage
       val senderLeaf: ByteString =
         MerklePatriciaTrie[Address, Account](genesisHeader.stateRoot.value.toArray, blockchain.getBackingMptStorage(0))(
@@ -366,7 +366,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       val good: Array[Byte] = nodes.get(senderLeaf).getOrElse(fail("the sender's leaf is not stored by its hash"))
       nodes.put(senderLeaf, Array(0x80.toByte))
 
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
 
       withClue(s"status=${status.status} validationError=${status.validationError}: ") {
         (status.status == Accepted || status.status == Syncing) shouldBe true
@@ -378,7 +378,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       }
 
       nodes.put(senderLeaf, good)
-      val repaired = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val repaired: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
       engineApi.invalidBlocksSnapshot shouldBe empty
   }

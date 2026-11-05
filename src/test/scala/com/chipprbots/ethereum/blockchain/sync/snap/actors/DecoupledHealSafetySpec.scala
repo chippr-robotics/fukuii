@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
@@ -11,7 +12,6 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 
-import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers

@@ -1,10 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
-import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
-
-import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
@@ -14,9 +12,10 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
-import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 object BlockBroadcasterActor:

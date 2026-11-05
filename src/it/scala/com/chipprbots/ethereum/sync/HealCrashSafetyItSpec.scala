@@ -11,10 +11,10 @@ import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.util.ByteString
 
+import cats.effect.unsafe.implicits.global
+
 import scala.collection.mutable
 import scala.util.Try
-
-import cats.effect.unsafe.implicits.global
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

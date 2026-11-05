@@ -4,8 +4,8 @@ import java.net.InetSocketAddress
 import java.net.URI
 
 import org.apache.pekko.NotUsed
-import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.ActorRef as ClassicActorRef
+import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
@@ -19,10 +19,10 @@ import scala.concurrent.duration.*
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.network.PeerActor.Status.*
+import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerOnWrongNetwork
-import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker

@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.consensus.engine
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-
-import java.util.concurrent.atomic.AtomicInteger
 
 import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JInt

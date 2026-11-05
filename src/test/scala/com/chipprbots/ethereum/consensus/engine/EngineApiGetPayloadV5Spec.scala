@@ -13,14 +13,14 @@ import org.json4s.jvalue2monadic
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
-import com.chipprbots.ethereum.domain.BloomFilter
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -74,7 +74,7 @@ class EngineApiGetPayloadV5Spec extends AnyWordSpec with Matchers:
       override def getPayload(payloadId: ByteString): IO[Either[String, Block]] =
         IO.pure(Right(block))
       override def getPayloadReceipts(payloadId: ByteString) = Nil
-      override def getPayloadBlobsBundle(payloadId: ByteString) = BlobsBundleData(Nil, Nil, Nil, Nil)
+      override def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData = BlobsBundleData(Nil, Nil, Nil, Nil)
       override def getPayloadExecutionRequests(payloadId: ByteString) = Nil
 
   private def getPayloadRequest(method: String): JsonRpcRequest =

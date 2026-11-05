@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -12,6 +13,9 @@ import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.LinkedHashSet
+import scala.collection.mutable.PriorityQueue
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.blocking
@@ -22,6 +26,7 @@ import scala.util.Success
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
 import com.google.common.hash.PrimitiveSink
+import org.slf4j.Logger
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
@@ -31,6 +36,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
@@ -115,7 +121,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // (see `finalizeTrie`). For the actor-thread code below we use `ctx.log`; the Future uses
   // `futureLog` (a plain SLF4J logger) instead.
   val log = ctx.log
-  val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
+  val futureLog: Logger = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   var stateRoot: ByteString = initialStateRoot
@@ -136,7 +142,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
   // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
-  val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val statelessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
   // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
@@ -145,7 +151,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
-  val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val snaplessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Strike counter for empty-with-empty-proof responses (the only signal that drives
   // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
   // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
@@ -161,7 +167,8 @@ private[actors] class AccountRangeCoordinatorImpl(
   //   * any successful response from peer → recordPeerSuccess clears strikes
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
-  val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  val emptyResponseStrikes: mutable.Map[PeerId, Int] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   var pivotRefreshRequested = false
 
   // Task management — resume ranges from saved positions (core-geth parity).
@@ -222,19 +229,20 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
-  val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(using
+  val pendingTasks: PriorityQueue[AccountTask] = mutable.PriorityQueue[AccountTask](remainingTasks*)(using
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
-  val activeTasks = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
+  val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] =
+    mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
   // Seeded with the ranges already complete on resume (#1597): every snapshot builds its cursor map from pending,
   // active, storing and completed tasks, so a skipped range left out of here dropped out of every later checkpoint, and
   // the next restart saw one cursor fewer than the layout and rejected the whole record.
-  val completedTasks = mutable.ArrayBuffer[AccountTask](skippedTasks*)
+  val completedTasks: ArrayBuffer[AccountTask] = mutable.ArrayBuffer[AccountTask](skippedTasks*)
 
   // Worker pool
-  val workers = mutable.ArrayBuffer[WorkerRef]()
-  val idleWorkers = mutable.LinkedHashSet.empty[WorkerRef]
+  val workers: ArrayBuffer[WorkerRef] = mutable.ArrayBuffer[WorkerRef]()
+  val idleWorkers: LinkedHashSet[WorkerRef] = mutable.LinkedHashSet.empty[WorkerRef]
 
   // #1184: dispatch-stalled detector — silent peers (no FIN/RST) leave activeTasks slots
   // held forever; the worker→TaskFailed cascade depends on a response that never arrives.
@@ -258,7 +266,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Statistics
   var accountsDownloaded: Long = 0
   var bytesDownloaded: Long = 0
-  val startTime = System.currentTimeMillis()
+  val startTime: Long = System.currentTimeMillis()
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
   var consumedKeyspace: BigInt =
@@ -320,21 +328,21 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Tasks whose response is being inserted chunk-by-chunk (`StoreAccountChunk`). They are in neither `pendingTasks`
   // nor `activeTasks` meanwhile; without this a snapshot taken in that window omits the range entirely and a resume
   // would restart it from its start. Keyed by `task.last`; the task's `next` is already advanced past the response.
-  val storingTasks = mutable.Map.empty[ByteString, AccountTask]
+  val storingTasks: mutable.Map[ByteString, AccountTask] = mutable.Map.empty[ByteString, AccountTask]
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
-  val knownAvailablePeers = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
-  val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
-  val peerCooldownUntilMs = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
   // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
-  val lastDispatchTimeMs = mutable.Map.empty[String, Long]
+  val lastDispatchTimeMs: mutable.Map[String, Long] = mutable.Map.empty[String, Long]
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
   // Exponential backoff from 60s to 5min.

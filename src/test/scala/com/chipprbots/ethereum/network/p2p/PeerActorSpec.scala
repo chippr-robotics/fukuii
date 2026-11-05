@@ -6,12 +6,12 @@ import java.net.URI
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicReference
 
-import org.apache.pekko.actor.typed.ActorRef
-import org.apache.pekko.actor.typed.scaladsl.Behaviors
-import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.actor.testkit.typed.scaladsl.ManualTime
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
@@ -31,7 +31,6 @@ import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
-import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.*
@@ -53,6 +52,7 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reas
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong.PongEnc
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
+import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -80,7 +80,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
   it should "retry failed rlpx connection" taggedAs (UnitTest, NetworkTest) in new TestSetup:
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
 
-    val deathProbe = testKit.createTestProbe[Any]()
+    val deathProbe: TestProbe[Any] = testKit.createTestProbe[Any]()
 
     (0 to 3).foreach { _ =>
       manualTime.timePasses(5.seconds)
@@ -97,8 +97,8 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     // Test probes live under /system and cannot be stopped via testKit.stop(), which routes
     // through the /user guardian (can only stop its direct children). Spawning user actors
     // lets testKit.stop() work correctly. Spy probes capture messages PeerActor sends.
-    val conn1Spy = testKit.createTestProbe[RLPxConnectionHandler.Command]()
-    val conn2Spy = testKit.createTestProbe[RLPxConnectionHandler.Command]()
+    val conn1Spy: TestProbe[RLPxConnectionHandler.Command] = testKit.createTestProbe[RLPxConnectionHandler.Command]()
+    val conn2Spy: TestProbe[RLPxConnectionHandler.Command] = testKit.createTestProbe[RLPxConnectionHandler.Command]()
     val conn1: ActorRef[RLPxConnectionHandler.Command] = testKit.spawn(
       Behaviors.receiveMessage[RLPxConnectionHandler.Command] { msg =>
         conn1Spy.ref ! msg; Behaviors.same
@@ -115,7 +115,8 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     connQueue.add(conn1)
     connQueue.add(conn2)
 
-    val peerMessageBus = testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
+    val peerMessageBus: ActorRef[PeerEventBusActor.Command] =
+      testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
     val knownNodesManager: TestProbe[KnownNodesManager.Command] = testKit.createTestProbe()
 
     val peer: ActorRef[PeerActor.Command] = testKit.spawn(
@@ -165,7 +166,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     // Test probes live under /system and cannot be stopped via testKit.stop() (see the "try to
     // reconnect" test above) — spawn a real user actor as the rlpx connection so it can be
     // stopped to trigger RlpxTerminated via death-watch, exactly like a dropped TCP link would.
-    val connSpy = testKit.createTestProbe[RLPxConnectionHandler.Command]()
+    val connSpy: TestProbe[RLPxConnectionHandler.Command] = testKit.createTestProbe[RLPxConnectionHandler.Command]()
     val conn: ActorRef[RLPxConnectionHandler.Command] = testKit.spawn(
       Behaviors.receiveMessage[RLPxConnectionHandler.Command] { msg =>
         connSpy.ref ! msg; Behaviors.same
@@ -173,7 +174,8 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
       s"rlpx-conn-handshaked-${java.util.UUID.randomUUID()}"
     )
 
-    val peerMessageBus = testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
+    val peerMessageBus: ActorRef[PeerEventBusActor.Command] =
+      testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
     val knownNodesManager: TestProbe[KnownNodesManager.Command] = testKit.createTestProbe()
     val handshakeEvents: TestProbe[PeerEventBusActor.PeerEvent] = testKit.createTestProbe()
     peerMessageBus ! PeerEventBusActor.SubscribeCmd(
@@ -211,7 +213,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
 
     // The PeerActor must stop -- not schedule a reconnect. Before the fix this would time out:
     // the buggy path transitions to waitingForRetry and stays alive without a manual-time advance.
-    val deathProbe = testKit.createTestProbe[Any]()
+    val deathProbe: TestProbe[Any] = testKit.createTestProbe[Any]()
     deathProbe.expectTerminated(peerUnderTest)
 
     // No reconnect attempt anywhere (no new ConnectTo, no second handshake success), and the
@@ -473,7 +475,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     statusProbe.expectMessage(StatusResponse(Handshaked))
 
     // Test peer terminated after peerConf.disconnectPoisonPillTimeout
-    val deathProbe = testKit.createTestProbe[Any]()
+    val deathProbe: TestProbe[Any] = testKit.createTestProbe[Any]()
 
     peer ! RLPxConnectionHandler.MessageReceived(Disconnect(Reasons.Other))
 
@@ -491,7 +493,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
   ) in new TestSetup:
     // 8k-H removed context.toClassic.parent sends; PeerActor now stops immediately
     // on pre-handshake Disconnect. Verify via death-watch instead of parent message.
-    val deathProbe = testKit.createTestProbe[Any]()
+    val deathProbe: TestProbe[Any] = testKit.createTestProbe[Any]()
 
     val peerUnderTest: ActorRef[PeerActor.Command] = testKit.spawn(
       PeerActor.apply(
@@ -618,7 +620,7 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     val rlpxConnection: TestProbe[RLPxConnectionHandler.Command] =
       testKit.createTestProbe[RLPxConnectionHandler.Command]()
 
-    val peerMessageBus =
+    val peerMessageBus: ActorRef[PeerEventBusActor.Command] =
       testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
 
     val knownNodesManager: TestProbe[KnownNodesManager.Command] =

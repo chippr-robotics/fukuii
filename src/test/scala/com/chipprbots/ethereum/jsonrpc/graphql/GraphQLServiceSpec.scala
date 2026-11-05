@@ -10,10 +10,12 @@ import org.apache.pekko.util.ByteString
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 
 import io.circe.ACursor
 import io.circe.Json
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -31,16 +33,16 @@ import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService
 import com.chipprbots.ethereum.jsonrpc.EthFilterService
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
@@ -84,7 +86,7 @@ class GraphQLServiceSpec
 
   it should "serve the Amsterdam header fields blockAccessListHash and slotNumber, null before Amsterdam (#1629)" in new GraphQLTestSetup:
     val bal: ByteString = ByteString(Array.tabulate[Byte](32)(i => (i + 1).toByte))
-    val amsterdamHeader = block.header.copy(extraFields =
+    val amsterdamHeader: BlockHeader = block.header.copy(extraFields =
       BlockHeader.HeaderExtraFields.HefPostAmsterdam(
         baseFee = 7,
         withdrawalsRoot = ByteString(Array.fill[Byte](32)(1)),
@@ -157,7 +159,7 @@ class GraphQLServiceSpec
       .and(blockchainWriter.storeChainWeight(emptyStateBlock.header.hash, weight))
       .commit()
     blockchainWriter.saveBestKnownBlocks(emptyStateBlock.hash, emptyStateBlock.number.value)
-    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val key: AsymmetricCipherKeyPair = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
     def pooled(nonce: Int): PendingTransaction =
       val stx = SignedTransaction.sign(
         LegacyTransaction(nonce, GasPrice(10), GasAmount(21_000), Some(Address(1)), 0, ByteString.empty),
@@ -166,8 +168,8 @@ class GraphQLServiceSpec
       )
       PendingTransaction(SignedTransactionWithSender(stx, Address(key)), System.currentTimeMillis)
 
-    val query = s"""{ pending { account(address: "${Address(key).toString}") { transactionCount } } }"""
-    val result = service.execute(query, None, None).unsafeToFuture()
+    val query: String = s"""{ pending { account(address: "${Address(key).toString}") { transactionCount } } }"""
+    val result: Future[(Int, Json)] = service.execute(query, None, None).unsafeToFuture()
     pendingTxProbe.expectMsgPF() { case req: GetPendingTransactionsReq =>
       req.replyTo ! PendingTransactionsResponse(Seq(pooled(1), pooled(3), pooled(0)))
     }

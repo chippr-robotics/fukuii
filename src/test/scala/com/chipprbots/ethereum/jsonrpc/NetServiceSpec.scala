@@ -27,6 +27,10 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerManagerActor.AddToBlacklistCmd
+import com.chipprbots.ethereum.network.PeerManagerActor.DisconnectPeerByIdCmd
+import com.chipprbots.ethereum.network.PeerManagerActor.GetPeersCmd
+import com.chipprbots.ethereum.network.PeerManagerActor.RemoveFromBlacklistCmd
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.NodeStatus
@@ -41,7 +45,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .peerCount(PeerCountRequest())
       .unsafeToFuture()
 
-    val pcCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
+    val pcCmd: GetPeersCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
     pcCmd.replyTo ! PeerManagerActor.Peers(
       Map(
         Peer(PeerId("peer1"), new InetSocketAddress(1), testRef, false) -> PeerActor.Status.Handshaked,
@@ -91,7 +95,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .listPeers(ListPeersRequest())
       .unsafeToFuture()
 
-    val lpCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
+    val lpCmd: GetPeersCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
     lpCmd.replyTo ! PeerManagerActor.Peers(
       Map(
         Peer(
@@ -122,7 +126,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .disconnectPeer(DisconnectPeerRequest("peer1"))
       .unsafeToFuture()
 
-    val dcCmd = peerManager.expectMsgType[PeerManagerActor.DisconnectPeerByIdCmd]
+    val dcCmd: DisconnectPeerByIdCmd = peerManager.expectMsgType[PeerManagerActor.DisconnectPeerByIdCmd]
     dcCmd.replyTo ! PeerManagerActor.DisconnectPeerResponse(disconnected = true)
 
     resF.futureValue shouldBe Right(DisconnectPeerResponse(success = true))
@@ -132,7 +136,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .disconnectPeer(DisconnectPeerRequest("nonexistent"))
       .unsafeToFuture()
 
-    val dcCmd2 = peerManager.expectMsgType[PeerManagerActor.DisconnectPeerByIdCmd]
+    val dcCmd2: DisconnectPeerByIdCmd = peerManager.expectMsgType[PeerManagerActor.DisconnectPeerByIdCmd]
     dcCmd2.replyTo ! PeerManagerActor.DisconnectPeerResponse(disconnected = false)
 
     resF.futureValue shouldBe Right(DisconnectPeerResponse(success = false))
@@ -175,7 +179,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .addToBlacklist(AddToBlacklistRequest("192.168.1.200", Some(300), "Test reason"))
       .unsafeToFuture()
 
-    val ablCmd = peerManager.expectMsgType[PeerManagerActor.AddToBlacklistCmd]
+    val ablCmd: AddToBlacklistCmd = peerManager.expectMsgType[PeerManagerActor.AddToBlacklistCmd]
     ablCmd.replyTo ! PeerManagerActor.AddToBlacklistResponse(added = true)
 
     resF.futureValue shouldBe Right(AddToBlacklistResponse(added = true))
@@ -185,7 +189,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .addToBlacklist(AddToBlacklistRequest("192.168.1.201", None, "Permanent ban"))
       .unsafeToFuture()
 
-    val ablCmd2 = peerManager.expectMsgType[PeerManagerActor.AddToBlacklistCmd]
+    val ablCmd2: AddToBlacklistCmd = peerManager.expectMsgType[PeerManagerActor.AddToBlacklistCmd]
     ablCmd2.replyTo ! PeerManagerActor.AddToBlacklistResponse(added = true)
 
     resF.futureValue shouldBe Right(AddToBlacklistResponse(added = true))
@@ -195,7 +199,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       .removeFromBlacklist(RemoveFromBlacklistRequest("192.168.1.100"))
       .unsafeToFuture()
 
-    val rblCmd = peerManager.expectMsgType[PeerManagerActor.RemoveFromBlacklistCmd]
+    val rblCmd: RemoveFromBlacklistCmd = peerManager.expectMsgType[PeerManagerActor.RemoveFromBlacklistCmd]
     rblCmd.replyTo ! PeerManagerActor.RemoveFromBlacklistResponse(removed = true)
 
     resF.futureValue shouldBe Right(RemoveFromBlacklistResponse(removed = true))

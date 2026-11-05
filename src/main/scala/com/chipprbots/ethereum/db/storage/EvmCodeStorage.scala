@@ -8,6 +8,7 @@ import fs2.Stream
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage.*
 
@@ -78,7 +79,7 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     * commit and caches after that eviction keeps bad code cached, which is accepted: rare, on code already rare (spec
     * 022 R-5f).
     */
-  override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]) =
+  override def update(toRemove: Seq[CodeHash], toUpsert: Seq[(CodeHash, Code)]): DataSourceBatchUpdate =
     toRemove.foreach { h =>
       EvmCodeStorage.shared.remove(cacheKey(h))
       EvmCodeStorage.sizes.remove(cacheKey(h))

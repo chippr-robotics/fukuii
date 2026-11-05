@@ -171,12 +171,12 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val result =
+      val result: List[JValue] =
         byHash(2, preAmsterdam.header.hash.value, withList.header.hash.value, unknown, withList.header.hash.value)
 
       result should have size 4
       accessListField(result(0)) shouldBe JNull
-      val served = data(accessListField(result(1)))
+      val served: ByteString = data(accessListField(result(1)))
       served shouldBe live.bytes
       // What the CL checks it against: the header's commitment, which is the live block's.
       ByteString(kec256(served.toArray)) shouldBe live.blockAccessListHash
@@ -188,7 +188,7 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val result = byHash(2, withoutList.header.hash.value)
+      val result: List[JValue] = byHash(2, withoutList.header.hash.value)
 
       result should have size 1
       result.head should not be JNull // the block is known: a body, with no list
@@ -207,9 +207,9 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val hashes = Seq(preAmsterdam, withList, withoutList).map(_.header.hash.value)
-      val v1 = byHash(1, hashes*)
-      val v2 = byHash(2, hashes*)
+      val hashes: Seq[ByteString] = Seq(preAmsterdam, withList, withoutList).map(_.header.hash.value)
+      val v1: List[JValue] = byHash(1, hashes*)
+      val v2: List[JValue] = byHash(2, hashes*)
 
       v1 should have size 3
       v1.zip(v2).foreach { (one, two) =>
@@ -230,7 +230,7 @@ class EngineApiPayloadBodiesV2Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val range = entries(byRange(2, 1, 3))
+      val range: List[JValue] = entries(byRange(2, 1, 3))
 
       range shouldBe byHash(
         2,

@@ -4,7 +4,13 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.mpt.{BranchNode, ExtensionNode, HashNode, LeafNode, MptNode, MptTraversals, NullNode}
+import com.chipprbots.ethereum.mpt.BranchNode
+import com.chipprbots.ethereum.mpt.ExtensionNode
+import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.NullNode
 import com.chipprbots.ethereum.testing.TestMptStorage
 
 /** Deterministic synthetic-trie fixtures for the #1374 moving-root delta heal tests.

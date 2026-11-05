@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.jsonrpc.conformance
 
+import java.io.File
+
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 
 import cats.effect.unsafe.IORuntime
-
-import java.io.File
 
 import io.circe.Json
 import org.bouncycastle.util.encoders.Hex

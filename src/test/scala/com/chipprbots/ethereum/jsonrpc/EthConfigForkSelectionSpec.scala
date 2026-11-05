@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlobParams
 import com.chipprbots.ethereum.utils.BlobSchedule
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.NetworkType
 
@@ -48,7 +49,7 @@ class EthConfigForkSelectionSpec
   implicit private val classicActorSystem: ActorSystem = system.toClassic
 
   "eth_config on an ETH-family chain" should "report the active timestamp fork, with no fork after it" in new TestSetup:
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
 
     val current = response.current.value
     current.activationTime shouldBe Some(540L)
@@ -78,7 +79,7 @@ class EthConfigForkSelectionSpec
   it should "report the next and last forks while the head is mid-schedule" in new TestSetup:
     override def headTime: Long = 430L // past cancun (420), before prague (450)
 
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
     response.current.value.activationTime shouldBe Some(420L)
     response.next.value.activationTime shouldBe Some(450L)
     response.last.value.activationTime shouldBe Some(540L)
@@ -97,14 +98,14 @@ class EthConfigForkSelectionSpec
       bpo2 = Some(BlobParams(10, 15, BigInt(8346193)))
     )
 
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
     response.current.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(8), BigInt(12), BigInt(6676955))
     response.next.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(10), BigInt(15), BigInt(8346193))
     response.last.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(10), BigInt(15), BigInt(8346193))
 
   it should "report Osaka with the Prague entry it inherits" in new TestSetup:
     override def headTime: Long = 480L
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
     response.current.value.activationTime shouldBe Some(480L)
     response.current.value.blobSchedule.value shouldBe BlobScheduleConfig(BigInt(6), BigInt(9), BigInt(5007716))
 
@@ -113,7 +114,7 @@ class EthConfigForkSelectionSpec
     def blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
 
     /** hive rpc-compat fixture schedule (tests/genesis.json). */
-    override lazy val blockchainConfig = super.blockchainConfig.copy(
+    override lazy val blockchainConfig: BlockchainConfig = super.blockchainConfig.copy(
       networkType = NetworkType.ETH,
       forkTimestamps = ForkTimestamps(
         shanghaiTimestamp = Some(390L),

@@ -8,6 +8,7 @@ import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 
 import org.scalatest.freespec.AnyFreeSpecLike
@@ -21,8 +22,8 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.domain.BlockBody
-import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -76,8 +77,9 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       NetworkTest
     ) in new Fixture:
       val (b1, b2) = (bal(1), bal(2))
-      val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       get.blockHashes shouldBe blocks.map(_.header.hash.value)
       req.replyTo ! PeersClient.Response(
@@ -92,8 +94,9 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       NetworkTest
     ) in new Fixture:
       val (good, other) = (bal(1), bal(2))
-      val blocks = Seq(amsterdamBlock(1, good.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, good.hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(peer, ETHPackets.BlockAccessLists(get.requestId, Seq(other.toRLPEncodable)))
       await(result) shouldBe empty
@@ -103,8 +106,9 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
           reason shouldBe a[BlacklistReason.InvalidBlockAccessList]
 
     "treats the empty string as unavailable, without penalty" taggedAs (UnitTest, NetworkTest) in new Fixture:
-      val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, bal(1).hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(
         peer,
@@ -115,8 +119,10 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
 
     "keeps the valid entries around an unavailable one" taggedAs (UnitTest, NetworkTest) in new Fixture:
       val (b1, b3) = (bal(1), bal(3))
-      val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, bal(2).hash), amsterdamBlock(3, b3.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] =
+        Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, bal(2).hash), amsterdamBlock(3, b3.hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req, get) = request()
       req.replyTo ! PeersClient.Response(
         peer,
@@ -132,8 +138,9 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       NetworkTest
     ) in new Fixture:
       val (b1, b2) = (bal(1), bal(2))
-      val blocks = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, b1.hash), amsterdamBlock(2, b2.hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       val (req1, get1) = request()
       req1.replyTo ! PeersClient.Response(peer, ETHPackets.BlockAccessLists(get1.requestId, Seq(b1.toRLPEncodable)))
       val (req2, get2) = request()
@@ -145,22 +152,25 @@ class BlockAccessListFetcherSpec extends ScalaTestWithActorTestKit with AnyFreeS
       UnitTest,
       NetworkTest
     ) in new Fixture:
-      val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, bal(1).hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()._1.replyTo ! PeersClient.NoSuitablePeer
       await(result) shouldBe empty
       await(fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)) shouldBe empty
       client.expectNoMessage(100.millis)
       clock += BlockAccessListFetcher.SuppressionMs + 1
-      val again = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val again: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()._1.replyTo ! PeersClient.NoSuitablePeer
       await(again) shouldBe empty
 
     "gives up after its timeout when the peer never answers" taggedAs (UnitTest, NetworkTest) in new Fixture(
       300.millis
     ):
-      val blocks = Seq(amsterdamBlock(1, bal(1).hash))
-      val result = fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
+      val blocks: Seq[Block] = Seq(amsterdamBlock(1, bal(1).hash))
+      val result: Future[Map[ByteString, BlockAccessList]] =
+        fetcher.fetch(blocks).unsafeToFuture()(using cats.effect.unsafe.IORuntime.global)
       request()
       await(result) shouldBe empty
 

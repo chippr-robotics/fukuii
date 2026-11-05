@@ -26,12 +26,12 @@ import org.scalatest.time.Span
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheckSpec
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheckSpec
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -70,7 +70,7 @@ class SNAPPivotBodyFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFlat
     val parent: TypedTestProbe[SyncProtocol.SyncControllerReply] =
       testKit.createTestProbe[SyncProtocol.SyncControllerReply]()
 
-    val root = ByteString(Array.fill(32)(0x11.toByte))
+    val root: ByteString = ByteString(Array.fill(32)(0x11.toByte))
 
     /** Ephemery 137,594's shape: no transactions, 16 withdrawals. */
     val pivotHeader: BlockHeader = StoredBodyCheckSpec.withdrawalsPivot.copy(stateRoot = TrieRoot(root))

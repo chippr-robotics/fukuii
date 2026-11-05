@@ -65,11 +65,11 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val head = 10
-    val roots = buildCanonical(this, head)
+    val roots: Map[Int, ByteString] = buildCanonical(this, head)
     (0 to head).filter(_ > head - history).foreach(bn => readWholeState(roots(bn)))
 
     // Non-canonical branch from the head, saved to head + history + 3 while the canonical head stays at `head`.
-    var parent = roots(head)
+    var parent: ByteString = roots(head)
     (head + 1 to head + history + 3).foreach { bn =>
       parent = execute(bn, parent, touchedBy(bn + 1000, 40), "x")
       stateStorage.onBlockSave(bn, head)(() => ())
@@ -83,7 +83,7 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val head = 10
-    val roots = buildCanonical(this, head)
+    val roots: Map[Int, ByteString] = buildCanonical(this, head)
 
     (1 to 5).foreach { attempt =>
       var parent = roots(head)
@@ -100,8 +100,8 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val reference = new Setup // legacy schedule: prune(bn - history) on every save
-    var roots = Map(0 -> genesis())
-    var refRoots = Map(0 -> reference.genesis())
+    var roots: Map[Int, ByteString] = Map(0 -> genesis())
+    var refRoots: Map[Int, ByteString] = Map(0 -> reference.genesis())
     (1 to 30).foreach { bn =>
       roots += bn -> execute(bn, roots(bn - 1), touchedBy(bn, 20), "c")
       refRoots += bn -> reference.execute(bn, refRoots(bn - 1), touchedBy(bn, 20), "c")
@@ -116,9 +116,9 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val reference = new Setup
-    var roots = Map(0 -> genesis())
-    var refRoots = Map(0 -> reference.genesis())
-    val batch = history + 3
+    var roots: Map[Int, ByteString] = Map(0 -> genesis())
+    var refRoots: Map[Int, ByteString] = Map(0 -> reference.genesis())
+    val batch: Int = history + 3
     (0 until 5).foreach { b =>
       val bestBefore = b * batch
       ((bestBefore + 1) to (bestBefore + batch)).foreach { bn =>
@@ -128,7 +128,7 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
         ReferenceCountNodeStorage.prune(bn - history, reference.nodeStorage, inMemory = false)
       }
     }
-    val last = 5 * batch
+    val last: Int = 5 * batch
     // the head advanced to `last`; the next save (re-)asserts it and the lagging prunes catch up
     stateStorage.onBlockSave(last, last)(() => ())
     dbKeys shouldBe reference.dbKeys

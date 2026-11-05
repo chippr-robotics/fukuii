@@ -8,6 +8,7 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.DefaultFormats
 import org.json4s.Extraction
@@ -334,13 +335,13 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
   // go-ethereum TransactionAPI.GetTransactionCount: "pending" is the pool nonce (GetPoolNonce), not a block's state.
   it should "eth_getTransactionCount under pending answer the pool's next nonce" taggedAs (UnitTest, RPCTest) in
-    new JsonRpcControllerFixture:
+    (new JsonRpcControllerFixture:
       val mockEthUserService: EthUserService = mock[EthUserService]
       val mockEthTxService: EthTxService = mock[EthTxService]
       override val jsonRpcController: JsonRpcController =
         super.jsonRpcController.copy(ethUserService = mockEthUserService, ethTxService = mockEthTxService)
 
-      val address = Address("0x7B9Bc474667Db2fFE5b08d000F1Acc285B2Ae47D")
+      val address: Address = Address("0x7B9Bc474667Db2fFE5b08d000F1Acc285B2Ae47D")
       (mockEthTxService.poolNonceAtHead).expects(address).returning(IO.pure(Right(BigInt(124))))
 
       val request: JsonRpcRequest = newJsonRpcRequest(
@@ -350,6 +351,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
       val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
       response should haveStringResult("0x7c")
+    )
 
   it should "eth_getBlockTransactionCountByNumber " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     // MIGRATION: Scala 3 scalamock macro drops Option[ForkChoiceManager] type arg — use concrete stub
@@ -594,7 +596,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
-    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    val key: AsymmetricCipherKeyPair = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
     val own: Address = Address(key)
     val stx: SignedTransaction = SignedTransaction.sign(
       TransactionWithDynamicFee(
@@ -633,7 +635,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     txJson \ "transactionIndex" shouldBe JNull
 
   it should "fail with the keystore's error rather than answer an empty list" taggedAs (UnitTest, RPCTest) in
-    new JsonRpcControllerFixture:
+    (new JsonRpcControllerFixture:
       personalService.listAccountsFn = _ => IO.pure(Left(JsonRpcError.LogicError("keystore unavailable")))
       val mockEthTxService: EthTxService = mock[EthTxService]
       (mockEthTxService.pendingTransactionsFrom).expects(*).never()
@@ -644,3 +646,4 @@ class JsonRpcControllerEthLegacyTransactionSpec
       jRpcController.handleRequest(request).unsafeRunSync() should haveError(
         JsonRpcError.LogicError("keystore unavailable")
       )
+    )

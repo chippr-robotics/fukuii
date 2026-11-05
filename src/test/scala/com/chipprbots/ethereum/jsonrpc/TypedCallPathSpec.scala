@@ -3,9 +3,9 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
-import scala.concurrent.duration.*
-
 import cats.effect.unsafe.IORuntime
+
+import scala.concurrent.duration.*
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
@@ -23,12 +23,14 @@ import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+import com.chipprbots.ethereum.jsonrpc.CallTxBuilder.CallMessage
 import com.chipprbots.ethereum.jsonrpc.EthInfoService.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.BlockOverrides
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.StateOverride
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
+import com.chipprbots.ethereum.ledger.StxLedger.CallEstimateFailure
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -196,7 +198,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in
-    new Node:
+    (new Node:
       for gp <- List(BigInt(0), BigInt(9)) do
         val m = message(args(SlotReader, _.copy(gasPrice = Some(GasPrice(gp)))))
         m.stx.tx.tx shouldBe a[LegacyTransaction]
@@ -211,12 +213,13 @@ class TypedCallPathSpec
         ledger.simulateCall(m.stx, m.header, None, m.options, Some(t1))
         ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
         t1.getResult shouldBe t2.getResult
+    )
 
   "estimateCallGas" should "answer what binarySearchGasEstimation answers for a legacy call" taggedAs (
     UnitTest,
     RPCTest
   ) in new Node:
-    val m = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
+    val m: CallMessage = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
     ledger.estimateCallGas(m.stx, m.header, None, m.options).value shouldBe
       ledger.binarySearchGasEstimation(m.stx, m.header, None)
 
@@ -226,7 +229,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val withFees = args(FeeEcho, _.copy(maxFeePerGas = Some(100), maxPriorityFeePerGas = Some(3)))
+    val withFees: TxArgs = args(FeeEcho, _.copy(maxFeePerGas = Some(100), maxPriorityFeePerGas = Some(3)))
     message(withFees).stx.tx.tx shouldBe a[TransactionWithDynamicFee]
     output(withFees) shouldBe word(baseFee + 3) ++ word(baseFee)
     // capped by maxFeePerGas (execution-apis call-callenv-options-eip1559 shape: echoed GASPRICE = maxFee - 1 there)
@@ -246,7 +249,7 @@ class TypedCallPathSpec
     output(args(FeeEcho, _.copy(maxFeePerGas = Some(0)))) shouldBe word(0) ++ word(0)
 
   it should "refuse fee caps the block cannot accept, with go-ethereum's messages" taggedAs (UnitTest, RPCTest) in
-    new Node:
+    (new Node:
       call(args(FeeEcho, _.copy(maxFeePerGas = Some(5), maxPriorityFeePerGas = Some(1)))).left.value should startWith(
         "max fee per gas less than block base fee: address "
       )
@@ -256,6 +259,7 @@ class TypedCallPathSpec
       call(args(FeeEcho, _.copy(gasPrice = Some(GasPrice(6))))).left.value should include(
         "maxFeePerGas: 6, baseFee: 7"
       )
+    )
 
   it should "require funds only when the message pays for gas or value" taggedAs (UnitTest, RPCTest) in new Node:
     // execution-apis call-unfunded-sender: no fee fields, zero value -> runs
@@ -274,8 +278,8 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val plain = call(args(SlotReader)).value.gasUsed
-    val listed = call(
+    val plain: BigInt = call(args(SlotReader)).value.gasUsed
+    val listed: BigInt = call(
       args(SlotReader, _.copy(accessList = Some(List(AccessListItem(SlotReader, List(StorageKey(1)))))))
     ).value.gasUsed
     // + 2,400 (address) + 1,900 (slot) intrinsic, - (2,100 cold - 100 warm) SLOAD
@@ -285,13 +289,13 @@ class TypedCallPathSpec
   // ── Blobs ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
   "eth_call blobVersionedHashes" should "be visible to BLOBHASH" taggedAs (UnitTest, RPCTest) in new Node:
-    val hash = ByteString(Hex.decode("01" + "ab" * 31))
-    val blobArgs = args(BlobReader, _.copy(blobVersionedHashes = Some(List(BlobVersionedHash(hash)))))
+    val hash: ByteString = ByteString(Hex.decode("01" + "ab" * 31))
+    val blobArgs: TxArgs = args(BlobReader, _.copy(blobVersionedHashes = Some(List(BlobVersionedHash(hash)))))
     message(blobArgs).stx.tx.tx shouldBe a[BlobTransaction]
     output(blobArgs) shouldBe hash
 
   it should "be refused with a bad version or none at all" taggedAs (UnitTest, RPCTest) in new Node:
-    val bad = ByteString(Hex.decode("02" + "ab" * 31))
+    val bad: ByteString = ByteString(Hex.decode("02" + "ab" * 31))
     call(args(BlobReader, _.copy(blobVersionedHashes = Some(List(BlobVersionedHash(bad)))))).left.value shouldBe
       "blob 0 has invalid hash version"
     call(args(BlobReader, _.copy(blobVersionedHashes = Some(Nil)))).left.value shouldBe
@@ -314,14 +318,15 @@ class TypedCallPathSpec
   ) in new Node:
     // without the list the authority is an empty account: no code, no output
     output(args(authority)) shouldBe ByteString.empty
-    val delegated = args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))
+    val delegated: TxArgs = args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))
     message(delegated).stx.tx.tx shouldBe a[SetCodeTransaction]
     // the delegated code runs in the authority's context, so ADDRESS is the authority
     output(delegated) shouldBe word(BigInt(1, authority.toArray))
 
   it should "raise eth_estimateGas by the authorization's cost" taggedAs (UnitTest, RPCTest) in new Node:
-    val without = estimate(args(authority)).value
-    val withAuth = estimate(args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))).value
+    val without: BigInt = estimate(args(authority)).value
+    val withAuth: BigInt =
+      estimate(args(authority, _.copy(authorizationList = Some(List(authorization(AddressEcho)))))).value
     withAuth should be > without
 
   it should "refuse an empty list as go-ethereum does" taggedAs (UnitTest, RPCTest) in new Node:
@@ -332,15 +337,15 @@ class TypedCallPathSpec
   // ── Overrides ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   "block overrides" should "replace the base fee and number the call sees" taggedAs (UnitTest, RPCTest) in new Node:
-    val ov = Some(BlockOverrides(baseFeePerGas = Some(20), number = Some(12345)))
+    val ov: Some[BlockOverrides] = Some(BlockOverrides(baseFeePerGas = Some(20), number = Some(12345)))
     output(args(FeeEcho, _.copy(maxFeePerGas = Some(100), maxPriorityFeePerGas = Some(3))), ov) shouldBe
       word(23) ++ word(20)
     output(args(NumberEcho), ov) shouldBe word(12345)
 
   "eth_call with state overrides" should "run against the overridden balance and code" taggedAs (UnitTest, RPCTest) in
-    new Node:
-      val funds = unfunded -> StateOverride(balance = Some(BigInt(10).pow(18)))
-      val req = CallRequest(
+    (new Node:
+      val funds: (Address, StateOverride) = unfunded -> StateOverride(balance = Some(BigInt(10).pow(18)))
+      val req: CallRequest = CallRequest(
         TxArgs(from = Some(unfunded), to = Some(Probe), gasPrice = Some(GasPrice(9)), gas = Some(GasAmount(100000))),
         BlockParam.Latest,
         stateOverrides = Some(Map(funds, Probe -> StateOverride(code = Some(NumberEchoCode))))
@@ -355,6 +360,7 @@ class TypedCallPathSpec
         .call(req.copy(blockOverrides = Some(BlockOverrides(number = Some(99)))))
         .unsafeRunSync()
         .value shouldBe CallResponse(word(99))
+    )
 
   // ── eth_createAccessList ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -362,7 +368,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val r = service
+    val r: CreateAccessListResponse = service
       .createAccessList(
         CreateAccessListRequest(args(Collector, _.copy(gas = Some(GasAmount(200000)))), BlockParam.Latest)
       )
@@ -386,7 +392,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val r = service
+    val r: CreateAccessListResponse = service
       .createAccessList(
         CreateAccessListRequest(args(Collector, _.copy(gas = Some(GasAmount(29700)))), BlockParam.Latest)
       )
@@ -399,7 +405,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val r = service
+    val r: CreateAccessListResponse = service
       .createAccessList(CreateAccessListRequest(TxArgs(from = Some(unfunded), to = Some(Probe)), BlockParam.Latest))
       .unsafeRunSync()
       .value
@@ -407,8 +413,8 @@ class TypedCallPathSpec
 
   it should "apply state overrides and leave the call's authorities out" taggedAs (UnitTest, RPCTest) in new Node:
     // Probe's overridden code reads slot 7 and the balance of Collector
-    val probeCode = code("6007545073" + "000000000000000000000000000000000000fee6" + "315000")
-    val r = service
+    val probeCode: ByteString = code("6007545073" + "000000000000000000000000000000000000fee6" + "315000")
+    val r: CreateAccessListResponse = service
       .createAccessList(
         CreateAccessListRequest(
           args(
@@ -442,10 +448,10 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val invalid = Address(0xfee7)
-    val spin = Address(0xfee8)
-    val over = StateOverride(code = Some(code("fe")))
-    val overridden = EthSimulateService
+    val invalid: Address = Address(0xfee7)
+    val spin: Address = Address(0xfee8)
+    val over: StateOverride = StateOverride(code = Some(code("fe")))
+    val overridden: InMemoryWorldStateProxy = EthSimulateService
       .applyStateOverrides(
         ledger.worldAt(head),
         Map(invalid -> over, spin -> StateOverride(code = Some(code("5b600056")))),
@@ -454,7 +460,7 @@ class TypedCallPathSpec
       )
       .value
       ._1
-    def est(to: Address) =
+    def est(to: Address): Either[CallEstimateFailure, BigInt] =
       val m = message(args(to, _.copy(gas = Some(GasAmount(100000)))), skipExecutionGasCap = false)
       ledger.estimateCallGas(m.stx, m.header, Some(overridden), m.options)
     est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
@@ -469,7 +475,7 @@ class TypedCallPathSpec
     RPCTest
   ) in new Node:
     // Osaka, 1,000 non-zero bytes: intrinsic 37,000, EIP-7623 floor 61,000
-    val heavy = args(Probe, _.copy(data = Some(ByteString(Array.fill[Byte](1000)(1)))))
+    val heavy: TxArgs = args(Probe, _.copy(data = Some(ByteString(Array.fill[Byte](1000)(1)))))
     estimate(heavy, gas = 50000).left.value shouldBe
       StxLedger.CallEstimateFailure.PreCheck("insufficient gas for floor data gas cost: have 50000, want 61000")
     estimate(heavy, gas = 30000).left.value shouldBe
@@ -479,7 +485,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val listed = args(Probe, _.copy(accessList = Some(List(AccessListItem(Collector, List(StorageKey(1)))))))
+    val listed: TxArgs = args(Probe, _.copy(accessList = Some(List(AccessListItem(Collector, List(StorageKey(1)))))))
     // 21,000 + 2,400 (address) + 1,900 (slot): what geth answers after its 21,000 short-circuit run fails
     estimate(listed).value shouldBe BigInt(25300)
     estimate(args(Probe)).value shouldBe BigInt(21000)
@@ -500,10 +506,10 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val hashes = List.fill(7)(BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31))))
+    val hashes: List[BlobVersionedHash] = List.fill(7)(BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31))))
     call(args(BlobReader, _.copy(blobVersionedHashes = Some(hashes)))).left.value shouldBe
       "blob transaction has too many blobs"
-    val initcode = ByteString(Array.fill[Byte](49153)(0))
+    val initcode: ByteString = ByteString(Array.fill[Byte](49153)(0))
     call(
       TxArgs(from = Some(senderAddress), data = Some(initcode), gas = Some(GasAmount(10_000_000)))
     ).left.value shouldBe
@@ -513,8 +519,8 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node:
-    val data = ByteString(Array.fill[Byte](100)(1))
-    val r = service
+    val data: ByteString = ByteString(Array.fill[Byte](100)(1))
+    val r: CreateAccessListResponse = service
       .createAccessList(
         CreateAccessListRequest(
           args(Probe, _.copy(data = Some(data), gas = Some(GasAmount(100000)))),
@@ -531,10 +537,10 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in new Node(amsterdamConfig, amsterdamHeader(46, 460)):
-    val gasEcho = Address(0xfee9)
+    val gasEcho: Address = Address(0xfee9)
     // GAS -> 32 bytes; a loop that burns gas until fewer than 1,000,000 remain
-    val burner = Address(0xfeea)
-    val overridden = EthSimulateService
+    val burner: Address = Address(0xfeea)
+    val overridden: InMemoryWorldStateProxy = EthSimulateService
       .applyStateOverrides(
         ledger.worldAt(head),
         Map(
@@ -546,15 +552,15 @@ class TypedCallPathSpec
       )
       .value
       ._1
-    val txMax = BigInt(1 << 24)
+    val txMax: BigInt = BigInt(1 << 24)
     def gasSeen(skip: Boolean): BigInt =
       val m = message(args(gasEcho, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = skip)
       BigInt(1, ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value.vmReturnData.toArray)
     gasSeen(skip = true) should be > txMax
     gasSeen(skip = false) should be < txMax
     // a call that burns more than TX_MAX_GAS_LIMIT of execution gas succeeds
-    val m = message(args(burner, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = true)
-    val burnt = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value
+    val m: CallMessage = message(args(burner, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = true)
+    val burnt: TxResult = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value
     burnt.vmError shouldBe None
     burnt.gasUsed should be > txMax
 

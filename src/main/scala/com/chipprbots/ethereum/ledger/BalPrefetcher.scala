@@ -9,9 +9,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-import scala.util.control.NonFatal
-
 import org.apache.pekko.util.ByteString
+
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader

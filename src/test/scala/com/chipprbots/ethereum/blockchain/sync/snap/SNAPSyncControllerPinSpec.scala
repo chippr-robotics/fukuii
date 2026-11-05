@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -74,7 +75,7 @@ class SNAPSyncControllerPinSpec
   // ── #1378 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController.apply" should
-    "#1378: arm the 5 s handshaked-peer poll: GetHandshakedPeersCmd at once and after every 5 s, unprompted" taggedAs UnitTest in new Fixture:
+    "#1378: arm the 5 s handshaked-peer poll: GetHandshakedPeersCmd at once and after every 5 s, unprompted" taggedAs UnitTest in (new Fixture:
       spawnController(SNAPSyncConfig())
       // start()'s immediate poll. No PollHandshakedPeers is ever sent by this test.
       npm.expectMessageType[GetHandshakedPeersCmd]
@@ -83,35 +84,40 @@ class SNAPSyncControllerPinSpec
         manualTime.timePasses(1.second)
         npm.expectMessageType[GetHandshakedPeersCmd]
       }
+    )
 
   // ── the healing spawn's arguments ─────────────────────────────────────────────────────────────
 
   "SNAPSyncController healing spawn" should
-    "spec 016 S0b: forward every healing setting via startStateHealing" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig()
-      val snap = startHealingViaStartStateHealing(cfg)
+    "spec 016 S0b: forward every healing setting via startStateHealing" taggedAs UnitTest in (new Fixture:
+      val cfg: SNAPSyncConfig = healingConfig()
+      val snap: ActorRef[Command] = startHealingViaStartStateHealing(cfg)
       assertFullHealingTuple(expectHealingSpawn(), cfg, snap)
+    )
 
   // spec 022 T052: `startStateHealingWithInterleave` had one way in, this signal, on Hash. Outside healing the arm now takes
   // nothing, so `startStateHealing` is the one route to the spawn, and the pins of the second route went with it.
   it should
-    "spec 022 T052: spawn nothing on a StateHealingComplete from outside healing: the interleave route is gone" taggedAs UnitTest in new Fixture:
-      val snap = enterStorageRecovery(healingConfig())
+    "spec 022 T052: spawn nothing on a StateHealingComplete from outside healing: the interleave route is gone" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(healingConfig())
       snap ! SNAPSyncController.StateHealingComplete
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 0
+    )
 
   // spec 022 5d: the spawn says whether the marker can hold, and that is `canHold` with what this run is on.
   it should
-    "spec 022 5d: tell the coordinator the marker may stand with the trie built and the trie store on disk" taggedAs UnitTest in new Fixture:
+    "spec 022 5d: tell the coordinator the marker may stand with the trie built and the trie store on disk" taggedAs UnitTest in (new Fixture:
       startHealingViaStartStateHealing(healingConfig())
       expectHealingSpawn().markerMayStand shouldBe true
+    )
 
   it should
-    "spec 022 5d: hand the coordinator the record it says its decision in" taggedAs UnitTest in new Fixture:
+    "spec 022 5d: hand the coordinator the record it says its decision in" taggedAs UnitTest in (new Fixture:
       startHealingViaStartStateHealing(healingConfig())
       expectHealingSpawn()
       factories.lastHealingDecidedRoot.get() shouldBe defined
+    )
 
   it should
     "spec 022 5d (vault V3): tell the coordinator no marker may stand under in-memory pruning" taggedAs UnitTest in {
@@ -168,20 +174,22 @@ class SNAPSyncControllerPinSpec
   // ── #1371 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController download completion" should
-    "#1371: skip healing (no healing coordinator) with deferred merkleization, a fresh cursor and storage force-completed" taggedAs UnitTest in new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
+    "#1371: skip healing (no healing coordinator) with deferred merkleization, a fresh cursor and storage force-completed" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 0
       // It took the lazy-healing handoff instead: completeSnapSync finalised at the pivot.
       parent.expectMessage(SNAPSyncController.SnapSyncFinalized(Pivot))
+    )
 
   it should
-    "#1371 (control): start healing on the same force-completed path when deferred merkleization is off" taggedAs UnitTest in new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
+    "#1371 (control): start healing on the same force-completed path when deferred merkleization is off" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 1
+    )
 
   // ── Fixture ────────────────────────────────────────────────────────────────────────────────────
 

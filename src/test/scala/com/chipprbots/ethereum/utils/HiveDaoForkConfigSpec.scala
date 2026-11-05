@@ -5,9 +5,9 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Properties
 
-import scala.jdk.CollectionConverters.*
-
 import org.apache.pekko.util.ByteString
+
+import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.Config as TypesafeConfig
 import com.typesafe.config.ConfigFactory

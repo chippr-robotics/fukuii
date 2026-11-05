@@ -12,9 +12,9 @@ import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.FillTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionResponse
+import com.chipprbots.ethereum.jsonrpc.PersonalService.SignRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionRequest
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SignTransactionResponse
-import com.chipprbots.ethereum.jsonrpc.PersonalService.SignRequest
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder

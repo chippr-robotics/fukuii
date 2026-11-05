@@ -8,6 +8,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.Transaction
@@ -18,7 +19,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Receipts68.*
 import com.chipprbots.ethereum.rlp.*
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*
-import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.testing.Tags.*
 

@@ -5,7 +5,6 @@ import java.security.SecureRandom
 import org.apache.pekko.util.ByteString
 
 import ethereum.ckzg4844.CKZG4844JNI
-
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec

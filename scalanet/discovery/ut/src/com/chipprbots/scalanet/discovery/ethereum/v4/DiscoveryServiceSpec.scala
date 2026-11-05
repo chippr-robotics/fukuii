@@ -29,7 +29,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   import DiscoveryServiceSpec.*
   // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
 
   def test(fixture: Fixture) =
     fixture.test.timeout(15.seconds).unsafeToFuture()
@@ -674,7 +674,6 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       override val test = for
         _ <- addRemotePeer
         closestNodes <- service.lookup(targetPublicKey)
-        state <- stateRef.get
       yield (closestNodes should contain).theSameElementsInOrderAs(expectedNodes)
   }
 
@@ -682,7 +681,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new LookupFixture:
       override val test = for
         _ <- addRemotePeer
-        closestNodes <- service.lookup(targetPublicKey)
+        _ <- service.lookup(targetPublicKey)
         fetching <- stateRef.get.map {
           _.fetchEnrMap.values.toList.map(_.get)
         }
@@ -719,8 +718,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         ping = _ => _ => IO.pure(Some(None)),
         enrRequest = peer => _ => IO.pure(nodes.find(_._1.id == peer.id).map(_._2)),
         // Return a mix of remote and local nodes.
-        findNode =
-          _ => targetPublicKey => IO.pure(Some(Random.shuffle(nodes).take(config.kademliaBucketSize).map(_._1)))
+        findNode = _ => _ => IO.pure(Some(Random.shuffle(nodes).take(config.kademliaBucketSize).map(_._1)))
       )
 
       override val test = for
@@ -834,7 +832,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         enrRequest = peer => _ => IO.pure(nodesWithEnr.find(_._1.id == peer.id).map(_._2)),
         // Random selection from the whole range, some with ENR, some without.
         findNode = _ =>
-          targetPublicKey =>
+          _ =>
             IO.pure {
               Some(Random.shuffle(randomNodes).take(config.kademliaBucketSize).map(_._1))
             }
@@ -979,7 +977,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 object DiscoveryServiceSpec:
   // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
   import com.chipprbots.scalanet.discovery.crypto.SigAlg
 
   implicit val sigalg: SigAlg = new MockSigAlg()

@@ -1,12 +1,13 @@
 package com.chipprbots.ethereum.ledger
 
+import java.security.MessageDigest
+
 import org.apache.pekko.util.ByteString
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-
-import java.security.MessageDigest
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
@@ -162,7 +163,7 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
 
     // ── The fixture's sender: accounts.json 0x7435ed30a8b4aeb0877cef0c6e8cffe834eb865f ────
 
-    val senderKey = crypto.keyPairFromPrvKey(
+    val senderKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
       Hex.decode("4552dbe6ca4699322b5d923d0c9bcdd24644f5db8bf89a085b67c6c49b8a1b91")
     )
     val senderAddress: Address = Address(senderKey)
@@ -289,8 +290,9 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
-    val afterTx = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
 
     // The user path ran: it wrote the queue count (slot 1) and tail (slot 3) and the 6 record words (slots 4..9).
     withClue("the user path must dirty slot 1 (count) — otherwise this test proves nothing: ") {
@@ -311,7 +313,7 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     storageOf(afterSystemCall, BuilderDepositQueueAddress, 0) shouldBe BigInt(0)
 
     // ...while the 6 record words survive, exactly as headstate.json shows them at block 600.
-    val record = Seq(
+    val record: Seq[BigInt] = Seq(
       "4242424242424242424242424242424242424242424242424242424242424242",
       "424242424242424242424242424242420000000000000000000000007435ed30",
       "a8b4aeb0877cef0c6e8cffe834eb865f000000003b9aca002424242424242424",
@@ -328,8 +330,9 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
-    val afterTx = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
     val (_, requests) = exec.processPragueSystemCalls(block, afterTx.worldState)
 
     requests should have size 1
@@ -340,8 +343,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     // TRAP: the amount is big-endian in the incoming calldata and little-endian in the emitted request — the
     // predeploy byte-reverses it. eips.ethereum.org's "big-endian" prose describes the INPUT. Getting this
     // backwards still produces a well-formed 185-byte request; only the hash catches it.
-    val amountBigEndianInCalldata = DepositCalldata.slice(80, 88)
-    val amountInRequest = request.slice(1 + 48 + 32, 1 + 48 + 32 + 8)
+    val amountBigEndianInCalldata: ByteString = DepositCalldata.slice(80, 88)
+    val amountInRequest: ByteString = request.slice(1 + 48 + 32, 1 + 48 + 32 + 8)
     amountBigEndianInCalldata shouldBe ByteString(Hex.decode("000000003b9aca00"))
     amountInRequest shouldBe ByteString(Hex.decode("00ca9a3b00000000"))
     amountInRequest shouldBe ByteString(amountBigEndianInCalldata.reverse.toArray)
@@ -354,9 +357,9 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val pubkey = ByteString(Hex.decode("42" * 48))
-    val block = amsterdamBlock(37, AmsterdamTs + 10, Seq(tx(BuilderExitQueueAddress, 1, pubkey)))
-    val afterTx = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
+    val pubkey: ByteString = ByteString(Hex.decode("42" * 48))
+    val block: Block = amsterdamBlock(37, AmsterdamTs + 10, Seq(tx(BuilderExitQueueAddress, 1, pubkey)))
+    val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
     val (afterSystemCall, requests) = exec.processPragueSystemCalls(block, afterTx.worldState)
 
     requests should have size 1
@@ -384,8 +387,9 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
   // ── The system call is not metered into the block ───────────────────────────
 
   it should "contribute nothing to block gasUsed" taggedAs (UnitTest, StateTest) in new Setup:
-    val block = amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
-    val afterTx = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
+    val block: Block =
+      amsterdamBlock(36, AmsterdamTs, Seq(tx(BuilderDepositQueueAddress, DepositValue, DepositCalldata)))
+    val afterTx: BlockResult = exec.executeBlockTransactions(block, worldWithPredeploys).toOption.get
 
     val (afterSystemCall, requests) = exec.processPragueSystemCalls(block, afterTx.worldState)
 
@@ -456,11 +460,11 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
     StateTest
   ) in new Setup:
     // pubkey48 || amount8 = 56 bytes, the EIP-7002 add-request shape.
-    val withdrawalCalldata = ByteString(Hex.decode("42" * 48 + "000000003b9aca00"))
+    val withdrawalCalldata: ByteString = ByteString(Hex.decode("42" * 48 + "000000003b9aca00"))
     // source_pubkey48 || target_pubkey48 = 96 bytes, the EIP-7251 add-request shape.
-    val consolidationCalldata = ByteString(Hex.decode("42" * 48 + "43" * 48))
+    val consolidationCalldata: ByteString = ByteString(Hex.decode("42" * 48 + "43" * 48))
 
-    val setupBlock = amsterdamBlock(
+    val setupBlock: Block = amsterdamBlock(
       36,
       AmsterdamTs,
       Seq(
@@ -468,7 +472,8 @@ class AmsterdamBuilderRequestsSpec extends AnyFlatSpec with Matchers:
         tx(ConsolidationQueueAddress, 1, consolidationCalldata, nonce = 1)
       )
     )
-    val queued = exec.executeBlockTransactions(setupBlock, worldWithQueuePredeploys).toOption.get.worldState
+    val queued: InMemoryWorldStateProxy =
+      exec.executeBlockTransactions(setupBlock, worldWithQueuePredeploys).toOption.get.worldState
 
     // Guard against a vacuous comparison: both queues must actually be non-empty before the system call runs.
     withClue("the withdrawal queue must be non-empty, or the arms compare nothing: ") {

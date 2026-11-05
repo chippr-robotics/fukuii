@@ -297,7 +297,7 @@ private[snap] trait SnapPeerPool
     * latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable external peer
     * when no snap-server-peer is connected.
     */
-  def bestSnapProbeTarget() =
+  def bestSnapProbeTarget(): Option[(PeerListSupportNg.PeerWithInfo, String)] =
     val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
       Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
     }.toSet

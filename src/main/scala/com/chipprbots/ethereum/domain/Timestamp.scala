@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.domain
 
 import com.chipprbots.ethereum.rlp.RLPCodec
-import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.rlp.RLPCodec.xmap
+import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.rlp.RLPImplicits.bigIntEncDec
 
 /** A block timestamp.

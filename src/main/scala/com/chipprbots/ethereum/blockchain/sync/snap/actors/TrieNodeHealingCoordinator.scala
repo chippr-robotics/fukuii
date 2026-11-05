@@ -219,7 +219,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var consecutiveDeadPulses: Int = 0
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
-  val activeRequests = mutable.Map[BigInt, ActiveRequest]()
+  val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map[BigInt, ActiveRequest]()
 
   // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
   val maxConcurrentRequests = concurrency
@@ -257,7 +257,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   val HealingReservedCores: Int = healingReservedCores
   val bfsQueue: BfsQueueStorage = stateIngest.bfsQueue.getOrElse(new InMemoryBfsQueueStorage())
   // Track last known available peers for re-dispatch after failures
-  val knownAvailablePeers = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
   // spec 022 D2: the live heal requests, queued or in flight, keyed by trie position (Path) or node hash (Hash). A
   // node hash is fetched once however many requests wait on it, and the served node fills them all: under Path every
@@ -726,7 +726,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private var serveRootRefreshCount: Long = 0L
 
   // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
-  val statelessPeers = mutable.Set[String]()
+  val statelessPeers: mutable.Set[String] = mutable.Set[String]()
   // Soft-exile strike counter (mirrors AccountRangeCoordinator.emptyResponseStrikes). A SINGLE empty
   // TrieNodes response used to permanently exile a peer for the whole root, which on a 2-peer-eligible
   // residual drains the pool to zero and stalls the heal one node short (observed live: only 2 of ~10
@@ -734,7 +734,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // the threshold; any successful heal from a peer wipes its strikes. Peers rotate — one that returns
   // empty now may serve after a refresh — so the set is also auto-cleared periodically (see
   // HealingStagnationCheck). 5 strikes mirrors Account/Storage's EmptyResponseStrikeThreshold.
-  val emptyResponseStrikes = mutable.Map.empty[String, Int]
+  val emptyResponseStrikes: mutable.Map[String, Int] = mutable.Map.empty[String, Int]
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
@@ -743,10 +743,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // would freeze unrelated fetches until the watchdog above. Cleared when the controller answers (resume or refresh).
   var giveUpEscalated: Boolean = false
 
-  val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown
-  val peerCooldownUntilMs = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
   // spec 022 D3: nodes committed with their whole subtree, waiting for the asynchronous flush (Hash scheme).
