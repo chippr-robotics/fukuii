@@ -6,6 +6,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
@@ -16,6 +18,8 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedDataSource
+import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedPruningMode
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -27,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.HealRequestFi
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant.AtSnapStart
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.components.Storages.DefaultStorages
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -66,12 +71,13 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
   /** A datadir this binary created, over a recording source, under archive pruning (nodes write straight through). */
   private class Datadir extends EphemBlockchainTestSetup:
     val source = new Recording
-    val store = new com.chipprbots.ethereum.db.components.EphemDataSourceComponent
-      with CheckpointImporterSpec.FixedDataSource(source)
-      with LocalPruningConfigBuilder
-      with CheckpointImporterSpec.FixedPruningMode(ArchivePruning)
-      with Storages.DefaultStorages
-      with com.chipprbots.ethereum.TestInstanceConfigProvider
+    val store: FixedDataSource & LocalPruningConfigBuilder & (FixedPruningMode & DefaultStorages) =
+      new com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+        with CheckpointImporterSpec.FixedDataSource(source)
+        with LocalPruningConfigBuilder
+        with CheckpointImporterSpec.FixedPruningMode(ArchivePruning)
+        with Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider
     val appState: AppStateStorage = store.storages.appStateStorage
     val stateTries: StateStorage = store.storages.stateStorage
     appState.markDatadirCreatedUnderInvariant().commit()
@@ -121,8 +127,9 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
   "CheckpointImporter" should "set the import key, synced, before it writes the first node" taggedAs UnitTest in new Datadir:
     importFrom(this, truncated).isLeft shouldBe true
     val writes = source.batches.toSeq
-    val firstNode = writes.indexWhere(_._2.exists(_.namespace == NodeNs))
-    val keyWrite = writes.indexWhere(_._2.contains(Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))))
+    val firstNode: Int = writes.indexWhere(_._2.exists(_.namespace == NodeNs))
+    val keyWrite: Int =
+      writes.indexWhere(_._2.contains(Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))))
     withClue(s"writes: $writes: ") {
       firstNode should be >= 0
       keyWrite should be >= 0
@@ -151,7 +158,8 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     importFrom(this, archive).isRight shouldBe true
     appState.getCheckpointImportInProgress() shouldBe None
     appState.isSnapSyncDone() shouldBe true
-    val flags = source.batches.toSeq.filter(_._2.contains(Op(AppNs, delete = false, key(Keys.SnapSyncDone))))
+    val flags: Seq[(Boolean, Seq[Op])] =
+      source.batches.toSeq.filter(_._2.contains(Op(AppNs, delete = false, key(Keys.SnapSyncDone))))
     flags.size shouldBe 1
     flags.head._1 shouldBe true
     flags.head._2 should contain(Op(AppNs, delete = true, key(Keys.CheckpointImportInProgress)))
@@ -160,7 +168,7 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     appState.stampSnapHealInvariant().commit()
     source.batches.clear()
     importFrom(this, truncated).isLeft shouldBe true
-    val keyWrite =
+    val keyWrite: Option[(Boolean, Seq[Op])] =
       source.batches.toSeq.find(_._2.contains(Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))))
     keyWrite.map(_._2.toSet) shouldBe Some(
       Set(
@@ -201,9 +209,9 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     holds(trie.root.hash) shouldBe true
     val peer = new ScriptedPeer(testKit)
     peer.serveFrom.set(Some(trie.served))
-    val controller = createTestProbe[SNAPSyncController.Command]()
+    val controller: TestProbe[SNAPSyncController.Command] = createTestProbe[SNAPSyncController.Command]()
     val cleanRoot = new AtomicReference[ByteString]()
-    val coordinator = HealingTrieFixtures.spawnCoordinator(
+    val coordinator: ActorRef[TrieNodeHealingCoordinator.Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
       requestTracker =
