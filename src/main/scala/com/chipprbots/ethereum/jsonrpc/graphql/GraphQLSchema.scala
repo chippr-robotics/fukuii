@@ -306,16 +306,20 @@ object GraphQLSchema:
       data = data
     )
 
-  /** A `call` field's result from the message call and the estimate of the same message. A frame that failed has
-    * `status` 0, as geth's `result.Failed()` sets it: a revert, and since eth_call reports a failed frame as an error,
-    * out of gas and every other VM error too (status 1 for those before). A pre-check failure is null, as before.
+  /** A `call` field's result from the message call and the estimate of the same message.
+    *
+    * A frame that failed (a revert, out of gas, any VM error) has `status` 0, as geth's `result.Failed()` sets it, with
+    * the frame's output and the gas it used, as geth's `result.ReturnData` and `result.UsedGas`: a revert reason
+    * reaches the client. One difference: geth's `UsedGas` is never below the calldata floor (EIP-7623 / EIP-7976) and
+    * this is the gas execution took. A successful frame keeps the estimate of the same message as `gasUsed`. A
+    * pre-check failure is null.
     */
   private def callResult(
       call: Either[JsonRpcError, TxResult],
       gas: Either[JsonRpcError, EthInfoService.EstimateGasResponse]
   ): Option[GCallResult] =
     (call, gas) match
-      case (Right(r), _) if r.vmError.isDefined => Some(GCallResult(ByteString.empty, 0L, 0L))
+      case (Right(r), _) if r.vmError.isDefined => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
       case (Right(r), Right(gasResp))           => Some(GCallResult(r.vmReturnData, gasResp.gas.toLong, 1L))
       case (Right(r), Left(_))                  => Some(GCallResult(r.vmReturnData, 0L, 1L))
       case (Left(_), _)                         => None

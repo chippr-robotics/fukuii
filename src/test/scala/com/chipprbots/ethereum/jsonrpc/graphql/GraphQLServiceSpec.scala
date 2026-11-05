@@ -16,6 +16,7 @@ import scala.concurrent.duration.*
 import io.circe.ACursor
 import io.circe.Json
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -56,6 +57,7 @@ import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.vm.OutOfGas
+import com.chipprbots.ethereum.vm.RevertOccurs
 
 class GraphQLServiceSpec
     extends ScalaTestWithActorTestKit
@@ -128,7 +130,7 @@ class GraphQLServiceSpec
     data.downField("blockAccessListHash").focus.get shouldBe Json.Null
     data.downField("slotNumber").focus.get shouldBe Json.Null
 
-  it should "report status 0 for a call whose frame fails, as geth's result.Failed() does, and 1 when it succeeds" in new GraphQLTestSetup:
+  it should "report a failed frame as geth does: status 0 with its output and gas, a revert reason included" in new GraphQLTestSetup:
     blockchainWriter.storeBlock(block).and(blockchainWriter.storeChainWeight(block.header.hash, weight)).commit()
     blockchainWriter.saveBestKnownBlocks(block.hash, block.number.value)
     val world: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
@@ -142,23 +144,31 @@ class GraphQLServiceSpec
     )
     val query: String =
       """{ block { call(data: {from: "0xda714fe079751fa7a1ad80b76571ea6ec52a446c", """ +
-        """to: "0xabbb6bebfa05aa13e908eaa492bd7a8343760477"}) { data status } } }"""
-    def callField(): ACursor =
+        """to: "0xabbb6bebfa05aa13e908eaa492bd7a8343760477"}) { data status gasUsed } } }"""
+    def callField(frame: Either[StxLedger.CallPreCheckError, TxResult]): ACursor =
+      stxLedger.simulateCall.expects(*, *, *, *, *).returning(frame)
       val (status, body) = service.execute(query, None, None).unsafeRunSync()
       status shouldBe 200
       body.hcursor.downField("data").downField("block").downField("call")
+    def field(c: ACursor, name: String): String = c.downField(name).as[String].toOption.get
+    stxLedger.estimateCallGas.expects(*, *, *, *).returning(Right(BigInt(21000))).anyNumberOfTimes()
 
-    stxLedger.estimateCallGas.expects(*, *, *, *).returning(Right(BigInt(21000))).twice()
-    stxLedger.simulateCall
-      .expects(*, *, *, *, *)
-      .returning(Right(TxResult(world, 100000, Nil, ByteString.empty, Some(OutOfGas))))
-    callField().downField("status").as[String].toOption.get shouldBe "0x0"
-    stxLedger.simulateCall
-      .expects(*, *, *, *, *)
-      .returning(Right(TxResult(world, 21000, Nil, ByteString(1, 2), None)))
-    val ok: ACursor = callField()
-    ok.downField("status").as[String].toOption.get shouldBe "0x1"
-    ok.downField("data").as[String].toOption.get shouldBe "0x0102"
+    // geth graphql Call: status 0 from result.Failed(), data result.ReturnData, gasUsed result.UsedGas
+    val oog: ACursor = callField(Right(TxResult(world, 100000, Nil, ByteString.empty, Some(OutOfGas))))
+    (field(oog, "status"), field(oog, "data"), field(oog, "gasUsed")) shouldBe (("0x0", "0x", "0x186a0"))
+    // Error("nope")
+    val reason: String = "08c379a0" + f"${0x20}%064x" + f"${4}%064x" + "6e6f7065" + "00" * 28
+    val reverted: ACursor =
+      callField(Right(TxResult(world, 23456, Nil, ByteString(Hex.decode(reason)), Some(RevertOccurs))))
+    (field(reverted, "status"), field(reverted, "data"), field(reverted, "gasUsed")) shouldBe
+      (("0x0", "0x" + reason, "0x5ba0"))
+    // success: the frame's output, and the estimate of the same message as gasUsed
+    val ok: ACursor = callField(Right(TxResult(world, 21000, Nil, ByteString(1, 2), None)))
+    (field(ok, "status"), field(ok, "data"), field(ok, "gasUsed")) shouldBe (("0x1", "0x0102", "0x5208"))
+    // a pre-check failure is null, as geth returns the error instead of a result
+    callField(
+      Left(StxLedger.CallPreCheckError("intrinsic gas too low: have 1, want 21000"))
+    ).focus.get shouldBe Json.Null
 
   it should "return null for an unknown transaction" in new GraphQLTestSetup:
     val unknown: String = "0x" + ("00" * 32)
