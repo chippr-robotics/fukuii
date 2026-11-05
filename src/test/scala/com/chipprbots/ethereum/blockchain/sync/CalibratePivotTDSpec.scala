@@ -241,7 +241,11 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
   // ─── T8.2 Pure ETH69 network: retry until anchor found ────────────────────
   it should "enter the retry loop on sentinel (0,0) and succeed when anchor appears" taggedAs (UnitTest, SyncTest) in
     (new CalibrationActorSetup:
-        setupBestBlockWithTD(BigInt(24720000), BigInt("3320000000000000000"))
+        // #1654: a block-number proxy (BLOCK_NUMBER_PROXY, `td = pivot`), not the 3.32e18 this test first stored. The
+        // Tier 3 anchor floor is now the genesis weight + 131072 per block, a bound every Ethash chain clears (Mordor
+        // included). It no longer rejects 3.32e18 at block 24.72M, which the old ETC-tuned 10^13-per-block floor did,
+        // so with that value the head itself is the anchor and attempt 1 succeeds without a retry.
+        setupBestBlockWithTD(BigInt(24720000), BigInt(24720000))
         drainRegistration()
 
         // Attempt 1: pure ETH69, no anchor reachable → retry

@@ -837,8 +837,8 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       * TD check runs synchronously inside the handshake handler, so any DisconnectPeer is already in the peer probe by
       * the time the probe on `peerManager` is observed.
       */
-    def handshakeHighTdPeer(holder: org.apache.pekko.actor.ActorRef): Unit =
-      holder ! PeerEventCmd(PeerHandshakeSuccessful(peer1, highTdPeerInfo))
+    def handshakeHighTdPeer(holder: org.apache.pekko.actor.ActorRef, info: PeerInfo = highTdPeerInfo): Unit =
+      holder ! PeerEventCmd(PeerHandshakeSuccessful(peer1, info))
       peerEventBus.expectMsgType[SubscribeCmd].to shouldBe PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))
       peerEventBus.expectMsgType[SubscribeCmd]
       peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).peerId shouldBe peer1.id
@@ -869,6 +869,35 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     handshakeHighTdPeer(holder)
 
     peer1Probe.expectMsg(DisconnectPeer(Disconnect.Reasons.UselessPeer))
+
+  it should "#1654 TD-PROXY-GAP: neither recalibrate nor disconnect when our head weight is exact" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TdProxyGapSetup:
+    expectInitialSubscriptions()
+    val holder: ActorRef = newReaderHolder()
+    expectInitialSubscriptions()
+    val calibrationTarget: TestProbe = TestProbe()
+    holder ! RegisterChainWeightCalibrationTargetCmd(
+      calibrationTarget.ref.toTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.CalibrateChainWeightFromPeer]
+    )
+    // Our head's stored weight is its parent's plus its difficulty, and the parent's clears the floor, so the
+    // calibration would leave it as it is. The peer still claims more than 10,000x our weight.
+    val parentTD: BigInt = BigInt("1000000000000000")
+    val exactTD: BigInt = parentTD + baseBlockHeader.difficulty.value
+    blockchainWriter.storeChainWeight(baseBlockHeader.parentHash, ChainWeight.totalDifficultyOnly(parentTD)).commit()
+    setBestBlock(baseBlock)
+    blockchainWriter.storeChainWeight(baseBlockHeader.hash, ChainWeight.totalDifficultyOnly(exactTD)).commit()
+    val heavierTD: BigInt = exactTD * 20000
+    val heavierPeerInfo: PeerInfo = initialPeerInfo.copy(
+      remoteStatus = peerStatus.copy(chainWeight = ChainWeight.totalDifficultyOnly(heavierTD)),
+      chainWeight = ChainWeight.totalDifficultyOnly(heavierTD)
+    )
+
+    handshakeHighTdPeer(holder, heavierPeerInfo)
+
+    peer1Probe.expectNoMessage(200.millis)
+    calibrationTarget.expectNoMessage(100.millis)
 
   trait TestSetupWithSnapSync extends TestSetup:
     val snapSyncController: TestProbe = TestProbe()

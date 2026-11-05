@@ -795,7 +795,27 @@ object NetworkPeerManagerActor:
                 // SNAP peer before the eager best-block probe runs → maxBlockNumber=0 everywhere →
                 // pivot=0 forever. TD-PROXY-GAP is only meaningful past genesis (post-SNAP genesis-
                 // proxy TD on a high best block). `number.value > 0` is the minimal, unambiguous guard.
-                if ratio > BigInt(10_000) && ourBest.header.number.value > 0 then
+                val tdProxyGap = ratio > BigInt(10_000) && ourBest.header.number.value > 0
+                // Read only when the gap fires: three chain-weight lookups.
+                lazy val headWeightExact =
+                  com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.classify(reader, ourBest.header) match
+                    case _: com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact => true
+                    case _                                                                       => false
+                if tdProxyGap && headWeightExact then
+                  // #1654: our head's stored weight is exact (parent weight + difficulty), so the calibration this
+                  // branch would trigger leaves it unchanged, and evicting the peer "until calibration" would repeat on
+                  // every reconnect. A chain whose links hold but whose base is a proxy also lands here; correcting
+                  // that base means recomputing every weight above it (#1654 option b3), not rewriting the head.
+                  log.warn(
+                    "TD-PROXY-GAP-EXACT-HEAD: Peer {} TD={} vs ours={} (ratio={}x) at block {}. Our head weight is " +
+                      "exact relative to its parent, so it is not recalibrated and the peer is not evicted.",
+                    peer.id,
+                    peerTD,
+                    ourWeight.totalDifficulty.value,
+                    ratio,
+                    ourBest.header.number
+                  )
+                else if tdProxyGap then
                   // TD-PROXY-GAP: stored TD is a genesis proxy from SNAP finalization.
                   chainWeightCalibrationTarget.foreach { target =>
                     target ! com.chipprbots.ethereum.blockchain.sync.SyncProtocol
