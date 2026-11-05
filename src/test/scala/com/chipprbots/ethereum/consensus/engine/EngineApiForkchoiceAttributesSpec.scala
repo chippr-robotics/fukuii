@@ -14,7 +14,6 @@ import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 

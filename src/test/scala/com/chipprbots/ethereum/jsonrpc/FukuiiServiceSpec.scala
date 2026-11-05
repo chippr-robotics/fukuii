@@ -24,8 +24,8 @@ import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
-import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.AccountTransaction
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.FukuiiServiceBuilder

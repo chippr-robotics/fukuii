@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network
 
 import java.net.InetSocketAddress
 
+import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -17,6 +18,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Fixtures.Blocks.DaoForkBlock
 import com.chipprbots.ethereum.Fixtures.Blocks.Genesis
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -33,14 +35,13 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeCmd
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
-import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -632,7 +633,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     val peerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
 
-    val peersInfoHolder = classicSystem
+    val peersInfoHolder: ActorRef = classicSystem
       .spawn(
         NetworkPeerManagerActor.behavior(
           peerManager.ref.toTyped[PeerManagerActor.Command],
@@ -741,7 +742,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     NetworkTest
   ) in new GenesisHeadSetup:
     expectInitialSubscriptions()
-    val holder = newGenesisHeadHolder(0.millis)
+    val holder: ActorRef = newGenesisHeadHolder(0.millis)
     expectInitialSubscriptions()
     storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
     setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
@@ -754,7 +755,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     NetworkTest
   ) in new GenesisHeadSetup:
     expectInitialSubscriptions()
-    val holder = newGenesisHeadHolder(1.hour)
+    val holder: ActorRef = newGenesisHeadHolder(1.hour)
     expectInitialSubscriptions()
     storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
     setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
@@ -767,7 +768,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     NetworkTest
   ) in new GenesisHeadSetup:
     expectInitialSubscriptions()
-    val holder = newGenesisHeadHolder(0.millis)
+    val holder: ActorRef = newGenesisHeadHolder(0.millis)
     expectInitialSubscriptions()
     setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
 
@@ -776,7 +777,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
 
   it should "not evict a peer whose head is past genesis" taggedAs (UnitTest, NetworkTest) in new GenesisHeadSetup:
     expectInitialSubscriptions()
-    val holder = newGenesisHeadHolder(0.millis)
+    val holder: ActorRef = newGenesisHeadHolder(0.millis)
     expectInitialSubscriptions()
     storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
     setupPeerOnHolder(holder, peer1, peer1Probe, eth69PeerInfo)
@@ -791,7 +792,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     NetworkTest
   ) in new GenesisHeadSetup:
     expectInitialSubscriptions()
-    val holder = newGenesisHeadHolder(0.millis)
+    val holder: ActorRef = newGenesisHeadHolder(0.millis)
     expectInitialSubscriptions()
     storagesInstance.storages.appStateStorage.putBestBlockNumber(100).commit()
     setupPeerOnHolder(holder, peer1, peer1Probe, crawlerInfo)
@@ -845,7 +846,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
   it should "#1367 TD-PROXY-GAP: no disconnect while our best block is 0" taggedAs (UnitTest, NetworkTest) in
     (new TdProxyGapSetup:
       expectInitialSubscriptions()
-      val holder = newReaderHolder()
+      val holder: ActorRef = newReaderHolder()
       expectInitialSubscriptions()
       setBestBlock(Block(Genesis.header, BlockBody(Nil, Nil)))
       blockchainReader.getBestBlock.map(_.header.number.value) shouldBe Some(BigInt(0))
@@ -860,7 +861,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     NetworkTest
   ) in new TdProxyGapSetup:
     expectInitialSubscriptions()
-    val holder = newReaderHolder()
+    val holder: ActorRef = newReaderHolder()
     expectInitialSubscriptions()
     setBestBlock(baseBlock)
     blockchainReader.getBestBlock.map(_.header.number.value).exists(_ > 0) shouldBe true
@@ -956,7 +957,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     // Drain peersInfoHolder (no blockchainReader) initial subscriptions.
     expectInitialSubscriptions()
     // Create the actor WITH blockchainReader and drain its initial subscriptions.
-    val readerHolder = newReaderHolder()
+    val readerHolder: ActorRef = newReaderHolder()
     expectInitialSubscriptions()
 
     // Seed the DB with the low actualTD before any tick so DB_LOOKUP can resolve it.
@@ -988,7 +989,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     requestSender.expectMsgType[PeerInfoResponse].peerInfo.get.chainWeight.totalDifficulty.value shouldBe inflatedTD
 
     // Trigger correction: send probe response. isPeerStatic = true → DB_LOOKUP → actualTD.
-    val probeResponse = BlockHeaders(BigInt(0), Seq(archiveProbeBlock))
+    val probeResponse: BlockHeaders = BlockHeaders(BigInt(0), Seq(archiveProbeBlock))
     readerHolder ! PeerEventCmd(MessageFromPeer(probeResponse, peer1.id))
 
     readerHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
@@ -1000,7 +1001,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
   ) in new TestSetupWithReader:
     // Drain peersInfoHolder initial subscriptions, then create and drain the reader actor.
     expectInitialSubscriptions()
-    val readerHolder = newReaderHolder()
+    val readerHolder: ActorRef = newReaderHolder()
     expectInitialSubscriptions()
 
     storeArchiveWeight()
@@ -1014,7 +1015,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     // This simulates an active mining node that keeps its signal fresh across tick intervals.
     // The advancing block number is not in the DB so resolveETH69ChainWeight returns COLD_START
     // (shouldUpdate = false), leaving chainWeight at inflatedTD.
-    val advancingBlock = archiveProbeBlock.copy(number = archiveProbeBlock.number + 1)
+    val advancingBlock: BlockHeader = archiveProbeBlock.copy(number = archiveProbeBlock.number + 1)
     readerHolder ! PeerEventCmd(
       MessageFromPeer(
         BlockRangeUpdate(

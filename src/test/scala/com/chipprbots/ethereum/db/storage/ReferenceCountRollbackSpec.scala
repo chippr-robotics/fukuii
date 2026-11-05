@@ -45,14 +45,14 @@ class ReferenceCountRollbackSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     val before = dbContent
     // y is created by the first transaction (no snapshot value), left by the second, and created AGAIN by the third:
     // its snapshots are None, then Some(intermediate). Replaying both resurrected the node at refs == 1.
-    val r1 = tx(1, root0, "y")
-    val r2 = tx(1, r1, "g")
+    val r1: ByteString = tx(1, root0, "y")
+    val r2: ByteString = tx(1, r1, "g")
     r2 shouldBe root0
-    val r3 = tx(1, r2, "y")
+    val r3: ByteString = tx(1, r2, "y")
     r3 shouldBe r1
     dbContent should not be before
 
@@ -61,7 +61,7 @@ class ReferenceCountRollbackSpec extends AnyFlatSpec with Matchers:
     dbContent shouldBe before
 
   it should "leave no snapshot or death-row key behind" taggedAs (UnitTest, DatabaseTest) in new Setup:
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     val before = dbContent
     tx(1, tx(1, root0, "y"), "z")
     stateStorage.onBlockRollback(1, 0)(() => ())
@@ -71,8 +71,8 @@ class ReferenceCountRollbackSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val root0 = genesis()
-    val r1 = tx(1, root0, "a")
+    val root0: ByteString = genesis()
+    val r1: ByteString = tx(1, root0, "a")
     val afterBlock1 = dbContent
     tx(2, tx(2, r1, "b"), "a")
     stateStorage.onBlockRollback(2, 1)(() => ())

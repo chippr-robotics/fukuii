@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.util.encoders.Hex
@@ -64,12 +65,12 @@ class PersonalServiceTypedTxSpec
     RPCTest
   ) in new TestSetup(TxDefaultsSpec.eth, TxDefaultsSpec.london):
     unlock()
-    val res = personal
+    val res: Future[Either[JsonRpcError, SendTransactionResponse]] = personal
       .sendTransaction(SendTransactionRequest(TxArgs(from = Some(address), to = Some(to), value = Some(5))))
       .unsafeToFuture()
     replyPTM(PendingTransactionsResponse(Nil))
     val tip = oracleTip
-    val expected = wallet
+    val expected: SignedTransaction = wallet
       .signTx(
         TransactionWithDynamicFee(
           1,
@@ -93,10 +94,10 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.cancun
   ):
     unlock()
-    val al = List(AccessListItem(to, List(StorageKey(BigInt(1)))))
-    val auth = SetCodeAuthorization(1, Address(0x99), 0, 0, 1, 1)
+    val al: List[AccessListItem] = List(AccessListItem(to, List(StorageKey(BigInt(1)))))
+    val auth: SetCodeAuthorization = SetCodeAuthorization(1, Address(0x99), 0, 0, 1, 1)
     // explicit type 0x1 with gasPrice
-    val r1 = personal
+    val r1: Either[JsonRpcError, SendTransactionResponse] = personal
       .sendTransaction(
         SendTransactionRequest(
           TxArgs(
@@ -110,7 +111,7 @@ class PersonalServiceTypedTxSpec
         )
       )
       .unsafeRunSync()
-    val sent1 = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
+    val sent1: SignedTransaction = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     sent1.tx shouldBe TransactionWithAccessList(
       1,
       accountNonce,
@@ -123,7 +124,7 @@ class PersonalServiceTypedTxSpec
     )
     r1 shouldBe Right(SendTransactionResponse(sent1.hash.value))
     // authorizationList selects 0x4, fees defaulted
-    val r4 = personal
+    val r4: Either[JsonRpcError, SendTransactionResponse] = personal
       .sendTransaction(
         SendTransactionRequest(
           TxArgs(
@@ -135,7 +136,7 @@ class PersonalServiceTypedTxSpec
         )
       )
       .unsafeRunSync()
-    val sent4 = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
+    val sent4: SignedTransaction = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     sent4.tx shouldBe a[SetCodeTransaction]
     sent4.tx.gasLimit shouldBe GasAmount(gasEstimate + 25000)
     sent4.tx.asInstanceOf[SetCodeTransaction].authorizationList shouldBe List(auth)
@@ -147,7 +148,7 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.cancun
   ):
     unlock()
-    val hash = BlobVersionedHash(ByteString(1) ++ ByteString(new Array[Byte](31)))
+    val hash: BlobVersionedHash = BlobVersionedHash(ByteString(1) ++ ByteString(new Array[Byte](31)))
     personal
       .sendTransaction(
         SendTransactionRequest(TxArgs(from = Some(address), to = Some(to), blobVersionedHashes = Some(List(hash))))
@@ -167,10 +168,10 @@ class PersonalServiceTypedTxSpec
     RPCTest
   ) in new TestSetup(TxDefaultsSpec.mordor, TxDefaultsSpec.mordorHead):
     unlock()
-    val res =
+    val res: Future[Either[JsonRpcError, SendTransactionResponse]] =
       personal.sendTransaction(SendTransactionRequest(TxArgs(from = Some(address), to = Some(to)))).unsafeToFuture()
     replyPTM(PendingTransactionsResponse(Nil))
-    val expected =
+    val expected: SignedTransaction =
       wallet
         .signTx(
           LegacyTransaction(accountNonce, GasPrice(gasPrice), GasAmount(gasEstimate), Some(to), 0, ByteString.empty),
@@ -215,15 +216,15 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.london
   ):
     unlock()
-    val req = SendTransactionRequest(TxArgs(from = Some(address), to = Some(to)))
-    val first = personal.sendTransaction(req).unsafeToFuture()
-    val second = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionRequest = SendTransactionRequest(TxArgs(from = Some(address), to = Some(to)))
+    val first: Future[Either[JsonRpcError, SendTransactionResponse]] = personal.sendTransaction(req).unsafeToFuture()
+    val second: Future[Either[JsonRpcError, SendTransactionResponse]] = personal.sendTransaction(req).unsafeToFuture()
     // Only one nonce query is outstanding: whichever send holds the lock reaches the pool before the other asks. Without
     // the lock the second GetPendingTransactionsReq would arrive where the SubmitLocalTransaction is expected.
     replyPTM(PendingTransactionsResponse(Nil))
-    val firstTx = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
+    val firstTx: SignedTransaction = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(SignedTransactionWithSender(firstTx, address), 0))))
-    val secondTx = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
+    val secondTx: SignedTransaction = txPool.expectMsgType[SubmitLocalTransaction].signedTransaction
     (firstTx.tx.nonce, secondTx.tx.nonce) shouldBe (accountNonce, accountNonce + 1)
     Set(first.futureValue, second.futureValue) shouldBe
       Set(Right(SendTransactionResponse(firstTx.hash.value)), Right(SendTransactionResponse(secondTx.hash.value)))
@@ -238,7 +239,7 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.london
   ):
     unlock()
-    val full = TxArgs(
+    val full: TxArgs = TxArgs(
       from = Some(address),
       to = Some(to),
       gas = Some(GasAmount(21000)),
@@ -246,13 +247,13 @@ class PersonalServiceTypedTxSpec
       maxPriorityFeePerGas = Some(1),
       nonce = Some(3)
     )
-    def sign(a: TxArgs) = personal.signTransaction(SignTransactionRequest(a, None)).unsafeRunSync()
+    def sign(a: TxArgs): Either[JsonRpcError, SignTransactionResponse] = personal.signTransaction(SignTransactionRequest(a, None)).unsafeRunSync()
     sign(full.copy(gas = None)) shouldBe Left(LogicError("gas not specified"))
     sign(full.copy(maxFeePerGas = None)) shouldBe Left(
       LogicError("missing gasPrice or maxFeePerGas/maxPriorityFeePerGas")
     )
     sign(full.copy(nonce = None)) shouldBe Left(LogicError("nonce not specified"))
-    val signed = sign(full).toOption.get.result
+    val signed: SignTransactionResult = sign(full).toOption.get.result
     signed.stx shouldBe wallet
       .signTx(TransactionWithDynamicFee(1, 3, 1, 100, GasAmount(21000), Some(to), 0, ByteString.empty, Nil), None)
       .tx
@@ -286,7 +287,7 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.cancun
   ):
     unlock()
-    val res = personal
+    val res: SignTransactionResult = personal
       .signTransaction(
         SignTransactionRequest(
           TxArgs(
@@ -307,7 +308,7 @@ class PersonalServiceTypedTxSpec
       .result
     res.sidecar.map(_.version) shouldBe Some(BlobTxSidecar.Version1)
     res.sidecar.map(_.proofs.size) shouldBe Some(BlobTxSidecar.CellProofsPerBlob)
-    val btx = res.stx.tx.asInstanceOf[BlobTransaction]
+    val btx: BlobTransaction = res.stx.tx.asInstanceOf[BlobTransaction]
     btx.blobVersionedHashes shouldBe res.sidecar.get.commitments.map(BlobTxSidecar.versionedHash)
     btx.maxFeePerBlobGas should be > BigInt(0)
     val (decoded, raw) = res.raw.toArray.toSignedTransactionWithSidecar
@@ -322,14 +323,14 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.london
   ):
     keyStore.unlockAccount.expects(address, passphrase).returning(Right(wallet))
-    val args = TxArgs(
+    val args: TxArgs = TxArgs(
       from = Some(address),
       to = Some(to),
       gas = Some(GasAmount(21000)),
       gasPrice = Some(GasPrice(7)),
       nonce = Some(4)
     )
-    val res = personal.signTransaction(SignTransactionRequest(args, Some(passphrase))).unsafeRunSync()
+    val res: Either[JsonRpcError, SignTransactionResponse] = personal.signTransaction(SignTransactionRequest(args, Some(passphrase))).unsafeRunSync()
     res.map(_.result.stx) shouldBe Right(
       wallet.signTx(LegacyTransaction(4, GasPrice(7), GasAmount(21000), Some(to), 0, ByteString.empty), Some(1)).tx
     )
@@ -342,7 +343,7 @@ class PersonalServiceTypedTxSpec
     UnitTest,
     RPCTest
   ) in new TestSetup(TxDefaultsSpec.eth, TxDefaultsSpec.london):
-    val res = personal
+    val res: Future[Either[JsonRpcError, FillTransactionResponse]] = personal
       .fillTransaction(FillTransactionRequest(TxArgs(from = Some(address), to = Some(to), value = Some(1))))
       .unsafeToFuture()
     replyPTM(PendingTransactionsResponse(Nil))
@@ -379,7 +380,7 @@ class PersonalServiceTypedTxSpec
     TxDefaultsSpec.eth,
     TxDefaultsSpec.cancun.copy(unixTimestamp = Timestamp(1746612311L + 12)) // Prague, not yet Osaka
   ):
-    val res = personal
+    val res: SignTransactionResult = personal
       .fillTransaction(
         FillTransactionRequest(
           TxArgs(

@@ -20,15 +20,15 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MptVisitors.*
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 
 /** Bytecode recovery actor for Bug 20 hardening.
   *

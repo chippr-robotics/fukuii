@@ -3,8 +3,8 @@ package com.chipprbots.ethereum.network.handshaker
 import cats.effect.SyncIO
 
 import com.chipprbots.ethereum.domain.Timestamp
-import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus

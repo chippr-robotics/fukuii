@@ -6,9 +6,9 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.*
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.Block.toBlock
-import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai

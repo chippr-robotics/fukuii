@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeWorker
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -291,7 +292,7 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
   it should "acknowledge nothing when the write fails: the bytecode is not there to depend on (T036)" taggedAs UnitTest in {
     val controller = TestInbox[SNAPSyncController.Command]()
     val failingCodes = new TestEvmCodeStorage():
-      override def put(key: ByteString, value: ByteString) = throw new RuntimeException("injected code write failure")
+      override def put(key: ByteString, value: ByteString): DataSourceBatchUpdate = throw new RuntimeException("injected code write failure")
     val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref) with ByteCodeResponseHandling
     val worker = TestInbox[ByteCodeWorker.Command]()
     val c = code(1)

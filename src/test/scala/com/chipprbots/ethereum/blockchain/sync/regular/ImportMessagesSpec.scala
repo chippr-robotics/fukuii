@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import org.apache.pekko.event.Logging.{InfoLevel, WarningLevel}
+import org.apache.pekko.event.Logging.InfoLevel
+import org.apache.pekko.event.Logging.WarningLevel
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec

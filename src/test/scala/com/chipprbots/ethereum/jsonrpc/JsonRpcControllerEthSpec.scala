@@ -666,9 +666,9 @@ class JsonRpcControllerEthSpec
     val request: JsonRpcRequest = newJsonRpcRequest("eth_capabilities")
 
     val bestBlock = blockchainReader.getBestBlock
-    val expectedHeadNumber =
+    val expectedHeadNumber: String =
       "0x" + bestBlock.map(_.header.number.value).getOrElse(BigInt(0)).toString(16)
-    val expectedHeadHash =
+    val expectedHeadHash: String =
       "0x" + Hex.toHexString(
         bestBlock.map(_.header.hash.value).getOrElse(ByteString(new Array[Byte](32))).toArray[Byte]
       )

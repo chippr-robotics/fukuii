@@ -13,8 +13,6 @@ import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.network.PeerActor
-
 import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
@@ -24,6 +22,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError

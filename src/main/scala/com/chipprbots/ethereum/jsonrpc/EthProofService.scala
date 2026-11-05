@@ -7,9 +7,9 @@ import cats.implicits.*
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.UInt256

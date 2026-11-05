@@ -10,10 +10,10 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures.Blocks.Block3125369
 import com.chipprbots.ethereum.Timeouts
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.ommers.OmmersPool.Command
 import com.chipprbots.ethereum.ommers.OmmersPool.GetOmmers

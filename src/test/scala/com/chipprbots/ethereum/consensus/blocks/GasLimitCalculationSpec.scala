@@ -12,12 +12,12 @@ import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig

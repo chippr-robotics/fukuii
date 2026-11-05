@@ -7,28 +7,28 @@ import boopickle.Pickler
 
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.AccessListItem
-import com.chipprbots.ethereum.domain.StorageKey
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
-import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.GasPrice
+import com.chipprbots.ethereum.domain.BlobVersionedHash
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockNumber
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.domain.BlobVersionedHash
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SetCodeAuthorization
 import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.StorageKey
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.Withdrawal
 

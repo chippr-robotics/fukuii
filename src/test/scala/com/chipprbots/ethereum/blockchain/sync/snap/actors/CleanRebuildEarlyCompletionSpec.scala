@@ -1,5 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
+import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.util.ByteString
@@ -12,15 +17,13 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
-import com.chipprbots.ethereum.db.dataSource.{RocksDbConfig, RocksDbDataSource}
-import com.chipprbots.ethereum.db.storage.{HealingFrontierStorage, Namespaces}
+import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
-
-import java.io.File
-import java.nio.file.Files
-import java.util.concurrent.{Executors, TimeUnit}
 
 /** spec 006 — Skip the redundant second verification walk on a CLEAN post-SNAP heal.
   *

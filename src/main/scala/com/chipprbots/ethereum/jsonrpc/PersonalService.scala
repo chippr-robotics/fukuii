@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
@@ -11,8 +12,6 @@ import cats.data.EitherT
 import cats.effect.IO
 import cats.effect.SyncIO
 import cats.effect.std.Semaphore
-
-import java.util.concurrent.ConcurrentHashMap
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.ECDSASignature

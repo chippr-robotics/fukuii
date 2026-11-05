@@ -8,17 +8,17 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.*
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
+import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.ChainId
 import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.Timestamp
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
-import com.chipprbots.ethereum.domain.BloomFilter
-import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers

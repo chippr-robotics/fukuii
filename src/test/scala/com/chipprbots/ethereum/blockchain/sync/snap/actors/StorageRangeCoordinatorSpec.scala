@@ -1,12 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-
 import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
+import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
-
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
@@ -20,6 +19,7 @@ import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -2956,7 +2956,7 @@ class StorageRangeCoordinatorSpec
     val file: java.nio.file.Path = java.nio.file.Files.createTempFile("excluded-task-file", ".bin")
     file.toFile.deleteOnExit()
     java.nio.file.Files.write(file, entries.flatMap { case (a, r) => (a ++ r).toArray }.toArray)
-    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    val controller: TestProbe[Command] = testKit.createTestProbe[SNAPSyncController.Command]()
     val source: EphemDataSource = sourceOverride.getOrElse(EphemDataSource())
     val appState = new AppStateStorage(source)
     appState.putSnapSyncStorageFilePath(file.toString).commit()

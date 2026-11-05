@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.consensus.validators.*
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.ChainId
 import com.chipprbots.ethereum.domain.SignedTransaction.FirstByteOfAddress
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockQueue
@@ -28,7 +29,6 @@ import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.*
-import com.chipprbots.ethereum.domain.ChainId
 
 class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
   implicit val testContext: IORuntime = IORuntime.global

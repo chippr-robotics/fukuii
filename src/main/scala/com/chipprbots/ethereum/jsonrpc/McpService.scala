@@ -17,10 +17,10 @@ import org.json4s.JsonAST.JValue
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.jsonrpc.mcp.McpPromptRegistry
 import com.chipprbots.ethereum.jsonrpc.mcp.McpResourceRegistry
 import com.chipprbots.ethereum.jsonrpc.mcp.McpToolRegistry
+import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.NodeStatus

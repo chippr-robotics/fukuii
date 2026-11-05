@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
-import org.scalatest.concurrent.Eventually
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 

@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import cats.effect.IO
-
 import org.apache.pekko.actor.ActorSystem
+
+import cats.effect.IO
 
 import scala.concurrent.ExecutionContext
 

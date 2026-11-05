@@ -10,6 +10,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.*
@@ -18,7 +19,6 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes.*
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.testing.Tags.*
 
 class SNAPRoundTripSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators:

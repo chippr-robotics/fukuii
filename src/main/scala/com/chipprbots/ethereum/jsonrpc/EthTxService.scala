@@ -28,9 +28,9 @@ import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.transactions.BlobSidecar
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
-import com.chipprbots.ethereum.transactions.BlobSidecar
 import com.chipprbots.ethereum.transactions.TransactionPicker
 import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.utils.BlockchainConfig

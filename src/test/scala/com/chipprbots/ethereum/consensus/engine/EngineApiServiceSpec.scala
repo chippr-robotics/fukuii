@@ -16,8 +16,8 @@ import com.chipprbots.ethereum.consensus.validators.std.StdValidators
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 
 // scalastyle:off magic.number

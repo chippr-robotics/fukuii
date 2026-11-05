@@ -4,6 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair.Outcome
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -45,7 +46,7 @@ class StoredBodyRepairSpec extends AnyFlatSpec with Matchers:
         corruptedNode()
         appState.needsBackfillResume() shouldBe false
 
-        val outcomes = repair()
+        val outcomes: Seq[Outcome] = repair()
 
         outcomes.map(o => (o.label, o.number, o.refetchArmed)) shouldBe Seq(("SNAP pivot", pivotNumber, true))
         outcomes.head.action shouldBe a[StoredBodyCheck.Action.Remove]
@@ -74,7 +75,7 @@ class StoredBodyRepairSpec extends AnyFlatSpec with Matchers:
   it should "remove the wrong body but not arm a whole-chain download when the header backfill never reached the pivot" taggedAs
     UnitTest in (new Fixture:
       corruptedNode(headerCursor = 0) // chain download disabled
-      val outcomes = repair()
+      val outcomes: Seq[Outcome] = repair()
       outcomes.map(_.refetchArmed) shouldBe Seq(false)
       blockchainReader.getBlockBodyByHash(pivot.hash) shouldBe None
       appState.needsBackfillResume() shouldBe false
@@ -90,7 +91,7 @@ class StoredBodyRepairSpec extends AnyFlatSpec with Matchers:
     appState.needsBackfillResume() shouldBe false
 
   it should "rewrite a Shanghai genesis stored with a 3-item body" taggedAs UnitTest in new Fixture:
-    val genesis = emptyShanghai.copy(number = com.chipprbots.ethereum.domain.BlockNumber(0))
+    val genesis: BlockHeader = emptyShanghai.copy(number = com.chipprbots.ethereum.domain.BlockNumber(0))
     storeGenesis(genesis, BlockBody(Nil, Nil)) // what GenesisDataLoader wrote before the fix
 
     repair().map(_.label) shouldBe Seq("genesis")

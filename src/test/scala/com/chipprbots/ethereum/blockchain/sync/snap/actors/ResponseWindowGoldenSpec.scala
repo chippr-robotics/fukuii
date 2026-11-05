@@ -9,6 +9,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
@@ -26,6 +27,7 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.AccountPeerDispatch
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.StubAccountPeerDispatchState
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.StoragePeerDispatch
@@ -373,7 +375,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     private val rootLeaf = LeafNode(ByteString(1), ByteString(1))
     storage.putNode(rootLeaf)
     private val stateRoot = ByteString(rootLeaf.hash)
-    val coordinator = HealingTrieFixtures.spawnCoordinator(
+    val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = stateRoot,
       networkPeerManager = network.ref,
       requestTracker = tracker,

@@ -6,13 +6,13 @@ import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.*
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
-import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
 

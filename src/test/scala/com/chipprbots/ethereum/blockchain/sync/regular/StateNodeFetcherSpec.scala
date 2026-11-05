@@ -18,12 +18,13 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerExcluding
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchResponse
-import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.metrics.Metrics
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes as SNAPByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
@@ -318,11 +319,11 @@ class StateNodeFetcherSpec
         .rootHash shouldBe stateRoot
 
       // The peer answers with a node that is not the wanted hash.
-      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val peer: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
 
       // Must rotate peers on the SAME root (blacklist, then a retry after the backoff), never re-ask under fallbackRoot.
-      val msgs = peersClientProbe.receiveWhile(2.seconds) { case m => m }
+      val msgs: Seq[Object] = peersClientProbe.receiveWhile(2.seconds) { case m => m }
       msgs
         .collect { case r: PeersClient.Request[?] => r.message }
         .collect { case g: GetTrieNodes => g.rootHash }
@@ -342,9 +343,9 @@ class StateNodeFetcherSpec
         fallbackStateRoot = Some(fallbackRoot)
       )
       peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
-      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val peer: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
-      val second = peersClientProbe.fishForMessage(3.seconds) {
+      val second: Any = peersClientProbe.fishForMessage(3.seconds) {
         case _: PeersClient.Request[?] => true; case _ => false
       }
       second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
@@ -359,9 +360,9 @@ class StateNodeFetcherSpec
         fallbackStateRoot = Some(fallbackRoot)
       )
       peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
-      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val peer: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
-      val msgs = peersClientProbe.receiveWhile(1.second) { case m => m }
+      val msgs: Seq[Object] = peersClientProbe.receiveWhile(1.second) { case m => m }
       msgs
         .collect { case r: PeersClient.Request[?] => r.message }
         .collect { case g: GetTrieNodes => g.rootHash }
@@ -370,7 +371,7 @@ class StateNodeFetcherSpec
     "still switches to the fallback root for a STORAGE-trie root (pathset [accountHash, 0x00])" taggedAs UnitTest in new TestSetup:
       val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
       val fallbackRoot: ByteString = ByteString(Array.fill[Byte](32)(0xdb.toByte))
-      val accountHash = ByteString(Array.fill[Byte](32)(0x77.toByte))
+      val accountHash: ByteString = ByteString(Array.fill[Byte](32)(0x77.toByte))
       fetcher ! StateNodeFetcher.FetchStateNode(
         hash = targetHash,
         originalSender = replyToProbe.ref,
@@ -379,9 +380,9 @@ class StateNodeFetcherSpec
         fallbackStateRoot = Some(fallbackRoot)
       )
       peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
-      val peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val peer: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(peer, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
-      val second = peersClientProbe.fishForMessage(3.seconds) {
+      val second: Any = peersClientProbe.fishForMessage(3.seconds) {
         case _: PeersClient.Request[?] => true; case _ => false
       }
       second.asInstanceOf[PeersClient.Request[?]].message.asInstanceOf[GetTrieNodes].rootHash shouldBe fallbackRoot
@@ -397,26 +398,26 @@ class StateNodeFetcherSpec
         paths = Some(Seq(Seq(ByteString(Array(0x01.toByte))))),
         isByteCode = false
       )
-      val first = nextRequest()
+      val first: Request[?] = nextRequest()
       first.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
 
       // Peer p1 answers with a node whose keccak is not the wanted hash: it must be rejected...
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
 
       // ...and the next request must go out without any virtual time passing (BackoffInterval is 5s), excluding p1.
-      val second = nextRequest()
+      val second: Request[?] = nextRequest()
       second.peerSelector shouldBe BestSnapPeerExcluding(Set(p1.id))
       replyToProbe.expectNoMessage(100.millis)
 
       // A second bad peer is again rotated immediately, excluding both.
-      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      val p2: Peer = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p2, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(2)))))
       nextRequest().peerSelector shouldBe
         BestSnapPeerExcluding(Set(p1.id, p2.id))
 
       // The third peer returns the genuine node: it is verified by hash and delivered.
-      val p3 = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
+      val p3: Peer = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p3, TrieNodes(1, Seq(goodNode)))
       replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(goodNode))))
 
@@ -434,7 +435,7 @@ class StateNodeFetcherSpec
       fetcher ! StateNodeFetcher.RetryStateNodeRequest
       manualTime.expectNoMessageFor(StateNodeFetcher.BackoffInterval - 1.milli, peersClientProbe)
       manualTime.timePasses(2.millis)
-      val retry = nextRequest()
+      val retry: Request[?] = nextRequest()
       // The rotation set was reset for the new pass over the pool.
       retry.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
 
@@ -443,12 +444,12 @@ class StateNodeFetcherSpec
       val codeHash: ByteString = ByteString(kec256(code.toArray))
       fetcher ! StateNodeFetcher.FetchStateNode(hash = codeHash, originalSender = replyToProbe.ref, isByteCode = true)
       nextRequest()
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(1, Seq(ByteString(Array.fill[Byte](16)(1)))))
       nextRequest().peerSelector shouldBe
         BestSnapPeerExcluding(Set(p1.id))
       replyToProbe.expectNoMessage(100.millis)
-      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      val p2: Peer = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p2, SNAPByteCodes(2, Seq(code)))
       replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(code))))
 
@@ -461,7 +462,7 @@ class StateNodeFetcherSpec
         isByteCode = false
       )
       nextRequest()
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq.empty))
       // The very next message is the rotated request: no BlacklistPeer precedes it.
       peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
@@ -476,7 +477,7 @@ class StateNodeFetcherSpec
         paths = Some(Seq(Seq(ByteString(Array(0x01.toByte)))))
       )
       nextRequest()
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, Seq(ByteString(Array.fill[Byte](40)(1)))))
       peersClientProbe.expectMessageType[PeersClient.BlacklistPeer].peerId shouldBe p1.id
       peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
@@ -499,10 +500,10 @@ class StateNodeFetcherSpec
       )
       nextRequest().message.asInstanceOf[GetTrieNodes].rootHash shouldBe stateRoot
       val moved: Seq[ByteString] = Seq(ByteString(Array.fill[Byte](40)(1)))
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
-      val p2 = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
-      val p3 = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
-      val p4 = PeerTestHelpers.createTestPeer("p4", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p2: Peer = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
+      val p3: Peer = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
+      val p4: Peer = PeerTestHelpers.createTestPeer("p4", TestProbe().ref)
 
       // At the parent root a mismatch switches roots, as it always did: no blacklist.
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, TrieNodes(1, moved))
@@ -527,7 +528,7 @@ class StateNodeFetcherSpec
     "an EMPTY ByteCodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(hash = targetHash, originalSender = replyToProbe.ref, isByteCode = true)
       nextRequest()
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(1, Seq.empty))
       peersClientProbe.expectMessageType[PeersClient.Request[?]].peerSelector shouldBe
         BestSnapPeerExcluding(Set(p1.id))
@@ -535,13 +536,13 @@ class StateNodeFetcherSpec
 
     "drops a late reply to an abandoned fetch without blacklisting the honest peer" taggedAs UnitTest in new ManualClockSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(hash = targetHash, originalSender = replyToProbe.ref, isByteCode = true)
-      val oldId = nextRequest().message.asInstanceOf[GetByteCodes].requestId
+      val oldId: BigInt = nextRequest().message.asInstanceOf[GetByteCodes].requestId
       val otherCode: ByteString = ByteString(Array.fill[Byte](16)(5))
       val otherHash: ByteString = ByteString(kec256(otherCode.toArray))
       fetcher ! StateNodeFetcher.FetchStateNode(hash = otherHash, originalSender = replyToProbe.ref, isByteCode = true)
       nextRequest()
       // Reply to the OLD request arrives now; it would not hash to otherHash, but must be ignored, not blacklisted.
-      val p1 = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
+      val p1: Peer = PeerTestHelpers.createTestPeer("p1", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(oldId, Seq(ByteString(Array.fill[Byte](16)(1)))))
       peersClientProbe.expectNoMessage(200.millis)
       // The live request is still answerable.

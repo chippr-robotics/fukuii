@@ -3,7 +3,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.actor.ActorSystem
-
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActorRef

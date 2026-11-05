@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.blockchain.data
 
-import org.apache.pekko.util.ByteString
-
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+
+import org.apache.pekko.util.ByteString
 
 import scala.jdk.CollectionConverters.*
 import scala.util.Using

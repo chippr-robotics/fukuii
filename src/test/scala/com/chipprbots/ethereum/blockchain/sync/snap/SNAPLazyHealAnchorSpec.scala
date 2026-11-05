@@ -30,11 +30,16 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtures.Trie
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -251,14 +256,14 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should
     "fire a SECOND heal-root-stale re-peg once networkBest has advanced by more than margin (not 2xmargin) on a " +
     "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(1_000)
-      val root0 = fakeRoot(0xaa)
+      val pivot0: BigInt = BigInt(1_000)
+      val root0: ByteString = fakeRoot(0xaa)
       val height1 = 2_000L
-      val pivot1 = BigInt(height1 - PivotOffset) // 1_936 — first stale-triggered re-peg's target
-      val root1 = fakeRoot(0xbb)
-      val height2 = height1 + 100 // strictly between the correct (+64) and pre-fix-buggy (+128) thresholds
-      val pivot2 = BigInt(height2 - PivotOffset) // 2_036 — reached only under the fix
-      val root2 = fakeRoot(0xcc)
+      val pivot1: BigInt = BigInt(height1 - PivotOffset) // 1_936 — first stale-triggered re-peg's target
+      val root1: ByteString = fakeRoot(0xbb)
+      val height2: Long = height1 + 100 // strictly between the correct (+64) and pre-fix-buggy (+128) thresholds
+      val pivot2: BigInt = BigInt(height2 - PivotOffset) // 2_036 — reached only under the fix
+      val root2: ByteString = fakeRoot(0xcc)
 
       storeGenesis()
       storeHeaderAt(pivot0, root0)
@@ -267,7 +272,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -289,13 +294,13 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   "SNAPSyncController" should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HEAL-REPEG " +
     "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(10_000)
-      val root0 = fakeRoot(0x11)
+      val pivot0: BigInt = BigInt(10_000)
+      val root0: ByteString = fakeRoot(0x11)
       // height - PivotOffset(64) = 10_736 / 11_536 respectively.
-      val pivot1 = BigInt(10_736)
-      val root1 = fakeRoot(0x22)
-      val pivot2 = BigInt(11_536)
-      val root2 = fakeRoot(0x33)
+      val pivot1: BigInt = BigInt(10_736)
+      val root1: ByteString = fakeRoot(0x22)
+      val pivot2: BigInt = BigInt(11_536)
+      val root2: ByteString = fakeRoot(0x33)
 
       storeGenesis()
       storeHeaderAt(pivot0, root0)
@@ -304,7 +309,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       // Synchronous end-to-end inside the Start handler (accounts already complete, no peers to bootstrap a
       // header from): by the time this returns, currentPhase == StateHealing and the coordinator is spawned
@@ -352,16 +357,16 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should
     "still abort finalization with HealingImpossible when the in-memory root genuinely diverges from the " +
     "pivot header's root (A5 guard must not be weakened)" taggedAs UnitTest in (new Fixture:
-      val pivotX = BigInt(10_000)
-      val persistedRoot = fakeRoot(0x11) // what AppStateStorage says
-      val realHeaderRoot = fakeRoot(0x99) // what the pivot header ACTUALLY stored on disk says — genuinely different
+      val pivotX: BigInt = BigInt(10_000)
+      val persistedRoot: ByteString = fakeRoot(0x11) // what AppStateStorage says
+      val realHeaderRoot: ByteString = fakeRoot(0x99) // what the pivot header ACTUALLY stored on disk says — genuinely different
 
       storeGenesis()
       storeHeaderAt(pivotX, realHeaderRoot)
       seedResumeState(pivotX, persistedRoot)
 
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -386,12 +391,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HealingRootUnservable " +
     "lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(10_000)
-      val root0 = fakeRoot(0x44)
-      val pivot1 = BigInt(10_736)
-      val root1 = fakeRoot(0x55)
-      val pivot2 = BigInt(11_536)
-      val root2 = fakeRoot(0x66)
+      val pivot0: BigInt = BigInt(10_000)
+      val root0: ByteString = fakeRoot(0x44)
+      val pivot1: BigInt = BigInt(10_736)
+      val root1: ByteString = fakeRoot(0x55)
+      val pivot2: BigInt = BigInt(11_536)
+      val root2: ByteString = fakeRoot(0x66)
 
       storeGenesis()
       storeHeaderAt(pivot0, root0)
@@ -400,7 +405,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -450,14 +455,14 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should
     "not count a preemptive heal-root-stale re-peg that finds no usable target against the HEAL-REPEG budget, " +
     "however many times it repeats, while a genuine all-peers-stateless failure still exhausts it" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(100)
-      val root0 = fakeRoot(0x77)
+      val pivot0: BigInt = BigInt(100)
+      val root0: ByteString = fakeRoot(0x77)
       storeGenesis()
       storeHeaderAt(pivot0, root0)
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap = spawnController(
+      val snap: TypedActorRef[Command] = spawnController(
         SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, pivotBlockOffset = 5000)
       )
       awaitFirstPoll()
@@ -517,14 +522,14 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   it should
     "still exhaust the budget and hand off when the GENERIC retry timer (RetryPivotRefresh), not " +
     "HealingAllPeersStateless, repeatedly finds genuinely no peer during StateHealing" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(2_000)
-      val root0 = fakeRoot(0xdd)
+      val pivot0: BigInt = BigInt(2_000)
+      val root0: ByteString = fakeRoot(0xdd)
       storeGenesis()
       storeHeaderAt(pivot0, root0)
       seedResumeState(pivot0, root0)
 
       peers.set(Map.empty)
-      val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
+      val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true))
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
@@ -567,12 +572,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // that block) instead of logging "not strictly newer ... Skipping refresh" and spending the budget.
   "SNAPSyncController on a PoS chain with a stalled CL" should
     "re-peg a stateless heal root to clHead - margin instead of skipping the refresh (#1555)" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(2_000)
+      val pivot0: BigInt = BigInt(2_000)
       storeGenesis()
       storeHeaderAt(pivot0, fakeRoot(0xe6))
       seedResumeState(pivot0, fakeRoot(0xe6))
       peers.set(Map.empty)
-      val snap =
+      val snap: TypedActorRef[Command] =
         spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
@@ -594,12 +599,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // its replay must keep the unservable fallback, so once a snap peer advertises a newer tip it re-pegs to the capped
   // peer tip - margin.
   it should "keep the unservable-pivot fallback on the counted RetryPivotRefresh replay (#1555)" taggedAs UnitTest in new Fixture:
-    val pivot0 = BigInt(2_000)
+    val pivot0: BigInt = BigInt(2_000)
     storeGenesis()
     storeHeaderAt(pivot0, fakeRoot(0xe7))
     seedResumeState(pivot0, fakeRoot(0xe7))
     peers.set(Map.empty)
-    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -630,12 +635,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // 15-minute watchdog retries).
   it should
     "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(2_000)
+      val pivot0: BigInt = BigInt(2_000)
       storeGenesis()
       storeHeaderAt(pivot0, fakeRoot(0xe1))
       seedResumeState(pivot0, fakeRoot(0xe1))
       peers.set(Map.empty)
-      val snap =
+      val snap: TypedActorRef[Command] =
         spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
@@ -656,12 +661,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // that, since nothing counted has armed it) firing repeatedly during StateHealing with a stalled CL must NOT
   // count: healing is progressing on a still-served root.
   it should "not spend the heal budget on a leftover retry timer firing during StateHealing" taggedAs UnitTest in new Fixture:
-    val pivot0 = BigInt(2_000)
+    val pivot0: BigInt = BigInt(2_000)
     storeGenesis()
     storeHeaderAt(pivot0, fakeRoot(0xe2))
     seedResumeState(pivot0, fakeRoot(0xe2))
     peers.set(Map.empty)
-    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -675,12 +680,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // (c) Provenance true: a timer armed by a COUNTED attempt keeps counting, so the chain a genuine report starts
   // reaches the handoff (1 counted report + 9 replays = 10).
   it should "count replays of a timer armed by a counted attempt, reaching the handoff" taggedAs UnitTest in new Fixture:
-    val pivot0 = BigInt(2_000)
+    val pivot0: BigInt = BigInt(2_000)
     storeGenesis()
     storeHeaderAt(pivot0, fakeRoot(0xe3))
     seedResumeState(pivot0, fakeRoot(0xe3))
     peers.set(Map.empty)
-    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -700,12 +705,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // forge warning: retryRefreshCounts must reset when a re-peg succeeds. A counted timer armed before a successful
   // re-peg would otherwise replay with a stalled CL, count again, re-arm and reach a spurious handoff.
   it should "not count a replay of a counted timer armed before a successful re-peg" taggedAs UnitTest in new Fixture:
-    val pivot0 = BigInt(2_000)
-    val pivot1 = BigInt(2_100)
+    val pivot0: BigInt = BigInt(2_000)
+    val pivot1: BigInt = BigInt(2_100)
     storeGenesis()
     storeHeaderAt(pivot0, fakeRoot(0xe4))
     // Post-merge-shaped pivot header so the PoS gate in completePivotRefreshWithStateRoot accepts the re-peg.
-    val posHeader = Fixtures.Blocks.Genesis.header.copy(
+    val posHeader: BlockHeader = Fixtures.Blocks.Genesis.header.copy(
       number = BlockNumber(pivot1),
       stateRoot = TrieRoot(fakeRoot(0xe5)),
       difficulty = com.chipprbots.ethereum.domain.Difficulty.Zero,
@@ -716,7 +721,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     blockchainWriter.storeBlock(Block(posHeader, BlockBody.empty)).commit()
     seedResumeState(pivot0, fakeRoot(0xe4))
     peers.set(Map.empty)
-    val snap = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
+    val snap: TypedActorRef[Command] = spawnController(SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true), isPoS = true)
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     stalledClHint(this, snap, pivot0)
@@ -725,7 +730,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     snap ! SNAPSyncController.HealingAllPeersStateless
     awaitProcessed(snap)
     // CL advances: the next attempt re-pegs successfully (pivot0 -> pivot1) and must reset the provenance.
-    val advanced = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + PivotOffset))
+    val advanced: BlockHeader = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + PivotOffset))
     snap ! SNAPSyncController.CLPivotHint(advanced.hash.value, Some(advanced))
     snap ! SNAPSyncController.HealingAllPeersStateless
     awaitProcessed(snap)
@@ -741,8 +746,8 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // populates, so they could never report "0 missing". The coordinator's path-aware verification is the clean signal.
   it should
     "complete SNAP under the Path scheme once the coordinator verifies a fully healed trie (no blind controller walk)" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(10_000)
-      val trie = PathHealPresenceFixtures.accountTrieNew()
+      val pivot0: BigInt = BigInt(10_000)
+      val trie: Trie = PathHealPresenceFixtures.accountTrieNew()
       val root0 = trie.root.hash
 
       storeGenesis()
@@ -755,7 +760,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       )
 
       peers.set(Map.empty)
-      val snap = spawnController(
+      val snap: TypedActorRef[Command] = spawnController(
         SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path)
       )
       awaitFirstPoll()
@@ -773,15 +778,15 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // controller answering status queries until it finishes.
   it should
     "publish the Path trie asynchronously: stay responsive to GetStatus mid-publish, then finalize on PublishDone" taggedAs UnitTest in (new Fixture:
-      val pivot0 = BigInt(10_000)
-      val trie = PathHealPresenceFixtures.accountTrieNew()
+      val pivot0: BigInt = BigInt(10_000)
+      val trie: Trie = PathHealPresenceFixtures.accountTrieNew()
       storeGenesis()
       storeHeaderAt(pivot0, trie.root.hash)
       seedResumeState(pivot0, trie.root.hash)
 
       val entered = new java.util.concurrent.CountDownLatch(1)
       val release = new java.util.concurrent.CountDownLatch(1)
-      val gated = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+      val gated: EphemDataSource = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
         override def iterate(
             namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace
         ): fs2.Stream[cats.effect.IO, Either[
@@ -794,7 +799,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       PathHealPresenceFixtures.seedPath(new PathNodeStorage(gated), trie.nodes)
 
       peers.set(Map.empty)
-      val snap = spawnController(
+      val snap: TypedActorRef[Command] = spawnController(
         SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path),
         flatSlot = new com.chipprbots.ethereum.db.storage.FlatSlotStorage(gated)
       )
@@ -804,7 +809,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       // The publish worker is inside the scan, blocked on the gate ...
       entered.await(20, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
       // ... and the controller still answers status and progress ...
-      val statusProbe = testKit.createTestProbe[SyncProtocol.Status]()
+      val statusProbe: TypedTestProbe[Status] = testKit.createTestProbe[SyncProtocol.Status]()
       snap ! SNAPSyncController.GetStatus(statusProbe.ref)
       statusProbe.expectMessageType[SyncProtocol.Status.Syncing](5.seconds)
       awaitProcessed(snap)

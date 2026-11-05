@@ -14,10 +14,10 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
+
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
-
-import cats.effect.IO
 
 import fs2.Stream
 
@@ -462,7 +462,7 @@ final class HookedDataSource(underlying: DataSource, gate: KillGate) extends Dat
     underlying.getOptimized(namespace, key)
   override def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
     underlying.multiGetOptimized(namespace, keys)
-  def scanRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]) =
+  def scanRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] =
     underlying.scanRange(namespace, fromKey, toKeyExclusive)
   def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
     underlying.deleteRange(namespace, fromKey, toKeyExclusive)

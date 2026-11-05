@@ -10,9 +10,9 @@ import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
 import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag
 import scodec.bits.ByteVector
 
-import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkId.*
+import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.rlp.*
 import com.chipprbots.ethereum.utils.BlockchainConfig

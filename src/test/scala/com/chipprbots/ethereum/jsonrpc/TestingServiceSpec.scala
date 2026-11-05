@@ -12,15 +12,16 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
+import com.chipprbots.ethereum.consensus.engine.BuiltBlock
 import com.chipprbots.ethereum.consensus.engine.EngineApiService
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.jsonrpc.TestingService.*
 import com.chipprbots.ethereum.ledger.*
-import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
 import com.chipprbots.ethereum.testing.Tags.*
@@ -79,11 +80,11 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     "build an empty block on the given parent without touching the canonical head" taggedAs UnitTest in new Setup:
       val before = blockchainReader.getBestBlockNumber
 
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync()
 
-      val built = res.getOrElse(fail(s"build failed: $res"))
+      val built: BuildBlockResponse = res.getOrElse(fail(s"build failed: $res"))
       built.block.header.parentHash shouldBe genesisHeader.hash
       built.block.header.number shouldBe BlockNumber(1)
       built.block.body.transactionList shouldBe empty
@@ -94,8 +95,8 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
 
     "use the supplied extraData verbatim, not the miner's configured header-extra-data" taggedAs UnitTest in
       (new Setup:
-        val marker = ByteString("test_name".getBytes)
-        val built = service
+        val marker: ByteString = ByteString("test_name".getBytes)
+        val built: BuildBlockResponse = service
           .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(marker)))
           .unsafeRunSync()
           .getOrElse(fail("build failed"))
@@ -104,7 +105,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       )
 
     "default extraData to empty when the parameter is absent" taggedAs UnitTest in new Setup:
-      val built = service
+      val built: BuildBlockResponse = service
         .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), None))
         .unsafeRunSync()
         .getOrElse(fail("build failed"))
@@ -112,7 +113,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       built.block.header.extraData shouldBe ByteString.empty
 
     "converge the gas limit toward the target instead of inheriting the parent's" taggedAs UnitTest in new Setup:
-      val built = service
+      val built: BuildBlockResponse = service
         .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync()
         .getOrElse(fail("build failed"))
@@ -121,21 +122,21 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       built.block.header.gasLimit.value should not be GenesisGasLimit
 
     "include the supplied transactions, in order" taggedAs UnitTest in new Setup:
-      val tx0 = rawTx(nonce = 0)
-      val tx1 = rawTx(nonce = 1)
-      val res = service
+      val tx0: ByteString = rawTx(nonce = 0)
+      val tx1: ByteString = rawTx(nonce = 1)
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(
           BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Seq(tx0, tx1)), Some(ByteString.empty))
         )
         .unsafeRunSync()
-      val built = res.getOrElse(fail(s"build failed: ${res.swap.map(_.message)}"))
+      val built: BuildBlockResponse = res.getOrElse(fail(s"build failed: ${res.swap.map(_.message)}"))
 
       built.block.body.transactionList.map(_.tx.nonce) shouldBe Seq(BigInt(0), BigInt(1))
 
     "reject an unapplicable transaction with -32000 and leave the chain untouched" taggedAs UnitTest in new Setup:
       val before = blockchainReader.getBestBlockNumber
 
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(
           BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty))
         )
@@ -149,7 +150,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader.getBestBlockNumber shouldBe before
 
     "reject an unknown parent hash with -32602" taggedAs UnitTest in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(
           BuildBlockRequest(ByteString(Array.fill(32)(0x99.toByte)), attrs(), Some(Nil), Some(ByteString.empty))
         )
@@ -160,7 +161,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     "build from the mempool when transactions is null" taggedAs UnitTest in new Setup:
       // The stub pool is empty, so "from the mempool" is an empty block here — which is exactly
       // what the spec permits ("MAY build a block from its local transaction pool").
-      val built = service
+      val built: BuildBlockResponse = service
         .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), None, Some(ByteString.empty)))
         .unsafeRunSync()
         .getOrElse(fail("build failed"))
@@ -173,35 +174,35 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     "insert the block and advance the canonical head" taggedAs UnitTest in new Setup:
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
-      val res = service
+      val res: CommitBlockResponse = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync()
         .getOrElse(fail("commit failed"))
 
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
-      val head = blockchainReader.getBestBlock.getOrElse(fail("no head"))
+      val head: Block = blockchainReader.getBestBlock.getOrElse(fail("no head"))
       head.header.hash.value shouldBe res.blockHash
       head.header.parentHash shouldBe genesisHeader.hash
       blockchainReader.getBlockByHash(BlockHash(res.blockHash)).isDefined shouldBe true
       blockchainReader.getReceiptsByHash(BlockHash(res.blockHash)).isDefined shouldBe true
 
     "build on the CURRENT head, so two commits chain" taggedAs UnitTest in new Setup:
-      val first = service
+      val first: CommitBlockResponse = service
         .commitBlock(CommitBlockRequest(attrs(ts = 1001), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync()
         .getOrElse(fail("first commit failed"))
-      val second = service
+      val second: CommitBlockResponse = service
         .commitBlock(CommitBlockRequest(attrs(ts = 1002), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync()
         .getOrElse(fail("second commit failed"))
 
       blockchainReader.getBestBlockNumber shouldBe BigInt(2)
-      val head = blockchainReader.getBestBlock.getOrElse(fail("no head"))
+      val head: Block = blockchainReader.getBestBlock.getOrElse(fail("no head"))
       head.header.hash.value shouldBe second.blockHash
       head.header.parentHash.value shouldBe first.blockHash
 
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty)))
         .unsafeRunSync()
 
@@ -219,9 +220,9 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         // a transaction fails to apply: it leaves that transaction out and hands the CL a payload
         // that executes. Only the testing_* namespace is strict. If `strict = false` ever starts
         // returning Left, forkchoiceUpdated throws instead of answering.
-        val bad = rawTx(nonce = 999).toArray.toSignedTransaction
+        val bad: SignedTransaction = rawTx(nonce = 999).toArray.toSignedTransaction
 
-        val lenient = engineApi.buildBlockOnParent(
+        val lenient: Either[String, BuiltBlock] = engineApi.buildBlockOnParent(
           Block(genesisHeader, BlockBody(Nil, Nil)),
           attrs(),
           Seq(bad),
@@ -229,7 +230,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           GasAmount(GenesisGasLimit),
           strict = false
         )
-        val strict = engineApi.buildBlockOnParent(
+        val strict: Either[String, BuiltBlock] = engineApi.buildBlockOnParent(
           Block(genesisHeader, BlockBody(Nil, Nil)),
           attrs(),
           Seq(bad),
@@ -251,13 +252,13 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         // transactions, extraData and gasLimit the two surfaces cannot disagree on a single header
         // field. Everything they DO differ on (extraData default, gas-limit policy) is a caller
         // argument, visible at the call site, not a hidden fork in the builder.
-        val parent = Block(genesisHeader, BlockBody(Nil, Nil))
-        val gasLimit = engineApi.proposerGasLimit(genesisHeader, 1, Some(GasLimitTarget))
+        val parent: Block = Block(genesisHeader, BlockBody(Nil, Nil))
+        val gasLimit: GasAmount = engineApi.proposerGasLimit(genesisHeader, 1, Some(GasLimitTarget))
 
-        val viaBuilder = engineApi
+        val viaBuilder: BuiltBlock = engineApi
           .buildBlockOnParent(parent, attrs(), Nil, ByteString.empty, gasLimit, strict = true)
           .getOrElse(fail("builder failed"))
-        val viaService = service
+        val viaService: BuildBlockResponse = service
           .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(ByteString.empty)))
           .unsafeRunSync()
           .getOrElse(fail("service failed"))
@@ -356,12 +357,12 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
 
     "emit exactly the fixture's envelope keys, and omit executionRequests pre-Prague" taggedAs UnitTest in
       (new Setup:
-        val built = service
+        val built: BuildBlockResponse = service
           .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(ByteString.empty)))
           .unsafeRunSync()
           .getOrElse(fail("build failed"))
 
-        val prague = encodeBuild
+        val prague: List[String] = encodeBuild
           .encodeJson(built.copy(executionRequests = Some(Nil)))
           .asInstanceOf[JObject]
           .obj
@@ -374,14 +375,14 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           "executionRequests"
         )
 
-        val preShanghai = encodeBuild
+        val preShanghai: List[String] = encodeBuild
           .encodeJson(built.copy(executionRequests = None))
           .asInstanceOf[JObject]
           .obj
           .map(_._1)
         preShanghai should not contain "executionRequests"
 
-        val bundle = encodeBuild
+        val bundle: List[String] = encodeBuild
           .encodeJson(built)
           .asInstanceOf[JObject]
           .obj

@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.consensus.isolation
 
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks
-import org.scalatest.flatspec.AnyFlatSpec
 
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.testing.Tags.*

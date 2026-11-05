@@ -13,7 +13,6 @@ import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.blockchain.sync.fast.BinarySearchSupport.*
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolver.SearchState
 import com.chipprbots.ethereum.domain.Block
@@ -23,6 +22,7 @@ import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.testing.Tags.*
 

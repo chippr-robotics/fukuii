@@ -10,12 +10,12 @@ import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalEnc
 import com.chipprbots.ethereum.domain.Withdrawal.toWithdrawal
-import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
 import com.chipprbots.ethereum.utils.ByteUtils.or

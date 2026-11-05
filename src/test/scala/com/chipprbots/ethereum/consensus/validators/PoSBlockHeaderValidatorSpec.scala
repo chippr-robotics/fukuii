@@ -13,14 +13,14 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.MissingBlob
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.MissingWithdrawalsRootError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.PoSNonceError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.PoSOmmersError
-import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai
-import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig

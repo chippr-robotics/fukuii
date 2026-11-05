@@ -30,13 +30,13 @@ import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerActor.ConnectTo
 import com.chipprbots.ethereum.network.PeerActor.GetStatus
 import com.chipprbots.ethereum.network.PeerActor.StatusResponse
-import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
-import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 

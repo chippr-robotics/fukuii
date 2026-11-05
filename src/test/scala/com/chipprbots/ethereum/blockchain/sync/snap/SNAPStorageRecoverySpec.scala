@@ -1,5 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
+import java.nio.file.Files
+import java.nio.file.Path
+
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe as TypedTestProbe
@@ -7,9 +10,6 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
-
-import java.nio.file.Files
-import java.nio.file.Path
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -71,13 +72,13 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     assertRestartsAccounts(None)
 
   it should "restart the accounts phase when the file is empty" taggedAs UnitTest in new Fixture:
-    val f = taskDir.resolve("empty.bin")
+    val f: Path = taskDir.resolve("empty.bin")
     Files.createDirectories(taskDir)
     Files.write(f, new Array[Byte](0))
     assertRestartsAccounts(Some(f))
 
   it should "restart the accounts phase when the file is truncated" taggedAs UnitTest in new Fixture:
-    val f = taskDir.resolve("truncated.bin")
+    val f: Path = taskDir.resolve("truncated.bin")
     Files.createDirectories(taskDir)
     Files.write(f, new Array[Byte](100))
     assertRestartsAccounts(Some(f))
@@ -103,7 +104,7 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "restart when the persisted storage count does not match the file size" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
     Files.createDirectories(taskDir)
-    val storageFile = taskDir.resolve("storage.bin")
+    val storageFile: Path = taskDir.resolve("storage.bin")
     Files.write(storageFile, new Array[Byte](64))
     markAccountsComplete(root, Some(storageFile))
     appState.putSnapSyncStorageFileCount(Some(3L)).commit()
@@ -115,9 +116,9 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "accept an empty codeHashes file when the persisted count is 0 and complete bytecode" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
     Files.createDirectories(taskDir)
-    val storageFile = taskDir.resolve("storage.bin")
+    val storageFile: Path = taskDir.resolve("storage.bin")
     Files.write(storageFile, new Array[Byte](64))
-    val codeFile = taskDir.resolve("codehashes.bin")
+    val codeFile: Path = taskDir.resolve("codehashes.bin")
     Files.write(codeFile, new Array[Byte](0))
     markAccountsComplete(root, Some(storageFile))
     appState
@@ -134,15 +135,15 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "use a present task file unchanged" taggedAs UnitTest in new Fixture:
     val (root, _) = buildTrie()
-    val present = taskDir.resolve("present.bin")
+    val present: Path = taskDir.resolve("present.bin")
     Files.createDirectories(taskDir)
     Files.write(present, new Array[Byte](64)) // one all-zero entry; the reader skips it
     markAccountsComplete(root, Some(present))
 
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     snap ! SNAPSyncController.Start
     // The controller handles messages in order, so a reply to GetProgress means Start has been fully handled.
-    val progress = testKit.createTestProbe[SyncProgress]()
+    val progress: TypedTestProbe[SyncProgress] = testKit.createTestProbe[SyncProgress]()
     snap ! SNAPSyncController.GetProgress(progress.ref)
     progress.receiveMessage(10.seconds)
 

@@ -24,14 +24,14 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
-import com.chipprbots.ethereum.domain.BlockNumber
-import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.CodeHash
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -225,7 +225,7 @@ class CheckpointExporterSpec
     // an archive would hand that error to every node that imports it.
     "write the exact total difficulty when the stored weight is an estimate" taggedAs UnitTest in new Setup:
       val header: BlockHeader = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot).last
-      val estimated = ChainWeight.totalDifficultyOnly(chainTd(20) - 114098267)
+      val estimated: ChainWeight = ChainWeight.totalDifficultyOnly(chainTd(20) - 114098267)
       sourceWriter.storeChainWeight(header.hash, estimated).commit()
 
       val outputPath: Path = tmpRoot.resolve("exact-td.checkpoint")
@@ -242,7 +242,7 @@ class CheckpointExporterSpec
       sourceExporter.exactTotalDifficulty(genesis).value shouldBe chainTd(0)
 
     "refuse, writing no file, when an ancestor header is missing" taggedAs UnitTest in new Setup:
-      val chain = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot, skip = Set(7))
+      val chain: IndexedSeq[BlockHeader] = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot, skip = Set(7))
       val header = chain.last
       sourceWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(chainTd(20))).commit()
 
@@ -252,8 +252,8 @@ class CheckpointExporterSpec
       Files.exists(outputPath) shouldBe false
 
     "export the stored weight when an ancestor is missing and allowEstimatedTd is set" taggedAs UnitTest in new Setup:
-      val header = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot, skip = Set(7)).last
-      val stored = ChainWeight.totalDifficultyOnly(chainTd(20) - 1)
+      val header: BlockHeader = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot, skip = Set(7)).last
+      val stored: ChainWeight = ChainWeight.totalDifficultyOnly(chainTd(20) - 1)
       sourceWriter.storeChainWeight(header.hash, stored).commit()
 
       val outputPath: Path = tmpRoot.resolve("estimated.checkpoint")
@@ -262,10 +262,10 @@ class CheckpointExporterSpec
       readArchiveWeight(outputPath) shouldBe stored
 
     "refuse when the parentHash walk reaches a block 0 that is not this chain's genesis" taggedAs UnitTest in new Setup:
-      val canonical = storeHeaderChain(sourceWriter, 3, oneAccountStateRoot)
+      val canonical: IndexedSeq[BlockHeader] = storeHeaderChain(sourceWriter, 3, oneAccountStateRoot)
       // A side header at height 1 whose parent is a block 0 stored by hash only, i.e. not the indexed genesis.
-      val otherGenesis = canonical.head.copy(extraData = ByteString("not-genesis"))
-      val sideHeader = canonical(1).copy(parentHash = otherGenesis.hash)
+      val otherGenesis: BlockHeader = canonical.head.copy(extraData = ByteString("not-genesis"))
+      val sideHeader: BlockHeader = canonical(1).copy(parentHash = otherGenesis.hash)
       sourceWriter.storeBlockByHashOnly(Block(otherGenesis, BlockBody.empty)).commit()
       sourceWriter.storeBlockByHashOnly(Block(sideHeader, BlockBody.empty)).commit()
 

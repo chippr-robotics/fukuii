@@ -23,11 +23,13 @@ import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfoRequestCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerManagerActor.GetPeersCmd
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.Tags.*
@@ -46,10 +48,10 @@ class DebugServiceSpec
     val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
       debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
-    val cmd1 = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
+    val cmd1: GetPeersCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
     cmd1.replyTo ! Peers(Map(peer1 -> PeerActor.Status.Connecting))
 
-    val cmd1Npma = etcPeerManager.expectMsgType[NetworkPeerManagerActor.PeerInfoRequestCmd]
+    val cmd1Npma: PeerInfoRequestCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.PeerInfoRequestCmd]
     cmd1Npma.peerId shouldBe peer1.id
     cmd1Npma.replyTo ! NetworkPeerManagerActor.PeerInfoResponse(Some(peer1Info))
 
@@ -59,7 +61,7 @@ class DebugServiceSpec
     val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
       debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
-    val cmd2 = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
+    val cmd2: GetPeersCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
     cmd2.replyTo ! Peers(Map.empty)
 
     result.futureValue shouldBe Right(ListPeersInfoResponse(List.empty))
@@ -68,10 +70,10 @@ class DebugServiceSpec
     val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
       debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
-    val cmd3 = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
+    val cmd3: GetPeersCmd = peerManager.expectMsgType[PeerManagerActor.GetPeersCmd]
     cmd3.replyTo ! Peers(Map(peer1 -> PeerActor.Status.Connecting))
 
-    val cmd3Npma = etcPeerManager.expectMsgType[NetworkPeerManagerActor.PeerInfoRequestCmd]
+    val cmd3Npma: PeerInfoRequestCmd = etcPeerManager.expectMsgType[NetworkPeerManagerActor.PeerInfoRequestCmd]
     cmd3Npma.peerId shouldBe peer1.id
     cmd3Npma.replyTo ! NetworkPeerManagerActor.PeerInfoResponse(None)
 

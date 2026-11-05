@@ -9,19 +9,18 @@ import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai
-import com.chipprbots.ethereum.domain.BloomFilter
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot

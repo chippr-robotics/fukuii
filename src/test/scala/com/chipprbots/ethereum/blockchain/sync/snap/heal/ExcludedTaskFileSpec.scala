@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.heal
 
-import org.apache.pekko.util.ByteString
-
 import java.nio.file.Files
+
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

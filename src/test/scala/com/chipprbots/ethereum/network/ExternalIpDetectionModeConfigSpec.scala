@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.network
 
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueFactory
-
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 

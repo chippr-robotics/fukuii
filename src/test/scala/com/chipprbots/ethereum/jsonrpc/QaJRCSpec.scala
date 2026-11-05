@@ -1,10 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
+
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
-import org.apache.pekko.actor.typed
-import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.json4s.JsonAST.*
 import org.scalamock.handlers.CallHandler1
 import org.scalatest.concurrent.PatienceConfiguration

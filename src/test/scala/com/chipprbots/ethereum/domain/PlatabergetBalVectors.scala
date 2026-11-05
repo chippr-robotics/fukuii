@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.domain
 
-import org.apache.pekko.util.ByteString
-
 import java.util.zip.GZIPInputStream
+
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.*

@@ -420,7 +420,7 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
   it should "leave the pass where it was when a page cannot be read" taggedAs UnitTest in {
     final class FailingScan extends EphemDataSource(Map.empty):
       var failing = false
-      override def scanRangeLimit(ns: IndexedSeq[Byte], from: Array[Byte], to: Array[Byte], limit: Int) =
+      override def scanRangeLimit(ns: IndexedSeq[Byte], from: Array[Byte], to: Array[Byte], limit: Int): Iterator[(Array[Byte], Array[Byte])] =
         if failing then throw new RuntimeException("injected") else super.scanRangeLimit(ns, from, to, limit)
     val source = new FailingScan
     val store = new SnapSyncProgressStorage(source)

@@ -101,7 +101,7 @@ class BlockCommitIdempotencySpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     commitTwice(1, root0, legacyCommit)
     refCounts.min shouldBe -1
     refCounts.max shouldBe 2
@@ -111,10 +111,10 @@ class BlockCommitIdempotencySpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val reference = new Setup
-    val refRoot0 = reference.genesis()
+    val refRoot0: ByteString = reference.genesis()
     reference.commitOnce(1, refRoot0, reference.guardedCommit)
 
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     commitTwice(1, root0, guardedCommit)
     refCounts.min shouldBe 0
     refCounts.max shouldBe 1
@@ -160,7 +160,7 @@ class BlockCommitIdempotencySpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     val afterGenesis = dbContent
     commitOnce(1, root0, guardedCommit)
     val afterCommit = dbContent

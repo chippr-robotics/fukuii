@@ -91,7 +91,7 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val roots = continueLinear(Map(0 -> genesis()), 1)
+    val roots: Map[Int, ByteString] = continueLinear(Map(0 -> genesis()), 1)
     noException should be thrownBy readWholeState(roots(head))
 
   /** Single application of everything: the reference every retry variant must equal. */
@@ -105,7 +105,7 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
       UnitTest,
       DatabaseTest
     ) in new Setup:
-      var roots = continueLinear(Map(0 -> genesis()), 1, from - 1)
+      var roots: Map[Int, ByteString] = continueLinear(Map(0 -> genesis()), 1, from - 1)
       roots = applyBatch(roots, from, to)
       roots = applyBatch(roots, from, to) // the retry, without undoing the first pass
       roots = continueLinear(roots, to + 1)
@@ -117,7 +117,7 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    var roots = continueLinear(Map(0 -> genesis()), 1, 5)
+    var roots: Map[Int, ByteString] = continueLinear(Map(0 -> genesis()), 1, 5)
     roots = applyBatch(roots, 6, 8)
     roots = applyBatch(roots, 6, 8)
     roots = continueLinear(roots, 9)
@@ -180,13 +180,13 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     UnitTest,
     DatabaseTest
   ) in new Setup:
-    val root0 = genesis()
+    val root0: ByteString = genesis()
     val before = dbContent
     val (root1, st) = executeStaged(stateStorage, 1, root0)
     st.pending should not be empty
     dbContent shouldBe before // nothing reached the database
     // execution read the block's own nodes back through the decoded-node cache
-    val cached = st.storage.asInstanceOf[SerializingMptStorage].cachedForExecution
+    val cached: MptStorage = st.storage.asInstanceOf[SerializingMptStorage].cachedForExecution
     noException should be thrownBy MerklePatriciaTrie[ByteString, ByteString](root1.toArray, cached).get(key(0))
     st.discard()
     dbContent shouldBe before
@@ -199,8 +199,8 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new Setup:
     val reference = new Setup
-    var refRoot = reference.genesis()
-    var root = genesis()
+    var refRoot: ByteString = reference.genesis()
+    var root: ByteString = genesis()
     (1 to 8).foreach { bn =>
       val (r, st) = executeStaged(reference.stateStorage, bn, refRoot)
       refRoot = r

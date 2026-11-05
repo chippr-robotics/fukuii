@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -89,8 +90,8 @@ class SNAPSyncControllerPinSpec
 
   "SNAPSyncController healing spawn" should
     "spec 016 S0b: forward every healing setting via startStateHealing" taggedAs UnitTest in (new Fixture:
-      val cfg = healingConfig()
-      val snap = startHealingViaStartStateHealing(cfg)
+      val cfg: SNAPSyncConfig = healingConfig()
+      val snap: ActorRef[Command] = startHealingViaStartStateHealing(cfg)
       assertFullHealingTuple(expectHealingSpawn(), cfg, snap)
     )
 
@@ -98,7 +99,7 @@ class SNAPSyncControllerPinSpec
   // nothing, so `startStateHealing` is the one route to the spawn, and the pins of the second route went with it.
   it should
     "spec 022 T052: spawn nothing on a StateHealingComplete from outside healing: the interleave route is gone" taggedAs UnitTest in (new Fixture:
-      val snap = enterStorageRecovery(healingConfig())
+      val snap: ActorRef[Command] = enterStorageRecovery(healingConfig())
       snap ! SNAPSyncController.StateHealingComplete
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 0
@@ -174,7 +175,7 @@ class SNAPSyncControllerPinSpec
 
   "SNAPSyncController download completion" should
     "#1371: skip healing (no healing coordinator) with deferred merkleization, a fresh cursor and storage force-completed" taggedAs UnitTest in (new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 0
@@ -184,7 +185,7 @@ class SNAPSyncControllerPinSpec
 
   it should
     "#1371 (control): start healing on the same force-completed path when deferred merkleization is off" taggedAs UnitTest in (new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 1

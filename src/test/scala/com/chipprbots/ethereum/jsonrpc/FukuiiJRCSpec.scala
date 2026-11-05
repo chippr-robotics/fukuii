@@ -1,5 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
+
 import cats.effect.IO
 
 import org.json4s.Extraction
@@ -10,9 +13,6 @@ import org.json4s.JLong
 import org.json4s.JObject
 import org.json4s.JString
 import org.scalamock.scalatest.AsyncMockFactory
-
-import org.apache.pekko.actor.typed
-import org.apache.pekko.actor.typed.scaladsl.adapter.*
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.FreeSpecBase

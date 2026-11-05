@@ -2,10 +2,11 @@ package com.chipprbots.ethereum.transactions
 
 import java.util.LinkedHashMap as JLinkedHashMap
 
-import scala.collection.mutable
-import scala.concurrent.duration.*
-
 import org.apache.pekko.util.ByteString
+
+import scala.collection.mutable
+import scala.collection.mutable.LinkedHashMap
+import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.network.PeerId
 
@@ -103,7 +104,7 @@ final class PendingAnnouncements(
 
   final private class Entry(val announcedAt: Long):
     /** Every live announcer's announcement, in announcement order: the next alternate is the head. */
-    val announcers = mutable.LinkedHashMap.empty[PeerId, Announcement]
+    val announcers: LinkedHashMap[PeerId, Announcement] = mutable.LinkedHashMap.empty[PeerId, Announcement]
     var requestedFrom: Option[PeerId] = None
 
   private val entries = new JLinkedHashMap[ByteString, Entry]()

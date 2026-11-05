@@ -22,6 +22,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncController
+import com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
@@ -34,21 +35,21 @@ import com.chipprbots.ethereum.consensus.pow.blocks.RestrictedPoWBlockGeneratorI
 import com.chipprbots.ethereum.consensus.pow.difficulty.EthashDifficultyCalculator
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.getEncodedWithoutNonce
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.EthMiningService.*
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
@@ -235,7 +236,7 @@ class EthMiningServiceSpec
 
     blockGenerator.getPrepared.expects(powHash).returning(Some(PendingBlock(block, Nil)))
 
-    val submitRequest = SubmitWorkRequest(ByteString("nonce"), powHash, ByteString(Hex.decode("01" * 32)))
+    val submitRequest: SubmitWorkRequest = SubmitWorkRequest(ByteString("nonce"), powHash, ByteString(Hex.decode("01" * 32)))
     val response1: Either[JsonRpcError, SubmitWorkResponse] = ethMiningService.submitWork(submitRequest).unsafeRunSync()
     response1 shouldEqual Right(SubmitWorkResponse(true))
 
@@ -419,7 +420,7 @@ class EthMiningServiceSpec
     result shouldEqual Right(SubmitWorkResponse(true))
     // ROOT-c: EthMiningService now wraps the MinedBlock send in SyncController.WrappedSyncProtocol so it survives the
     // SyncController Behavior[Command] boundary. The TestProbe therefore receives the wrapper, not the raw MinedBlock.
-    val wrapped = syncingController.expectMsgType[SyncController.WrappedSyncProtocol]
+    val wrapped: WrappedSyncProtocol = syncingController.expectMsgType[SyncController.WrappedSyncProtocol]
     wrapped.msg shouldBe a[SyncProtocol.MinedBlock]
 
   it should "set and get the etherbase address" taggedAs (UnitTest, RPCTest) in new TestSetup:

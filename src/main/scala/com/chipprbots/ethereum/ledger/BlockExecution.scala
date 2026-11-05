@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersEr
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
@@ -19,7 +20,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.StateReadCacheConfig
-import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig

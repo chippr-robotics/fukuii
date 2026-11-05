@@ -18,12 +18,12 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks.MockHandshakerAlwaysFails
 import com.chipprbots.ethereum.Mocks.MockHandshakerAlwaysSucceeds
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus

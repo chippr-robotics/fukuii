@@ -38,8 +38,8 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -53,6 +53,7 @@ import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerEventBusActor
+import com.chipprbots.ethereum.network.PeerEventBusActor.Command
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
@@ -61,7 +62,6 @@ import com.chipprbots.ethereum.network.ServerActor
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
-
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
@@ -204,7 +204,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val statSlotDuration: FiniteDuration = 1.minute
     override val statSlotCount: Int = 30
 
-  lazy val peerEventBus = system.spawn(PeerEventBusActor.behavior(), "peer-event-bus")
+  lazy val peerEventBus: org.apache.pekko.actor.typed.ActorRef[Command] = system.spawn(PeerEventBusActor.behavior(), "peer-event-bus")
 
   private val handshakerConfiguration: NetworkHandshakerConfiguration =
     new NetworkHandshakerConfiguration:

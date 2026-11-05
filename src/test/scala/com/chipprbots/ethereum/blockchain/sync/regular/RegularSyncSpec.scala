@@ -31,9 +31,10 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InvalidateBlocksFrom
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
@@ -69,12 +70,12 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -140,7 +141,7 @@ class RegularSyncSpec
       "fetch headers and bodies concurrently" taggedAs (UnitTest, SyncTest) in sync(new Fixture:
         regularSync ! SyncProtocol.Start
 
-        val sub136 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub136: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub136.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -179,7 +180,7 @@ class RegularSyncSpec
           var blockFetcher: TypedActorRef[PeerEvent] = uninitialized
 
           regularSync ! SyncProtocol.Start
-          val sub168 = peerEventBus.expectMsgType[SubscribeCmd]
+          val sub168: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
           blockFetcher = sub168.subscriber
 
           peersClient.expectMsgEq(blockHeadersChunkRequest(0)).replyTo ! PeersClient.Response(
@@ -262,7 +263,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub249 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub249: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub249.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -451,7 +452,7 @@ class RegularSyncSpec
           )
 
           // The importer must invalidate the fetcher's blocks from lca + 1 (resolver-driven rollback).
-          val invalidate = importerFetcher.fishForSpecificMessage(5.seconds) {
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
           }
           assert(
@@ -529,7 +530,7 @@ class RegularSyncSpec
 
           regularSync ! SyncProtocol.Start
 
-          val sub383 = peerEventBus.expectMsgType[SubscribeCmd]
+          val sub383: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
           sub383.subscriber ! MessageFromPeer(
             NewBlock(
               alternativeBlocks.last,
@@ -593,7 +594,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub445 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub445: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         val blockFetcher: TypedActorRef[PeerEvent] = sub445.subscriber
         sub445.subscriber ! MessageFromPeer(
           NewBlock(
@@ -745,7 +746,7 @@ class RegularSyncSpec
             case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
           }
           BlockImporter.distinctMissingCodesForTests shouldBe 1
-          val toSupervisor = supervisor.receiveWhile(1.second) { case m => m }
+          val toSupervisor: Seq[Object] = supervisor.receiveWhile(1.second) { case m => m }
           toSupervisor.collect {
             case com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol(
                   r: SyncProtocol.MissingCodeNeedsBulkRecovery
@@ -788,7 +789,7 @@ class RegularSyncSpec
               true
           }
           // ...and it did NOT also start a single-hash fetch.
-          val seen = peersClient.receiveWhile(1.second) { case m => m }
+          val seen: Seq[Object] = peersClient.receiveWhile(1.second) { case m => m }
           seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
       )
 
@@ -902,7 +903,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val expected =
+        val expected: Seq[Seq[ByteString]] =
           Seq(Seq(kec256(holder.bytes), ByteString(HexPrefix.encode(Array(holeSlot.toByte), isLeaf = false))))
         peersClient.fishForSpecificMessage(max = 10.seconds) {
           case PeersClient.Request(GetTrieNodes(_, root, paths, _), _, _, _)
@@ -931,7 +932,7 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
-        val asked = peersClient.receiveWhile(2.seconds) { case m => m }
+        val asked: Seq[Object] = peersClient.receiveWhile(2.seconds) { case m => m }
         asked.collect {
           case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
           case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) => r
@@ -1235,7 +1236,7 @@ class RegularSyncSpec
         val newBlock: Block = testBlocks.last
 
         regularSync ! SyncProtocol.Start
-        val sub576 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub576: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
 
         sub576.subscriber ! MessageFromPeer(
           NewBlock(newBlock, ChainWeight.totalDifficultyOnly(BigInt(1)).totalDifficulty.value),
@@ -1263,7 +1264,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub598 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub598: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub598.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -1332,7 +1333,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub665 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub665: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub665.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -1375,7 +1376,7 @@ class RegularSyncSpec
       "broadcast after successful import" in sync(new OnTopFixture:
         goToTop()
 
-        val peersCmd724 = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+        val peersCmd724: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
         peersCmd724.replyTo ! HandshakedPeers(handshakedPeers)
 
         regularSync ! SyncProtocol.MinedBlock(newBlock)

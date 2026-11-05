@@ -48,9 +48,11 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
+import com.chipprbots.ethereum.network.PeerManagerActor.SetMaxPeersResponse
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
+import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager.GetDiscoveredNodesInfoReq
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -134,7 +136,7 @@ class PeerManagerSpec
 
     testScheduler.timePasses(21000.millis) // wait for next scan
 
-    val req = eventually {
+    val req: GetDiscoveredNodesInfoReq = eventually {
       peerDiscoveryManager.expectMsgClass(classOf[PeerDiscoveryManager.GetDiscoveredNodesInfoReq])
     }
     req.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes)
@@ -150,7 +152,7 @@ class PeerManagerSpec
     probe.ref ! PoisonPill
 
     // Peer death triggers GetRandomNodeInfoReq, but a timer-fired GetDiscoveredNodesInfoReq may arrive first
-    val randomReq = peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfoReq") {
+    val randomReq: Any = peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfoReq") {
       case _: PeerDiscoveryManager.GetRandomNodeInfoReq => true
       case _                                            => false
     }
@@ -199,7 +201,7 @@ class PeerManagerSpec
 
     testScheduler.timePasses(21000.millis) // wait for next scan
 
-    val req2 = eventually {
+    val req2: GetDiscoveredNodesInfoReq = eventually {
       peerDiscoveryManager.expectMsgClass(classOf[PeerDiscoveryManager.GetDiscoveredNodesInfoReq])
     }
     req2.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes)
@@ -1139,8 +1141,8 @@ class PeerManagerSpec
     NetworkTest
   ) in new TestSetup:
     start()
-    val wrongHex = "aa" * 64
-    val okHex = "bb" * 64
+    val wrongHex: String = "aa" * 64
+    val okHex: String = "bb" * 64
     val wrongUri = new URI(s"enode://$wrongHex@10.0.0.9:30303")
     val okUri = new URI(s"enode://$okHex@10.0.0.10:30303")
 
@@ -1150,7 +1152,7 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri)
     peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
 
-    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     dialled should not be null
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
     createdPeers.size shouldBe 1
@@ -1160,14 +1162,14 @@ class PeerManagerSpec
     NetworkTest
   ) in new TestSetup:
     start()
-    val wrongHex = "cc" * 64
+    val wrongHex: String = "cc" * 64
     val wrongUri = new URI(s"enode://$wrongHex@10.0.0.11:30303")
     peerManager ! PeerManagerActor.PeerEventReceived(
       PeerEvent.PeerOnWrongNetwork(ByteString(Hex.decode(wrongHex)), "10.0.0.11")
     )
     peerManager ! PeerManagerActor.ConnectToPeerCmd(wrongUri, explicit = true)
 
-    val dialled = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     dialled should not be null
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
 
@@ -1246,7 +1248,7 @@ class PeerManagerSpec
     UnitTest,
     NetworkTest
   ) in new HandshakedCrawlerSetup:
-    val replyProbe = TestProbe()
+    val replyProbe: TestProbe = TestProbe()
     peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
       crawlerUri,
       replyProbe.ref.toTyped[PeerManagerActor.AddMaintainedPeerResponse]
@@ -1259,7 +1261,7 @@ class PeerManagerSpec
     NetworkTest
   ) in new HandshakedCrawlerSetup:
     evictCrawler()
-    val inboundProbe = reconnectCrawlerInbound()
+    val inboundProbe: TestProbe = reconnectCrawlerInbound()
     inboundProbe.expectMsg(3.seconds, PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
 
   // Subscribers (NetworkPeerManagerActor, PendingTransactionsManager) register a peer under its handshake ID on the
@@ -1271,7 +1273,7 @@ class PeerManagerSpec
   ) in new HandshakedCrawlerSetup:
     evictCrawler()
     dropOriginalCrawler()
-    val inboundProbe = reconnectCrawlerInbound()
+    val inboundProbe: TestProbe = reconnectCrawlerInbound()
     inboundProbe.expectMsg(3.seconds, PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
     stopAndAwait(inboundProbe)
     peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected under the handshake ID") {
@@ -1286,7 +1288,7 @@ class PeerManagerSpec
     evictCrawler()
     dropOriginalCrawler()
     peerManager ! PeerManagerActor.AddMaintainedPeerCmd(crawlerUri, discardReplyRef)
-    val inboundProbe = reconnectCrawlerInbound()
+    val inboundProbe: TestProbe = reconnectCrawlerInbound()
     inboundProbe.expectNoMessage(500.millis)
 
   it should "let a trusted node reconnect inbound even while it is excluded" taggedAs (
@@ -1299,7 +1301,7 @@ class PeerManagerSpec
       crawlerUri,
       testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
     )
-    val inboundProbe = reconnectCrawlerInbound()
+    val inboundProbe: TestProbe = reconnectCrawlerInbound()
     inboundProbe.expectNoMessage(500.millis)
 
   it should "not publish PeerDisconnected for a stale handshake while another live connection has the node ID" taggedAs (
@@ -1322,7 +1324,7 @@ class PeerManagerSpec
       )
     )
     // The live crawler connection still owns the node ID: subscribers must not drop it.
-    val published = peerEventBus.receiveWhile(500.millis) { case m => m }
+    val published: Seq[Object] = peerEventBus.receiveWhile(500.millis) { case m => m }
     published.collect { case PublishCmd(PeerDisconnected(id)) => id } should not contain PeerId(crawlerHex)
 
   // Sepolia v0.9.6: an enrscout crawler closed TCP right after STATUS. Its PeerActor stopped while
@@ -1382,7 +1384,7 @@ class PeerManagerSpec
     NetworkTest
   ) in new SnapGoodSetup:
     start()
-    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    val tp: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     tp should not be null
     tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
     // The dial attempt is counted (and persisted) until a handshake proves the peer is reachable.
@@ -1396,23 +1398,23 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.SnapServedReportCmd(
       Map(tp.peer.id -> PeerManagerActor.SnapServed(responses = 50, bytes = 6_553_600L))
     )
-    val score = java.nio.file.Files.readAllLines(goodFile).get(1).split('\t')(3).toDouble
+    val score: Double = java.nio.file.Files.readAllLines(goodFile).get(1).split('\t')(3).toDouble
     score should be > 100.0 // 10 seeded + 50 + 100 weight
 
   it should "dial a remembered snap peer within the reserved budget even when the outgoing limit is zero" taggedAs (
     UnitTest,
     NetworkTest
   ) in new SnapGoodSetup:
-    val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+    val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
     peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
     start()
-    val tp = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    val tp: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     tp should not be null
     tp.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe goodHex
 
   it should "not take a failed-dial strike while the outgoing table is full" taggedAs (UnitTest, NetworkTest) in
     new SnapGoodSetup:
-      val maxReply = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
+      val maxReply: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SetMaxPeersResponse] = testKit.createTestProbe[PeerManagerActor.SetMaxPeersResponse]()
       peerManager ! PeerManagerActor.SetMaxPeersCmd(0, maxReply.ref)
       // Maintained peers bypass the limit and fill the reserved budget (2 slots) before the first re-dial.
       peerManager ! PeerManagerActor.AddMaintainedPeerCmd(

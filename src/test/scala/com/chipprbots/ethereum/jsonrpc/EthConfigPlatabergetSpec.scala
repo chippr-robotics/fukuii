@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -96,19 +97,19 @@ class EthConfigPlatabergetSpec
   ) in new PlatabergetSetup(headTimestamp = AmsterdamTimestamp + 12):
     genesisHash shouldBe "ee33ef92bbabcf07bcf44fea1d18a7925c5f7f9da8f81334ea19b0f3cb892b31"
 
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
     normalized(render(response)) shouldBe normalized(live)
 
   it should "advertise EIP-8282's two builder contracts, lower-case, at the addresses execution calls" taggedAs (
     UnitTest,
     RPCTest
   ) in new PlatabergetSetup(headTimestamp = AmsterdamTimestamp):
-    val contracts = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value.current.value.systemContracts
+    val contracts: Map[String, Address] = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value.current.value.systemContracts
     contracts("BUILDER_DEPOSIT_CONTRACT_ADDRESS") shouldBe BlockExecution.BuilderDepositQueueAddress
     contracts("BUILDER_EXIT_CONTRACT_ADDRESS") shouldBe BlockExecution.BuilderExitQueueAddress
     contracts should have size 7
 
-    val rendered = render(ethService.config(ConfigRequest()).unsafeRunSync().toOption.value)
+    val rendered: JValue = render(ethService.config(ConfigRequest()).unsafeRunSync().toOption.value)
     rendered \ "current" \ "systemContracts" \ "BUILDER_DEPOSIT_CONTRACT_ADDRESS" shouldBe
       JString("0x0000bff46984e3725691fa540a8c7589300d8282")
     rendered \ "current" \ "systemContracts" \ "BUILDER_EXIT_CONTRACT_ADDRESS" shouldBe
@@ -118,7 +119,7 @@ class EthConfigPlatabergetSpec
     UnitTest,
     RPCTest
   ) in new PlatabergetSetup(headTimestamp = AmsterdamTimestamp - 1):
-    val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+    val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
 
     // Genesis-active fork (Osaka / BPO2 at 0): the five Prague contracts, no builder contracts.
     val current = response.current.value
@@ -132,7 +133,7 @@ class EthConfigPlatabergetSpec
 
   "eth_config on an ETC chain" should "never list a builder contract" taggedAs (UnitTest, RPCTest) in
     (new EtcSetup:
-      val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
+      val response: ConfigResponse = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
       Seq(response.current, response.next, response.last).flatten.foreach { fork =>
         fork.systemContracts.keySet.intersect(BuilderKeys) shouldBe empty
       }

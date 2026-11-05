@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
+import java.util.concurrent.ConcurrentHashMap.KeySetView
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.ActorRef
@@ -29,13 +30,14 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.ledger.AncestorBlockHashes
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.ledger.AncestorBlockHashes
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
@@ -58,7 +60,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     private val pollsAnswered = new AtomicInteger(0)
     // Each ChainDownloader instance polls with its own reply adapter, so a respawn shows up as a new reply ref.
-    val pollers = java.util.concurrent.ConcurrentHashMap.newKeySet[Any]()
+    val pollers: KeySetView[Any, java.lang.Boolean] = java.util.concurrent.ConcurrentHashMap.newKeySet[Any]()
     private val networkPeerManager: TestProbe = TestProbe()
     networkPeerManager.setAutoPilot(
       new AutoPilot:
@@ -75,8 +77,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       testKit.createTestProbe[SyncProtocol.SyncControllerReply]()
     private val progressProbe = testKit.createTestProbe[SyncProgress]()
 
-    val pivot = BigInt(10_000)
-    val root = ByteString(Array.fill(32)(0x11.toByte))
+    val pivot: BigInt = BigInt(10_000)
+    val root: ByteString = ByteString(Array.fill(32)(0x11.toByte))
 
     def start(cfg: SNAPSyncConfig, withAncestors: Boolean = false): TypedActorRef[SNAPSyncController.Command] =
       val genesis = Fixtures.Blocks.Genesis.header
@@ -143,7 +145,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   "SNAPSyncController" should
     "spawn the header-only downloader during state sync, hold finalisation until the header cursor reaches the pivot, " +
     "then finalise with the REAL pivot TD and a resolvable BLOCKHASH window" taggedAs UnitTest in (new Fixture:
-      val snap = start(cfg(defer = true), withAncestors = true)
+      val snap: TypedActorRef[Command] = start(cfg(defer = true), withAncestors = true)
       awaitProcessed(snap)
       // The downloader exists while state sync is not done (ChainDownloader.Start persists its target)...
       eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
@@ -158,8 +160,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       appStateStorage.isSnapSyncDone() shouldBe false
 
       // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored.
-      val pivotHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
-      val realTd = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
+      val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+      val realTd: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
       blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(realTd)).commit()
       appStateStorage.putBackfillBestHeader(pivot).commit()
       snap ! SNAPSyncController.HeaderHoldTick
@@ -174,15 +176,15 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(realTd)
 
       // BLOCKHASH for the block after the pivot walks parentHash through the stored headers.
-      val executing = pivotHeader.copy(number = BlockNumber(pivot + 1), parentHash = pivotHeader.hash)
-      val blockHashes = AncestorBlockHashes.forBlock(executing, blockchainReader)
-      val byNumber = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
+      val executing: BlockHeader = pivotHeader.copy(number = BlockNumber(pivot + 1), parentHash = pivotHeader.hash)
+      val blockHashes: AncestorBlockHashes = AncestorBlockHashes.forBlock(executing, blockchainReader)
+      val byNumber: Map[BigInt, BlockHeader] = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
       blockHashes(pivot - 1) shouldBe Some(byNumber(pivot - 1).hash.value)
       blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
     )
 
   it should "restart the chain downloader, and keep holding, when the header cursor stalls during the hold" taggedAs UnitTest in new Fixture:
-    val snap = start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)
+    val snap: TypedActorRef[Command] = start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)
     awaitProcessed(snap)
     eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
     snap ! SNAPSyncController.HealingRootUnservable(root)
@@ -199,7 +201,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     appStateStorage.isSnapSyncDone() shouldBe false
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
-    val snap = start(cfg(defer = false))
+    val snap: TypedActorRef[Command] = start(cfg(defer = false))
     awaitProcessed(snap)
     // ChainDownloader.Start persists its target: with the switch off it is already running while state sync is not done.
     eventually(appStateStorage.getBackfillTarget() shouldBe pivot)

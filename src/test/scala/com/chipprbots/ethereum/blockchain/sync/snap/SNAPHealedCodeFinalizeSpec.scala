@@ -29,7 +29,14 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -39,12 +46,6 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
-import com.chipprbots.ethereum.db.dataSource.DataSource
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.db.storage.ExcludedAccount
-import com.chipprbots.ethereum.db.storage.ExcludedReason
-import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** SNAP must not claim bytecode recovery is done while the bytecode of healed accounts is missing. (Devnet-8 block
@@ -110,8 +111,8 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       testKit.createTestProbe[SyncProtocol.SyncControllerReply]()
     private val progressProbe = testKit.createTestProbe[SyncProgress]()
 
-    val pivot = BigInt(10_000)
-    val root = ByteString(Array.fill(32)(0x11.toByte))
+    val pivot: BigInt = BigInt(10_000)
+    val root: ByteString = ByteString(Array.fill(32)(0x11.toByte))
 
     /** `marked`: a run with a standing marker, which owes no code scan. Without it the run is a repair run, and does.
       */
@@ -171,7 +172,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   "SNAPSyncController" should
     "not hold a lazy hand-off for a healed account's bytecode: it finalises with bytecodeRecoveryDone UNSET, so the next " +
     "start's recovery scan fetches the missing code (spec 022 T037)" taggedAs UnitTest in (new Fixture:
-      val snap = start()
+      val snap: TypedActorRef[Command] = start()
       snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
       snap ! SNAPSyncController.HealingRootUnservable(root)
 
@@ -185,7 +186,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     )
 
   it should "set bytecodeRecoveryDone at a lazy hand-off when the reported bytecode has been stored" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
     awaitProcessed(snap)
     evmCodeStorage.put(ByteString(codeHash), code).commit() // the bytecode coordinator stored it
@@ -200,7 +201,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
   it should "finalise immediately, with bytecodeRecoveryDone set, when healing reported no missing bytecode" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
 
     parent.fishForMessage(10.seconds) {
@@ -216,9 +217,9 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
   it should "leave bytecodeRecoveryDone UNSET for a code entry, set storageRecoveryDone, and keep the entry (spec 022 D5)" taggedAs UnitTest in new Fixture:
     val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
-    val entry = excluded(codeHash, ExcludedReason.CodeMissing)
+    val entry: ExcludedAccount = excluded(codeHash, ExcludedReason.CodeMissing)
     progress.recordExcluded(Seq(entry))
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -228,9 +229,9 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
   it should "leave storageRecoveryDone UNSET for an account entry, set bytecodeRecoveryDone, and keep the entry (spec 022 D5)" taggedAs UnitTest in new Fixture:
     val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
-    val entry = excluded(codeHash, ExcludedReason.StorageAbandoned)
+    val entry: ExcludedAccount = excluded(codeHash, ExcludedReason.StorageAbandoned)
     progress.recordExcluded(Seq(entry))
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -242,7 +243,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   it should "count a dormant entry for storageRecoveryDone: nothing has shown that account complete" taggedAs UnitTest in new Fixture:
     val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
     progress.recordExcluded(Seq(excluded(codeHash, ExcludedReason.StorageSkipped, dormant = true)))
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -252,9 +253,9 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   // The user's decision, 2026-10-30: the code-only hand-off's end, as the controller sees it.
   it should "finalise on an abandonment with only code entries left: bytecodeRecoveryDone UNSET, the entries kept" taggedAs UnitTest in new Fixture:
     val progress = new SnapSyncProgressStorage(appStateStorage.dataSource)
-    val entry = excluded(codeHash, ExcludedReason.CodeMissing)
+    val entry: ExcludedAccount = excluded(codeHash, ExcludedReason.CodeMissing)
     progress.recordExcluded(Seq(entry))
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.StateHealingAbandoned
     awaitFinalized()
 
@@ -264,7 +265,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     progress.excludedPage(None, 10) shouldBe Seq(entry)
 
   it should "set both flags with an empty set" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -274,7 +275,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   it should "set neither recovery flag when the excluded set cannot be read (forge N3)" taggedAs UnitTest in new Fixture(
     failExcludedRead = true
   ):
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -286,7 +287,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   private val nopLog = org.slf4j.helpers.NOPLogger.NOP_LOGGER
 
   it should "withhold both recovery flags at the end of a repair run, and settle the debt there" taggedAs UnitTest in new Fixture:
-    val snap = start(marked = false)
+    val snap: TypedActorRef[Command] = start(marked = false)
     appStateStorage.getSnapCodeScanOwed() shouldBe defined
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
@@ -299,7 +300,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   // forge W1: a failed task-file sweep is exactly the case where unfinished accounts were never recorded, so an empty
   // excluded set says nothing, and a lazy hand-off has no walk behind it.
   it should "withhold storageRecoveryDone with the owed key on a lazy hand-off and an empty excluded set" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
       .lostTrack(appStateStorage, "the task file could not be read", nopLog) shouldBe true
     snap ! SNAPSyncController.HealingRootUnservable(root)
@@ -310,7 +311,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
   it should "overwrite a storageRecoveryDone an earlier cycle left set, for the owed key" taggedAs UnitTest in new Fixture:
     appStateStorage.storageRecoveryDone().commit()
-    val snap = start(marked = false)
+    val snap: TypedActorRef[Command] = start(marked = false)
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -320,7 +321,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.storageRecoveryDone().commit()
     new SnapSyncProgressStorage(appStateStorage.dataSource)
       .recordExcluded(Seq(excluded(codeHash, ExcludedReason.StorageAbandoned)))
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -330,7 +331,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
   // Hunter 4: lostTrack runs on other actors' threads, and the batch below clears the key. The marker's removal is the last
   // write before that batch's read, so one landing there has to be seen.
   it should "see a lostTrack that lands after the durability barrier and the marker's removal" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     val fired = new java.util.concurrent.atomic.AtomicBoolean(false)
     afterSyncedBatch = keys =>
       if keys.contains(AppStateStorage.Keys.SnapHealInvariant) && fired.compareAndSet(false, true) then
@@ -345,7 +346,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
   it should "overwrite a bytecodeRecoveryDone an earlier cycle left set: leaving it out would not withhold it" taggedAs UnitTest in new Fixture:
     appStateStorage.bytecodeRecoveryDone().commit()
-    val snap = start(marked = false)
+    val snap: TypedActorRef[Command] = start(marked = false)
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
@@ -353,7 +354,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
   it should "withhold bytecodeRecoveryDone when a run with a standing marker loses track mid-run" taggedAs UnitTest in new Fixture:
-    val snap = start()
+    val snap: TypedActorRef[Command] = start()
     com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
       .lostTrack(appStateStorage, "a sweep hung", nopLog) shouldBe true
     snap ! SNAPSyncController.HealingRootUnservable(root)
@@ -363,22 +364,22 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
     appStateStorage.getSnapCodeScanOwed() shouldBe None
 
   it should "still withhold after a restart: the debt is durable, whatever the marker says by then" taggedAs UnitTest in new Fixture:
-    val before = start()
+    val before: TypedActorRef[Command] = start()
     com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
       .lostTrack(appStateStorage, "a sweep hung", nopLog) shouldBe true
     testKit.stop(before)
-    val after = start() // a clean walk stamped it again, say
+    val after: TypedActorRef[Command] = start() // a clean walk stamped it again, say
     after ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
     appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
   it should "settle the debt in the one synced write of the done flags: no crash can lose it without the flag" taggedAs UnitTest in new Fixture:
-    val snap = start(marked = false)
+    val snap: TypedActorRef[Command] = start(marked = false)
     snap ! SNAPSyncController.HealingRootUnservable(root)
     awaitFinalized()
 
-    val theWrite = syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
+    val theWrite: Seq[Set[String]] = syncedBatches.synchronized(syncedBatches.toSeq).filter(_.contains(AppStateStorage.Keys.SnapSyncDone))
     theWrite.size shouldBe 1
     theWrite.head should contain(AppStateStorage.Keys.BytecodeRecoveryDone)
     theWrite.head should contain(AppStateStorage.Keys.StorageRecoveryDone)

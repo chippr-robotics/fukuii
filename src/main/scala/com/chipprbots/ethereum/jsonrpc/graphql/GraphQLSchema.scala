@@ -21,10 +21,10 @@ import sangria.schema.fields
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.AccessListItem
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.domain.FailureOutcome
@@ -40,11 +40,11 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.domain.TxLogEntry
-import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.BlockParam
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
+import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLScalars.*
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLTypes.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy

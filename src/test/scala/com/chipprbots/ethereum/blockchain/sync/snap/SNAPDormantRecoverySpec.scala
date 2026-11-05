@@ -27,9 +27,10 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
@@ -61,7 +62,7 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   "SNAPSyncController" should "go dormant, not fall back, when no snap-capable peer is left at the capability check" taggedAs UnitTest in new Fixture:
     storeGenesis()
     peers.set(peersAt(height = 10, snap = true)) // at or below the pivot offset: SNAP starts from genesis
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     // The snap peer stops advertising snap/1 before the capability check.
@@ -75,7 +76,7 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "go dormant, not fall back, when bootstrap retries run out without a peer" taggedAs UnitTest in new Fixture:
     storeGenesis()
     peers.set(Map.empty)
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     awaitFirstPoll()
     snap ! SNAPSyncController.Start // no peer: network height unknown, retry scheduled (attempt 1)
     (2 to MaxBootstrapRetries).foreach(_ => snap ! SNAPSyncController.RetrySnapSyncStart)
@@ -87,7 +88,7 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   it should "give a woken controller a fresh bootstrap retry budget" taggedAs UnitTest in new Fixture:
     storeGenesis()
     peers.set(Map.empty)
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     (2 to MaxBootstrapRetries).foreach(_ => snap ! SNAPSyncController.RetrySnapSyncStart) // budget spent: dormant
@@ -104,13 +105,13 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   // pivot roll moves it to a fresh one as soon as a snap peer shows the real head.
   it should "roll off an old floor pivot it took from a local header before any peer connected" taggedAs UnitTest in new Fixture:
     storeGenesis()
-    val strandedBest = BigInt(1000)
+    val strandedBest: BigInt = BigInt(1000)
     Seq(strandedBest, strandedBest + 1).foreach { n =>
       blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(n))).commit()
     }
     storagesInstance.storages.appStateStorage.putBestBlockNumber(strandedBest).commit()
     peers.set(Map.empty)
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     awaitFirstPoll()
 
     snap ! SNAPSyncController.MinPivotBlock(strandedBest + 1)
@@ -128,7 +129,7 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "go dormant, not fall back, when the genesis header is missing" taggedAs UnitTest in new Fixture:
     peers.set(peersAt(height = 10, snap = true)) // genesis pivot, but no genesis header stored
-    val snap = spawnController()
+    val snap: TypedActorRef[Command] = spawnController()
     awaitFirstPoll()
     snap ! SNAPSyncController.Start
     parent.expectNoMessage(500.millis)
