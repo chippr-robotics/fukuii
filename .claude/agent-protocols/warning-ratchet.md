@@ -74,13 +74,19 @@ Never put a behavior-affecting change in the mechanical commit.
 Anything not fixed gets a narrow site-level suppression only:
 
 ```scala
-@nowarn("cat=deprecation") // <one-line reason> — DEFERRED-BACKLOG §<ref>
+@annotation.nowarn("cat=deprecation") // <one-line reason> — <ledger row or #issue>, <date>
 def foo(...) = ...
 ```
 
 - `@nowarn` at the **exact site** — not file-level, not build-level
-- One-line reason required; backlog reference required
+- One-line reason required; a dated reference required: the sprint's ledger row (for spec 020,
+  `specs/020-scala-3-9-lts-migration/dc4-ledger.md`, "Deferrals": date, owner, follow-up issue) and a CHASE-QUEUE entry
+  (`.claude/agent-protocols/working-docs/CHASE-QUEUE.md`, local and gitignored, see `inline-cleanup.md`). There is no
+  `DEFERRED-BACKLOG.md`
 - **No blanket `-Wconf` silence, ever**
+- The four spec 020 deferrals (`EcKeyGen`, `SignatureValidator`, `BlockFetcherState`, `ChainDownloader`) carry the
+  annotation alone in source; their reasons are ledger rows 1 to 4 (follow-ups #1715 and #1716). Add the one-line
+  comment when you add a site.
 
 ---
 
@@ -89,9 +95,16 @@ def foo(...) = ...
 Promote the cleared category to a build error:
 
 ```scala
-// build.sbt scalacOptions:
-"-Wconf:cat=<CATEGORY>:e"
+// build.sbt scala3Options (the repo writes `:error`; `:e` is the same):
+"-Wconf:cat=<CATEGORY>:error"       // a category
+"-Wconf:id=<Exxx>:error"            // a message id
+"-Wconf:msg=<message text>:error"   // a warning that has no id (see below)
 ```
+
+**In Scala 3.9.0 the LAST matching `-Wconf` wins** (checked in both orders with `id=E198:w` and `id=E198:error`). Add a
+new ratchet below the existing ones. This is measured behaviour: re-check the order after a compiler bump. A `msg=` filter is a regex on the compiler's
+own text, so keep its punctuation, backticks included; for a multi-line message use the first line without its colon,
+since a colon ends the filter.
 
 The Step-3 `@nowarn` sites carry their narrow exemptions so the build stays green.
 
@@ -105,6 +118,34 @@ Verify precedence works on this Scala version:
 sbt compile-all 2>&1 | grep -c "error:"                          # must be 0
 sbt compile-all 2>&1 | grep "warning:" | grep "<CATEGORY>"       # must be 0
 ```
+
+### The ratchets in `build.sbt` today (spec 020 PR 6, `-source:3.9`)
+
+Nine `-Wconf ... :error` filters in `scala3Options`: `E198` (unused), `cat=unchecked`, then the seven promotions below.
+Ledger, measured counts and the exact scratch-file proofs: `specs/020-scala-3-9-lts-migration/dc4-ledger.md`
+("Promotions: the exact filters").
+
+| Filter | Catches | Write instead |
+|--------|---------|---------------|
+| `id=E205` | given prioritisation (inert at `-source:3.9`; guards `-migration` re-runs and lower source levels) | an explicit instance |
+| `id=E028` | illegal literal | `(-98).toByte`, not `-98.toByte` |
+| ``msg=Implicit parameters should be provided with a `using` clause`` | implicit argument passed without `using` | `using x` |
+| `msg=Alphanumeric method .* is not declared infix` | alphanumeric method used infix | `a.m(b)`, ``a `m` b`` or declare it `infix` |
+| ``msg=`_` is deprecated for wildcard arguments of types`` | `_` as a type wildcard | `?` |
+| `msg=with as a type operator has been deprecated` | `A with B` as a type | `A & B` |
+| `msg=Type ascriptions after patterns other than` | `val (a, b): (A, B) = e` | ascribe `e` |
+
+```bash
+grep -c '"-Wconf:.*:error"' build.sbt
+# 2026-11-05: 9  (E198 + cat=unchecked + the 7 above)
+grep -c '"-Wconf:msg=.*:error"' build.sbt
+# 2026-11-05: 5  (the message-matched ones: using, infix, `_`, with, ascription)
+```
+
+The greps only count filters. That each filter still matches the compiler's text is not greppable: it was proved with a
+scratch file at `-source:3.9` (a warning without the flag, an error with it), recorded in the ledger. Re-prove a filter
+that way after any compiler bump, since message text can change between minors. `cat=deprecation` cannot be promoted
+yet: 59 Manifest-synthesis deprecations remain (ledger, "Final per-category table").
 
 ---
 
