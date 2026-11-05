@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService
 import com.chipprbots.ethereum.jsonrpc.EthFilterService
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
@@ -50,8 +51,11 @@ import com.chipprbots.ethereum.jsonrpc.EthTxService
 import com.chipprbots.ethereum.jsonrpc.EthUserService
 import com.chipprbots.ethereum.jsonrpc.FilterManager
 import com.chipprbots.ethereum.keystore.KeyStore
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
+import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.vm.OutOfGas
 
 class GraphQLServiceSpec
     extends ScalaTestWithActorTestKit
@@ -123,6 +127,38 @@ class GraphQLServiceSpec
     val data: ACursor = body.hcursor.downField("data").downField("block")
     data.downField("blockAccessListHash").focus.get shouldBe Json.Null
     data.downField("slotNumber").focus.get shouldBe Json.Null
+
+  it should "report status 0 for a call whose frame fails, as geth's result.Failed() does, and 1 when it succeeds" in new GraphQLTestSetup:
+    blockchainWriter.storeBlock(block).and(blockchainWriter.storeChainWeight(block.header.hash, weight)).commit()
+    blockchainWriter.saveBestKnownBlocks(block.hash, block.number.value)
+    val world: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val query: String =
+      """{ block { call(data: {from: "0xda714fe079751fa7a1ad80b76571ea6ec52a446c", """ +
+        """to: "0xabbb6bebfa05aa13e908eaa492bd7a8343760477"}) { data status } } }"""
+    def callField(): ACursor =
+      val (status, body) = service.execute(query, None, None).unsafeRunSync()
+      status shouldBe 200
+      body.hcursor.downField("data").downField("block").downField("call")
+
+    stxLedger.estimateCallGas.expects(*, *, *, *).returning(Right(BigInt(21000))).twice()
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(Right(TxResult(world, 100000, Nil, ByteString.empty, Some(OutOfGas))))
+    callField().downField("status").as[String].toOption.get shouldBe "0x0"
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(Right(TxResult(world, 21000, Nil, ByteString(1, 2), None)))
+    val ok: ACursor = callField()
+    ok.downField("status").as[String].toOption.get shouldBe "0x1"
+    ok.downField("data").as[String].toOption.get shouldBe "0x0102"
 
   it should "return null for an unknown transaction" in new GraphQLTestSetup:
     val unknown: String = "0x" + ("00" * 32)
