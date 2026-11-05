@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Scala 3.9.0 LTS at `-source:3.9`, and sbt 1.13.0 (spec 020, #1631, #1717). Breaking for projects that consume the
+  published modules.** The build moves from Scala 3.3.8 and sbt 1.10.7. Node behaviour is unchanged. It was checked by importing
+  the same fixed Mordor and Ephemery block ranges with the 0.10.0 build and with this one (every state and receipt root
+  equal, import time inside the budget set for the move), and by the unit and ethereum/tests suites.
+  - **Rebuild downstream projects.** `bytes`, `crypto`, `rlp`, `scalanet` and `scalanet-discovery` are compiled by
+    Scala 3.9 and carry its TASTy; a project still on Scala 3.3 cannot consume them.
+  - **Public `implicit class` wrappers in those modules are now `extension` methods with the same method names (#1714).** Call
+    syntax (`bs.toHex`, `codec.xmap(f, g)`, `a + b`) and wildcard imports (`import X.*`) are unchanged. Code that imports
+    or names a removed wrapper class itself (`import ByteStringUtils.ByteStringOps`, `ByteStringOps(bs)`) must import the
+    extension method instead (`import ByteStringUtils.toHex`) or use the wildcard import. The removed classes are
+    `ByteStringUtils.Padding`, `ByteStringUtils.ByteStringOps`, `RLPCodec.Ops`, `FiniteField.Ops.FiniteFieldOps`, and
+    scalanet's `peergroup.implicits.{NextOps, PeerGroupOps, ChannelOps}` and `PeerGroup.ServerEvent.ServerOps`. The
+    conversion wrappers (`ByteStringUtils.ByteString{Self,Array,Byte}Element`) are unchanged.
+  - **for-comprehensions are elaborated differently from `-source:3.8` (SIP-62 "better fors").** A trailing
+    `map(identity)` is dropped and value definitions are no longer tuple-wrapped. Comparing the 3.7 and 3.9 builds' bytecode,
+    the only change is `map` removals on `Either`, `Option`, `Try`, `EitherT`, `IO`, `Resource` and scodec `Attempt`, where
+    `fa.map(identity)` is `fa`; none on `List`, `Seq`, `Vector`, `Iterator`, `Array`, `Map`, `Future`, Pekko `Source` or
+    fs2. Downstream code compiled at `-source:3.8` or later gets the same elaboration; it matters only for a type whose
+    `map` has observable side effects.
+  - **For contributors:** seven more compiler warnings are build errors (`E205`, `E028`, an implicit argument without
+    `using`, alphanumeric infix, `_` as a type wildcard, `with` as a type operator, a type ascription after a pattern),
+    and `sbt formatCheck` (scalafix `--check` on `bytes`, `crypto`, `rlp` and the root, scalafmt on every module) now runs in
+    CI's required "Test and Build" job (#1721). `return` and Scala 2 wildcard imports are rejected. Run `sbt formatAll`
+    before pushing: `scalafmtAll` alone covers the root project only.
+
 ### Fixed
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
