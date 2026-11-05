@@ -32,11 +32,11 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 |---------|-------------|-------------|
 | `sbt compile-all` | Compiles all modules + test sources | After every file change (exception: core domain sweeps — use `sbt compile` instead, then `compile-all` once at end; see `testing-protocol.md`) |
 | `sbt compile` | Root main sources only — no test/IT/Benchmark | **Core domain type sweeps only** (BlockHeader, Account, Block, Transaction → 50+ dependents) — avoids cascade on every file; `compile-all` once at end |
-| `sbt scalafmtAll` | scalafmt across ALL modules (formatting only) | After every migration commit; safe at any time |
-| `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, Evm, etc.) |
-| `sbt formatAll` | scalafixAll + scalafmtAll across all modules | Pre-PR on a clean codebase ONLY — aborts on pre-existing scalafix violations |
-| `sbt formatCheck` | Verify formatting without writing | CI / pre-flight check |
-| `sbt pp` | compile-all + formatAll + quick + integration tests | Pre-PR gate — same caveat as formatAll |
+| `sbt scalafmtAll` | scalafmt on the **root project only** (all its configs); not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`) | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
+| `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, scalanet, etc.) |
+| `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp and root, and scalafmtAll on scalanet and scalanetDiscovery | After editing any module, and before a PR. The tree has been scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings; it rewrites files, so read `git diff` after |
+| `sbt formatCheck` | The read-only form of `formatAll`: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | Runs in CI, in the required "Test and Build" job (since #1721); run it locally before pushing |
+| `sbt pp` | compile-all, scalafmtAll on bytes, crypto, rlp and root, then `rlp / test`, sbt's `testQuick` and `IntegrationTest / test` | Pre-PR gate. It runs no scalafix and does not format scalanet, so run `formatCheck` as well |
 | `sbt "testOnly *Foo*"` | Single test class (seconds) | After each phase that changes logic — not compile-only phases |
 | `./scripts/fukuii-test only "*Foo*"` | Wrapper for targeted test | Same as testOnly — prefer this form |
 | `./scripts/fukuii-test essential` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
@@ -53,13 +53,18 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 3. After Phase 2 (main migration) and Phase 3 (callers) → `testOnly *<ActorName>*` + any touched caller specs
 4. End of thread, once → full `testEssential` to confirm baseline holds
 
-**The two format commands that look similar but are not:**
+**The format commands that look similar but are not:**
 - `scalafmt` → root module only → **wrong for this codebase**
-- `scalafmtAll` → all modules → **always use this one**
-- `formatAll` → runs scalafix first → aborts mid-migration on pre-existing violations → **pre-PR only**
+- `scalafmtAll` / `scalafmtCheckAll` → the root project only (every config, no submodule) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**
+- `formatAll` / `formatCheck` → every module (scalafmt on all six; scalafix on bytes, crypto, rlp and root) → **use these after editing a submodule**. They no longer abort on old scalafix findings, so a finding they report is new: fix it, do not suppress it
 
-Modules: root `main`, plus `bytes`, `crypto`, `rlp`, `Evm`, `Benchmark`,
-`RpcTest`, `IntegrationTest`.
+**scalafix parser gotcha (scalafix 0.14.9 bundles scalameta 4.17.4):** a fewer-braces template opened on a continuation
+line, as in `it should "x" in` followed by `new X:` on the next line, breaks the parse of the *next* sibling
+(`indent` expected, or `;` expected but `:` found), and `scalafixAll --check` fails on the file. Write `in (new X: ... )`
+instead. The same-line `in new X:` is fine. Spec 020 PR 6b-1 (#1719) rewrote every affected site in the test sources.
+
+Modules: root `main`, plus `bytes`, `crypto`, `rlp`, `scalanet`, `scalanetDiscovery`; `Evm`, `Benchmark`, `RpcTest` and
+`IntegrationTest` are configurations of the root, not modules.
 
 ## Shared agent protocols
 
@@ -211,7 +216,7 @@ For comprehensive changes, cycle through:
 ## Conventions
 
 - Add files to git individually; know what you're committing (avoid `git add .`).
-- Run `sbt scalafmtAll` before committing during a migration. Run `sbt pp` (which includes `formatAll`) only before a PR on a clean codebase.
+- Run `sbt formatAll` before committing (`scalafmtAll` alone only covers the root project). Run `sbt pp` and `sbt formatCheck` before a PR.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
 
