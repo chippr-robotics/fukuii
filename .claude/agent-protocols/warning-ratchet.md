@@ -74,7 +74,8 @@ Never put a behavior-affecting change in the mechanical commit.
 Anything not fixed gets a narrow site-level suppression only:
 
 ```scala
-@annotation.nowarn("cat=deprecation") // <one-line reason> — <ledger row or #issue>, <date>
+@annotation.nowarn("cat=deprecation")
+// DEFERRED <date> (<spec>, see <ledger file>): <reason>. <follow-up> (#<issue>).
 def foo(...) = ...
 ```
 
@@ -84,9 +85,9 @@ def foo(...) = ...
   (`.claude/agent-protocols/working-docs/CHASE-QUEUE.md`, local and gitignored, see `inline-cleanup.md`). There is no
   `DEFERRED-BACKLOG.md`
 - **No blanket `-Wconf` silence, ever**
-- The four spec 020 deferrals (`EcKeyGen`, `SignatureValidator`, `BlockFetcherState`, `ChainDownloader`) carry the
-  annotation alone in source; their reasons are ledger rows 1 to 4 (follow-ups #1715 and #1716). Add the one-line
-  comment when you add a site.
+- The four spec 020 deferrals (`EcKeyGen`, `SignatureValidator`, `BlockFetcherState`, `ChainDownloader`) are the model:
+  each has a `// DEFERRED 2026-11-05 (spec 020 DC-4, see ...dc4-ledger.md): ...` comment under the annotation, naming the
+  follow-up issue (#1715 or #1716), and a ledger row (rows 1 to 4).
 
 ---
 
