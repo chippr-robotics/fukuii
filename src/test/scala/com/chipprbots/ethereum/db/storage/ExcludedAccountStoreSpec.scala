@@ -2,12 +2,14 @@ package com.chipprbots.ethereum.db.storage
 
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
 
 import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -143,6 +145,97 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
     store.removeExcluded(Seq(code))
     store.recordExcluded(Seq(ExcludedAccount(h(1), ExcludedReason.StorageSkipped)))
     (store.hasExcluded, store.hasExcludedAccounts, store.hasExcludedCode) shouldBe (true, true, false)
+  }
+
+  // spec 022 (forge, 2026-11-04): `hasExcludedAccounts` is two scans, the active kind [a,c) then the dormant kind [d,e). The
+  // healing coordinator promotes dormant to active in one atomic write; landing between the two scans it left the entry in
+  // neither, and the read said "no account entry" over a set that held one the whole time. SnapFinalization set
+  // `storageRecoveryDone` on that answer (data-model.md: only with no account-kind entry left).
+  //
+  // The mover is another thread, as it is in the controller: a store's multi-scan read and a writer on another thread
+  // (of the same store or of a second one over the same data source) are what the lock pairs. The hook returns when the
+  // write has landed (no lock: the bug) or the writer is parked on a lock (fixed: it can only land after the read). It
+  // never waits for "landed" alone, which on the fixed code never comes while the read is held. No sleeps.
+  final private class MidReadMoveDataSource extends EphemDataSource(Map.empty):
+    @volatile var afterActiveKindScanFoundNothing: () => Unit = () => ()
+    override def scanRangeLimit(
+        namespace: DataSource.Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte],
+        limit: Int
+    ): Iterator[(Array[Byte], Array[Byte])] =
+      val found = super.scanRangeLimit(namespace, fromKey, toKeyExclusive, limit).toArray
+      // `hasExcludedAccounts`' first scan is the only one that ends at kind 'c'.
+      if toKeyExclusive.lastOption.contains('c'.toByte) && found.isEmpty then afterActiveKindScanFoundNothing()
+      found.iterator
+
+  final private class MidReadMover(move: () => Unit):
+    private val landed = new AtomicBoolean(false)
+    @volatile private var failure: Option[Throwable] = None
+    private def run(): Unit =
+      try
+        move()
+        landed.set(true)
+      catch case scala.util.control.NonFatal(e) => failure = Some(e)
+    private val thread = new Thread(() => run(), "excluded-mid-read-mover")
+
+    /** Start the move; return once it has landed, failed, or is parked on a lock. */
+    def startAndSettle(): Unit =
+      thread.start()
+      val deadline = System.nanoTime() + 10_000_000_000L
+      def settled = landed.get || failure.isDefined || thread.getState == Thread.State.WAITING ||
+        thread.getState == Thread.State.TIMED_WAITING
+      while !settled && System.nanoTime() < deadline do Thread.onSpinWait()
+
+    /** The read is over: the move lands now if it has not, and must not have failed. */
+    def finish(): Unit =
+      thread.join(30_000L)
+      thread.isAlive shouldBe false
+      failure shouldBe None
+      landed.get shouldBe true
+
+  "hasExcludedAccounts" should "say true for a dormant entry that is promoted to active between its two scans" taggedAs UnitTest in {
+    val source = new MidReadMoveDataSource
+    val reader = new SnapSyncProgressStorage(source)
+    val writer = new SnapSyncProgressStorage(source) // a second store over the data source, as the controller's is
+    val dormant = ExcludedAccount(h(1), ExcludedReason.StorageSkipped, claimedStorageRoot = h(9), dormant = true)
+    reader.recordExcluded(Seq(dormant))
+    withClue("control, nothing moves: ")(reader.hasExcludedAccounts shouldBe true)
+
+    val mover = new MidReadMover(() => writer.updateExcluded(Seq(dormant), Seq(dormant.copy(dormant = false))))
+    source.afterActiveKindScanFoundNothing = () => mover.startAndSettle()
+    withClue("the entry is in the set the whole time: ")(reader.hasExcludedAccounts shouldBe true)
+
+    source.afterActiveKindScanFoundNothing = () => ()
+    mover.finish()
+    reader.excludedPage(None, 10) shouldBe Seq(dormant.copy(dormant = false))
+    reader.hasExcludedAccounts shouldBe true
+  }
+
+  // Not the pin (the hook above is): the same entry moved both ways, as fast as two threads go, with no hook. A move
+  // is never visible to the read as an absence.
+  it should "say true throughout, for an entry moved between dormant and active on another thread" taggedAs UnitTest in {
+    val source = EphemDataSource()
+    val reader = new SnapSyncProgressStorage(source)
+    val writer = new SnapSyncProgressStorage(source)
+    val dormant = ExcludedAccount(h(1), ExcludedReason.StorageSkipped, claimedStorageRoot = h(9), dormant = true)
+    val active = dormant.copy(dormant = false)
+    reader.recordExcluded(Seq(dormant))
+    val stop = new AtomicBoolean(false)
+    @volatile var failure: Option[Throwable] = None
+    def flip(): Unit =
+      try
+        while !stop.get do
+          writer.updateExcluded(Seq(dormant), Seq(active))
+          writer.updateExcluded(Seq(active), Seq(dormant))
+      catch case scala.util.control.NonFatal(e) => failure = Some(e)
+    val flipper = new Thread(() => flip(), "excluded-flipper")
+    flipper.start()
+    try (1 to 20_000).count(_ => !reader.hasExcludedAccounts) shouldBe 0
+    finally
+      stop.set(true)
+      flipper.join(30_000L)
+    failure shouldBe None
   }
 
   "An empty write" should "do nothing" taggedAs UnitTest in {
