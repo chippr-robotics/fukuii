@@ -41,7 +41,7 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 | `./scripts/fukuii-test only "*Foo*"` | Wrapper for targeted test | Same as testOnly — prefer this form |
 | `./scripts/fukuii-test essential` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
 | `./scripts/fukuii-test quick` | `crypto / test` only (~20 s) | Fast smoke check of the crypto sub-module |
-| `sbt testEssential` | Tier 1 full suite (24 min, 3,621 tests) | End of thread only — stalls development if run mid-thread |
+| `sbt testEssential` | Tier 1 full suite (24 min, 7,219 root tests plus rlp 46, bytes 11, crypto 80) | End of thread only — stalls development if run mid-thread |
 | `sbt testStandard` | Tier 2 tests | Before opening a PR |
 | `sbt testComprehensive` | Tier 3 full compliance suite (<3 h) | Release gate only |
 | `sbt testVM testCrypto` | Tagged test subsets | Targeted validation of specific subsystem |
@@ -189,7 +189,7 @@ Paste exact error messages. If clean, write: "sbt compile-all — 0 errors".
 One specific instruction: "Open X.scala line N and change Y to Z."
 
 ## Test baseline
-Last known result: e.g. "3,621 / 0 — run before and after any change."
+Last known result: e.g. "7,219 / 0 — run before and after any change."
 ```
 
 **The continuation thread** reads this file as its first action before anything

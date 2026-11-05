@@ -13,7 +13,7 @@ Referenced by: `fukuii/CLAUDE.md`, loom.md
 
 | Command | What runs | Time | Baseline |
 |---------|-----------|------|---------|
-| `sbt testEssential` | 3,621 unit tests | ~24 min | 3,621 / 0 failures |
+| `sbt testEssential` | 7,219 root unit tests, plus rlp 46, bytes 11, crypto 80 (their own `test`) | ~24 min | 7,219 / 0 failures |
 | `sbt testStandard` | Unit + integration | ~30 min | — |
 | `sbt testComprehensive` | Full ethereum/tests compliance | <3 h | — |
 
@@ -169,7 +169,7 @@ the description of #1721). `formatCheck` does scalafmt-check both modules but ru
 ## What "baseline holds" means
 
 The thread-end `testEssential` run must show:
-- Test count: **3,621** (not fewer — a missing test class = silent deletion)
+- Test count: **7,219** root tests, plus rlp 46, bytes 11, crypto 80 (not fewer — a missing test class = silent deletion). Last measured 2026-11-05 on spec 020 PR 6b-1 and 6b-2
 - Failures: **0**
 - If count drops: investigate before closing the thread
 
