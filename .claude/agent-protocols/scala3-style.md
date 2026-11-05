@@ -305,13 +305,18 @@ exception a `return` inside a closure throws, `extends scala.util.control.Contro
 `ControlThrowable` through, so a `return` crossed them. A `RuntimeException` they catch. A `break` in the same method as
 its `boundary` is compiled to a jump and throws nothing. A `break` inside a closure (a lambda, the body of `map`,
 `foreach` or `collect`, a by-name argument, a `Future` or `IO` block), or in a method that receives the `Label` as a
-`using` parameter (a `break` that leaves its own method), is a throw.
+`using` parameter (a `break` that leaves its own method), is a throw. A `for ... do` loop over a collection is a
+`foreach` closure too, so a `break` in its body is a throw; a `while` loop is not a closure.
 
 **Rule:** between a `break` that is a throw (in a closure, or in a method called with the `Label`) and its `boundary`
 there must be no `Try`, no `NonFatal` handler,
 no `catch` on `Exception` or `RuntimeException` (or a wildcard `catch case _`), no `IO` or `Future` combinator that
 recovers (`recover`, `handleError`, `attempt`) and no actor behaviour whose supervision sees the exception. Any of them
 swallows the `break`: the method carries on, or the actor sees a failed message, where the code reads as an early exit.
+
+**Never break across an async boundary.** A `break` inside a `Future` or `IO` body that runs on another thread, or after
+the `boundary` has returned, never reaches the `boundary`: it surfaces as a failed `Future` or `IO` (or is lost). Keep
+the `boundary` inside the async body, or return a value out of it instead of breaking.
 
 **Prefer restructuring** to a `boundary` at all: an `if/else`, a `match`, `Either`/`Option` combinators, a `fold`.
 Where a `boundary` stays, keep every `break` in the method body itself and put none in a lambda. `return` remains
@@ -329,6 +334,17 @@ grep -rlE "scala\.util\.(boundary|\{[^}]*boundary)|^\s*boundary(\[[^]]*\])?(:| *
 All six files were checked against this rule on 2026-11-05 and are safe: `EthSimulateService` first, then the other
 five, reading every `break` and what lies between it and its `boundary`. What to keep true when you edit them:
 
+- `EthSimulateService` has the most closure `break`s. In `applyStateOverrides` the `break`s at `:230` and `:235` sit in
+  `ov.movePrecompileToAddress.foreach`, inside a `for (address, ov) <- sortedOverrides do` loop, and `:240` sits in that
+  loop; `:515` is in `stateOverrides.foreach`; and the `for ... do` loops over `blockStateCalls` and `calls` hold more
+  (`:416`, `:450`, `:681`, `:697`, `:710`, `:1128`, `:1143`, `:1151`, `:1172`; lines as of 2026-11-05). All are safe
+  because `Option.foreach` and `Seq.foreach` have no handler and no `Try`, `catch` or `Future` lies between a `break`
+  and its `boundary`.
+- The invariant there: `ethSimulate` wraps `doSimulate` in `IO { ... }.recover { case _: MissingNodeException => ... }`.
+  That is safe only because each of the six `boundary`s (`applyStateOverrides`, `doSimulate`, three more helpers and
+  `decodeErrorString`) sits in the same method as the `break`s it catches and none takes a `Label`, so no `Break` can
+  leave `doSimulate` for the `IO`. Keep it so: a `break` that reached the `IO` would fail it, since `recover` here
+  handles only `MissingNodeException`.
 - `EthSimulateJsonMethodsImplicits.decodeBlockStateCall`: every `break` is in the method body (match arms, `if`), none in
   a lambda, so each is a jump.
 - `SNAPSyncController.startSnapSync` owns the one `boundary` for `PivotSelector` (`resumeInterruptedBootstrap`,
@@ -337,10 +353,10 @@ five, reading every `break` and what lies between it and its `boundary`. What to
   and no `try`, `Try`, `NonFatal` or `Future` lies on that path. Keep it so: do not call them from inside a closure or a
   handler.
 - `SnapFinalization.finalizeSnapSync`: the `break(Behaviors.same)` in the `getSnapSyncStateRoot().foreach` lambda is the
-  one closure `break` of the five. It is safe because `Option.foreach` has no handler; wrapping it in a `Try` would break
-  it. The method's two `try ... catch NonFatal` blocks hold no `break`.
+  only closure `break` among the other five files. It is safe because `Option.foreach` has no handler; wrapping it in a
+  `Try` would break it. The method's two `try ... catch NonFatal` blocks hold no `break`.
 
-These are behaviour-building `boundary` bodies in actor code, so the supervision clause above is the one to remember.
+The SNAP `boundary` bodies build actor behaviours, so the supervision clause above is the one to remember there.
 
 ---
 
