@@ -201,6 +201,20 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
   // a downgrade still opens the database; the family's string keys never start with this prefix, and it is read only by
   // this range). Each write ends with a `updateSync`: an entry is durable before anything is done on its strength, and
   // the fsync syncs the WAL up to it. Every read is a page, so no caller ever holds the whole set.
+  //
+  // One lock, `excludedLock`, pairs every write to the range with every read of it that is more than one scan. A write
+  // moves an entry between kinds (dormant to active when a pass finds the account again), the kinds are ranges of the
+  // key space, and a read of two ranges is two calls to the data source: a move landing between them leaves the entry
+  // in neither, and `hasExcludedAccounts` said false over a set that held it throughout (found by forge, spec 022). The
+  // writers are `updateExcluded` (and so `recordExcluded` and `removeExcluded`), `clearDormantExcluded` and
+  // `clearExcluded`, and nothing else touches the range: its prefix and key function are private to this file. A single
+  // scan needs no lock (the data source answers it from one point in time), so `hasExcluded`, `hasAnyExcluded`,
+  // `hasExcludedCode` and `excludedPage` take none. A new multi-scan read of the set takes the lock; so does a new write.
+  //
+  // The lock is the companion's, not a store's: the controller's store, the healing coordinator's and a test's are
+  // separate instances over one data source. It is held across all the batches of one `updateExcluded` and across its
+  // fsync: only another write to the set, and the one multi-scan read (finalisation), wait on it, never an import. Lock
+  // order: `excludedLock`, then the data source's own lock; the data source never calls back into a store.
 
   /** Record `entries`, durably, before any action is taken on them. An entry already there is overwritten. */
   def recordExcluded(entries: Seq[ExcludedAccount]): Unit = updateExcluded(Nil, entries)
@@ -232,8 +246,11 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       else
         record.grouped(ExcludedWriteBatch).map(batch(Nil, _)).toSeq ++
           remove.grouped(ExcludedWriteBatch).map(batch(_, Nil))
-    batches.dropRight(1).foreach(b => dataSource.update(Seq(b)))
-    if batches.nonEmpty then dataSource.updateSync(batches.takeRight(1))
+    if batches.nonEmpty then
+      withExcludedLock {
+        batches.dropRight(1).foreach(b => dataSource.update(Seq(b)))
+        dataSource.updateSync(batches.takeRight(1))
+      }
 
   /** Up to `limit` entries in key order, dormant ones last, starting after the entry whose [[ExcludedAccount.cursor]]
     * is `after`.
@@ -255,8 +272,12 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
   /** Whether the set holds an account-kind entry, dormant or not: an account whose storage nothing has shown complete.
     */
   def hasExcludedAccounts: Boolean =
-    excludedKindPresent(ExcludedAccount.AccountKind, ExcludedAccount.CodeKind) ||
+    import SnapSyncProgressStorage.*
+    // Two scans, so under the lock: a move between the kinds landing between them would leave the entry in neither.
+    withExcludedLock {
+      excludedKindPresent(ExcludedAccount.AccountKind, ExcludedAccount.CodeKind) ||
       excludedKindPresent(ExcludedAccount.DormantKind, (ExcludedAccount.DormantKind + 1).toByte)
+    }
 
   /** Whether the set holds a code hash the download gave up on. */
   def hasExcludedCode: Boolean = excludedKindPresent(ExcludedAccount.CodeKind, ExcludedAccount.DormantKind)
@@ -272,21 +293,20 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
     */
   def clearDormantExcluded(): Unit =
     import SnapSyncProgressStorage.*
-    dataSource.deleteRange(
-      Namespaces.AppStateNamespace,
-      ExcludedPrefix :+ ExcludedAccount.DormantKind,
-      ExcludedPrefix :+ (ExcludedAccount.DormantKind + 1).toByte
-    )
+    withExcludedLock {
+      dataSource.deleteRange(
+        Namespaces.AppStateNamespace,
+        ExcludedPrefix :+ ExcludedAccount.DormantKind,
+        ExcludedPrefix :+ (ExcludedAccount.DormantKind + 1).toByte
+      )
+    }
 
   /** Empty the set (one range tombstone): a SNAP cycle is starting from nothing, and may not read an earlier one's
     * decisions.
     */
   def clearExcluded(): Unit =
-    dataSource.deleteRange(
-      Namespaces.AppStateNamespace,
-      SnapSyncProgressStorage.ExcludedPrefix,
-      SnapSyncProgressStorage.ExcludedEnd
-    )
+    import SnapSyncProgressStorage.*
+    withExcludedLock(dataSource.deleteRange(Namespaces.AppStateNamespace, ExcludedPrefix, ExcludedEnd))
 
 object SnapSyncProgressStorage:
   private val AuditCursorsKey: Array[Byte] = "snap.heal.auditCursors".getBytes(StorageStringCharset.UTF8Charset)
@@ -302,6 +322,16 @@ object SnapSyncProgressStorage:
         DataSourceUpdateOptimized(Namespaces.SnapSyncProgressNamespace, Seq(AuditCursorsKey, AuditBadEntriesKey), Nil)
       )
     )
+
+  // See "the durable excluded set" above: pairs every write to the excluded range with every multi-scan read of it. A
+  // plain mutex rather than a read-write lock: the one multi-scan reader is finalisation, so sharing between readers
+  // buys nothing.
+  private val excludedLock = new java.util.concurrent.locks.ReentrantLock()
+
+  private def withExcludedLock[A](body: => A): A =
+    excludedLock.lock()
+    try body
+    finally excludedLock.unlock()
 
   private val ExcludedPrefix: Array[Byte] = "SnapExcluded/1/".getBytes(StorageStringCharset.UTF8Charset)
   // Above every kind byte, so [ExcludedPrefix, ExcludedEnd) covers the set and nothing else.
