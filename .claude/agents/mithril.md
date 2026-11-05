@@ -93,8 +93,8 @@ done
   - Any other branch kind ("other") that touches a module file is rejected.
   - Rules: the header of `scripts/snap-split/verify.py`.
   - Pick the branch name before committing.
-- Run `sbt scalafmtAll` before committing (not `sbt scalafmt`, which covers the root module only). `sbt formatAll` runs
-  scalafix first and is for pre-PR only.
+- Run `sbt formatAll` before committing: it covers every module, and `sbt scalafmtAll` alone formats the root project
+  only. `sbt formatCheck` is the read-only form CI runs.
 - On a shared build host, one sbt JVM at a time. If your brief names a lock file, wrap every sbt call in
   `flock <lock>`.
 

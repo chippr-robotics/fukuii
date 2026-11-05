@@ -83,7 +83,7 @@ done
 ```bash
 sbt compile-all          # all modules + test sources (the check that counts)
 sbt compile              # root main only, for fast iteration
-sbt scalafmtAll          # format every module; `sbt scalafmt` covers the root only, do not use it
+sbt formatAll            # format every module; `sbt scalafmtAll` and `sbt scalafmt` cover the root only
 ```
 
 One sbt JVM at a time on a shared build host. If your brief names a lock file, wrap every sbt call in `flock <lock>`.

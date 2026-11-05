@@ -10,13 +10,13 @@ assumptions so every loop recipe starts from verified facts rather than guesses.
 | Command | What it does | Approx time |
 |---------|--------------|-------------|
 | `sbt compile-all` | All 6 modules + test sources, all configs | ~30s |
-| `sbt testEssential` | Unit tests; excludes SlowTest, IntegrationTest, SyncTest, DisabledTest, FlakyTest | ~24 min (3,595-3,601 tests) |
+| `sbt testEssential` | Unit tests; excludes SlowTest, IntegrationTest, SyncTest, DisabledTest, FlakyTest | ~24 min (7,219 root tests, plus rlp 46, bytes 11, crypto 80) |
 | `sbt testStandard` | Unit + integration; excludes BenchmarkTest, EthereumTest, SyncTest, DisabledTest, FlakyTest | ~30 min |
 | `sbt testComprehensive` | Full ethereum/tests compliance vectors | ~3 hr |
-| `sbt scalafmtAll` | Format all modules in place | ~20s |
-| `sbt scalafmtCheck` | Verify format without writing | ~20s |
-| `sbt scalafixAll` | Run all scalafix rules | ~30s |
-| `sbt formatAll` | scalafixAll + scalafmtAll (pre-PR only; aborts on pre-existing violations) | ~50s |
+| `sbt scalafmtAll` | Format the root project in place (not bytes, crypto, rlp, scalanet, scalanetDiscovery) | ~20s |
+| `sbt formatCheck` | Verify format and scalafix on every module without writing (what CI runs; compile-all first) | — |
+| `sbt scalafixAll` | Run all scalafix rules (root project only) | ~30s |
+| `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on every module (the tree is scalafix-clean, so it no longer aborts) | ~50s after compile |
 | `./scripts/fukuii-test essential` | Tier 1 via wrapper with persistent logging | ~24 min |
 | `./scripts/fukuii-test standard` | Tier 2 via wrapper | ~30 min |
 | `./scripts/fukuii-test only "*<Spec>*"` | Targeted single-spec run | ~10-60s |
