@@ -113,35 +113,35 @@ final class SnapPathTrie(
         while i < first.length do
           deleteExact(first.slice(0, i))
           i += 1
-      // Skip writing if `path` is a prefix of `first` (path is an ancestor of first, or IS first).
-      //
-      // The filter stays armed for the whole run (geth `pathTrie.onTrieNode` parity). It used to disarm itself at the
-      // first non-boundary node, but StackTrie emits bottom-up: the ANCESTORS of `first` are emitted LATER, after
-      // non-boundary siblings. Disarmed, an ancestor whose content happened to be complete (no left siblings) was
-      // written while `first` itself was skipped — a node that verifies against the target hash with a missing child,
-      // so path-scheme healing (which stops at verified nodes) left a permanent hole. SnapResumeBoundarySpec.
-      if hasPrefix(first, path) then return
+    // Skip writing if `path` is a prefix of `first` (path is an ancestor of first, or IS first).
+    //
+    // The filter stays armed for the whole run (geth `pathTrie.onTrieNode` parity). It used to disarm itself at the
+    // first non-boundary node, but StackTrie emits bottom-up: the ANCESTORS of `first` are emitted LATER, after
+    // non-boundary siblings. Disarmed, an ancestor whose content happened to be complete (no left siblings) was
+    // written while `first` itself was skipped — a node that verifies against the target hash with a missing child,
+    // so path-scheme healing (which stops at verified nodes) left a permanent hole. SnapResumeBoundarySpec.
+    val skipWrite = skipLeft && hasPrefix(first, path)
+    if !skipWrite then
+      // ---- extension-gap cleanup ----
+      // If `path` is a strict prefix of `last` with a gap > 1 nibble, StackTrie is finalising an extension node that
+      // spans that gap. Intermediate path slots at depths (len(path)+1 .. len(last)−1) may hold stale nodes from a
+      // prior run; delete them.
+      // go-ethereum equivalent: `last != nil && HasPrefix(last, path) && len(last)-len(path) > 1`
+      if last != null && hasPrefix(last, path) && last.length - path.length > 1 then
+        var i = path.length + 1
+        while i < last.length do
+          deleteExact(last.slice(0, i))
+          i += 1
 
-    // ---- extension-gap cleanup ----
-    // If `path` is a strict prefix of `last` with a gap > 1 nibble, StackTrie is finalising an extension node that
-    // spans that gap. Intermediate path slots at depths (len(path)+1 .. len(last)−1) may hold stale nodes from a
-    // prior run; delete them.
-    // go-ethereum equivalent: `last != nil && HasPrefix(last, path) && len(last)-len(path) > 1`
-    if last != null && hasPrefix(last, path) && last.length - path.length > 1 then
-      var i = path.length + 1
-      while i < last.length do
-        deleteExact(last.slice(0, i))
-        i += 1
+      // ---- write ----
+      // Deep-copy: StackTrie reuses its internal path/blob buffers across callbacks.
+      writePath(path.clone(), hash, blob.clone())
 
-    // ---- write ----
-    // Deep-copy: StackTrie reuses its internal path/blob buffers across callbacks.
-    writePath(path.clone(), hash, blob.clone())
-
-    // Update `last` (reuse the existing allocation if lengths match to avoid GC churn).
-    last =
-      if last == null || last.length != path.length then path.clone()
-      else
-        System.arraycopy(path, 0, last, 0, path.length); last
+      // Update `last` (reuse the existing allocation if lengths match to avoid GC churn).
+      last =
+        if last == null || last.length != path.length then path.clone()
+        else
+          System.arraycopy(path, 0, last, 0, path.length); last
 
   /** Delete ancestor paths of `last` at depths 0 through `len(last)−1`. */
   private def deleteRightBoundary(): Unit =

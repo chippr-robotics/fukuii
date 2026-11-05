@@ -169,12 +169,13 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     while history.nonEmpty && history.head._1 < cutoff do history.dequeue()
 
   private def calculateRecentThroughput(history: mutable.Queue[(Long, Long)]): Double =
-    if history.size < 2 then return 0.0
-    val oldest = history.head
-    val newest = history.last
-    val timeDiff = (newest._1 - oldest._1) / 1000.0
-    val countDiff = newest._2 - oldest._2
-    if timeDiff > 0 then countDiff / timeDiff else 0.0
+    if history.size < 2 then 0.0
+    else
+      val oldest = history.head
+      val newest = history.last
+      val timeDiff = (newest._1 - oldest._1) / 1000.0
+      val countDiff = newest._2 - oldest._2
+      if timeDiff > 0 then countDiff / timeDiff else 0.0
 
   def calculateETA: Option[Long] = synchronized {
     currentPhaseState match
