@@ -172,13 +172,12 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
   final private class MidReadMover(move: () => Unit):
     private val landed = new AtomicBoolean(false)
     @volatile private var failure: Option[Throwable] = None
-    private val thread = new Thread(
-      () =>
-        try
-          move()
-          landed.set(true)
-        catch case scala.util.control.NonFatal(e) => failure = Some(e), "excluded-mid-read-mover"
-    )
+    private def run(): Unit =
+      try
+        move()
+        landed.set(true)
+      catch case scala.util.control.NonFatal(e) => failure = Some(e)
+    private val thread = new Thread(() => run(), "excluded-mid-read-mover")
 
     /** Start the move; return once it has landed, failed, or is parked on a lock. */
     def startAndSettle(): Unit =
@@ -224,14 +223,13 @@ class ExcludedAccountStoreSpec extends AnyFlatSpec with Matchers:
     reader.recordExcluded(Seq(dormant))
     val stop = new AtomicBoolean(false)
     @volatile var failure: Option[Throwable] = None
-    val flipper = new Thread(
-      () =>
-        try
-          while !stop.get do
-            writer.updateExcluded(Seq(dormant), Seq(active))
-            writer.updateExcluded(Seq(active), Seq(dormant))
-        catch case scala.util.control.NonFatal(e) => failure = Some(e), "excluded-flipper"
-    )
+    def flip(): Unit =
+      try
+        while !stop.get do
+          writer.updateExcluded(Seq(dormant), Seq(active))
+          writer.updateExcluded(Seq(active), Seq(dormant))
+      catch case scala.util.control.NonFatal(e) => failure = Some(e)
+    val flipper = new Thread(() => flip(), "excluded-flipper")
     flipper.start()
     try (1 to 20_000).count(_ => !reader.hasExcludedAccounts) shouldBe 0
     finally
