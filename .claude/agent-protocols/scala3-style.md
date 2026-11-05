@@ -301,10 +301,12 @@ an `if/else` or `match` restructuring is not enough. A `break` has a trap that `
 `scala.util.boundary$Break extends java.lang.RuntimeException`, while `scala.runtime.NonLocalReturnControl`, the
 exception a `return` inside a closure throws, `extends scala.util.control.ControlThrowable`. `NonFatal` and `Try` let a
 `ControlThrowable` through, so a `return` crossed them. A `RuntimeException` they catch. A `break` in the same method as
-its `boundary` is compiled to a jump and throws nothing; a `break` inside a closure (a lambda, the body of `map`,
-`foreach` or `collect`, a by-name argument, a `Future` or `IO` block) is a throw.
+its `boundary` is compiled to a jump and throws nothing. A `break` inside a closure (a lambda, the body of `map`,
+`foreach` or `collect`, a by-name argument, a `Future` or `IO` block), or in a method that receives the `Label` as a
+`using` parameter (a `break` that leaves its own method), is a throw.
 
-**Rule:** between a `break` that sits inside a closure and its `boundary` there must be no `Try`, no `NonFatal` handler,
+**Rule:** between a `break` that is a throw (in a closure, or in a method called with the `Label`) and its `boundary`
+there must be no `Try`, no `NonFatal` handler,
 no `catch` on `Exception` or `RuntimeException` (or a wildcard `catch case _`), no `IO` or `Future` combinator that
 recovers (`recover`, `handleError`, `attempt`) and no actor behaviour whose supervision sees the exception. Any of them
 swallows the `break`: the method carries on, or the actor sees a failed message, where the code reads as an early exit.
