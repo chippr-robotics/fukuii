@@ -72,6 +72,9 @@ val scala3Options = Seq(
   "-Wconf:id=E028:error", // Illegal literal: write `(-98).toByte`, not `-98.toByte`
   // Migration warnings have no id, so the next four match the message. Keep the backticks: the compiler's own text has them.
   "-Wconf:msg=Implicit parameters should be provided with a `using` clause:error",
+  "-Wconf:msg=Alphanumeric method .* is not declared infix:error", // write a.m(b) or a `m` b
+  "-Wconf:msg=`_` is deprecated for wildcard arguments of types:error", // write `?`
+  "-Wconf:msg=with as a type operator has been deprecated:error", // write `&`
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
