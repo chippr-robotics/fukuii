@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.domain
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.rlp.RLPCodec
-import com.chipprbots.ethereum.rlp.RLPCodec.Ops
+import com.chipprbots.ethereum.rlp.RLPCodec.xmap
 import com.chipprbots.ethereum.rlp.RLPImplicits.byteStringEncDec
 
 opaque type BlobVersionedHash = ByteString

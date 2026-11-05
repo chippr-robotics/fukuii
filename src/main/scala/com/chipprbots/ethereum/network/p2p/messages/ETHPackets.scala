@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.forkid.ForkId.*
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.*
-import com.chipprbots.ethereum.rlp.RLPCodec.Ops
+import com.chipprbots.ethereum.rlp.RLPCodec.xmap
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps

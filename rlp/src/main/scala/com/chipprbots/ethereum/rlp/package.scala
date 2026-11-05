@@ -136,7 +136,7 @@ package object rlp:
         override def encode(obj: T): RLPEncodeable = enc.encode(obj)
         override def decode(rlp: RLPEncodeable): T = dec.decode(rlp)
 
-    implicit class Ops[A](val codec: RLPCodec[A]) extends AnyVal:
+    extension [A](codec: RLPCodec[A])
 
       /** Given a codec for type A, make a coded for type B. */
       def xmap[B](f: A => B, g: B => A): RLPCodec[B] =

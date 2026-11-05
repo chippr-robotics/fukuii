@@ -13,7 +13,7 @@ import scodec.bits.ByteVector
 
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPCodec
-import com.chipprbots.ethereum.rlp.RLPCodec.Ops
+import com.chipprbots.ethereum.rlp.RLPCodec.xmap
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitDerivations.*
 import com.chipprbots.ethereum.rlp.RLPImplicits.given

@@ -5,7 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.rlp.RLP.*
 import com.chipprbots.ethereum.utils.ByteUtils
 
-import RLPCodec.Ops
+import RLPCodec.xmap
 
 object RLPImplicits:
 
