@@ -85,30 +85,27 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer:
       value: BigInt,
       input: ByteString
   ): Unit =
-    if onlyTopCall then return
-
-    val frame = CallFrame(
-      opCode = opCode,
-      from = from,
-      to = to,
-      gas = gas,
-      value = value,
-      input = input
-    )
-    callStack.push(frame)
+    if !onlyTopCall then
+      val frame = CallFrame(
+        opCode = opCode,
+        from = from,
+        to = to,
+        gas = gas,
+        value = value,
+        input = input
+      )
+      callStack.push(frame)
 
   override def onCallExit(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit =
-    if onlyTopCall then return
-    if callStack.size <= 1 then return // don't pop the root frame
+    if !onlyTopCall && callStack.size > 1 then // size <= 1: don't pop the root frame
+      val frame = callStack.pop()
+      frame.gasUsed = gasUsed
+      frame.output = output
+      frame.error = error
+      if error.exists(_.contains("execution reverted")) && output.length >= 4 then
+        frame.revertReason = parseRevertReason(output)
 
-    val frame = callStack.pop()
-    frame.gasUsed = gasUsed
-    frame.output = output
-    frame.error = error
-    if error.exists(_.contains("execution reverted")) && output.length >= 4 then
-      frame.revertReason = parseRevertReason(output)
-
-    if callStack.nonEmpty then callStack.top.calls += frame
+      if callStack.nonEmpty then callStack.top.calls += frame
 
   override def getResult: JValue = rootFrame match
     case Some(frame) => encodeFrame(frame)
@@ -148,12 +145,14 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer:
   /** Parse Solidity revert reason from ABI-encoded error data. Format: 0x08c379a0 + offset + length + utf8 string
     */
   private def parseRevertReason(data: ByteString): Option[String] =
-    if data.length < 68 then return None
-    val selector = data.take(4)
-    if selector != ByteString(0x08, 0xc3, 0x79, 0xa0) then return None
-    try
-      val offset = BigInt(1, data.slice(4, 36).toArray).toInt
-      val length = BigInt(1, data.slice(36 + offset, 68 + offset).toArray).toInt
-      if data.length < 68 + offset + length then return None
-      Some(new String(data.slice(68 + offset, 68 + offset + length).toArray, "UTF-8"))
-    catch case _: Exception => None
+    if data.length < 68 then None
+    else
+      val selector = data.take(4)
+      if selector != ByteString(0x08, 0xc3, 0x79, 0xa0) then None
+      else
+        try
+          val offset = BigInt(1, data.slice(4, 36).toArray).toInt
+          val length = BigInt(1, data.slice(36 + offset, 68 + offset).toArray).toInt
+          if data.length < 68 + offset + length then None
+          else Some(new String(data.slice(68 + offset, 68 + offset + length).toArray, "UTF-8"))
+        catch case _: Exception => None

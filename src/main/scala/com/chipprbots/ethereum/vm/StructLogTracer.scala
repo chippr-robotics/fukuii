@@ -50,58 +50,57 @@ class StructLogTracer(
       prevState: ProgramState[W, S],
       nextState: ProgramState[W, S]
   ): Unit =
-    if limit > 0 && steps.size >= limit then return
+    if !(limit > 0 && steps.size >= limit) then
+      val gasCost = prevState.gas - nextState.gas
 
-    val gasCost = prevState.gas - nextState.gas
-
-    val memorySnapshot = if enableMemory then
-      val mem = prevState.memory
-      if mem.size > 0 then
-        val words = (0 until mem.size by 32).map { offset =>
-          val word = mem.load(UInt256(offset), UInt256(32))._1
-          // Schema (execution-apis src/schemas/opcode-tracer.yaml, StructLog.memory.items): each
-          // chunk is a 0x-prefixed bytes32 (^0x[0-9a-f]{64}$). The un-prefixed hex below was
-          // previously emitted bare and failed that pattern — see StructLogTracerSpec.
-          "0x" + word.toArray.map("%02x".format(_)).mkString
-        }
-        Some(words.toSeq)
-      else Some(Seq.empty)
-    else None
-
-    val storageSnapshot =
-      if enableStorage then
-        opCode match
-          case SLOAD if prevState.stack.size >= 1 =>
-            val slot = prevState.stack.toSeq.head.toBigInt
-            val value = nextState.stack.toSeq.head.toBigInt
-            val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
-            val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
-            Some(Map(k -> v))
-          case SSTORE if prevState.stack.size >= 2 =>
-            val slot = prevState.stack.toSeq(0).toBigInt
-            val value = prevState.stack.toSeq(1).toBigInt
-            val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
-            val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
-            Some(Map(k -> v))
-          case _ => None
+      val memorySnapshot = if enableMemory then
+        val mem = prevState.memory
+        if mem.size > 0 then
+          val words = (0 until mem.size by 32).map { offset =>
+            val word = mem.load(UInt256(offset), UInt256(32))._1
+            // Schema (execution-apis src/schemas/opcode-tracer.yaml, StructLog.memory.items): each
+            // chunk is a 0x-prefixed bytes32 (^0x[0-9a-f]{64}$). The un-prefixed hex below was
+            // previously emitted bare and failed that pattern — see StructLogTracerSpec.
+            "0x" + word.toArray.map("%02x".format(_)).mkString
+          }
+          Some(words.toSeq)
+        else Some(Seq.empty)
       else None
 
-    val error = nextState.error.map(_.toString)
+      val storageSnapshot =
+        if enableStorage then
+          opCode match
+            case SLOAD if prevState.stack.size >= 1 =>
+              val slot = prevState.stack.toSeq.head.toBigInt
+              val value = nextState.stack.toSeq.head.toBigInt
+              val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
+              val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
+              Some(Map(k -> v))
+            case SSTORE if prevState.stack.size >= 2 =>
+              val slot = prevState.stack.toSeq(0).toBigInt
+              val value = prevState.stack.toSeq(1).toBigInt
+              val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
+              val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
+              Some(Map(k -> v))
+            case _ => None
+        else None
 
-    steps += StructLog(
-      pc = prevState.pc,
-      op = opCode.toString,
-      gas = prevState.gas,
-      gasCost = gasCost,
-      depth = prevState.env.callDepth + 1, // go-ethereum uses 1-based depth
-      // go-ethereum's structLog stack is bottom-first (oldest push first). Stack.toSeq is
-      // top-first (see Stack.scala: toSeq = underlying.reverse), so it must be reversed here
-      // to avoid a schema-valid-but-wrong-order response.
-      stack = prevState.stack.toSeq.reverse.map(_.toBigInt),
-      memory = memorySnapshot,
-      storage = storageSnapshot,
-      error = error
-    )
+      val error = nextState.error.map(_.toString)
+
+      steps += StructLog(
+        pc = prevState.pc,
+        op = opCode.toString,
+        gas = prevState.gas,
+        gasCost = gasCost,
+        depth = prevState.env.callDepth + 1, // go-ethereum uses 1-based depth
+        // go-ethereum's structLog stack is bottom-first (oldest push first). Stack.toSeq is
+        // top-first (see Stack.scala: toSeq = underlying.reverse), so it must be reversed here
+        // to avoid a schema-valid-but-wrong-order response.
+        stack = prevState.stack.toSeq.reverse.map(_.toBigInt),
+        memory = memorySnapshot,
+        storage = storageSnapshot,
+        error = error
+      )
 
   /** Populates the tx-level result fields. Fired once after the top-level transaction returns — see
     * StxLedger.simulateTransactionWithTracer, which calls this after all onStep calls have completed with exactly the
