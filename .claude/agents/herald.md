@@ -28,11 +28,11 @@ name rather than assuming it no longer exists.
 
 ## Shared protocols
 
-- Logging and metrics standards (peer counts, decode errors, connection lifecycle, discovery progress): `~/.claude/agent-protocols/logging-standards.md`
-- Inline cleanup scope — P2P codec files often have cleanup opportunities: `~/.claude/agent-protocols/inline-cleanup.md`
-- Risk-stratified commits: `~/.claude/agent-protocols/risk-stratified-commit.md`
+- Logging and metrics standards (peer counts, decode errors, connection lifecycle, discovery progress): `.claude/agent-protocols/logging-standards.md`
+- Inline cleanup scope — P2P codec files often have cleanup opportunities: `.claude/agent-protocols/inline-cleanup.md`
+- Risk-stratified commits: `.claude/agent-protocols/risk-stratified-commit.md`
 
-**Contributing protocols**: Wire-protocol bugs often reveal recurring patterns — Snappy decompression ordering, requestId wrapper requirements, RLP type encoding traps, ForkId hash calculation. If the same shape of bug recurs across protocol versions or peers, write it to `~/.claude/agent-protocols/<name>.md` rather than leaving it in inline comments.
+**Contributing protocols**: Wire-protocol bugs often reveal recurring patterns — Snappy decompression ordering, requestId wrapper requirements, RLP type encoding traps, ForkId hash calculation. If the same shape of bug recurs across protocol versions or peers, write it to `.claude/agent-protocols/<name>.md` rather than leaving it in inline comments.
 
 ## Fukuii repo
 

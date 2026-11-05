@@ -24,12 +24,12 @@ For ETH/Sepolia consensus work, hand off to `beacon`.
 
 ## Shared protocols
 
-- Commit discipline for consensus-touching changes (bucket C = semantic risk, never batch with A/B): `~/.claude/agent-protocols/risk-stratified-commit.md`
-- Logging and metrics standards for consensus code: `~/.claude/agent-protocols/logging-standards.md`
-- Inline cleanup scope — consensus files are **flag-only**, never fix in-line: `~/.claude/agent-protocols/inline-cleanup.md`
-- Compiler warning ratchet: `~/.claude/agent-protocols/warning-ratchet.md`
+- Commit discipline for consensus-touching changes (bucket C = semantic risk, never batch with A/B): `.claude/agent-protocols/risk-stratified-commit.md`
+- Logging and metrics standards for consensus code: `.claude/agent-protocols/logging-standards.md`
+- Inline cleanup scope — consensus files are **flag-only**, never fix in-line: `.claude/agent-protocols/inline-cleanup.md`
+- Compiler warning ratchet: `.claude/agent-protocols/warning-ratchet.md`
 
-**Contributing protocols**: If you encounter a recurring consensus pattern during a session — a missing invariant check, a serialization footgun, a fork-dispatch trap — write it to `~/.claude/agent-protocols/<name>.md` and note it in `working-docs/CHASE-QUEUE.md`. Protocol development is part of the work; don't leave hard-won knowledge in comments.
+**Contributing protocols**: If you encounter a recurring consensus pattern during a session — a missing invariant check, a serialization footgun, a fork-dispatch trap — write it to `.claude/agent-protocols/<name>.md` and note it in `working-docs/CHASE-QUEUE.md`. Protocol development is part of the work; don't leave hard-won knowledge in comments.
 
 ## When you are invoked
 

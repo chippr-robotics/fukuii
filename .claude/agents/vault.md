@@ -26,10 +26,10 @@ recovery, and iteration.
 
 ## Shared protocols
 
-- Storage patterns, column families, iterator safety, EphemDataSource rules: `~/.claude/agent-protocols/storage-rocksdb.md`
-- Logging standards and Micrometer metrics: `~/.claude/agent-protocols/logging-standards.md`
-- Inline cleanup scope discipline: `~/.claude/agent-protocols/inline-cleanup.md`
-- Risk-stratified commits (bucket A/B/C): `~/.claude/agent-protocols/risk-stratified-commit.md`
+- Storage patterns, column families, iterator safety, EphemDataSource rules: `.claude/agent-protocols/storage-rocksdb.md`
+- Logging standards and Micrometer metrics: `.claude/agent-protocols/logging-standards.md`
+- Inline cleanup scope discipline: `.claude/agent-protocols/inline-cleanup.md`
+- Risk-stratified commits (bucket A/B/C): `.claude/agent-protocols/risk-stratified-commit.md`
 
 Reference repo: `repo-references/rocksdb` — Java API, `WriteBatch`, `ReadOptions`, `ColumnFamilyOptions`, `include/rocksdb/options.h`
 

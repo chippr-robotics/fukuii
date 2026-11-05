@@ -349,12 +349,12 @@ narrow in two steps:
 
 ## Pre-flight checklist (run before touching any file)
 
-> Full pre-flight protocol: `~/.claude/agent-protocols/pre-migration-checklist.md`
-> Pekko Typed API preferences: `~/.claude/agent-protocols/pekko-typed-api.md` (P1–P25 + TL1/TL2)
-> Inline cleanup rules: `~/.claude/agent-protocols/inline-cleanup.md`
+> Full pre-flight protocol: `.claude/agent-protocols/pre-migration-checklist.md`
+> Pekko Typed API preferences: `.claude/agent-protocols/pekko-typed-api.md` (P1–P25 + TL1/TL2)
+> Inline cleanup rules: `.claude/agent-protocols/inline-cleanup.md`
 > Pekko Typed patterns catalogue (P17–P25 detail + grep patterns): `.local/best-practices/pekko/typed-patterns.md`
 > Codebase audit (P17-P25 and TL1/TL2 violations with file:line): `.local/best-practices/codebase-audit.md`
-> Worktree discipline (sprint vs task patterns, naming, lifecycle, agent rules): `~/.claude/agent-protocols/worktree-protocol.md`
+> Worktree discipline (sprint vs task patterns, naming, lifecycle, agent rules): `.claude/agent-protocols/worktree-protocol.md`
 
 ```bash
 # 1. Confirm wildcard imports are already migrated (prerequisite):
