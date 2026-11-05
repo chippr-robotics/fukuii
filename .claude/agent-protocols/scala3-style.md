@@ -42,7 +42,7 @@ grep -rnw "return" src/main bytes/src/main rlp/src/main crypto/src/main scalanet
 # trailing comment or string (StdNode x2, ReferenceCountNodeStorage, CallErrors, BlockHeader)
 ```
 
-(The older form `grep "\breturn\b" src/main` printed 315 lines, 243 of them `@return` in scaladoc, so it was no ratchet.)
+(The older form `grep -rn "\breturn\b" src/main` prints 381 lines on this tree, 378 in `.scala` files, 243 of them `@return` in scaladoc, so it was no ratchet.)
 
 Fix: restructure as an expression (`if cond then a else b`, a `match`, an `Either`/`Option` combinator). Where that
 cannot be done, `scala.util.boundary` and `break`, under S12: a `break` is not a `return`.
