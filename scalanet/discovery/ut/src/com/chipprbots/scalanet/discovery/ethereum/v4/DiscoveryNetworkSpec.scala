@@ -7,7 +7,7 @@ import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
 // Bring DefaultCodecs' given instances (Codec[Payload], Codec[Content], etc.)
 // into scope. Scala 3 wildcard imports do NOT carry given/implicit instances
 // by default — explicit `given` is required.
-import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.{given, *}
+import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.given
 import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryNetwork.Peer
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Ping
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.*
@@ -354,7 +354,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
   it should "start handling requests in the background" in test {
     new Fixture:
       override val test = for
-        token <- network.startHandling {
+        _ <- network.startHandling {
           StubDiscoveryRPC(
             ping = _ => _ => IO.pure(Some(None))
           )
@@ -385,7 +385,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
           peerGroup.createServerChannel(from)
         }
         ping = Ping(4, toNodeAddress(remoteAddress), toNodeAddress(localAddress), validExpiration, None)
-        _ <- (channels.zip(remotes)).traverse { case (channel, (remoteAddress, (_, remotePrivateKey))) =>
+        _ <- (channels.zip(remotes)).traverse { case (channel, (_, (_, remotePrivateKey))) =>
           channel.sendPayloadToSUT(ping, remotePrivateKey)
         }
         messages <- channels.traverse(_.nextMessageFromSUT())
@@ -480,7 +480,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
         }
         channel <- peerGroup.createServerChannel(from = remoteAddress)
         findNode = FindNode(remotePublicKey, validExpiration)
-        packet <- channel.sendPayloadToSUT(findNode, remotePrivateKey)
+        _ <- channel.sendPayloadToSUT(findNode, remotePrivateKey)
         msgs <- Stream
           .repeatEval(channel.nextMessageFromSUT())
           .takeWhile(_.isDefined)

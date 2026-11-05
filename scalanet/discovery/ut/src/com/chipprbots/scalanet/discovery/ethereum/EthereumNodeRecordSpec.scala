@@ -11,7 +11,7 @@ import org.scalatest.Inspectors
 class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers:
   // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
   import EthereumNodeRecord.Keys
 
   implicit val sigalg: SigAlg = new MockSigAlg()
