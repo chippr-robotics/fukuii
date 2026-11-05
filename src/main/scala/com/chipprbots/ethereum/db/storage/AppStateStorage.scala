@@ -655,12 +655,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.
     */
   def needsBackfillResume(): Boolean =
-    if !isSnapSyncDone() then return false
-    val target = getBackfillTarget()
-    if target <= 0 then return false
-    getBackfillBestHeader() < target ||
-    getBackfillBestBody() < target ||
-    getBackfillBestReceipt() < target
+    if !isSnapSyncDone() then false
+    else
+      val target = getBackfillTarget()
+      if target <= 0 then false
+      else
+        getBackfillBestHeader() < target ||
+        getBackfillBestBody() < target ||
+        getBackfillBestReceipt() < target
 
 object AppStateStorage:
   type Key = String

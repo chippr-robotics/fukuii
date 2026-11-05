@@ -1419,20 +1419,22 @@ class EthSimulateService(
   /** EIP-1559: Compute the base fee for the next block */
   private def computeNextBaseFee(parentHeader: BlockHeader): BigInt =
     val parentBaseFee = parentHeader.baseFee.getOrElse(BigInt(0))
-    if parentBaseFee == 0 then return BigInt(0)
-    val elasticityMultiplier = 2
-    val baseFeeChangeDenominator = 8
-    val parentGasTarget = parentHeader.gasLimit / elasticityMultiplier
-    if parentGasTarget == GasAmount.Zero then return parentBaseFee
-    if parentHeader.gasUsed == parentGasTarget then parentBaseFee
-    else if parentHeader.gasUsed > parentGasTarget then
-      val gasUsedDelta = (parentHeader.gasUsed - parentGasTarget).value
-      val baseFeePerGasDelta = (parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator).max(1)
-      parentBaseFee + baseFeePerGasDelta
+    if parentBaseFee == 0 then BigInt(0)
     else
-      val gasUsedDelta = (parentGasTarget - parentHeader.gasUsed).value
-      val baseFeePerGasDelta = parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator
-      (parentBaseFee - baseFeePerGasDelta).max(0)
+      val elasticityMultiplier = 2
+      val baseFeeChangeDenominator = 8
+      val parentGasTarget = parentHeader.gasLimit / elasticityMultiplier
+      if parentGasTarget == GasAmount.Zero then parentBaseFee
+      else if parentHeader.gasUsed == parentGasTarget then parentBaseFee
+      else if parentHeader.gasUsed > parentGasTarget then
+        val gasUsedDelta = (parentHeader.gasUsed - parentGasTarget).value
+        val baseFeePerGasDelta =
+          (parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator).max(1)
+        parentBaseFee + baseFeePerGasDelta
+      else
+        val gasUsedDelta = (parentGasTarget - parentHeader.gasUsed).value
+        val baseFeePerGasDelta = parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator
+        (parentBaseFee - baseFeePerGasDelta).max(0)
 
   private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString =
     if txs.isEmpty then EmptyMpt
@@ -1465,16 +1467,17 @@ class EthSimulateService(
     * — matching geth's behavior.
     */
   private def decodeErrorString(returnData: ByteString): Option[String] =
-    if returnData.length < 4 + 32 + 32 then return None
-    val bytes = returnData.toArray
-    val selector = (bytes(0) & 0xff, bytes(1) & 0xff, bytes(2) & 0xff, bytes(3) & 0xff)
-    if selector != (0x08, 0xc3, 0x79, 0xa0) then return None
-    // ABI: head[0] = offset (always 0x20 for a single string arg)
-    // head[1] = string length (right-aligned uint256)
-    // head[2..] = string bytes (padded to 32-byte boundary)
-    val payload = bytes.drop(4)
-    val offset = BigInt(1, payload.slice(0, 32))
-    if offset != 32 then return None
-    val length = BigInt(1, payload.slice(32, 64)).toInt
-    if length < 0 || 64 + length > payload.length then return None
-    scala.util.Try(new String(payload.slice(64, 64 + length), "UTF-8")).toOption
+    boundary:
+      if returnData.length < 4 + 32 + 32 then break(None)
+      val bytes = returnData.toArray
+      val selector = (bytes(0) & 0xff, bytes(1) & 0xff, bytes(2) & 0xff, bytes(3) & 0xff)
+      if selector != (0x08, 0xc3, 0x79, 0xa0) then break(None)
+      // ABI: head[0] = offset (always 0x20 for a single string arg)
+      // head[1] = string length (right-aligned uint256)
+      // head[2..] = string bytes (padded to 32-byte boundary)
+      val payload = bytes.drop(4)
+      val offset = BigInt(1, payload.slice(0, 32))
+      if offset != 32 then break(None)
+      val length = BigInt(1, payload.slice(32, 64)).toInt
+      if length < 0 || 64 + length > payload.length then break(None)
+      scala.util.Try(new String(payload.slice(64, 64 + length), "UTF-8")).toOption

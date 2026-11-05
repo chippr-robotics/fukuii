@@ -92,90 +92,90 @@ final class CombinedRecoveryScanner(
     val shardCount = shards.length
 
     // An empty state trie has nothing to recover; never persist a checkpoint for it (invariant: shardCount >= 1).
-    if shardCount == 0 then return RecoveryScanResult(Vector.empty, Vector.empty, holes = 0L)
-
-    // Resume: a tag-matched checkpoint seeds the accumulators + dedup sets; a mismatch/absence starts fresh.
-    val resumed = appStateStorage.getRecoveryProgressFor(scanRoot, shardCount)
-    val completed = mutable.BitSet() ++ resumed.map(_.completedShards).getOrElse(Set.empty)
-    val accBytecodes = mutable.ArrayBuffer.from(resumed.map(_.missingBytecodes).getOrElse(Vector.empty))
-    val accStorage = mutable.ArrayBuffer.from(resumed.map(_.missingStorageTries).getOrElse(Vector.empty))
-    val seenCodeHashes = mutable.HashSet.from(accBytecodes)
-    val seenStorageRoots = mutable.HashSet.from(accStorage.map(_._2))
-
-    // Fast path: the checkpoint is already complete (e.g. the process died during the download phase). Skip the scan
-    // and hand back the persisted gaps so download can resume without re-walking the trie.
-    if completed.size >= shardCount then
-      return RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes = 0L)
-
-    val remaining = (0 until shardCount).filterNot(completed)
-    val lock = new Object
-    var holes = 0L
-    val firstFailure = new AtomicReference[Throwable](null)
-
-    // Live progress gauges for the node-health dashboard. Counts accounts walked THIS session (resumed shards are not
-    // re-walked); the missing count is seeded from the resumed checkpoint so it stays cumulative. Atomics because the
-    // per-leaf callback fires from parallel shard walks.
-    val accountsScanned = new java.util.concurrent.atomic.AtomicLong(0L)
-    val contractsFound = new java.util.concurrent.atomic.AtomicLong(0L)
-    val missingStorageCount = new java.util.concurrent.atomic.AtomicLong(accStorage.size.toLong)
-    val onAccount: Boolean => Unit = isContract =>
-      if firstFailure.get != null then throw CombinedRecoveryScanner.StoppedByAnotherShard
-      val n = accountsScanned.incrementAndGet()
-      if isContract then contractsFound.incrementAndGet()
-      if n % 100000 == 0 then RecoveryMetrics.setStorageScanProgress(n, contractsFound.get(), missingStorageCount.get())
-
-    // Merge one shard's gaps (cross-shard dedup) and atomically persist completion + accumulated gaps. Serialized so
-    // the shared accumulators/dedup-sets and the single-key write are consistent under parallel walks.
-    def mergeAndPersist(idx: Int, scan: CombinedRecoveryScan): Unit = lock.synchronized {
-      scan.missingBytecodes.foreach(h => if seenCodeHashes.add(h) then accBytecodes += h)
-      scan.missingStorageTries.foreach { case (acct, root) =>
-        if seenStorageRoots.add(root) then accStorage += ((acct, root))
-      }
-      missingStorageCount.set(accStorage.size.toLong)
-      holes += scan.holes
-      completed += idx
-      // commitSync (fsync) not commit: the per-shard checkpoint is the resumability anchor, so it must survive a hard
-      // host crash (this box has hit a memory-pressure thrash-lock), not just a clean OOM exit — otherwise the OS
-      // write-back window can lose the last shards' progress and force a full re-scan. ~16-256 fsyncs over a multi-hour
-      // scan is negligible. (commitSync infra from PR #1305.)
-      appStateStorage
-        .putRecoveryProgress(
-          RecoveryProgress(scanRoot, shardCount, completed.toSet, accBytecodes.toVector, accStorage.toVector)
-        )
-        .commitSync()
-      // Each shard's end, so a scan of hours says how far it is and what it costs, and holes a later resume will not
-      // count are still on record.
-      log.info(
-        s"[SNAP-RECOVERY] Scan: ${completed.size} of $shardCount shards done, ${accountsScanned.get()} accounts this " +
-          s"session, ${accBytecodes.size} codes and ${accStorage.size} storage roots missing, $holes subtrees unreadable"
-      )
-      onShardPersisted(completed.size)
-    }
-
-    // A shard still queued after a failure begins and stops at its first leaf, so nothing needs to check before it does.
-    def scanOne(idx: Int): Unit =
-      try
-        onShardScanStart(idx)
-        val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
-        scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
-        mergeAndPersist(idx, scan)
-      catch
-        case NonFatal(e) =>
-          firstFailure.compareAndSet(null, e)
-          onShardFailed()
-          throw e
-
-    if concurrency <= 1 then remaining.foreach(scanOne)
+    if shardCount == 0 then RecoveryScanResult(Vector.empty, Vector.empty, holes = 0L)
     else
-      val pool = Executors.newFixedThreadPool(math.min(concurrency, remaining.size))
-      given ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
-      try Await.result(Future.sequence(remaining.map(idx => Future(scanOne(idx)))), Duration.Inf)
-      catch case NonFatal(e) => throw Option(firstFailure.get).getOrElse(e)
-      finally pool.shutdown()
+      // Resume: a tag-matched checkpoint seeds the accumulators + dedup sets; a mismatch/absence starts fresh.
+      val resumed = appStateStorage.getRecoveryProgressFor(scanRoot, shardCount)
+      val completed = mutable.BitSet() ++ resumed.map(_.completedShards).getOrElse(Set.empty)
+      val accBytecodes = mutable.ArrayBuffer.from(resumed.map(_.missingBytecodes).getOrElse(Vector.empty))
+      val accStorage = mutable.ArrayBuffer.from(resumed.map(_.missingStorageTries).getOrElse(Vector.empty))
+      val seenCodeHashes = mutable.HashSet.from(accBytecodes)
+      val seenStorageRoots = mutable.HashSet.from(accStorage.map(_._2))
 
-    // Final progress publish so the dashboard reflects the completed totals.
-    RecoveryMetrics.setStorageScanProgress(accountsScanned.get(), contractsFound.get(), missingStorageCount.get())
-    RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes)
+      // Fast path: the checkpoint is already complete (e.g. the process died during the download phase). Skip the scan
+      // and hand back the persisted gaps so download can resume without re-walking the trie.
+      if completed.size >= shardCount then RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes = 0L)
+      else
+        val remaining = (0 until shardCount).filterNot(completed)
+        val lock = new Object
+        var holes = 0L
+        val firstFailure = new AtomicReference[Throwable](null)
+
+        // Live progress gauges for the node-health dashboard. Counts accounts walked THIS session (resumed shards are not
+        // re-walked); the missing count is seeded from the resumed checkpoint so it stays cumulative. Atomics because the
+        // per-leaf callback fires from parallel shard walks.
+        val accountsScanned = new java.util.concurrent.atomic.AtomicLong(0L)
+        val contractsFound = new java.util.concurrent.atomic.AtomicLong(0L)
+        val missingStorageCount = new java.util.concurrent.atomic.AtomicLong(accStorage.size.toLong)
+        val onAccount: Boolean => Unit = isContract =>
+          if firstFailure.get != null then throw CombinedRecoveryScanner.StoppedByAnotherShard
+          val n = accountsScanned.incrementAndGet()
+          if isContract then contractsFound.incrementAndGet()
+          if n % 100000 == 0 then
+            RecoveryMetrics.setStorageScanProgress(n, contractsFound.get(), missingStorageCount.get())
+
+        // Merge one shard's gaps (cross-shard dedup) and atomically persist completion + accumulated gaps. Serialized so
+        // the shared accumulators/dedup-sets and the single-key write are consistent under parallel walks.
+        def mergeAndPersist(idx: Int, scan: CombinedRecoveryScan): Unit = lock.synchronized {
+          scan.missingBytecodes.foreach(h => if seenCodeHashes.add(h) then accBytecodes += h)
+          scan.missingStorageTries.foreach { case (acct, root) =>
+            if seenStorageRoots.add(root) then accStorage += ((acct, root))
+          }
+          missingStorageCount.set(accStorage.size.toLong)
+          holes += scan.holes
+          completed += idx
+          // commitSync (fsync) not commit: the per-shard checkpoint is the resumability anchor, so it must survive a hard
+          // host crash (this box has hit a memory-pressure thrash-lock), not just a clean OOM exit — otherwise the OS
+          // write-back window can lose the last shards' progress and force a full re-scan. ~16-256 fsyncs over a multi-hour
+          // scan is negligible. (commitSync infra from PR #1305.)
+          appStateStorage
+            .putRecoveryProgress(
+              RecoveryProgress(scanRoot, shardCount, completed.toSet, accBytecodes.toVector, accStorage.toVector)
+            )
+            .commitSync()
+          // Each shard's end, so a scan of hours says how far it is and what it costs, and holes a later resume will not
+          // count are still on record.
+          log.info(
+            s"[SNAP-RECOVERY] Scan: ${completed.size} of $shardCount shards done, ${accountsScanned.get()} accounts this " +
+              s"session, ${accBytecodes.size} codes and ${accStorage.size} storage roots missing, $holes subtrees unreadable"
+          )
+          onShardPersisted(completed.size)
+        }
+
+        // A shard still queued after a failure begins and stops at its first leaf, so nothing needs to check before it does.
+        def scanOne(idx: Int): Unit =
+          try
+            onShardScanStart(idx)
+            val scan = new CombinedRecoveryScan(storageForShard(), evmCodeStorage, onAccount)
+            scan.scanShard(shards(idx).root, shards(idx).pathPrefix)
+            mergeAndPersist(idx, scan)
+          catch
+            case NonFatal(e) =>
+              firstFailure.compareAndSet(null, e)
+              onShardFailed()
+              throw e
+
+        if concurrency <= 1 then remaining.foreach(scanOne)
+        else
+          val pool = Executors.newFixedThreadPool(math.min(concurrency, remaining.size))
+          given ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
+          try Await.result(Future.sequence(remaining.map(idx => Future(scanOne(idx)))), Duration.Inf)
+          catch case NonFatal(e) => throw Option(firstFailure.get).getOrElse(e)
+          finally pool.shutdown()
+
+        // Final progress publish so the dashboard reflects the completed totals.
+        RecoveryMetrics.setStorageScanProgress(accountsScanned.get(), contractsFound.get(), missingStorageCount.get())
+        RecoveryScanResult(accBytecodes.toVector, accStorage.toVector, holes)
 
 object CombinedRecoveryScanner:
 

@@ -213,32 +213,31 @@ object SubscriptionManager:
 
     def notifyLogs(block: Block): Unit =
       val logSubs = subscriptions.values.collect { case s: LogsSubscription => s }
-      if logSubs.isEmpty then return
-
-      val receipts = blockchainReader.getReceiptsByHash(block.header.hash).getOrElse(Seq.empty)
-      var blockLogIndex = 0
-      receipts.zipWithIndex.foreach { case (receipt, txIndex) =>
-        receipt.logs.zipWithIndex.foreach { case (log, localIdx) =>
-          val globalIdx = blockLogIndex + localIdx
-          logSubs.foreach { sub =>
-            if logMatchesSubscription(log, sub) then
-              val tx = block.body.transactionList(txIndex)
-              val logJson = JObject(
-                "removed" -> JBool(false),
-                "logIndex" -> JString("0x" + globalIdx.toHexString),
-                "transactionIndex" -> JString("0x" + txIndex.toHexString),
-                "transactionHash" -> JString("0x" + tx.hash.toHex),
-                "blockHash" -> JString("0x" + block.header.hash.value.toHex),
-                "blockNumber" -> JString("0x" + block.header.number.value.toString(16)),
-                "address" -> JString(log.loggerAddress.toString),
-                "data" -> JString("0x" + log.data.toHex),
-                "topics" -> JArray(log.logTopics.map(t => JString("0x" + t.toHex)).toList)
-              )
-              push(sub.connectionId, subscriptionEnvelope(sub.subscriptionId, logJson))
+      if logSubs.nonEmpty then
+        val receipts = blockchainReader.getReceiptsByHash(block.header.hash).getOrElse(Seq.empty)
+        var blockLogIndex = 0
+        receipts.zipWithIndex.foreach { case (receipt, txIndex) =>
+          receipt.logs.zipWithIndex.foreach { case (log, localIdx) =>
+            val globalIdx = blockLogIndex + localIdx
+            logSubs.foreach { sub =>
+              if logMatchesSubscription(log, sub) then
+                val tx = block.body.transactionList(txIndex)
+                val logJson = JObject(
+                  "removed" -> JBool(false),
+                  "logIndex" -> JString("0x" + globalIdx.toHexString),
+                  "transactionIndex" -> JString("0x" + txIndex.toHexString),
+                  "transactionHash" -> JString("0x" + tx.hash.toHex),
+                  "blockHash" -> JString("0x" + block.header.hash.value.toHex),
+                  "blockNumber" -> JString("0x" + block.header.number.value.toString(16)),
+                  "address" -> JString(log.loggerAddress.toString),
+                  "data" -> JString("0x" + log.data.toHex),
+                  "topics" -> JArray(log.logTopics.map(t => JString("0x" + t.toHex)).toList)
+                )
+                push(sub.connectionId, subscriptionEnvelope(sub.subscriptionId, logJson))
+            }
           }
+          blockLogIndex += receipt.logs.size
         }
-        blockLogIndex += receipt.logs.size
-      }
 
     def logMatchesSubscription(log: TxLogEntry, sub: LogsSubscription): Boolean =
       val addrMatch = sub.address.forall(addrs => addrs.contains(log.loggerAddress))

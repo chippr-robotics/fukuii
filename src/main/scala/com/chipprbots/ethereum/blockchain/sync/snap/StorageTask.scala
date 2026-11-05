@@ -138,15 +138,16 @@ object StorageTask:
       numChunks: Int
   ): Seq[StorageTask] =
     require(numChunks > 0, s"numChunks must be positive, got $numChunks")
-    if numChunks == 1 then return Seq(StorageTask(accountHash, storageRoot, from, to))
-    val fromBig = BigInt(1, from.toArray.padTo(32, 0.toByte))
-    val toBig = BigInt(1, to.toArray.padTo(32, 0.toByte))
-    val step = (toBig - fromBig) / numChunks
-    (0 until numChunks).map { i =>
-      val start = if i == 0 then from else bigIntTo32(fromBig + step * i)
-      val end = if i == numChunks - 1 then to else bigIntTo32(fromBig + step * (i + 1) - 1)
-      StorageTask(accountHash, storageRoot, start, end)
-    }
+    if numChunks == 1 then Seq(StorageTask(accountHash, storageRoot, from, to))
+    else
+      val fromBig = BigInt(1, from.toArray.padTo(32, 0.toByte))
+      val toBig = BigInt(1, to.toArray.padTo(32, 0.toByte))
+      val step = (toBig - fromBig) / numChunks
+      (0 until numChunks).map { i =>
+        val start = if i == 0 then from else bigIntTo32(fromBig + step * i)
+        val end = if i == numChunks - 1 then to else bigIntTo32(fromBig + step * (i + 1) - 1)
+        StorageTask(accountHash, storageRoot, start, end)
+      }
 
   private[snap] def incrementHash32(hash: ByteString): ByteString =
     require(hash.length == 32, s"Expected 32-byte hash, got ${hash.length}")

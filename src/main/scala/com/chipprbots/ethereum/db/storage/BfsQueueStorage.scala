@@ -100,13 +100,13 @@ class RocksDbBfsQueueStorage(dataSource: DataSource, namespace: Namespace) exten
   def counter: Long = writeCounter.get()
 
   def enqueueBatch(entries: Seq[(Array[Byte], Seq[Array[Byte]], Boolean)]): Unit =
-    if entries.isEmpty then return
-    val upserts = entries.map { case (hash, pathset, isStorage) =>
-      val key = longToBytes(writeCounter.getAndIncrement())
-      val value = encodeEntry(hash, pathset, isStorage)
-      (key, value)
-    }
-    dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = Seq.empty, toUpsert = upserts)))
+    if entries.nonEmpty then
+      val upserts = entries.map { case (hash, pathset, isStorage) =>
+        val key = longToBytes(writeCounter.getAndIncrement())
+        val value = encodeEntry(hash, pathset, isStorage)
+        (key, value)
+      }
+      dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = Seq.empty, toUpsert = upserts)))
 
   def iterateRange(from: Long, to: Long, chunkSize: Int = DefaultChunkSize): Iterator[Seq[BfsEntry]] =
     dataSource match

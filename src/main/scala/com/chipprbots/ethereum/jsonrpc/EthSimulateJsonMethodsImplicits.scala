@@ -2,6 +2,9 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.boundary
+import scala.util.boundary.break
+
 import org.json4s.JsonAST.*
 import org.json4s.jvalue2extractable
 import org.json4s.jvalue2monadic
@@ -41,8 +44,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
               case bsc: JObject => decodeBlockStateCall(bsc)
               case _            => Left(InvalidParams("blockStateCall must be object"))
             }
-            if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get
-            Right(parsed.collect { case Right(v) => v })
+            if parsed.exists(_.isLeft) then parsed.collectFirst { case Left(e) => Left(e) }.get
+            else Right(parsed.collect { case Right(v) => v })
           case JNothing | JNull => Right(Seq.empty)
           case _                => Left(InvalidParams("blockStateCalls must be array"))
 
@@ -51,52 +54,54 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
         }
 
       private def decodeBlockStateCall(obj: JObject): Either[JsonRpcError, BlockStateCall] =
-        val blockOverrides = (obj \ "blockOverrides") match
-          case bo: JObject =>
-            unknownKey(bo, KnownBlockOverrideKeys) match
-              case Some(k) => return Left(InvalidParams(s"invalid argument 0: unknown field \"$k\" in block override"))
-              case None =>
-                decodeBlockOverrides(bo) match
-                  case Right(ov) => Some(ov)
-                  case Left(err) => return Left(err)
-          case _ => None
+        boundary:
+          val blockOverrides = (obj \ "blockOverrides") match
+            case bo: JObject =>
+              unknownKey(bo, KnownBlockOverrideKeys) match
+                case Some(k) =>
+                  break(Left(InvalidParams(s"invalid argument 0: unknown field \"$k\" in block override")))
+                case None =>
+                  decodeBlockOverrides(bo) match
+                    case Right(ov) => Some(ov)
+                    case Left(err) => break(Left(err))
+            case _ => None
 
-        val stateOverrides = (obj \ "stateOverrides") match
-          case JObject(fields) =>
-            val parsed = fields.map {
-              case (addrHex, value: JObject) =>
-                extractAddress(JString(addrHex)) match
-                  case Right(addr) =>
-                    unknownKey(value, KnownStateOverrideKeys) match
-                      case Some(k) =>
-                        Left(
-                          InvalidParams(s"invalid argument 0: unknown field \"$k\" in state override for $addrHex")
-                        )
-                      case None => decodeStateOverride(value, addrHex).map(ov => (addr, ov))
-                  case Left(_) => Left(InvalidParams(s"invalid address: $addrHex"))
-              case (k, _) => Left(InvalidParams(s"invalid state override entry: $k"))
-            }
-            if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get
-            Some(parsed.collect { case Right((k, v)) => (k, v) }.toMap)
-          case _ => None
+          val stateOverrides = (obj \ "stateOverrides") match
+            case JObject(fields) =>
+              val parsed = fields.map {
+                case (addrHex, value: JObject) =>
+                  extractAddress(JString(addrHex)) match
+                    case Right(addr) =>
+                      unknownKey(value, KnownStateOverrideKeys) match
+                        case Some(k) =>
+                          Left(
+                            InvalidParams(s"invalid argument 0: unknown field \"$k\" in state override for $addrHex")
+                          )
+                        case None => decodeStateOverride(value, addrHex).map(ov => (addr, ov))
+                    case Left(_) => Left(InvalidParams(s"invalid address: $addrHex"))
+                case (k, _) => Left(InvalidParams(s"invalid state override entry: $k"))
+              }
+              if parsed.exists(_.isLeft) then break(parsed.collectFirst { case Left(e) => Left(e) }.get)
+              Some(parsed.collect { case Right((k, v)) => (k, v) }.toMap)
+            case _ => None
 
-        val calls = (obj \ "calls") match
-          case JArray(items) =>
-            val parsed = items.map {
-              // execution-apis GenericTransaction, decoded as strictly as go-ethereum's TransactionArgs: a malformed
-              // address, quantity or blob hash is -32602, never a silently absent field (#1629 S4). The payload is
-              // params[0], so errors read "invalid argument 0: ...", as geth reports them. Only the shape is checked
-              // here: the field rules (CallDefaults, preCheck) run per call during the simulation, in geth's order,
-              // so a request with several faults reports the one geth reports.
-              case c: JObject => TxArgsJson.decode(c, argIndex = 0)
-              case _          => Left(InvalidParams("call must be object"))
-            }
-            if parsed.exists(_.isLeft) then return parsed.collectFirst { case Left(e) => Left(e) }.get
-            Some(parsed.collect { case Right(v) => v })
-          case JNothing | JNull => None
-          case _                => return Left(InvalidParams("invalid argument 0: calls must be an array"))
+          val calls = (obj \ "calls") match
+            case JArray(items) =>
+              val parsed = items.map {
+                // execution-apis GenericTransaction, decoded as strictly as go-ethereum's TransactionArgs: a malformed
+                // address, quantity or blob hash is -32602, never a silently absent field (#1629 S4). The payload is
+                // params[0], so errors read "invalid argument 0: ...", as geth reports them. Only the shape is checked
+                // here: the field rules (CallDefaults, preCheck) run per call during the simulation, in geth's order,
+                // so a request with several faults reports the one geth reports.
+                case c: JObject => TxArgsJson.decode(c, argIndex = 0)
+                case _          => Left(InvalidParams("call must be object"))
+              }
+              if parsed.exists(_.isLeft) then break(parsed.collectFirst { case Left(e) => Left(e) }.get)
+              Some(parsed.collect { case Right(v) => v })
+            case JNothing | JNull => None
+            case _                => break(Left(InvalidParams("invalid argument 0: calls must be an array")))
 
-        Right(BlockStateCall(blockOverrides, stateOverrides, calls))
+          Right(BlockStateCall(blockOverrides, stateOverrides, calls))
 
       // execution-apis: "A client MUST reject a key that it does not support with error code -32602." The key sets
       // are the schema's (src/schemas/execute.yaml); `difficulty` is accepted here and rejected post-merge by the

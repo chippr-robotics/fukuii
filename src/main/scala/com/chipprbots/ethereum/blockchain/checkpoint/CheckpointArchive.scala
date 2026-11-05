@@ -178,15 +178,18 @@ object CheckpointArchive:
             if hdrLen < 0 || hdrLen > MaxHeaderBytes then Left(Malformed(s"hdrLen=$hdrLen"))
             else
               val hdrBytes = r(hdrLen)
-              val header =
-                try hdrBytes.toBlockHeader
-                catch case e: Exception => return Left(Malformed(s"blockHeader: ${e.getMessage}"))
-              val weightLen = rInt()
-              if weightLen < 0 || weightLen > MaxWeightBytes then Left(Malformed(s"weightLen=$weightLen"))
-              else
-                val weightBytes = r(weightLen)
-                val totalDifficulty = if weightBytes.isEmpty then BigInt(0) else BigInt(1, weightBytes)
-                Right(Header(chainId, header, ChainWeight(TotalDifficulty(totalDifficulty))))
+              val parsedHeader: Either[Malformed, BlockHeader] =
+                try Right(hdrBytes.toBlockHeader)
+                catch case e: Exception => Left(Malformed(s"blockHeader: ${e.getMessage}"))
+              parsedHeader match
+                case Left(malformed) => Left(malformed)
+                case Right(header) =>
+                  val weightLen = rInt()
+                  if weightLen < 0 || weightLen > MaxWeightBytes then Left(Malformed(s"weightLen=$weightLen"))
+                  else
+                    val weightBytes = r(weightLen)
+                    val totalDifficulty = if weightBytes.isEmpty then BigInt(0) else BigInt(1, weightBytes)
+                    Right(Header(chainId, header, ChainWeight(TotalDifficulty(totalDifficulty))))
       catch case _: EOFException => Left(Truncated("header-section"))
 
     def nextEntry(): Either[DecodeError, Entry] =

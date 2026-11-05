@@ -104,25 +104,24 @@ class PeerRateTracker extends Logger:
     * with fixed periods.
     */
   def tune(): Unit = synchronized {
-    if peers.isEmpty then return
+    if peers.nonEmpty then
+      // Collect RTTs from all peers, sort, and pick geometric-mean index (√N)
+      val rtts = peers.values.map(_.roundtripMs).toArray.sorted
+      val idx = math.sqrt(rtts.length.toDouble).toInt.min(rtts.length - 1)
+      val median = rtts(idx).max(RttMinEstimateMs).min(RttMaxEstimateMs)
 
-    // Collect RTTs from all peers, sort, and pick geometric-mean index (√N)
-    val rtts = peers.values.map(_.roundtripMs).toArray.sorted
-    val idx = math.sqrt(rtts.length.toDouble).toInt.min(rtts.length - 1)
-    val median = rtts(idx).max(RttMinEstimateMs).min(RttMaxEstimateMs)
+      // EMA update of median RTT
+      medianRTT = ((1 - TuningImpact) * medianRTT + TuningImpact * median).toLong
+      medianRTT = medianRTT.max(RttMinEstimateMs).min(RttMaxEstimateMs)
 
-    // EMA update of median RTT
-    medianRTT = ((1 - TuningImpact) * medianRTT + TuningImpact * median).toLong
-    medianRTT = medianRTT.max(RttMinEstimateMs).min(RttMaxEstimateMs)
+      // Increase confidence toward 1.0
+      confidence = confidence + (1.0 - confidence) / 2.0
+      confidence = confidence.max(RttMinConfidence).min(1.0)
 
-    // Increase confidence toward 1.0
-    confidence = confidence + (1.0 - confidence) / 2.0
-    confidence = confidence.max(RttMinConfidence).min(1.0)
-
-    log.debug(
-      s"PeerRateTracker tuned: medianRTT=${medianRTT}ms, confidence=${"%.3f".format(confidence)}, " +
-        s"timeout=${targetTimeout().toSeconds}s, peers=${peers.size}"
-    )
+      log.debug(
+        s"PeerRateTracker tuned: medianRTT=${medianRTT}ms, confidence=${"%.3f".format(confidence)}, " +
+          s"timeout=${targetTimeout().toSeconds}s, peers=${peers.size}"
+      )
   }
 
   /** Notify that a new peer connected. Detunes confidence on small networks.

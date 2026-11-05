@@ -71,46 +71,46 @@ class VmTracer extends ExecutionTracer:
       prevState: ProgramState[W, S],
       nextState: ProgramState[W, S]
   ): Unit =
-    if frameStack.isEmpty then return
-    val frame = frameStack.top
+    if frameStack.nonEmpty then
+      val frame = frameStack.top
 
-    if frame.code.isEmpty then frame.code = prevState.env.program.code
+      if frame.code.isEmpty then frame.code = prevState.env.program.code
 
-    val cost = prevState.gas - nextState.gas
-    val exUsed = nextState.gas
+      val cost = prevState.gas - nextState.gas
+      val exUsed = nextState.gas
 
-    val exPush: Seq[BigInt] =
-      if opCode.alpha > 0 then nextState.stack.toSeq.take(opCode.alpha).map(_.toBigInt)
-      else Seq.empty
+      val exPush: Seq[BigInt] =
+        if opCode.alpha > 0 then nextState.stack.toSeq.take(opCode.alpha).map(_.toBigInt)
+        else Seq.empty
 
-    val exMem: Option[(BigInt, ByteString)] = opCode match
-      case MSTORE if prevState.stack.size >= 2 =>
-        val offset = prevState.stack.toSeq.head
-        val data = nextState.memory.load(offset, UInt256(32))._1
-        Some((offset.toBigInt, data))
-      case MSTORE8 if prevState.stack.size >= 2 =>
-        val offset = prevState.stack.toSeq.head
-        val data = nextState.memory.load(offset, UInt256(1))._1
-        Some((offset.toBigInt, data))
-      case _ =>
-        None
+      val exMem: Option[(BigInt, ByteString)] = opCode match
+        case MSTORE if prevState.stack.size >= 2 =>
+          val offset = prevState.stack.toSeq.head
+          val data = nextState.memory.load(offset, UInt256(32))._1
+          Some((offset.toBigInt, data))
+        case MSTORE8 if prevState.stack.size >= 2 =>
+          val offset = prevState.stack.toSeq.head
+          val data = nextState.memory.load(offset, UInt256(1))._1
+          Some((offset.toBigInt, data))
+        case _ =>
+          None
 
-    val exStore: Option[(BigInt, BigInt)] = opCode match
-      case SSTORE if prevState.stack.size >= 2 =>
-        val key = prevState.stack.toSeq(0).toBigInt
-        val v = prevState.stack.toSeq(1).toBigInt
-        Some((key, v))
-      case _ =>
-        None
+      val exStore: Option[(BigInt, BigInt)] = opCode match
+        case SSTORE if prevState.stack.size >= 2 =>
+          val key = prevState.stack.toSeq(0).toBigInt
+          val v = prevState.stack.toSeq(1).toBigInt
+          Some((key, v))
+        case _ =>
+          None
 
-    frame.ops += VmOp(
-      pc = prevState.pc,
-      cost = cost,
-      exUsed = exUsed,
-      exPush = exPush,
-      exMem = exMem,
-      exStore = exStore
-    )
+      frame.ops += VmOp(
+        pc = prevState.pc,
+        cost = cost,
+        exUsed = exUsed,
+        exPush = exPush,
+        exMem = exMem,
+        exStore = exStore
+      )
 
   override def onCallEnter(
       opCode: String,
@@ -124,10 +124,10 @@ class VmTracer extends ExecutionTracer:
     frameStack.push(frame)
 
   override def onCallExit(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit =
-    if frameStack.size <= 1 then return
-    val frame = frameStack.pop()
-    val encoded = encodeFrame(frame)
-    if frameStack.nonEmpty && frameStack.top.ops.nonEmpty then frameStack.top.ops.last.sub = Some(encoded)
+    if frameStack.size > 1 then
+      val frame = frameStack.pop()
+      val encoded = encodeFrame(frame)
+      if frameStack.nonEmpty && frameStack.top.ops.nonEmpty then frameStack.top.ops.last.sub = Some(encoded)
 
   override def getResult: JValue = rootFrame match
     case Some(frame) => encodeFrame(frame)

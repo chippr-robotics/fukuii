@@ -124,110 +124,64 @@ object HealCrashChild:
       invariantStep(rocks, point)
       gate.signal(point)
       System.in.read()
-      return
-    val dataSource = new HookedDataSource(rocks, gate)
-    val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
-    val mpt: MptStorage =
-      val backing = stateStorage.getBackingStorage(1)
-      if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate, oldTrie.nodes.map(_.hash).toSet)
-      else backing
-    val pathNodes = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
+    else
+      val dataSource = new HookedDataSource(rocks, gate)
+      val nodeStorage = new NodeStorage(dataSource)
+      val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
+      val mpt: MptStorage =
+        val backing = stateStorage.getBackingStorage(1)
+        if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate, oldTrie.nodes.map(_.hash).toSet)
+        else backing
+      val pathNodes = Option.when(scheme == StorageScheme.Path)(new PathNodeStorage(dataSource))
 
-    val progress = new SnapSyncProgressStorage(dataSource)
-    // `excluded-resolved`: an account was committed, its storage was abandoned and the entry says so: the resolver seeds
-    // the storage root, and the first chain it commits is what the kill lands after.
-    val resolving = point == "excluded-resolved" || point == "excluded-removed"
-    if resolving then
-      val onDisk = oldTrie.nodes.filterNot(n => Set("sRoot", "sLeaf1")(n.label))
-      pathNodes match
-        case Some(_) => PathHealPresenceFixtures.seedPath(new PathNodeStorage(rocks), onDisk)
-        case None =>
-          val backing = stateStorage.getBackingStorage(1)
-          backing.storeRawNodes(onDisk.map(n => (n.hash, n.encoded.toArray)))
-          backing.persist()
-      progress.recordExcluded(
-        Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
-      )
-      gate.armExcludedDelete() // the next write to the set is the resolver's
-    // `code-*`: the contract fixture's code is never served; the coordinator is told 30 idle minutes have passed.
-    val codeHandOff = point.startsWith("code-")
-    // `repeg-partial`: one node of the old trie is never served, so the nodes above it stay held.
-    val withheld: Set[Seq[ByteString]] =
-      if point == "repeg-partial" then HealCrashChild.withheldLabels(fixture).map(oldTrie(_).pathset).toSet
-      else Set.empty
-    val served = new AtomicReference[Map[Seq[ByteString], ByteString]](oldTrie.served -- withheld)
-    val requests = new AtomicInteger(0)
-    val repegReady = new CountDownLatch(1)
-    val coordinatorRef = new AtomicReference[ActorRef[TrieNodeHealingCoordinator.Command]]()
+      val progress = new SnapSyncProgressStorage(dataSource)
+      // `excluded-resolved`: an account was committed, its storage was abandoned and the entry says so: the resolver seeds
+      // the storage root, and the first chain it commits is what the kill lands after.
+      val resolving = point == "excluded-resolved" || point == "excluded-removed"
+      if resolving then
+        val onDisk = oldTrie.nodes.filterNot(n => Set("sRoot", "sLeaf1")(n.label))
+        pathNodes match
+          case Some(_) => PathHealPresenceFixtures.seedPath(new PathNodeStorage(rocks), onDisk)
+          case None =>
+            val backing = stateStorage.getBackingStorage(1)
+            backing.storeRawNodes(onDisk.map(n => (n.hash, n.encoded.toArray)))
+            backing.persist()
+        progress.recordExcluded(
+          Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
+        )
+        gate.armExcludedDelete() // the next write to the set is the resolver's
+      // `code-*`: the contract fixture's code is never served; the coordinator is told 30 idle minutes have passed.
+      val codeHandOff = point.startsWith("code-")
+      // `repeg-partial`: one node of the old trie is never served, so the nodes above it stay held.
+      val withheld: Set[Seq[ByteString]] =
+        if point == "repeg-partial" then HealCrashChild.withheldLabels(fixture).map(oldTrie(_).pathset).toSet
+        else Set.empty
+      val served = new AtomicReference[Map[Seq[ByteString], ByteString]](oldTrie.served -- withheld)
+      val requests = new AtomicInteger(0)
+      val repegReady = new CountDownLatch(1)
+      val coordinatorRef = new AtomicReference[ActorRef[TrieNodeHealingCoordinator.Command]]()
 
-    val testKit = ActorTestKit("heal-crash-child")
-    val peerManager = testKit.spawn(Behaviors.receiveMessage[NetworkPeerManagerActor.Command] {
-      case NetworkPeerManagerActor.SendMessageCmd(message, _) =>
-        message.underlyingMsg match
-          case req: SNAP.GetTrieNodes =>
-            val n = requests.incrementAndGet()
-            if point == "held" && n == 2 then gate.signal("held") // the root's children: never answered
-            else
-              if withheld.nonEmpty && req.paths.forall(withheld.contains) then repegReady.countDown()
-              val map = served.get()
-              coordinatorRef.get() ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
-                SNAP.TrieNodes(req.requestId, req.paths.flatMap(map.get))
-              )
-          case _ => ()
-        Behaviors.same
-      case _ => Behaviors.same
-    })
-    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
-    // Two writer threads, as production's pool has several (the coordinator keeps one healed-node write at a time).
-    val pool = Executors.newFixedThreadPool(2)
-    val coordinator = HealingTrieFixtures.spawnCoordinator(
-      stateRoot = oldTrie.root.hash,
-      networkPeerManager = peerManager,
-      requestTracker = new SNAPRequestTracker()(using testKit.system.classicSystem.scheduler),
-      mptStorage = mpt,
-      batchSize = 16,
-      snapSyncController = controller.ref,
-      healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
-      storageScheme = scheme,
-      pathNodeStorageOpt = pathNodes,
-      movingRootDeltaHeal = true,
-      evmCodeStorage = Option.when(codeHandOff)(new EvmCodeStorage(dataSource)),
-      excludedStore = Option.when(resolving || codeHandOff)(progress)
-    )(using testKit)
-    coordinatorRef.set(coordinator)
-    def peerAvailable(): Unit =
-      coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
-        PeerTestHelpers.createTestPeer("heal-crash-peer", testKit.createTestProbe[Any]().ref.toClassic)
-      )
-
-    coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(oldTrie.root.hash)
-    peerAvailable()
-
-    if codeHandOff then
-      val awaited = oldTrie.nodes.flatMap(HealCrashChild.contractCode).toSet
-      var reported = Set.empty[ByteString]
-      controller.fishForMessage(60.seconds) {
-        case SNAPSyncController.HealedCodeHashes(hashes) =>
-          reported ++= hashes
-          if reported == awaited then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
-        case _ => FishingOutcomes.continueAndIgnore
-      }
-      (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach(_ =>
-        coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
-      )
-
-    if point.startsWith("excluded") && !resolving then
-      controller.fishForMessage(60.seconds) {
-        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
-      }
-      // The excluded-write points land inside this call, on the writing thread: this one.
-      progress.recordExcluded(
-        Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
-      )
-      gate.armExcludedDelete()
-      HealingTrieFixtures.spawnCoordinator(
+      val testKit = ActorTestKit("heal-crash-child")
+      val peerManager = testKit.spawn(Behaviors.receiveMessage[NetworkPeerManagerActor.Command] {
+        case NetworkPeerManagerActor.SendMessageCmd(message, _) =>
+          message.underlyingMsg match
+            case req: SNAP.GetTrieNodes =>
+              val n = requests.incrementAndGet()
+              if point == "held" && n == 2 then gate.signal("held") // the root's children: never answered
+              else
+                if withheld.nonEmpty && req.paths.forall(withheld.contains) then repegReady.countDown()
+                val map = served.get()
+                coordinatorRef.get() ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(
+                  SNAP.TrieNodes(req.requestId, req.paths.flatMap(map.get))
+                )
+            case _ => ()
+          Behaviors.same
+        case _ => Behaviors.same
+      })
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      // Two writer threads, as production's pool has several (the coordinator keeps one healed-node write at a time).
+      val pool = Executors.newFixedThreadPool(2)
+      val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = oldTrie.root.hash,
         networkPeerManager = peerManager,
         requestTracker = new SNAPRequestTracker()(using testKit.system.classicSystem.scheduler),
@@ -238,29 +192,75 @@ object HealCrashChild:
         storageScheme = scheme,
         pathNodeStorageOpt = pathNodes,
         movingRootDeltaHeal = true,
-        excludedStore = Some(progress)
-      )(using testKit) ! TrieNodeHealingCoordinator.StartTrieNodeHealing(oldTrie.root.hash)
+        evmCodeStorage = Option.when(codeHandOff)(new EvmCodeStorage(dataSource)),
+        excludedStore = Option.when(resolving || codeHandOff)(progress)
+      )(using testKit)
+      coordinatorRef.set(coordinator)
+      def peerAvailable(): Unit =
+        coordinator ! TrieNodeHealingCoordinator.HealingPeerAvailable(
+          PeerTestHelpers.createTestPeer("heal-crash-peer", testKit.createTestProbe[Any]().ref.toClassic)
+        )
 
-    if point.startsWith("repeg") then
-      if point == "repeg-full" || point == "repeg-delete" then
+      coordinator ! TrieNodeHealingCoordinator.StartTrieNodeHealing(oldTrie.root.hash)
+      peerAvailable()
+
+      if codeHandOff then
+        val awaited = oldTrie.nodes.flatMap(HealCrashChild.contractCode).toSet
+        var reported = Set.empty[ByteString]
+        controller.fishForMessage(60.seconds) {
+          case SNAPSyncController.HealedCodeHashes(hashes) =>
+            reported ++= hashes
+            if reported == awaited then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
+          case _ => FishingOutcomes.continueAndIgnore
+        }
+        (1 to TrieNodeHealingCoordinator.MaxBlockedTicks).foreach(_ =>
+          coordinator ! TrieNodeHealingCoordinator.HealingBlockedTick
+        )
+
+      if point.startsWith("excluded") && !resolving then
         controller.fishForMessage(60.seconds) {
           case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
           case _                                       => FishingOutcomes.continueAndIgnore
         }
-      else if !repegReady.await(60, TimeUnit.SECONDS) then
-        throw new IllegalStateException("the withheld node was never requested alone")
-      gate.armRepeg()
-      served.set(newTrie.served)
-      coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash)
-      peerAvailable()
+        // The excluded-write points land inside this call, on the writing thread: this one.
+        progress.recordExcluded(
+          Seq(ExcludedAccount(HealCrashChild.excludedSubject(fixture, oldTrie), ExcludedReason.StorageAbandoned))
+        )
+        gate.armExcludedDelete()
+        HealingTrieFixtures.spawnCoordinator(
+          stateRoot = oldTrie.root.hash,
+          networkPeerManager = peerManager,
+          requestTracker = new SNAPRequestTracker()(using testKit.system.classicSystem.scheduler),
+          mptStorage = mpt,
+          batchSize = 16,
+          snapSyncController = controller.ref,
+          healingWriterEcOverride = Some(ExecutionContext.fromExecutorService(pool)),
+          storageScheme = scheme,
+          pathNodeStorageOpt = pathNodes,
+          movingRootDeltaHeal = true,
+          excludedStore = Some(progress)
+        )(using testKit) ! TrieNodeHealingCoordinator.StartTrieNodeHealing(oldTrie.root.hash)
 
-    // Until the kill: a healing that ends without reaching the kill point says so, and still waits.
-    controller.fishForMessage(60.seconds) {
-      case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
-      case _                                       => FishingOutcomes.continueAndIgnore
-    }
-    gate.signal("none")
-    System.in.read()
+      if point.startsWith("repeg") then
+        if point == "repeg-full" || point == "repeg-delete" then
+          controller.fishForMessage(60.seconds) {
+            case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+            case _                                       => FishingOutcomes.continueAndIgnore
+          }
+        else if !repegReady.await(60, TimeUnit.SECONDS) then
+          throw new IllegalStateException("the withheld node was never requested alone")
+        gate.armRepeg()
+        served.set(newTrie.served)
+        coordinator ! TrieNodeHealingCoordinator.HealingPivotRefreshed(newTrie.root.hash)
+        peerAvailable()
+
+      // Until the kill: a healing that ends without reaching the kill point says so, and still waits.
+      controller.fishForMessage(60.seconds) {
+        case SNAPSyncController.StateHealingComplete => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      gate.signal("none")
+      System.in.read()
 
   /** What a frontier left by an older binary holds: an entry, a subtree record and the sentinel. */
   val frontierEntry: ByteString = ByteString(Array.fill[Byte](32)(0xab.toByte))

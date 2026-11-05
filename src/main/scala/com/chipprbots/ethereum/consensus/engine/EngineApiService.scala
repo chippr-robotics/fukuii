@@ -2268,17 +2268,18 @@ object BlobGasUtils:
       updateFraction: BigInt
   ): BigInt =
     val total = parentExcessBlobGas + parentBlobGasUsed
-    if total < targetGas then return BigInt(0)
-    val reservePrice = BLOB_BASE_COST * parentBaseFee
-    val blobBaseFee = fakeExponential(MIN_BLOB_BASE_FEE, parentExcessBlobGas, updateFraction)
-    val blobPrice = blobBaseFee * GAS_PER_BLOB
-    if reservePrice > blobPrice then
-      // Both `targetGas` and `maxGas` are gas units; the blob-count ratio (Max-Target)/Max
-      // is the same regardless of unit, so we can compute against gas directly. Integer
-      // division truncates toward zero (same as geth's uint64 arithmetic).
-      val scaled = parentBlobGasUsed * (maxGas - targetGas) / maxGas
-      parentExcessBlobGas + scaled
-    else total - targetGas
+    if total < targetGas then BigInt(0)
+    else
+      val reservePrice = BLOB_BASE_COST * parentBaseFee
+      val blobBaseFee = fakeExponential(MIN_BLOB_BASE_FEE, parentExcessBlobGas, updateFraction)
+      val blobPrice = blobBaseFee * GAS_PER_BLOB
+      if reservePrice > blobPrice then
+        // Both `targetGas` and `maxGas` are gas units; the blob-count ratio (Max-Target)/Max
+        // is the same regardless of unit, so we can compute against gas directly. Integer
+        // division truncates toward zero (same as geth's uint64 arithmetic).
+        val scaled = parentBlobGasUsed * (maxGas - targetGas) / maxGas
+        parentExcessBlobGas + scaled
+      else total - targetGas
 
   /** Calculate the blob gas price using the fake exponential function. Per EIP-4844:
     * fake_exponential(MIN_BLOB_BASE_FEE, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION)

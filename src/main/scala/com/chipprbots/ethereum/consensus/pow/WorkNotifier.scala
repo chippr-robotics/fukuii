@@ -37,23 +37,23 @@ object WorkNotifier extends Logger:
   /** Posts the work package to every configured URL. Each POST is independent; one failure does not affect others.
     */
   def notify(urls: Seq[String], work: WorkPackage)(implicit system: ActorSystem): Unit =
-    if urls.isEmpty then return
-    implicit val ec: ExecutionContext = system.dispatcher
-    val body = buildJsonBody(work)
-    urls.foreach { url =>
-      val request = HttpRequest(
-        method = HttpMethods.POST,
-        uri = url,
-        entity = HttpEntity(ContentTypes.`application/json`, body)
-      )
-      Http().singleRequest(request).onComplete {
-        case Success(response) =>
-          response.discardEntityBytes()
-          log.debug("Work notification sent to {} (HTTP {})", url, response.status.intValue())
-        case Failure(ex) =>
-          log.warn("Work notification to {} failed: {}", url, ex.getMessage)
+    if urls.nonEmpty then
+      implicit val ec: ExecutionContext = system.dispatcher
+      val body = buildJsonBody(work)
+      urls.foreach { url =>
+        val request = HttpRequest(
+          method = HttpMethods.POST,
+          uri = url,
+          entity = HttpEntity(ContentTypes.`application/json`, body)
+        )
+        Http().singleRequest(request).onComplete {
+          case Success(response) =>
+            response.discardEntityBytes()
+            log.debug("Work notification sent to {} (HTTP {})", url, response.status.intValue())
+          case Failure(ex) =>
+            log.warn("Work notification to {} failed: {}", url, ex.getMessage)
+        }
       }
-    }
 
   /** Builds the JSON array body matching core-geth's GetWork wire format. All values are 0x-prefixed hex strings.
     */
