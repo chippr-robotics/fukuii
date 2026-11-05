@@ -82,7 +82,7 @@ private[scalanet] object DynamicTLSExtension:
 
       override def sizeBound: SizeBound = SizeBound.unknown
 
-    implicit class ExtensionPublicKeyOps(key: ExtensionPublicKey):
+    extension (key: ExtensionPublicKey)
       def getNodeId: BitVector =
         key.keyType match
           case Secp256k1 =>

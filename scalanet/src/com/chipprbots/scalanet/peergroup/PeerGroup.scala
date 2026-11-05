@@ -184,7 +184,7 @@ object PeerGroup:
         failure
       }
 
-    implicit class ServerOps[A, M](stream: Stream[IO, ServerEvent[A, M]]):
+    extension [A, M](stream: Stream[IO, ServerEvent[A, M]])
       def collectChannelCreated: Stream[IO, (Channel[A, M], Release)] = stream.collect(ChannelCreated.collector)
       def collectHandshakeFailure: Stream[IO, HandshakeException[A]] = stream.collect(HandshakeFailed.collector)
 

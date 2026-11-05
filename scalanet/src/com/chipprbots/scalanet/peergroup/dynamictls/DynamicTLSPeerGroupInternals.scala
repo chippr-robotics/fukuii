@@ -93,7 +93,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
       TimeUnit.MILLISECONDS
     )
 
-  implicit class ChannelOps(val channel: io.netty.channel.Channel):
+  extension (channel: io.netty.channel.Channel)
     def sendMessage[M](m: M)(implicit codec: Codec[M]): IO[Unit] =
       for
         enc <- IO.fromTry(codec.encode(m).toTry)
