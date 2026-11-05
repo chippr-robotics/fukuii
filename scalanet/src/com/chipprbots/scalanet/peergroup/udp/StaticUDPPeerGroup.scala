@@ -637,41 +637,41 @@ object StaticUDPPeerGroup extends StrictLogging:
 
     // Allocated before the event loop so it is released after it: no datagram can be handed to a closed dispatcher.
     Dispatcher.parallel[IO].flatMap { dispatcher =>
-    eventLoopResource.flatMap { workerGroup =>
-      // Create the peer group with all its dependencies
-      val peerGroupResource = Resource.eval {
-        for
-          isShutdownRef <- Ref[IO].of(false)
-          serverQueue <- CloseableQueue[ServerEvent[InetMultiAddress, M]](config.maxServerChannels)
-          serverChannelSemaphore <- Semaphore[IO](1)
-          serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ServerAlloc[M]])
-          clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
-        yield new StaticUDPPeerGroup[M](
-          config,
-          workerGroup,
-          isShutdownRef,
-          serverQueue,
-          serverChannelSemaphore,
-          serverChannelsRef,
-          clientChannelsRef,
-          dispatcher
-        )
-      }
+      eventLoopResource.flatMap { workerGroup =>
+        // Create the peer group with all its dependencies
+        val peerGroupResource = Resource.eval {
+          for
+            isShutdownRef <- Ref[IO].of(false)
+            serverQueue <- CloseableQueue[ServerEvent[InetMultiAddress, M]](config.maxServerChannels)
+            serverChannelSemaphore <- Semaphore[IO](1)
+            serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ServerAlloc[M]])
+            clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
+          yield new StaticUDPPeerGroup[M](
+            config,
+            workerGroup,
+            isShutdownRef,
+            serverQueue,
+            serverChannelSemaphore,
+            serverChannelsRef,
+            clientChannelsRef,
+            dispatcher
+          )
+        }
 
-      peerGroupResource.flatMap { peerGroup =>
-        // Create the server channel as a Resource
-        peerGroup.createServerChannel.flatMap { _ =>
-          peerGroup.reapIdleServerChannels.background.flatMap { _ =>
-            Resource.make {
-              IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
-                .as(peerGroup)
-            } { _ =>
-              peerGroup.shutdown
+        peerGroupResource.flatMap { peerGroup =>
+          // Create the server channel as a Resource
+          peerGroup.createServerChannel.flatMap { _ =>
+            peerGroup.reapIdleServerChannels.background.flatMap { _ =>
+              Resource.make {
+                IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
+                  .as(peerGroup)
+              } { _ =>
+                peerGroup.shutdown
+              }
             }
           }
         }
       }
-    }
     }
 
   private class ChannelImpl[M](
