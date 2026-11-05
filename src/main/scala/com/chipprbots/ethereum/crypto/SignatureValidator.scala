@@ -12,6 +12,9 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
 // scalastyle:off regex
+@annotation.nowarn("cat=deprecation")
+// DEFERRED 2026-11-05 (spec 020 DC-4, see specs/020-scala-3-9-lts-migration/dc4-ledger.md): scala.App is deprecated
+// since 3.8.0. `def main` changes initialisation order (delayedInit), so forge decides in a follow-up.
 object SignatureValidator extends App with SecureRandomBuilder with JsonMethodsImplicits:
 
   args match
