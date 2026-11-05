@@ -13,7 +13,8 @@ The weekly `dependency-check.yml` job runs `dependencyTree` only (recommendation
 **Updated 2026-11-05 (spec 020 PR 7).** The audit above is the 2026-10-17 record. In this table the **Pinned** column now
 shows the pins on the tree after spec 020, read from the build files (`project/build.properties`, `project/plugins.sbt`,
 `build.sbt`, `.scalafmt.conf`, `.github/workflows/ci.yml`, `docker/Dockerfile`), with the 2026-10-17 value in
-parentheses. The "Latest" columns, the verdict and the actions are the audit's, as of 2026-10-17.
+parentheses. For the Scala, sbt, scalafmt and scalafix rows the Status and Action cells are updated too. The "Latest"
+columns, and the JDK row's other cells, are the audit's 2026-10-17 record.
 
 | Component | Pinned | Latest on the same support line | Latest LTS line | Status | Action |
 | --- | --- | --- | --- | --- | --- |

@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Scala 3.9.0 LTS at `-source:3.9`, and sbt 1.13.0 (spec 020, #1631, #1717). Breaking for projects that consume the
-  published modules.** The build moves from Scala 3.3.8 and sbt 1.10.7. Node behaviour is unchanged. It was checked by importing
+- **Scala 3.9.0 LTS at `-source:3.9` (spec 020, #1717). Breaking for projects that consume the published modules.** The
+  build moves from Scala 3.3.8 (sbt 1.13.0 already shipped in 0.10.0). Node behaviour is unchanged. It was checked by importing
   the same fixed Mordor and Ephemery block ranges with the 0.10.0 build and with this one (every state and receipt root
   equal, import time inside the budget set for the move), and by the unit and ethereum/tests suites.
   - **Rebuild downstream projects.** `bytes`, `crypto`, `rlp`, `scalanet` and `scalanet-discovery` are compiled by

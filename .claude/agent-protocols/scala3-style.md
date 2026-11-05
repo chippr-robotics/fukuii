@@ -341,7 +341,7 @@ deferral is `specs/020-scala-3-9-lts-migration/dc4-ledger.md`.
 |-------|-----------------|-------------------|
 | 3.4 | alphanumeric method in infix position must be declared `infix`; `_` as a type wildcard (write `?`); `with` as a type operator (write `&`); illegal literal `-98.toByte` (E028, write `(-98).toByte`) | cleared by the 3.4 rewrite (PR 3); each is a build error through `-Wconf` (`warning-ratchet.md`) |
 | 3.5 | no source change | none |
-| 3.6, 3.7 | given prioritisation changes; an implicit parameter list passed without `using` is flagged | 371 prioritisation sites made explicit (DC-3, PR 4); 564 `using` inserted in 197 files (PR 5a); E205 and the `using` message are build errors |
+| 3.6, 3.7 | given prioritisation changes; an implicit parameter list passed without `using` is flagged | 381 prioritisation sites (rows of `dc3-sites.md`; GT-1 measured 371) resolved by DC-3 (PR 4); 564 `using` inserted in 197 files (PR 5a); E205 and the `using` message are build errors |
 | 3.8 | SIP-62 "better fors" (enabled from `-source:3.8`) | no rewrite diff and no warning, yet **not elaboration-neutral** (below) |
 | 3.9 | no rewrite diff; nothing new enforced | `-source:3.9` set (PR 6) |
 

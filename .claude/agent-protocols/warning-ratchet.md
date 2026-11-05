@@ -8,7 +8,7 @@ a Scala 2→3 migration. Correctness outranks tidiness: a behavior change hidden
 a "cleanup" is worse than leaving the warning.
 
 Used by: WRAITH (warning-cleanup sessions), MITHRIL (Scala 3 idiom cleanup)
-Project reference: `fukuii/.claude/agent-protocols/completed/CHORE-QUEUE.md` (archive, C1-C14 done)
+Project reference: `fukuii/.claude/agent-protocols/completed/CHORE-QUEUE.md` (archive, C1-C14 done; local and gitignored, absent from a fresh checkout)
 
 ---
 
