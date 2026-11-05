@@ -105,7 +105,7 @@ The distribution is created at: `target/universal/fukuii-<version>.zip`
 sbt assembly
 ```
 
-The JAR is created at: `target/scala-3.3.7/fukuii-assembly-<version>.jar`
+The JAR is created at: `target/scala-3.9.0/fukuii-assembly-<version>.jar`
 
 ## Run from Source
 

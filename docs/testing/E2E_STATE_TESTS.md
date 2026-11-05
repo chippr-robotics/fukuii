@@ -204,7 +204,7 @@ If tests fail to compile:
 ```bash
 # Ensure you're using the correct Scala version
 sbt "show scalaVersion"
-# Should output: 3.3.7
+# Should output: 3.9.0
 
 # Clean and recompile
 sbt clean
