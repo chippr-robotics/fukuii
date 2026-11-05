@@ -592,7 +592,68 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       networkPeerManager.expectNoMessage(200.millis)
     )
 
+  // ─── #1654 on a flat PoS chain (difficulty 0 after the merge) ─────────────
+  //
+  // Post-merge every block adds 0, so a block's weight equals its parent's: the frozen terminal TD. These pin at the
+  // handler what HeadChainWeightSpec pins at `classify` (beacon review).
+
+  it should "write nothing on a post-merge head above a SNAP pivot whose TD was a peer-interpolated estimate" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      // Pivot P stored PEER_INTERPOLATED_TD (plausible, but a guess); P+1..P+3 were imported on top at difficulty 0, so
+      // each stores its parent's weight unchanged. The base is estimated; every link holds.
+      val pivotEstimate: BigInt = SepoliaFrozenTD * PoSPivot / (PoSPivot + 100)
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 4, difficulty = BigInt(0))
+      def weights: Vector[BigInt] =
+        chain.map(h => blockchainReader.getChainWeightByHash(h.hash).get.totalDifficulty.value)
+      weights shouldBe Vector.fill(4)(pivotEstimate)
+      drainRegistration()
+
+      // Tier 1: before #1654 this wrote frozenTD * (P+3) / (P+53), below the frozen TD the parent carries.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, PoSPivot + 53)
+      )
+      // Tier 2 and Tier 3 (ETH68 STATUS only; pure ETH69).
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, BigInt(0))
+      )
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
+      )
+
+      weights shouldBe Vector.fill(4)(pivotEstimate)
+      testScheduler.timePasses(30.minutes)
+      networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  it should "still run the estimate path when the post-merge head is the SNAP pivot itself (no parent weight)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val pivotEstimate: BigInt = SepoliaFrozenTD * PoSPivot / (PoSPivot + 100)
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 1, difficulty = BigInt(0))
+      drainRegistration()
+
+      val peerMaxBlock: BigInt = PoSPivot + 53
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, peerMaxBlock)
+      )
+
+      // Unchanged from before #1654: Tier 1's linear interpolation.
+      blockchainReader.getChainWeightByHash(chain.head.hash).get.totalDifficulty.value shouldBe
+        SepoliaFrozenTD * PoSPivot / peerMaxBlock
+    )
+
   // ─── Base test setup ──────────────────────────────────────────────────────
+
+  // Sepolia: the TD frozen at the merge, and a post-merge SNAP pivot height.
+  private val SepoliaFrozenTD: BigInt = BigInt("17000018015853232")
+  private val PoSPivot: BigInt = BigInt(9500000)
 
   private val MordorPivot: BigInt = BigInt(15000000)
   private val MordorDifficulty: BigInt = BigInt(9000000)
@@ -738,14 +799,16 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       buf.toVector
 
     /** #1654: save `length` blocks (header + empty body) numbered from `startNum`, the first a child of `parentHash`,
-      * each with Mordor-scale difficulty. The first stores `firstWeight`; each later one stores its parent's weight
-      * plus its difficulty, as block import does. The last becomes the best block. Returns them in ascending order.
+      * each with `difficulty` (Mordor-scale by default; 0 for a post-merge chain). The first stores `firstWeight`; each
+      * later one stores its parent's weight plus its difficulty, as block import does. The last becomes the best block.
+      * Returns them in ascending order.
       */
     def saveLinkedChain(
         parentHash: BlockHash,
         startNum: BigInt,
         firstWeight: BigInt,
-        length: Int
+        length: Int,
+        difficulty: BigInt = MordorDifficulty
     ): Vector[BlockHeader] =
       val buf = scala.collection.mutable.ArrayBuffer.empty[BlockHeader]
       var parent = parentHash
@@ -755,7 +818,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
         val h = Fixtures.Blocks.Genesis.header.copy(
           number = BlockNumber(n),
           parentHash = parent,
-          difficulty = Difficulty(MordorDifficulty),
+          difficulty = Difficulty(difficulty),
           extraData = ByteString(n.toByteArray)
         )
         if i > 0 then weight = weight.increase(h)
