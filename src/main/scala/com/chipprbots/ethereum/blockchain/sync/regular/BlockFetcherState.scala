@@ -215,6 +215,10 @@ case class BlockFetcherState(
       .toRight(BlacklistReason.UnrequestedBodies)
 
   // Checks that the received block bodies are an ordered subset of the ones requested
+  @annotation.nowarn("id=E029")
+  // DEFERRED 2026-11-05 (spec 020 DC-4, see specs/020-scala-3-9-lts-migration/dc4-ledger.md): Scala 3.9 says this
+  // match may not be exhaustive (counter-example `(_, Seq(_, _*))`). The cases look complete, so it may be a false
+  // positive on `Seq()` / `+:`, but adding a case would be a behaviour change (DC-8): analysed in a follow-up.
   @tailrec
   private def bodiesAreOrderedSubsetOfRequested(
       requestedHeaders: Seq[BlockHeader],

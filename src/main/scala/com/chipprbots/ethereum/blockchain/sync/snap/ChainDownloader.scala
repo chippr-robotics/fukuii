@@ -784,6 +784,10 @@ class ChainDownloader private (
     * happens, matching stops (nothing later in `items` is tried either — position is unrecoverable past a response that
     * doesn't correspond to what was asked for).
     */
+  @annotation.nowarn("id=E029")
+  // DEFERRED 2026-11-05 (spec 020 DC-4, see specs/020-scala-3-9-lts-migration/dc4-ledger.md): Scala 3.9 says this
+  // match may not be exhaustive (counter-example `(_, Seq(_, _*))`). The cases look complete, so it may be a false
+  // positive on `Seq()` / `+:`, but adding a case would be a behaviour change (DC-8): analysed in a follow-up.
   @tailrec
   private def matchOrderedSubsequence[Item](
       remainingHashes: Seq[ByteString],
