@@ -77,10 +77,11 @@ jobs:
         env:
           FUKUII_DEV: true
 
-      # scalafix --check and scalafmtCheckAll on every module, scalanet and scalanetDiscovery included
-      # (the `formatCheck` alias in build.sbt; spec 020 PR 6b, #1656). After the compile, so a compile
-      # error is reported as one, not as a lint failure.
-      - name: Check formatting and lint (scalafmt + scalafix, all modules)
+      # The `formatCheck` alias in build.sbt (spec 020 PR 6b, #1656): scalafmtCheckAll on every module
+      # (root, bytes, crypto, rlp, scalanet, scalanetDiscovery) and scalafixAll --check on root, bytes,
+      # crypto and rlp. The root project does not aggregate the others, so a bare scalafmtCheckAll
+      # checks root alone. After the compile, so a compile error is reported as one, not as a lint failure.
+      - name: Check formatting (all modules) and scalafix (root, bytes, crypto, rlp)
         run: sbt formatCheck
         env:
           FUKUII_DEV: true

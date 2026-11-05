@@ -83,9 +83,9 @@ jobs:
         # Use sbt's quoted multi-command syntax. The bare `sbt scalafmtAll scalafmtSbt`
         # form is mis-parsed by sbt (it reads the two space-separated tasks as one
         # selector and fails with "Expected '/'"), which had this job red on every PR.
-        # The scalanet modules are outside the root aggregate, so they are named here, as
-        # ci.yml's formatCheck checks them.
-        run: sbt "scalafmtAll; scalafmtSbt; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
+        # The root project does not aggregate the other modules, so a bare scalafmtAll formats
+        # root alone; each module is named here, the same set ci.yml's formatCheck checks.
+        run: sbt "scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
         env:
           FUKUII_DEV: true
 

@@ -107,7 +107,8 @@ gates:
     tier: required
     owner: realcodywburns
     covers: >-
-      compile-all, formatCheck (scalafix + scalafmt, every module), Tier-1 testEssential, Tier-2 testStandard
+      compile-all, formatCheck (scalafmt on every module; scalafix on root, bytes, crypto, rlp),
+      Tier-1 testEssential, Tier-2 testStandard
       with coverage (develop + PRs into main), KPI baselines, ethereum/tests
       integration job, assembly build.
 
