@@ -345,45 +345,45 @@ object PendingTransactionsManager:
 
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
     def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit =
-      if txs.isEmpty || peers.isEmpty then return
-      import com.chipprbots.ethereum.domain.*
+      if txs.nonEmpty && peers.nonEmpty then
+        import com.chipprbots.ethereum.domain.*
 
-      val txSeq = txs.groupBy(_.hash).values.map(_.head).toSeq
-      peers.foreach { peer =>
-        val txsToNotify = txSeq.filterNot(stx => isTxKnown(stx, peer.id))
-        if txsToNotify.nonEmpty then
-          val hashes = txsToNotify.map(_.hash.value)
-          val types = txsToNotify.map { stx =>
-            stx.tx match
-              case _: LegacyTransaction         => 0.toByte
-              case _: TransactionWithAccessList => Transaction.Type01
-              case _: TransactionWithDynamicFee => Transaction.Type02
-              case _: BlobTransaction           => Transaction.Type03
-              case _: SetCodeTransaction        => Transaction.Type04
-          }
-          // A blob tx travels in its network form, 0x03 || rlp([tx, blobs, commitments, proofs]). That is
-          // what GetPooledTransactions serves, so its length is the size a peer checks the reply against.
-          val sizes = txsToNotify.map { stx =>
-            blobTxNetworkBytes.get(stx.hash.value) match
-              case Some(networkForm) => BigInt(networkForm.length)
-              case None              => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length)
-          }
-          // ETH72 peers require the 4-field announcement (adds a custody Mask, EIP-8070) — same wire
-          // code as the 3-field ETH68+ form, but a strictly different RLP shape (see
-          // ETHPackets.NewPooledTransactionHashes72's doc comment). fukuii has no PeerDAS cell storage,
-          // so it always advertises zero custody rather than claim cells it can't serve.
-          val announcement: MessageSerializable =
-            if connectedPeerCapabilities.get(peer.id).contains(Capability.ETH72) then
-              ETHPackets.NewPooledTransactionHashes72(
-                types,
-                sizes,
-                hashes,
-                ETHPackets.NewPooledTransactionHashes72.NoCustody
-              ): MessageSerializable
-            else ETHPackets.NewPooledTransactionHashes(types, sizes, hashes): MessageSerializable
-          networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(announcement, peer.id)
-          txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
-      }
+        val txSeq = txs.groupBy(_.hash).values.map(_.head).toSeq
+        peers.foreach { peer =>
+          val txsToNotify = txSeq.filterNot(stx => isTxKnown(stx, peer.id))
+          if txsToNotify.nonEmpty then
+            val hashes = txsToNotify.map(_.hash.value)
+            val types = txsToNotify.map { stx =>
+              stx.tx match
+                case _: LegacyTransaction         => 0.toByte
+                case _: TransactionWithAccessList => Transaction.Type01
+                case _: TransactionWithDynamicFee => Transaction.Type02
+                case _: BlobTransaction           => Transaction.Type03
+                case _: SetCodeTransaction        => Transaction.Type04
+            }
+            // A blob tx travels in its network form, 0x03 || rlp([tx, blobs, commitments, proofs]). That is
+            // what GetPooledTransactions serves, so its length is the size a peer checks the reply against.
+            val sizes = txsToNotify.map { stx =>
+              blobTxNetworkBytes.get(stx.hash.value) match
+                case Some(networkForm) => BigInt(networkForm.length)
+                case None              => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length)
+            }
+            // ETH72 peers require the 4-field announcement (adds a custody Mask, EIP-8070) — same wire
+            // code as the 3-field ETH68+ form, but a strictly different RLP shape (see
+            // ETHPackets.NewPooledTransactionHashes72's doc comment). fukuii has no PeerDAS cell storage,
+            // so it always advertises zero custody rather than claim cells it can't serve.
+            val announcement: MessageSerializable =
+              if connectedPeerCapabilities.get(peer.id).contains(Capability.ETH72) then
+                ETHPackets.NewPooledTransactionHashes72(
+                  types,
+                  sizes,
+                  hashes,
+                  ETHPackets.NewPooledTransactionHashes72.NoCustody
+                ): MessageSerializable
+              else ETHPackets.NewPooledTransactionHashes(types, sizes, hashes): MessageSerializable
+            networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(announcement, peer.id)
+            txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
+        }
 
     /** Handle an inbound NewPooledTransactionHashes announcement (ETH67+ 3-field, or ETH72's 4-field form): record each
       * announcement's (type, size) for later validation against this peer's PooledTransactions reply, and request the
@@ -485,51 +485,52 @@ object PendingTransactionsManager:
           case None => true
       }
 
-      if blockchainReader == null || stateStorage == null then return StateChecked(afterTipAndTypeCheck)
-      try
-        import com.chipprbots.ethereum.domain.Account
-        import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-        import MerklePatriciaTrie.defaultByteArraySerializable
+      if blockchainReader == null || stateStorage == null then StateChecked(afterTipAndTypeCheck)
+      else
+        try
+          import com.chipprbots.ethereum.domain.Account
+          import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+          import MerklePatriciaTrie.defaultByteArraySerializable
 
-        val bestBlockOpt = blockchainReader.getBestBlock
-        bestBlockOpt match
-          case Some(bestBlock) =>
-            val mptStorage = stateStorage.getReadOnlyStorage
-            val stateTrie = MerklePatriciaTrie[Array[Byte], Account](bestBlock.header.stateRoot.toArray, mptStorage)(
-              using
-              defaultByteArraySerializable,
-              Account.accountSerializer
-            )
+          val bestBlockOpt = blockchainReader.getBestBlock
+          bestBlockOpt match
+            case Some(bestBlock) =>
+              val mptStorage = stateStorage.getReadOnlyStorage
+              val stateTrie = MerklePatriciaTrie[Array[Byte], Account](bestBlock.header.stateRoot.toArray, mptStorage)(
+                using
+                defaultByteArraySerializable,
+                Account.accountSerializer
+              )
 
-            val accountsBySender = afterTipAndTypeCheck
-              .map(_.senderAddress)
-              .map { senderAddress =>
-                val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
-                senderAddress -> stateTrie.get(addressHash)
+              val accountsBySender = afterTipAndTypeCheck
+                .map(_.senderAddress)
+                .map { senderAddress =>
+                  val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
+                  senderAddress -> stateTrie.get(addressHash)
+                }
+                .toMap
+
+              val passed = afterTipAndTypeCheck.filter { stx =>
+                accountsBySender.get(stx.senderAddress).flatten.exists { account =>
+                  val tx = stx.tx.tx
+                  // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
+                  // the rule local submission applies. A peer's tx may not run more than 1024 ahead of the account.
+                  TxAdmission.stateRejection(tx, account).isEmpty && tx.nonce < account.nonce.toBigInt + 1024
+                }
               }
-              .toMap
-
-            val passed = afterTipAndTypeCheck.filter { stx =>
-              accountsBySender.get(stx.senderAddress).flatten.exists { account =>
-                val tx = stx.tx.tx
-                // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
-                // the rule local submission applies. A peer's tx may not run more than 1024 ahead of the account.
-                TxAdmission.stateRejection(tx, account).isEmpty && tx.nonce < account.nonce.toBigInt + 1024
-              }
-            }
-            StateChecked(
-              passed,
-              accountsBySender.collect { case (address, Some(account)) => address -> account },
-              Some(bestBlock.header)
-            )
-          case None =>
-            // No best block — only accept txs from senders we've already seen
+              StateChecked(
+                passed,
+                accountsBySender.collect { case (address, Some(account)) => address -> account },
+                Some(bestBlock.header)
+              )
+            case None =>
+              // No best block — only accept txs from senders we've already seen
+              StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
+        catch
+          case _: Exception =>
+            // MPT failed — only accept txs from senders with established pending nonces
+            // (unknown senders can't be validated without state)
             StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
-      catch
-        case _: Exception =>
-          // MPT failed — only accept txs from senders with established pending nonces
-          // (unknown senders can't be validated without state)
-          StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
 
     def isTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Boolean =
       knownTransactions.isKnown(signedTransaction.hash.value, peerId)
