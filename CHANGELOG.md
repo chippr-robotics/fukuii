@@ -27,11 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `fa.map(identity)` is `fa`; none on `List`, `Seq`, `Vector`, `Iterator`, `Array`, `Map`, `Future`, Pekko `Source` or
     fs2. Downstream code compiled at `-source:3.8` or later gets the same elaboration; it matters only for a type whose
     `map` has observable side effects.
-  - **For contributors:** seven more compiler warnings are build errors (`E205`, `E028`, an implicit argument without
-    `using`, alphanumeric infix, `_` as a type wildcard, `with` as a type operator, a type ascription after a pattern),
-    and `sbt formatCheck` (scalafix `--check` on `bytes`, `crypto`, `rlp` and the root, scalafmt on every module) now runs in
-    CI's required "Test and Build" job (#1721). `return` and Scala 2 wildcard imports are rejected. Run `sbt formatAll`
-    before pushing: `scalafmtAll` alone covers the root project only.
+  - **For contributors:** six more compiler warnings are build errors (`E028`, an implicit argument without `using`,
+    alphanumeric infix, `_` as a type wildcard, `with` as a type operator, a type ascription after a pattern; `E205` is
+    an error too, but cannot fire at `-source:3.9`), and `sbt formatCheck` (scalafix `--check` on `bytes`, `crypto`,
+    `rlp` and the root, scalafmt on every module) now runs in CI's required "Test and Build" job (#1721). Scala 2
+    wildcard imports are rejected everywhere; `return` is rejected in the four scalafixed modules (`scalanet` is not
+    scalafix-checked). Run `sbt formatAll` before pushing: `scalafmtAll` alone covers the root project only.
 
 ### Fixed
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
