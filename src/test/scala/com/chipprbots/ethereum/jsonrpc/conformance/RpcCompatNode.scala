@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.jsonrpc.*
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.keystore.KeyStore

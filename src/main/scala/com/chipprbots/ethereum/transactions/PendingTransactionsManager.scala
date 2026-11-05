@@ -40,7 +40,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetPooledTransact
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes.*
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewPooledTransactionHashes72.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.TxPoolConfig
 

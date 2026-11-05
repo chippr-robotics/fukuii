@@ -33,7 +33,7 @@ object Withdrawal:
         RLPValue(ByteUtils.bigIntToUnsignedByteArray(w.amount))
       )
 
-  implicit class WithdrawalDec(val rlpEncodeable: RLPEncodeable) extends AnyVal:
+  extension (rlpEncodeable: RLPEncodeable)
     def toWithdrawal: Withdrawal =
       rlpEncodeable match
         case RLPList(index, validatorIndex, address, amount) =>
@@ -45,5 +45,4 @@ object Withdrawal:
           )
         case _ => throw new RuntimeException("Cannot decode Withdrawal")
 
-  implicit class WithdrawalBytesDec(val bytes: Array[Byte]) extends AnyVal:
-    def toWithdrawal: Withdrawal = WithdrawalDec(rawDecode(bytes)).toWithdrawal
+  extension (bytes: Array[Byte]) def toWithdrawal: Withdrawal = rawDecode(bytes).toWithdrawal

@@ -5,7 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Transaction.TransactionTypeValidator
+import com.chipprbots.ethereum.domain.Transaction.isValidTransactionType
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.TypedTransaction.*
 import com.chipprbots.ethereum.rlp.*
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*

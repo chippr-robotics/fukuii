@@ -315,10 +315,9 @@ object BlockHeaderImplicits:
 
       RLPList((baseItems ++ extraItems)*)
 
-  implicit class BlockHeaderByteArrayDec(val bytes: Array[Byte]) extends AnyVal:
-    def toBlockHeader: BlockHeader = BlockHeaderDec(rawDecode(bytes)).toBlockHeader
+  extension (bytes: Array[Byte]) def toBlockHeader: BlockHeader = rawDecode(bytes).toBlockHeader
 
-  implicit class BlockHeaderDec(val rlpEncodeable: RLPEncodeable) extends AnyVal:
+  extension (rlpEncodeable: RLPEncodeable)
     def toBlockHeader: BlockHeader =
       rlpEncodeable match
         case rlpList: RLPList =>

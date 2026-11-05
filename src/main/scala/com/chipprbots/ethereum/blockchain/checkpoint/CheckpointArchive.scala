@@ -10,8 +10,8 @@ import java.util.zip.CRC32
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderByteArrayDec
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
+import com.chipprbots.ethereum.domain.BlockHeaderImplicits.toBlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TotalDifficulty
 import com.chipprbots.ethereum.utils.ByteUtils

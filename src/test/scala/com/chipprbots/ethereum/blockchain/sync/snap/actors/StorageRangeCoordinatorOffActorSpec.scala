@@ -35,7 +35,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** #1533: StorageRanges responses are verified (and whole-account tries built) on a worker pool, and applied on the
   * coordinator in arrival order. These tests drive the pipeline with an ExecutionContext that runs nothing until told

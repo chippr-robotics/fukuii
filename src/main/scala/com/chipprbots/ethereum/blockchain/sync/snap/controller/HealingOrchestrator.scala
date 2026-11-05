@@ -24,7 +24,7 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.RocksDbBfsQueueStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait HealingOrchestratorState:
   var healRepegNoRootAttempts: Int

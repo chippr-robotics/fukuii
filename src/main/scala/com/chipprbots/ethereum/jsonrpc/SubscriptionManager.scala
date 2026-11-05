@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** Manages WebSocket subscriptions for eth_subscribe / eth_unsubscribe.
   *

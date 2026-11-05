@@ -19,7 +19,7 @@ import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `StorageOrderedApply` reads and writes (spec 016 C-S2, research.md R14b). The core's behaviour
   * arms, the peer dispatch (C-S1) or the response processing and done markers that C-S3/C-S4 will move touch every one

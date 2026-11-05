@@ -98,8 +98,7 @@ object BlockBody:
         header => BlockHeaderEnc(header).toRLPEncodable
       )
 
-  implicit class BlockBlodyDec(val bytes: Array[Byte]) extends AnyVal:
-    def toBlockBody: BlockBody = BlockBodyRLPEncodableDec(rawDecode(bytes)).toBlockBody
+  extension (bytes: Array[Byte]) def toBlockBody: BlockBody = rawDecode(bytes).toBlockBody
 
   def rlpEncodableToBlockBody(
       rlpEncodeable: RLPEncodeable,
@@ -127,12 +126,12 @@ object BlockBody:
         )
       case _ => throw new RuntimeException("Cannot decode BlockBody")
 
-  implicit class BlockBodyRLPEncodableDec(val rlpEncodeable: RLPEncodeable):
+  extension (rlpEncodeable: RLPEncodeable)
     def toBlockBody: BlockBody =
       import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 
       rlpEncodableToBlockBody(
         rlpEncodeable,
         rlp => rlp.toSignedTransaction,
-        rlp => BlockHeaderDec(rlp).toBlockHeader
+        rlp => rlp.toBlockHeader
       )

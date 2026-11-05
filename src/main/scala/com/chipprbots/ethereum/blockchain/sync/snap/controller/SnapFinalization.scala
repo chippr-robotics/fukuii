@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait SnapFinalizationState:
   var chainDownloadComplete: Boolean

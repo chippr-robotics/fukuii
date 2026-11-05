@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `StorageResponseProcessing` reads and writes (spec 016 C-S4, research.md R14b). The core's
   * behaviour arms (pivot refresh, force-complete, peer loss, the processing result, progress), `onPostStop`, the peer

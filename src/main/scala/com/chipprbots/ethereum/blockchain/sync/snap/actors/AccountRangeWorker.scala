@@ -10,7 +10,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** AccountRangeWorker fetches a single account range from a peer.
   *

@@ -9,7 +9,7 @@ import fs2.Stream
 
 package object implicits:
   // Functions to be applied on the `.nextChannelEvent()` or `.nextServerEvent()` results.
-  implicit class NextOps[A](val next: IO[Option[A]]) extends AnyVal:
+  extension [A](next: IO[Option[A]])
     def toStream: Stream[IO, A] =
       Stream.repeatEval(next).unNoneTerminate
 
@@ -19,10 +19,10 @@ package object implicits:
         case Right(x) => x
       }
 
-  implicit class PeerGroupOps[A, M](val group: PeerGroup[A, M]) extends AnyVal:
+  extension [A, M](group: PeerGroup[A, M])
     def serverEventStream: Stream[IO, ServerEvent[A, M]] =
       group.nextServerEvent.toStream
 
-  implicit class ChannelOps[A, M](val channel: Channel[A, M]) extends AnyVal:
+  extension [A, M](channel: Channel[A, M])
     def channelEventStream: Stream[IO, ChannelEvent[M]] =
       channel.nextChannelEvent.toStream

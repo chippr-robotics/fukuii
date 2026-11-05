@@ -650,7 +650,7 @@ object Discv5SyncResponder extends LazyLogging:
     Some((iv ++ masked ++ ct).bits)
 
   // Lazy bridge for ConcurrentHashMap.values iteration.
-  implicit private class IterableHasAsScala[A](val it: java.util.Iterator[A]):
-    def asScala: Iterator[A] = new Iterator[A]:
+  extension [A](it: java.util.Iterator[A])
+    private def asScala: Iterator[A] = new Iterator[A]:
       def hasNext: Boolean = it.hasNext
       def next(): A = it.next()

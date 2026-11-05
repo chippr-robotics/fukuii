@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.domain.StorageKey
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
+import com.chipprbots.ethereum.utils.ByteStringUtils.padToByteString
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.*
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.EtcFork
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.EthFork

@@ -78,7 +78,7 @@ class SNAPSyncControllerResumeSpec extends AnyFlatSpec with Matchers:
       // Write account cursors the same way the controller does (hex-encoded ByteString)
       val lastBs = ByteString(Hex.decode("aa" * 32))
       val nextBs = ByteString(Hex.decode("bb" * 32))
-      import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+      import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
       storage.writeAccountCursors(root, 200_000L, Map(lastBs.toHex -> nextBs.toHex))
 
       // Simulate the controller's startup conversion: hex → ByteString resumeMap

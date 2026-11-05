@@ -32,7 +32,7 @@ import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 // The call-site map for the snap-split verify adoption mode (spec 016 T064, C-A3): the dropped parameter and the
 // StateIngest member that replaces it. `mptStorage` (the core's per-pivot trie store) and `storageDone` stay explicit
