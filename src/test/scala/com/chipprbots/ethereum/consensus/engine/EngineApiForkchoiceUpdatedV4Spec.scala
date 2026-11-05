@@ -351,9 +351,9 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
       // The controller refuses such attributes before the service is asked (see above); this is the service's own
       // guard, reached directly. go-ethereum: "no slot number set post-amsterdam", InvalidPayloadAttributes.
       val headHash = genesis.header.hash.value
-      val zero = ByteString(new Array[Byte](32))
-      val slotless = attributes(12, slot = None)
-      val outcome = service.forkchoiceUpdated(ForkChoiceState(headHash, zero, zero), Some(slotless)).unsafeRunSync()
+      val zero: ByteString = ByteString(new Array[Byte](32))
+      val slotless: PayloadAttributes = attributes(12, slot = None)
+      val outcome: Either[String, ForkchoiceUpdatedResponse] = service.forkchoiceUpdated(ForkChoiceState(headHash, zero, zero), Some(slotless)).unsafeRunSync()
 
       outcome shouldBe Left("ATTR:" + EngineApiService.AmsterdamSlotNumberMissing)
       forkChoiceManager.getHeadBlockHash shouldBe Some(headHash)
@@ -361,7 +361,7 @@ class EngineApiForkchoiceUpdatedV4Spec extends AnyWordSpec with Matchers:
         Left("Payload not available")
 
     "still answer VALID to the same call without attributes" taggedAs (UnitTest, ConsensusTest) in new Fixture:
-      val response = fcuV4(List(fcsJson(genesisHash), JNull, JString("0x" + "ff" * 16)))
+      val response: JsonRpcResponse = fcuV4(List(fcsJson(genesisHash), JNull, JString("0x" + "ff" * 16)))
 
       response.error shouldBe None
       payloadStatus(response) shouldBe Some(JString("VALID"))

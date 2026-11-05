@@ -116,7 +116,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
 
       val timestampIdx: BigInt = BigInt(ts) % Buf
       val rootIdx: BigInt = timestampIdx + Buf
-      val storage = world.getStorage(BeaconRootContractAddress)
+      val storage: InMemoryWorldStateProxyStorage = world.getStorage(BeaconRootContractAddress)
 
       storage.load(timestampIdx) shouldBe BigInt(ts)
       storage.load(rootIdx) shouldBe UInt256(beaconRoot).toBigInt
@@ -127,7 +127,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val preCancunBlock = Block(
+    val preCancunBlock: Block = Block(
       header = Fixtures.Blocks.ValidBlock.header.copy(
         unixTimestamp = Timestamp(CancunTs),
         gasLimit = GasAmount(8_000_000),
@@ -140,7 +140,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
 
     val timestampIdx: BigInt = BigInt(CancunTs) % Buf
     val rootIdx: BigInt = timestampIdx + Buf
-    val storage = world.getStorage(BeaconRootContractAddress)
+    val storage: InMemoryWorldStateProxyStorage = world.getStorage(BeaconRootContractAddress)
 
     storage.load(timestampIdx) shouldBe BigInt(0)
     storage.load(rootIdx) shouldBe BigInt(0)
@@ -167,7 +167,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
     val slotB_ts: BigInt = BigInt(tsB) % Buf // 0
     val slotB_root: BigInt = slotB_ts + Buf // 8191
 
-    val storage = world2.getStorage(BeaconRootContractAddress)
+    val storage: InMemoryWorldStateProxyStorage = world2.getStorage(BeaconRootContractAddress)
 
     // Slot 0 written by block B
     storage.load(slotB_ts) shouldBe BigInt(tsB)

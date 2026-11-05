@@ -164,12 +164,12 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     // 97,920 of state gas comes out of the 1,566,720 reservoir) - 2 (GAS) = 29,987,892. With no reservoir the state
     // charge would have come out of the gas GAS reads: the old budget gives 31,566,720 - 6 - 12,100 - 97,920 - 2 =
     // 31,456,692.
-    val amsterdam = requestSystemCall(AmsterdamTs, WithdrawalQueueAddress, SetThenStoreGas)
+    val amsterdam: InMemoryWorldStateProxy = requestSystemCall(AmsterdamTs, WithdrawalQueueAddress, SetThenStoreGas)
     storageOf(amsterdam, WithdrawalQueueAddress, 0) shouldBe BigInt(1)
     storageOf(amsterdam, WithdrawalQueueAddress, 1) shouldBe BigInt(29987892)
     // Osaka: no state gas; the fresh SSTORE is EIP-2929 cold 2,100 + SSTORE_SET 20,000 = 22,100.
     // 30,000,000 - 6 - 22,100 - 2 = 29,977,892.
-    val osaka = requestSystemCall(OsakaTs, WithdrawalQueueAddress, SetThenStoreGas)
+    val osaka: InMemoryWorldStateProxy = requestSystemCall(OsakaTs, WithdrawalQueueAddress, SetThenStoreGas)
     storageOf(osaka, WithdrawalQueueAddress, 1) shouldBe BigInt(29977892)
 
   // ── EIP-4788 / EIP-2935: real system calls from Amsterdam on ────────────────
@@ -199,8 +199,8 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     StateTest
   ) in new Setup:
     // EEST test_system_call_execution_grant[beacon] / [history]: the probe must run, so GAS lands in slot 0.
-    val world = withCode(withCode(emptyWorld, BeaconRootContractAddress, StoreGas), HistoryStorageAddress, StoreGas)
-    val after = preamble(this, AmsterdamTs, world)
+    val world: InMemoryWorldStateProxy = withCode(withCode(emptyWorld, BeaconRootContractAddress, StoreGas), HistoryStorageAddress, StoreGas)
+    val after: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, world)
     storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(29999998)
     storageOf(after, HistoryStorageAddress, 0) shouldBe BigInt(29999998)
     // And nothing was written where the direct writes would have put the timestamp and the root.
@@ -211,18 +211,18 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Setup:
-    val world =
+    val world: InMemoryWorldStateProxy =
       withCode(withCode(emptyWorld, BeaconRootContractAddress, BeaconRootsCode), HistoryStorageAddress, HistoryCode)
-    val parentHash = BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)
+    val parentHash: BigInt = BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)
 
     // Amsterdam, by running the contracts: timestamp 360 -> slots 360 and 360 + 8191; block 36 -> history slot 35.
-    val amsterdam = preamble(this, AmsterdamTs, world)
+    val amsterdam: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, world)
     storageOf(amsterdam, BeaconRootContractAddress, 360) shouldBe BigInt(360)
     storageOf(amsterdam, BeaconRootContractAddress, 360 + 8191) shouldBe BigInt(1, BeaconRoot.toArray)
     storageOf(amsterdam, HistoryStorageAddress, 35) shouldBe parentHash
 
     // Osaka, by the direct writes: the same layout at timestamp 359.
-    val osaka = preamble(this, OsakaTs, world)
+    val osaka: InMemoryWorldStateProxy = preamble(this, OsakaTs, world)
     storageOf(osaka, BeaconRootContractAddress, 359) shouldBe BigInt(359)
     storageOf(osaka, BeaconRootContractAddress, 359 + 8191) shouldBe BigInt(1, BeaconRoot.toArray)
     storageOf(osaka, HistoryStorageAddress, 35) shouldBe parentHash
@@ -230,13 +230,13 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
   it should "drop a failing call's changes and keep executing the block" taggedAs (UnitTest, StateTest) in new Setup:
     // execution-specs process_unchecked_system_transaction: the failure is ignored. PUSH1 1 PUSH1 0 SSTORE INVALID
     // writes a slot and then halts, so the write must not survive; the history call after it still runs.
-    val failing = ByteString(Hex.decode("6001600055fe"))
-    val world = withCode(withCode(emptyWorld, BeaconRootContractAddress, failing), HistoryStorageAddress, HistoryCode)
-    val after = preamble(this, AmsterdamTs, world)
+    val failing: ByteString = ByteString(Hex.decode("6001600055fe"))
+    val world: InMemoryWorldStateProxy = withCode(withCode(emptyWorld, BeaconRootContractAddress, failing), HistoryStorageAddress, HistoryCode)
+    val after: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, world)
     storageOf(after, BeaconRootContractAddress, 0) shouldBe BigInt(0)
     storageOf(after, HistoryStorageAddress, 35) shouldBe BigInt(1, block(AmsterdamTs).header.parentHash.value.toArray)
 
   it should "create nothing when no contract is deployed" taggedAs (UnitTest, StateTest) in new Setup:
-    val after = preamble(this, AmsterdamTs, emptyWorld)
+    val after: InMemoryWorldStateProxy = preamble(this, AmsterdamTs, emptyWorld)
     after.getAccount(BeaconRootContractAddress) shouldBe None
     after.getAccount(HistoryStorageAddress) shouldBe None

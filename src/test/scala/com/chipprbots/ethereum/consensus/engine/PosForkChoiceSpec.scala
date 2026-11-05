@@ -110,7 +110,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
   it should "REFUSE when the consensus layer has not spoken yet" taggedAs (UnitTest, ConsensusTest) in
     (new HeaderStore:
       val chain: List[Block] = storeChain(3)
-      val silent = DesignatedHead(() => None)
+      val silent: DesignatedHead = DesignatedHead(() => None)
       DesignatedHead.leadsToDesignatedHead(Some(silent), blockchainReader, chain.last.hash.value) shouldBe false
     )
 
@@ -196,7 +196,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     ConsensusTest
   ) in new PosChainSetup:
     // The ETC/Mordor/Gorgoroth configuration, and also the pre-change behaviour: equal weight, so no reorg.
-    val posConsensus = consensusWith(designatedHead = None)
+    val posConsensus: ConsensusImpl = consensusWith(designatedHead = None)
     whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture()) { result =>
       result shouldBe KeptCurrentBestBranch
     }
@@ -204,7 +204,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
   it should "reorganise onto a branch the consensus layer designated" taggedAs (UnitTest, ConsensusTest) in
     (new PosChainSetup:
-      val posConsensus = consensusWith(Some(clDesignatedSideTip))
+      val posConsensus: ConsensusImpl = consensusWith(Some(clDesignatedSideTip))
       whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture()) { result =>
         result shouldBe a[SelectedNewBestBranch]
       }
@@ -216,7 +216,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     UnitTest,
     ConsensusTest
   ) in new PosChainSetup:
-    val posConsensus = consensusWith(Some(DesignatedHead(() => Some(canonicalTip.hash.value))))
+    val posConsensus: ConsensusImpl = consensusWith(Some(DesignatedHead(() => Some(canonicalTip.hash.value))))
     whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture()) { result =>
       result shouldBe KeptCurrentBestBranch
     }
@@ -228,7 +228,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       // invalid-chain channel does the rest: the failing block and everything queued behind it are reported, with
       // the failing block's parent as latestValidHash.
       failAt(sideBranch(1))
-      val posConsensus = consensusWith(Some(clDesignatedSideTip))
+      val posConsensus: ConsensusImpl = consensusWith(Some(clDesignatedSideTip))
       whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture())(_ => ())
 
       val lvh: ByteString = sideBranch(0).hash.value
@@ -285,7 +285,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     ConsensusTest
   ) in new NotifyOnlySideHead:
     failAt(sideBranch(1))
-    val posConsensus = consensusWith(Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)))
+    val posConsensus: ConsensusImpl = consensusWith(Some(DesignatedHead(() => fcm.getRequestedHeadBlockHash)))
     whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture())(_ => ())
 
     executedBlocks.toList.map(_.number) shouldBe List(sideBranch.head.number)
@@ -358,14 +358,14 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     ) in (new FarBehindClHead:
       // Unchanged behaviour, pinned because it is the mechanism of #1432. The whole batch goes to importToNewBranch
       // (parent N-66 is not the head): equal weight, CL head out of reach, so nothing executes.
-      val posConsensus = consensusWith(Some(unreachableClHead))
+      val posConsensus: ConsensusImpl = consensusWith(Some(unreachableClHead))
       whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(postRewindBatch)).unsafeToFuture()) {
         _ shouldBe KeptCurrentBestBranch
       }
       executedBlocks shouldBe empty
 
       // The same blocks minus the canonical prefix go to importToTop and execute.
-      val onlyTheExtension = NonEmptyList.fromListUnsafe(postRewindBatch.drop(canonicalPrefix.size))
+      val onlyTheExtension: NonEmptyList[Block] = NonEmptyList.fromListUnsafe(postRewindBatch.drop(canonicalPrefix.size))
       whenReady(posConsensus.evaluateBranch(onlyTheExtension).unsafeToFuture()) {
         _ shouldBe a[ExtendedCurrentBestBranch]
       }

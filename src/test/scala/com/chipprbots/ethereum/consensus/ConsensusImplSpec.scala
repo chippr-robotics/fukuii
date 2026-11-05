@@ -20,10 +20,10 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPart
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -50,7 +50,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     ConsensusTest
   ) in new ConsensusSetup:
     val chainExtension: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
-    val lists = Map(chainExtension.head.hash.value -> BlockAccessList(Nil))
+    val lists: Map[ByteString, BlockAccessList] = Map(chainExtension.head.hash.value -> BlockAccessList(Nil))
 
     whenReady(
       consensus.evaluateBranchWithAccessLists(NonEmptyList.fromListUnsafe(chainExtension), lists).unsafeToFuture()
@@ -202,7 +202,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     // Same height as the tip and same per-block difficulty (generateBlock copies the parent's), so equal total
     // difficulty. The TD rule is strict `>`, so a PoW node keeps its chain.
     val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
-    val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+    val etcShaped: ConsensusImpl = consensusWith(Some(new DesignatedHead.LateBound))
 
     whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
       _ shouldBe KeptCurrentBestBranch
@@ -217,7 +217,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
           initialChain(2),
           b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
         )
-      val etcShaped = consensusWith(Some(new DesignatedHead.LateBound))
+      val etcShaped: ConsensusImpl = consensusWith(Some(new DesignatedHead.LateBound))
 
       whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(heavierBranch)).unsafeToFuture()) {
         _ shouldBe a[SelectedNewBestBranch]
@@ -366,7 +366,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     def heavier(from: Block): List[Block] =
       BlockHelpers.generateChain(3, from, b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000))))
 
-    val reorg = heavier(initialChain(2))
+    val reorg: List[Block] = heavier(initialChain(2))
     setFailingBlockWith(reorg(1), localStateFault)
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(reorg)).unsafeToFuture()) {
       case BranchExecutionFailure(_, _, error) =>

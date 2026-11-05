@@ -193,20 +193,20 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     UnitTest,
     StateTest
   ) in new Chain(amsterdamConfig):
-    val expected = gasPerTransaction(executed(header, txs).receipts)
+    val expected: Seq[BigInt] = gasPerTransaction(executed(header, txs).receipts)
     expected.head shouldBe BigInt(79000) // the floor
     expected(2) shouldBe BigInt(12000) // the self-transfer
 
-    val stxs = withSenders(txs)
-    val replayed = stxs.indices.map { i =>
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
+    val replayed: IndexedSeq[BigInt] = stxs.indices.map { i =>
       val world = ledger.advanceWorldToTx(header, stxs, i, parent.stateRootHash)
       ledger.replayTransaction(stxs(i), header, world, tracer = None).gasUsed
     }
     replayed shouldBe expected
 
   it should "tell the tracer the gas the receipt reports" taggedAs (UnitTest, StateTest) in new Chain(amsterdamConfig):
-    val expected = gasPerTransaction(executed(header, txs).receipts)
-    val stxs = withSenders(txs)
+    val expected: Seq[BigInt] = gasPerTransaction(executed(header, txs).receipts)
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
     stxs.indices.foreach { i =>
       val tracer = new CallTracer(onlyTopCall = false)
       ledger.replayTransaction(
@@ -222,9 +222,9 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     UnitTest,
     StateTest
   ) in new Chain(amsterdamConfig):
-    val stxs = withSenders(txs)
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
     // debug_intermediateRoots' way: the world before the first transaction, then one replay at a time.
-    val roots = stxs
+    val roots: Seq[ByteString] = stxs
       .scanLeft(ledger.advanceWorldToTx(header, stxs, 0, parent.stateRootHash)) { (world, stx) =>
         ledger.replayTransaction(stx, header, world, tracer = None).worldState
       }
@@ -236,7 +236,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
 
   it should "run the EIP-4788 and EIP-2935 preamble before the first transaction" taggedAs (UnitTest, StateTest) in
     (new Chain(amsterdamConfig):
-      val world = ledger.advanceWorldToTx(header, withSenders(txs), 0, parent.stateRootHash)
+      val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, withSenders(txs), 0, parent.stateRootHash)
       // timestamp 460 -> slots 460 and 460 + 8191; block 46 -> history slot 45.
       world.getStorage(BlockExecution.BeaconRootContractAddress).load(UInt256(460)) shouldBe BigInt(460)
       world.getStorage(BlockExecution.BeaconRootContractAddress).load(UInt256(460 + 8191)) shouldBe
@@ -247,8 +247,8 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
 
   it should "apply the Type-4 transaction's delegation, which the bare VM never did" taggedAs (UnitTest, StateTest) in
     (new Chain(amsterdamConfig):
-      val stxs = withSenders(txs)
-      val before = ledger.advanceWorldToTx(header, stxs, 1, parent.stateRootHash)
+      val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
+      val before: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, stxs, 1, parent.stateRootHash)
       ledger.replayTransaction(stxs(1), header, before, tracer = None).worldState.getCode(Address(authority)) shouldBe
         addressToDelegation(Stop)
       ledger.simulateTransaction(stxs(1), header, Some(before)).worldState.getCode(Address(authority)) shouldBe
@@ -263,21 +263,21 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     // transactions before it wrote it. Each persist names the nodes it replaces for removal. Honouring that deleted the
     // root of the world a transaction ran on, so prestateTracer (which reads the pre-state after the run) and
     // trace_replay*'s vmTrace (a second run on the same pre-state) both failed with a missing trie node.
-    val stxs = withSenders(txs)
-    val before = ledger.advanceWorldToTx(header, stxs, 3, parent.stateRootHash)
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
+    val before: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, stxs, 3, parent.stateRootHash)
     val prestate = new PrestateTracer[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](before)
-    val first = ledger.replayTransaction(stxs(3), header, before, Some(prestate))
+    val first: TxResult = ledger.replayTransaction(stxs(3), header, before, Some(prestate))
 
     // `emit` SLOADs slot 0, which held 8 before this transaction.
-    val emitKey = "0x" + Hex.toHexString(Emit.bytes.toArray)
+    val emitKey: String = "0x" + Hex.toHexString(Emit.bytes.toArray)
     prestate.getResult \ emitKey \ "storage" \ ("0x" + "0" * 64) shouldBe JString("0x" + "0" * 63 + "8")
 
-    val second = ledger.replayTransaction(stxs(3), header, before, tracer = None)
+    val second: TxResult = ledger.replayTransaction(stxs(3), header, before, tracer = None)
     (second.gasUsed, second.worldState.stateRootHash) shouldBe (first.gasUsed, first.worldState.stateRootHash)
 
   it should "report the floor, which the bare VM left out" taggedAs (UnitTest, StateTest) in new Chain(amsterdamConfig):
-    val stxs = withSenders(txs)
-    val world = ledger.advanceWorldToTx(header, stxs, 0, parent.stateRootHash)
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, stxs, 0, parent.stateRootHash)
     ledger.replayTransaction(stxs.head, header, world, tracer = None).gasUsed shouldBe BigInt(79000)
     ledger.simulateTransaction(stxs.head, header, Some(world)).gasUsed shouldBe BigInt(31000)
 
@@ -290,8 +290,8 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
 
   "Replaying a block before Amsterdam" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest) in
     (new Chain(amsterdamConfig):
-      val osaka = preAmsterdamHeader(46, 300)
-      val stxs = withSenders(txs.take(1) :+ txs(3))
+      val osaka: BlockHeader = preAmsterdamHeader(46, 300)
+      val stxs: Seq[SignedTransactionWithSender] = withSenders(txs.take(1) :+ txs(3))
       // No preamble before the first transaction, and each earlier one replayed on the bare VM.
       ledger.advanceWorldToTx(osaka, stxs, 0, parent.stateRootHash).stateRootHash shouldBe parent.stateRootHash
       stxs.foreach { stx =>
@@ -307,7 +307,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
   "Replaying an ETC block" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest, OlympiaTest) in
     (new Chain(Config.blockchains.blockchainConfig):
       val etcHeader = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header
-      val stx = withSenders(
+      val stx: SignedTransactionWithSender = withSenders(
         Seq(
           legacyTx(Some(payee), value = 0, gasLimit = 79000, payload = nonZeros(1000), config = blockchainConfig)
         )

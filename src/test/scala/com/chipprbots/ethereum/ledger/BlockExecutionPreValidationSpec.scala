@@ -186,9 +186,9 @@ class BlockExecutionPreValidationSpec
     "hand a peer-supplied access list to the block it belongs to, and to no other" taggedAs
       (UnitTest, ConsensusTest) in new BlockchainSetup:
         val chain: List[Block] = BlockHelpers.generateChain(3, validBlockParentBlock)
-        val list = BlockAccessList(Nil)
-        val seen = scala.collection.mutable.Map.empty[BigInt, Option[BlockAccessList]]
-        override lazy val blockExecution =
+        val list: BlockAccessList = BlockAccessList(Nil)
+        val seen: scala.collection.mutable.Map[BigInt, Option[BlockAccessList]] = scala.collection.mutable.Map.empty[BigInt, Option[BlockAccessList]]
+        override lazy val blockExecution: BlockExecution =
           new BlockExecution(
             blockchain,
             blockchainReader,

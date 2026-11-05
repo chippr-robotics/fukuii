@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.util.ByteString
@@ -140,16 +141,16 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Chain:
-    val root = execute(0, None, 0 until keyCount, "g")
+    val root: ByteString = execute(0, None, 0 until keyCount, "g")
     val reads = new AtomicInteger
-    val counting = new MptStorage:
+    val counting: MptStorage = new MptStorage:
       private val real = stateStorage.getBackingStorage(0)
       override def get(nodeId: Array[Byte]): MptNode =
         reads.incrementAndGet(); real.get(nodeId)
-      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]) =
+      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
         real.updateNodesInStorage(newRoot, toRemove)
       override def persist(): Unit = real.persist()
-    val cache = DecodedNodeCache.withOwnBudget(8L * 1024 * 1024)
+    val cache: DecodedNodeCache = DecodedNodeCache.withOwnBudget(8L * 1024 * 1024)
     val cached = new CachingMptStorage(counting, cache)
     readAll(root, cached)
     val firstPass = reads.get
@@ -157,7 +158,7 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     readAll(root, cached)
     reads.get shouldBe firstPass // the second pass is entirely from the cache
 
-    val absent = kec256(ByteString("no such node"))
+    val absent: ByteString = kec256(ByteString("no such node"))
     a[MissingNodeException] should be thrownBy cached.get(absent.toArray)
     a[MissingNodeException] should be thrownBy cached.get(absent.toArray) // not remembered as anything
 
@@ -165,7 +166,7 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Chain:
-    var roots = Map(0 -> execute(0, None, 0 until keyCount, "g"))
+    var roots: Map[Int, ByteString] = Map(0 -> execute(0, None, 0 until keyCount, "g"))
     // Populate the cache with every node of block 1's state while it is still whole.
     roots += 1 -> execute(1, Some(roots(0)), (0 until 60).toSeq, "c")
     stateStorage.onBlockSave(1, 0)(() => ())
@@ -185,10 +186,10 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in new Chain:
-    val root = execute(0, None, 0 until keyCount, "g")
+    val root: ByteString = execute(0, None, 0 until keyCount, "g")
     readAll(root, cachedStorage(0)) // fills the cache
     // Remove a node from the database behind the cache's back (a stand-in for anything that deletes nodes).
-    val victim = dataSource.storage.keys.find(k => k.array().endsWith(root.toArray)).get
+    val victim: ByteBuffer = dataSource.storage.keys.find(k => k.array().endsWith(root.toArray)).get
     dataSource.storage = dataSource.storage - victim
     // The plain handle (what healing and presence checks use) sees the hole exactly as before...
     a[MissingNodeException] should be thrownBy readAll(root, stateStorage.getBackingStorage(0))

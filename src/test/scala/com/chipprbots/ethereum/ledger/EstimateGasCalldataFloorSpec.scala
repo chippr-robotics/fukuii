@@ -3,11 +3,13 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
+import org.scalatest.compatible.Assertion
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.validators.SignedTransactionError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionNotEnoughGasForFloorError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionNotEnoughGasForIntrinsicError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValid
@@ -81,14 +83,14 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
     def execute(stx: SignedTransaction, header: BlockHeader): TxResult =
       mining.blockPreparator.executeTransaction(stx, senderAddress, header, world)
 
-    def validate(stx: SignedTransaction, header: BlockHeader) =
+    def validate(stx: SignedTransaction, header: BlockHeader): Either[SignedTransactionError, SignedTransactionValid] =
       val sender = Account(nonce = UInt256(0), balance = UInt256(BigInt(10).pow(24)))
       val upfront = UInt256(stx.tx.gasLimit.value * 1_000_000_000 + stx.tx.value)
       StdSignedTransactionValidator.validate(stx, sender, header, upfront, 0)(using config)
 
     /** The estimate is valid, one gas less is not (with `belowError`), and executing the estimate charges exactly it.
       */
-    def assertTight(tx: BigInt => SignedTransaction, header: BlockHeader, expected: BigInt, belowError: Any) =
+    def assertTight(tx: BigInt => SignedTransaction, header: BlockHeader, expected: BigInt, belowError: Any): Assertion =
       estimate(tx(Cap), header) shouldBe expected
       validate(tx(expected), header) shouldBe Right(SignedTransactionValid)
       validate(tx(expected - 1), header) shouldBe Left(belowError)

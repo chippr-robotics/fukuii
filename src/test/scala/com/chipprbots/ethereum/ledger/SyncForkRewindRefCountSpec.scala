@@ -173,8 +173,8 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
       DatabaseTest,
       ConsensusTest
     ) in (new Setup:
-      val tipRoot = rewindAndReplace(chain)
-      val finalState = readWholeState(tipRoot)
+      val tipRoot: ByteString = rewindAndReplace(chain)
+      val finalState: Map[Int, Option[ByteString]] = readWholeState(tipRoot)
       finalState(3) shouldBe Some(value("g3"))
       finalState(7) shouldBe Some(value("bOnly"))
       finalState(1) shouldBe Some(value("a1"))
@@ -185,5 +185,5 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
     DatabaseTest,
     ConsensusTest
   ) in new Setup:
-    val tipRoot = rewindAndReplace(ReorgStateHandler.NoOp)
+    val tipRoot: ByteString = rewindAndReplace(ReorgStateHandler.NoOp)
     a[MissingNodeException] should be thrownBy readWholeState(tipRoot)

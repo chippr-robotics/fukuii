@@ -16,15 +16,15 @@ import com.chipprbots.ethereum.Mocks.MockVM
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.crypto.ECDSASignature
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionSignatureError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValid
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValidator
+import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -469,10 +469,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         )
       )
 
-      val excessBlobGas = BigInt(1000000)
+      val excessBlobGas: BigInt = BigInt(1000000)
       val blockTs = 100L
       val numBlobs = 2
-      val blobTx = BlobTransaction(
+      val blobTx: BlobTransaction = BlobTransaction(
         chainId = pragueConfig.chainId.value,
         nonce = 1,
         maxPriorityFeePerGas = 1,
@@ -485,8 +485,8 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         maxFeePerBlobGas = 1000,
         blobVersionedHashes = List.fill(numBlobs)(BlobVersionedHash(ByteString(Array.fill(32)(0.toByte))))
       )
-      val stx = SignedTransaction(blobTx, ECDSASignature(0, 0, 0))
-      val header = defaultBlockHeader.copy(
+      val stx: SignedTransaction = SignedTransaction(blobTx, ECDSASignature(0, 0, 0))
+      val header: BlockHeader = defaultBlockHeader.copy(
         unixTimestamp = Timestamp(blockTs),
         extraFields = HefPostCancun(
           baseFee = BigInt(1_000_000_000L),
@@ -497,14 +497,14 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         )
       )
 
-      val senderBalance = UInt256(BigInt(1000000000L))
-      val world = emptyWorld.saveAccount(originAddress, Account(balance = senderBalance))
+      val senderBalance: UInt256 = UInt256(BigInt(1000000000L))
+      val world: InMemoryWorldStateProxy = emptyWorld.saveAccount(originAddress, Account(balance = senderBalance))
 
-      val resultWorld = prep.deductBlobGas(stx, originAddress, header, world)
+      val resultWorld: InMemoryWorldStateProxy = prep.deductBlobGas(stx, originAddress, header, world)
 
-      val expectedFee = BlobGasUtils.getBlobGasPrice(excessBlobGas, Timestamp(blockTs), pragueConfig)
-      val expectedBurned = expectedFee * BlobGasUtils.GAS_PER_BLOB * numBlobs
-      val actualBalance = resultWorld.getGuaranteedAccount(originAddress).balance
+      val expectedFee: BigInt = BlobGasUtils.getBlobGasPrice(excessBlobGas, Timestamp(blockTs), pragueConfig)
+      val expectedBurned: BigInt = expectedFee * BlobGasUtils.GAS_PER_BLOB * numBlobs
+      val actualBalance: UInt256 = resultWorld.getGuaranteedAccount(originAddress).balance
 
       actualBalance shouldBe UInt256(senderBalance.toBigInt - expectedBurned)
   }

@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -275,7 +275,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val sibling = payloadOn(block1, Nil, randao = 0x0b) // same parent and height as block2, empty body
+      val sibling: Block = payloadOn(block1, Nil, randao = 0x0b) // same parent and height as block2, empty body
       sibling.header.number shouldBe block2.header.number
       newPayload(sibling).status shouldBe Valid
 
@@ -287,9 +287,9 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       engineApi.getPayloadBodyByHash(sibling.hash.value).map(_._1.size) shouldBe Some(0)
 
     "keep a child of that sibling off the canonical index too" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      val sibling: Block = payloadOn(block1, Nil, randao = 0x0b)
       newPayload(sibling).status shouldBe Valid
-      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      val child: Block = payloadOn(sibling, Seq(tx1), randao = 0x0c)
       newPayload(child).status shouldBe Valid
 
       canonicalAt(2) shouldBe Some(block2.hash)
@@ -297,9 +297,9 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     "let forkchoiceUpdated move the index to the side chain, and back" taggedAs (UnitTest, ConsensusTest) in
       (new Setup:
-        val sibling = payloadOn(block1, Nil, randao = 0x0b)
+        val sibling: Block = payloadOn(block1, Nil, randao = 0x0b)
         newPayload(sibling).status shouldBe Valid
-        val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+        val child: Block = payloadOn(sibling, Seq(tx1), randao = 0x0c)
         newPayload(child).status shouldBe Valid
 
         forkchoice(child)
@@ -316,19 +316,19 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
     ) in new Setup:
       // A CL whose newPayload call timed out re-sends the same payload. A side payload (stored by hash, no canonical
       // entry) used to be re-executed every time; on Platåberget that never finished inside the CL's 8 s timeout.
-      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      val sibling: Block = payloadOn(block1, Nil, randao = 0x0b)
       val before = executions.get
       newPayload(sibling).status shouldBe Valid
       executions.get shouldBe (before + 1)
       canonicalAt(2) shouldBe Some(block2.hash) // it is a side payload: block2 keeps the height
 
-      val again = newPayload(sibling)
+      val again: PayloadStatusV1 = newPayload(sibling)
       again shouldBe PayloadStatusV1(Valid, latestValidHash = Some(sibling.hash.value))
       executions.get shouldBe (before + 1)
       canonicalAt(2) shouldBe Some(block2.hash)
 
       // Its child still builds on it (the side payload counts as an executed parent) and is itself not re-executed.
-      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      val child: Block = payloadOn(sibling, Seq(tx1), randao = 0x0c)
       newPayload(child).status shouldBe Valid
       executions.get shouldBe (before + 2)
       newPayload(child).status shouldBe Valid
@@ -338,9 +338,9 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val sibling = payloadOn(block1, Nil, randao = 0x0b)
+      val sibling: Block = payloadOn(block1, Nil, randao = 0x0b)
       newPayload(sibling).status shouldBe Valid
-      val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
+      val child: Block = payloadOn(sibling, Seq(tx1), randao = 0x0c)
       newPayload(child).status shouldBe Valid
       val before = executions.get
       newPayload(sibling).status shouldBe Valid // deduped re-send
@@ -350,14 +350,14 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       forkchoice(child) // adopts the side chain whose payloads were only ever executed once
       canonicalAt(2) shouldBe Some(sibling.hash)
       canonicalAt(3) shouldBe Some(child.hash)
-      val grandchild = payloadOn(child, Nil, randao = 0x0d) // needs the adopted state to be readable
+      val grandchild: Block = payloadOn(child, Nil, randao = 0x0d) // needs the adopted state to be readable
       newPayload(grandchild).status shouldBe Valid
       forkchoice(grandchild)
       canonicalAt(4) shouldBe Some(grandchild.hash)
 
     "still write the canonical entry of a payload that extends the head" taggedAs (UnitTest, ConsensusTest) in
       (new Setup:
-        val block3 = payloadOn(block2, Nil, randao = 0x03)
+        val block3: Block = payloadOn(block2, Nil, randao = 0x03)
         newPayload(block3).status shouldBe Valid
         canonicalAt(3) shouldBe Some(block3.hash)
       )
@@ -390,7 +390,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
     "delete the index entries above a shorter side chain it reorganises to" taggedAs (UnitTest, ConsensusTest) in
       (new Setup:
         block2
-        val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a) // sibling of block1
+        val side1: Block = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a) // sibling of block1
         newPayload(side1).status shouldBe Valid
         forkchoice(side1)
 
@@ -407,11 +407,11 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       // the CL carries on from the old chain. The leftover entry at height 2 made block3's newPayload write height 3,
       // and the forkchoiceUpdated to block3 then stopped its walk at height 3 — height 1 still named side1.
       block2
-      val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
+      val side1: Block = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
       newPayload(side1).status shouldBe Valid
       forkchoice(side1)
 
-      val block3 = payloadOn(block2, Nil, randao = 0x03)
+      val block3: Block = payloadOn(block2, Nil, randao = 0x03)
       newPayload(block3).status shouldBe Valid
       forkchoice(block3)
 
@@ -429,7 +429,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         // block exactly like this: BlockExecution saves the executed block with its number->hash entry, then the best
         // block moves to the branch tip. Nothing clears what lies above the tip, so height 2 keeps block2.
         block2
-        val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
+        val side1: Block = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a)
         newPayload(side1).status shouldBe Valid
         blockchainWriter.save(side1, Nil, ChainWeight.zero, saveAsBestBlock = false)
         blockchainWriter.saveBestKnownBlocks(side1.hash, side1.header.number.value)
@@ -474,7 +474,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     "drop it on a reorganisation to a sibling that leaves the transaction out" taggedAs (UnitTest, ConsensusTest) in
       (new Setup:
-        val emptySibling = payloadOn(block1, Nil, randao = 0x0b)
+        val emptySibling: Block = payloadOn(block1, Nil, randao = 0x0b)
         newPayload(emptySibling).status shouldBe Valid
 
         forkchoice(emptySibling)
@@ -485,7 +485,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     "point it at the new block when the new branch re-includes the transaction" taggedAs (UnitTest, ConsensusTest) in
       (new Setup:
-        val sameTxSibling = payloadOn(block1, Seq(tx1), randao = 0x0c)
+        val sameTxSibling: Block = payloadOn(block1, Seq(tx1), randao = 0x0c)
         sameTxSibling.hash should not be block2.hash
         newPayload(sameTxSibling).status shouldBe Valid
 
@@ -514,7 +514,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new Setup:
       block2 // canonical genesis <- block1 <- block2, head block2
-      val response = fcu(block1, withAttributes = false)
+      val response: ForkchoiceUpdatedResponse = fcu(block1, withAttributes = false)
 
       response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(block1.hash.value))
       response.payloadId shouldBe None
@@ -525,7 +525,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
     "not begin a payload build for it, even with payload attributes" taggedAs (UnitTest, ConsensusTest) in new Setup:
       block2
       val poolReadsBefore = poolQueries.get
-      val response = fcu(block1, withAttributes = true)
+      val response: ForkchoiceUpdatedResponse = fcu(block1, withAttributes = true)
 
       response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(block1.hash.value))
       response.payloadId shouldBe None
@@ -534,7 +534,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
     "treat genesis as such an ancestor too" taggedAs (UnitTest, ConsensusTest) in new Setup:
       block2
-      val response = fcu(Block(genesisHeader, BlockBody(Nil, Nil)), withAttributes = true)
+      val response: ForkchoiceUpdatedResponse = fcu(Block(genesisHeader, BlockBody(Nil, Nil)), withAttributes = true)
 
       response.payloadStatus shouldBe PayloadStatusV1(Valid, latestValidHash = Some(genesisHeader.hash.value))
       response.payloadId shouldBe None

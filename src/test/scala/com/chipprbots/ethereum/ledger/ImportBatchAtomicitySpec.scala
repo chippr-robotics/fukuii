@@ -236,11 +236,11 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
         initGenesis()
         val node = new Node()
         node.importEach(chain.take(start - 1))
-        val batch = chain.slice(start - 1, start - 1 + length)
-        val failing = batch(failIndex)
+        val batch: List[Block] = chain.slice(start - 1, start - 1 + length)
+        val failing: Block = batch(failIndex)
         pendingFailure = Some(failing.hash.value -> failure)
 
-        val result = node.importBatch(batch)
+        val result: ConsensusResult = node.importBatch(batch)
 
         failure match
           case MissingAfter(_) =>
@@ -253,7 +253,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
             else result shouldBe a[ExtendedCurrentBestBranchPartially]
 
         // adopted: best moved to the last validated block, and is exactly what importing that prefix leaves
-        val adoptedUpTo = start - 1 + failIndex
+        val adoptedUpTo: Int = start - 1 + failIndex
         reader.getBestBlockNumber shouldBe BigInt(adoptedUpTo)
         dbContent shouldBe referenceContent(adoptedUpTo)
         // the failing block left nothing: no block data, and (the line above) not one state byte
@@ -303,11 +303,11 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
     // restart: nothing is applied twice. The only residue of the kill is the one prune that did not run: every key the
     // reference has still holds the reference's value, and the extras are that block's death row / snapshots / dead nodes.
     new Node().importBatch(chain.drop(7)) shouldBe a[ExtendedCurrentBestBranch]
-    val reference = referenceContent(lastBlock)
+    val reference: Map[Seq[Byte], Seq[Byte]] = referenceContent(lastBlock)
     val actual = dbContent
-    val differing = reference.filter { case (k, v) => actual.get(k).exists(_ != v) }
+    val differing: Map[Seq[Byte], Seq[Byte]] = reference.filter { case (k, v) => actual.get(k).exists(_ != v) }
     withClue("keys the reference has, with a DIFFERENT value (a skewed count): ")(differing shouldBe empty)
-    val missing = reference.keySet.diff(actual.keySet)
+    val missing: Set[Seq[Byte]] = reference.keySet.diff(actual.keySet)
     // a restarted node's prune cursor starts one block in, so the skipped prune is not retried; the reference's own
     // deletions may be present in `actual` as extras but nothing live may be absent
     withClue("keys the reference has that are ABSENT here (a live node lost): ")(missing shouldBe empty)
@@ -326,11 +326,11 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       // stay applied unless undone) is pinned by the two "abandoned block" tests below, which prune past it.
       initGenesis()
       val node = new Node()
-      val oldChain = chain.take(3)
+      val oldChain: List[Block] = chain.take(3)
       // a3 writes slot 9 = SHARED; the replacing b2 writes the very same leaf
       plans(oldChain(2).hash.value) = Seq(9 -> "shared")
       phase("importing the old chain")(node.importEach(oldChain))
-      val heavy = BlockHelpers.generateChain(
+      val heavy: List[Block] = BlockHelpers.generateChain(
         1,
         oldChain(0),
         b => b.copy(header = b.header.copy(difficulty = Difficulty(BigInt(10).pow(12))))
@@ -342,14 +342,14 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       phase("importing the reorg block")(node.importBatch(List(b2)) shouldBe a[SelectedNewBestBranch])
       reader.getBestBlock.map(_.hash) shouldBe Some(b2.hash)
       // (the canonical index legitimately drops height 3; the TRIE namespace must lose nothing)
-      val nodeNamespace = 'n'.toByte
+      val nodeNamespace: Byte = 'n'.toByte
       withClue("trie keys the reorg removed: ")(
         beforeReorg.keySet.filter(_.head == nodeNamespace).diff(dbContent.keySet) shouldBe empty
       )
 
       // restart, then one block on top of the reorg block (it prunes block 1 only)
       val restarted = new Node()
-      val c3 = BlockHelpers.generateChain(1, b2).head
+      val c3: Block = BlockHelpers.generateChain(1, b2).head
       phase("importing the block after the reorg")(restarted.importEach(List(c3)))
 
       readWholeState(roots(c3.hash.value))(9) shouldBe Some(value("shared"))
@@ -379,20 +379,20 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       initGenesis()
       val node = new Node()
       val a1 = chain.head
-      val a2 = chain(1)
+      val a2: Block = chain(1)
       plans(a1.hash.value) = Seq(1 -> "a1")
       plans(a2.hash.value) = Seq(3 -> "aOnly")
       phase("importing the old chain")(node.importEach(List(a1, a2)))
-      val b2 = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
+      val b2: Block = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
       plans(b2.hash.value) = Seq(7 -> "bOnly")
       phase("reorganising to the sibling")(node.importBatch(List(b2)) shouldBe a[SelectedNewBestBranch])
       reader.getBestBlock.map(_.hash) shouldBe Some(b2.hash)
 
       // carry on from b2 well past the point where dr2 is pruned (history = 2)
-      val tail = extendQuiet(this, b2, 5)
+      val tail: List[Block] = extendQuiet(this, b2, 5)
       phase("extending the new chain")(node.importEach(tail))
 
-      val finalState = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+      val finalState: Map[Int, Option[ByteString]] = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
       finalState(3) shouldBe Some(value("g3"))
       finalState(7) shouldBe Some(value("bOnly"))
       finalState(1) shouldBe Some(value("a1"))
@@ -408,22 +408,22 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
     initGenesis()
     val node = new Node()
     val a1 = chain.head
-    val a2 = chain(1)
+    val a2: Block = chain(1)
     plans(a1.hash.value) = Seq(1 -> "a1")
     plans(a2.hash.value) = Seq(3 -> "aOnly")
     node.importEach(List(a1, a2))
-    val b2 = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
+    val b2: Block = BlockHelpers.generateChain(1, a1, heavyAdjust(BigInt(10).pow(12))).head
     plans(b2.hash.value) = Seq(7 -> "bOnly")
     phase("reorganising to b2")(node.importBatch(List(b2)) shouldBe a[SelectedNewBestBranch])
-    val a3 = BlockHelpers.generateChain(1, a2, heavyAdjust(BigInt(10).pow(13))).head
+    val a3: Block = BlockHelpers.generateChain(1, a2, heavyAdjust(BigInt(10).pow(13))).head
     plans(a3.hash.value) = Seq(8 -> "a3")
     phase("reorganising back through a2")(node.importBatch(List(a3)) shouldBe a[SelectedNewBestBranch])
     reader.getBestBlock.map(_.hash) shouldBe Some(a3.hash)
 
-    val tail = extendQuiet(this, a3, 5)
+    val tail: List[Block] = extendQuiet(this, a3, 5)
     phase("extending the a chain")(node.importEach(tail))
 
-    val finalState = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
+    val finalState: Map[Int, Option[ByteString]] = phase("reading the final state")(readWholeState(roots(tail.last.hash.value)))
     finalState(3) shouldBe Some(value("aOnly"))
     finalState(8) shouldBe Some(value("a3"))
     finalState(7) shouldBe Some(value("g7"))
@@ -437,7 +437,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
     initGenesis()
     val node = new Node()
     node.importEach(chain.take(3))
-    val batch = chain.slice(3, 8)
+    val batch: List[Block] = chain.slice(3, 8)
     pendingFailure = Some(batch(2).hash.value -> MissingAfter(2))
     node.importBatch(batch) shouldBe a[ConsensusErrorDueToMissingNode]
     // newPayload answers VALID without executing for a block it already holds, and treats a parent with receipts as a
