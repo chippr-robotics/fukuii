@@ -65,11 +65,11 @@ object DiscoveryNetwork:
   // Pause before restarting a failed server-event consumer, so a persistent failure cannot spin.
   private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
 
-  /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key recovery
-    * and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest node
-    * (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what many
-    * IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would be.
-    * At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
+  /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key
+    * recovery and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest
+    * node (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what
+    * many IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would
+    * be. At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
     */
   case class InboundRequestLimits(
       perIpPerSecond: Int,
@@ -469,7 +469,9 @@ object DiscoveryNetwork:
             .collect(pf)
 
         /** Collect the first response that matches the partial function or return None if one cannot be found */
-        private def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
+        private def collectFirstResponse[T](
+            publicKey: PublicKey
+        )(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
           channel
             .collectResponses(publicKey: PublicKey, config.requestTimeout.fromNow)(pf)
             .head

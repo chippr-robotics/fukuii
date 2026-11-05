@@ -77,7 +77,7 @@ target is "one small flat object per result, no `BigInteger` on the path".
 ## Gates *(mandatory; nothing past them proceeds until they pass)*
 
 **GT-1 — Impact analysis (`beacon` and `forge`, before any code).** Enumerate every `UInt256` and `BigInt` entry point in
-`vm/` and `domain/`: each opcode's arithmetic, every implicit conversion site (`uint256ToBigInt`, `BigIntAsUInt256`,
+`vm/` and `domain/`: each opcode's arithmetic, every implicit conversion site (`uint256ToBigInt`, `UInt256.toUInt256` (the `BigIntAsUInt256` implicit class until spec 020 PR 5b),
 `long2UInt256`, `int2UInt256`, `byte2UInt256`, `bool2UInt256`), gas arithmetic that mixes `UInt256` and `BigInt`,
 `Account` balance/nonce, `Wei`, RLP and JSON codecs, the storage-proxy boundary (NG-3). Classify each as: representation
 change only; conversion that stays; or a semantic hazard (signed ops, 512-bit intermediates, `EXP`, shifts ≥ 256,

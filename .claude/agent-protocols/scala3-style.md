@@ -78,20 +78,27 @@ the implicit to a `given`. Order: **S3 → S4 → S5 → S6**.
 (note below).
 
 ```bash
-grep -rnE "implicit +((final|sealed|abstract|private(\[[A-Za-z_]+\])?|protected(\[[A-Za-z_]+\])?) +)*class\b" src/main/ --include="*.scala" | grep -v "//" | grep -v "Enc("
-# Target: 0 hits (same-line forms, modifiers included; the old `consensus/` and `vm/` excludes are gone)
+grep -rnE "implicit +((final|sealed|abstract|private(\[[A-Za-z_]+\])?|protected(\[[A-Za-z_]+\])?) +)*class\b" \
+    src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src --include="*.scala" \
+  | grep -vE '^[^:]+:[0-9]+:\s*(//|\*)' \
+  | grep -v "Enc(" | grep -vE "ByteString(Self|Array|Byte)Element|BufferConversionOps"
+# Target: 0 hits. Main sources of every module, the published ones included (bytes, rlp, crypto, scalanet,
+# scalanetDiscovery); modifier forms included; only comment-only lines are dropped, not lines with a trailing `//`.
 # `implicit` and `class` on different lines, or an annotation between them:
-rg -U --pcre2 -n -g '*.scala' 'implicit\b(?:\s|@\w+(?:\([^)]*\))?)+(?:(?:final|sealed|abstract|private(?:\[\w+\])?|protected(?:\[\w+\])?|case)\s+)*class\b' src/main | grep -v "Enc("
+rg -U --pcre2 -n -g '*.scala' 'implicit\b(?:\s|@\w+(?:\([^)]*\))?)+(?:(?:final|sealed|abstract|private(?:\[\w+\])?|protected(?:\[\w+\])?|case)\s+)*class\b' \
+  src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src \
+  | grep -v "Enc(" | grep -vE "ByteString(Self|Array|Byte)Element|BufferConversionOps"
 ```
 
 Fix: `implicit class Foo(val x: T) { def bar = ... }` → `extension (x: T) def bar = ...`
 
-**Note (2026-11-04, spec 020 PR 5b):** the conversion wrappers stay `implicit class` by user decision: the 54 message
-wrappers (`XEnc(val underlyingMsg) extends MessageSerializableImplicit`), the consensus encoders (`BlockHeaderEnc`,
+**Note (2026-11-04, spec 020 PR 5b):** the conversion wrappers stay `implicit class` by user decision: the 43 message
+wrappers (`XEnc(val underlyingMsg) extends MessageSerializableImplicit`), the 12 other encoders, consensus ones among them (`BlockHeaderEnc`,
 `BlockBodyEnc`, `AccountEnc`, `WithdrawalEnc`, `BlockEnc`, `OmmersSeqEnc`, `ECDSASignatureEnc`, `SignedTransactionEnc`,
 the `ReceiptBloom*` ones, `MptNodeEnc`) and bytes' `ByteString{Self,Array,Byte}Element`. Each adds a supertype
 (`RLPSerializable`, `MessageSerializableImplicit`, `ByteStringElement`) that an `extension` cannot give, so the grep
-above excludes them with `grep -v "Enc("`. **They must be converted (for example to `given Conversion`) before any move
+above excludes them by name (`Enc(`, and the bytes and scalanet names). The exemption is by name, so a new wrapper
+with another name shows up as a hit: decide it explicitly. **They must be converted (for example to `given Conversion`) before any move
 to `-source:future`, which rejects `implicit class`.** The first version of the grep (`implicit class\b`) missed the
 modifier forms (`implicit final class`, `implicit private class`); the five sites it hid (`RichMining`, `RichResponse`,
 `ConnectedPeersOps` in `src/main`; `DiscoveryNetwork.ChannelOps` and `Discv5SyncResponder.IterableHasAsScala` in

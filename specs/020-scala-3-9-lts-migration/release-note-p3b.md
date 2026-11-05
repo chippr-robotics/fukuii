@@ -20,9 +20,9 @@ Draft text. PR 7 folds it into the release-note draft.
 | scalanet | `peergroup.implicits.PeerGroupOps[A, M]` | `extension [A, M](group: PeerGroup[A, M])`: `serverEventStream` |
 | scalanet | `peergroup.implicits.ChannelOps[A, M]` | `extension [A, M](channel: Channel[A, M])`: `channelEventStream` |
 | scalanet | `PeerGroup.ServerEvent.ServerOps[A, M]` | `extension [A, M](stream: Stream[IO, ServerEvent[A, M]])`: `collectChannelCreated`, `collectHandshakeFailure` (found through `ServerEvent`'s companion, no import) |
-| scalanet | `DynamicTLSPeerGroupInternals.ChannelOps` | `extension (channel: io.netty.channel.Channel)`: `sendMessage[M](m)(implicit codec)` |
-| scalanet | `DynamicTLSExtension.ExtensionPublicKey.ExtensionPublicKeyOps` | `extension (key: ExtensionPublicKey)`: `getNodeId` (found through `ExtensionPublicKey`'s companion, no import) |
 
 Not changed: the conversion wrappers (`ByteStringUtils.ByteString{Self,Array,Byte}Element`, and in the node module the
 `XEnc` message and consensus encoders) stay `implicit class` (user decision 2026-11-04; see `scala3-style.md` S4).
 scalanet's unused `BufferConversionOps` is untouched.
+
+Also converted, but not visible downstream so not listed above: `DynamicTLSPeerGroupInternals.ChannelOps` and `DynamicTLSExtension.ExtensionPublicKey.ExtensionPublicKeyOps` sit in objects that are `private[peergroup]` / `private[scalanet]`, and the two scalanetDiscovery sites (`DiscoveryNetwork.ChannelOps`, `Discv5SyncResponder.IterableHasAsScala`) were `private`. scalanetDiscovery's public API is unchanged.

@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 class ETH63AccountImplicitsSpec extends AnyFlatSpec with Matchers:
 
-  "Account.AccountDec" should "normalize empty storageRoot/codeHash to canonical empty hashes" taggedAs (UnitTest) in {
+  "Account.toAccount" should "normalize empty storageRoot/codeHash to canonical empty hashes" taggedAs (UnitTest) in {
     // RLP([nonce, balance, storageRoot, codeHash])
     // Here storageRoot/codeHash are encoded as empty byte strings by some peers.
     val encoded = rlp.encode(
