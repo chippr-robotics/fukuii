@@ -68,38 +68,38 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec:
     val dir = new File(testDir)
     if !dir.exists() || !dir.isDirectory then
       info(s"Directory not found: $testDir")
-      return (0, 0, 0)
+      (0, 0, 0)
+    else
+      val testFiles = dir.listFiles().filter(_.getName.endsWith(".json")).take(maxTests)
+      var passed = 0
+      var failed = 0
+      var skipped = 0
 
-    val testFiles = dir.listFiles().filter(_.getName.endsWith(".json")).take(maxTests)
-    var passed = 0
-    var failed = 0
-    var skipped = 0
+      testFiles.foreach { file =>
+        val suite = loadTestSuiteFromFile(file.getAbsolutePath)
 
-    testFiles.foreach { file =>
-      val suite = loadTestSuiteFromFile(file.getAbsolutePath)
+        if suite.tests.isEmpty then skipped += 1
+        else
+          suite.tests.foreach { case (testName, test) =>
+            val result = executeTest(test)
+            result match
+              case Right(_) =>
+                passed += 1
+              case Left(error) =>
+                // Log failure but don't spam console for known gas issues
+                if error.contains("invalid gas used") then
+                  // Known gas calculation issue - see GAS_CALCULATION_ISSUES.md
+                  failed += 1
+                else if error.contains("invalid state root") then
+                  // State root mismatch - may be related to gas or other issues
+                  failed += 1
+                else
+                  info(s"  ✗ Test failed: $testName - $error")
+                  failed += 1
+          }
+      }
 
-      if suite.tests.isEmpty then skipped += 1
-      else
-        suite.tests.foreach { case (testName, test) =>
-          val result = executeTest(test)
-          result match
-            case Right(_) =>
-              passed += 1
-            case Left(error) =>
-              // Log failure but don't spam console for known gas issues
-              if error.contains("invalid gas used") then
-                // Known gas calculation issue - see GAS_CALCULATION_ISSUES.md
-                failed += 1
-              else if error.contains("invalid state root") then
-                // State root mismatch - may be related to gas or other issues
-                failed += 1
-              else
-                info(s"  ✗ Test failed: $testName - $error")
-                failed += 1
-        }
-    }
-
-    (passed, failed, skipped)
+      (passed, failed, skipped)
 
   "ComprehensiveBlockchainTests" should "run multiple tests from ValidBlocks/bcValidBlockTest" taggedAs (
     IntegrationTest,

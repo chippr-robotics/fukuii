@@ -39,21 +39,23 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
   // Returns the values from all leaves in visit order.
   private def walkLeaves(rootHash: Array[Byte], storage: MptStorage): Seq[ByteString] =
     // EmptyRootHash is a sentinel for an empty trie — no node is ever stored under it.
-    if java.util.Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then return Seq.empty
-    val collected = mutable.ArrayBuffer.empty[ByteString]
-    val visitor = new LeafWalkVisitor(storage, leaf => collected += leaf.value)
-    MptTraversals.dispatch(HashNode(rootHash), visitor)
-    collected.toSeq
+    if java.util.Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then Seq.empty
+    else
+      val collected = mutable.ArrayBuffer.empty[ByteString]
+      val visitor = new LeafWalkVisitor(storage, leaf => collected += leaf.value)
+      MptTraversals.dispatch(HashNode(rootHash), visitor)
+      collected.toSeq
 
   // Walk a trie from its root hash using PathTrackingLeafWalkVisitor.
   // Returns (reconstructedKeyBytes → valueBytes) pairs.
   private def walkWithPaths(rootHash: Array[Byte], storage: MptStorage): Seq[(ByteString, ByteString)] =
-    if java.util.Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then return Seq.empty
-    val collected = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
-    val visitor =
-      new PathTrackingLeafWalkVisitor(storage, ByteString(), (path, leaf) => collected += ((path, leaf.value)))
-    MptTraversals.dispatch(HashNode(rootHash), visitor)
-    collected.toSeq
+    if java.util.Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then Seq.empty
+    else
+      val collected = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+      val visitor =
+        new PathTrackingLeafWalkVisitor(storage, ByteString(), (path, leaf) => collected += ((path, leaf.value)))
+      MptTraversals.dispatch(HashNode(rootHash), visitor)
+      collected.toSeq
 
   // ---------------------------------------------------------------------------
   // LeafWalkVisitor — leaf count and value correctness

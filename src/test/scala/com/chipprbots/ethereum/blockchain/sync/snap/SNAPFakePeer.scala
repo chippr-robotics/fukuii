@@ -48,32 +48,32 @@ class SNAPFakePeer(
     p.setAutoPilot(
       new AutoPilot:
         def run(sender: ActorRef, msg: Any): AutoPilot =
-          if dropped.get() then return this
-          msg match
-            case NetworkPeerManagerActor.SendMessageCmd(rawMsg, _) =>
-              rawMsg.underlyingMsg match
-                case req: GetAccountRange =>
-                  accountRangeHandler(req).foreach { resp =>
-                    sender ! AccountRangeCoordinator.AccountRangeResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetStorageRanges =>
-                  storageRangesHandler(req).foreach { resp =>
-                    sender ! StorageRangeCoordinator.StorageRangesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetByteCodes =>
-                  byteCodesHandler(req).foreach { resp =>
-                    sender ! ByteCodeCoordinator.ByteCodesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetTrieNodes =>
-                  trieNodesHandler(req).foreach { resp =>
-                    sender ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case _ => // ignore unknown messages
-            case _ => // ignore non-SendMessage messages
+          if !dropped.get() then
+            msg match
+              case NetworkPeerManagerActor.SendMessageCmd(rawMsg, _) =>
+                rawMsg.underlyingMsg match
+                  case req: GetAccountRange =>
+                    accountRangeHandler(req).foreach { resp =>
+                      sender ! AccountRangeCoordinator.AccountRangeResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetStorageRanges =>
+                    storageRangesHandler(req).foreach { resp =>
+                      sender ! StorageRangeCoordinator.StorageRangesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetByteCodes =>
+                    byteCodesHandler(req).foreach { resp =>
+                      sender ! ByteCodeCoordinator.ByteCodesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetTrieNodes =>
+                    trieNodesHandler(req).foreach { resp =>
+                      sender ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case _ => // ignore unknown messages
+              case _ => // ignore non-SendMessage messages
           this
     )
     p
