@@ -674,7 +674,6 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       override val test = for
         _ <- addRemotePeer
         closestNodes <- service.lookup(targetPublicKey)
-        _ <- stateRef.get
       yield (closestNodes should contain).theSameElementsInOrderAs(expectedNodes)
   }
 

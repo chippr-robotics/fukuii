@@ -9,7 +9,6 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
-import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -298,7 +297,7 @@ private[snap] trait SnapPeerPool
     * latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable external peer
     * when no snap-server-peer is connected.
     */
-  def bestSnapProbeTarget(): Option[(PeerWithInfo, String)] =
+  def bestSnapProbeTarget(): Option[(PeerListSupportNg.PeerWithInfo, String)] =
     val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
       Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
     }.toSet

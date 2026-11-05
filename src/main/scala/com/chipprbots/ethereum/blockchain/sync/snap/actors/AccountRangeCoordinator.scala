@@ -142,7 +142,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
   // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
-  val statelessPeers: scala.collection.mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val statelessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
   // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
@@ -151,7 +151,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
-  val snaplessPeers: scala.collection.mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val snaplessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Strike counter for empty-with-empty-proof responses (the only signal that drives
   // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
   // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
@@ -167,7 +167,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   //   * any successful response from peer → recordPeerSuccess clears strikes
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
-  val emptyResponseStrikes: scala.collection.mutable.Map[PeerId, Int] =
+  val emptyResponseStrikes: mutable.Map[PeerId, Int] =
     mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   var pivotRefreshRequested = false
 
@@ -233,7 +233,7 @@ private[actors] class AccountRangeCoordinatorImpl(
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
-  val activeTasks: scala.collection.mutable.Map[BigInt, (AccountTask, ActorRef[WorkerMessage], Peer)] =
+  val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] =
     mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
   // Seeded with the ranges already complete on resume (#1597): every snapshot builds its cursor map from pending,
   // active, storing and completed tasks, so a skipped range left out of here dropped out of every later checkpoint, and
@@ -241,8 +241,8 @@ private[actors] class AccountRangeCoordinatorImpl(
   val completedTasks: ArrayBuffer[AccountTask] = mutable.ArrayBuffer[AccountTask](skippedTasks*)
 
   // Worker pool
-  val workers: ArrayBuffer[ActorRef[WorkerMessage]] = mutable.ArrayBuffer[WorkerRef]()
-  val idleWorkers: LinkedHashSet[ActorRef[WorkerMessage]] = mutable.LinkedHashSet.empty[WorkerRef]
+  val workers: ArrayBuffer[WorkerRef] = mutable.ArrayBuffer[WorkerRef]()
+  val idleWorkers: LinkedHashSet[WorkerRef] = mutable.LinkedHashSet.empty[WorkerRef]
 
   // #1184: dispatch-stalled detector — silent peers (no FIN/RST) leave activeTasks slots
   // held forever; the worker→TaskFailed cascade depends on a response that never arrives.
@@ -328,21 +328,21 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Tasks whose response is being inserted chunk-by-chunk (`StoreAccountChunk`). They are in neither `pendingTasks`
   // nor `activeTasks` meanwhile; without this a snapshot taken in that window omits the range entirely and a resume
   // would restart it from its start. Keyed by `task.last`; the task's `next` is already advanced past the response.
-  val storingTasks: scala.collection.mutable.Map[ByteString, AccountTask] = mutable.Map.empty[ByteString, AccountTask]
+  val storingTasks: mutable.Map[ByteString, AccountTask] = mutable.Map.empty[ByteString, AccountTask]
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
-  val knownAvailablePeers: scala.collection.mutable.Set[Peer] = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
-  val peerResponseBytesTarget: scala.collection.mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
-  val peerCooldownUntilMs: scala.collection.mutable.Map[String, Long] = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
   // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
-  val lastDispatchTimeMs: scala.collection.mutable.Map[String, Long] = mutable.Map.empty[String, Long]
+  val lastDispatchTimeMs: mutable.Map[String, Long] = mutable.Map.empty[String, Long]
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
   // Exponential backoff from 60s to 5min.

@@ -76,21 +76,21 @@ private[actors] class ByteCodeCoordinatorImpl(
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
   var maxInFlightPerPeer: Int = cooldownConfig.maxInFlightPerPeer
 
-  val peerFailureCounts: scala.collection.mutable.Map[PeerId, Int] =
+  val peerFailureCounts: mutable.Map[PeerId, Int] =
     mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  val peerCooldownUntilMillis: scala.collection.mutable.Map[PeerId, Long] =
+  val peerCooldownUntilMillis: mutable.Map[PeerId, Long] =
     mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
 
   // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
   // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
-  val hashFailureCounts: scala.collection.mutable.Map[ByteString, Int] = mutable.Map.empty[ByteString, Int]
+  val hashFailureCounts: mutable.Map[ByteString, Int] = mutable.Map.empty[ByteString, Int]
 
   // Track known available peers for redispatch when activeTasks is empty.
   // tryRedispatchPendingTasks() previously derived peers from activeTasks.values, leaving it
   // unable to dispatch when activeTasks was empty (all peers in cooldown). This caused an
   // unnecessary 2-minute stall window after simultaneous peer failures.
   // Deduped by remoteAddress — same pattern as TrieNodeHealingCoordinator.
-  val knownAvailablePeers: scala.collection.mutable.Set[Peer] = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
   // Consecutive task failure guard: if all peers repeatedly fail with no progress,
   // force-complete bytecode sync rather than hanging indefinitely. Threshold 100 matches
@@ -101,7 +101,7 @@ private[actors] class ByteCodeCoordinatorImpl(
   // Task management
   val pendingTasks: Queue[ByteCodeTask] = mutable.Queue[ByteCodeTask]()
 
-  val activeTasks: scala.collection.mutable.Map[BigInt, ActiveByteCodeRequest] =
+  val activeTasks: mutable.Map[BigInt, ActiveByteCodeRequest] =
     mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
 
   // Completion bookkeeping (#1233). Previously `completedTasks: mutable.ArrayBuffer[ByteCodeTask]`
@@ -118,9 +118,9 @@ private[actors] class ByteCodeCoordinatorImpl(
   private[actors] var backpressureActive: Boolean = false
 
   // Worker pool
-  val workers: ArrayBuffer[ActorRef[WorkerMessage]] = mutable.ArrayBuffer[WorkerRef]()
+  val workers: ArrayBuffer[WorkerRef] = mutable.ArrayBuffer[WorkerRef]()
   val maxWorkers = 32
-  val idleWorkers: LinkedHashSet[ActorRef[WorkerMessage]] = mutable.LinkedHashSet.empty[WorkerRef]
+  val idleWorkers: LinkedHashSet[WorkerRef] = mutable.LinkedHashSet.empty[WorkerRef]
 
   // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
@@ -136,7 +136,7 @@ private[actors] class ByteCodeCoordinatorImpl(
   // diagnostics so operators can correlate force-completes with later BytecodeRecoveryActor activity.
   private var bytecodesAbandoned: Long = 0
 
-  val peerResponseBytesTarget: scala.collection.mutable.Map[PeerId, BigInt] =
+  val peerResponseBytesTarget: mutable.Map[PeerId, BigInt] =
     mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
 
   // preStart equivalent: record start time, schedule the recurring status pulse, log. Called once by the

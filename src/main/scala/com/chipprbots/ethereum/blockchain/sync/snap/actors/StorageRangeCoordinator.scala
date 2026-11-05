@@ -143,8 +143,8 @@ private[actors] class StorageRangeCoordinatorImpl(
   val tasks: Queue[StorageTask] = mutable.Queue[StorageTask]()
   // Dedup gate: (accountHash, next) uniquely identifies a pending task. Prevents duplicate
   // enqueues when concurrent timeout re-queues overlap (two timeouts for the same batch).
-  val pendingTaskKeys: scala.collection.mutable.Set[(ByteString, ByteString)] = mutable.Set[(ByteString, ByteString)]()
-  val activeTasks: scala.collection.mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)] =
+  val pendingTaskKeys: mutable.Set[(ByteString, ByteString)] = mutable.Set[(ByteString, ByteString)]()
+  val activeTasks: mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)] =
     mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
 
   // Bookkeeping counters — replace the previously unbounded `completedTasks: ArrayBuffer[StorageTask]`
@@ -201,7 +201,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // observed `pending=N active=0 workers-known=10 eligible=8-11` snapshots where most of
   // the eligible peers were parked here. Halving the cooldown keeps storage dispatch
   // closer to the request budget the SNAP server can actually sustain.
-  val peerCooldownUntilMs: scala.collection.mutable.Map[String, Long] = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // Liveness score per peer (see SnapPeerHealth). The 5 s cooldown above handles a transient hiccup; this handles a peer
   // that never answers. A peer with `timeoutThreshold` consecutive timeouts and no success is penalised (2 min, doubling
@@ -216,7 +216,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // The previous single-failure binary mark caused the same peer-pool collapse pathology
   // we observed in AccountRangeCoordinator on sepolia 2026-05-13. Strike counting gives
   // a transient peer hiccup the same recovery path used elsewhere in the codebase.
-  val statelessPeers: scala.collection.mutable.Set[String] = mutable.Set[String]()
+  val statelessPeers: mutable.Set[String] = mutable.Set[String]()
   // Strike counter for empty storage-range responses. Mirror of AccountRangeCoordinator's
   // emptyResponseStrikes: a peer must miss N=5 consecutive empties (no intervening success)
   // before being marked stateless. Cleared on PivotRefreshed, PeerUnavailable, or any
@@ -228,7 +228,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   // fix shape applied to account (PR-2 / #1255 cleared sticky snapless on PivotRefreshed).
   // Reference clients use 5 (Nethermind) or unlimited+throughput-tracker (Geth); 3 was
   // overly aggressive for our policy.
-  val emptyResponseStrikes: scala.collection.mutable.Map[String, Int] = mutable.Map.empty[String, Int]
+  val emptyResponseStrikes: mutable.Map[String, Int] = mutable.Map.empty[String, Int]
   var pivotRefreshRequested = false
 
   // Contract completion tracking for progress estimation.
@@ -265,12 +265,12 @@ private[actors] class StorageRangeCoordinatorImpl(
   // Starts at maxAccountsPerBatch, ratchets down on empty batched responses, scales back up
   // on successful packed responses. This allows recovery from transient issues rather than
   // permanently degrading to batch=1 for the lifetime of the sync.
-  val peerBatchSize: scala.collection.mutable.Map[String, Int] = mutable.Map.empty[String, Int]
-  val peerBatchSuccessStreak: scala.collection.mutable.Map[String, Int] = mutable.Map.empty[String, Int]
+  val peerBatchSize: mutable.Map[String, Int] = mutable.Map.empty[String, Int]
+  val peerBatchSuccessStreak: mutable.Map[String, Int] = mutable.Map.empty[String, Int]
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next StoragePeerAvailable message.
-  val knownAvailablePeers: scala.collection.mutable.Set[Peer] = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
   // Per-task empty-response tracking.
   // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
@@ -330,7 +330,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
 
-  val peerResponseBytesTarget: scala.collection.mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // ========================================
   // Streaming storage-trie construction (replaces the legacy two-phase Phase 1 slot buffer)
@@ -459,7 +459,7 @@ private[actors] class StorageRangeCoordinatorImpl(
   /** Sequence number of the last submitted flat batch (1-based). */
   var flatBatchSeq: Long = 0L
 
-  val flatBatchesDoneAhead: scala.collection.mutable.Set[Long] = mutable.Set.empty[Long]
+  val flatBatchesDoneAhead: mutable.Set[Long] = mutable.Set.empty[Long]
 
   /** Dedicated dispatcher for flat-batch RocksDB commits. Tests can inject their own ExecutionContext to keep timing
     * deterministic; production looks up `storage-writer-dispatcher` from the actor system.
