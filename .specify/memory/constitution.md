@@ -5,7 +5,7 @@ Version change: 1.1.1 → 1.1.2 (PATCH)
 Rationale: spec 020 PR 6b-3 (#1721) makes `sbt formatCheck` the format gate in CI's required "Test and Build" job, in
 place of `scalafmtCheckAll`, which checks the root project only (the root has no `aggregate`). `formatCheck` runs
 `scalafixAll --check` on the root, bytes, crypto and rlp, and `scalafmtCheckAll` on all six modules. Wording-only: no
-principle is added, removed or redefined. Merge this amendment after #1721; before it, CI still runs `scalafmtCheckAll`.
+principle is added, removed or redefined.
 
 Changes:
   - Principle V, Rules, CI MUST pass: "format check (`scalafmtCheckAll`)" → "format check (`formatCheck`)".
@@ -13,10 +13,10 @@ Changes:
     correction.
 
 Templates & artifacts reviewed for alignment:
-  - .specify/templates/plan-template.md  (no change required)
-  - .specify/templates/spec-template.md  (no change required)
-  - .specify/templates/tasks-template.md (no change required)
-  - .specify/templates/checklist-template.md (no change required)
+  ✅ .specify/templates/plan-template.md  (no change required)
+  ✅ .specify/templates/spec-template.md  (no change required)
+  ✅ .specify/templates/tasks-template.md (no change required)
+  ✅ .specify/templates/checklist-template.md (no change required)
 
 Last Amended: 2026-11-05
 -->
