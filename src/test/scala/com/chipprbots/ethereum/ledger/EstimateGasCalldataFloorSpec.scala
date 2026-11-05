@@ -146,16 +146,17 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
     assertTight(calldataCall(amsterdamConfig), atAmsterdam, 79000, TransactionNotEnoughGasForFloorError(78999, 79000))
 
   it should "answer 12,000 for a self-transfer, its EIP-2780 cost" taggedAs (UnitTest, StateTest) in
-    new Ledger(amsterdamConfig):
+    (new Ledger(amsterdamConfig):
       assertTight(
         selfTransfer(amsterdamConfig),
         atAmsterdam,
         12000,
         TransactionNotEnoughGasForIntrinsicError(11999, 12000)
       )
+    )
 
   it should "answer 21,000 for a value transfer to an existing account" taggedAs (UnitTest, StateTest) in
-    new Ledger(amsterdamConfig):
+    (new Ledger(amsterdamConfig):
       // TX_BASE 12,000 + COLD_ACCOUNT_ACCESS 3,000 + TX_VALUE_COST 6,000.
       assertTight(
         valueTransfer(amsterdamConfig),
@@ -163,6 +164,7 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
         21000,
         TransactionNotEnoughGasForIntrinsicError(20999, 21000)
       )
+    )
 
   it should "answer the cap when the cap is below the least valid gas limit, as it always has" taggedAs (
     UnitTest,

@@ -174,13 +174,14 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
       tail.last
 
   "A PoW batch re-presenting the canonical prefix 7..10 and extending the head with 11" should
-    "leave the prefix's undo records applied" taggedAs (UnitTest, DatabaseTest, ConsensusTest) in new Setup:
+    "leave the prefix's undo records applied" taggedAs (UnitTest, DatabaseTest, ConsensusTest) in (new Setup:
       importBatch(prefix :+ extension) shouldBe a[SelectedNewBestBranch]
       reader.getBestBlockNumber shouldBe BigInt(11)
 
       // Unfixed: settleHead abandoned oldCanonical = 7..10, i.e. these very blocks, and every one reads false.
       prefix.foreach(b => withClue(s"block ${b.number}: ")(applied(b) shouldBe true))
       applied(extension) shouldBe true
+    )
 
   it should "keep every node of the head state once pruning has passed the prefix" taggedAs (
     UnitTest,
@@ -199,7 +200,7 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
       UnitTest,
       DatabaseTest,
       ConsensusTest
-    ) in new Setup:
+    ) in (new Setup:
       // The executed 7..10 only match the head's weight, so the old head is kept and the index restored. Unfixed, that
       // arm abandoned every executed block as a side block, the canonical 7..10 among them.
       failing = Set(extension.hash.value)
@@ -213,13 +214,14 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
       val tip = extendPastPruning(extension)
       val state = readWholeState(roots(tip.hash.value))
       (1 to 11).foreach(i => withClue(s"slot $i: ")(state(i) shouldBe Some(value(s"a$i"))))
+    )
 
   "A PoW batch carrying the canonical prefix 7..9 and then a heavier sibling of the head" should
     "still undo the block it really displaces, and only that one" taggedAs (
       UnitTest,
       DatabaseTest,
       ConsensusTest
-    ) in new Setup:
+    ) in (new Setup:
       // Control: the filter keeps re-presented blocks, never a displaced one. b10 replaces block 10 (which wrote slot
       // 10) and writes slot 35 instead, so slot 10 must read its genesis value again on the new chain.
       val heavier: Block => Block = b => b.copy(header = b.header.copy(difficulty = Difficulty(BigInt(10).pow(12))))
@@ -237,3 +239,4 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
       (1 to 9).foreach(i => withClue(s"slot $i: ")(state(i) shouldBe Some(value(s"a$i"))))
       state(10) shouldBe Some(value("g10"))
       state(35) shouldBe Some(value("b10"))
+    )

@@ -109,7 +109,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
     "write timestamp and beacon root to the correct ring-buffer slots on the first post-Cancun block" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new TestSetup:
+    ) in (new TestSetup:
       val ts: Long = CancunTs
       val beaconRoot: ByteString = ByteString(Array.fill(32)(0xab.toByte))
       val world: InMemoryWorldStateProxy = runBlock(makeBlock(beaconRoot, ts))
@@ -120,6 +120,7 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
 
       storage.load(timestampIdx) shouldBe BigInt(ts)
       storage.load(rootIdx) shouldBe UInt256(beaconRoot).toBigInt
+    )
 
   // Case 2 — Pre-Cancun block: no storage written, contract absent
   it should "NOT write any storage slots for a block without parentBeaconBlockRoot" taggedAs (

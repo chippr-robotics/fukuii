@@ -170,7 +170,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
 
   "SNAPSyncController" should
     "not hold a lazy hand-off for a healed account's bytecode: it finalises with bytecodeRecoveryDone UNSET, so the next " +
-    "start's recovery scan fetches the missing code (spec 022 T037)" taggedAs UnitTest in new Fixture:
+    "start's recovery scan fetches the missing code (spec 022 T037)" taggedAs UnitTest in (new Fixture:
       val snap = start()
       snap ! SNAPSyncController.HealedCodeHashes(Seq(ByteString(codeHash)))
       snap ! SNAPSyncController.HealingRootUnservable(root)
@@ -182,6 +182,7 @@ class SNAPHealedCodeFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFla
       appStateStorage.isSnapSyncDone() shouldBe true
       appStateStorage.isBytecodeRecoveryDone() shouldBe false
       appStateStorage.isStorageRecoveryDone() shouldBe true
+    )
 
   it should "set bytecodeRecoveryDone at a lazy hand-off when the reported bytecode has been stored" taggedAs UnitTest in new Fixture:
     val snap = start()

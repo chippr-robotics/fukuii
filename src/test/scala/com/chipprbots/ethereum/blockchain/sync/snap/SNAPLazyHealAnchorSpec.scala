@@ -250,7 +250,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // AppStateStorage best-block write, the same fix-independent signal repegUntil uses elsewhere in this file.
   it should
     "fire a SECOND heal-root-stale re-peg once networkBest has advanced by more than margin (not 2xmargin) on a " +
-    "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in new Fixture:
+    "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(1_000)
       val root0 = fakeRoot(0xaa)
       val height1 = 2_000L
@@ -284,10 +284,11 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       staleRepegUntil(height1, pivot1)
       staleRepegUntil(height2, pivot2)
+    )
 
   "SNAPSyncController" should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HEAL-REPEG " +
-    "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
+    "budget-exhaustion lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(10_000)
       val root0 = fakeRoot(0x11)
       // height - PivotOffset(64) = 10_736 / 11_536 respectively.
@@ -346,10 +347,11 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot2)
       appStateStorage.getSnapSyncStateRoot() shouldBe Some(root2)
+    )
 
   it should
     "still abort finalization with HealingImpossible when the in-memory root genuinely diverges from the " +
-    "pivot header's root (A5 guard must not be weakened)" taggedAs UnitTest in new Fixture:
+    "pivot header's root (A5 guard must not be weakened)" taggedAs UnitTest in (new Fixture:
       val pivotX = BigInt(10_000)
       val persistedRoot = fakeRoot(0x11) // what AppStateStorage says
       val realHeaderRoot = fakeRoot(0x99) // what the pivot header ACTUALLY stored on disk says — genuinely different
@@ -374,6 +376,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           FishingOutcomes.fail(s"A5 guard should have aborted on a genuine root divergence, but finalized: $f")
         case _ => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // forge review follow-up: HealingRootUnservable (~1443/1451) shares anchorPivotBeforeLazyHandoff with the
   // HEAL-REPEG budget-exhaustion site above, but had no direct coverage. HealingRootUnservable is a public case
@@ -382,7 +385,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // directly, exactly as HealingAllPeersStateless already is above.
   it should
     "anchor SnapSyncPivotBlock/SnapSyncStateRoot to the LAST re-pegged pivot before the HealingRootUnservable " +
-    "lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in new Fixture:
+    "lazy handoff, instead of aborting on the pre-healing anchor" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(10_000)
       val root0 = fakeRoot(0x44)
       val pivot1 = BigInt(10_736)
@@ -426,6 +429,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot2)
       appStateStorage.getSnapSyncStateRoot() shouldBe Some(root2)
+    )
 
   // BUG-BC3 regression: a "heal root stale" re-peg that finds no usable target must not count against the
   // HEAL-REPEG budget, however many times it happens, while a genuine all-peers-stateless failure still must.
@@ -445,7 +449,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // that a frozen CL head would.
   it should
     "not count a preemptive heal-root-stale re-peg that finds no usable target against the HEAL-REPEG budget, " +
-    "however many times it repeats, while a genuine all-peers-stateless failure still exhausts it" taggedAs UnitTest in new Fixture:
+    "however many times it repeats, while a genuine all-peers-stateless failure still exhausts it" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(100)
       val root0 = fakeRoot(0x77)
       storeGenesis()
@@ -498,6 +502,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           )
         case _ => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // coordinator follow-up (3rd round), BUG-BC3 2nd follow-up: regression guard for the SAME code path
   // emptyBecauseClNotAdvanced now gates — the RetryPivotRefresh/PivotBootstrapRetryKey generic retry timer,
@@ -511,7 +516,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // live here — see its doc for why the pure-function tests are this ticket's evidence for that specific claim).
   it should
     "still exhaust the budget and hand off when the GENERIC retry timer (RetryPivotRefresh), not " +
-    "HealingAllPeersStateless, repeatedly finds genuinely no peer during StateHealing" taggedAs UnitTest in new Fixture:
+    "HealingAllPeersStateless, repeatedly finds genuinely no peer during StateHealing" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(2_000)
       val root0 = fakeRoot(0xdd)
       storeGenesis()
@@ -536,6 +541,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           )
         case _ => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // forge review of f2583dc42 (BUG-BC3 3rd follow-up). isPoSChainOverride makes the PoS/CL-anchored paths drivable
   // live. A CL hint whose head - pivotBlockOffset is not newer than the current pivot is a STALLED CL (target not
@@ -560,7 +566,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // and every healing peer is stateless for its root. The heal must re-peg to clHead - margin (a header bootstrap for
   // that block) instead of logging "not strictly newer ... Skipping refresh" and spending the budget.
   "SNAPSyncController on a PoS chain with a stalled CL" should
-    "re-peg a stateless heal root to clHead - margin instead of skipping the refresh (#1555)" taggedAs UnitTest in new Fixture:
+    "re-peg a stateless heal root to clHead - margin instead of skipping the refresh (#1555)" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(2_000)
       storeGenesis()
       storeHeaderAt(pivot0, fakeRoot(0xe6))
@@ -582,6 +588,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         case SyncProtocol.HealingImpossible                  => FishingOutcomes.fail("unexpected HealingImpossible")
         case _                                               => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // #1555 fix (a), the counted replay: a "stateless" attempt that found no target arms a counted RetryPivotRefresh;
   // its replay must keep the unservable fallback, so once a snap peer advertises a newer tip it re-pegs to the capped
@@ -622,7 +629,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // makes the budget unreachable and wedges the node (the coordinator latches pivotRefreshRequested; only a
   // 15-minute watchdog retries).
   it should
-    "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in new Fixture:
+    "still exhaust the heal budget and hand off on genuine all-peers-stateless reports" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(2_000)
       storeGenesis()
       storeHeaderAt(pivot0, fakeRoot(0xe1))
@@ -643,6 +650,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         case SyncProtocol.HealingImpossible => FishingOutcomes.fail("unexpected HealingImpossible")
         case _                              => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // (b) A leftover retry timer armed OUTSIDE StateHealing (provenance false -- the initial state here is exactly
   // that, since nothing counted has armed it) firing repeatedly during StateHealing with a stalled CL must NOT
@@ -732,7 +740,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // Path scheme: the controller's own trie walk / StateValidator read the hash-keyed store, which Path never
   // populates, so they could never report "0 missing". The coordinator's path-aware verification is the clean signal.
   it should
-    "complete SNAP under the Path scheme once the coordinator verifies a fully healed trie (no blind controller walk)" taggedAs UnitTest in new Fixture:
+    "complete SNAP under the Path scheme once the coordinator verifies a fully healed trie (no blind controller walk)" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(10_000)
       val trie = PathHealPresenceFixtures.accountTrieNew()
       val root0 = trie.root.hash
@@ -759,11 +767,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
           FishingOutcomes.fail("SNAP aborted (HealingImpossible) instead of completing a fully healed Path trie")
         case _ => FishingOutcomes.continueAndIgnore
       }
+    )
 
   // The Path publish scans the whole state: it must run off the controller thread, report by message, and leave the
   // controller answering status queries until it finishes.
   it should
-    "publish the Path trie asynchronously: stay responsive to GetStatus mid-publish, then finalize on PublishDone" taggedAs UnitTest in new Fixture:
+    "publish the Path trie asynchronously: stay responsive to GetStatus mid-publish, then finalize on PublishDone" taggedAs UnitTest in (new Fixture:
       val pivot0 = BigInt(10_000)
       val trie = PathHealPresenceFixtures.accountTrieNew()
       storeGenesis()
@@ -808,6 +817,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
         case SyncProtocol.HealingImpossible => FishingOutcomes.fail("publish failed (HealingImpossible)")
         case _                              => FishingOutcomes.continueAndIgnore
       }
+    )
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig:
     implicit override lazy val classicSystem: ActorSystem = SNAPLazyHealAnchorSpec.this.system.classicSystem

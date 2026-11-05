@@ -131,11 +131,12 @@ class EthConfigPlatabergetSpec
     response.next.value.systemContracts.keySet should contain allElementsOf BuilderKeys
 
   "eth_config on an ETC chain" should "never list a builder contract" taggedAs (UnitTest, RPCTest) in
-    new EtcSetup:
+    (new EtcSetup:
       val response = ethService.config(ConfigRequest()).unsafeRunSync().toOption.value
       Seq(response.current, response.next, response.last).flatten.foreach { fork =>
         fork.systemContracts.keySet.intersect(BuilderKeys) shouldBe empty
       }
+    )
 
   /** A node whose best block sits at `headTimestamp`, on the shipped Platåberget chain. */
   class PlatabergetSetup(headTimestamp: Long)(implicit system: ActorSystem) extends EthServiceSetup:

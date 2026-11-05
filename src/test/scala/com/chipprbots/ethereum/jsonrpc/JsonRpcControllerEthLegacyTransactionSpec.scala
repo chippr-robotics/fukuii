@@ -334,7 +334,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
   // go-ethereum TransactionAPI.GetTransactionCount: "pending" is the pool nonce (GetPoolNonce), not a block's state.
   it should "eth_getTransactionCount under pending answer the pool's next nonce" taggedAs (UnitTest, RPCTest) in
-    new JsonRpcControllerFixture:
+    (new JsonRpcControllerFixture:
       val mockEthUserService: EthUserService = mock[EthUserService]
       val mockEthTxService: EthTxService = mock[EthTxService]
       override val jsonRpcController: JsonRpcController =
@@ -350,6 +350,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
       val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
       response should haveStringResult("0x7c")
+    )
 
   it should "eth_getBlockTransactionCountByNumber " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     // MIGRATION: Scala 3 scalamock macro drops Option[ForkChoiceManager] type arg — use concrete stub
@@ -633,7 +634,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     txJson \ "transactionIndex" shouldBe JNull
 
   it should "fail with the keystore's error rather than answer an empty list" taggedAs (UnitTest, RPCTest) in
-    new JsonRpcControllerFixture:
+    (new JsonRpcControllerFixture:
       personalService.listAccountsFn = _ => IO.pure(Left(JsonRpcError.LogicError("keystore unavailable")))
       val mockEthTxService: EthTxService = mock[EthTxService]
       (mockEthTxService.pendingTransactionsFrom).expects(*).never()
@@ -644,3 +645,4 @@ class JsonRpcControllerEthLegacyTransactionSpec
       jRpcController.handleRequest(request).unsafeRunSync() should haveError(
         JsonRpcError.LogicError("keystore unavailable")
       )
+    )

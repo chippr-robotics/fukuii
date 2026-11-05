@@ -48,7 +48,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     "keep the heavier old head and index, so the next canonical block's BLOCKHASH matches core-geth" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // Canonical h1..h15 at difficulty 1000. Side branch s6..s13 forks after h5: s6..s12 at 1000, s13 at 5000 and
       // consensus-invalid (tampered stateRoot). Whole branch: 12000 > 10000 for h6..h15, so it is selected and executed;
       // the executed prefix s6..s12 is 7000 < 10000, so core-geth's head never leaves h15.
@@ -74,6 +74,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importOne(h16) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe h16.hash
       node.storedBlockhash(h16, slot = 16) shouldBe oldChain(7).hash.value
+    )
 
   it should "move the head to the executed prefix when it is heavier, and drop the old index above it" taggedAs (
     UnitTest,
@@ -98,7 +99,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // The ordinary ETC uncle race, across a restart. Canonical a1..a10. b10, a heavier sibling of a10, arrives and
       // wins. The node restarts, losing the in-memory block queue that held the orphaned a10. Then a11 (child of a10)
       // arrives by NewBlock and outweighs b10. a10 is on disk with a chain weight, so the queue roots a11 directly on
@@ -132,12 +133,13 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importOne(a12) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe a12.hash
       node.storedBlockhash(a12, slot = 12) shouldBe a10.hash.value
+    )
 
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
       // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
       // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
@@ -153,6 +155,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importFile(heavierSide)
       node.bestHash shouldBe heavierSide.last.hash
       (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
+    )
 
   it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
     UnitTest,

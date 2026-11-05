@@ -62,16 +62,17 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
   // ---------------------------------------------------------------------------------------------------------------
 
   "leadsToDesignatedHead" should "accept the branch tip itself" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       val chain: List[Block] = storeChain(3)
       DesignatedHead.leadsToDesignatedHead(
         headAt(chain.last),
         blockchainReader,
         chain.last.hash.value
       ) shouldBe true
+    )
 
   it should "accept a tip the designated head descends from, one hop up" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       // The hive shape exactly: the CL hands us a tip whose parent is the last block we fetched.
       val chain: List[Block] = storeChain(3)
       DesignatedHead.leadsToDesignatedHead(
@@ -79,15 +80,17 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         blockchainReader,
         chain(1).hash.value
       ) shouldBe true
+    )
 
   it should "accept a tip several hops below the designated head" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       val chain: List[Block] = storeChain(6)
       DesignatedHead.leadsToDesignatedHead(
         headAt(chain.last),
         blockchainReader,
         chain.head.hash.value
       ) shouldBe true
+    )
 
   it should "REFUSE when there is no consensus layer — the ETC/Mordor/Gorgoroth configuration" taggedAs (
     UnitTest,
@@ -97,20 +100,22 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     DesignatedHead.leadsToDesignatedHead(None, blockchainReader, chain.last.hash.value) shouldBe false
 
   it should "REFUSE when the channel exists but nothing bound it" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       val chain: List[Block] = storeChain(3)
       val unbound = new DesignatedHead.LateBound
       unbound.isBound shouldBe false
       DesignatedHead.leadsToDesignatedHead(Some(unbound), blockchainReader, chain.last.hash.value) shouldBe false
+    )
 
   it should "REFUSE when the consensus layer has not spoken yet" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       val chain: List[Block] = storeChain(3)
       val silent = DesignatedHead(() => None)
       DesignatedHead.leadsToDesignatedHead(Some(silent), blockchainReader, chain.last.hash.value) shouldBe false
+    )
 
   it should "REFUSE a tip the designated head does not descend from" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       // THE safety case: the CL named a head on some other branch, so this branch is not ours to follow.
       val chain: List[Block] = storeChain(3)
       val other: List[Block] = storeChain(3)
@@ -119,9 +124,10 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         blockchainReader,
         other.last.hash.value
       ) shouldBe false
+    )
 
   it should "REFUSE when the ancestry walk hits a header we do not hold" taggedAs (UnitTest, ConsensusTest) in
-    new HeaderStore:
+    (new HeaderStore:
       // Chain generated but NOT stored except for the head: the walk cannot link it to the tip, so we do not guess.
       val chain: List[Block] = BlockHelpers.generateChain(4, BlockHelpers.genesis)
       blockchainWriter.storeBlockHeader(chain.last.header).commit()
@@ -130,6 +136,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         blockchainReader,
         chain.head.hash.value
       ) shouldBe false
+    )
 
   it should "REFUSE rather than walk forever when headers never run out" taggedAs (UnitTest, ConsensusTest) in {
     // Pins MaxAncestryWalk. A reader that answers with a header for ANY hash is an infinite virtual ancestry; the
@@ -152,22 +159,24 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     "still refuse a competing branch when only the ChainWeight write is in place" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new PosChainSetup:
+    ) in (new PosChainSetup:
       // Every block here HAS a stored weight — this fixture is the world after the EngineApiService ChainWeight
       // write, so `compareBranch` gets past the lookup that used to abort it with
       // "ChainWeight for N: … not found when resolving branch". It then computes newWeight == oldWeight (difficulty
       // is 0 everywhere), finds oldBlocks non-empty, and refuses. Weights alone flip nothing.
       val resolution = new BranchResolution(blockchainReader, designatedHead = None)
       resolution.resolveBranch(NonEmptyList.fromListUnsafe(sideBranch.map(_.header))) shouldBe NoChainSwitch
+    )
 
   it should "accept a competing branch the consensus layer designated" taggedAs (UnitTest, ConsensusTest) in
-    new PosChainSetup:
+    (new PosChainSetup:
       val resolution = new BranchResolution(blockchainReader, Some(clDesignatedSideTip))
       resolution.resolveBranch(NonEmptyList.fromListUnsafe(sideBranch.map(_.header))) match
         case NewBetterBranch(oldBranch) =>
           // The old canonical suffix from the fork point up, which the caller re-queues as pending txs / ommers.
           oldBranch.map(_.number) shouldBe canonicalSuffix.map(_.number)
         case other => fail(s"expected NewBetterBranch, got $other")
+    )
 
   it should "REFUSE a competing branch when the consensus layer designated the canonical head" taggedAs (
     UnitTest,
@@ -194,13 +203,14 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     executedBlocks shouldBe empty
 
   it should "reorganise onto a branch the consensus layer designated" taggedAs (UnitTest, ConsensusTest) in
-    new PosChainSetup:
+    (new PosChainSetup:
       val posConsensus = consensusWith(Some(clDesignatedSideTip))
       whenReady(posConsensus.evaluateBranch(NonEmptyList.fromListUnsafe(sideBranch)).unsafeToFuture()) { result =>
         result shouldBe a[SelectedNewBestBranch]
       }
       // And it actually EXECUTED the branch, which is the whole point — an unexecuted branch can never be judged.
       executedBlocks.toList.map(_.number) shouldBe sideBranch.map(_.number)
+    )
 
   it should "REFUSE to reorganise onto a branch the consensus layer did not designate" taggedAs (
     UnitTest,
@@ -213,7 +223,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     executedBlocks shouldBe empty
 
   it should "find and report the invalid block on a designated branch" taggedAs (UnitTest, ConsensusTest) in
-    new PosChainSetup:
+    (new PosChainSetup:
       // The end of the hive CanonicalReOrg=True story. Once the branch is allowed to execute, the existing
       // invalid-chain channel does the rest: the failing block and everything queued behind it are reported, with
       // the failing block's parent as latestValidHash.
@@ -223,6 +233,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
       val lvh: ByteString = sideBranch(0).hash.value
       reported.toList shouldBe sideBranch.drop(1).map(_.hash.value -> lvh)
+    )
 
   // ---------------------------------------------------------------------------------------------------------------
   // 4. The head SOURCE, driven through the real ForkChoiceManager rather than injected.
@@ -239,7 +250,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     "follow a side head the CL named notify-only, while the executed head stays put" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new NotifyOnlySideHead:
+    ) in (new NotifyOnlySideHead:
       // Executed-only invariant: notifyBeaconHead must not move the executed head.
       fcm.getHeadBlockHash shouldBe Some(canonicalTip.hash.value)
       fcm.getRequestedHeadBlockHash shouldBe Some(acceptedSideHead.hash.value)
@@ -258,6 +269,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         blockchainReader,
         sideBranch.last.hash.value
       ) shouldBe false
+    )
 
   it should "let BranchResolution accept the side branch the CL named notify-only" taggedAs (
     UnitTest,
@@ -305,12 +317,13 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     "classify a post-rewind batch — canonical prefix, then the head's extension — as ExtendsCanonicalHead" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new FarBehindClHead:
+    ) in (new FarBehindClHead:
       val resolution = new BranchResolution(blockchainReader, Some(unreachableClHead))
       resolution.resolveBranch(headersOf(postRewindBatch)) shouldBe ExtendsCanonicalHead(canonicalPrefix.size)
       // The importer drops exactly that many blocks; what is left starts at the head's child.
       postRewindBatch.drop(canonicalPrefix.size).map(_.number) shouldBe extension.take(10).map(_.number)
       postRewindBatch.drop(canonicalPrefix.size).head.header.parentHash shouldBe head.hash
+    )
 
   it should "keep NewBetterBranch(Nil) for a batch that starts at the head's child — no prefix, nothing to drop" taggedAs (
     UnitTest,
@@ -342,7 +355,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     "refuse the whole post-rewind batch yet import its extension — which is why the importer drops the prefix" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new FarBehindClHead:
+    ) in (new FarBehindClHead:
       // Unchanged behaviour, pinned because it is the mechanism of #1432. The whole batch goes to importToNewBranch
       // (parent N-66 is not the head): equal weight, CL head out of reach, so nothing executes.
       val posConsensus = consensusWith(Some(unreachableClHead))
@@ -358,6 +371,7 @@ class PosForkChoiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       }
       executedBlocks.toList.map(_.number) shouldBe onlyTheExtension.toList.map(_.number)
       blockchainReader.getBestBlockNumber shouldBe onlyTheExtension.last.number.value
+    )
 
   // ---------------------------------------------------------------------------------------------------------------
   // Fixtures

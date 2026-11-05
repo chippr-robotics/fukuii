@@ -469,7 +469,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       bundle.cellProofsPerBlob shouldBe empty
 
     "include the same blob transaction once it can pay the blob base fee" taggedAs (UnitTest, ConsensusTest) in
-      new CancunSetup:
+      (new CancunSetup:
         val payable = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
         poolContents.set(Seq(payable -> 1L))
 
@@ -477,6 +477,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         block1.body.transactionList shouldBe Seq(payable)
         block1.header.blobGasUsed shouldBe Some(BlobGasUtils.GAS_PER_BLOB * 6)
         expectValid(block1)
+      )
   }
 
   /** execution-apis paris.md, engine_getPayloadV1: "MUST return the most recent version of the payload that is
@@ -492,7 +493,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
   "engine_getPayload" should {
 
     "include a transaction that reached the pool after forkchoiceUpdated" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
+      (new ParisSetup:
         val payloadId = requestPayload(genesisHeader)
         stored(payloadId).body.transactionList shouldBe empty
 
@@ -505,17 +506,19 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         servedHash shouldBe hexOf(served)
         served.body.transactionList shouldBe Seq(transfer)
         expectValid(served)
+      )
 
     "answer exactly the payload it built when the pool has not changed" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
+      (new ParisSetup:
         poolContents.set(Seq(legacy(bob, 0) -> 1L))
         val payloadId = requestPayload(genesisHeader)
         val built = stored(payloadId)
 
         servedV1(getPayloadCall(1, payloadId)) shouldBe ((hexOf(built), 1))
+      )
 
     "keep answering the payload it served, even after the pool changes" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
+      (new ParisSetup:
         // "Client software MAY stop the corresponding build process after serving this call"; go-ethereum does
         // (Payload.Resolve), and hive's withdrawals tests ask V1 then V2 for one id and expect the same payload.
         val payloadId = requestPayload(genesisHeader)
@@ -524,6 +527,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         poolContents.set(Seq(legacy(bob, 0) -> 1L))
         servedV1(getPayloadCall(1, payloadId)) shouldBe first
         first._2 shouldBe 0
+      )
 
     "not restart a build for attributes it is already building" taggedAs (UnitTest, ConsensusTest) in new ParisSetup:
       // "Payload building" point 6: "If a build process with given payloadAttributes already exists, client software

@@ -172,12 +172,13 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
       UnitTest,
       DatabaseTest,
       ConsensusTest
-    ) in new Setup:
+    ) in (new Setup:
       val tipRoot = rewindAndReplace(chain)
       val finalState = readWholeState(tipRoot)
       finalState(3) shouldBe Some(value("g3"))
       finalState(7) shouldBe Some(value("bOnly"))
       finalState(1) shouldBe Some(value("a1"))
+    )
 
   it should "lose that node when nothing undoes the dropped block (NoOp control: the bug this fixes)" taggedAs (
     UnitTest,

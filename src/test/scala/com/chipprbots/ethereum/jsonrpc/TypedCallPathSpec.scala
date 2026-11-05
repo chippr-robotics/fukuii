@@ -196,7 +196,7 @@ class TypedCallPathSpec
     UnitTest,
     RPCTest
   ) in
-    new Node:
+    (new Node:
       for gp <- List(BigInt(0), BigInt(9)) do
         val m = message(args(SlotReader, _.copy(gasPrice = Some(GasPrice(gp)))))
         m.stx.tx.tx shouldBe a[LegacyTransaction]
@@ -211,6 +211,7 @@ class TypedCallPathSpec
         ledger.simulateCall(m.stx, m.header, None, m.options, Some(t1))
         ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
         t1.getResult shouldBe t2.getResult
+    )
 
   "estimateCallGas" should "answer what binarySearchGasEstimation answers for a legacy call" taggedAs (
     UnitTest,
@@ -246,7 +247,7 @@ class TypedCallPathSpec
     output(args(FeeEcho, _.copy(maxFeePerGas = Some(0)))) shouldBe word(0) ++ word(0)
 
   it should "refuse fee caps the block cannot accept, with go-ethereum's messages" taggedAs (UnitTest, RPCTest) in
-    new Node:
+    (new Node:
       call(args(FeeEcho, _.copy(maxFeePerGas = Some(5), maxPriorityFeePerGas = Some(1)))).left.value should startWith(
         "max fee per gas less than block base fee: address "
       )
@@ -256,6 +257,7 @@ class TypedCallPathSpec
       call(args(FeeEcho, _.copy(gasPrice = Some(GasPrice(6))))).left.value should include(
         "maxFeePerGas: 6, baseFee: 7"
       )
+    )
 
   it should "require funds only when the message pays for gas or value" taggedAs (UnitTest, RPCTest) in new Node:
     // execution-apis call-unfunded-sender: no fee fields, zero value -> runs
@@ -338,7 +340,7 @@ class TypedCallPathSpec
     output(args(NumberEcho), ov) shouldBe word(12345)
 
   "eth_call with state overrides" should "run against the overridden balance and code" taggedAs (UnitTest, RPCTest) in
-    new Node:
+    (new Node:
       val funds = unfunded -> StateOverride(balance = Some(BigInt(10).pow(18)))
       val req = CallRequest(
         TxArgs(from = Some(unfunded), to = Some(Probe), gasPrice = Some(GasPrice(9)), gas = Some(GasAmount(100000))),
@@ -355,6 +357,7 @@ class TypedCallPathSpec
         .call(req.copy(blockOverrides = Some(BlockOverrides(number = Some(99)))))
         .unsafeRunSync()
         .value shouldBe CallResponse(word(99))
+    )
 
   // ── eth_createAccessList ───────────────────────────────────────────────────────────────────────────────────────
 

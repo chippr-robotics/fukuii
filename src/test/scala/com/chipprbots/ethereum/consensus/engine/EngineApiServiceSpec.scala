@@ -307,7 +307,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         modified.copy(blockHash = header.hash.value)
 
     "give an executed block a ChainWeight, so p2p branch resolution can cross it" taggedAs UnitTest in
-      new EngineApiTestSetup:
+      (new EngineApiTestSetup:
         // WHY. `storeBlock`/`storeBlockByHashOnly` write a header and a body and nothing else, and nothing in the
         // Engine API used to write a weight. A node whose chain was built entirely through newPayload therefore had
         // no weight for any of its own blocks, and `BranchResolution.compareBranch` aborted the first time a
@@ -328,6 +328,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         // the whole point: `None` is what aborted branch resolution.
         blockchainReader.getChainWeightByHash(validBlock.header.hash) shouldBe
           blockchainReader.getChainWeightByHash(genesisHeader.hash)
+      )
 
     "not invent a ChainWeight when the parent has none" taggedAs UnitTest in new EngineApiTestSetup:
       // The fixture deliberately leaves genesis without a weight. A fabricated value would be a worse answer than an
@@ -349,7 +350,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
       result.latestValidHash shouldBe Some(validBlock.header.hash)
 
     "return INVALID with null latestValidHash on hash mismatch (parent known)" taggedAs UnitTest in
-      new EngineApiTestSetup:
+      (new EngineApiTestSetup:
         // Per execution-apis PR #338 (Shanghai+): hash mismatch returns INVALID (not
         // INVALID_BLOCK_HASH) with latestValidHash=null. The corruption is in the
         // payload envelope, not attributable to a specific ancestor. Aligns with hive
@@ -362,9 +363,10 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
 
         result.status shouldBe Invalid
         result.latestValidHash shouldBe None
+      )
 
     "return INVALID with null latestValidHash on hash mismatch (parent unknown)" taggedAs UnitTest in
-      new EngineApiTestSetup:
+      (new EngineApiTestSetup:
         val (validBlock, _) = buildValidBlock1()
         val payload: ExecutionPayload = blockToPayload(validBlock)
         val badPayload: ExecutionPayload = payload.copy(
@@ -376,6 +378,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
 
         result.status shouldBe Invalid
         result.latestValidHash shouldBe None
+      )
 
     "return INVALID for block with modified stateRoot" taggedAs UnitTest in new EngineApiTestSetup:
       val (validBlock, _) = buildValidBlock1()
@@ -397,7 +400,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
       result.validationError should not be empty
 
     "return INVALID when newPayloadV3 expectedBlobVersionedHashes mismatches payload txs" taggedAs UnitTest in
-      new EngineApiTestSetup:
+      (new EngineApiTestSetup:
         // EIP-4844 / Engine API V3: the CL passes expectedBlobVersionedHashes as the 2nd param
         // to engine_newPayloadV3; the EL must compare the CL's list against the concatenation
         // of every blob tx's blobVersionedHashes in the payload and reject on mismatch. The
@@ -416,6 +419,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         result.status shouldBe Invalid
         result.latestValidHash shouldBe Some(genesisHeader.hash)
         result.validationError.getOrElse("") should include("INVALID_VERSIONED_HASHES")
+      )
 
     "return INVALID for block with modified gasUsed" taggedAs UnitTest in new EngineApiTestSetup:
       val (validBlock, _) = buildValidBlock1()

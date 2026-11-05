@@ -296,7 +296,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       canonicalAt(3) shouldBe None
 
     "let forkchoiceUpdated move the index to the side chain, and back" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         val sibling = payloadOn(block1, Nil, randao = 0x0b)
         newPayload(sibling).status shouldBe Valid
         val child = payloadOn(sibling, Seq(tx1), randao = 0x0c)
@@ -308,6 +308,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
         forkchoice(block2)
         canonicalAt(2) shouldBe Some(block2.hash)
+      )
 
     "answer VALID without executing again for a side payload it already executed" taggedAs (
       UnitTest,
@@ -355,10 +356,11 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       canonicalAt(4) shouldBe Some(grandchild.hash)
 
     "still write the canonical entry of a payload that extends the head" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         val block3 = payloadOn(block2, Nil, randao = 0x03)
         newPayload(block3).status shouldBe Valid
         canonicalAt(3) shouldBe Some(block3.hash)
+      )
   }
 
   /** After engine_forkchoiceUpdated the canonical index is exactly the head's ancestry: every height up to the head
@@ -386,7 +388,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       canonicalAt(2) shouldBe Some(block2.hash)
 
     "delete the index entries above a shorter side chain it reorganises to" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         block2
         val side1 = payloadOn(Block(genesisHeader, BlockBody(Nil, Nil)), Nil, randao = 0x0a) // sibling of block1
         newPayload(side1).status shouldBe Valid
@@ -395,6 +397,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         blockchainReader.getBestBlockNumber shouldBe BigInt(1)
         canonicalAt(1) shouldBe Some(side1.hash)
         canonicalAt(2) shouldBe None
+      )
 
     "leave the index exactly the ancestry of a head reached back across a shorter side chain" taggedAs (
       UnitTest,
@@ -421,7 +424,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       engineApi.getPayloadBodyByNumber(1).map(_._1.size) shouldBe Some(1)
 
     "not stop its walk at an entry above the best block that another writer left" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         // The p2p import path's designated-head arm (ConsensusImpl.settleHead, `!selectedByWeight`) moves the best
         // block exactly like this: BlockExecution saves the executed block with its number->hash entry, then the best
         // block moves to the branch tip. Nothing clears what lies above the tip, so height 2 keeps block2.
@@ -437,6 +440,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         blockchainReader.getBestBlockNumber shouldBe BigInt(2)
         canonicalAt(1) shouldBe Some(block1.hash)
         canonicalAt(2) shouldBe Some(block2.hash)
+      )
   }
 
   /** The transaction lookup follows the canonical chain too. eth_getTransactionByHash (EthTxService
@@ -469,7 +473,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
       reportedBlockOf(tx1) shouldBe Some(block2.hash.value)
 
     "drop it on a reorganisation to a sibling that leaves the transaction out" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         val emptySibling = payloadOn(block1, Nil, randao = 0x0b)
         newPayload(emptySibling).status shouldBe Valid
 
@@ -477,9 +481,10 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
 
         lookupOf(tx1) shouldBe None
         reportedBlockOf(tx1) shouldBe None
+      )
 
     "point it at the new block when the new branch re-includes the transaction" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         val sameTxSibling = payloadOn(block1, Seq(tx1), randao = 0x0c)
         sameTxSibling.hash should not be block2.hash
         newPayload(sameTxSibling).status shouldBe Valid
@@ -487,6 +492,7 @@ class EngineApiSidechainNewPayloadSpec extends AnyWordSpec with Matchers:
         forkchoice(sameTxSibling)
 
         reportedBlockOf(tx1) shouldBe Some(sameTxSibling.hash.value)
+      )
   }
 
   /** execution-apis paris.md engine_forkchoiceUpdatedV1 point 2, carried into V2/V3: "Client software MAY skip an

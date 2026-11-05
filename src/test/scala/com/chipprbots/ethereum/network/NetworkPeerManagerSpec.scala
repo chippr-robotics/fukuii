@@ -462,7 +462,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     requestSender.expectMsgType[PeerInfoResponse].peerInfo.map(_.maxBlockNumber) shouldBe Some(BigInt(14))
 
   it should "send nothing for a missing CL ancestor when no peer is behind it" taggedAs (UnitTest, NetworkTest) in
-    new TestSetup:
+    (new TestSetup:
       expectInitialSubscriptions()
       val aheadEth69: PeerInfo =
         peer2Info.copy(remoteStatus = peer2Info.remoteStatus.copy(capability = Capability.ETH69), maxBlockNumber = 20)
@@ -471,6 +471,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       peersInfoHolder ! ProbeMissingAncestorCmd(baseBlockHeader.copy(number = BlockNumber(14)).hash.value, BigInt(14))
 
       peerManager.expectNoMessage(100.millis)
+    )
 
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
     UnitTest,
@@ -842,7 +843,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).peerId shouldBe peer1.id
 
   it should "#1367 TD-PROXY-GAP: no disconnect while our best block is 0" taggedAs (UnitTest, NetworkTest) in
-    new TdProxyGapSetup:
+    (new TdProxyGapSetup:
       expectInitialSubscriptions()
       val holder = newReaderHolder()
       expectInitialSubscriptions()
@@ -852,6 +853,7 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       handshakeHighTdPeer(holder)
 
       peer1Probe.expectNoMessage(200.millis)
+    )
 
   it should "#1367 TD-PROXY-GAP: disconnect a peer with TD ratio above 10,000 once our best block is past genesis" taggedAs (
     UnitTest,

@@ -210,7 +210,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
 
   it should "SELECT a heavier competing PoW branch, under an unbound LateBound" taggedAs (UnitTest, ConsensusTest) in
-    new ConsensusSetup:
+    (new ConsensusSetup:
       val heavierBranch: List[Block] =
         BlockHelpers.generateChain(
           2,
@@ -223,6 +223,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         _ shouldBe a[SelectedNewBestBranch]
       }
       blockchainReader.getBestBlock shouldBe Some(heavierBranch.last)
+    )
 
   it should "be sensitive to the binding — a BOUND holder does change the equal-TD outcome" taggedAs (
     UnitTest,

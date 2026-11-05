@@ -214,12 +214,13 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -38003 for a zero timestamp, after applying the forkchoice state" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         // The service's own attribute check (timestamp), as opposed to the controller's version check.
         val response =
           fcu(1, block1.header.hash.value, payloadAttributes = Some(attrs(0L, withdrawals = false, beaconRoot = false)))
         response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
         blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+      )
 
     "answer -38005 for a fork outside the method's window, without applying anything" taggedAs (
       UnitTest,
@@ -263,11 +264,12 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -32602 for a hash without its 0x prefix, instead of applying it" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         val unprefixed = hex(block1.header.hash.value).drop(2)
         val response = send(3, stateWith("headBlockHash", Some(JString(unprefixed))), None)
         response.error.map(_.code) shouldBe Some(InvalidParams)
         blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+      )
 
     "answer -32602 for a hash that is not a string" taggedAs (UnitTest, ConsensusTest) in new Setup:
       val response = send(3, stateWith("finalizedBlockHash", Some(JInt(0))), None)

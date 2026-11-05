@@ -232,7 +232,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
         UnitTest,
         DatabaseTest,
         ConsensusTest
-      ) in new Setup:
+      ) in (new Setup:
         initGenesis()
         val node = new Node()
         node.importEach(chain.take(start - 1))
@@ -264,6 +264,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
         node.importBatch(chain.drop(adoptedUpTo)) shouldBe a[ExtendedCurrentBestBranch]
         dbContent shouldBe referenceContent(lastBlock)
         noException should be thrownBy readWholeState(roots(chain.last.hash.value))
+      )
   }
 
   "A kill at a write boundary" should "leave the database as if the block was never started (before the commit)" taggedAs (
@@ -317,7 +318,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       UnitTest,
       DatabaseTest,
       ConsensusTest
-    ) in new Setup:
+    ) in (new Setup:
       // PR #1464 swept the replaced block's snapshots by number on restart and deleted the shared node. Nothing here is
       // undone by number, so the reorg and the restart remove no key at all.
       //
@@ -353,6 +354,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
 
       readWholeState(roots(c3.hash.value))(9) shouldBe Some(value("shared"))
       readWholeState(roots(b2.hash.value))(9) shouldBe Some(value("shared"))
+    )
 
   private val heavyAdjust: BigInt => Block => Block = d =>
     b => b.copy(header = b.header.copy(difficulty = Difficulty(d)))
@@ -370,7 +372,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       UnitTest,
       DatabaseTest,
       ConsensusTest
-    ) in new Setup:
+    ) in (new Setup:
       // a2 replaces the leaf of slot 3; the heavier sibling b2 (same parent) does not touch it, so slot 3's old leaf is
       // live in b2's state. Executing a2 left that leaf at zero references on dr2; the reorg to b2 used to keep it
       // there, and the prune of dr2 (`history` blocks later) deleted a node the canonical chain reads.
@@ -394,6 +396,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
       finalState(3) shouldBe Some(value("g3"))
       finalState(7) shouldBe Some(value("bOnly"))
       finalState(1) shouldBe Some(value("a1"))
+    )
 
   it should "be undone again, and its changes put back, when a new branch builds on it" taggedAs (
     UnitTest,

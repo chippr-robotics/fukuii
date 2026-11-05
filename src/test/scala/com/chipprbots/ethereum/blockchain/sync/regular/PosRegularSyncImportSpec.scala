@@ -89,7 +89,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       UnitTest,
       SyncTest,
       ConsensusTest
-    ) in new ImporterFixture():
+    ) in (new ImporterFixture():
       start()
       requestPick()
       servePick(ahead.take(50))
@@ -97,6 +97,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout) // sent once the import is done
       blockchainReader.getBestBlockNumber shouldBe head.number.value + 50
       stop()
+    )
 
   it should "import the head's extension out of a post-rewind batch instead of looping forever (#1432)" taggedAs (
     UnitTest,
@@ -249,7 +250,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     "drop the canonical prefix of a post-rewind batch and execute only the head's extension (#1592)" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new ImporterFixture(postMerge = false):
+    ) in (new ImporterFixture(postMerge = false):
       start()
       val batch = canonical.takeRight(66) ++ ahead.take(10)
       requestPick()
@@ -264,6 +265,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       executedNumbers shouldBe ahead.take(10).map(_.number.value)
       blockchainReader.getBestBlockNumber shouldBe head.number.value + 10
       stop()
+    )
 
   it should "still resolve a batch that arrives mid-import on arrival — serialisation is gated off here" taggedAs (
     UnitTest,

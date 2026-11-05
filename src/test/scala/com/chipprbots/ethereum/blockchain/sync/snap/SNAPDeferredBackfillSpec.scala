@@ -142,7 +142,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
   "SNAPSyncController" should
     "spawn the header-only downloader during state sync, hold finalisation until the header cursor reaches the pivot, " +
-    "then finalise with the REAL pivot TD and a resolvable BLOCKHASH window" taggedAs UnitTest in new Fixture:
+    "then finalise with the REAL pivot TD and a resolvable BLOCKHASH window" taggedAs UnitTest in (new Fixture:
       val snap = start(cfg(defer = true), withAncestors = true)
       awaitProcessed(snap)
       // The downloader exists while state sync is not done (ChainDownloader.Start persists its target)...
@@ -179,6 +179,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       val byNumber = (pivot - 256 to pivot).map(n => n -> blockchainReader.getBlockHeaderByNumber(n).get).toMap
       blockHashes(pivot - 1) shouldBe Some(byNumber(pivot - 1).hash.value)
       blockHashes(pivot - 256) shouldBe Some(byNumber(pivot - 256).hash.value)
+    )
 
   it should "restart the chain downloader, and keep holding, when the header cursor stalls during the hold" taggedAs UnitTest in new Fixture:
     val snap = start(cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds), withAncestors = true)

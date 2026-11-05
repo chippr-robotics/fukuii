@@ -36,7 +36,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
   // ─── T2.1 Tier 1: exact interpolation from NewBlock ───────────────────────
   "SyncController CalibrateChainWeightFromPeer" should
     "apply Tier 1 interpolation when peerTD and peerMaxBlock are both provided" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -52,10 +52,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe expected
+    )
 
   // ─── T2.2 Tier 2: STATUS-only, no block number ────────────────────────────
   it should "apply Tier 2 (peerTD direct) when peerMaxBlock is 0" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -67,10 +68,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe peerTD
+    )
 
   // ─── T2.3 Tier 3 entry: sentinel triggers local chain computation ──────────
   it should "call calibrateTDFromLocalChain when peerTD is 0 (ETH69 sentinel)" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -82,10 +84,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Proof: retry was scheduled — advance 30 min and expect CalibrateChainWeightNowCmd
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T2.4 Tier 3 failure: retry is scheduled when anchor not found ─────────
   it should "schedule a 30-minute retry when calibrateTDFromLocalChain returns false" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -97,10 +100,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
       // No second message without advancing clock again
       networkPeerManager.expectNoMessage(100.millis)
+    )
 
   // ─── T2.5 Tier 3 success: no retry when anchor found and TD written ────────
   it should "not schedule a retry when calibrateTDFromLocalChain succeeds" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupAnchorChain(bestBlockNum = 10, anchorNum = 7, anchorTD = BigInt("7000000000000000"))
       drainRegistration()
 
@@ -110,10 +114,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T2.6 Plausibility gate — below threshold: no write ───────────────────
   it should "not write chain weight when calibratedTD is below genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // bestBlock.number = 1; peerTD=100, peerMaxBlock=100000 → calibratedTD = 0 via integer div
       setupBestBlock(blockNum = BigInt(1))
       drainRegistration()
@@ -126,10 +131,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
 
       blockchainReader.getChainWeightByHash(beforeHash) shouldBe beforeWeight
+    )
 
   // ─── T2.7 Plausibility gate — above threshold: write succeeds ─────────────
   it should "write chain weight when calibratedTD is above genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -144,11 +150,12 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value should be > BigInt("17179869184000")
+    )
 
   // ─── T3.1 Core traversal: anchor at h7, accumulate h8-h10 ─────────────────
   "calibrateTDFromLocalChain" should
     "find the anchor at h7 and accumulate h8+h9+h10 difficulties" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val anchorTD: BigInt = BigInt("7000000000000000") // 7×10^15 > 7 × 10^13 → plausible anchor
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 7, length = 4) // h7, h8, h9, h10
       val h7: BlockHeader = chain(0); val h8: BlockHeader = chain(1); val h9: BlockHeader = chain(2);
@@ -172,13 +179,14 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       val stored: Option[ChainWeight] = blockchainReader.getChainWeightByHash(h10.hash)
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T3.2 No anchor within MaxWalkBlocks: defer ────────────────────────────
   it should "return false and schedule retry when no plausible anchor found within walk limit" taggedAs (
     UnitTest,
     SyncTest
   ) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -189,10 +197,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.3 Idempotent: bestBlock already has correct TD ────────────────────
   it should "be idempotent when bestBlock already has a plausible stored TD" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // bestBlock h10 has anchorTD that passes the plausibility check already
       val correctTD: BigInt = BigInt("24000000000000000000000") // 24e21 >> 10 × 10^13
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 10, length = 1)
@@ -212,10 +221,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // No retry needed — success
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T3.4 Broken parentHash chain aborts cleanly ─────────────────────────
   it should "abort without writing when parentHash lookup returns None" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // Build h10 whose parentHash points to a header that is NOT stored
       val h10: BlockHeader = Fixtures.Blocks.Genesis.header.copy(
         number = BlockNumber(10),
@@ -238,10 +248,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Retry is scheduled (abort returns false → scheduleTDCalibrationRetry)
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.5 Plausibility gate blocks write of low computed TD ───────────────
   it should "not write when accumulated TD is below genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // Anchor at h1 with absurdly low anchorTD — accumulated result < genesis × 1000
       // Actually 1×10^12 < 1×10^13 → NOT a plausible anchor! So the walk will abort, not return a below-threshold result.
       // Instead: use a large-numbered block with barely-above-threshold anchor that still leads to below-genesis*1000 result.
@@ -272,10 +283,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Retry is scheduled (plausibility failure → returns false)
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.6 Boundary: gap = MaxWalkBlocks exactly succeeds ──────────────────
   it should "succeed when gap equals MaxWalkBlocks (10000 headers above anchor)" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val MaxWalk = 10000
       // Build chain: h1 (anchor), h2...h10001 (10000 headers above anchor)
       val anchorTD: BigInt = BigInt("10000000000000000") // 10^16 >> threshold
@@ -299,10 +311,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       stored shouldBe defined
       val expectedTD: BigInt = anchorTD + chain.tail.foldLeft(BigInt(0))((acc, h) => acc + h.difficulty.value)
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T3.7 Boundary: gap = MaxWalkBlocks + 1 defers ───────────────────────
   it should "defer when gap is one past MaxWalkBlocks" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val MaxWalk = 10000
       // Chain of MaxWalk+2 headers; anchor is at head (h1), gap = MaxWalk+1
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 1, length = MaxWalk + 2)
@@ -325,10 +338,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       blockchainReader.getChainWeightByHash(bestHdr.hash) shouldBe beforeWeight
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.8 Walk stops at the FIRST plausible anchor (closest to bestBlock) ─
   it should "stop at the first plausible anchor encountered while walking backward" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // h5 and h10 both have plausible TDs; walk from h15 should find h10 first
       val anchorTD_5: BigInt = BigInt("5000000000000000") // would give wrong lower td
       val anchorTD_10: BigInt = BigInt("10000000000000000") // correct anchor (first hit from h15)
@@ -355,11 +369,12 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       val gapHeaders: Vector[BlockHeader] = chain.slice(6, 11) // h11..h15
       val expectedTD: BigInt = anchorTD_10 + gapHeaders.foldLeft(BigInt(0))(_ + _.difficulty.value)
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T4.1 Retry loop: two consecutive 30-minute retries ──────────────────
   "ChainWeightCalibration retry loop" should
     "fire CalibrateChainWeightNowCmd again after each failed attempt" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -376,10 +391,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T4.2 Retry terminates on success ────────────────────────────────────
   it should "stop scheduling retries when calibrateTDFromLocalChain succeeds" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -403,10 +419,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T4.3 ETH68 peer appears at retry: tier 2 fires, no local chain ───────
   it should "use Tier 2 (not local chain) when an ETH68 peer appears at retry time" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -428,6 +445,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── Base test setup ──────────────────────────────────────────────────────
 

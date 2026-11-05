@@ -93,7 +93,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader.getBlockByHash(built.block.header.hash) shouldBe None
 
     "use the supplied extraData verbatim, not the miner's configured header-extra-data" taggedAs UnitTest in
-      new Setup:
+      (new Setup:
         val marker = ByteString("test_name".getBytes)
         val built = service
           .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(marker)))
@@ -101,6 +101,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           .getOrElse(fail("build failed"))
 
         built.block.header.extraData shouldBe marker
+      )
 
     "default extraData to empty when the parameter is absent" taggedAs UnitTest in new Setup:
       val built = service
@@ -213,7 +214,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
   "the shared proposer builder" should {
 
     "keep engine_forkchoiceUpdated's lenient behaviour: a bad transaction does NOT abort the build" taggedAs
-      UnitTest in new Setup:
+      UnitTest in (new Setup:
         // Regression guard on the extraction. The engine path always builds a payload, even when
         // a transaction fails to apply: it leaves that transaction out and hands the CL a payload
         // that executes. Only the testing_* namespace is strict. If `strict = false` ever starts
@@ -242,9 +243,10 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         // client can execute.
         lenient.map(_.block.body.transactionList) shouldBe Right(Nil)
         strict.isLeft shouldBe true
+      )
 
     "produce the identical block for the engine and testing paths given identical inputs" taggedAs UnitTest in
-      new Setup:
+      (new Setup:
         // The point of routing both through buildBlockOnParent: with the same parent, attributes,
         // transactions, extraData and gasLimit the two surfaces cannot disagree on a single header
         // field. Everything they DO differ on (extraData default, gas-limit policy) is a caller
@@ -261,9 +263,10 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           .getOrElse(fail("service failed"))
 
         viaService.block.header.hash shouldBe viaBuilder.block.header.hash
+      )
 
     "keep the parent gas limit when proposerGasLimit gets no target, converge when it gets one" taggedAs
-      UnitTest in new Setup:
+      UnitTest in (new Setup:
         engineApi.proposerGasLimit(genesisHeader, 1, None).value shouldBe GenesisGasLimit
         engineApi.proposerGasLimit(genesisHeader, 1, Some(GasLimitTarget)).value shouldBe
           GasLimitCalculator.calcGasLimit(GenesisGasLimit, GasLimitTarget)
@@ -271,6 +274,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         // node's gas ceiling on every fork, which by default is this namespace's 60,000,000 target.
         engineApi.enginePayloadGasLimit(genesisHeader, attrs()).value shouldBe
           GasLimitCalculator.calcGasLimit(GenesisGasLimit, EngineApiService.DefaultBuilderGasCeil)
+      )
   }
 
   "the testing_* codecs" should {
@@ -351,7 +355,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     }
 
     "emit exactly the fixture's envelope keys, and omit executionRequests pre-Prague" taggedAs UnitTest in
-      new Setup:
+      (new Setup:
         val built = service
           .buildBlock(BuildBlockRequest(genesisHeader.hash.value, attrs(), Some(Nil), Some(ByteString.empty)))
           .unsafeRunSync()
@@ -387,6 +391,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           .obj
           .map(_._1)
         bundle should contain theSameElementsAs List("commitments", "proofs", "blobs")
+      )
   }
 
   /** Harness modelled on EngineApiGasLimitElasticitySpec: real VM, ephemeral storage, a funded genesis, and a stub

@@ -55,7 +55,7 @@ class DebugTracingServiceSpec
   "DebugTracingService.traceTransaction" should
     "return a -32000 server error when transaction is not found in mapping storage" taggedAs
     (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       val unknownHash: ByteString = ByteString(Array.fill(32)(0xff.toByte))
       txMappingStorage.get.expects(unknownHash).returning(None)
 
@@ -65,9 +65,10 @@ class DebugTracingServiceSpec
 
       result.isLeft shouldBe true
       result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
+    )
 
   it should "return a -32000 server error when block hash is not in storage" taggedAs (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       val txHash: ByteString = block.body.transactionList.head.hash.value
       val missingBlockHash: ByteString = ByteString(Array.fill(32)(0xee.toByte))
       txMappingStorage.get.expects(txHash).returning(Some(TransactionLocation(missingBlockHash, 0)))
@@ -78,9 +79,10 @@ class DebugTracingServiceSpec
 
       result.isLeft shouldBe true
       result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
+    )
 
   it should "return a trace result for a valid transaction" taggedAs (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       val txHash: ByteString = block.body.transactionList.head.hash.value
       val txIndex = 0
 
@@ -102,11 +104,12 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result.isRight shouldBe true
+    )
 
   // ── traceBlockByHash ─────────────────────────────────────────────────────────
 
   "DebugTracingService.traceBlockByHash" should
-    "return InvalidParams when block is not found" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return InvalidParams when block is not found" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val unknownHash: ByteString = ByteString(Array.fill(32)(0xdd.toByte))
 
       val result: Either[JsonRpcError, TraceBlockByHashResponse] = service
@@ -114,9 +117,10 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result.isLeft shouldBe true
+    )
 
   it should "return an empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
       blockchainWriter.storeBlock(emptyBlock).commit()
       storagesInstance.storages.blockHeadersStorage
@@ -128,12 +132,13 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result shouldBe Right(TraceBlockByHashResponse(Seq.empty))
+    )
 
   // ── traceBlockByNumber ───────────────────────────────────────────────────────
 
   "DebugTracingService.traceBlockByNumber" should
     "return an empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
       blockchainWriter.save(
         emptyBlock,
@@ -150,11 +155,12 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result shouldBe Right(TraceBlockByNumberResponse(Seq.empty))
+    )
 
   // ── traceCall ────────────────────────────────────────────────────────────────
 
   "DebugTracingService.traceCall" should
-    "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       blockchainWriter.save(
         block,
         Nil,
@@ -174,11 +180,12 @@ class DebugTracingServiceSpec
         .unsafeRunSync()
 
       result.isRight shouldBe true
+    )
 
   // ── intermediateRoots ────────────────────────────────────────────────────────
 
   "DebugTracingService.intermediateRoots" should
-    "return InvalidParams when block is not found" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return InvalidParams when block is not found" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       import com.chipprbots.ethereum.jsonrpc.DebugTracingService.IntermediateRootsRequest
       val result: Either[JsonRpcError, IntermediateRootsResponse] = service
         .intermediateRoots(IntermediateRootsRequest(block.header.hash.value))
@@ -186,6 +193,7 @@ class DebugTracingServiceSpec
       result.isLeft shouldBe true
       result.swap.getOrElse(fail("Expected Left")).message should include("Block not found")
       result.swap.getOrElse(fail("Expected Left")).code shouldBe ServerErrorCode
+    )
 
   it should "return empty list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
     import com.chipprbots.ethereum.jsonrpc.DebugTracingService.{IntermediateRootsRequest, IntermediateRootsResponse}

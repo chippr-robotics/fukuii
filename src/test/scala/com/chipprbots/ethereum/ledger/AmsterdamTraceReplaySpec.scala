@@ -235,7 +235,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     ledger.advanceWorldToTx(header, stxs, stxs.size, parent.stateRootHash).stateRootHash shouldBe roots.last
 
   it should "run the EIP-4788 and EIP-2935 preamble before the first transaction" taggedAs (UnitTest, StateTest) in
-    new Chain(amsterdamConfig):
+    (new Chain(amsterdamConfig):
       val world = ledger.advanceWorldToTx(header, withSenders(txs), 0, parent.stateRootHash)
       // timestamp 460 -> slots 460 and 460 + 8191; block 46 -> history slot 45.
       world.getStorage(BlockExecution.BeaconRootContractAddress).load(UInt256(460)) shouldBe BigInt(460)
@@ -243,15 +243,17 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
         BigInt(1, Array.fill[Byte](32)(0x42))
       world.getStorage(BlockExecution.HistoryStorageAddress).load(UInt256(45)) shouldBe
         BigInt(1, header.parentHash.value.toArray)
+    )
 
   it should "apply the Type-4 transaction's delegation, which the bare VM never did" taggedAs (UnitTest, StateTest) in
-    new Chain(amsterdamConfig):
+    (new Chain(amsterdamConfig):
       val stxs = withSenders(txs)
       val before = ledger.advanceWorldToTx(header, stxs, 1, parent.stateRootHash)
       ledger.replayTransaction(stxs(1), header, before, tracer = None).worldState.getCode(Address(authority)) shouldBe
         addressToDelegation(Stop)
       ledger.simulateTransaction(stxs(1), header, Some(before)).worldState.getCode(Address(authority)) shouldBe
         ByteString.empty
+    )
 
   it should "leave the pre-state readable after replaying on it, for prestateTracer and a second tracer" taggedAs (
     UnitTest,
@@ -287,7 +289,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
       (b.gasUsed, b.logs, b.vmReturnData, b.vmError, b.worldState.stateRootHash)
 
   "Replaying a block before Amsterdam" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest) in
-    new Chain(amsterdamConfig):
+    (new Chain(amsterdamConfig):
       val osaka = preAmsterdamHeader(46, 300)
       val stxs = withSenders(txs.take(1) :+ txs(3))
       // No preamble before the first transaction, and each earlier one replayed on the bare VM.
@@ -300,9 +302,10 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
       }
       // The floor-bound call reports its execution gas, not the floor, as every pre-Amsterdam replay did.
       ledger.replayTransaction(stxs.head, osaka, parent, tracer = None).gasUsed shouldBe BigInt(37000)
+    )
 
   "Replaying an ETC block" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest, OlympiaTest) in
-    new Chain(Config.blockchains.blockchainConfig):
+    (new Chain(Config.blockchains.blockchainConfig):
       val etcHeader = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header
       val stx = withSenders(
         Seq(
@@ -313,3 +316,4 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
         ledger.replayTransaction(stx, etcHeader, parent, tracer = None),
         ledger.simulateTransaction(stx, etcHeader, Some(parent))
       )
+    )

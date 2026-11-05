@@ -61,12 +61,13 @@ class MissingAncestorProbeSpec extends AnyFlatSpec with Matchers:
     MissingAncestorProbe.target(headOf(canonical.last), blockchainReader) shouldBe None
 
   it should "ask for nothing when the CL head was executed off the canonical chain" taggedAs (UnitTest, SyncTest) in
-    new Setup:
+    (new Setup:
       // A side block the engine executed: receipts stored, no number mapping. Its ancestry is ours.
       storeByHashOnly(s5)
       blockchainWriter.storeReceipts(s5.hash, Nil).commit()
 
       MissingAncestorProbe.target(headOf(s5), blockchainReader) shouldBe None
+    )
 
   it should "ask for nothing when the walk reaches an executed ancestor without a gap" taggedAs (
     UnitTest,

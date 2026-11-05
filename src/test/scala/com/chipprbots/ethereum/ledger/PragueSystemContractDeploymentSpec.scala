@@ -132,13 +132,14 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
       case other => fail(s"expected SYSTEM_CONTRACT_EMPTY, got $other")
 
   it should "reject a Prague block when the consolidation queue has no code" taggedAs (UnitTest, ConsensusTest) in
-    new TestSetup:
+    (new TestSetup:
       val world = withCode(emptyWorld, WithdrawalQueueAddress, someCode)
       exec.requireRequestPredeploysPresent(block, world) match
         case Left(ValidationAfterExecError(reason)) =>
           reason should include("SYSTEM_CONTRACT_EMPTY")
           reason should include(ConsolidationQueueAddress.toString)
         case other => fail(s"expected SYSTEM_CONTRACT_EMPTY, got $other")
+    )
 
   it should "accept a Prague block when both predeploys have code (e.g. deployed by this block's own txs)" taggedAs (
     UnitTest,

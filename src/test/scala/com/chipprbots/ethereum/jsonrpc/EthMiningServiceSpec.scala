@@ -376,7 +376,7 @@ class EthMiningServiceSpec
 
   // core-geth alignment: submitWork rejects shares older than staleThreshold blocks
   it should "reject submitWork when submission is beyond stale threshold" taggedAs (UnitTest, RPCTest) in
-    new TestSetup:
+    (new TestSetup:
       override lazy val miningConfig: MiningConfig = MiningConfigs.miningConfig.copy(staleThreshold = 0)
 
       // Save both blocks so best = block.number (1)
@@ -398,6 +398,7 @@ class EthMiningServiceSpec
         .unsafeRunSync()
 
       result shouldEqual Right(SubmitWorkResponse(false))
+    )
 
   // core-geth alignment: submitWork accepts shares within staleThreshold window
   it should "accept submitWork when submission is within stale threshold" taggedAs (

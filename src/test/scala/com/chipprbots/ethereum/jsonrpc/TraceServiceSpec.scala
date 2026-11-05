@@ -47,7 +47,7 @@ class TraceServiceSpec
   // ── traceTransaction ────────────────────────────────────────────────────────
 
   "TraceService.traceTransaction" should
-    "return InvalidParams when transaction is not found" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return InvalidParams when transaction is not found" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val unknownHash: ByteString = ByteString(Array.fill(32)(0xff.toByte))
       txMappingStorage.get.expects(unknownHash).returning(None)
 
@@ -56,6 +56,7 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result.isLeft shouldBe true
+    )
 
   it should "return flat trace array for a valid transaction" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val txHash: ByteString = block.body.transactionList.head.hash.value
@@ -82,7 +83,7 @@ class TraceServiceSpec
   // ── traceBlock ───────────────────────────────────────────────────────────────
 
   "TraceService.traceBlock" should
-    "return empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
       blockchainWriter.storeBlock(emptyBlock).commit()
       storagesInstance.storages.blockHeadersStorage
@@ -94,11 +95,12 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result shouldBe Right(TraceBlockResponse(Seq.empty))
+    )
 
   // ── replayTransaction ────────────────────────────────────────────────────────
 
   "TraceService.replayTransaction" should
-    "return InvalidParams when transaction is not found" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return InvalidParams when transaction is not found" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val unknownHash: ByteString = ByteString(Array.fill(32)(0xee.toByte))
       txMappingStorage.get.expects(unknownHash).returning(None)
 
@@ -107,6 +109,7 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result.isLeft shouldBe true
+    )
 
   it should "return a replay result with trace option enabled" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val txHash: ByteString = block.body.transactionList.head.hash.value
@@ -134,7 +137,7 @@ class TraceServiceSpec
   // ── replayBlockTransactions ──────────────────────────────────────────────────
 
   "TraceService.replayBlockTransactions" should
-    "return empty list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return empty list for a block with no transactions" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
       blockchainWriter.storeBlock(emptyBlock).commit()
       storagesInstance.storages.blockHeadersStorage
@@ -152,11 +155,12 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result shouldBe Right(TraceReplayBlockTransactionsResponse(Seq.empty))
+    )
 
   // ── traceCall ────────────────────────────────────────────────────────────────
 
   "TraceService.traceCall" should
-    "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       blockchainWriter.save(
         block,
         Nil,
@@ -176,11 +180,12 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result.isRight shouldBe true
+    )
 
   // ── traceFilter ──────────────────────────────────────────────────────────────
 
   "TraceService.traceFilter" should
-    "return InvalidParams when fromBlock is after toBlock" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    "return InvalidParams when fromBlock is after toBlock" taggedAs (UnitTest, RPCTest) in (new TestSetup:
       val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
       // parentBlock gets a different hash because number changed in the header
       val parentBlock: Block = emptyBlock.copy(header = emptyBlock.header.copy(number = emptyBlock.header.number - 1))
@@ -197,6 +202,7 @@ class TraceServiceSpec
         .unsafeRunSync()
 
       result shouldBe Left(JsonRpcError.InvalidParams("fromBlock must be <= toBlock"))
+    )
 
   it should "return empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val emptyBlock: Block = block.copy(body = block.body.copy(transactionList = Seq.empty))
