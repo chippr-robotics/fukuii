@@ -148,7 +148,7 @@ Fukuii uses a multi-module SBT build with the following structure:
 
 ### Code Organization
 - Package structure: `com.chipprbots.ethereum.*`
-- Scala version: 3.3.7 (LTS)
+- Scala version: 3.9.0 (LTS)
 - JDK version: 25 (LTS)
 
 ### Testing Conventions
