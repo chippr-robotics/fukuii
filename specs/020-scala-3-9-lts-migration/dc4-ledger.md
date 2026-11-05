@@ -43,10 +43,10 @@ the control's shape (the 81 warnings at `-source:3.9` contain none).
 
 | # | Site | Warning | Reason | Date | Owner | Follow-up |
 |---|---|---|---|---|---|---|
-| 1 | `src/main/.../crypto/EcKeyGen.scala`, `object EcKeyGen extends App` | `trait App is deprecated since 3.8.0` | `App` to `def main` changes initialisation order (delayedInit). Under `crypto/` that is bucket C, so forge decides. `@annotation.nowarn("cat=deprecation")` is on the object, the narrowest site that leaves the template untouched | 2026-11-05 | forge | issue to be filed by the main session (CHASE-QUEUE is git-ignored): replace `App` with `def main`, keeping the key-generation output unchanged |
-| 2 | `src/main/.../crypto/SignatureValidator.scala`, `object SignatureValidator extends App` | same | same | 2026-11-05 | forge | same issue |
-| 3 | `src/main/.../blockchain/sync/regular/BlockFetcherState.scala`, `bodiesAreOrderedSubsetOfRequested` | `[E029]` match may not be exhaustive; counter-example `(_, Seq(_, _*))` | The three cases look complete, so it may be a false positive on `Seq()` / `+:`, but adding a case is a behaviour change, which DC-8 forbids here. `@annotation.nowarn("id=E029")` on the method (the match is its whole body) | 2026-11-05 | wraith to analyse; prism to review (non-consensus sync code) | issue to be filed: decide whether the counter-example is reachable; add the case or keep the suppression with a proof |
-| 4 | `src/main/.../blockchain/sync/snap/ChainDownloader.scala`, `matchOrderedSubsequence` | same | same | 2026-11-05 | same | same issue |
+| 1 | `src/main/.../crypto/EcKeyGen.scala`, `object EcKeyGen extends App` | `trait App is deprecated since 3.8.0` | `App` to `def main` changes initialisation order (delayedInit). Under `crypto/` that is bucket C, so forge decides. `@annotation.nowarn("cat=deprecation")` is on the object, the narrowest site that leaves the template untouched | 2026-11-05 | forge | #1715: replace `App` with `def main`, keeping the key-generation output unchanged |
+| 2 | `src/main/.../crypto/SignatureValidator.scala`, `object SignatureValidator extends App` | same | same | 2026-11-05 | forge | #1715 |
+| 3 | `src/main/.../blockchain/sync/regular/BlockFetcherState.scala`, `bodiesAreOrderedSubsetOfRequested` | `[E029]` match may not be exhaustive; counter-example `(_, Seq(_, _*))` | The three cases look complete, so it may be a false positive on `Seq()` / `+:`, but adding a case is a behaviour change, which DC-8 forbids here. `@annotation.nowarn("id=E029")` on the method (the match is its whole body) | 2026-11-05 | wraith to analyse; prism to review (non-consensus sync code) | #1716: decide whether the counter-example is reachable; add the case or keep the suppression with a proof |
+| 4 | `src/main/.../blockchain/sync/snap/ChainDownloader.scala`, `matchOrderedSubsequence` | same | same | 2026-11-05 | same | #1716 |
 
 Not deferred, still emitted and untouched (pre-existing): the other two E029 (`scalanet/.../V5DemuxResponder.scala:43`,
 `regular/BlockFetcher.scala:100`), 2 E194 (`scalanet/.../IOValues.scala`), 1 E121 (`ByteCodeCoordinator.scala:541`), the
@@ -75,12 +75,32 @@ Manifest synthesis deprecations, and the one-off deprecations below.
 | E194 extension never selected | 2 | 2 | 2 | unchanged | none |
 | E121 unreachable case | 1 | 1 | 1 | unchanged | none |
 | diffx `DiffMatcher` deprecated | 2 | 2 | 2 | unchanged | none |
-| One-off deprecations (`new URL`, Guava `CacheBuilder`, `Set.--`, web3j `Admin`) | 6 | 4 | 4 | unchanged | none |
+| One-off deprecations (see below) | 5 | 4 | 4 | unchanged; one fewer than GT-1 (below) | none |
+| `-Ykind-projector` option warning | 13 per `compile-all` | 0 | 0 | the flag was dropped in PR 3 (OQ-1: no code needs it); no occurrence in any log of this PR | none |
 | **Total emitted** | 605 (post-3.4 ceiling), 365 (3.3.8) | **81** | **70** (+4 suppressed sites) | | |
 
 Checks of the sum: step (c) is 59 Manifest + 5 ascription + 4 E029 + 2 E194 + 2 `trait App` + 2 diffx + 2 unused `@nowarn` +
 1 E121 + 4 one-off deprecations = 81. Final is 59 Manifest + 2 E029 + 2 E194 + 2 diffx + 1 E121 + 4 one-off deprecations = 70.
 R-6 expected about 85 plus 4 suppressed sites; this tree is lower because Manifest synthesis measures 59, not 69.
+
+### One-off deprecations: the four current sites, and the one that went
+
+GT-1 (§4.1) lists five one-off deprecations, and its "6" at line 174 is those five plus the E121. This tree has four, at
+
+| Site | Warning |
+|---|---|
+| `scalanet/src/.../peergroup/ExternalAddressResolver.scala:29` | `new URL(url)`: constructor `URL` is deprecated |
+| `src/main/.../transactions/PendingTransactionsManager.scala:233` | `CacheBuilder.expireAfterWrite` is deprecated: see corresponding Javadoc |
+| `src/test/.../blockchain/sync/snap/SnapResumeBoundarySpec.scala:103` | `Set.--` is deprecated since 2.13.0 |
+| `src/rpcTest/.../rpcTest/RpcApiTests.scala:1204` | web3j `Admin` is deprecated |
+
+The fifth, GT-1's `HealResponseProcessing.scala:354` (`copyArrayToImmutableIndexedSeq`: implicit Array to `IndexedSeq`
+conversion in `mptStorage.multiGetNodes(toCheck.map(_._2.toArray))`), is the one that went. The logs show it: it is in the PR 3
+baseline, `d-source34.log` and the PR 4 logs (`s020-pr4-logs/c-compile.log`, 2026-10-28), and absent from every log from PR 5a on
+(`s020-pr5-logs/a-rewrite37.log`, `c-compile37.log`, `f-rebase.log`, `s020-pr5b-logs/base2-compile.log`, and this PR's). Git
+history of the file between those logs: `cabda59b5` (spec 022 slice 1, #1682, 2026-10-29) changed the `toCheck` definition the
+call uses, and the same call now sits at `HealResponseProcessing.scala:632` without a warning. This ledger does not claim more
+than that: it is a spec 022 change that removed the warning, not a PR 6 one.
 
 ## Better fors: the silent 3.8 change
 
