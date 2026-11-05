@@ -69,6 +69,7 @@ val scala3Options = Seq(
   "-Wconf:cat=unchecked:error", // Ratchet step 4/4: unchecked patterns are build errors
   // Spec 020 PR 6 (DC-4) ratchets. In Scala 3.9 the LAST matching -Wconf wins, so add new ones below existing ones.
   "-Wconf:id=E205:error", // Given prioritisation (DC-3): inert at -source:3.9, errors if a 3.6- or -migration source level returns
+  "-Wconf:id=E028:error", // Illegal literal: write `(-98).toByte`, not `-98.toByte`
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
