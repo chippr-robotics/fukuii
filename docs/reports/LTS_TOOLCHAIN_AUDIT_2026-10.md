@@ -10,13 +10,18 @@ The weekly `dependency-check.yml` job runs `dependencyTree` only (recommendation
 
 ## 1. Verdict
 
+**Updated 2026-11-05 (spec 020 PR 7).** The audit above is the 2026-10-17 record. In this table the **Pinned** column now
+shows the pins on the tree after spec 020, read from the build files (`project/build.properties`, `project/plugins.sbt`,
+`build.sbt`, `.scalafmt.conf`, `.github/workflows/ci.yml`, `docker/Dockerfile`), with the 2026-10-17 value in
+parentheses. The "Latest" columns, the verdict and the actions are the audit's, as of 2026-10-17.
+
 | Component | Pinned | Latest on the same support line | Latest LTS line | Status | Action |
 | --- | --- | --- | --- | --- | --- |
-| **JDK** | 25 (CI `temurin` 25; Docker `eclipse-temurin:25-jdk/jre-noble`; distroless `java25`) | Temurin 25.0.4.1+1 (2026-08-19), EOL 2031-09-30; the `25` tag floats to it | **25 is the current LTS**; 26 and 27 are non-LTS; next LTS is 29 (2027-09) | ✅ current | none; fix the stale "JDK 21" docs (R-6) |
-| **Scala** | 3.3.8 (2026-06-11) | 3.3.8 is the latest 3.3 patch; 3.3.9 expected within a month of 3.9.0 | **3.9.0 LTS, released 2026-09-03**, opens the new LTS line; 3.3 LTS stays maintained for one year after (to about 2027-09) with fewer backports | ⚠️ supported, one LTS line behind | plan the 3.3 → 3.9 migration as its own spec (R-1) |
-| **sbt** | 1.10.7 | 1.12.15; 1.13.0 (2026-08-20) is the newest 1.x on Maven Central | **2.0.10** is the newest 2.x; sbt 2.0.0 shipped 2026-06-14 under SemVer, build definitions on Scala 3.8.4 | ⚠️ five minor versions behind on 1.x; 2.x is a migration | bump to 1.12.15 now (R-2); sbt 2 after the four missing plugins ship (R-3) |
-| **scalafmt** | 3.8.3 (`.scalafmt.conf`), sbt-scalafmt 2.5.2 | scalafmt 3.11.5, sbt-scalafmt 2.6.2 | | ⚠️ the 3.8 dialect does not know 3.9 syntax | bump with the Scala migration; constitution names 3.8.3 (PATCH amendment) |
-| **scalafix** | sbt-scalafix 0.13.0 | 0.14.9 | | ⚠️ | bump with the Scala migration (semantic rules need a scalafix that knows the compiler) |
+| **JDK** | 25, unchanged (CI `temurin` 25; Docker `eclipse-temurin:25-jdk/jre-noble`; distroless `java25`) | Temurin 25.0.4.1+1 (2026-08-19), EOL 2031-09-30; the `25` tag floats to it | **25 is the current LTS**; 26 and 27 are non-LTS; next LTS is 29 (2027-09) | ✅ current | none; fix the stale "JDK 21" docs (R-6) |
+| **Scala** | **3.9.0** at `-source:3.9`, in `build.sbt` (was 3.3.8, 2026-06-11); scapegoat compiler plugin 3.4.1 | 3.3.8 is the latest 3.3 patch; 3.3.9 expected within a month of 3.9.0 | **3.9.0 LTS, released 2026-09-03**, opens the new LTS line; 3.3 LTS stays maintained for one year after (to about 2027-09) with fewer backports | on the 3.9 LTS line since spec 020 (was: supported, one LTS line behind) | done: spec 020 (R-1); 0.11.0 carries it |
+| **sbt** | **1.13.0**, `project/build.properties` (was 1.10.7) | 1.12.15; 1.13.0 (2026-08-20) is the newest 1.x on Maven Central | **2.0.10** is the newest 2.x; sbt 2.0.0 shipped 2026-06-14 under SemVer, build definitions on Scala 3.8.4 | on 1.13.0, the newest 1.x of 2026-10-17 (was: five minor versions behind on 1.x); 2.x is a migration | done: R-2, taken to 1.13.0 (#1631); sbt 2 after the four missing plugins ship (R-3) |
+| **scalafmt** | 3.8.3 (`.scalafmt.conf`, unchanged by decision F-1; bundles scalameta 4.9.9), sbt-scalafmt **2.6.2** (was 2.5.2) | scalafmt 3.11.5, sbt-scalafmt 2.6.2 | | 3.8.3 kept for spec 020 (DC-8 forbids hand-editing up to 96 test files); the 3.8 dialect does not know 3.9 syntax | FU-1: scalafmt 3.11.x before spec 017's first PR, with a constitution PATCH (the constitution still names 3.8.3, which is true) |
+| **scalafix** | sbt-scalafix **0.14.9** (was 0.13.0), which bundles scalameta 4.17.4; `semanticdbVersion` follows `scalafixSemanticdb.revision` | 0.14.9 | | on 0.14.9 (was behind) | done with spec 020 (PR 1). Its scalameta (4.17.4) is newer than scalafmt 3.8.3's (4.9.9): 37 test files that parse under the older one did not parse under scalafix (spec 020 PR 6b-1) |
 
 **BSL guard**: zero `import akka.` in `src/`; no `com.typesafe.akka` or `com.lightbend:akka*` in `Dependencies.scala`.
 ✅ Apache-2.0 clean.
