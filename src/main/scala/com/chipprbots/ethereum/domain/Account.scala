@@ -33,7 +33,7 @@ object Account:
         byteStringEncDec.encode(codeHash.value)
       )
 
-  implicit class AccountDec(val bytes: Array[Byte]) extends AnyVal:
+  extension (bytes: Array[Byte])
     def toAccount: Account = rawDecode(bytes) match
       case RLPList(
             RLPValue(nonceBytes),

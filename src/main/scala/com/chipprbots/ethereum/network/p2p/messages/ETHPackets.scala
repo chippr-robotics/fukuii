@@ -6,7 +6,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.BlockBody.BlockBodyRLPEncodableDec
+import com.chipprbots.ethereum.domain.BlockBody.toBlockBody
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkId.*
@@ -102,8 +102,7 @@ object ETHPackets:
   object TypedTransaction:
     extension (encodables: Seq[RLPEncodeable])
       def toTypedRLPEncodables: Seq[RLPEncodeable] =
-        import Transaction.ByteArrayTransactionTypeValidator
-        import Transaction.TransactionTypeValidator
+        import Transaction.isValidTransactionType
         val result = new scala.collection.mutable.ArrayBuffer[RLPEncodeable](encodables.size)
         var i = 0
         val items = encodables.toIndexedSeq

@@ -64,10 +64,10 @@ object Transaction:
         tx.maxFeePerGas.min(base + tx.maxPriorityFeePerGas)
       case _ => tx.gasPrice.value
 
-  implicit class TransactionTypeValidator(val transactionType: Byte) extends AnyVal:
+  extension (transactionType: Byte)
     def isValidTransactionType: Boolean = transactionType >= MinAllowedType && transactionType <= MaxAllowedType
 
-  implicit class ByteArrayTransactionTypeValidator(val binaryData: Array[Byte]) extends AnyVal:
+  extension (binaryData: Array[Byte])
     def isValidTransactionType: Boolean = binaryData.length == 1 && binaryData.head.isValidTransactionType
 
 sealed trait TypedTransaction extends Transaction

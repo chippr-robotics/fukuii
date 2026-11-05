@@ -132,7 +132,7 @@ object Timestamp:
       // Reinstates the bound `longEncDec` gave us for free. `longCodec.decode` rejects
       // `bytes.length > 8`; `bigIntEncDec` accepts any length, and a bare `v.toLong` would
       // silently truncate a 9-byte field to its low 64 bits. This given has no production
-      // consumer today, but BlockHeaderDec's hand-written `longFromEncodeable(items(11))` is
+      // consumer today, but `toBlockHeader`'s hand-written `longFromEncodeable(items(11))` is
       // one natural cleanup away from becoming one — at which point an over-long timestamp
       // would decode to a value whose re-encoding differs from its wire form, i.e. a header
       // that hashes differently than it arrived. Forge flagged this as a chain-split-class

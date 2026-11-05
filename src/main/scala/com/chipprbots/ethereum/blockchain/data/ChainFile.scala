@@ -11,8 +11,8 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.Block.BlockDec
 import com.chipprbots.ethereum.domain.Block.BlockEnc
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.utils.Logger
 
 /** The chain file format shared by `admin_exportChain`, `admin_importChain`, the `export` / `import` launcher commands
@@ -24,8 +24,8 @@ import com.chipprbots.ethereum.utils.Logger
   *
   * Writing uses the block's consensus (network) encoding — header, transactions, ommers and, from Shanghai, withdrawals
   * — byte-identical to geth's `admin_exportChain`. geth's `export` command may append a fifth item, the EIP-7928 block
-  * access list (`exportBlock`, cmd/utils/cmd.go); [[Block.BlockDec]] accepts and ignores it, and the importer
-  * recomputes the list and checks it against the header's `blockAccessListHash` anyway.
+  * access list (`exportBlock`, cmd/utils/cmd.go); [[Block.toBlock]] accepts and ignores it, and the importer recomputes
+  * the list and checks it against the header's `blockAccessListHash` anyway.
   *
   * Files written by fukuii's `admin_exportChain` before this format was fixed put a 4-byte big-endian length before
   * each block. Those are still read (see [[ChainFile.Reader]]), with a warning.
