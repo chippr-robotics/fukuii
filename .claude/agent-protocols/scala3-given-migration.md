@@ -145,14 +145,22 @@ How G1–G3 applied in P3b:
 | G2 — anonymous given type | No | P3b converted `implicit class`, not `given` definitions |
 | G3 — given is final | **Yes — these were not touched** | Override-chain `implicit val` sites that P3a left intentionally are not missed conversions |
 
-**The override-chain sites today** (G3): `ioRuntime` in `PeerDiscoveryManagerBuilder` and in `PortForwardingBuilder`
-(both in `NodeBuilder.scala`; test fixtures override it) and `JsonMethodsImplicits.formats` (`RateLimit` overrides it):
+**The override-chain sites today** (G3): the `implicit override` definitions in `src/main`, and the `implicit` members
+they override:
 
 ```bash
-grep -rnE "implicit lazy val ioRuntime|implicit val formats" src/main --include="*.scala"
-# 2026-11-05: 3 hits
+rg -n -g '*.scala' --pcre2 '\bimplicit\s+override\b|\boverride\s+implicit\b' src/main
+# 2026-11-05: 9 hits in 7 files
 ```
+
+| Overridden member | Overridden in |
+|-------------------|---------------|
+| `PeerDiscoveryManagerBuilder.ioRuntime`, `PortForwardingBuilder.ioRuntime` (both in `NodeBuilder.scala`) | the combining class in `NodeBuilder.scala` (`implicit override lazy val ioRuntime`); test fixtures override it too |
+| `NodeBuilder.blockchainConfig` | `TestNode` |
+| `JsonMethodsImplicits.formats` | `EthSimulateJsonMethodsImplicits` |
+| `Json4sSupport.serialization` and `.formats` (abstract) | `object Json4sSupport`, `RateLimit` |
+| `JsonRpcBaseController.executionContext` (abstract) | `JsonRpcController`, `FaucetJsonRpcController` |
 
 The comment grep this section used to prescribe, `grep -rn "not given.*override\|given is final\|overridden in subclass"
 src/main/`, prints 0 on this tree: the P3a comments did not survive. A new override-chain `implicit` needs its own
-comment saying why it is not a `given`; do not convert the three above.
+comment saying why it is not a `given`; do not convert the members in the table.

@@ -42,7 +42,7 @@ grep -rnw "return" src/main bytes/src/main rlp/src/main crypto/src/main scalanet
 # trailing comment or string (StdNode x2, ReferenceCountNodeStorage, CallErrors, BlockHeader)
 ```
 
-(The older form `grep "\breturn\b" src/main` printed 315 lines, nearly all `@return` in scaladoc, so it was no ratchet.)
+(The older form `grep "\breturn\b" src/main` printed 315 lines, 243 of them `@return` in scaladoc, so it was no ratchet.)
 
 Fix: restructure as an expression (`if cond then a else b`, a `match`, an `Either`/`Option` combinator). Where that
 cannot be done, `scala.util.boundary` and `break`, under S12: a `break` is not a `return`.
@@ -64,22 +64,24 @@ Exception: JNI/interop boundary code — narrow `@nowarn` + comment.
 ---
 
 ### S3 — `given/using` over `implicit`
-**Status:** P3a done (W2-P3a, `7210311bb`, 334 sites), but not "complete": 44 lines with `implicit val/def/lazy val` remain
-in `src/main`. The build is `-source:3.9`, which still accepts `implicit`. Spec 020 made the 3.7 prioritisation sites
+**Status:** P3a done (W2-P3a, `7210311bb`, 334 sites), but not "complete": 73 `implicit` val and def definitions remain
+in `src/main` (modifier forms such as `implicit override`, `implicit private` and `private implicit` included). The build is `-source:3.9`, which still accepts `implicit`. Spec 020 made the 3.7 prioritisation sites
 explicit (DC-3, `specs/020-scala-3-9-lts-migration/dc3-sites.md`) and rewrote every `implicit` parameter list that
 needed a `using` (PR 5a); an implicit parameter passed without `using` is now a build error (see the `-source`
-mapping). What stays `implicit` stays on purpose or by decision:
-- override-chain definitions: `ioRuntime` in `PeerDiscoveryManagerBuilder` and in `PortForwardingBuilder` (both in
-  `NodeBuilder.scala`; test fixtures override it) and `JsonMethodsImplicits.formats` (`RateLimit` overrides it). `given`
-  is final, so they must stay (see `scala3-given-migration.md` G3);
+mapping). What stays `implicit` stays on purpose or by decision. Some of the kinds, not an exhaustive list:
+- override-chain definitions: `implicit` members that something overrides, and the overrides (9 `implicit override`
+  definitions in 7 files). `given` is final, so they must stay (see `scala3-given-migration.md` G3 for the list);
 - `implicit def` conversions (`UInt256` x5, `FunctorOps`) and the codec and serializer instances;
-- the Pekko-HTTP `Json4sSupport` and `JsonRpcHttpServer` members, whose signatures follow the library.
+- the Pekko-HTTP `Json4sSupport` and `JsonRpcHttpServer` members, whose signatures follow the library;
+- `implicit override` and `implicit private` members (controllers, services, `PeerManagerActor`, ...): 30 of the
+  73 sites (`implicit` followed or preceded by `override`, `private` or `protected`). Each is a candidate for a decision, not yet one.
 
 ```bash
-grep -rn "implicit val\|implicit def\|implicit lazy val" src/main/ --include="*.scala" \
+rg -n -g '*.scala' --pcre2 '\bimplicit\s+(?:(?:override|private(?:\[\w+\])?|protected(?:\[\w+\])?|final|lazy)\s+)*(?:val|def)\b|\b(?:override|private(?:\[\w+\])?|protected(?:\[\w+\])?|final|lazy)\s+implicit\s+(?:(?:override|private|protected|final|lazy)\s+)*(?:val|def)\b' src/main \
   | grep -v "consensus/\|vm/\|crypto/\|//\|@nowarn\|not given.*override"
-# 2026-11-05: 38 hits (44 before the filters). The `not given.*override` comments the filter expects are gone from
-# this tree: new override-chain sites need their own comment saying why (G3).
+# 2026-11-05: 60 hits (73 before the filters). The older form, `grep "implicit val\|implicit def\|implicit lazy val"`,
+# misses every modifier form and printed 38 (44 unfiltered). The `not given.*override` comments the filter expects are
+# gone from this tree: new override-chain sites need their own comment saying why (G3).
 ```
 
 Ratchet: none. A `GivenUsing` scalafix rule is not in `.scalafix.conf` and was not added by spec 020: the remaining
