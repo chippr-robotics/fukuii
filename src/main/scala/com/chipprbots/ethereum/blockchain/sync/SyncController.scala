@@ -919,56 +919,41 @@ object SyncController:
           appStateStorage.clearFastSyncDone().commit()
           startSnapSync(minPivotBlock = Some(blockNumber))
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
-          // Three-tier calibration cascade:
-          //   Tier 1 (peerTD > 0, peerMaxBlock > 0): exact interpolation from NewBlock TD+blockNum
-          //   Tier 2 (peerTD > 0, peerMaxBlock = 0): ETH68 STATUS only — peerTD direct (<0.05% over)
-          //   Tier 3 (peerTD = 0): pure ETH69 sentinel — compute from local chain DB via parentHash traversal
-          if peerTD > BigInt(0) then
-            // Tier 1 or 2: ETH68 peer TD available
-            blockchainReader.getBestBlock.foreach { bestBlock =>
-              val genesisWeight: BigInt = blockchainReader
-                .getChainWeightByHash(blockchainReader.genesisHeader.hash)
-                .map(_.totalDifficulty.value)
-                .getOrElse(blockchainReader.genesisHeader.difficulty.value)
-              val calibratedTD =
-                if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
-                else peerTD
-              if calibratedTD > genesisWeight * BigInt(1000) then
-                val storedTD: BigInt = blockchainReader
-                  .getChainWeightByHash(bestBlock.header.hash)
-                  .map(_.totalDifficulty.value)
-                  .getOrElse(BigInt(0))
-                blockchainWriter
-                  .storeChainWeight(
-                    bestBlock.header.hash,
-                    com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
-                  )
-                  .commit()
-                networkBestTD = peerTD
-                calibrationSucceeded = true
-                lastCalibrationSource = if peerMaxBlock > BigInt(0) then "NEWBLOCK_EXACT" else "ETH68_STATUS"
-                log.info(
-                  "CHAIN_WEIGHT_CALIBRATED_ON_RESUME: bestBlock={} storedTD={} calibratedTD={} source={}",
-                  bestBlock.header.number,
-                  storedTD,
-                  calibratedTD,
-                  lastCalibrationSource
-                )
-                val ratio = if storedTD > BigInt(0) then (calibratedTD / storedTD).toString else "∞"
-                log.info(
-                  s"TD_CALIBRATION_SUMMARY: block=${bestBlock.header.number} before=$storedTD after=$calibratedTD ratio=$ratio source=$lastCalibrationSource attempt=$tdCalibrationAttempt"
-                )
-            }
-          else
-            // Tier 3: pure ETH69 sentinel (0, 0) — no ETH68 peer TD seen at T+30s (or retry).
-            // Walk backward via parentHash to find a ChainDownloader anchor with plausible TD,
-            // accumulate forward. Retry every 30min until success or ETH68 peers appear.
-            tdCalibrationAttempt += 1
-            val succeeded = calibrateTDFromLocalChain()
-            if succeeded then
+          // #1654: first ask whether the best block's stored weight is already exact, or can be derived exactly from
+          // its parent's. Fork choice compares stored weights, so rewriting an exact head with an estimate leaves a
+          // jump that every fork branching below it is weighed across (see HeadChainWeight). Before this check, the
+          // timed calibration did that on every restart (Mordor: about ±80M per restart).
+          blockchainReader.getBestBlockHeader.map(h => h -> HeadChainWeight.classify(blockchainReader, h)) match
+            case Some((head, HeadChainWeight.Status.Exact(stored))) =>
               calibrationSucceeded = true
-              lastCalibrationSource = "LOCAL_CHAIN"
-            else scheduleTDCalibrationRetry()
+              lastCalibrationSource = "ALREADY_EXACT"
+              log.info(
+                "TD_CALIBRATION_SKIPPED: block={} storedTD={} reason=ALREADY_EXACT (stored = parent weight + " +
+                  "difficulty); peer data td={} block={} not used",
+                head.number,
+                stored.totalDifficulty,
+                peerTD,
+                peerMaxBlock
+              )
+            case Some((head, HeadChainWeight.Status.Derivable(stored, exact))) =>
+              blockchainWriter.storeChainWeight(head.hash, exact).commit()
+              calibrationSucceeded = true
+              lastCalibrationSource = "DERIVED_FROM_PARENT"
+              val before = stored.map(_.totalDifficulty.value.toString).getOrElse("none")
+              log.warn(
+                "CHAIN_WEIGHT_REPAIRED: block={} before={} after={} source=DERIVED_FROM_PARENT (parent weight + " +
+                  "difficulty; peer data td={} block={} not used)",
+                head.number,
+                before,
+                exact.totalDifficulty,
+                peerTD,
+                peerMaxBlock
+              )
+              log.info(
+                s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
+                  s"source=DERIVED_FROM_PARENT attempt=$tdCalibrationAttempt"
+              )
+            case _ => calibrateChainWeightEstimate(peerTD, peerMaxBlock)
           Behaviors.same
 
         case msg if isInternalMarker(msg) =>
@@ -2518,6 +2503,66 @@ object SyncController:
       }
       recentRootBootstrap = None
 
+    /** The calibration cascade, for a best block with no exact stored weight (#1654: `HeadChainWeight.Status.NoExact`):
+      * a pivot whose parent headers are not backfilled, or a chain built on a proxy base. Tiers 1 and 2 write an
+      * ESTIMATE and log it as one.
+      *   - Tier 1 (peerTD > 0, peerMaxBlock > 0): linear interpolation `peerTD * ourBest / peerMaxBlock`. The pair
+      *     comes from a NewBlock or from an ETH68 STATUS plus the peer's probed height; either way the result is a
+      *     guess.
+      *   - Tier 2 (peerTD > 0, peerMaxBlock = 0): the peer's TD as is (ETH68 STATUS only).
+      *   - Tier 3 (peerTD = 0): pure ETH69 sentinel — accumulate from a plausible local anchor
+      *     ([[calibrateTDFromLocalChain]]).
+      */
+    private def calibrateChainWeightEstimate(peerTD: BigInt, peerMaxBlock: BigInt): Unit =
+      if peerTD > BigInt(0) then
+        // Tier 1 or 2: ETH68 peer TD available
+        blockchainReader.getBestBlock.foreach { bestBlock =>
+          val genesisWeight: BigInt = blockchainReader
+            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+            .map(_.totalDifficulty.value)
+            .getOrElse(blockchainReader.genesisHeader.difficulty.value)
+          val calibratedTD =
+            if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
+            else peerTD
+          if calibratedTD > genesisWeight * BigInt(1000) then
+            val storedTD: BigInt = blockchainReader
+              .getChainWeightByHash(bestBlock.header.hash)
+              .map(_.totalDifficulty.value)
+              .getOrElse(BigInt(0))
+            blockchainWriter
+              .storeChainWeight(
+                bestBlock.header.hash,
+                com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
+              )
+              .commit()
+            networkBestTD = peerTD
+            calibrationSucceeded = true
+            lastCalibrationSource =
+              if peerMaxBlock > BigInt(0) then "PEER_INTERPOLATED_ESTIMATE" else "PEER_STATUS_ESTIMATE"
+            log.warn(
+              "CHAIN_WEIGHT_CALIBRATED_ON_RESUME: bestBlock={} storedTD={} calibratedTD={} source={} (an ESTIMATE: " +
+                "no exact weight is stored for this block or its parent)",
+              bestBlock.header.number,
+              storedTD,
+              calibratedTD,
+              lastCalibrationSource
+            )
+            val ratio = if storedTD > BigInt(0) then (calibratedTD / storedTD).toString else "∞"
+            log.info(
+              s"TD_CALIBRATION_SUMMARY: block=${bestBlock.header.number} before=$storedTD after=$calibratedTD ratio=$ratio source=$lastCalibrationSource attempt=$tdCalibrationAttempt"
+            )
+        }
+      else
+        // Tier 3: pure ETH69 sentinel (0, 0) — no ETH68 peer TD seen at T+30s (or retry).
+        // Walk backward via parentHash to find a ChainDownloader anchor with plausible TD,
+        // accumulate forward. Retry every 30min until success or ETH68 peers appear.
+        tdCalibrationAttempt += 1
+        val succeeded = calibrateTDFromLocalChain()
+        if succeeded then
+          calibrationSucceeded = true
+          lastCalibrationSource = "LOCAL_CHAIN"
+        else scheduleTDCalibrationRetry()
+
     /** Walk backward from bestBlock via parentHash until a header with a plausible stored TD is found (ChainDownloader
       * anchor), then accumulate forward to produce the correct cumulative TD for bestBlock. Writes the result to DB if
       * plausible.
@@ -2530,10 +2575,11 @@ object SyncController:
       */
     private def calibrateTDFromLocalChain(): Boolean =
       val MaxWalkBlocks = 10000
-      // Conservative ETC lower bound: ~10^13 difficulty per block.
-      // Rejects BLOCK_NUMBER_PROXY (blockNum ≈ 24.7M << correct TD ≈ 24.64×10^21) and
-      // RegularSync wrong TDs built on a proxy base.
-      val MinTDPerBlock = BigInt("10000000000000")
+      // An anchor's stored TD must clear HeadChainWeight.floor: the genesis weight plus MinimumDifficulty (131072) per
+      // block, a bound no real Ethash chain is under. It rejects BLOCK_NUMBER_PROXY and genesis-proxy weights at any
+      // height. It replaces a fixed 10^13 per block (#1654), which mainnet cleared but Mordor (~9e6 per block, TD
+      // ~1.75e14 at block 15M) never could, so this fallback never found an anchor there.
+      val anchorGenesisWeight: BigInt = HeadChainWeight.genesisWeight(blockchainReader)
 
       blockchainReader.getBestBlockHeader match
         case None =>
@@ -2559,7 +2605,8 @@ object SyncController:
 
           while !anchorFound && !abort do
             blockchainReader.getChainWeightByHash(cur.hash) match
-              case Some(cw) if cw.totalDifficulty.value > cur.number.value * MinTDPerBlock =>
+              case Some(cw)
+                  if HeadChainWeight.isPlausible(cur.number.value, cw.totalDifficulty.value, anchorGenesisWeight) =>
                 anchorTD = cw.totalDifficulty.value
                 anchorFound = true
                 log.debug(
