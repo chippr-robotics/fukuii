@@ -141,7 +141,7 @@ sbt testVM
 
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `sbt scalafmtAll` | scalafmt on the **root project only** (all its configs). Not bytes, crypto, rlp, scalanet, scalanetDiscovery: the root has no `aggregate` (verified 2026-11-05 with a misformatted file in each) | Root-only edits |
+| `sbt scalafmtAll` | scalafmt on the **root project only**: its main, `Test` and `IntegrationTest` sources. Not bytes, crypto, rlp, scalanet, scalanetDiscovery (the root has no `aggregate`), and not `src/evmTest`, `src/rpcTest` or `src/benchmark` (verified 2026-11-05 with a misformatted file in each; `formatAll` and `formatCheck` run the same root command, so no alias formats those three) | Root-only edits |
 | `sbt scalafmt` | scalafmt ROOT module only | **Never** — misses submodules |
 | `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp, root; scalafmtAll on scalanet and scalanetDiscovery | After editing any module; before a PR. The tree is scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings |
 | `sbt formatCheck` | the read-only form: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | What CI runs in "Test and Build" (from #1721); run it before pushing |

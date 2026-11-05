@@ -32,7 +32,7 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 |---------|-------------|-------------|
 | `sbt compile-all` | Compiles all modules + test sources | After every file change (exception: core domain sweeps — use `sbt compile` instead, then `compile-all` once at end; see `testing-protocol.md`) |
 | `sbt compile` | Root main sources only — no test/IT/Benchmark | **Core domain type sweeps only** (BlockHeader, Account, Block, Transaction → 50+ dependents) — avoids cascade on every file; `compile-all` once at end |
-| `sbt scalafmtAll` | scalafmt on the **root project only** (all its configs); not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`) | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
+| `sbt scalafmtAll` | scalafmt on the **root project only**, its main, `Test` and `IntegrationTest` sources; not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`), and not `src/evmTest`, `src/rpcTest` or `src/benchmark` | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
 | `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, scalanet, etc.) |
 | `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp and root, and scalafmtAll on scalanet and scalanetDiscovery | After editing any module, and before a PR. The tree has been scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings; it rewrites files, so read `git diff` after |
 | `sbt formatCheck` | The read-only form of `formatAll`: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | Runs in CI, in the required "Test and Build" job (since #1721); run it locally before pushing |
@@ -55,7 +55,7 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 
 **The format commands that look similar but are not:**
 - `scalafmt` → root module only → **wrong for this codebase**
-- `scalafmtAll` / `scalafmtCheckAll` → the root project only (every config, no submodule) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**
+- `scalafmtAll` / `scalafmtCheckAll` → the root project only (main, `Test` and `IntegrationTest` sources) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**. `formatAll` and `formatCheck` run the same root commands, so the root's `src/evmTest`, `src/rpcTest` and `src/benchmark` sources are formatted by no alias
 - `formatAll` / `formatCheck` → every module (scalafmt on all six; scalafix on bytes, crypto, rlp and root) → **use these after editing a submodule**. They no longer abort on old scalafix findings, so a finding they report is new: fix it, do not suppress it
 
 **scalafix parser gotcha (scalafix 0.14.9 bundles scalameta 4.17.4):** a fewer-braces template opened on a continuation
