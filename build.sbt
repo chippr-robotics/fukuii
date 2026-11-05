@@ -67,6 +67,8 @@ val scala3Options = Seq(
   "-Wconf:id=E198:error", // Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)
   "-Wconf:cat=feature:s", // Suppress adhocExtensions feature warnings (extending non-open Pekko/library classes)
   "-Wconf:cat=unchecked:error", // Ratchet step 4/4: unchecked patterns are build errors
+  // Spec 020 PR 6 (DC-4) ratchets. In Scala 3.9 the LAST matching -Wconf wins, so add new ones below existing ones.
+  "-Wconf:id=E205:error", // Given prioritisation (DC-3): inert at -source:3.9, errors if a 3.6- or -migration source level returns
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
