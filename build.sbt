@@ -70,6 +70,8 @@ val scala3Options = Seq(
   // Spec 020 PR 6 (DC-4) ratchets. In Scala 3.9 the LAST matching -Wconf wins, so add new ones below existing ones.
   "-Wconf:id=E205:error", // Given prioritisation (DC-3): inert at -source:3.9, errors if a 3.6- or -migration source level returns
   "-Wconf:id=E028:error", // Illegal literal: write `(-98).toByte`, not `-98.toByte`
+  // Migration warnings have no id, so the next four match the message. Keep the backticks: the compiler's own text has them.
+  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:error",
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
