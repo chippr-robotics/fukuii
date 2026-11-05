@@ -8,7 +8,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.ByteUtils
 
 /** SNAP/1 protocol messages

@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeWorker
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `AccountPeerDispatch` reads and writes (spec 016 C-A1, research.md R14b: 17). The core's
   * behaviour arms, or the account-task lifecycle that C-A2 will move, touch every one of them too, so the Impl keeps

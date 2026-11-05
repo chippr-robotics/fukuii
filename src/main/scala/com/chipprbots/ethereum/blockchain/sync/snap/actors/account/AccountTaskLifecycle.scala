@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `AccountTaskLifecycle` reads and writes (spec 016 C-A2, research.md R14b: 18). The core's
   * behaviour arms, the peer dispatch or the trie assembly that C-A3 will move touch every one of them too, so the Impl

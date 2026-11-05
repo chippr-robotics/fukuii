@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait StateValidationState:
   var validationInProgress: Boolean

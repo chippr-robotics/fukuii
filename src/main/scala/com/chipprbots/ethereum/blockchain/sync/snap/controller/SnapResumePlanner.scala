@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.Hex
 
 private[snap] trait SnapResumePlannerState:

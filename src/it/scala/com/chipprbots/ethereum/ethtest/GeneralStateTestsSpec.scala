@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.ethtest
 
 import com.chipprbots.ethereum.testing.Tags.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** Test suite for ethereum/tests GeneralStateTests category
   *

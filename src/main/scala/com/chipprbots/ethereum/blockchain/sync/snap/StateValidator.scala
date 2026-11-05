@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** Walks a state trie for what healing must fetch.
   *

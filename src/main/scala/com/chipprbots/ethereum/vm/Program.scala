@@ -6,7 +6,7 @@ import scala.collection.immutable.BitSet
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
+import com.chipprbots.ethereum.utils.ByteStringUtils.padToByteString
 
 /** Holds a program's code and provides utilities for accessing it (defaulting to zeroes when out of scope)
   *

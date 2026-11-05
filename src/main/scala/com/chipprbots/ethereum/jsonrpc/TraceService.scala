@@ -21,7 +21,7 @@ import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.vm.CallTracer
 import com.chipprbots.ethereum.vm.ExecutionTracer

@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.rlp.*
 import com.chipprbots.ethereum.rlp.RLPCodec.xmap
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.ByteUtils
 
 /** ETH/68+ wire protocol packet definitions — the single canonical source.

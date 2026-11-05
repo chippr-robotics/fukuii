@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait PivotRefresherState:
   var clPivotHint: Option[CLPivotHint]

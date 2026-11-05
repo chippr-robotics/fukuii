@@ -65,7 +65,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 private class SNAPSyncControllerImpl(
