@@ -61,12 +61,23 @@ val baseScalacOptions = Seq(
 
 // Scala 3 warning and feature options
 val scala3Options = Seq(
-  "-source:3.7", // spec 020 DC-2 step 3.7 (rewrite applied); `import x.*` is enforced by scripts/ci/check_scala_imports.sh
+  // -source:3.8 and later enable SIP-62 "better fors": for-comprehension elaboration changes with no rewrite and no
+  // warning, so the "no rewrite diff" 3.8 step is NOT elaboration-neutral. See dc4-ledger.md, "Better fors".
+  "-source:3.9", // spec 020 DC-2 step 3.9; `import x.*` is enforced by scripts/ci/check_scala_imports.sh
   "-language:adhocExtensions", // Allow extending non-open classes (TestKit, Pekko test patterns)
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
   "-Wconf:id=E198:error", // Ratchet step 4/4: unused symbols are build errors (Scala 3: id=E198, cat=unused is not valid)
   "-Wconf:cat=feature:s", // Suppress adhocExtensions feature warnings (extending non-open Pekko/library classes)
   "-Wconf:cat=unchecked:error", // Ratchet step 4/4: unchecked patterns are build errors
+  // Spec 020 PR 6 (DC-4) ratchets. In Scala 3.9 the LAST matching -Wconf wins, so add new ones below existing ones.
+  "-Wconf:id=E205:error", // Given prioritisation (DC-3): inert at -source:3.9, errors if a 3.6- or -migration source level returns
+  "-Wconf:id=E028:error", // Illegal literal: write `(-98).toByte`, not `-98.toByte`
+  // Migration warnings have no id, so the next five match the message. Keep the backticks: the compiler's own text has them.
+  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:error",
+  "-Wconf:msg=Alphanumeric method .* is not declared infix:error", // write a.m(b) or a `m` b
+  "-Wconf:msg=`_` is deprecated for wildcard arguments of types:error", // write `?`
+  "-Wconf:msg=with as a type operator has been deprecated:error", // write `&`
+  "-Wconf:msg=Type ascriptions after patterns other than:error", // `val (a, b): (A, B) = e`: ascribe e instead
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 

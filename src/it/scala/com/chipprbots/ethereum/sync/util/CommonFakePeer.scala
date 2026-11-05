@@ -151,7 +151,6 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     system.actorOf(
       org.apache.pekko.actor.Props(
         new org.apache.pekko.actor.Actor:
-          @annotation.nowarn("msg=Matchable")
           def receive: Receive = { case cmd: KnownNodesManager.Command =>
             knownNodesManagerTyped ! cmd
           }

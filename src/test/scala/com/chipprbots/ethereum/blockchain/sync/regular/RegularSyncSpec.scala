@@ -855,7 +855,7 @@ class RegularSyncSpec
           }
           store.persist()
           ByteString(trie.getRootHash)
-        val (holeSlot, hole): (Int, ByteString) = store.get(storageRoot.toArray) match
+        val (holeSlot, hole) = store.get(storageRoot.toArray) match
           case branch: BranchNode =>
             branch.children.zipWithIndex.collectFirst { case (HashNode(h), i) => (i, ByteString(h)) }.get
           case other => fail(s"the storage root is no branch: $other")

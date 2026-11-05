@@ -105,8 +105,7 @@ class MerkleProofVerifierPhase3Spec extends AnyFlatSpec with Matchers:
   // ── Shared large fixtures (built once, reused across groups 1-2) ─────────────
 
   private lazy val hashedAccts4096: Seq[(ByteString, Account)] = buildHashedAccounts(4096)
-  private lazy val (hashedTrie4096, hashedRoot4096): (MerklePatriciaTrie[ByteString, Account], ByteString) =
-    buildMpt(hashedAccts4096)
+  private lazy val (hashedTrie4096, hashedRoot4096) = buildMpt(hashedAccts4096)
 
   // ── Group 1: Scale tests — reproduce the Phase 3 stall ──────────────────────
   //
@@ -325,8 +324,7 @@ class MerkleProofVerifierPhase3Spec extends AnyFlatSpec with Matchers:
   // Six distinct mutations; every one must produce Left.
 
   private val badProofAccts: Seq[(ByteString, Account)] = buildHashedAccounts(50)
-  private val (badProofTrie, badProofRoot): (MerklePatriciaTrie[ByteString, Account], ByteString) =
-    buildMpt(badProofAccts)
+  private val (badProofTrie, badProofRoot) = buildMpt(badProofAccts)
   private val badProofFull: Seq[ByteString] =
     boundaryProof(badProofTrie, badProofAccts.head._1, badProofAccts.last._1)
 

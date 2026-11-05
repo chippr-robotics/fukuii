@@ -372,7 +372,6 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
       .commit()
     blockchainWriter.storeChainWeight(Fixtures.Blocks.Genesis.header.parentHash, ChainWeight.zero).commit()
 
-    @annotation.nowarn("msg=Matchable") // a classic TestProbe hands fishForMessage an Any
     def drainRegistration(): Unit =
       syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
       networkPeerManager.expectMsgClass(classOf[RegisterChainWeightCalibrationTargetCmd])
