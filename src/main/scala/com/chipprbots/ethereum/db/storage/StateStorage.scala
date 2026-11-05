@@ -299,7 +299,7 @@ class ReferenceCountedStateStorage(
 
   override def stageBlock(bn: BigInt): StagedBlockState =
     val buffered = new BufferedNodeStorage(nodeStorage)
-    val counted = new ReferenceCountNodeStorage(buffered, bn)
+    val counted = new ReferenceCountNodeStorage(buffered, bn, trackNetDeltas = true)
     new StagedBlockState:
       override val storage: MptStorage = new SerializingMptStorage(counted, decodedNodes)
       override def pending: Option[DataSourceBatchUpdate] = Option.when(!buffered.isEmpty)(buffered.pending)

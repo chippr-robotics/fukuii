@@ -325,6 +325,49 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers:
     val keys: Seq[ByteString] = inserted.map(_._1) :+ kec256(ByteString("nope"))
     storage.multiGet(keys).map(_.map(_.toSeq)) shouldEqual keys.map(storage.get).map(_.map(_.toSeq))
 
+  // ---- #1471 undo record: the per-node net deltas are kept only where something reads them ----
+
+  it should "keep a net delta per node touched when asked to track them" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1, trackNetDeltas = true)
+    val inserted = insertRangeKeys(4, storage)
+    storage.remove(inserted.head._1)
+
+    storage.trackedDeltaEntries shouldBe 4
+    // One node went in once and out once: no net change, so it is not part of the undo record.
+    storage.netDeltas.map(_._1).toSet shouldBe inserted.tail.map(_._1).toSet
+    storage.netDeltas.map(_._2).toSet shouldBe Set(1)
+
+  it should "keep no per-node state by default, however many nodes pass through, and refuse to report deltas" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
+    (1 to 50).foreach(_ => insertRangeKeys(20, storage))
+
+    storage.trackedDeltaEntries shouldBe 0
+    // Counted all the same: 50 passes of the same 20 nodes.
+    storage.get(kec256(ByteString("key1"))) shouldBe defined
+    encoding.storedNodeFromBytes(nodeStorage.get(kec256(ByteString("key1"))).get).references shouldBe 50
+    // An empty answer would be a block's undo record dropped without a word.
+    an[IllegalStateException] should be thrownBy storage.netDeltas
+
+  it should "write the same bytes whether or not it tracks deltas" taggedAs (UnitTest, DatabaseTest) in new TestSetup:
+    val tracked = new TestSetup {}
+    val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 3)
+    val trackedStorage = new ReferenceCountNodeStorage(tracked.nodeStorage, bn = 3, trackNetDeltas = true)
+    val inserted = insertRangeKeys(6, storage)
+    insertRangeKeys(6, trackedStorage)
+    storage.remove(inserted.head._1)
+    trackedStorage.remove(inserted.head._1)
+    insertRangeKeys(3, storage)
+    insertRangeKeys(3, trackedStorage)
+
+    def contents(source: EphemDataSource) = source.storage.map { case (k, v) => k.array().toSeq -> v.toSeq }
+    contents(dataSource) shouldBe contents(tracked.dataSource)
+
   trait TestSetup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)

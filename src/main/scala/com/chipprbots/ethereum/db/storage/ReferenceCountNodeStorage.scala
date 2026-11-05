@@ -32,18 +32,35 @@ import encoding.*
   * Storing snapshot info this way allows for easy construction of snapshot key (based on a block number and number of
   * snapshots) and therefore, fast access to each snapshot individually.
   */
-class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends NodesKeyValueStorage:
+class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt, trackNetDeltas: Boolean = false)
+    extends NodesKeyValueStorage:
 
   import ReferenceCountNodeStorage.*
 
   /** Net reference-count change this instance has applied per node (the sum over its `update` calls). A staged block
     * owns one instance for its whole execution, so this is exactly what the block did to the counts; it becomes the
     * block's undo record (see [[ReferenceCountNodeStorage.abandonRecordWrites]]).
+    *
+    * Filled only when `trackNetDeltas` is set, which `stageBlock` alone does: one entry per node the instance touches,
+    * held until it is dropped, so it is bounded by one block's writes there and by nothing on an instance that lives
+    * through a bulk load. The Path publish (`PathToHashExporter`) streams the whole state through one instance and kept
+    * ~100 B per node, an OutOfMemoryError at Sepolia's size (T063, spec 022 Gate 2). Nothing reads the deltas of an
+    * instance that was not asked to track them, so the counts it writes are the same either way.
     */
   private val netDeltaByNode = scala.collection.mutable.LinkedHashMap.empty[NodeHash, Int]
 
-  /** Non-zero net reference-count changes applied so far, in first-touched order. */
-  def netDeltas: Seq[(NodeHash, Int)] = netDeltaByNode.iterator.filter(_._2 != 0).toSeq
+  /** Non-zero net reference-count changes applied so far, in first-touched order. Throws on an instance that does not
+    * track them: an empty answer there would drop the block's `bd` undo record without a word.
+    */
+  def netDeltas: Seq[(NodeHash, Int)] =
+    if !trackNetDeltas then
+      throw new IllegalStateException(
+        "ReferenceCountNodeStorage was not created with trackNetDeltas: it keeps no per-node deltas to report"
+      )
+    netDeltaByNode.iterator.filter(_._2 != 0).toSeq
+
+  /** How many nodes' deltas this instance holds right now (0 unless it tracks them). */
+  private[storage] def trackedDeltaEntries: Int = netDeltaByNode.size
 
   def get(key: ByteString): Option[NodeEncoded] =
     nodeStorage.get(key).map(node => storedNodeFromBytes(node).nodeEncoded.toArray)
@@ -78,10 +95,11 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
     val upsertChanges = prepareUpsertChanges(toUpsert, bn)
     val changes = prepareRemovalChanges(toRemove, upsertChanges, bn)
 
-    changes.foreach { case (key, (storedNode, snapshot)) =>
-      val delta = storedNode.references - snapshot.storedNode.fold(0)(_.references)
-      if delta != 0 then netDeltaByNode.update(key, netDeltaByNode.getOrElse(key, 0) + delta)
-    }
+    if trackNetDeltas then
+      changes.foreach { case (key, (storedNode, snapshot)) =>
+        val delta = storedNode.references - snapshot.storedNode.fold(0)(_.references)
+        if delta != 0 then netDeltaByNode.update(key, netDeltaByNode.getOrElse(key, 0) + delta)
+      }
 
     val (toUpsertUpdated, snapshots) =
       // Use List prepend (O(1)) instead of Seq append (O(n)) to avoid O(n²) for large node sets

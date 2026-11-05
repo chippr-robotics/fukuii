@@ -53,6 +53,9 @@ trait MptStorage:
 class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
     extends MptStorage:
 
+  /** The node store this one serializes onto, for tests that look at what an instance retains. */
+  private[storage] def backing: NodesKeyValueStorage = storage
+
   /** This storage with its state storage's decoded-node cache in front, for BLOCK EXECUTION only. Everything else
     * (SNAP, healing, recovery, presence checks) keeps using the storage itself, which never consults the cache.
     */
