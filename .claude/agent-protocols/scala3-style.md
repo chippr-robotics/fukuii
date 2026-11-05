@@ -322,9 +322,21 @@ grep -rlE "scala\.util\.(boundary|\{[^}]*boundary)|^\s*boundary(\[[^]]*\])?(:| *
 #          blockchain/sync/snap/SNAPSyncController, and snap/controller/{PivotSelector,SnapResumePlanner,SnapFinalization}
 ```
 
-`EthSimulateService`'s existing boundaries were checked against this rule on 2026-11-05 and are safe. The other five
-files were not part of that check: before editing a `break` or adding one there, apply the rule to the whole method.
-In `snap/controller` the `boundary` bodies sit in actor behaviours, where the supervision clause above matters.
+All six files were checked against this rule on 2026-11-05 and are safe: `EthSimulateService` first, then the other
+five, reading every `break` and what lies between it and its `boundary`. What to keep true when you edit them:
+
+- `EthSimulateJsonMethodsImplicits.decodeBlockStateCall`: every `break` is in the method body (match arms, `if`), none in
+  a lambda, so each is a jump.
+- `SNAPSyncController.startSnapSync` owns the one `boundary` for `PivotSelector` (`resumeInterruptedBootstrap`,
+  `selectPivotAndStart`) and `SnapResumePlanner` (`recoverAccountsComplete`, `healAtNewerPivot`). Their `break`s go
+  through a `using Label` from other methods, so they are always throws. They are called directly from the boundary body,
+  and no `try`, `Try`, `NonFatal` or `Future` lies on that path. Keep it so: do not call them from inside a closure or a
+  handler.
+- `SnapFinalization.finalizeSnapSync`: the `break(Behaviors.same)` in the `getSnapSyncStateRoot().foreach` lambda is the
+  one closure `break` of the five. It is safe because `Option.foreach` has no handler; wrapping it in a `Try` would break
+  it. The method's two `try ... catch NonFatal` blocks hold no `break`.
+
+These are behaviour-building `boundary` bodies in actor code, so the supervision clause above is the one to remember.
 
 ---
 
