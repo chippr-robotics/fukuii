@@ -56,7 +56,7 @@ You are called once per actor migration thread. Your deliverables per session:
    where `sender()` was used. Show the new types, get confirmation.
 3. **Implementation** — migrate the actor, update all callers, adapt spawning
    sites. One file at a time; compile after each file.
-4. **Verify** — `sbt compile-all` after every file; `sbt scalafmtAll` after formatting phases; `testOnly *<Actor>*` after logic phases; full `./scripts/fukuii-test essential` once at thread end only. See Verification section.
+4. **Verify** — `sbt compile-all` after every file; `sbt formatAll` after formatting phases; `testOnly *<Actor>*` after logic phases; full `./scripts/fukuii-test essential` once at thread end only. See Verification section.
 
 **At session start:**
 1. Check `.local/docs/continuations/` for a loom continuation file — if one exists for this actor, read it before anything else.
@@ -473,8 +473,8 @@ surface it to the main session before touching the file.
 sbt compile-all
 
 # After formatting-only phases (Phase 0: returns, Phase 1: Messages.scala):
-sbt scalafmtAll    # formatting check only — no tests needed, no logic changed
-                   # use scalafmtAll NOT formatAll (see CLAUDE.md build commands)
+sbt formatAll      # formatting + scalafix, every module — no tests needed, no logic changed
+                   # scalafmtAll alone formats the root project only (see CLAUDE.md build commands)
 
 # After Phase 2 (main migration) and Phase 3 (callers) — targeted, seconds:
 ./scripts/fukuii-test only "*<ActorName>Spec*"

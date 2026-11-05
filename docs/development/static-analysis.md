@@ -447,14 +447,14 @@ compile-all → scalafmt (all modules) → testQuick → IntegrationTest
 
 ### `formatAll`
 ```
-compile-all → scalafixAll → scalafmtAll (all modules)
+compile-all → scalafixAll + scalafmtAll (root, bytes, crypto, rlp) → scalafmtAll (scalanet, scalanetDiscovery)
 ```
 - Applies all formatting fixes
 - ✅ Good for batch updates
 
 ### `formatCheck`
 ```
-compile-all → scalafixAll --check → scalafmtCheckAll (all modules)
+compile-all → scalafixAll --check (root, bytes, crypto, rlp) → scalafmtCheckAll (all six modules)
 ```
 - Checks all formatting without changes
 - ✅ Used in CI
