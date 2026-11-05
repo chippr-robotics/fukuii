@@ -117,7 +117,7 @@ class CleanRebuildEarlyCompletionSpec
       stateRoot = root,
       networkPeerManager =
         testKit.createTestProbe[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]().ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controllerProbe.ref,

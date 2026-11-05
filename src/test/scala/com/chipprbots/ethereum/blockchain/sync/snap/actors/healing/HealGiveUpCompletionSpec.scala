@@ -86,7 +86,7 @@ class HealGiveUpCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val coordinator: ActorRef[TrieNodeHealingCoordinator.Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = if scheme == StorageScheme.Hash then hashStore else new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,

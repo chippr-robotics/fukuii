@@ -453,7 +453,7 @@ class ChainDownloaderSpec
 
   /** The receipts-trie root block validation checks (MptListValidator). */
   private def receiptsRootOf(receipts: Seq[Receipt]): TrieRoot =
-    val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(
+    val trie = MerklePatriciaTrie[Int, Receipt](StateStorage.getReadOnlyStorage(EphemDataSource()))(using
       MptListValidator.intByteArraySerializable,
       Receipt.byteArraySerializable
     )
@@ -461,7 +461,7 @@ class ChainDownloaderSpec
 
   /** The transactions-trie root StdBlockValidator.validateTransactionRoot checks. */
   private def transactionsRootOf(transactions: Seq[SignedTransaction]): TrieRoot =
-    val trie = MerklePatriciaTrie[Int, SignedTransaction](StateStorage.getReadOnlyStorage(EphemDataSource()))(
+    val trie = MerklePatriciaTrie[Int, SignedTransaction](StateStorage.getReadOnlyStorage(EphemDataSource()))(using
       MptListValidator.intByteArraySerializable,
       SignedTransaction.byteArraySerializable
     )

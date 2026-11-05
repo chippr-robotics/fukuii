@@ -301,7 +301,9 @@ object SignedTransaction:
       .flatten
       .grouped(batchSize)
 
-    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(ioRuntime)
+    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs)
+      .void
+      .unsafeRunAndForget()(using ioRuntime)
 
   private def calculateSendersForTxs(txs: Seq[SignedTransaction])(implicit
       blockchainConfig: BlockchainConfig
@@ -844,7 +846,7 @@ object SignedTransactionWithSender:
     IO.parTraverseN(parallelism)(batches) { batch =>
       IO(recoverSenders(batch))
     }.map(_.flatten)
-      .unsafeRunSync()(IORuntime.global)
+      .unsafeRunSync()(using IORuntime.global)
 
   def apply(transaction: LegacyTransaction, signature: ECDSASignature, sender: Address): SignedTransactionWithSender =
     SignedTransactionWithSender(SignedTransaction(transaction, signature), sender)

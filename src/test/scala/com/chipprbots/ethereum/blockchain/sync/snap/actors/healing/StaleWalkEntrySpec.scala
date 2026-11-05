@@ -64,7 +64,7 @@ class StaleWalkEntrySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = oldTrie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,

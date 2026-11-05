@@ -202,7 +202,7 @@ abstract class BlockGeneratorSkeleton(
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
     val mpt = MerklePatriciaTrie[Int, K](
       source = stateStorage
-    )(intByteArraySerializable, vSerializable)
+    )(using intByteArraySerializable, vSerializable)
     val hash = entities.zipWithIndex.foldLeft(mpt) { case (trie, (value, key)) => trie.put(key, value) }.getRootHash
     ByteString(hash)
 

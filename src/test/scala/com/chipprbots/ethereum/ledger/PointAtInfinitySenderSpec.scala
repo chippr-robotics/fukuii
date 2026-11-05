@@ -73,7 +73,7 @@ class PointAtInfinitySenderSpec extends AnyFlatSpec with Matchers:
   private def legacy = LegacyTransaction(0, GasPrice(0), GasAmount(21_000), to, 0, ByteString.empty)
 
   private def execute(stx: SignedTransaction)(using cfg: BlockchainConfig) =
-    preparator.executeTransactions(Seq(stx), setup.emptyWorld, header)(cfg)
+    preparator.executeTransactions(Seq(stx), setup.emptyWorld, header)(using cfg)
 
   private def assertRejected(stx: SignedTransaction)(using cfg: BlockchainConfig): Unit =
     // Syntactically valid: r and s are in range, s <= n/2, v matches the chain.

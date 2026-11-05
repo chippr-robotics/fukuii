@@ -312,7 +312,7 @@ object RLPxConnectionHandler:
       tcpManagerForTest: Option[ClassicActorRef] = None
   ): Behavior[Command] = Behaviors.setup { context =>
     val peerId: String = parent.path.name
-    val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(context.system.classicSystem))
+    val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(using context.system.classicSystem))
     new Impl(
       capabilities,
       authHandshaker,

@@ -82,5 +82,5 @@ class PeerStatisticsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
           peerEventBus.ref.toTyped[PeerEventBusActor.Command],
           slotDuration = 1.minute,
           slotCount = 30
-        )(mockClock)
+        )(using mockClock)
       )

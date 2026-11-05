@@ -201,11 +201,11 @@ private[actors] trait FrontierPersistence
               true
           }
         }
-      }(ec).onComplete {
+      }(using ec).onComplete {
         case scala.util.Success(true)  => selfRef ! FlushComplete(ticket.token, nodes.size)
         case scala.util.Success(false) => () // superseded: the synchronous flush that took it over wrote these nodes
         case scala.util.Failure(e)     => selfRef ! FlushFailed(ticket.token, e)
-      }(ec)
+      }(using ec)
 
   /** The asynchronous flush `token` wrote its snapshot: release those nodes. Only the flush in flight counts. A
     * completion of any other (one a synchronous flush took over, or one a previous incarnation of this coordinator

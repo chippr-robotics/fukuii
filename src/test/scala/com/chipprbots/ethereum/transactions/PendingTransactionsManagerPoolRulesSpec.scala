@@ -93,7 +93,7 @@ class PendingTransactionsManagerPoolRulesSpec
     private val stateRoot: Array[Byte] =
       state
         .foldLeft(
-          MerklePatriciaTrie[Array[Byte], Account](stateStorage.getBackingStorage(0))(
+          MerklePatriciaTrie[Array[Byte], Account](stateStorage.getBackingStorage(0))(using
             defaultByteArraySerializable,
             Account.accountSerializer
           )

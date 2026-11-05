@@ -85,7 +85,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val genesisStateRoot =
       val world = InMemoryWorldStateProxy(
@@ -150,7 +150,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
           else HefPostShanghai(baseFee = baseFee, withdrawalsRoot = BlockHeader.EmptyMpt)
       )
       val block = Block(template, BlockBody(Nil, Nil, withdrawals = if paris then None else Some(Nil)))
-      blockExec.executeBlockNoValidation(block)(blockchainConfig) match
+      blockExec.executeBlockNoValidation(block)(using blockchainConfig) match
         case Right((_, gasUsed, computedStateRoot)) =>
           Block(template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)), block.body)
         case Left(error) => throw new RuntimeException(s"Failed to execute block: ${error.describe}")

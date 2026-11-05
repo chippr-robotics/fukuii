@@ -56,7 +56,7 @@ class MerklePatriciaTreeSpeedSpec
     val hashFn = crypto.kec256(_: Array[Byte])
 
     val defaultByteArraySer = MerklePatriciaTrie.defaultByteArraySerializable
-    val EmptyTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](ns)(defaultByteArraySer, defaultByteArraySer)
+    val EmptyTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](ns)(using defaultByteArraySer, defaultByteArraySer)
 
     var t = System.currentTimeMillis()
     (1 to 20000000).foldLeft(EmptyTrie) { case (trie, i) =>

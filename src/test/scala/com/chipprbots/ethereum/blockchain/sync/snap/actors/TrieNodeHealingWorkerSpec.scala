@@ -34,7 +34,7 @@ class TrieNodeHealingWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSp
       coordinator: TestProbe[TrieNodeHealingCoordinator.Command]
   ): org.apache.pekko.actor.typed.ActorRef[TrieNodeHealingWorker.Command] =
     val networkPeerManager = ClassicTestProbe()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     testKit.spawn(
       TrieNodeHealingWorker(coordinator.ref, networkPeerManager.ref, requestTracker)
     )

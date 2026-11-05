@@ -106,7 +106,7 @@ class IORuntimeInitializationSpec extends ScalaTestWithActorTestKit with AnyFlat
     trait TestRuntime:
       implicit lazy val ioRuntime: IORuntime =
         initCount += 1
-        IO.sleep(10.millis).unsafeRunSync()(IORuntime.global) // Simulate some initialization work
+        IO.sleep(10.millis).unsafeRunSync()(using IORuntime.global) // Simulate some initialization work
         IORuntime.global
 
     val runtime = new TestRuntime {}

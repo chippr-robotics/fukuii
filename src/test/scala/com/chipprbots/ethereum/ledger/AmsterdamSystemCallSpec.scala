@@ -188,7 +188,7 @@ class AmsterdamSystemCallSpec extends AnyFlatSpec with Matchers:
   /** Runs the block preamble and an empty transaction list, as block execution does. */
   private def preamble(setup: Setup, timestamp: Long, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
     setup.exec
-      .executeBlockTransactions(setup.block(timestamp, BeaconRoot), world)(setup.blockchainConfig)
+      .executeBlockTransactions(setup.block(timestamp, BeaconRoot), world)(using setup.blockchainConfig)
       .fold(err => fail(s"block execution failed: $err"), _.worldState)
 
   import BlockExecution.BeaconRootContractAddress

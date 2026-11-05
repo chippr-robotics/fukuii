@@ -575,7 +575,7 @@ class FilterManagerSpec
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
     val keyStore: KeyStore = mock[KeyStore]
     val blockGenerator: BlockGenerator = mock[BlockGenerator]
-    val ptmProbe: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val ptmProbe: TestProbe = TestProbe()(using testKit.system.classicSystem)
 
     val filterManager: ActorRef[FilterManager.Command] = testKit.spawn(
       FilterManager(

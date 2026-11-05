@@ -155,7 +155,7 @@ object BytecodeRecoveryActor:
                 pivotBlockNumber,
                 ctx.log
               )
-            )(ctx.executionContext)
+            )(using ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
@@ -185,7 +185,7 @@ object BytecodeRecoveryActor:
               coordinatorForTesting match
                 case Some(testRef) => testRef.toTyped[snap.actors.ByteCodeCoordinator.Command]
                 case None =>
-                  val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
+                  val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
                   ctx.spawn(
                     Behaviors
                       .supervise(

@@ -232,7 +232,7 @@ class OlympiaBlockHeaderValidationSpec
           extraData = baseExtraData,
           extraFields = HefPostOlympia(BigInt(7))
         )
-        DifficultyAgnosticValidator.validate(child, emptyParent)(configFloorZero) shouldBe Right(BlockHeaderValid)
+        DifficultyAgnosticValidator.validate(child, emptyParent)(using configFloorZero) shouldBe Right(BlockHeaderValid)
       }
     }
   }

@@ -460,7 +460,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         stateRoot = Some(pivotRoot),
         codePresent = hash => stateIngest.bytecode.get(hash).isDefined
       )
-    }(blockingEc)
+    }(using blockingEc)
     ctx.pipeToSelf(work) {
       case scala.util.Success(r) => PathPublishDone(r, System.currentTimeMillis() - started)
       case scala.util.Failure(e) => PathPublishFailed(e)

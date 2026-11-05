@@ -131,9 +131,9 @@ private[snap] trait SnapResumePlanner
     storageDoneStorage.clear()
     ctx.log.info(s"Cleared storage-task completion markers ($reason); compacting their key range in the background")
     scala.concurrent
-      .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(snapValidationEc)
+      .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(using snapValidationEc)
       .failed
-      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(
+      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(using
         snapValidationEc
       )
 

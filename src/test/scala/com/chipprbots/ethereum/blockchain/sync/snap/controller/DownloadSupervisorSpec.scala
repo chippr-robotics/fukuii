@@ -128,7 +128,7 @@ private[snap] class StubDownloadSupervisorState(
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.AccountRangeSync
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers, snapSyncConfig, networkPeerManager and childFactories are constructor vals)
   def syncConfig: SyncConfig = notUsed("syncConfig")

@@ -190,7 +190,7 @@ object BalPrefetcher extends Logger:
       val valid =
         committedHash.contains(bal.hash) && bal.validateFor(transactionCount, gasLimit).isRight
       if valid then
-        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(
+        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(using
           Address.hashedAddressEncoder,
           Account.accountSerializer
         )

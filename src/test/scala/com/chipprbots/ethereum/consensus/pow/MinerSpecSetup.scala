@@ -73,10 +73,10 @@ trait MinerSpecSetup
   private lazy val _defaultClassicSystem: ClassicSystem = ClassicSystem("MinerSpecSetup-DefaultSystem")
 
   implicit val runtime: IORuntime = IORuntime.global
-  lazy val parentActor: TestProbe = TestProbe()(classicSystem)
-  lazy val sync: TestProbe = TestProbe()(classicSystem)
-  lazy val ommersPool: TestProbe = TestProbe()(classicSystem)
-  lazy val pendingTransactionsManager: TestProbe = TestProbe()(classicSystem)
+  lazy val parentActor: TestProbe = TestProbe()(using classicSystem)
+  lazy val sync: TestProbe = TestProbe()(using classicSystem)
+  lazy val ommersPool: TestProbe = TestProbe()(using classicSystem)
+  lazy val pendingTransactionsManager: TestProbe = TestProbe()(using classicSystem)
 
   val origin: Block = Block(Fixtures.Blocks.Genesis.header, Fixtures.Blocks.Genesis.body)
 

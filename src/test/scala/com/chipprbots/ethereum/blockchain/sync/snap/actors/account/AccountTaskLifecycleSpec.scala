@@ -132,7 +132,7 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   final private class Harness:
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     private val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    private val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    private val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     private var action: () => Unit = () => ()
     private var captured: StubAccountTaskLifecycleState & AccountTaskLifecycle = null
     val kit: BehaviorTestKit[AccountRangeCoordinator.Command] =

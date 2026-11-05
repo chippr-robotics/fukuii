@@ -88,7 +88,7 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
 
       result.accounts should have size pairs.size
       val hashes = result.accounts.map(_._1)
-      hashes shouldEqual hashes.sorted(Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))
+      hashes shouldEqual hashes.sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))
     }
 
   it should "always include a left-bound proof for a non-empty response" taggedAs UnitTest in {
@@ -139,7 +139,7 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
   it should "handle a reversed range (start > limit) as single-key-from-start" taggedAs UnitTest in {
     val keys = sampleKeys(5)
     val (root, storage) = buildAccountTrie(keys.map(_ -> eoa()))
-    val sortedKeys = keys.sorted(Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))
+    val sortedKeys = keys.sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))
     val highStart = sortedKeys.last // highest unsigned key — start AFTER most keys
     val lowLimit = sortedKeys.head // lowest unsigned key — limit BEFORE most keys → reversed
 
@@ -153,7 +153,7 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
   it should "return exactly one account when start == limit and the key exists" taggedAs UnitTest in {
     val keys = sampleKeys(5)
     val (root, storage) = buildAccountTrie(keys.map(k => k -> eoa()))
-    val target = keys.sorted(Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray))).head
+    val target = keys.sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray))).head
 
     val result = SnapServer.serveAccountRange(1, root, target, target, bigBudget, storage)
 
@@ -238,7 +238,7 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     val account = accountWithStorage(storageRoot)
     val (stateRoot, _) = buildAccountTrie(Seq(accountHash -> account), storage)
 
-    val nonZeroStart = slotKeys.sorted(Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray))).head
+    val nonZeroStart = slotKeys.sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray))).head
 
     val result = SnapServer.serveStorageRanges(
       requestId = 1,

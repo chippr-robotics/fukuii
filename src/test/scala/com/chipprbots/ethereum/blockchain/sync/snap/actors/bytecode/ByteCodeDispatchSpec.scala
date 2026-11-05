@@ -75,7 +75,7 @@ private[actors] class StubByteCodeDispatchState(val requestTracker: SNAPRequestT
 class ByteCodeDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
   private def newModule(maxWorkers: Int = 4): StubByteCodeDispatchState & ByteCodeDispatch =
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     new StubByteCodeDispatchState(tracker, maxWorkers) with ByteCodeDispatch
 
   private def peer(id: String): Peer =

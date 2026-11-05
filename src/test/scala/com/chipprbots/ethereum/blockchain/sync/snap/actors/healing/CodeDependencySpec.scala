@@ -137,7 +137,7 @@ class CodeDependencySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLik
     val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = t.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = if scheme == StorageScheme.Hash then hashStore else new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,

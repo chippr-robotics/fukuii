@@ -169,10 +169,10 @@ final class ExcludedSweep:
     Future {
       handle.begin()
       work(handle)
-    }(ec).onComplete {
+    }(using ec).onComplete {
       case Success(outcome) => report(token, outcome)
       case Failure(e)       => report(token, ExcludedTaskFile.Outcome.StoreFailed(e))
-    }(ExecutionContext.parasitic)
+    }(using ExecutionContext.parasitic)
     token
 
   /** A look by the sweep's watchdog: `Some(false)` when `token`, if it is the one running, has been at its work for the

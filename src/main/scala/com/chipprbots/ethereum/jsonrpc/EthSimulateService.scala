@@ -1438,7 +1438,7 @@ class EthSimulateService(
     if txs.isEmpty then EmptyMpt
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
-      val trie = MerklePatriciaTrie[Int, SignedTransaction](source = stateStorage)(
+      val trie = MerklePatriciaTrie[Int, SignedTransaction](source = stateStorage)(using
         MptListValidator.intByteArraySerializable,
         SignedTransaction.byteArraySerializable
       )
@@ -1448,7 +1448,7 @@ class EthSimulateService(
     if receipts.isEmpty then EmptyMpt
     else
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
-      val trie = MerklePatriciaTrie[Int, Receipt](source = stateStorage)(
+      val trie = MerklePatriciaTrie[Int, Receipt](source = stateStorage)(using
         MptListValidator.intByteArraySerializable,
         Receipt.byteArraySerializable
       )

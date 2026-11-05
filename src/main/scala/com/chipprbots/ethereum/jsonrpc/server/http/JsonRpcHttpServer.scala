@@ -193,7 +193,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.unsafeToFuture()(runtime))
+    complete(httpResponseF.unsafeToFuture()(using runtime))
 
   private def handleHealthcheck(): StandardRoute =
     val responseF = jsonRpcHealthChecker.healthCheck
@@ -210,7 +210,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.unsafeToFuture()(runtime))
+    complete(httpResponseF.unsafeToFuture()(using runtime))
 
   private def handleGraphQL(svc: GraphQLService, body: String): StandardRoute =
     GraphQLService.parseJsonBody(body) match
@@ -233,7 +233,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
         complete(fut)
 
   private def handleBuildInfo(): StandardRoute =
-    val buildInfo = Serialization.writePretty(BuildInfo.toMap)(DefaultFormats)
+    val buildInfo = Serialization.writePretty(BuildInfo.toMap)(using DefaultFormats)
     complete(
       HttpResponse(
         status = StatusCodes.OK,
@@ -253,12 +253,14 @@ object JsonRpcHttpServer extends Logger:
     config.mode match
       case "http" =>
         Right(
-          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(actorSystem)
+          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using
+            actorSystem
+          )
         )
       case "https" =>
         Right(
           new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext, graphQLService)(
-            actorSystem
+            using actorSystem
           )
         )
       case _ => Left(s"Cannot start JSON RPC server: Invalid mode ${config.mode} selected")

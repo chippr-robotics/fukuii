@@ -113,7 +113,7 @@ class StoragePeerDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
   final private class Harness:
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     private var action: () => Unit = () => ()
     private var captured: StubStoragePeerDispatchState & StoragePeerDispatch = null
     val kit: BehaviorTestKit[StorageRangeCoordinator.Command] =

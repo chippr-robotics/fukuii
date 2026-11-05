@@ -112,7 +112,7 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
 
   /** Serves `block` with `accessList`, counting how often it is resolved. */
   private class StubService(block: Block, list: Option[ByteString])
-      extends EngineApiService(null, null, null, null, None)(null, null):
+      extends EngineApiService(null, null, null, null, None)(using null, null):
     val resolved = new AtomicInteger(0)
     override def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO.pure(Right(block))
     override def resolvePayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
@@ -228,7 +228,7 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
         null,
         new ForkChoiceManager(blockchainReader, blockchainWriter),
         None
-      )(config, null)
+      )(using config, null)
       val params: List[JValue] =
         List(envelope \ "executionPayload", JArray(Nil), JString(hex(beaconRoot)), envelope \ "executionRequests")
       val response = new EngineApiController(service, None, config)
@@ -243,7 +243,7 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
   "engine_exchangeCapabilities" should {
 
     "advertise engine_newPayloadV5, engine_forkchoiceUpdatedV4 and engine_getPayloadV6" taggedAs UnitTest in {
-      val service = new EngineApiService(null, null, null, null, None)(null, null)
+      val service = new EngineApiService(null, null, null, null, None)(using null, null)
       val response = new EngineApiController(service, None, amsterdamConfig)
         .handleRequest(
           JsonRpcRequest("2.0", "engine_exchangeCapabilities", Some(JArray(List(JArray(Nil)))), Some(JInt(1)))

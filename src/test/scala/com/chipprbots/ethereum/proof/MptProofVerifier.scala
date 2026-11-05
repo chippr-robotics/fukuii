@@ -29,7 +29,7 @@ object MptProofVerifier:
       proof: Vector[MptNode]
   )(implicit kSer: ByteArrayEncoder[K], vSer: ByteArraySerializable[V]): ProofVerifyResult =
     val mptStore = mkStorage(proof)
-    rebuildMpt(rootHash, mptStore)(kSer, vSer)
+    rebuildMpt(rootHash, mptStore)(using kSer, vSer)
       .flatMap(trie => getKey(key, trie))
       .fold(InvalidProof.apply, _ => ValidProof)
 

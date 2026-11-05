@@ -132,7 +132,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
           _: Address,
           _: Seq[BlockHeader],
           _: Option[InMemoryWorldStateProxy]
-        )(_: BlockchainConfig))
+        )(using _: BlockchainConfig))
         .expects(parentBlock, Nil, miningConfig.coinbase, Nil, None, *)
         .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
 
@@ -143,7 +143,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
         fakeWorld: InMemoryWorldStateProxy
     ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
       (mockBlockCreator
-        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
+        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(using _: BlockchainConfig))
         .expects(parentBlock, withTransactions, *, *)
         .returning(IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld)))
 
@@ -154,7 +154,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
         fakeWorld: InMemoryWorldStateProxy
     ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
       (mockBlockCreator
-        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
+        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(using _: BlockchainConfig))
         .expects(where { (parent: Block, withTxs: Boolean, _: Option[InMemoryWorldStateProxy], _: BlockchainConfig) =>
           parent == parentBlock && withTxs == withTransactions
         })

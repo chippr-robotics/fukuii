@@ -35,10 +35,10 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
     val expected = Address("0xf0f6f18bca1b28cd68e4357452947e021241e9ce")
 
     // A mismatched-chain recovery falls back to the pre-155 payload and yields some other address. It must not stick.
-    getSender(stx)(foreign) should not be Some(expected)
-    getSender(stx)(native) shouldEqual Some(expected)
+    getSender(stx)(using foreign) should not be Some(expected)
+    getSender(stx)(using native) shouldEqual Some(expected)
     // and the reverse order stays consistent
-    getSender(stx)(foreign) should not be Some(expected)
+    getSender(stx)(using foreign) should not be Some(expected)
   }
 
   "Legacy transaction sender" should "be properly recoverable from rlp encoded values" taggedAs (UnitTest) in {

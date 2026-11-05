@@ -202,7 +202,7 @@ class RpcCompatNode(using system: ActorSystem, testKit: ActorTestKit) extends Ep
         ethTxService,
         ethInfoService,
         ethUserService,
-        new EthFilterService(filterManager, filterConfig, blockchainReader)(system)
+        new EthFilterService(filterManager, filterConfig, blockchainReader)(using system)
       ),
       maxQueryDepth = com.chipprbots.ethereum.jsonrpc.graphql.GraphQLSchema.MaxQueryDepth,
       executionTimeout = 30.seconds

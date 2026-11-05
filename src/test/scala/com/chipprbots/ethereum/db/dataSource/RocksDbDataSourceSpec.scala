@@ -288,7 +288,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
       // anything: the pass path is fast and deterministic every time; only a genuine
       // lock/resource leak would time out, and we want that to fail loudly here rather than
       // hang this shared, resource-constrained test JVM indefinitely.
-      val closed = Future(ds.close())(ExecutionContext.global)
+      val closed = Future(ds.close())(using ExecutionContext.global)
       Await.result(closed, 10.seconds)
 
       // Prove no native handle / OS-level lock survives: a fresh DataSource can reopen the same

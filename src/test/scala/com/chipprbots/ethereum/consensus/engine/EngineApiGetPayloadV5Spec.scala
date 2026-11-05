@@ -70,7 +70,7 @@ class EngineApiGetPayloadV5Spec extends AnyWordSpec with Matchers:
     Block(header, BlockBody(Nil, Nil, withdrawals = Some(Nil)))
 
   private def stubService(block: Block): EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def getPayload(payloadId: ByteString): IO[Either[String, Block]] =
         IO.pure(Right(block))
       override def getPayloadReceipts(payloadId: ByteString) = Nil

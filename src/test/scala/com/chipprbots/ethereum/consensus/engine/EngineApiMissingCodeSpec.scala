@@ -95,7 +95,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     val callTx: SignedTransaction =
       SignedTransaction.sign(
@@ -357,6 +357,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       val nodes = storagesInstance.storages.nodeStorage
       val senderLeaf: ByteString =
         MerklePatriciaTrie[Address, Account](genesisHeader.stateRoot.value.toArray, blockchain.getBackingMptStorage(0))(
+          using
           Address.hashedAddressEncoder,
           Account.accountSerializer
         ).getProof(sender).flatMap(_.lastOption) match

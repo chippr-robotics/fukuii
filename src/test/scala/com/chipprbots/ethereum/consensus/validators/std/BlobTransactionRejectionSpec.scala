@@ -107,7 +107,7 @@ class BlobTransactionRejectionSpec extends AnyFlatSpec with Matchers:
       forkTimestamps = blockchainConfig.forkTimestamps.copy(cancunTimestamp = Some(0L))
     )
     val cancunHeader = etcBlockHeader.copy(unixTimestamp = Timestamp(1_000_000_000L))
-    validate(signedBlobTx, cancunHeader)(cancunCfg) match
+    validate(signedBlobTx, cancunHeader)(using cancunCfg) match
       case Left(TransactionSyntaxError(msg)) if msg.contains("TYPE_3_TX_NOT_SUPPORTED") =>
         fail("Blob tx should not be rejected for type when Cancun is active")
       case _ => succeed // Any other result (including other errors) is acceptable

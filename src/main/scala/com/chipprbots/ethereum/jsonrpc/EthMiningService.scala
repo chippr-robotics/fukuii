@@ -138,7 +138,7 @@ class EthMiningService(
               WorkNotifier.notify(
                 notifyUrls,
                 WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
-              )(system)
+              )(using system)
             Right(workResponse)
           }
         case None =>

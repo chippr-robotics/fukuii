@@ -73,7 +73,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
           timers,
           initialStateRoot = Root,
           networkPeerManager = TestInbox[NetworkPeerManagerActor.Command]().ref,
-          requestTracker = new SNAPRequestTracker()(system.classicSystem.scheduler),
+          requestTracker = new SNAPRequestTracker()(using system.classicSystem.scheduler),
           mptStorage = new TestMptStorage(),
           batchSize = 16,
           snapSyncController = TestInbox[SNAPSyncController.Command]().ref,

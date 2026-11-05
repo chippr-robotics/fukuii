@@ -53,10 +53,10 @@ class EngineApiVersionRejectionSpec extends AnyWordSpec with Matchers:
   private val nonZeroHash32 = "0x" + "ab" * 32
 
   private def stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null) {}
+    new EngineApiService(null, null, null, null, None)(using null, null) {}
 
   private def stubServiceWithBlock(block: Block): EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def getPayload(payloadId: ByteString): IO[Either[String, Block]] =
         IO.pure(Right(block))
 

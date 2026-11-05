@@ -60,7 +60,7 @@ class EngineApiForkchoiceAttributesSpec extends AnyWordSpec with Matchers:
   )
 
   /** Records what reaches the service, so a test can tell "rejected at the boundary" from "applied, then rejected". */
-  private class RecordingService extends EngineApiService(null, null, null, null, None)(null, null):
+  private class RecordingService extends EngineApiService(null, null, null, null, None)(using null, null):
     val calls = new ConcurrentLinkedQueue[(ForkChoiceState, Option[PayloadAttributes])]()
     override def forkchoiceUpdated(
         forkChoiceState: ForkChoiceState,

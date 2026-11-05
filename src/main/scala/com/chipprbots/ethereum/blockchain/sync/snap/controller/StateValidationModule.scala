@@ -168,13 +168,13 @@ private[snap] trait StateValidationModule extends ValidationApi:
       .Future {
         val v = stateIngest.validatorFactory(storage)
         (v.validateAccountTrie(expectedRoot), System.currentTimeMillis() - start)
-      }(snapValidationEc)
+      }(using snapValidationEc)
       .onComplete {
         case scala.util.Success((result, elapsed)) =>
           selfRef ! ValidateAccountTrieResult(generation, result, elapsed)
         case scala.util.Failure(e) =>
           selfRef ! ValidateAccountTrieResult(generation, Left(e.getMessage), -1L)
-      }(snapValidationEc)
+      }(using snapValidationEc)
 
   private def spawnStorageValidation(generation: Long, expectedRoot: ByteString, pivot: BigInt): Unit =
     val storage = getOrCreateMptStorage(pivot)
@@ -184,13 +184,13 @@ private[snap] trait StateValidationModule extends ValidationApi:
       .Future {
         val v = stateIngest.validatorFactory(storage)
         (v.validateAllStorageTries(expectedRoot), System.currentTimeMillis() - start)
-      }(snapValidationEc)
+      }(using snapValidationEc)
       .onComplete {
         case scala.util.Success((result, elapsed)) =>
           selfRef ! ValidateStorageTriesResult(generation, result, elapsed)
         case scala.util.Failure(e) =>
           selfRef ! ValidateStorageTriesResult(generation, Left(e.getMessage), -1L)
-      }(snapValidationEc)
+      }(using snapValidationEc)
 
   def validateState(): Unit =
     if !snapSyncConfig.stateValidationEnabled then

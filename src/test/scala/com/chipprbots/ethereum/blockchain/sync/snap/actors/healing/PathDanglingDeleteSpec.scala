@@ -66,7 +66,7 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = createTestProbe[SNAPSyncController.Command]().ref,
@@ -257,7 +257,7 @@ class PathDanglingDeleteSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,

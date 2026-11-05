@@ -94,7 +94,7 @@ trait ShutdownHookBuilder:
         .map(
           _ ->
             log.info("actor system finished")
-        )(system.dispatcher),
+        )(using system.dispatcher),
       faucetConfig.shutdownTimeout
     )
 

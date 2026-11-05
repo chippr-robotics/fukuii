@@ -94,7 +94,7 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
   /** A service whose payload is `block`, counting how often the controller resolves it. Every payload is served with
     * the empty block access list, which only V6 reads (and which the Amsterdam header below commits to).
     */
-  private class CountingService(block: Block) extends EngineApiService(null, null, null, null, None)(null, null):
+  private class CountingService(block: Block) extends EngineApiService(null, null, null, null, None)(using null, null):
     val resolved = new AtomicInteger(0)
     override def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO.pure(Right(block))
     override def resolvePayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =

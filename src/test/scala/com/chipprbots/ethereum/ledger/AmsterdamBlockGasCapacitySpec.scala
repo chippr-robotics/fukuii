@@ -79,7 +79,7 @@ class AmsterdamBlockGasCapacitySpec extends AnyFlatSpec with Matchers with Amste
       blockGasLimit: BigInt,
       config: BlockchainConfig
   ): Either[TxsExecutionError, BlockResult] =
-    preparator.executeTransactions(txs, world, header(blockGasLimit, config))(config)
+    preparator.executeTransactions(txs, world, header(blockGasLimit, config))(using config)
 
   private def rejection(result: Either[TxsExecutionError, BlockResult]): String =
     result.fold(_.reason, r => fail(s"expected the block to be rejected, it executed: $r"))
@@ -186,7 +186,7 @@ class AmsterdamBlockGasCapacitySpec extends AnyFlatSpec with Matchers with Amste
 
   "blockGasCapacityError" should "select the rule by the block's timestamp" taggedAs (UnitTest, ConsensusTest) in {
     def check(ts: Long, txGas: BigInt) =
-      StdSignedTransactionValidator.blockGasCapacityError(txGas, 1000000, Timestamp(ts), 565130, 75530, 489600)(
+      StdSignedTransactionValidator.blockGasCapacityError(txGas, 1000000, Timestamp(ts), 565130, 75530, 489600)(using
         amsterdamConfig
       )
     check(359, 500000).isDefined shouldBe true // Osaka: 500,000 + 565,130 > 1,000,000

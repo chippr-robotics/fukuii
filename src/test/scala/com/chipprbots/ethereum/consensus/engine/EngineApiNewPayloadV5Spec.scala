@@ -69,7 +69,7 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
   private val UnsupportedFork = -38005
 
   /** Records the payload that reaches the service; answers SYNCING. */
-  private class RecordingService extends EngineApiService(null, null, null, null, None)(null, null):
+  private class RecordingService extends EngineApiService(null, null, null, null, None)(using null, null):
     val received = new AtomicReference[Option[ExecutionPayload]](None)
     override def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] =
       IO(received.set(Some(payload))).as(PayloadStatusV1(PayloadStatus.Syncing))
@@ -309,7 +309,7 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
       null, // never reached: an unknown parent is not executed
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
-    )(config, null)
+    )(using config, null)
     def newPayloadV5(ps: List[JValue]): JsonRpcResponse =
       new EngineApiController(service, None, config)
         .handleRequest(JsonRpcRequest("2.0", "engine_newPayloadV5", Some(JArray(ps)), Some(JInt(1))))

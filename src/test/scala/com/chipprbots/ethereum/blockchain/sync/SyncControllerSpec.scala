@@ -644,7 +644,7 @@ class SyncControllerSpec
     */
   private def awaitSnapStarted(controller: TestActorRef[Nothing]): Unit =
     val snapSync = eventually(controller.children.find(_.path.name.startsWith("snap-sync")).get)
-    val progress = TestProbe()(controller.underlying.system)
+    val progress = TestProbe()(using controller.underlying.system)
     snapSync.toTyped[SNAPSyncController.Command] ! SNAPSyncController.GetProgress(progress.ref.toTyped)
     progress.expectMsgType[com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress]
 
@@ -1185,7 +1185,7 @@ class SyncControllerSpec
       val requested = sc.requests.asScala.toVector
       withClue(s"request sizes ${requested.map(_.size)}: ") {
         requested.map(_.size).sorted shouldBe Vector(30, 85, 85) // 200 codes in batches of 85
-        requested.flatten.sorted(hexOrder) shouldBe sc.codeHashes.sorted(hexOrder)
+        requested.flatten.sorted(using hexOrder) shouldBe sc.codeHashes.sorted(using hexOrder)
       }
       requested.flatten.distinct.size shouldBe sc.codeHashes.size // each fetched exactly once: one scan, not two
       sc.codeHashes.foreach(h => sc.evmCodes.get(h) shouldBe defined)

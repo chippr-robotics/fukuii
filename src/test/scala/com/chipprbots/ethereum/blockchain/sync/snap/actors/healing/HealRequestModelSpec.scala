@@ -75,7 +75,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = ByteString(root.hash),
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(), // empty: nothing is stored yet
       batchSize = 1,
       snapSyncController = createTestProbe[SNAPSyncController.Command]().ref,
@@ -159,7 +159,7 @@ class HealRequestModelSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = ByteString(root.hash),
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 1,
       snapSyncController = createTestProbe[SNAPSyncController.Command]().ref,

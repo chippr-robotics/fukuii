@@ -573,11 +573,11 @@ private[snap] trait HealingOrchestrator
         .Future {
           val validator = new StateValidator(storage)
           validator.findMissingNodesWithPaths(root.value)
-        }(ec)
+        }(using ec)
         .foreach {
           case Right(nodes) => ctx.self ! ValidationMissingNodes(nodes)
           case Left(error)  => ctx.self ! ValidationRewalkFailed(error)
-        }(ec)
+        }(using ec)
     }
 
   /** True when a lazy-heal hand-off is certain to fail (#1555): Path scheme, and the current pivot root's node is

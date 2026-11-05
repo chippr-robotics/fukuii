@@ -185,7 +185,7 @@ class EthAllOpcodesFixtureSpec extends AnyWordSpec with Matchers:
 
   private def run(h: BlockHeader, config: BlockchainConfig): BlockResult =
     setup.prep
-      .executeTransactions(Seq(fixtureTx), preWorld, h)(config)
+      .executeTransactions(Seq(fixtureTx), preWorld, h)(using config)
       .fold(err => throw new AssertionError(s"block execution failed: ${err.reason}"), identity)
 
   private def slot(result: BlockResult, opcode: Int): BigInt =

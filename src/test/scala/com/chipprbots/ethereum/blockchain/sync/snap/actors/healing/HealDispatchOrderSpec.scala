@@ -69,7 +69,7 @@ class HealDispatchOrderSpec extends ScalaTestWithActorTestKit() with AnyFlatSpec
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = kec256(ByteString("s022/order/root")),
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       // Two paths per request, so the order is visible across requests as well as within one.
       batchSize = 2,
@@ -101,7 +101,7 @@ class HealDispatchOrderSpec extends ScalaTestWithActorTestKit() with AnyFlatSpec
     val depths = dispatchOrder(StorageScheme.Path)
     depths should have size queued.size.toLong
     withClue(s"dispatched depths $depths: ") {
-      depths shouldBe depths.sorted(Ordering[Int].reverse)
+      depths shouldBe depths.sorted(using Ordering[Int].reverse)
     }
   }
 
@@ -109,6 +109,6 @@ class HealDispatchOrderSpec extends ScalaTestWithActorTestKit() with AnyFlatSpec
     val depths = dispatchOrder(StorageScheme.Hash)
     depths should have size queued.size.toLong
     withClue(s"dispatched depths $depths: ") {
-      depths shouldBe depths.sorted(Ordering[Int].reverse)
+      depths shouldBe depths.sorted(using Ordering[Int].reverse)
     }
   }

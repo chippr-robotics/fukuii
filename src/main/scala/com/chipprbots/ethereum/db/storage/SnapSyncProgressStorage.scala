@@ -156,7 +156,7 @@ class SnapSyncProgressStorage(val dataSource: DataSource)
       .iterate(namespace)
       .compile
       .toList
-      .unsafeRunSync()(IORuntime.global)
+      .unsafeRunSync()(using IORuntime.global)
       .collect { case Right((k, _)) => ByteString.fromArrayUnsafe(k) }
     if keys.nonEmpty then update(keys, Nil).commit()
 

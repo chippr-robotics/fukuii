@@ -63,7 +63,7 @@ object JsonRpcControllerFixture:
       mockFactory: org.scalamock.scalatest.MockFactory,
       actorTestKit: ActorTestKit
   ): JsonRpcControllerFixture =
-    new JsonRpcControllerFixture()(system, mockFactory, actorTestKit)
+    new JsonRpcControllerFixture()(using system, mockFactory, actorTestKit)
 
 class JsonRpcControllerFixture(implicit
     system: ActorSystem,
@@ -230,7 +230,7 @@ class JsonRpcControllerFixture(implicit
     filterManager,
     filterConfig,
     blockchainReader
-  )(system)
+  )(using system)
   val personalService: TestPersonalService = new TestPersonalService
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]

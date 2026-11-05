@@ -106,7 +106,7 @@ class Plataberget319453ReplaySpec extends AnyFlatSpec with Matchers with Amsterd
             Nil
           )
       val stx = SignedTransaction(tx, com.chipprbots.ethereum.crypto.ECDSASignature(BigInt(1), BigInt(1), BigInt(27)))
-      val res = setup.prep.executeTransaction(stx, addr(p(1)), hdr, world)(cfg)
+      val res = setup.prep.executeTransaction(stx, addr(p(1)), hdr, world)(using cfg)
       if res.gasUsed != BigInt(p(10)) then gasMismatches += s"tx$i: got ${res.gasUsed} canonical ${p(10)}"
       (res.vmError.isEmpty, p(11)) match
         case (true, "0x1") | (false, "0x0") => ()

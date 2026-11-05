@@ -33,8 +33,8 @@ object XorOrdering:
     */
   def apply[A, B <: BitVector](f: A => B)(base: B): Ordering[A] =
     val xorOrdering = new XorOrdering(base)
-    val tupleOrdering = Ordering.Tuple2(xorOrdering, Ordering.Int)
+    val tupleOrdering = Ordering.Tuple2(using xorOrdering, Ordering.Int)
     Ordering.by[A, (BitVector, Int)] { x =>
       // Using hashCode to make them unique form each other within the same distance.
       f(x) -> x.hashCode
-    }(tupleOrdering)
+    }(using tupleOrdering)

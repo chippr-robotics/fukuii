@@ -67,7 +67,7 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     def bal: BlockAccessList =
       BlockAccessList(
         (addresses :+ eoa)
-          .sortBy(_.bytes.toArray.toSeq.map(_ & 0xff))(
+          .sortBy(_.bytes.toArray.toSeq.map(_ & 0xff))(using
             Ordering.Implicits.seqOrdering[Seq, Int]
           )
           .map(a => AccountChanges(a, Nil, (1 to slots).map(i => UInt256(i)), Nil, Nil, Nil))
@@ -120,7 +120,7 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     // The execution's own walk (a CachingMptStorage on the same cache) now never reaches the database.
     val counting = new CountingStorage(f.mpt)
     val exec = new CachingMptStorage(counting, f.cache)
-    val trie = MerklePatriciaTrie[Address, Account](f.root.toArray, exec)(
+    val trie = MerklePatriciaTrie[Address, Account](f.root.toArray, exec)(using
       Address.hashedAddressEncoder,
       Account.accountSerializer
     )
@@ -159,7 +159,7 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
         AccountChanges(ghost, Nil, Seq(UInt256(1), UInt256(2)), Nil, Nil, Nil),
         AccountChanges(noCode, Nil, Seq(UInt256(1)), Nil, Nil, Nil),
         AccountChanges(f.addresses.head, Nil, Seq(UInt256(999)), Nil, Nil, Nil)
-      ).sortBy(_.address.bytes.toArray.toSeq.map(_ & 0xff))(Ordering.Implicits.seqOrdering[Seq, Int])
+      ).sortBy(_.address.bytes.toArray.toSeq.map(_ & 0xff))(using Ordering.Implicits.seqOrdering[Seq, Int])
     )
     val run = BalPrefetcher
       .start(
@@ -218,7 +218,7 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     val many = BlockAccessList(
       (0 until 4000)
         .map(i => AccountChanges(Address(BigInt(0x100000 + i)), Nil, (1 to 3).map(UInt256(_)), Nil, Nil, Nil))
-        .sortBy(_.address.bytes.toArray.toSeq.map(_ & 0xff))(Ordering.Implicits.seqOrdering[Seq, Int])
+        .sortBy(_.address.bytes.toArray.toSeq.map(_ & 0xff))(using Ordering.Implicits.seqOrdering[Seq, Int])
     )
     val run = BalPrefetcher
       .start(

@@ -100,7 +100,7 @@ class HealWalkSingleFlightSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     private def coordinator: Behavior[Command] = TrieNodeHealingCoordinator(
       stateRoot = trie.root.hash,
       networkPeerManager = peers.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = hashStore,
       batchSize = 16,
       snapSyncController = controller.ref,

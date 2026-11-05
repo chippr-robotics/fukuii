@@ -80,7 +80,7 @@ object CombinedRecoveryScanActor:
             shardDepth = snapSyncConfig.recoveryScanShardDepth
           )
           scanner.run()
-        }(ctx.executionContext)
+        }(using ctx.executionContext)
       ) {
         case Success(result) => ScanDone(Some(result))
         case Failure(ex) =>

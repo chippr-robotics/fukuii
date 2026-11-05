@@ -101,7 +101,10 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         TestConverter.toBlockHeader(tb.blockHeader),
         BlockBody(tb.transactions.map(TestConverter.toTransaction), tb.uncleHeaders.map(TestConverter.toBlockHeader))
       )
-      (block, consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, bc).unsafeRunSync()(IORuntime.global))
+      (
+        block,
+        consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, bc).unsafeRunSync()(using IORuntime.global)
+      )
     }
     val failures = results.collect { case (block, BlockImportFailed(err)) =>
       s"block ${block.number} ${block.header.hashAsHexString}: $err"

@@ -104,7 +104,7 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     val coordinator: ActorRef[TrieNodeHealingCoordinator.Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = first.root.hash,
       networkPeerManager = peer.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = if scheme == StorageScheme.Hash then hashStore else new TestMptStorage(),
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -228,7 +228,7 @@ class HealConvergenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = trie.root.hash,
         networkPeerManager = new ScriptedPeer(testKit).ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = new TestMptStorage(),
         batchSize = 16,
         snapSyncController = controller.ref,
@@ -295,7 +295,7 @@ class HealConvergenceControllerSpec
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = before.root.hash,
       networkPeerManager = new ScriptedPeer(testKit).ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = new TestMptStorage(),
       batchSize = 16,
       snapSyncController = signals.ref,

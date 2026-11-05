@@ -8,9 +8,9 @@ import com.chipprbots.ethereum.rlp.{encode as rlpEncode, *}
 
 package object encoding:
 
-  private[storage] def snapshotsCountFromBytes(encoded: Array[Byte]): BigInt = decode(encoded)(bigIntEncDec)
+  private[storage] def snapshotsCountFromBytes(encoded: Array[Byte]): BigInt = decode(encoded)(using bigIntEncDec)
 
-  private[storage] def storedNodeFromBytes(encoded: Array[Byte]): StoredNode = decode(encoded)(storedNodeEncDec)
+  private[storage] def storedNodeFromBytes(encoded: Array[Byte]): StoredNode = decode(encoded)(using storedNodeEncDec)
 
   /** The node bytes in a stored-node wrapper, whatever state its counters are in. None if it is not a wrapper at all.
     */
@@ -19,9 +19,10 @@ package object encoding:
       byteArrayFromEncodeable(nodeEncoded)
     }
 
-  private[storage] def snapshotFromBytes(encoded: Array[Byte]): StoredNodeSnapshot = decode(encoded)(snapshotEncDec)
+  private[storage] def snapshotFromBytes(encoded: Array[Byte]): StoredNodeSnapshot =
+    decode(encoded)(using snapshotEncDec)
 
-  private[storage] def snapshotsCountToBytes(value: BigInt): Array[Byte] = rlpEncode(value)(bigIntEncDec)
+  private[storage] def snapshotsCountToBytes(value: BigInt): Array[Byte] = rlpEncode(value)(using bigIntEncDec)
 
   private[storage] def storedNodeToBytes(storedNode: StoredNode): Array[Byte] = rlpEncode(
     storedNodeEncDec.encode(storedNode)

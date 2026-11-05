@@ -50,7 +50,7 @@ class PeerRequestHandlerSpec
   trait Fixtures:
     val peerId: PeerId = PeerId("test-peer-1")
     val otherPeerId: PeerId = PeerId("other-peer")
-    val peerActorProbe: TestProbe = TestProbe()(testKit.system.toClassic)
+    val peerActorProbe: TestProbe = TestProbe()(using testKit.system.toClassic)
     val peer: Peer = Peer(
       id = peerId,
       remoteAddress = new InetSocketAddress("127.0.0.1", 9000),
@@ -83,7 +83,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
 
     val sent = npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
@@ -135,7 +135,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -150,7 +150,7 @@ class PeerRequestHandlerSpec
     }
 
   it should "reply RequestFailed when the response timer fires" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe, timeout = 2.seconds)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -162,7 +162,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -171,7 +171,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessage(PeerRequestHandler.RequestFailed(0, peer, "connection closed"))
 
   it should "ignore a response from a different peer" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 
@@ -190,7 +190,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
     def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
       testKit.spawn(
@@ -225,7 +225,7 @@ class PeerRequestHandlerSpec
     UnitTest,
     NetworkTest
   ) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     given (GetByteCodes => MessageSerializable) = new GetByteCodes.GetByteCodesEnc(_)
     def request(id: Int, to: TypedActorRef[PeerRequestHandler.Result]) =
       testKit.spawn(
@@ -255,7 +255,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessageType[PeerRequestHandler.ResponseReceived[ByteCodes]].response.requestId shouldBe BigInt(11)
 
   it should "time out when the only reply has no matching id" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     given (GetTrieNodes => MessageSerializable) = new GetTrieNodes.GetTrieNodesEnc(_)
     testKit.spawn(
       PeerRequestHandler.behavior[GetTrieNodes, TrieNodes](
@@ -279,7 +279,7 @@ class PeerRequestHandlerSpec
     replyTo.expectMessage(PeerRequestHandler.RequestFailed(11, peer, "request timeout"))
 
   it should "ignore a disconnect event for a different peer" taggedAs (UnitTest, NetworkTest) in new Fixtures:
-    val npmProbe = TestProbe()(testKit.system.toClassic)
+    val npmProbe = TestProbe()(using testKit.system.toClassic)
     spawnPRH(npmProbe)
     npmProbe.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
 

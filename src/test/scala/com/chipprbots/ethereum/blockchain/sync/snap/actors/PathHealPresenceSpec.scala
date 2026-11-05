@@ -130,7 +130,7 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = initialRoot,
       networkPeerManager = peerManager,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = mptStorage,
       batchSize = 16,
       snapSyncController = controller.ref,
@@ -358,7 +358,7 @@ class PathHealPresenceSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = trie.root.hash,
         networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = new TestMptStorage(),
         batchSize = 16,
         snapSyncController = controller.ref,

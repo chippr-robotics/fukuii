@@ -76,11 +76,11 @@ class SubscriptionManagerSpec
   /** Returns a preMaterialized queue + source pair. */
   def makeQueue(): (SourceQueueWithComplete[String], Source[String, NotUsed]) = Source
     .queue[String](64, OverflowStrategy.dropHead)
-    .preMaterialize()(mat)
+    .preMaterialize()(using mat)
 
   /** Collects N messages from the queue source into a Future[Seq[String]]. */
   def collectN(source: org.apache.pekko.stream.scaladsl.Source[String, Any], n: Int): Future[Seq[String]] =
-    source.take(n).runWith(Sink.seq)(mat)
+    source.take(n).runWith(Sink.seq)(using mat)
 
   // ── helpers for typed ask ──────────────────────────────────────────────────
 
@@ -251,6 +251,6 @@ class SubscriptionManagerSpec
     // FUTURE: replace once SubscriptionManager delivery through preMaterialized
     // queues is made synchronization-point-observable (tracked in CHASE-QUEUE).
     Thread.sleep(200)
-    val messages2 = source2.take(1).completionTimeout(50.millis).runWith(Sink.seq)(mat)
+    val messages2 = source2.take(1).completionTimeout(50.millis).runWith(Sink.seq)(using mat)
     intercept[Exception](Await.result(messages2, 200.millis))
   }

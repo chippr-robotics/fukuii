@@ -99,7 +99,7 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = stateRoot,
         networkPeerManager = networkPeerManager.ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = storage,
         batchSize = 16,
         snapSyncController = snapSyncController.ref,
@@ -151,7 +151,7 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       val coordinator = HealingTrieFixtures.spawnCoordinator(
         stateRoot = stateRoot,
         networkPeerManager = networkPeerManager.ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = storage,
         batchSize = 16,
         snapSyncController = snapSyncController.ref,
@@ -237,7 +237,7 @@ class DecoupledHealSafetySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = root,
       networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 64,
       snapSyncController = controller.ref,

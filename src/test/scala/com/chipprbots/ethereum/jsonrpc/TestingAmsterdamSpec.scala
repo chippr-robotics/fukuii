@@ -128,7 +128,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       blockExecution,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       Some(pendingTxManager)
-    )(config, classicSystem.toTyped.scheduler)
+    )(using config, classicSystem.toTyped.scheduler)
 
     lazy val service = new TestingService(
       engineApi,
@@ -138,7 +138,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = ConfiguredTarget
-    )(config)
+    )(using config)
 
     val genesis: Block =
       val empty = InMemoryWorldStateProxy(

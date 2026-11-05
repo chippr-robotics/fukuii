@@ -18,9 +18,9 @@ trait TestSyncPeers:
   self: TestSyncConfig =>
   implicit def system: ActorSystem
 
-  val peer1TestProbe: TestProbe = TestProbe("peer1")(system)
-  val peer2TestProbe: TestProbe = TestProbe("peer2")(system)
-  val peer3TestProbe: TestProbe = TestProbe("peer3")(system)
+  val peer1TestProbe: TestProbe = TestProbe("peer1")(using system)
+  val peer2TestProbe: TestProbe = TestProbe("peer2")(using system)
+  val peer3TestProbe: TestProbe = TestProbe("peer3")(using system)
 
   val peer1: Peer =
     Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 0), peer1TestProbe.ref.toTyped[PeerActor.Command], false)

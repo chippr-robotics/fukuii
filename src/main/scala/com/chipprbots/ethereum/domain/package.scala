@@ -26,7 +26,7 @@ package object domain:
       override def toBytes(input: BigInt): Array[Byte] = rlp.encode[BigInt](input)
 
     def storageMpt(rootHash: ByteString, nodeStorage: MptStorage): MerklePatriciaTrie[BigInt, BigInt] =
-      MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(
+      MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(using
         HashByteArraySerializable(byteArrayBigIntSerializer),
         rlpBigIntSerializer
       )
@@ -40,7 +40,7 @@ package object domain:
       override def toBytes(input: BigInt): Array[Byte] = input.toByteArray
 
     def storageMpt(rootHash: ByteString, nodeStorage: MptStorage): MerklePatriciaTrie[BigInt, BigInt] =
-      MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(
+      MerklePatriciaTrie[BigInt, BigInt](rootHash.toArray[Byte], nodeStorage)(using
         HashByteArraySerializable(bigIntSerializer),
         bigIntSerializer
       )

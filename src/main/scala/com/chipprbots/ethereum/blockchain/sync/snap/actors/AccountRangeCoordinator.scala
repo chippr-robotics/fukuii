@@ -839,13 +839,13 @@ private[actors] class AccountRangeCoordinatorImpl(
             val selfRef = ctx.self
             Future {
               blocking(finalizeTrie())
-            }(accountTrieEc)
+            }(using accountTrieEc)
               .onComplete {
                 case Success(result) => selfRef ! TrieFlushComplete(gen, result)
                 // `Status.Failure` is Classic ask protocol with no Typed equivalent — route the
                 // exception through an explicit internal Command instead.
                 case Failure(ex) => selfRef ! TrieFlushFailed(gen, ex.getMessage)
-              }(accountTrieEc)
+              }(using accountTrieEc)
             // Switch to finalizing state so no message can touch the trie during flush.
             finalizing()
           else Behaviors.same

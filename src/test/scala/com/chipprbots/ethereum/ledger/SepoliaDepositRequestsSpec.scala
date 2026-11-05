@@ -118,16 +118,16 @@ class SepoliaDepositRequestsSpec extends AnyFlatSpec with Matchers:
   ) in new Setup:
     BlockExecution.depositContractFor(sepolia) shouldBe SepoliaDepositContract
 
-    val Right(Some(request)) = exec.collectDepositRequests(receipts)(sepolia): @unchecked
+    val Right(Some(request)) = exec.collectDepositRequests(receipts)(using sepolia): @unchecked
     request.head shouldBe BlockExecution.DepositRequestType.toByte
     request.length shouldBe 1 + 10 * 192
 
     // The block's own requests: its ten deposits and no EIP-7002 / EIP-7251 output.
     BlockExecution.computeRequestsHash(Seq(request)) shouldBe header.requestsHash.get
-    exec.validateRequestsHash(block, Seq(request))(sepolia) shouldBe Right(())
+    exec.validateRequestsHash(block, Seq(request))(using sepolia) shouldBe Right(())
 
   it should "keep only the contract's DepositEvent logs, in log order" taggedAs (UnitTest, ConsensusTest) in new Setup:
-    val Right(Some(request)) = exec.collectDepositRequests(receipts)(sepolia): @unchecked
+    val Right(Some(request)) = exec.collectDepositRequests(receipts)(using sepolia): @unchecked
     // Each 192-byte body ends with the deposit contract's little-endian 8-byte `index`. Ten consecutive indices mean the
     // ten DepositEvents, not the ten Transfers or the batcher's twelve logs, were taken, and in emission order.
     val indices = request.drop(1).grouped(192).map(body => BigInt(1, body.takeRight(8).reverse.toArray)).toSeq
@@ -141,6 +141,6 @@ class SepoliaDepositRequestsSpec extends AnyFlatSpec with Matchers:
     val undeclared = sepolia.copy(depositContractAddress = None)
     BlockExecution.depositContractFor(undeclared) shouldBe BlockExecution.DepositContractAddress
 
-    exec.collectDepositRequests(receipts)(undeclared) shouldBe Right(None)
-    val Left(error) = exec.validateRequestsHash(block, Nil)(undeclared): @unchecked
+    exec.collectDepositRequests(receipts)(using undeclared) shouldBe Right(None)
+    val Left(error) = exec.validateRequestsHash(block, Nil)(using undeclared): @unchecked
     error.describe should include("INVALID_REQUESTS")

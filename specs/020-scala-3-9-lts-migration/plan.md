@@ -14,7 +14,7 @@ tooling, then libraries (none are forced). GT-1 sized the work:
 
 - The rewrite chain must run on the 3.9 compiler.
 - 8 hand fixes are needed first.
-- Only two steps change source: 3.4 (16 files) and 3.7 (514 `using` insertions in 187 files).
+- Only two steps change source: 3.4 (16 files) and 3.7 (514 `using` insertions in 187 files at GT-1; measured at PR 5: 564 in 197 files, the tree having grown).
 - Given prioritisation surfaces at 371 sites. 364 of them come from one duplicated-`given` pattern in
   `RLPImplicits`, which is fixed at its 9 definitions (research R-5).
 - The final tree has 91 warnings against a DC-4 ceiling of 605.
@@ -52,7 +52,7 @@ improvement is expected (3.8 lazy-val codegen, 3.9 stdlib).
 (DC-2); the warning ratchet only tightens (DC-4); the host never runs sbt beside a live node, and the differential never runs beside a live
 node or an sbt build.
 
-**Scale/Scope**: 7 PRs plus 1 docs-only PR before them. Source diff: 8 hand fixes, 16 files at 3.4, 187 at 3.7,
+**Scale/Scope**: 7 PRs plus 1 docs-only PR before them. Source diff: 8 hand fixes, 16 files at 3.4, 187 at 3.7 (197 measured at PR 5),
 about 2 definition-site files for DC-3, P3b (≤ 95 `implicit class` sites, scope per S4), and about 10 ratchet sites.
 About 40 minutes of clean compile per full chain on the 4-core host (GT-1 §7).
 
@@ -102,7 +102,7 @@ import property throughout.
 | **2** | Import guard: `.scalafix.conf` `DisableSyntax.regex`; `scripts/ci/check_scala_imports.sh` and its self-test; a step in `ci.yml` | DC-6 | ~4 files | prism | Q-2 proofs (grep exit 1 on `import x._`; scalafix error on a scratch file) |
 | **3** | (a) 8 hand-fix commits (5 × E172 `Ordering` → `using`, 2 of them SNAP main; 3 × E171 `McpService`), each compiling on 3.3.8 first; (b) `scala-3` 3.9.0, `scapegoatVersion` 3.4.1, sbt-scalafix 0.14.9 (if not in PR 1), drop `-Ykind-projector`, `-source:future` → `-source:3.4-migration`, with `E198` and `unchecked` demoted to `:w` (as GT-1 did; the 13 unused imports 3.9 finds would otherwise be errors before the rewrite deletes them); (c) the 3.4 rewrite output commit (16 files, +19/−33, incl. 13 unused-import deletions); (d) flag → `-source:3.4` and both ratchets restored to `:error`; (e) format-only commit if needed; `ci.yml` names drop "3.3.8" | DC-2 step 3.4, DC-7 | 24 files | wraith (fallout); **forge** (`vm/OpCode.scala` infix/backticks, `rlp/package.scala`); herald glance (`MessageDecoders` import deletions) | differential (both ranges); a one-off `-source:3.9` compile for the record (≤ 605, GT-1 C2) |
 | **4** | (a) 3.5 step commit (no diff; record); (b) 3.6 step with `dc3-sites.md` (381 rows; GT-1 measured 371); (c) DC-3 definition-site commit: collapse `RLPImplicits` duplicates (after `git log -S`); (d) DC-3 commit: 7 `JsonRpcController` sites made explicit; flag → `-source:3.6`; a one-off `-source:3.7-migration` compile shows 0 E205 | DC-2, DC-3 | ~3 files | **forge + beacon** (`rlp/`); mithril, conduit (jsonrpc) | differential after (c) alone; rpc-compat unchanged |
-| **5** | (a) 3.7 rewrite commit (514 `using`, 187 files; word-diff shows only `using`); (b) P3b commits: `implicit class` → `extension`, S4 scope, split per bucket; flag → `-source:3.7`. May split as 5a/5b if the diff is unreviewable | DC-2, DC-3, G-4 | 187 files + P3b | mithril (P3b); forge/beacon (58 consensus files) | differential; S4 grep = 0 |
+| **5** | (a) 3.7 rewrite commit (514 `using`, 187 files; word-diff shows only `using`. Measured 2026-11-04: 564 `using` in 197 files, every changed line differing only by inserted `using `; split taken: 5a = rewrite + format-only + flag, 5b = P3b. Of the 65 `implicit class` sites in `src/main` that S4's grep finds, 54 are message and codec conversion wrappers (`… (val underlyingMsg: X) extends MessageSerializableImplicit` / `RLPSerializable`) that an `extension` cannot replace: 5b's plan decides them per site); (b) P3b commits: `implicit class` → `extension`, S4 scope, split per bucket; flag → `-source:3.7`. May split as 5a/5b if the diff is unreviewable | DC-2, DC-3, G-4 | 187 files + P3b | mithril (P3b); forge/beacon (58 consensus files) | differential; S4 grep = 0 |
 | **6** | (a) 3.8 and (b) 3.9 step commits (no diff; check the `@unchecked` probe, R-9); (c) flag → **`-source:3.9`**; (d) ratchet commits per R-6 (bucket A fixes, dated `@nowarn` deferrals, promotions `E205`, `E028`, implicit-`using` msg); `dc4-ledger.md` | DC-2, DC-4, DC-5 | ~10 sites | wraith; forge (`vm/PrecompiledContracts`); eye | **full DC-5 run**: differential and `[IMPORT-TIMING]` both ranges, forge and beacon sign-off; ethereum/tests dispatch; SyncTest; Tier 2 coverage |
 | **6b** | **Scalafix and scalafmt ratchet (#1656; user decision 2026-10-20: part of 020's implementation).** (a) the 37 test files scalameta cannot parse (35 × `) in new Fixture:`, 2 × `;` expected): first re-measure on the 3.9 tree with PR 1's scalafix (a newer scalameta may parse them); otherwise rewrite those `in new X:` bodies to the braced or `in new X {}` form, format-only, one commit; (b) the automatic `scalafixAll` rewrite (OrganizeImports and friends; 209 files on 3.3.8), one commit, no hand edits; (c) the `DisableSyntax.return` findings (58; 51 in `src/main`), one commit per file group, behaviour-neutral (`if/else`, `boundary`/`break`); consensus files (`ledger/BlockExecution`, `ledger/BranchResolution`, `consensus/eip1559/BaseFeeCalculator`, `vm/*Tracer`) separately; (d) `formatCheck` (every module's `scalafixAll --check` and `scalafmtCheckAll`) becomes a CI step and a required check | DC-6, DC-8, constitution IV | ~210 files | **forge + beacon** (consensus `return` removals); prism (rest) | per-PR set; `sbt formatCheck` green; differential (both ranges) after (c) |
 | **7** | DC-9 and FR-009 text: CLAUDE.md build table; `scala3-style.md` (S1 status stale, S3/S4 status, S6 `future` text, a new `-source` mapping section); `scala3-given-migration.md` (P3b done); `warning-ratchet.md` (new ids, verified grep); audit §1 pins; `docs/development/{scala-build,contributing}.md`; release-note draft | DC-9 | docs | **prism** (protocol edits only) | greps in the protocols run green on the tree |
@@ -148,7 +148,7 @@ src/main/.../snap/actors/AccountRangeCoordinator.scala,
 16 files of the 3.4 rewrite (incl. vm/OpCode.scala, rlp/.../package.scala)     # PR 3
 rlp/src/main/scala/com/chipprbots/ethereum/rlp/RLPImplicits.scala              # PR 4 (DC-3)
 src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcController.scala         # PR 4 (DC-3)
-187 files of the 3.7 rewrite + P3b implicit-class files                         # PR 5
+187 files of the 3.7 rewrite (197 measured) + P3b implicit-class files          # PR 5 (5a, 5b)
 vm/PrecompiledContracts.scala, crypto/{EcKeyGen,SignatureValidator}.scala,
   regular/BlockFetcherState.scala, snap/ChainDownloader.scala, 2 @nowarn sites  # PR 6
 .specify/memory/constitution.md; docs/adr/infrastructure/INF-009-*.md + READMEs # PR 0
