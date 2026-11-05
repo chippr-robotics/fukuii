@@ -335,7 +335,9 @@ object NetworkPeerManagerActor:
                   "TIMED_CALIBRATION: forwarding td={} blockNum={} source={}",
                   td,
                   blockNum,
-                  if blockNum > BigInt(0) then "NEW_BLOCK_EXACT" else "ETH68_STATUS_ONLY"
+                  // A NewBlock, or an ETH68 STATUS plus the peer's probed height: the receiver scales it to our
+                  // height, which is an estimate (#1654).
+                  if blockNum > BigInt(0) then "PEER_TD_WITH_BLOCK" else "ETH68_STATUS_ONLY"
                 )
               else
                 log.info(
