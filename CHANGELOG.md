@@ -42,13 +42,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defined` for a byte with no name), in `eth_estimateGas` and the `eth_createAccessList` `error` field too. GraphQL `call`
   now reports a failed frame with `status` 0, the frame's output as `data` (so a revert reason reaches the client) and
   the gas it used. Before, an out-of-gas frame had `status` 1, and a revert had empty `data` and `gasUsed` 0.
+- **SNAP healing completes on a live chain without walking the whole state trie (spec 022, #1671). Both chains.**
+  Healing used to prove the state complete by walking every stored trie node: about 17 h and 787M nodes on Sepolia, and
+  16-20 h on ETC mainnet. The Sepolia pivot moved about every 12 minutes, so the walk's result was thrown away and
+  healing fell back to slow on-demand repair. A healed node now reaches disk only after its whole subtree is present,
+  so a node on disk means its subtree is there, and healing is done when nothing is pending, held or excluded and the
+  current root is present.
+  - **What changed in the download and in healing.** Heal requests are keyed by trie position (Path) or by hash with
+    parent edges (Hash), so a node needed at two positions is no longer lost, and two accounts with the same storage
+    root both get their storage trie healed (#1682). A healed node waits in memory until its subtree is present (128 MiB
+    by default, `fukuii.sync.snap-sync.healing.held-memory-limit`), then it and the ancestors it completes are written
+    in one batch (#1684). Every give-up (an account skipped, abandoned at a storage force-complete, a root mismatch,
+    unservable bytecode) is recorded durably, so an incomplete account never looks complete (#1685). Gaps at the
+    account-to-storage edge are closed (#1690, #1691): an account with storage but no code now gets its storage
+    fetched, and a storage reply with no slots no longer marks an account done when nothing was written; the account is
+    recorded as excluded. The filter that de-duplicates code hashes was sized for 3M and, by calculation from Sepolia's
+    logs, never queued about 17% of that chain's code hashes; it now holds 40M (about 206 MiB) and warns if a sync
+    reaches that load.
+  - **When the walk still runs.** A marker records that everything on disk was written under this rule, or covered by a
+    clean walk (#1688); where it stands, healing completes with no walk and logs `[HEAL-COMPLETE] ... no full-trie gate
+    walk` (#1695). The walk stays for a datadir an earlier jar wrote (a SNAP sync resumed on it pays one walk, once), a
+    run that lost track, a fresh Path account phase over existing nodes, `pruning.mode = inmemory` and deferred
+    merkleization.
+  - **Measured.** Mordor (Hash), fresh datadir, public peers: hand-off 239 s after start with the root equal to the
+    pivot's `stateRoot`, then 24 h following the head with no stuck sync and no ERROR lines (T062). Sepolia (Path),
+    fresh datadir, public peers, NVMe host: storage done to hand-off 1 h 24 min 46 s, no gate walk, and the root
+    matched block 12072545's `stateRoot` (T063, #1718). The 24 h head-follow was not run on Sepolia: the copy described
+    under Known issues was still running when T063 was stopped.
+  - **Upgrade.** The persisted healing frontier is retired: its column family is cleared once at the first start, and
+    the disk it held is returned only when RocksDB compacts it (the size is not measured) (#1688). The `sync.conf` keys
+    `healing-frontier-persistence`, `scoped-heal-verification`, `scoped-heal-max-paths` and `pruned-heal-verification`
+    are gone, and a config that still sets them is ignored (#1700, #1701).
+- **SNAP trie-node and bytecode replies are matched to their request by id, and a peer that does not echo the id now
+  times out (#1693). Every SNAP sync.** `TrieNodes` and `ByteCodes` were taken from a peer whichever request they
+  answered, so two requesters on one peer could cross. snap/1 requires the echo and fukuii's own server does it.
+  geth-family, Besu and Nethermind are expected to comply; this was checked from the spec and from memory, not from
+  their code, and Erigon and Reth are not verified.
+- **RPC: a request's `type` field is ignored and the transaction type is inferred from the fields, as go-ethereum
+  does (#1660, #1661). Every RPC path, both chains.** It covers `eth_call`, `eth_estimateGas`, `eth_createAccessList`,
+  the `debug` and `trace` call methods, `eth_simulateV1`, `eth_sendTransaction`, `eth_signTransaction`,
+  `eth_fillTransaction` and `personal_*`. This reverses the one deviation from geth that 0.10.0 documented (#1633):
+  `gasPrice` with an access list and no `type` was rejected, and now builds a type 0x1 transaction. On ETC and Mordor,
+  `"type":"0x2"` with no 1559 fields before Olympia now builds a legacy transaction instead of returning -32602. A
+  type that is not active is still never signed or sent, because the activation check works from the fields present.
+- **`eth_simulateV1` follows go-ethereum where a 159-case comparison with Erigon on Ephemery found differences (#1660,
+  #1661).** Each item was settled against go-ethereum master's source. With `traceTransfers`, a contract creation's
+  transfer log records the created address, not zero. `blockOverrides.blobBaseFee` reaches `BLOBBASEFEE`, in child
+  frames too. `state` and `stateDiff` on one account, and moving a precompile onto an address already overridden in the
+  same set, return -32000; malformed block and state override values return -32602 instead of being dropped silently,
+  and so does an empty `blockStateCalls`. Per-call gas defaults to the block's remaining gas; asking for more returns
+  -38015 `block gas limit reached`, then gas is clamped to the 50M budget. The default coinbase is the previous
+  header's, not zero, and `blockOverrides.withdrawals` is applied from Shanghai on (credited before the request system
+  calls, committed in the withdrawals root, returned in the body). Results change wherever the default coinbase, gas
+  clamping or withdrawals matter. Still open: the failure text of a precompile, and a multi-block system-contract
+  `stateRoot` difference against Erigon that is not yet checked against geth. On ETC, simulate's PoW block reward uses
+  ETH's 5/3/2 schedule, not ECIP-1017; that predates this change and is not fixed.
+
+### Added
+- **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a
+  throttled walk (25% duty cycle) from the current head checks every node's hash, every account's code and every
+  storage trie, fetches what is missing and logs each hole with its position. It does not block import, and it replaces
+  the blocking recovery scan at start: a start with a recovery flag down goes straight to regular sync. A node that
+  fails its hash check is deleted only after 3 failed passes at least 1 h apart; a node that passes it is never
+  deleted. A node that never ran SNAP owes nothing; every other node, an upgraded one included, owes one full pass. On
+  Mordor a clean pass over 5.54M nodes took 20 to 34 minutes; the length at Sepolia and mainnet sizes is not measured
+  (T063 stopped before the audit ran). It is on by default, is switched off with
+  `fukuii.sync.snap-sync.background-audit.enabled = false`, and never runs under `pruning.mode = inmemory`. Holes met on
+  demand are counted by `state_ondemand_fetch_total` and `engine_state_hole_total{kind}` (#1695).
+- **GraphQL `Block` gains `slotNumber` and `blockAccessListHash` (#1629, #1668).** They carry geth's names, types and
+  nullability (`Long` and `Bytes32`, both nullable) and are null before Amsterdam, so always null on ETC. No other field
+  changes, so a client that does not select them sees the same output.
 
 ### Fixed
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
+- **The copy of the Path trie into the hash-keyed store after SNAP no longer runs out of heap (#1724). Path-scheme ETH
+  chains; it also closes the same growth on ETC.** On Sepolia (T063, #1718) a 4 GiB heap was exhausted 17 minutes after
+  a clean hand-off: live heap rose from 146 MiB to 4,020 MiB in about 15 minutes, with one reorg-undo map entry (#1471)
+  per published node. A second out-of-memory would have followed about 13 minutes later: the copy wrote a snapshot row
+  per node, and the prune at the 64th save after hand-off built every one of those keys in memory. The copy now uses a
+  bulk-load store that keeps no undo entries and writes no snapshot rows, and a prune of more than 10,000 rows runs in
+  bounded writes that an interruption resumes. The Hash-scheme SNAP download and the checkpoint import pushed whole
+  syncs through one instance of the same store, so the growth was there too. With the fix the live set was 49 MiB after
+  a full GC and the heap stayed under 600 MiB after collections for the whole run, about 10.5 h (#1718). A datadir that
+  died mid-copy restarts safely on this build: `SnapSyncDone` is written only after the copy, so the restart heals on
+  the same pivot and copies again from the start. Nodes the crashed copy had written stay unprunable, which wastes space
+  but is not a correctness issue.
+- **A restart no longer overwrites an exact stored head weight with a peer estimate (#1654, #1723). ETC/Mordor; ETH
+  calibration writes stop too.** Since 0.7.0, the calibration 30 s after regular sync starts, and the TD-PROXY-GAP
+  handshake trigger, replaced the head's stored total difficulty with `peerTD x ourBest / peerMax` even when the stored
+  value was exact. Fork choice compares stored weights, so each rewrite left a jump: on ETC, right after a restart, a
+  node could reject a heavier chain or stick on a lighter branch, and STATUS and `admin_nodeInfo` carried the wrong
+  value. The head is now classified first. An exact head (its parent's weight is plausible and head = parent +
+  difficulty) is left alone; a head that does not follow from a plausible parent becomes parent + difficulty; otherwise
+  the old estimates run, now logged as `PEER_INTERPOLATED_ESTIMATE` or `PEER_STATUS_ESTIMATE`. A peer is no longer
+  evicted over a total-difficulty gap while the head is exact. The old anchor floor (1e13 per block) was never met on
+  Mordor, at about 9e6 per block, so its local-chain anchor never applied; it is replaced by the plausibility floor
+  used for the parent's weight (genesis + 131072 per block). After the merge a normally synced head is exact, so the
+  writes stop on PoS chains too. Jumps that earlier releases already wrote are not repaired; that is planned for
+  0.12.0. This closes the 0.10.0 known issue "Total difficulty rewritten on restart".
+- **A stored trie node whose bytes do not decode is treated as missing, is fetched again, and blames no peer (#1709).
+  Both chains.** Import took the decode failure for a bad block from the peer. On Mordor, with the top miner's account
+  leaf corrupted, it blacklisted between 183 and 2,200 honest peers depending on the kind of corruption, evicted up to
+  401 blocks and stayed stuck, and a leaf corrupted to the empty node made `eth_getBalance` return 0x0 for a funded
+  account. The node is now deleted, after a keccak re-check so a good node is never deleted, and fetched, with one
+  `[STATE-CORRUPT]` ERROR and no strike, eviction or fork-detect. Re-run on Mordor, each case was caught in 14-53 s and
+  repaired by one on-demand fetch or, after three exhausted fetches (about 10 min), by a re-SNAP of about 6.5 min, and
+  the balance and `stateRoot` then equalled the public RPC's. Behaviour changes: an RPC read of a corrupt node answers
+  "node not found" (before, a silent 0x0 or an internal error); `engine_newPayload` over a corrupt parent-state node
+  answers ACCEPTED, not INVALID; a corrupt node that fetching cannot repair escalates to a re-SNAP after about 10
+  minutes, which is cheap on Mordor and costly on Sepolia or mainnet. A corrupt node that import never touches can still
+  stall the heal phase of a re-SNAP; that predates this change and is planned for 0.12.0.
+- **A missing node or contract under `engine_newPayload` or import is repaired without stopping regular sync, and it
+  takes longer to trigger a re-SNAP (#1694, #1697). Both chains.** #1694 reported that nothing repairs a hole met under
+  `engine_newPayload`. Measured on Ephemery, import does: `newPayload` stores the block by hash and answers ACCEPTED,
+  and import then fetches the node (storage holes at the head, 12.8 s and 24.5 s). What was wrong: on a SNAP-synced node
+  the first missing contract went straight to a bulk recovery scan that reads the whole state with regular sync stopped
+  (98 ms there, estimated at hours on Sepolia). Each miss is now fetched with `GetByteCodes` first (23.9 s, against
+  about 60 s with a scan), and the scan is asked for only after 8 distinct misses in a process, once. A storage hole met
+  while writing has no position; import used to ask for the storage root, and the peer's honest answer got it
+  blacklisted. It now locates the position by walking what is present (up to 4,096 reads) and asks no peer where it
+  finds none. Only exhausted fetches count towards a re-SNAP: before, each 30 s retry of the blocked import counted too,
+  so a hole no peer served for about 150 s cost a re-SNAP after 2.5 to 3 minutes. It now takes three exhausted fetches
+  with no block imported between them (at least about 17 minutes), or about 10 minutes for a storage hole that cannot be
+  located. This applies to ETC as well. A hole in a large storage trie, such as a token's or an exchange's, is mostly
+  not located within 4,096 reads and so goes to the re-SNAP.
+- **SNAP storage sync recovers from a genuine stall that follows an early force-complete (#1708). Every SNAP sync, since
+  0.7.0.** A storage force-complete during the account phase latched its guard for good, so a later genuine stall could
+  never force-complete and SNAP hung instead of recovering. The guard now re-arms when the account phase ends; what the
+  earlier force-complete recorded stays in the excluded set.
+- **Storage recovery can no longer be marked done while an account still lacks proven storage (#1712). Every SNAP
+  sync; introduced after 0.10.0 by spec 022 slice 3 (#1685).** The excluded set was read in two scans, and the healing
+  coordinator promoting an entry from dormant to active between them hid it, so `storageRecoveryDone` could be set with
+  an entry left and the next start skipped the recovery scan for that account. The window was about 60 microseconds and
+  needed a hand-off while healing was promoting, for example after a re-peg. Both scans and every write to the set now
+  hold one lock. An entry inserted between finalisation's read and its flags commit is still not seen; that is planned
+  for 0.12.0.
+- **The SNAP controller no longer hangs after going dormant, and no longer crashes on a second capability check (#1515,
+  #1516, #1662). Every SNAP sync.** Three paths (state-validation retries exhausted, pivot repeatedly unservable,
+  account-stall limit) entered dormant mode but discarded the dormant behaviour they got back, so the controller stayed
+  in `syncing`, dropped the wake-up and SNAP hung for good. A capability check while the account coordinator was already
+  running spawned a second one under the same name, which threw `InvalidActorNameException` and crashed the controller.
+- **A restart in the middle of SNAP resumes SNAP when `do-snap-sync = false`, and storage recovery uses the node's
+  storage scheme (#1434, #1595, #1666).** With `do-snap-sync = false`, a node holding an unfinished SNAP sync (accounts
+  complete, or the best block still the SNAP pivot) went to regular sync on a half-built trie after a restart. It now
+  resumes SNAP and logs a WARN; a finished, checkpoint-imported or regular-synced node never re-enters SNAP. ETC and
+  Mordor ship with `do-snap-sync = true`, so their default path is unchanged. The pivot's header, chain weight and best
+  block are also written in one batch, so a crash cannot leave a best block without its header. Storage recovery had
+  spawned its coordinator with the Hash scheme and no progress store; on Path-scheme ETH nodes recovered storage was
+  written hash-keyed, where the Path reader may not find it. It now uses the node's scheme.
+- **Three storage-integrity fixes (#1607, #1549, #1581, #1667). No state root or trie content changes.**
+  `ReadOnlyNodeStorage`, the scratch buffer behind `eth_call`, `eth_estimateGas`, `eth_simulateV1`, replay, snap serving
+  and the checkpoint exporter, applied removals to content-addressed nodes, so an earlier root in the same buffer could
+  lose a node it still referenced; it now ignores removals (block import does not use it). `flushTrieNodeWrites`
+  cleared its buffer before the write succeeded; it now commits and then clears, and a failed write keeps the buffer
+  and throws. With `pruning.mode = inmemory`, SNAP finalization and checkpoint import could record `snapSyncDone` while
+  the ingested state lived only in the node cache; both now force the state to disk before the flags are written.
+  Archive and basic pruning, the ETC default, were not affected.
+- **A peer disconnect is reported at once, not 15 s late (#1527, #1669). Both chains.** `PeerActor` ignored
+  `RlpxTerminated` once disconnected and waited out the 15 s `disconnectPoisonPillTimeout` even when its RLPx
+  connection was already dead, which delayed `PeerTerminated` and `PeerDisconnected`. It now stops when its own
+  connection ends. This covers a remote that closes TCP; against a silent remote the timer still governs. Maintained
+  peers redial about 15 s sooner after a local disconnect.
+- **SNAP downloads and other peer-driven paths no longer slow down as decoded lists grow (#1672, #1673, #1675, #1678).**
+  RLP lists decoded into an immutable `Queue`, where reading item i costs O(i), so every indexed walk over a decoded
+  list was quadratic, and peers choose several of those lengths. In a Mordor SNAP sync against one local core-geth,
+  0.10.3 fetched 903k accounts (34% of the keyspace) in 23 minutes at about 640/s and falling, with fukuii at 350% CPU
+  in `Queue.apply`; with the fix it fetched all 2.72M in 8 minutes at about 5,400/s and about 80% CPU, and the whole
+  SNAP sync took 25.6 minutes. Serving `GetTrieNodes` was quadratic in the peer's path list too, a way to amplify our
+  CPU use. RLP lists now decode as `Vector`s, with the same accepted inputs, values and re-encoded bytes and an
+  unchanged `fukuii-rlp` public API, and the transaction pool, receipt accumulation, the ledger's persist step, receipt
+  presence checks and healing's attempt counting were made linear. Measured before the change: the `PooledTransactions`
+  size check took 155 ms for 4,096 transactions and 2.7 s for 16,384, on the pool actor; the ledger's change set took
+  128 ms for 5,000 dirty entries and 2 s for 20,000, per persist. Two limits are new, both go-ethereum's: at most 256
+  hashes per `GetPooledTransactions`, and at most 4,096 tracked announced hashes per peer.
+- **The transaction sender cache is keyed by chain id as well as hash (#1629, #1668).** A legacy EIP-155 transaction
+  whose `v` names another chain recovers a garbage sender, or none, under a mismatched config, and that result was then
+  served to callers on the right config. On a single-chain node the new key is a relabelling, so nothing changes there.
 
 ### Known issues
+- **Path-scheme ETH chains copy the whole state into a second store after SNAP, and the node does not follow the chain
+  until the copy ends (Sepolia, mainnet, Platåberget; removal planned in spec 018).** After SNAP completes on a chain
+  that uses the Path storage scheme, fukuii copies the whole state into a second, hash-keyed store before it can
+  execute blocks. It logs `[PATH-PUBLISH] account=... storage=...` while it runs and `[PATH-PUBLISH] done` at the end;
+  until then the node executes no block and does not follow the chain. Measured on Sepolia (T063, #1718), on an NVMe
+  host: the account trie (215M nodes) took 79 min. The storage tries ran at a rate that fell from about 36k to 9k
+  nodes/s as the store grew, and the run was stopped at roughly 40-50% of the copy after 9.3 h, the total being an
+  estimate. A full copy is expected to take days. Expect this wait after a Path-scheme SNAP sync. Restarting during
+  the copy starts it again from the beginning. ETC and Mordor use the Hash scheme and need no copy, so they are not
+  affected; Ephemery also uses the Path scheme, but its state is small. Removing the copy (path-addressed reads,
+  per-block changesets, SNAP writing once) is planned in spec 018, and 0.11.0 ships no workaround.
 - **Plan disk for Sepolia, and for a full-history node generally: backfill has no limit and nothing stops at a full disk
   (#1483).** A SNAP sync of Sepolia needs about 300-340 GB when it hands off to regular sync. It then backfills the whole
   block history into the same datadir, roughly another 500-900 GB (estimated from a sample of the chain at block 12.04M,
