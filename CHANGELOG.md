@@ -138,9 +138,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old estimates run, now logged as `PEER_INTERPOLATED_ESTIMATE` or `PEER_STATUS_ESTIMATE`. A peer is no longer
   evicted over a total-difficulty gap while the head is exact. The old anchor floor (1e13 per block) was never met on
   Mordor, at about 9e6 per block, so its local-chain anchor never applied; it is replaced by the plausibility floor
-  used for the parent's weight (genesis + 131072 per block). After the merge a normally synced head is exact, so the
-  writes stop on PoS chains too. Jumps that earlier releases already wrote are not repaired; that is planned for
-  0.12.0. This closes the 0.10.0 known issue "Total difficulty rewritten on restart".
+  used for the parent's weight (genesis + 131072 per block). After the merge a normally synced head is exact, so on
+  Sepolia and mainnet the writes stop too; chains whose total difficulty never clears that floor (Ephemery,
+  Platåberget, Hoodi) are not classified exact and keep the old estimate writes. Jumps that earlier releases already
+  wrote are not repaired; that is planned for 0.12.0. This closes the 0.10.0 known issue "Total difficulty rewritten
+  on restart".
 - **A stored trie node whose bytes do not decode is treated as missing, is fetched again, and blames no peer (#1709).
   Both chains.** Import took the decode failure for a bad block from the peer. On Mordor, with the top miner's account
   leaf corrupted, it blacklisted between 183 and 2,200 honest peers depending on the kind of corruption, evicted up to
@@ -152,7 +154,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "node not found" (before, a silent 0x0 or an internal error); `engine_newPayload` over a corrupt parent-state node
   answers ACCEPTED, not INVALID; a corrupt node that fetching cannot repair escalates to a re-SNAP after about 10
   minutes, which is cheap on Mordor and costly on Sepolia or mainnet. A corrupt node that import never touches can still
-  stall the heal phase of a re-SNAP; that predates this change and is planned for 0.12.0.
+  stall the heal phase of a re-SNAP; that predates this change and is planned for 0.12.0. Only bytes that fail to
+  decode, or a bare value that fails its hash, are caught when read: a node that parses but holds the wrong content is
+  read as it is, so a block over it can still be answered INVALID. The background audit, which checks every node's
+  hash, is what finds those.
 - **A missing node or contract under `engine_newPayload` or import is repaired without stopping regular sync, and it
   takes longer to trigger a re-SNAP (#1694, #1697). Both chains.** #1694 reported that nothing repairs a hole met under
   `engine_newPayload`. Measured on Ephemery, import does: `newPayload` stores the block by hash and answers ACCEPTED,
@@ -237,24 +242,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
     length`).
 
-  On ETC, simulated blocks pay ETH's 5/3/2 PoW reward, not ECIP-1017. Block import and mining are not affected by any
-  of these.
-- **Path-scheme ETH chains copy the whole state into a second store after SNAP, and the node does not follow the chain
-  until the copy ends (Sepolia, mainnet, Platåberget; removal planned in spec 018).** After SNAP completes on a chain
-  that uses the Path storage scheme, fukuii copies the whole state into a second, hash-keyed store before it can
-  execute blocks. It logs `[PATH-PUBLISH] account=... storage=...` while it runs and `[PATH-PUBLISH] done` at the end;
-  until then the node executes no block and does not follow the chain. Measured on Sepolia (T063, #1718), on an NVMe
-  host: the account trie (215M nodes) took 79 min. The storage tries ran at a rate that fell from about 36k to 9k
-  nodes/s as the store grew, and the run was stopped at roughly 40-50% of the copy after 9.3 h, the total being an
-  estimate. A full copy is expected to take days. Expect this wait after a Path-scheme SNAP sync, and **do not restart
-  the node during the copy**: a restart begins the copy again from the start (SNAP itself is not repeated), and every
-  node copied before the restart keeps one extra reference that is never pruned. That costs disk space only; state
-  reads, block execution and proofs are unaffected, and only a fresh sync into an empty datadir removes it. ETC and
-  Mordor use the Hash scheme and need no copy, so they are not
-  affected; Ephemery also uses the Path scheme, but its state is small. Removing the copy (path-addressed reads,
-  per-block changesets, SNAP writing once) is planned in spec 018, and 0.11.0 ships no workaround.
+  On ETC, simulated blocks pay ETH's 5/3/2 PoW reward, not ECIP-1017. The differences listed do not touch block import
+  or mining; the gap request, though, stalls the whole node, import included.
+- **Path-scheme ETH chains copy the whole state into a second store after a SNAP sync, and the node does not follow
+  the chain until the copy ends (removal planned in spec 018).** This applies only when SNAP sync is switched on
+  (`fukuii.sync.do-snap-sync = true`); the shipped Sepolia, mainnet, Ephemery and Platåberget configs sync by
+  importing blocks and never reach it. After SNAP completes on a chain that uses the Path storage scheme, fukuii copies
+  the whole state into a second, hash-keyed store before it can execute blocks. It logs `[PATH-PUBLISH] account=...
+  storage=...` while it runs and `[PATH-PUBLISH] done` at the end; until then the node executes no block, the consensus
+  client sees it as syncing, and a validator should not rely on it. Measured on Sepolia (T063, #1718), on an NVMe host:
+  the account trie (215M nodes) took 79 min; the storage tries ran at a rate that fell from about 36k to 9k nodes/s as
+  the store grew, and the run was stopped at roughly 40-50% of the copy after 9.3 h (the total is an estimate). A full
+  copy is expected to take days on Sepolia; mainnet, about 3-4 times larger, has not been run and should be expected to
+  take weeks. After the copy the node still executes every block since the SNAP pivot. **Do not restart the node
+  during the copy**: a restart begins the copy again from the start (the SNAP download is kept; a restart long after
+  the hand-off may first heal the state forward to a newer pivot), and every node copied before the restart keeps one
+  extra reference that is never pruned. That costs disk space only; state reads, block execution and proofs are
+  unaffected, and only a fresh sync into an empty datadir removes it. The Sepolia hand-off also left 30 accounts
+  excluded, for on-demand fetches and the background audit to repair: a block that touches one waits on a fetch, and
+  one that cannot be fetched ends in a re-SNAP, which on a Path chain means the copy again. ETC and Mordor use the Hash
+  scheme and need no copy. 0.11.0 ships no workaround.
 - **Plan disk for Sepolia, and for a full-history node generally: backfill has no limit and nothing stops at a full disk
-  (#1483).** A SNAP sync of Sepolia needs about 300-340 GB when it hands off to regular sync. It then backfills the whole
+  (#1483).** A SNAP sync of Sepolia needs, by estimate, about 310-340 GiB once the post-SNAP copy above has finished
+  (extrapolated from T063, whose datadir was 255 GiB with roughly half of the copy done). It then backfills the whole
   block history into the same datadir, roughly another 500-900 GB (estimated from a sample of the chain at block 12.04M,
   with receipts the least certain part). Mainnet needs far more. There is no history expiry yet, and a separate path for
   history is not available. Check free space before you start a sync, and watch it during backfill. To skip backfill, set
@@ -262,7 +272,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before the point it synced to.
 - **Running an older build on a datadir this one has synced.** An older binary neither reads nor clears the healing
   invariant marker, so what it writes is not covered by it, and a later upgrade cannot tell. After going back up, start
-  once with `-Dfukuii.snap.clearDoneOnStart=true`, which removes the marker and runs healing again.
+  once with `-Dfukuii.snap.clearDoneOnStart=true`, which removes the marker and runs healing again. An older build
+  also finds the healing-frontier column family emptied by this release's one-time cleanup, so an older build
+  restarted in the middle of healing pays a full verification walk.
 
 ## [0.10.0] - 2026-10-20
 
