@@ -441,7 +441,9 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private def startPathPublish(pivot: BigInt, pivotRoot: ByteString): Unit =
     val pns =
       stateIngest.pathNodes.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
-    val target = getOrCreateMptStorage(pivot)
+    // Not the cached per-pivot store: the publish is a bulk load of every node of the state, and gets the store that
+    // keeps no per-node undo rows for it. Its counts are the same.
+    val target = stateIngest.stateTries.getBulkLoadStorage(pivot)
     // Capture everything the worker needs on the actor thread: ActorContext accessors are actor-thread-only.
     val self = ctx.self
     val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
