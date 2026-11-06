@@ -10,6 +10,7 @@ import scala.concurrent.duration.*
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST.*
+import org.json4s.jvalue2monadic
 import org.json4s.native.JsonMethods.parse
 import org.scalatest.EitherValues
 import org.scalatest.OptionValues
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.crypto.sha256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.jsonrpc.CallTxBuilder.CallMessage
@@ -44,6 +46,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.CallTracer
+import com.chipprbots.ethereum.vm.OutOfGas
 
 /** #1629 S3: every message-call endpoint runs [[TxArgs]] through [[CallTxBuilder]] and `StxLedger.simulateCall` /
   * `estimateCallGas`, so each transaction type is honoured as go-ethereum's call path honours it (internal/ethapi
@@ -99,8 +102,12 @@ class TypedCallPathSpec
   private val etcHeader: BlockHeader =
     Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(100), extraFields = HefEmpty)
 
-  private class Node(config: BlockchainConfig = preAmsterdamConfig, header: BlockHeader = osakaHeader)
-      extends EphemBlockchainTestSetup:
+  private class Node(
+      config: BlockchainConfig = preAmsterdamConfig,
+      header: BlockHeader = osakaHeader,
+      // more accounts in the block's state, not as overrides: what a plain eth_call runs against
+      extraState: InMemoryWorldStateProxy => InMemoryWorldStateProxy = identity
+  ) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = config
 
     lazy val ledger: StxLedger =
@@ -141,7 +148,9 @@ class TypedCallPathSpec
         (AddressEcho, AddressEchoCode),
         (Collector, CollectorCode)
       ).foldLeft(funded) { case (w, (a, c)) => withContract(w, a, c) }
-      InMemoryWorldStateProxy.persistState(withContract(contracts, SlotReader, SlotReaderCode, Map(1 -> 42)))
+      InMemoryWorldStateProxy.persistState(
+        extraState(withContract(contracts, SlotReader, SlotReaderCode, Map(1 -> 42)))
+      )
 
     val head: BlockHeader = header.copy(stateRoot = TrieRoot(world.stateRootHash))
     blockchainWriter.save(Block(head, BlockBody(Nil, Nil, Some(Nil))), Nil, ChainWeight.zero, saveAsBestBlock = true)
@@ -466,8 +475,8 @@ class TypedCallPathSpec
     est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
       com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)
     )
-    CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe
-      "invalid opcode: opcode 0xfe not defined"
+    // geth `OpCode.String()`: 0xFE is named INVALID (geth v1.17.9 on Ephemery answers "invalid opcode: INVALID")
+    CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe "invalid opcode: INVALID"
     est(spin).left.value shouldBe StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (100000)")
 
   it should "keep go-ethereum's floor-data-gas message, and map only intrinsic gas to the allowance message" taggedAs (
@@ -563,6 +572,146 @@ class TypedCallPathSpec
     val burnt: TxResult = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value
     burnt.vmError shouldBe None
     burnt.gasUsed should be > txMax
+
+  // ── eth_call: a failed frame is an error (go-ethereum `Call` returns `result.Return(), result.Err`) ─────────────────
+
+  "eth_call" should "return go-ethereum's error for a frame that fails, never an empty result" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val spin: Address = Address(0xfeeb)
+    val invalid: Address = Address(0xfeec)
+    val reverter: Address = Address(0xfeed)
+    val undefined: Address = Address(0xfeee)
+    val overrides: Option[Map[Address, StateOverride]] = Some(
+      Map(
+        spin -> StateOverride(code = Some(code("5b600056"))), // JUMPDEST PUSH1 0 JUMP: only ever runs out of gas
+        invalid -> StateOverride(code = Some(code("fe"))),
+        reverter -> StateOverride(code = Some(code("60006000fd"))),
+        undefined -> StateOverride(code = Some(code("0c"))) // a byte geth names nothing
+      )
+    )
+    def rpc(to: Address): Either[JsonRpcError, CallResponse] =
+      service
+        .call(CallRequest(args(to, _.copy(gas = Some(GasAmount(100_000)))), BlockParam.Latest, overrides))
+        .unsafeRunSync()
+    // geth v1.17.9 on Ephemery answers the `spin` call with {"code":-32000,"message":"out of gas"}; fukuii answered "0x"
+    rpc(spin) shouldBe Left(JsonRpcError(-32000, "out of gas", None))
+    // geth's OpCode.String(): the name where geth has one, else "opcode 0x.. not defined". Both as geth v1.17.9 on
+    // Ephemery answers these two calls
+    rpc(invalid) shouldBe Left(JsonRpcError(-32000, "invalid opcode: INVALID", None))
+    rpc(undefined) shouldBe Left(JsonRpcError(-32000, "invalid opcode: opcode 0xc not defined", None))
+    rpc(reverter).left.value.code shouldBe 3
+
+  "CallErrors.opCodeName" should "name an opcode as go-ethereum's OpCode.String() does, enabled by the fork or not" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    def name(op: Int): String = CallErrors.opCodeName(op.toByte)
+    // geth's names, not fukuii's (SHA3)
+    name(0x20) shouldBe "KECCAK256"
+    name(0x44) shouldBe "DIFFICULTY"
+    // PUSH0 before Shanghai, CLZ before Osaka, BASEFEE on ETC before Olympia: named all the same
+    name(0x5f) shouldBe "PUSH0"
+    name(0x1e) shouldBe "CLZ"
+    name(0x48) shouldBe "BASEFEE"
+    name(0x60) shouldBe "PUSH1"
+    name(0x7f) shouldBe "PUSH32"
+    name(0x8f) shouldBe "DUP16"
+    name(0x9f) shouldBe "SWAP16"
+    name(0xa4) shouldBe "LOG4"
+    name(0xe6) shouldBe "DUPN"
+    name(0xfe) shouldBe "INVALID"
+    name(0xff) shouldBe "SELFDESTRUCT"
+    // unnamed bytes
+    name(0x0c) shouldBe "opcode 0xc not defined"
+    name(0x21) shouldBe "opcode 0x21 not defined"
+    name(0xa5) shouldBe "opcode 0xa5 not defined"
+    name(0xef) shouldBe "opcode 0xef not defined"
+    // 170 named, as geth's opCodeToString
+    (0 to 255).count(op => !name(op).endsWith("not defined")) shouldBe 170
+  }
+
+  /** The beacon deposit contract as the Amsterdam fixture's pre-state deploys it: its code and the 31 zero-hash slots
+    * its constructor writes, with no deposit made yet.
+    */
+  private val DepositContract: Address = Address(Hex.decode("00000000219ab540356cbb839cbe05303d7705fa"))
+  private lazy val withDepositContract: InMemoryWorldStateProxy => InMemoryWorldStateProxy =
+    val source = scala.io.Source.fromResource("eest-regression/amsterdam-genesis.json")
+    val json =
+      try parse(source.mkString)
+      finally source.close()
+    val JObject(tests) = json: @unchecked
+    val account = tests.iterator
+      .map(_._2 \ "pre" \ "0x00000000219ab540356cbb839cbe05303d7705fa")
+      .collectFirst { case a @ JObject(_) if (a \ "code").values.toString.length > 1000 => a }
+      .get
+    val JString(codeHex) = account \ "code": @unchecked
+    val JObject(slots) = account \ "storage": @unchecked
+    val depositCode = code(codeHex.drop(2))
+    require(slots.size == 31, s"deposit contract pre-state: ${slots.size} slots")
+    w =>
+      val w1 = w
+        .saveAccount(DepositContract, Account(codeHash = CodeHash(kec256(depositCode))))
+        .saveCode(DepositContract, depositCode)
+      val storage = slots.foldLeft(w1.getStorage(DepositContract)) { case (s, (k, v)) =>
+        s.store(BigInt(k.drop(2), 16), BigInt(v.values.toString.drop(2), 16))
+      }
+      w1.saveStorage(DepositContract, storage)
+
+  /** `deposit(bytes,bytes,bytes,bytes32)` calldata for a deposit of `amount` wei, with a deposit_data_root the contract
+    * accepts (it recomputes the SSZ root and compares; it does not verify the BLS signature): 420 bytes, as the live
+    * call's.
+    */
+  private def depositCall(amount: BigInt): ByteString =
+    def zeros(n: Int): ByteString = ByteString(Array.fill[Byte](n)(0))
+    def sha(parts: ByteString*): ByteString = sha256(parts.reduce(_ ++ _))
+    val pubkey = ByteString(Array.fill[Byte](48)(0x11))
+    val credentials = ByteString(Hex.decode("02" + "00" * 11 + "ab" * 20))
+    val signature = ByteString(Array.fill[Byte](96)(0x22))
+    val gweiLittleEndian = ByteString((amount / BigInt(10).pow(9)).toByteArray.reverse.padTo(8, 0.toByte).take(8))
+    val signatureRoot = sha(sha(signature.take(64)), sha(signature.drop(64), zeros(32)))
+    val root = sha(sha(sha(pubkey, zeros(16)), credentials), sha(gweiLittleEndian, zeros(24), signatureRoot))
+    ByteString(kec256("deposit(bytes,bytes,bytes,bytes32)".getBytes("US-ASCII")).take(4)) ++
+      word(0x80) ++ word(0xe0) ++ word(0x120) ++ root ++
+      word(48) ++ pubkey ++ zeros(16) ++ word(32) ++ credentials ++ word(96) ++ signature
+
+  "eth_call at Amsterdam" should "fail a beacon deposit short of its state gas, as eth_estimateGas and block import do" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node(amsterdamConfig, amsterdamHeader(46, 460), withDepositContract):
+    val value: BigInt = BigInt(335) * BigInt(10).pow(18)
+    val data: ByteString = depositCall(value)
+    data.size shouldBe 420
+    def deposit(gas: BigInt): TxArgs =
+      args(DepositContract, _.copy(value = Some(value), data = Some(data), gas = Some(GasAmount(gas))))
+    def rpc(gas: BigInt): Either[JsonRpcError, CallResponse] =
+      service.call(CallRequest(deposit(gas), BlockParam.Latest)).unsafeRunSync()
+    // block import: BlockPreparator.executeTransaction, the path every Amsterdam block's transactions take
+    def imported(gas: BigInt): TxResult =
+      execute(
+        dynamicFeeTx(Some(DepositContract), value, gas, data, config = amsterdamConfig),
+        head,
+        world,
+        amsterdamConfig
+      )
+
+    // 260,666 here; geth v1.17.9 measured 260,654 for the live 335 ETH first deposit on Ephemery 165
+    val needed: BigInt = estimate(deposit(1_000_000)).value
+    // The first deposit writes two fresh slots (deposit_count and branch[0]): 2 * GAS_STORAGE_SET (97,920) of
+    // EIP-8037 state gas on top of the execution gas
+    needed should be > BigInt(2 * 97_920)
+    needed should be > BigInt(250_000)
+    // 47,880 is the EIP-7976 calldata floor, 21,000 + 420 bytes * 64, refused before the frame runs. It is where the
+    // live eth_call "started succeeding": every limit at or above it ran out of gas and was reported as "0x".
+    rpc(47_879).left.value.message shouldBe "insufficient gas for floor data gas cost: have 47879, want 47880"
+    for gas <- List(BigInt(47_880), BigInt(60_000), BigInt(100_000), BigInt(250_000), needed - 1) do
+      withClue(s"gas $gas: ") {
+        rpc(gas) shouldBe Left(JsonRpcError(-32000, "out of gas", None))
+        imported(gas).vmError shouldBe Some(OutOfGas)
+      }
+    rpc(needed) shouldBe Right(CallResponse(ByteString.empty))
+    imported(needed).vmError shouldBe None
 
   // ── ETC: per-chain gating ──────────────────────────────────────────────────────────────────────────────────────
 

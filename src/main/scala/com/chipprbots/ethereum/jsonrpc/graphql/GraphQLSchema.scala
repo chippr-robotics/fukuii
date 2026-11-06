@@ -44,10 +44,12 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.BlockParam
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLScalars.*
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLTypes.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
+import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
@@ -303,6 +305,24 @@ object GraphQLSchema:
       value = m.get("value").flatMap(asOption[BigInt]),
       data = data
     )
+
+  /** A `call` field's result from the message call and the estimate of the same message.
+    *
+    * A frame that failed (a revert, out of gas, any VM error) has `status` 0, as geth's `result.Failed()` sets it, with
+    * the frame's output and the gas it used, as geth's `result.ReturnData` and `result.UsedGas`: a revert reason
+    * reaches the client. One difference: geth's `UsedGas` is never below the calldata floor (EIP-7623 / EIP-7976) and
+    * this is the gas execution took. A successful frame keeps the estimate of the same message as `gasUsed`. A
+    * pre-check failure is null.
+    */
+  private def callResult(
+      call: Either[JsonRpcError, TxResult],
+      gas: Either[JsonRpcError, EthInfoService.EstimateGasResponse]
+  ): Option[GCallResult] =
+    (call, gas) match
+      case (Right(r), _) if r.vmError.isDefined => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
+      case (Right(r), Right(gasResp))           => Some(GCallResult(r.vmReturnData, gasResp.gas.toLong, 1L))
+      case (Right(r), Left(_))                  => Some(GCallResult(r.vmReturnData, 0L, 1L))
+      case (Left(_), _)                         => None
 
   // cast: dynamic GraphQL argument map returns Any; callers supply the expected type A
   private def asOption[A](v: Any): Option[A] = v match
@@ -769,20 +789,12 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
-            val io = c.ctx.ethInfoService.call(req)
+            val io = c.ctx.ethInfoService.callOutcome(req)
             val estGasIo = c.ctx.ethInfoService.estimateGas(req)
             val fut: Future[Option[GCallResult]] = (for
               callE <- io
               gasE <- estGasIo
-            yield (callE, gasE) match
-              case (Right(resp), Right(gasResp)) =>
-                Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
-              case (Right(resp), Left(_)) =>
-                Some(GCallResult(resp.returnData, 0L, 1L))
-              case (Left(err), _) if err.code == 3 => // execution reverted
-                Some(GCallResult(ByteString.empty, 0L, 0L))
-              case _ => None
-            ).unsafeToFuture()
+            yield callResult(callE, gasE)).unsafeToFuture()
             fut
         ),
         Field(
@@ -863,14 +875,9 @@ object GraphQLSchema:
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             val fut = (for
-              callE <- c.ctx.ethInfoService.call(req)
+              callE <- c.ctx.ethInfoService.callOutcome(req)
               gasE <- c.ctx.ethInfoService.estimateGas(req)
-            yield (callE, gasE) match
-              case (Right(resp), Right(gasResp))   => Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
-              case (Right(resp), Left(_))          => Some(GCallResult(resp.returnData, 0L, 1L))
-              case (Left(err), _) if err.code == 3 => Some(GCallResult(ByteString.empty, 0L, 0L))
-              case _                               => None
-            ).unsafeToFuture()
+            yield callResult(callE, gasE)).unsafeToFuture()
             fut
         ),
         Field(

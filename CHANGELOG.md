@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `rlp` and the root, scalafmt on every module) now runs in CI's required "Test and Build" job (#1721). Scala 2
     wildcard imports are rejected everywhere; `return` is rejected in the four scalafixed modules (`scalanet` is not
     scalafix-checked). Run `sbt formatAll` before pushing: `scalafmtAll` alone covers the root project only.
+- **RPC: `eth_call` now returns an error for a message whose frame fails, as go-ethereum does, on every chain.** A
+  failure other than a revert (out of gas, an invalid opcode, a stack error, ...) used to come back as a successful
+  `"0x"`. It is now JSON-RPC error -32000 with geth's message (`out of gas`, `invalid opcode: INVALID`). A revert is
+  unchanged: error 3 with its data. Callers that read `"0x"` as success were told such a message would succeed. On
+  Ephemery (Amsterdam), a 335 ETH beacon deposit "succeeded" from 47,880 gas, the calldata floor; on chain it needs
+  260,654. The invalid-opcode message now names the opcode as geth does (`invalid opcode: PUSH0`, or `opcode 0xc not
+  defined` for a byte with no name), in `eth_estimateGas` and the `eth_createAccessList` `error` field too. GraphQL `call`
+  now reports a failed frame with `status` 0, the frame's output as `data` (so a revert reason reaches the client) and
+  the gas it used. Before, an out-of-gas frame had `status` 1, and a revert had empty `data` and `gasUsed` 0.
 
 ### Fixed
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
