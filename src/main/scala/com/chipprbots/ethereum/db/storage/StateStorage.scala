@@ -110,6 +110,14 @@ enum BadEntryDelete:
 trait StateStorage:
   def getBackingStorage(bn: BigInt): MptStorage
 
+  /** Storage for loading a whole, already-final state at height `bn` in bulk: the Path publish, which streams every
+    * node of the state through one instance. Reference counts are written exactly as [[getBackingStorage]] writes them.
+    * A mode that keeps per-node undo rows for a block it may roll back by number leaves them out here, since nothing
+    * rolls a bulk load back and a row per trie node is what a prune of that height could not hold in memory. Any other
+    * mode has no such rows and gives the backing storage.
+    */
+  def getBulkLoadStorage(bn: BigInt): MptStorage = getBackingStorage(bn)
+
   /** Storage for executing block `bn` whose writes are held back until the caller commits them. */
   def stageBlock(bn: BigInt): StagedBlockState = StagedBlockState.direct(getBackingStorage(bn))
   def getReadOnlyStorage: MptStorage
@@ -286,6 +294,9 @@ class ReferenceCountedStateStorage(
 
   override def getBackingStorage(bn: BigInt): MptStorage =
     new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn), decodedNodes)
+
+  override def getBulkLoadStorage(bn: BigInt): MptStorage =
+    new SerializingMptStorage(new ReferenceCountNodeStorage(nodeStorage, bn, recordSnapshots = false), decodedNodes)
 
   override def onBlocksAbandoned(blocks: Seq[(BigInt, ByteString)]): Unit =
     ReferenceCountedStateStorage.commitLock.synchronized {

@@ -53,15 +53,15 @@ class PathPublishRefCountSpec extends AnyFlatSpec with Matchers:
   final private class HashStore(val source: EphemDataSource, val nodes: NodeStorage, val mpt: SerializingMptStorage):
     def backing: NodesKeyValueStorage = mpt.backing
 
-  /** The store `startPathPublish` takes: `StateStorage.getBackingStorage(pivot)` on basic pruning (the production
+  /** The store `startPathPublish` takes: `StateStorage.getBulkLoadStorage(pivot)` on basic pruning (the production
     * default), built the way production builds it.
     */
   private def publishStore(): HashStore =
     val source = EphemDataSource()
     val (state, nodes, _) = StateStorage.createTestStateStorage(source, BasicPruning(64))
-    new HashStore(source, nodes, state.getBackingStorage(Pivot).asInstanceOf[SerializingMptStorage])
+    new HashStore(source, nodes, state.getBulkLoadStorage(Pivot).asInstanceOf[SerializingMptStorage])
 
-  /** The store as it was before the fix: every instance tracked deltas. */
+  /** The store as it was before the fixes: every instance tracked deltas and recorded snapshots. */
   private def trackingStore(): HashStore =
     val source = EphemDataSource()
     val nodes = new NodeStorage(source)
@@ -79,9 +79,16 @@ class PathPublishRefCountSpec extends AnyFlatSpec with Matchers:
   private def references(nodes: NodeStorage, rlp: Array[Byte]): Int =
     encoding.storedNodeFromBytes(nodes.get(ByteString(kec256(rlp))).get).references
 
-  /** What the data source holds, comparable. */
-  private def contents(source: EphemDataSource): Map[Seq[Byte], Seq[Byte]] =
-    source.storage.map { case (k, v) => k.array().toSeq -> v.toSeq }
+  private val nsLength = Namespaces.NodeNamespace.length
+
+  private def rows(source: EphemDataSource): Map[Seq[Byte], Seq[Byte]] =
+    source.storage.map { case (k, v) => k.array().drop(nsLength).toSeq -> v.toSeq }
+
+  /** The trie nodes: rows under a 32-byte hash. Everything else is bookkeeping (`sk`, `sck`, `dr`, `bd`). */
+  private def nodeRows(source: EphemDataSource): Map[Seq[Byte], Seq[Byte]] = rows(source).filter(_._1.length == 32)
+
+  private def bookkeepingRows(source: EphemDataSource): Map[Seq[Byte], Seq[Byte]] =
+    rows(source).filterNot(_._1.length == 32)
 
   "A Path publish through the store startPathPublish takes" should "retain no per-node delta entries" taggedAs (
     UnitTest,
@@ -97,7 +104,7 @@ class PathPublishRefCountSpec extends AnyFlatSpec with Matchers:
     counted(store).trackedDeltaEntries shouldBe 0
   }
 
-  it should "write the same hash store as before: same keys, values, reference counts and snapshots" taggedAs (
+  it should "write the same nodes, values and reference counts as before, and no snapshot rows" taggedAs (
     UnitTest,
     DatabaseTest
   ) in {
@@ -105,18 +112,21 @@ class PathPublishRefCountSpec extends AnyFlatSpec with Matchers:
     val now = publishStore()
     PathToHashExporter.publish(pns, now.mpt)
 
-    // Before the fix every instance tracked deltas, and a tracking instance is what that was: the same counting code
-    // with the map filled.
+    // Before the fixes every instance tracked deltas and recorded a snapshot row per node: the same counting code.
     val before = trackingStore()
     PathToHashExporter.publish(pns, before.mpt)
 
-    contents(now.source) shouldBe contents(before.source)
+    nodeRows(now.source) shouldBe nodeRows(before.source)
+    nodeRows(now.source).size shouldBe distinctNodes
     // The two repeats are counted once per position, as block execution counts them.
     references(now.nodes, rlpFor(0)) shouldBe 2
     references(now.nodes, rlpFor(AccountNodes + 1)) shouldBe 2
     references(now.nodes, rlpFor(1)) shouldBe 1
-    val everyNode = ((0 until AccountNodes) ++ (AccountNodes + 1 to AccountNodes + StorageNodes)).map(rlpFor)
-    everyNode.foreach(rlp => now.nodes.get(ByteString(kec256(rlp))) should not be empty)
+    // What is gone is the bookkeeping for a rollback by height that nothing does to a bulk load: one row per node,
+    // and the `sck` count a prune of the pivot's height had to hold the keys of.
+    bookkeepingRows(before.source).size should be > distinctNodes
+    bookkeepingRows(now.source) shouldBe empty
+    now.nodes.get(ByteString("sck".getBytes ++ Pivot.toByteArray)) shouldBe None
   }
 
   it should "be what a tracking instance was: one entry per distinct node, the leak the publish died of" taggedAs (

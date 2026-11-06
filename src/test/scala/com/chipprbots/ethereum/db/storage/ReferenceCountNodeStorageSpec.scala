@@ -12,6 +12,9 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.MapCache
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 import com.chipprbots.ethereum.testing.Tags.*
@@ -332,7 +335,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers:
     DatabaseTest
   ) in new TestSetup:
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1, trackNetDeltas = true)
-    val inserted = insertRangeKeys(4, storage)
+    val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
     storage.remove(inserted.head._1)
 
     storage.trackedDeltaEntries shouldBe 4
@@ -355,18 +358,98 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers:
     an[IllegalStateException] should be thrownBy storage.netDeltas
 
   it should "write the same bytes whether or not it tracks deltas" taggedAs (UnitTest, DatabaseTest) in new TestSetup:
-    val tracked = new TestSetup {}
+    val tracked: TestSetup = new TestSetup {}
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 3)
     val trackedStorage = new ReferenceCountNodeStorage(tracked.nodeStorage, bn = 3, trackNetDeltas = true)
-    val inserted = insertRangeKeys(6, storage)
+    val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(6, storage)
     insertRangeKeys(6, trackedStorage)
     storage.remove(inserted.head._1)
     trackedStorage.remove(inserted.head._1)
     insertRangeKeys(3, storage)
     insertRangeKeys(3, trackedStorage)
 
-    def contents(source: EphemDataSource) = source.storage.map { case (k, v) => k.array().toSeq -> v.toSeq }
+    def contents(source: EphemDataSource): Map[Seq[Byte], Seq[Byte]] =
+      source.storage.map { case (k, v) => k.array().toSeq -> v.toSeq }
     contents(dataSource) shouldBe contents(tracked.dataSource)
+
+  // ---- a height written in bulk: its snapshot rows are pruned in bounded writes ----
+
+  /** A data source that records how many keys each write removes. */
+  private class RecordingDataSource extends EphemDataSource(Map()):
+    val removedPerWrite: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty[Int]
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      removedPerWrite += dataSourceUpdates.map {
+        case DataSourceUpdate(_, toRemove, _)          => toRemove.size
+        case DataSourceUpdateOptimized(_, toRemove, _) => toRemove.size
+      }.sum
+      super.update(dataSourceUpdates)
+
+  private def bulkLoad(storage: ReferenceCountNodeStorage, nodes: Int): Unit =
+    (1 to nodes).grouped(5000).foreach { chunk =>
+      storage.update(Nil, chunk.map(i => kec256(ByteString(s"bulk$i")) -> ByteString(s"value$i").toArray[Byte]))
+    }
+
+  private def snapshotRows(source: EphemDataSource): Int =
+    source.storage.keys.count { k =>
+      val raw = k.array().drop(Namespaces.NodeNamespace.length)
+      val key = new String(raw, "ISO-8859-1")
+      raw.length != 32 && (key.startsWith("sk") || key.startsWith("sck")) // a node is a 32-byte hash
+    }
+
+  it should "prune a height of tens of thousands of snapshot rows in bounded writes" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    val source = new RecordingDataSource
+    val nodes = new NodeStorage(source)
+    val nodeCount = 3 * ReferenceCountNodeStorage.MaxSnapshotKeysPerWrite + 17
+    bulkLoad(new ReferenceCountNodeStorage(nodes, bn = 5), nodeCount)
+    snapshotRows(source) shouldBe nodeCount + 1
+    source.removedPerWrite.clear()
+
+    ReferenceCountNodeStorage.prune(5, nodes, inMemory = false)
+
+    // No write carries more than one write's worth of snapshot keys and the death row and count key that go with it.
+    source.removedPerWrite.max should be <= ReferenceCountNodeStorage.MaxSnapshotKeysPerWrite + 2
+    source.removedPerWrite.sum shouldBe nodeCount + 2 // every snapshot row, the count key and the death row key
+    snapshotRows(source) shouldBe 0
+    // The nodes themselves stay: pruning a height removes what is dead, and nothing here is.
+    source.storage.size shouldBe nodeCount
+  }
+
+  it should "finish a bulk height's prune that an earlier one left half done" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val nodeCount: Int = 2 * ReferenceCountNodeStorage.MaxSnapshotKeysPerWrite + 5
+    bulkLoad(new ReferenceCountNodeStorage(nodeStorage, bn = 5), nodeCount)
+    // The first batch of snapshot rows is gone and the count key is still there: a crash between the writes.
+    val countKey: ByteString = ByteString("sck".getBytes ++ BigInt(5).toByteArray)
+    val firstBatch: IndexedSeq[ByteString] = (0 until ReferenceCountNodeStorage.MaxSnapshotKeysPerWrite).map { i =>
+      ByteString(("sk".getBytes ++ BigInt(5).toByteArray) ++ BigInt(i).toByteArray)
+    }
+    nodeStorage.update(firstBatch, Nil)
+    nodeStorage.get(countKey) shouldBe defined
+
+    ReferenceCountNodeStorage.prune(5, nodeStorage, inMemory = false)
+
+    snapshotRows(dataSource) shouldBe 0
+    dataSource.storage.size shouldBe nodeCount
+
+  it should "prune a bulk height's snapshots like the one-write path for a height that has few" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    val source = new RecordingDataSource
+    val nodes = new NodeStorage(source)
+    bulkLoad(new ReferenceCountNodeStorage(nodes, bn = 5), 100)
+    source.removedPerWrite.clear()
+
+    ReferenceCountNodeStorage.prune(5, nodes, inMemory = false)
+
+    source.removedPerWrite.toSeq shouldBe Seq(102) // one write: 100 snapshot rows, the count key, the death row key
+    snapshotRows(source) shouldBe 0
+  }
 
   trait TestSetup:
     val dataSource: EphemDataSource = EphemDataSource()
