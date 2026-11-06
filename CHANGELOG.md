@@ -94,9 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -38015 `block gas limit reached`, then gas is clamped to the 50M budget. The default coinbase is the previous
   header's, not zero, and `blockOverrides.withdrawals` is applied from Shanghai on (credited before the request system
   calls, committed in the withdrawals root, returned in the body). Results change wherever the default coinbase, gas
-  clamping or withdrawals matter. Still open: the failure text of a precompile, and a multi-block system-contract
-  `stateRoot` difference against Erigon that is not yet checked against geth. On ETC, simulate's PoW block reward uses
-  ETH's 5/3/2 schedule, not ECIP-1017; that predates this change and is not fixed.
+  clamping or withdrawals matter. A second comparison, against geth v1.17.9, found more differences; they are listed
+  under Known issues (#1727).
 
 ### Added
 - **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a
@@ -222,6 +221,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   served to callers on the right config. On a single-chain node the new key is a relabelling, so nothing changes there.
 
 ### Known issues
+- **`eth_simulateV1`: do not expose it to untrusted callers, and expect some differences from go-ethereum (#1727,
+  planned for 0.12.0). Both chains.** A request whose block-number override lies far beyond the base block makes
+  fukuii build gap blocks without limit. The RPC thread never returns and block import stalls until the node is
+  restarted; geth rejects such a request with -38026. Until it is fixed, keep `eth_simulateV1` away from untrusted
+  callers, for example by keeping the RPC interface private or blocking the method at a proxy. A comparison of 815
+  cases with geth v1.17.9 on Ephemery also found these differences:
+  - malformed override values (balances over 256 bits, unprefixed or short hex, overrides sent as an array) are
+    accepted, where geth returns -32602;
+  - an override at a precompile's address does not disable the precompile;
+  - `movePrecompileToAddress` refuses 0x0a (KZG), and two moves to the same address are both dropped;
+  - `maxUsedGas` reports gas after refunds;
+  - a create that fails after returning code returns those bytes as `returnData`;
+  - a request system contract whose code is overridden away is skipped instead of failing;
+  - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
+    length`).
+
+  On ETC, simulated blocks pay ETH's 5/3/2 PoW reward, not ECIP-1017. Block import and mining are not affected by any
+  of these.
 - **Path-scheme ETH chains copy the whole state into a second store after SNAP, and the node does not follow the chain
   until the copy ends (Sepolia, mainnet, Platåberget; removal planned in spec 018).** After SNAP completes on a chain
   that uses the Path storage scheme, fukuii copies the whole state into a second, hash-keyed store before it can
