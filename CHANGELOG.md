@@ -229,8 +229,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until then the node executes no block and does not follow the chain. Measured on Sepolia (T063, #1718), on an NVMe
   host: the account trie (215M nodes) took 79 min. The storage tries ran at a rate that fell from about 36k to 9k
   nodes/s as the store grew, and the run was stopped at roughly 40-50% of the copy after 9.3 h, the total being an
-  estimate. A full copy is expected to take days. Expect this wait after a Path-scheme SNAP sync. Restarting during
-  the copy starts it again from the beginning. ETC and Mordor use the Hash scheme and need no copy, so they are not
+  estimate. A full copy is expected to take days. Expect this wait after a Path-scheme SNAP sync, and **do not restart
+  the node during the copy**: a restart begins the copy again from the start (SNAP itself is not repeated), and every
+  node copied before the restart keeps one extra reference that is never pruned. That costs disk space only; state
+  reads, block execution and proofs are unaffected, and only a fresh sync into an empty datadir removes it. ETC and
+  Mordor use the Hash scheme and need no copy, so they are not
   affected; Ephemery also uses the Path scheme, but its state is small. Removing the copy (path-addressed reads,
   per-block changesets, SNAP writing once) is planned in spec 018, and 0.11.0 ships no workaround.
 - **Plan disk for Sepolia, and for a full-history node generally: backfill has no limit and nothing stops at a full disk
