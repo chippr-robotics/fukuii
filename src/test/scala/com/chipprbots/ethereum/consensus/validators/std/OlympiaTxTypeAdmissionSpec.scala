@@ -109,7 +109,7 @@ class OlympiaTxTypeAdmissionSpec
       stx = stx,
       senderAccount = senderAccount,
       blockHeader = header,
-      upfrontGasCost = UInt256(0),
+      upfrontGasCost = BigInt(0),
       accumGasUsed = BigInt(0)
     )
 

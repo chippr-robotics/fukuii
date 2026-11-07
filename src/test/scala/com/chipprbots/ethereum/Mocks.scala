@@ -104,7 +104,7 @@ object Mocks:
             stx: SignedTransaction,
             senderAccount: Account,
             blockHeader: BlockHeader,
-            upfrontGasCost: UInt256,
+            upfrontGasCost: BigInt,
             accumGasUsed: BigInt
         )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
           Right(SignedTransactionValid)
@@ -118,7 +118,7 @@ object Mocks:
             stx: SignedTransaction,
             senderAccount: Account,
             blockHeader: BlockHeader,
-            upfrontGasCost: UInt256,
+            upfrontGasCost: BigInt,
             accumGasUsed: BigInt
         )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
           Left(SignedTransactionError.TransactionSignatureError)

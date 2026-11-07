@@ -55,7 +55,7 @@ class EIP1559FeeMarketSpec
       stx = stx,
       senderAccount = senderAccount,
       blockHeader = header,
-      upfrontGasCost = UInt256(0),
+      upfrontGasCost = BigInt(0),
       accumGasUsed = BigInt(0)
     )
 
