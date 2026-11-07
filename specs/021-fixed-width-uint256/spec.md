@@ -21,7 +21,7 @@ re-execution (018 SC-016) and before spec 019's SP-1b consumes the type (019 FR-
   masking sites and Track C's proposer view meet, so the two are sequenced per PR.
 - Spec 020's code has landed (PRs 3 to 7, the last #1722); its header still has to be closed.
 
-**In flight**: `fukuii-fc` (local session), branch `wt/021-plan`: planned and tasked; next `/speckit-implement`
+**In flight**: `fukuii-fc` (local session), branch `docs/spec-021-plan`: planned; implementation after 0.11.0
 
 **Depends on**: spec 020 landed (so the implementation is written once on the 3.9 toolchain and can use its `inline`
 and opaque-type facilities without a later rewrite). Nothing in storage.
