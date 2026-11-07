@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: Draft (2026-10-30). Ready for `/speckit-clarify`. The Phase 0 evaluation is done ([research.md](./research.md)); the
+**Status**: Planned (2026-11-07). Track C (the copy removal and the unified path-live layout for both chains, items 8, 6 and 10) has its plan, data model, a two-round S0 sign-off and 288 tasks, and starts after 0.11.0; Tracks E, F, H and R are planned at plan level only. The Phase 0 evaluation is done ([research.md](./research.md)); the
 plan ([plan.md](./plan.md)) is drafted to the point where `/speckit-tasks` can run once the gates below report. The
 Design constraints and Gates sections are binding on that later work. **Revised 2026-10-17 (same day)** after the user's
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the
@@ -16,14 +16,20 @@ a read-serving track (Track R), the enterprise analytics user story (US-8), the 
 `dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
 added as comparators in the GT-1 harness (FR-028).
 
+**In flight**: `fukuii-fc` (local session), branch `wt/plan-018-021`: `/speckit-clarify` and the copy-removal plan, 2026-11-06
+
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,
 the engine bake-off, the cold-tier assessment; all off the node host) may start as soon as spec 016 completes, because
-it merges nothing.
+it merges nothing. **Amended 2026-11-06 (user decision, after T063; see Clarifications):** the copy-removal track
+(items 8, 6 and 10, both chains) starts after 0.11.0, on RocksDB, ahead of Track E and of spec 017, which waits for
+execution-specs to release `ExecutionWitness`. Items 7, 9 and 11 keep the order above.
 
 **Depends on**: spec 016's `StateIngest` (landed, T055; healing-store members at C-H1) and spec 017's `StateAccess`
 (G-1), `RecordingMptStorage` (G-2) and the differential witness test (FR-006). This spec changes the storage
-**beneath** those two gateways and must not change their signatures.
+**beneath** those two gateways and must not change their signatures. *(Clarified 2026-11-06: the dependency on 017 is
+for items 7 and 9 only. The copy-removal track depends on neither 017 deliverable; it works beneath today's
+`StateStorage`, and DC-1 applies to `StateAccess` once 017 delivers it.)*
 
 **Input**: User request, 2026-10-17: evaluate fukuii's database use and specify its move off RocksDB before the zkVM
 guest work, as its own spec between 017 and the guest. Clarified the same day: "libmdbx isn't a hard requirement. We
@@ -31,6 +37,63 @@ should consider other database patterns as well that would make good use of Scal
 ClickHouse. The goal is to make the system more efficient as we will need to deal with much larger blocks and execution
 if ETH moves to gigablocks. ETC should be brought along as well. There are few ETC operators and this will be a
 substantial optimization."
+
+## Clarifications
+
+### Session 2026-11-06
+
+Asked after the T063 Sepolia gate (spec 022, PR #1726). SNAP reached hand-off 1 h 25 min after storage was done. Then
+the `PathToHashExporter` copy ran out of heap (fixed by #1724). On a second run it was read-bound, slowing from 35.7k to
+9.2k nodes/s, and was stopped at about 40–50% after 10.8 h. The user decided to remove the copy rather than speed it up
+(research §17).
+
+**Standing rule (user, 2026-11-06), applied to every answer below:** "avoid separation between etc and eth. we build for
+eth and etc is along for the ride. the end state is a configurable, highly efficient evm el. avoid doing multiple stages
+as the fastest path to a stable client is to build correctly. the fukuii client is not in production and no external
+parties rely on previous versions, only this computer and dev-node." For this spec that means:
+- one layout for both chains, delivered in one track, with no ETH-first / ETC-later gates;
+- no compatibility machinery for old datadirs;
+- no release-level transition windows (DC-9, DC-11).
+
+Consensus rules still differ per chain by configuration; the rule is about the shared infrastructure. Two answers given
+earlier the same day were revised under it, and are marked.
+
+- Q: Where does removing the Path copy go in the order? → A: First, after 0.11.0 and on RocksDB, ahead of Track E and of
+  spec 017's implementation. Items 8, 6 and 10 form the **copy-removal track**; nothing in it needs Track E (research
+  §17). **Item 10 is one gate for both chains:** `PathToHashExporter` and the Hash scheme are retired together, and ETC
+  moves onto the unified layout in the same track, with `forge`. *(Revised under the standing rule; an earlier answer
+  the same day split item 10 into a Path-only 10a and a later ETC 10b.)*
+- Q: Once the copy is gone, how is post-pivot state kept: a frozen SNAP base read through from the hash store (Option
+  X), or path nodes written in place with per-block changesets (Option Y)? → A: **Option Y.** Item 6 (changesets, an
+  in-memory overlay of recent blocks for sibling and non-head roots, reference counts retired on Path) lands **before**
+  the copy is retired.
+- Q: Does the copy removal wait for spec 017? → A: No. Spec 017 waits for execution-specs to release `ExecutionWitness`
+  (today it exists only on the `projects/zkevm` branch). The dependency on 017 applies to items 7 and 9 only.
+- Q: How is amendment request #2 (the two-part changeset from spec 025) handled now that changesets are on the critical
+  path? → A: The two-part shape is accepted, but only the **local part** ships now. It is keyed by block hash and carries
+  prior and new values, a version byte and a record kind (FR-010). The exportable part is added when 025 Phase A freezes
+  its record, and the copy removal does not wait for 025.
+- Q: What does a new build do with a datadir from before the copy-removal track? → A: On either chain, a datadir without
+  the new layout marker is **refused at start** with a message naming the resync procedure. There is no migration, no
+  adoption and no automatic wipe, and no legacy reader is kept (FR-016). *(Revised twice the same day; this is final under
+  the standing rule. The interim answer adopted Path datadirs whose copy never finished, such as T063's. That was dropped
+  because no external party relies on old datadirs, and adoption is compatibility machinery.)*
+- Q: The full design of Option Y came to about 12,000 lines (code and tests) against about 6,000 for Option X. Keep Y?
+  → A: **Yes, Option Y is kept.**
+- Q: Under Option Y, does the disk hold the canonical head, or lag it behind an in-memory layer? → A:
+  **Write-through.** State, changeset, anchor and head pointer commit in one batch, as block import does today. No
+  shutdown journal; after a crash only payloads that were executed but never made canonical are re-executed.
+- Q: Checkpoint archives are hash-keyed. What happens to a checkpoint import? → A: A **new importer that assigns
+  positions** is built (FR-032), not a refusal. With ETC on the unified layout, it is ETC's resync path.
+- Q: T064 (repair of a kept datadir) was deferred until this spec. Where does it run? → A: Its intent is re-expressed
+  on a fresh datadir on the new layout and becomes part of the copy-removal track's exit gate: holes found and filled, a
+  hand-off with no copy, and the audit's first pass.
+- Q: fukuii has never completed an ETC mainnet sync. Does that sync gate the copy-removal track? → A: **Yes.** A fresh
+  ETC mainnet sync on the unified layout, followed by head-following, is part of the track's exit gate (plan EG-12).
+- Q: Which pruning modes does the new layout support? → A: **`basic` and `archive`**, on both chains. `inmemory` is
+  **retired** (FR-033, OQ-5) and rejected at start with a clear message; there is no deprecation window. *(Revised the same
+  day. The first answer kept all three, but the S0 review showed that closing `inmemory`'s durability gap needs a
+  persisted changeset tail. That removes the mode's write saving over `basic`.)*
 
 ## Problem
 
@@ -167,7 +230,8 @@ The user named ScyllaDB and ClickHouse as patterns to consider. The evaluation (
 
 ## Scope
 
-Four tracks. Track E and Track F are strictly ordered; Track H runs beside Track F behind its own seam; Track R (read
+Four tracks. Track E and Track F are strictly ordered, except for the **copy-removal track** (items 8, 6 and 10, both
+chains, clarified 2026-11-06), which runs first, on RocksDB. Track H runs beside Track F behind its own seam; Track R (read
 serving) runs beside all of them and gates none.
 
 **Track E — the hot-tier engine, behind the contract (G-1, G-2, G-3, G-9).**
@@ -189,8 +253,8 @@ serving) runs beside all of them and gates none.
 
 **Track F — the flat data model (G-4, G-5, G-6, G-7).**
 
-6. Changesets: per block, the previous value of every flat key and trie node the block changed, keyed by block number,
-   replacing `ReferenceCountNodeStorage`'s stored counts, snapshots and death rows. Rollback applies them in reverse;
+6. Changesets: per block, the previous value of every flat key and trie node the block changed, keyed by block hash
+   (clarified 2026-11-06; siblings collide on number), replacing `ReferenceCountNodeStorage`'s stored counts, snapshots and death rows. Rollback applies them in reverse;
    pruning deletes those older than `pruning.history`; archive keeps all (NG-6).
 7. Flat execution reads in `InMemoryWorldStateProxy` under `StateAccess`: `getAccount` and `getStorage` read the flat
    stores; the trie is updated from the block's write set and yields the state root.
@@ -198,8 +262,11 @@ serving) runs beside all of them and gates none.
    path-keyed node store serves both chains. Hashing and encoding are untouched (DC-2; `forge` and `beacon` review).
 9. Key-set witness recorder plus proof walk (DC-7), with the 017 differential test as the oracle (SC-007), amending 017
    DC-8.
-10. SNAP ingest writes each node once (path-keyed) and each leaf once (flat); `PathToHashExporter` is retired; the Hash
-    scheme is retired and ETC moves onto the unified layout (`forge` sign-off; DC-9).
+10. SNAP ingest writes each node once (path-keyed) and each leaf once (flat). `PathToHashExporter` is retired.
+    Execution, commit and serving read the path-keyed store (item 8), and history comes from changesets (item 6). The
+    Hash scheme is retired, and ETC moves onto the unified layout in the same step (`forge` sign-off; DC-9).
+    *(Clarified 2026-11-06: one gate for both chains, under the standing rule; a same-day split into 10a/10b was
+    dropped.)*
 11. Gigablock readiness of the state root (DC-13): the modified-subtree hashing runs in parallel across independent
     account and storage subtrees, keyed by the block's write set (the BAL where present, the recorded write set
     otherwise), with a sparse in-memory trie cache that persists across blocks; the root is byte-identical to the
@@ -231,7 +298,8 @@ serving) runs beside all of them and gates none.
 18. **History reads for analytics.** Archive and long-window reads needed by traces over history are served from
     changesets plus the cold tier (Track H, OQ-3), with the documented error beyond what is configured.
 
-Track F cannot start before Track E's SC-001 is green on both chains; item 9 must be green before item 7 is enabled by
+Track F cannot start before Track E's SC-001 is green on both chains, except the copy-removal track (items 8, 6 and 10,
+both chains), which runs first on RocksDB in that order: item 6 before item 10 (clarified 2026-11-06). Item 9 must be green before item 7 is enabled by
 default; Track H never gates Track E or F; Track R items 15 and 16 never gate E or F and item 17 is gated only by its
 own consensus review.
 
@@ -288,7 +356,8 @@ ethereum/tests and the Mordor/Sepolia import differential (SC-001) are the oracl
 equivalently crash-safe commit mode the engine documents as durable). `StateIngest` may run relaxed (016 FR-045), and the
 DC-1 barrier of 016/017 (a synced commit before `completeSnapSync`, on both chains) is **implemented** by this spec if
 016 T056 has not already done so. The `inmemory` pruning mode's durability gap (INF-006 §4) is closed or the mode is
-retired (OQ-5). Cold-tier writes are asynchronous and their loss is never a consensus or sync failure.
+retired (OQ-5). *(Clarified 2026-11-06: the mode is **retired** on both chains (FR-033), which removes the gap.
+Write-through applies: state, changeset, anchor and head pointer commit in one batch.)* Cold-tier writes are asynchronous and their loss is never a consensus or sync failure.
 
 **DC-4 — Writes never block reads.** Reads run in snapshot read transactions and take no lock a writer takes. The
 process-wide `dbLock` shrinks to a close-fence (an open/closed state plus in-flight count) or disappears. SC-004 tests
@@ -324,6 +393,12 @@ witness is the only thing that crosses from host to guest.
 plus flat accounts and slots plus changesets, on both chains, in the first release. `storage-scheme` is deprecated
 (accepted and ignored with a WARN for one minor release, then rejected). Existing datadirs on the old layout are
 detected at start and refused with a message naming the resync procedure; no silent mixing of layouts in one datadir.
+*(Clarified 2026-11-06, standing rule.)* Both chains reach the path-keyed trie plus changesets together, in the
+copy-removal track (item 10), ahead of flat reads (item 7) and the engine (Track E). There is no transition window:
+`storage-scheme` is **removed** in that track, not accepted with a WARN for a release. A datadir on either chain without
+the new layout marker is refused with a resync message (FR-016). ETC resyncs through the position-assigning checkpoint
+importer (FR-032) or by SNAP. This supersedes the deprecation window and the release-notes and runbook staging written
+above, since no external operator relies on old datadirs.
 ETC operators resync from a checkpoint archive (hours); the release notes, the `fukuii-checkpoint-service` and
 `fukuii-first-start` skills and the ETC runbooks carry the procedure before the default flips. `forge` signs off that
 ETC consensus is unchanged and that mining, ECIP-1017 rewards and the ETC ethereum/tests job are green on the unified
@@ -338,6 +413,10 @@ host class and is measured on it.
 **DC-11 — The transition window is bounded.** Both engines compile in for at most one minor release after the default
 flips to the new engine; then RocksDB, `rocksdbjni`, spec 015's budget config and `RocksDbCacheMetrics` are removed in
 one PR. `db.data-source = "rocksdb"` is rejected at start after removal with a message naming the migration runbook.
+*(Clarified 2026-11-06, standing rule: there is no release-level transition window. No external operator relies on old
+datadirs, so the "one minor release" with both engines compiled in is not needed. RocksDB is removed in the same track
+that switches the engine, once SC-001 and the soaks are green. Both engines may coexist only within that track, as the
+SC-001 differential oracle during development.)*
 
 **DC-12 — Scala 3 at the storage boundary.** The boundary is engine-agnostic and makes the invariants types:
 - **Typed transactions.** `ReadTxn` and `WriteTxn` are distinct types; a `DataSource` hands out a `WriteTxn` only
@@ -537,6 +616,11 @@ carries the full load.
 - Power loss between a relaxed `StateIngest` commit and the DC-3 barrier: SNAP resumes from its last durable
   checkpoint; nothing execution reads is missing.
 - An old-layout datadir opened by a new build (DC-9); a new-layout datadir opened by an old build.
+- A datadir without the new layout marker, on either chain, opened by a new build: refused with the resync message
+  (FR-016), never migrated, adopted or wiped.
+- A crash between executing a payload and making it canonical: only that payload is re-executed (write-through).
+- A checkpoint archive imported onto the unified layout, on either chain (FR-032).
+- `pruning.mode = "inmemory"` in an existing config: rejected at start, naming `basic` (FR-033).
 - `pruning.mode = "inmemory"` (OQ-5).
 - A reorg deeper than `pruning.history` under changesets: refused loudly, as today's reference counting refuses it.
 - The parallel state root and a block whose write set touches one deep subtree only: no parallelism available; the
@@ -576,7 +660,10 @@ carries the full load.
   range, comparing every state root and receipt root.
 - **FR-010** The system MUST provide a changeset store: per block, the previous value of every flat key and trie node
   the block changed; rollback MUST apply changesets in reverse; basic pruning MUST delete changesets older than
-  `pruning.history`; archive MUST keep all (and MAY move them to the cold tier, Track H).
+  `pruning.history`; archive MUST keep all (and MAY move them to the cold tier, Track H). *(Clarified 2026-11-06.)* Each
+  record MUST be keyed by **block hash**, not block number, so sibling blocks do not collide. It MUST carry the **prior
+  and new** value and a **version byte** and **record kind**, so the exportable part of amendment request #2 can be added
+  later without rewriting stored records. The copy-removal track ships the local (trie-node undo) part only.
 - **FR-011** Under `StateAccess` with the flat read path on, `getAccount` and `getStorage` MUST read the flat stores,
   and the state root MUST be computed by updating the path-keyed trie from the block's write set; the root MUST equal
   the trie-walk root for every block (SC-001 under flat reads).
@@ -590,7 +677,10 @@ carries the full load.
 - **FR-015** SNAP ingest on the unified layout MUST write each trie node once (path-keyed) and each leaf once (flat);
   `PathToHashExporter` MUST be retired with its 016 FR-044 durability property re-expressed as the DC-3 barrier.
 - **FR-016** `storage-scheme` MUST be deprecated per DC-9; a datadir on the old layout MUST be refused at start with a
-  message naming the resync procedure; ETC MUST run on the unified layout in the first release.
+  message naming the resync procedure; ETC MUST run on the unified layout in the first release. *(Clarified
+  2026-11-06, standing rule.)* `storage-scheme` MUST be removed in the copy-removal track, not deprecated over a
+  release. A datadir without the new layout marker, on either chain, MUST be refused at start with a message naming the
+  resync procedure. It MUST NOT be migrated, adopted or wiped automatically, and no legacy reader is kept.
 - **FR-017** RocksDB MUST be removable in one PR one minor release after the default flips (DC-11); the removal PR MUST
   delete `rocksdbjni`, spec 015's budget config and `RocksDbCacheMetrics`.
 - **FR-018** The operator runbooks and skills that name `rocksdb/` (`fukuii-backup-restore`, `fukuii-disk-management`,
@@ -624,6 +714,15 @@ carries the full load.
   MUST re-measure trace re-execution (SC-016) once spec 021 lands and MUST NOT duplicate its implementation.
 - **FR-031** The `dbLock` close-fence (DC-4) MUST ship as its own PR on the RocksDB engine as soon as GT-0 has reported,
   independent of the engine decision (T-010); it is the one Track E change that does not wait for GT-1.
+- **FR-032** *(Clarified 2026-11-06.)* Checkpoint archive import MUST write the unified layout on either chain,
+  assigning each node its position. Importing an archive MUST NOT require the hash store or a copy. It is ETC's resync
+  path (DC-9).
+- **FR-033** *(Clarified 2026-11-06.)* On both chains, the unified layout MUST support the `basic` and `archive` pruning
+  modes:
+  - `basic` keeps `pruning.history` blocks of changesets.
+  - `archive` keeps every changeset and refuses a read deeper than it can serve, with an explicit error.
+  - `pruning.mode = "inmemory"` MUST be rejected at start with a message naming `basic`. The mode, its cache and its
+    configuration are removed (OQ-5).
 
 ### Key Entities
 
@@ -723,7 +822,7 @@ carries the full load.
   re-downloads only state? Default: no converter in the first release; measure how long chain-data download takes on
   each chain first (R-8).
 - **OQ-5** `pruning.mode = "inmemory"`: close its durability gap on the new engine, or retire the mode? Recommended:
-  retire; changesets make the in-memory reference-count cache redundant.
+  retire; changesets make the in-memory reference-count cache redundant. **Resolved 2026-11-06: retired** (FR-033).
 - **OQ-6** Relaxed commit mode for `StateIngest`: the engine-specific "metadata-safe, last transactions may be lost"
   mode is the recommended default; the fully unsynced mode only if GT-0/GT-1 show it matters and SNAP resume covers it.
 - **OQ-7** *(decided 2026-10-17, user)* The lock fix (research §8, alternative 2) ships as its own PR on RocksDB as soon
@@ -792,7 +891,7 @@ row here.*
 | # | Target in this spec | Request | Needed by | Status |
 | --- | --- | --- | --- | --- |
 | 1 | GT-1 harness (FR-021, FR-028) | Add a **read-fleet profile**: N reader processes plus one writer, concurrency 8–64, larger host class; record whether the engine supports safe **multi-process read-only access** (DC-5 reader discipline across processes). | 023 OQ-4 (`sim` reading a follower's store) | Pending |
-| 2 | F2 changeset format (FR-010, `data-model.md`) | *(Refined 2026-10-30, alignment review §2.)* The changeset has two parts. The **exportable part** is the block's semantic write set, accounts, slots and code by hashed key, with **previous and new value**, a **schema version** and `chainKey`; it is byte-identical to the 025 record and is the only part any consumer outside `db/` sees. The **local part**, trie-node undo records for hot-tier rollback, stays engine-specific and is never exported. | 025 GT-1 / DC-9 (must land before F2 freezes) | Pending |
+| 2 | F2 changeset format (FR-010, `data-model.md`) | *(Refined 2026-10-30, alignment review §2.)* The changeset has two parts. The **exportable part** is the block's semantic write set, accounts, slots and code by hashed key, with **previous and new value**, a **schema version** and `chainKey`; it is byte-identical to the 025 record and is the only part any consumer outside `db/` sees. The **local part**, trie-node undo records for hot-tier rollback, stays engine-specific and is never exported. | 025 GT-1 / DC-9 (must land before F2 freezes) | **Accepted in part, 2026-11-06** (Clarifications): the two-part shape is accepted. The copy-removal track ships the local part only, with the record keyed by block hash and carrying prior and new values, a version byte and a kind (FR-010). The exportable part is added when 025 Phase A freezes its record. The copy removal does not wait for 025. |
 | 3 | Track H slice H3 (FR-025) | **The node does not write ClickHouse.** The `ColdStore` write side publishes to Kafka (025 FR-002); the indexer owns analytics tables; H4's `eth_getLogs` routing reads them through the `ColdStore` read adapter. | 025 DC-7 | Pending |
 | 4 | T-010 close-fence (FR-031) | Schedule early (it is independent of GT-1 and merge-able on RocksDB). | 026 (followers and `sim` read concurrently) | Pending — already the intent of OQ-7 / FR-031; the request is only about ordering |
 | 5 | Pruning decisions (OQ-3, OQ-5; FR-010 archive) | Leave a mode that **retains every changeset**, so the `archive` role needs no second storage layout. | 026 GT-2 / FR-005 | Pending |
