@@ -113,6 +113,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **`eth_simulateV1` no longer builds blocks without limit (#1727). Both chains.** A block-number override far past the
+  base block was narrowed to 32 bits before the 256-block check, so a gap of 2^32 + 1 counted as one block and the node
+  then built 2^32 of them: the RPC thread never returned and block import stalled until a restart. The gap is now
+  compared as a big integer, as go-ethereum does, and a request that reaches more than 256 blocks past the base
+  returns -38026 `too many blocks` before any block is built. The call limits are go-ethereum's too: -38026 for more
+  than 5,000 calls in a block (`too many calls in block: 5001 > 5000`) or 10,000 in a request. Quantities in
+  `blockOverrides` and `stateOverrides` are bounded like go-ethereum's `hexutil` types and return -32602 beyond that:
+  256 bits for `number`, `difficulty`, `baseFeePerGas`, `blobBaseFee`, `balance` and a storage key or value, 64 bits for
+  `time`, `gasLimit`, `nonce` and a withdrawal's `index`, `validatorIndex` and `amount`. An `Error(string)` revert
+  whose length word is wider than 32 bits no longer reads as a shorter string.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -226,14 +236,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   served to callers on the right config. On a single-chain node the new key is a relabelling, so nothing changes there.
 
 ### Known issues
-- **`eth_simulateV1`: do not expose it to untrusted callers, and expect some differences from go-ethereum (#1727,
-  planned for 0.12.0). Both chains.** A request whose block-number override lies far beyond the base block makes
-  fukuii build gap blocks without limit. The RPC thread never returns and block import stalls until the node is
-  restarted; geth rejects such a request with -38026. Until it is fixed, keep `eth_simulateV1` away from untrusted
-  callers, for example by keeping the RPC interface private or blocking the method at a proxy. A comparison of 815
-  cases with geth v1.17.9 on Ephemery also found these differences:
-  - malformed override values (balances over 256 bits, unprefixed or short hex, overrides sent as an array) are
-    accepted, where geth returns -32602;
+- **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
+  unbounded block-gap loop that stalled the node is fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on
+  Ephemery found these differences:
+  - malformed override values (unprefixed or short hex, overrides sent as an array) are accepted, where geth returns
+    -32602;
   - an override at a precompile's address does not disable the precompile;
   - `movePrecompileToAddress` refuses 0x0a (KZG), and two moves to the same address are both dropped;
   - `maxUsedGas` reports gas after refunds;
@@ -243,7 +250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     length`).
 
   On ETC, simulated blocks pay ETH's 5/3/2 PoW reward, not ECIP-1017. The differences listed do not touch block import
-  or mining; the gap request, though, stalls the whole node, import included.
+  or mining.
 - **Path-scheme ETH chains copy the whole state into a second store after a SNAP sync, and the node does not follow
   the chain until the copy ends (removal planned in spec 018).** This applies only when SNAP sync is switched on
   (`fukuii.sync.do-snap-sync = true`); the shipped Sepolia, mainnet, Ephemery and Platåberget configs sync by
