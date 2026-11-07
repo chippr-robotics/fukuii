@@ -182,7 +182,8 @@ class BlockPreparator(
     //
     // On block execution this cannot wrap: the validator has already required, unbounded, a
     // balance of at least gasLimit * gasPrice (maxFeePerGas for the dynamic-fee types) + value +
-    // blob cost, and effectiveGasPrice <= that price, so upfrontTotal <= balance.
+    // blob gas * maxFeePerBlobGas, and effectiveGasPrice <= that price and the blob base fee
+    // <= maxFeePerBlobGas, so upfrontTotal <= balance.
     val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
     val executionUpfront = (stx.tx.gasLimit * effectiveGasPrice).value
     val upfrontTotal = executionUpfront + blobGasCost
@@ -931,20 +932,17 @@ class BlockPreparator(
         )
 
       case Seq(stx, otherStxs*) =>
-        // EIP-4844: upfront balance check must include blob-gas cost too —
-        // otherwise a sender pre-funded with exactly gasLimit*maxFee + blobCost
-        // passes the check but underflows when the upfront deduction runs.
-        val blobGasCost = stx.tx match
+        // EIP-4844: the balance check reserves the blob gas at the transaction's cap, maxFeePerBlobGas, just as it
+        // reserves execution gas at maxFeePerGas (EIP-4844 `max_total_fee`, go-ethereum `buyGas` `blobBalanceCheck`).
+        // The debit in updateSenderAccountBeforeExecution charges the block's blob base fee instead, which
+        // validateMaxFeePerBlobGas holds at or below the cap, so the debit never exceeds what is reserved here.
+        val blobGasReserved = stx.tx match
           case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
-            val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-            val blobBaseFee = blockHeader.excessBlobGas
-              .map(eg => BlobGasUtils.getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig))
-              .getOrElse(BigInt(1))
-            blobGasUsed * blobBaseFee
+            BigInt(bt.blobVersionedHashes.size) * BigInt(131072) * bt.maxFeePerBlobGas
           case _ => BigInt(0)
         // Unbounded, never reduced mod 2^256: go-ethereum / core-geth `buyGas` reject a required balance that does
         // not fit 256 bits as insufficient funds, and the validator compares this exact figure with the balance.
-        val upfrontCost: BigInt = calculateUpfrontCost(stx.tx) + blobGasCost
+        val upfrontCost: BigInt = calculateUpfrontCost(stx.tx) + blobGasReserved
         val senderAddress = SignedTransaction.getSender(stx)
 
         val accountDataOpt = senderAddress

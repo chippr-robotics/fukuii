@@ -367,5 +367,8 @@ object UpfrontCostOverflowSpec:
     /** Whether the price is a fee cap (`maxFeePerGas`), the transaction then being charged the effective gas price. */
     def hasFeeCap: Boolean = number >= 2
 
-    /** The blob cost the upfront check adds: one blob at the base fee. Zero for every other type. */
+    /** The blob cost of one blob, for both the upfront check (at maxFeePerBlobGas) and the debit (at the blob base
+      * fee): every blob transaction here sets maxFeePerBlobGas to the base fee, so the two agree. Zero for every other
+      * type.
+      */
     def blobCost: BigInt = if this == Blob then GasPerBlob * BlobBaseFee else BigInt(0)
