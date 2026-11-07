@@ -112,24 +112,30 @@ class BlockPreparator(
           increaseAccountBalance(treasuryAddress, UInt256(treasuryCredit))(world)
         case _ => world
 
-  /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68)
+  /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68). `tx.gasPrice` is `maxFeePerGas` for the
+    * dynamic-fee types, the price go-ethereum's `buyGas` checks the balance against.
+    *
+    * Unbounded: never reduced mod 2^256 (see [[calculateUpfrontCost]]).
     *
     * @param tx
     *   Target transaction
     * @return
     *   Upfront cost
     */
-  private[ledger] def calculateUpfrontGas(tx: Transaction): UInt256 = UInt256(tx.gasLimit.value * tx.gasPrice.value)
+  private[ledger] def calculateUpfrontGas(tx: Transaction): BigInt = tx.gasLimit.value * tx.gasPrice.value
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price) + Tv (Tx value). See YP equation number (65)
     *
+    * Unbounded, as go-ethereum's and core-geth's `buyGas` compute it: the balance check compares this exact figure, so
+    * a cost that does not fit 256 bits is insufficient funds rather than a value reduced mod 2^256.
+    *
     * @param tx
     *   Target transaction
     * @return
     *   Upfront cost
     */
-  private[ledger] def calculateUpfrontCost(tx: Transaction): UInt256 =
-    UInt256(calculateUpfrontGas(tx) + tx.value)
+  private[ledger] def calculateUpfrontCost(tx: Transaction): BigInt =
+    calculateUpfrontGas(tx) + tx.value
 
   /** Increments account nonce by 1 stated in YP equation (69) and Pays the upfront Tx gas calculated as TxGasPrice *
     * TxGasLimit from balance. YP equation (68). Per EIP-4844, blob-gas cost is ALSO part of the upfront cost deducted
@@ -173,6 +179,11 @@ class BlockPreparator(
     // balance computed with effectiveGasPrice, matching geth/nethermind.
     // Surfaces on hive `bcEIP1559/burnVerify_Cancun` which reads BALANCE inside
     // the contract to verify the burn invariant.
+    //
+    // On block execution this cannot wrap: the validator has already required, unbounded, a
+    // balance of at least gasLimit * gasPrice (maxFeePerGas for the dynamic-fee types) + value +
+    // blob gas * maxFeePerBlobGas, and effectiveGasPrice <= that price and the blob base fee
+    // <= maxFeePerBlobGas, so upfrontTotal <= balance.
     val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
     val executionUpfront = (stx.tx.gasLimit * effectiveGasPrice).value
     val upfrontTotal = executionUpfront + blobGasCost
@@ -192,7 +203,7 @@ class BlockPreparator(
     val account = worldStateProxy.getGuaranteedAccount(senderAddress)
     worldStateProxy.saveAccount(
       senderAddress,
-      account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce()
+      account.increaseBalance(UInt256(-calculateUpfrontGas(stx.tx))).increaseNonce()
     )
 
   /** EIP-4844: Deduct blob gas cost from sender after execution. The blob gas is burned (not paid to miner). Uses
@@ -656,6 +667,10 @@ class BlockPreparator(
     // (post-EIP-1559: NOT maxFeePerGas — see comment there). So the refund only
     // needs to return the unused portion: (gasLimit - executionGas) * effectiveGasPrice.
     // No maxFee overpay to undo.
+    //
+    // Neither this refund nor the miner's fee below can exceed gasLimit * effectiveGasPrice, which
+    // the unbounded balance check has already bounded by the sender's balance, so the two
+    // `.toUInt256` conversions are exact on every transaction block execution admits.
     val refundAmount = totalGasToRefund.value * gasPrice
     val refundGasFn = pay(senderAddress, refundAmount.toUInt256, withTouch = false)
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
@@ -917,18 +932,17 @@ class BlockPreparator(
         )
 
       case Seq(stx, otherStxs*) =>
-        // EIP-4844: upfront balance check must include blob-gas cost too —
-        // otherwise a sender pre-funded with exactly gasLimit*maxFee + blobCost
-        // passes the check but underflows when the upfront deduction runs.
-        val blobGasCost = stx.tx match
+        // EIP-4844: the balance check reserves the blob gas at the transaction's cap, maxFeePerBlobGas, just as it
+        // reserves execution gas at maxFeePerGas (EIP-4844 `max_total_fee`, go-ethereum `buyGas` `blobBalanceCheck`).
+        // The debit in updateSenderAccountBeforeExecution charges the block's blob base fee instead, which
+        // validateMaxFeePerBlobGas holds at or below the cap, so the debit never exceeds what is reserved here.
+        val blobGasReserved = stx.tx match
           case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
-            val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-            val blobBaseFee = blockHeader.excessBlobGas
-              .map(eg => BlobGasUtils.getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig))
-              .getOrElse(BigInt(1))
-            blobGasUsed * blobBaseFee
+            BigInt(bt.blobVersionedHashes.size) * BigInt(131072) * bt.maxFeePerBlobGas
           case _ => BigInt(0)
-        val upfrontCost = UInt256(calculateUpfrontCost(stx.tx).toBigInt + blobGasCost)
+        // Unbounded, never reduced mod 2^256: go-ethereum / core-geth `buyGas` reject a required balance that does
+        // not fit 256 bits as insufficient funds, and the validator compares this exact figure with the balance.
+        val upfrontCost: BigInt = calculateUpfrontCost(stx.tx) + blobGasReserved
         val senderAddress = SignedTransaction.getSender(stx)
 
         val accountDataOpt = senderAddress

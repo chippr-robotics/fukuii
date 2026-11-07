@@ -85,7 +85,7 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
 
     def validate(stx: SignedTransaction, header: BlockHeader): Either[SignedTransactionError, SignedTransactionValid] =
       val sender = Account(nonce = UInt256(0), balance = UInt256(BigInt(10).pow(24)))
-      val upfront = UInt256(stx.tx.gasLimit.value * 1_000_000_000 + stx.tx.value)
+      val upfront = stx.tx.gasLimit.value * 1_000_000_000 + stx.tx.value
       StdSignedTransactionValidator.validate(stx, sender, header, upfront, 0)(using config)
 
     /** The estimate is valid, one gas less is not (with `belowError`), and executing the estimate charges exactly it.

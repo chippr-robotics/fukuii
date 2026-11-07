@@ -73,7 +73,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers:
 
   val accumGasUsed = 0 // Both are the first tx in the block
 
-  val upfrontGasCost: UInt256 = UInt256(senderBalance / 2)
+  val upfrontGasCost: BigInt = BigInt(senderBalance / 2)
 
   def validateStx(
       stx: SignedTransaction,
@@ -206,7 +206,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in {
-    val senderAccountWithLowBalance = senderAccountAfterHomestead.copy(balance = upfrontGasCost / 2)
+    val senderAccountWithLowBalance = senderAccountAfterHomestead.copy(balance = UInt256(upfrontGasCost / 2))
     StdSignedTransactionValidator.validate(
       stx = signedTxAfterHomestead,
       senderAccount = senderAccountWithLowBalance,
