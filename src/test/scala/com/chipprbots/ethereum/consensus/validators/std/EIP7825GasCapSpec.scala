@@ -39,10 +39,15 @@ class EIP7825GasCapSpec
   val senderAddress: Address = Address(senderKeys)
   val senderAccount: Account = Account(nonce = 0, balance = UInt256(BigInt("1000000000000000000000")))
 
+  /** The post-Olympia header's base fee. The transactions pay exactly it, so EIP-1559's `gasPrice >= baseFee` holds and
+    * the gas cap is the only rule under test.
+    */
+  val baseFee: BigInt = BigInt(1000000000)
+
   def makeTx(gasLimit: BigInt): SignedTransaction =
     val tx = LegacyTransaction(
       nonce = 0,
-      gasPrice = GasPrice(1),
+      gasPrice = GasPrice(baseFee),
       gasLimit = GasAmount(gasLimit),
       receivingAddress = Address(1),
       value = 0,
@@ -51,7 +56,7 @@ class EIP7825GasCapSpec
     SignedTransaction.sign(tx, senderKeys, Some(config.chainId.value))
 
   def makeHeader(number: BigInt): BlockHeader =
-    val extraFields = if number >= olympiaBlock then HefPostOlympia(BigInt(1000000000)) else HefEmpty
+    val extraFields = if number >= olympiaBlock then HefPostOlympia(baseFee) else HefEmpty
     Fixtures.Blocks.ValidBlock.header.copy(
       number = BlockNumber(number),
       gasLimit = GasAmount(BigInt(100_000_000)),

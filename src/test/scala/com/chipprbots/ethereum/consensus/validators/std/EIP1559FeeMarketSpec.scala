@@ -18,8 +18,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** L9 — EIP-1559 fee market validation at the transaction validator layer.
   *
-  * Covers validateMaxFeeAgainstBaseFee for Type-2 (dynamic fee), Type-3 (blob), and legacy transactions on ETC
-  * post-Mystique (EIP-1559 active). All fee-market validations happen before state access.
+  * Covers validateMaxFeeAgainstBaseFee for Type-2 (dynamic fee), Type-3 (blob), and legacy transactions on ETC with
+  * Olympia (EIP-1559) active. All fee-market validations happen before state access.
   */
 class EIP1559FeeMarketSpec
     extends AnyFlatSpec
@@ -144,16 +144,18 @@ class EIP1559FeeMarketSpec
 
   // ── Legacy tx in EIP-1559 blocks ──────────────────────────────────────────
 
-  it should "not apply baseFee check to legacy transactions (they pay gasPrice post-execution)" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    // Legacy tx with gasPrice below baseFee — fee market check does NOT apply to legacy
-    val lowGasPrice = baseFee / 2
-    validate(signLegacy(gasPrice = lowGasPrice)) match
-      case Left(TransactionSyntaxError(reason)) if reason.contains("INSUFFICIENT_MAX_FEE_PER_GAS") =>
-        fail("Legacy tx should not be checked against baseFee")
-      case _ => succeed
+  // A legacy tx's gasPrice is its fee cap. EIP-1559 normalises it to max_fee_per_gas = gas_price and asserts
+  // max_fee_per_gas >= base_fee_per_gas for every transaction; go-ethereum / core-geth `preCheck` reject it as
+  // ErrFeeCapTooLow (GasFeeCap is the gas price for types 0 and 1); the execution-spec tests name it
+  // INSUFFICIENT_MAX_FEE_PER_GAS.
+  it should "reject legacy tx when gasPrice < baseFee" taggedAs (UnitTest, ConsensusTest) in {
+    val result = validate(signLegacy(gasPrice = baseFee / 2))
+    result shouldBe a[Left[?, ?]]
+    result.left.toOption.get.asInstanceOf[TransactionSyntaxError].reason should include("INSUFFICIENT_MAX_FEE_PER_GAS")
+  }
+
+  it should "accept legacy tx when gasPrice exactly equals baseFee" taggedAs (UnitTest, ConsensusTest) in {
+    validate(signLegacy(gasPrice = baseFee)) shouldBe a[Right[?, ?]]
   }
 
   it should "not apply priority fee inversion check to legacy transactions" taggedAs (UnitTest, ConsensusTest) in {

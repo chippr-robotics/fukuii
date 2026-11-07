@@ -116,9 +116,14 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         )
       case _ => Right(SignedTransactionValid)
 
-  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
-    * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and
-    * Type-1 txs are post-paid at tx.gasPrice.
+  /** EIP-1559: once the block carries a base fee, every transaction must be willing to pay it.
+    *   - Types 2, 3 and 4: reject maxPriorityFeePerGas > maxFeePerGas, and maxFeePerGas < baseFee.
+    *   - Types 0 and 1: the gas price is the fee cap (EIP-1559 normalises it to max_fee_per_gas =
+    *     max_priority_fee_per_gas = gas_price), so gasPrice < baseFee is rejected the same way.
+    *
+    * go-ethereum's and core-geth's `preCheck` return ErrFeeCapTooLow for both, `GasFeeCap` being the gas price for
+    * types 0 and 1; the execution-spec tests name it INSUFFICIENT_MAX_FEE_PER_GAS. A header carries a base fee from
+    * London on ETH and from Olympia on ETC, so the header itself gates the rule.
     */
   private def validateMaxFeeAgainstBaseFee(
       stx: SignedTransaction,
@@ -133,7 +138,16 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         Some((sct.maxFeePerGas, sct.maxPriorityFeePerGas))
       case _ => None
     feeFields match
-      case None => Right(SignedTransactionValid)
+      case None =>
+        // Types 0 and 1: the gas price is the fee cap.
+        blockHeader.baseFee match
+          case Some(baseFee) if stx.tx.gasPrice.value < baseFee =>
+            Left(
+              TransactionSyntaxError(
+                s"INSUFFICIENT_MAX_FEE_PER_GAS: gasPrice (${stx.tx.gasPrice.value}) < baseFee ($baseFee)"
+              )
+            )
+          case _ => Right(SignedTransactionValid)
       case Some((maxFee, prio)) =>
         val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
         if prio > maxFee then Left(TransactionSyntaxError(s"maxPriorityFeePerGas ($prio) > maxFeePerGas ($maxFee)"))
