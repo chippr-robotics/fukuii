@@ -4,11 +4,11 @@
 
 **Created**: 2026-10-17
 
-**Status**: Clarified (2026-11-07). GT-1 reported 2026-11-06; scoped as one end-state interpreter design (fixed-width type plus an in-place word stack), see Clarifications; next `/speckit-plan`. Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
+**Status**: Planned (2026-11-07). `plan.md` and `tasks.md` exist: 104 tasks in seven phases (prerequisites, then the slices S0 golden pins, S1 the limb type with GT-2, S2 the T-005 conversions, S3 the word stack and S4 mutable Memory, then closure), no code landed; next `/speckit-implement`, S0 first. Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
 request on 2026-10-17, because it is pure consensus code under the consensus-change protocol and should not be
-scheduled behind a storage gate. To be fleshed out with `/speckit-specify` and `/speckit-clarify` once the impact
-analysis (GT-1) has reported, then `/speckit-plan` and `/speckit-tasks`. The Gates and Design constraints sections are
-binding on that later work.
+scheduled behind a storage gate. GT-1 reported 2026-11-06, and the Clarifications of 2026-11-07 scoped one end-state
+interpreter design (fixed-width type plus an in-place word stack). The Gates and Design constraints sections are
+binding on the implementation.
 
 **Sequence**: after spec 020 (Scala 3.9 LTS toolchain), in parallel with spec 017 (they touch different packages:
 this spec `domain/UInt256` and `vm/`, 017 `ledger/` and `db/`), before spec 018's Track R re-measures trace
@@ -21,7 +21,7 @@ re-execution (018 SC-016) and before spec 019's SP-1b consumes the type (019 FR-
   masking sites and Track C's proposer view meet, so the two are sequenced per PR.
 - Spec 020's code has landed (PRs 3 to 7, the last #1722); its header still has to be closed.
 
-**In flight**: `fukuii-fc` (local session), PR #1729 (branch `docs/spec-018-021-planning`): clarified; next `/speckit-plan`
+**In flight**: `fukuii-fc` (local session), branch `wt/021-plan`: planned and tasked; next `/speckit-implement`
 
 **Depends on**: spec 020 landed (so the implementation is written once on the 3.9 toolchain and can use its `inline`
 and opaque-type facilities without a later rewrite). Nothing in storage.
@@ -53,6 +53,10 @@ stable client is to build correctly." One code path for both chains, and the end
 - Q (D3): building a value from more than 32 bytes throws. → A: **Keep it.** It is input validation, not arithmetic.
 - Q (D4, OQ-4): what happens to the stack's representation? → A: It is **in scope** as part of the word stack. Its
   design constraints come from GT-1 part A §6 (DC-8).
+- Q (asked at /speckit-plan, 2026-11-07): is a mutable, in-place EVM `Memory` part of this spec, or a follow-up spec? → A:
+  **Part of this spec** (the end-state rule). It is its own slice after the word stack (G-6, FR-012), under the same gates
+  and DC-8-style rules: the tracers see the memory as it was before each step, and a failed operation leaves memory as it
+  was.
 
 ### GT-1 result (2026-11-06)
 
@@ -118,6 +122,9 @@ target is "one small flat object per result, no `BigInteger` on the path".
   (division by zero already returns zero per EVM semantics, as `zeroCheck` does today).
 - G-5 In-place arithmetic on a mutable word stack inside the interpreter, so the hot loop allocates nothing per opcode.
   *(Clarified 2026-11-07: part of the one end-state design, no longer gated on measurement.)*
+- G-6 *(2026-11-07)* An in-place, mutable EVM `Memory` (a growable byte buffer per call frame, as in go-ethereum), so that
+  MSTORE, MLOAD, MCOPY, the copy opcodes and RETURN do not copy the whole memory per operation. The semantics are unchanged:
+  memory-expansion gas, the 32-byte word rounding, zero fill and every byte read and written stay byte-identical.
 
 ## Non-goals
 
@@ -162,8 +169,12 @@ signs ETC, `beacon` ETH. *(Clarified 2026-11-07.)*
 - The ETC side follows forge's S4: the ETC-typed legacy suite, pre-Spiral ethereum/tests, a Mordor two-tree
   differential across its fork transitions, and an ETC mainnet two-tree differential. Per-transaction receipt roots
   before Atlantis must be equal too.
-- ETC mainnet state does not exist yet, so its differential uses the same block source as spec 018's offline ETC import
-  (018 plan, open item 1).
+- *(Corrected 2026-11-07, forge's plan review.)* ETC mainnet is synced on `fukuii-fc`: a SNAP sync with pivot
+  25,688,690 and a verified root. The ETC mainnet differential has two parts:
+  - an offline import from genesis of blocks 0 to 5,100,000, the same block source as spec 018's offline ETC import;
+  - a head window imported into a copy of that synced state (plan, GT-3 row 10b).
+
+  Blocks between 5.1M and the head have no state source, which is a declared gap that forge signed (plan).
 
 **GT-4 — Measurement (before claiming anything).** JFR allocation profile of `debug_traceBlockByNumber` over the fixture
 blocks before and after; `[IMPORT-TIMING]` p50/p99 on the fixed ranges; the figures published in `research.md`. *(Clarified 2026-11-07: GT-4
@@ -310,6 +321,13 @@ Spec 019's SP-1b translates `UInt256` without a `BigInt` shim.
   - S7: any T-005 rewrite of `calcMemCost` or `wordsForBytes` keeps size arithmetic unbounded, with vectors
     (2^256−1, 1) and (2^64, 2^64).
   - S8: `[IMPORT-TIMING]` on the ETC ranges stays within 10%, or `toBigInt` is memoised.
+- **FR-012** *(2026-11-07, G-6.)* EVM `Memory` MUST become an in-place, mutable buffer per call frame, delivered as its own
+  slice after the word stack. That slice has its own GT-2 (a differential against today's immutable `Memory` on generated
+  operation sequences) and GT-3 pass, and it MUST preserve:
+  - memory-expansion gas and its overflow and out-of-gas behaviour;
+  - byte-identical reads, writes and zero fill;
+  - the pre-step view the tracers read (copy or snapshot, as DC-8 requires for the stack);
+  - memory left unchanged when an operation fails a check before it writes.
 
 ### Key Entities
 
