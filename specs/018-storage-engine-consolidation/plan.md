@@ -677,8 +677,15 @@ DELETED in C8a/C8b: snap/PathToHashExporter.scala, StorageScheme, SnapHashTrie a
 
 ### Remaining open items (genuinely open)
 
-1. **The source of the ETC blocks 0 to 5,100,000 for forge's offline import is OPEN, decided later (user, 2026-11-06).**
-   Candidates, none chosen:
+1. **DECIDED 2026-11-07 (user: "this machine should sync etc then we can push to the nfs directory"):** source (c).
+   `fukuii-fc` syncs ETC mainnet with the current release (v0.10.48, SNAP with chain download on, started 2026-11-07).
+   Once it is synced and stopped, `fukuii etc export <file> 0 5100000` (`ChainTool`) writes one chain file from the
+   header-validated canonical chain. That file is pushed to the user's NFS directory, and both the pinned jar and the
+   Track C build replay it offline from genesis.
+   - It keeps (a)'s one-deterministic-file property without a core-geth node.
+   - If the sync fails, (a) and (b) below remain the fallbacks.
+
+   The original candidates (2026-11-06):
    - (a) a `chain.rlp` from `geth export` (core-geth) on a synced ETC node: is there one, and is its history complete from
      genesis?
    - (b) fukuii's own full sync from genesis over p2p with SNAP off, stopped at a height: the whole chain is one to three months
