@@ -17,4 +17,4 @@ kept beside the pinned jar, outside the tree, and its SHA-256 is recorded in the
 | ETC 0–5,100,000 chain file | T010 | **decided 2026-11-07:** fukuii-fc's ETC mainnet sync (v0.10.48, SNAP with chain download, started 2026-11-07 15:30Z), then `fukuii etc export <file> 0 5100000` with the node stopped. Kept on the user's NFS share; its SHA-256 is recorded here | sync running |
 | `m14-etc-import-cost.md` | T012 | the pinned jar, ETC 0–2M from genesis | open |
 | `m1-diff-size.md` | T013 | an instrumented throwaway build | open |
-| `oracle-tests.md` | T015 | copied from data-model §8 | open |
+| `oracle-tests.md` | T015 | copied from data-model §8 | **Frozen 2026-11-07** |
