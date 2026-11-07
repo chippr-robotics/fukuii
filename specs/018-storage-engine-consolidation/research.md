@@ -328,3 +328,91 @@ Track R, T-010 and T-011 land, and they never make the JVM beat Go on arithmetic
 
 **Rule for external material.** No throughput or concurrency claim about fukuii leaves the project until GT-1's RPC
 arm (FR-028) has produced the figures on the same hardware as the comparators.
+
+## 17. The Path copy at Sepolia scale (T063), and what removing it needs
+
+*Added 2026-11-06. The evidence comes from spec 022's T063 run on `fukuii-fc` (#1718, written up in PR #1726). The
+dependency map is a read-only `vault` review of staging `49dd46d1b` (v0.10.47); nothing was prototyped. The geth and
+Besu notes come from the reviewer's recollection, not from their source.*
+
+**What T063 measured.** The host was 6 cores, 12 GB WSL2 and an NVMe disk; the versions were v0.10.40, then v0.10.46.
+
+- **SNAP itself was fast:** 1 h 25 min from storage done to hand-off.
+- **Run 1: the copy ran out of heap.** The `[PATH-PUBLISH]` copy ran out of heap at `-Xmx4g` after 37M nodes, with one
+  `netDeltaByNode` entry kept per node. #1724 fixed it: the bulk-load store keeps no deltas or snapshot rows.
+- **Run 2: the copy was read-bound.**
+  - The account trie took 79 min for 215M nodes.
+  - The storage phase covered 556.6M nodes in 9.3 h, slowing from 35.7k to 9.2k nodes/s as CF `n` grew.
+  - The publish thread's JFR share in `RocksDB.get` rose from 62.9% to 82.3% hour by hour.
+  - The block cache sat full (1 GiB, with `cache_index_and_filter_blocks=1`). `max_open_files` was 512 against 4,713
+    SSTs. There were no write stalls and the disk was nearly idle. CF `n` reached 70 GB, with compaction write
+    amplification of 12.6.
+  - The run was stopped at about 40–50% of an estimated 1.1–1.4B storage nodes.
+- **Run 1's 37M nodes stay at refs=2** and are never pruned.
+
+**Why the copy is read-bound.** `PathToHashExporter.publish` iterates CFs `t` then `u` in 10k chunks. For each node it
+does one keccak, **one point `get` on CF `n`** (the new reference count is the existing count plus one), and one put of
+the wrapper. vault's reading, unmeasured: filters and index blocks, about 1% of CF `n`, compete with the memtables for
+the shared 1 GiB cache, so random lookups reload filter blocks from the page cache. That fits CPU in `get` with an idle
+disk; the `rocksdb.block.cache.filter.miss` ticker would confirm it. This is finding F2 at full scale.
+
+**What removing the copy touches.** Today every reader of state resolves by hash in CF `n`:
+- execution and the BAL prefetch
+- commit, prune, rollback and reorg
+- RPC: `BlockchainReader`, `eth_getProof`, GraphQL
+- `StxLedger`, `eth_call`, simulate and trace
+- SNAP serving (root-addressed, a 128-block window)
+- the background audit (hash-only)
+- on-demand fetch
+- checkpoint export and import, and recovery scans
+
+`MptStorage` has 7 implementors and is referenced by 50 main and 147 test files. Only SNAP writes `t`/`u`/`d`; CF `a` is
+never written. All of them freeze at `snapSyncDone`.
+
+**Dependencies.**
+- **On Track E: none.** Today's `DataSource` already has atomic multi-CF batches, `deleteRange`, `scanRange` and
+  `multiGet`. "Track F after Track E" was an ordering for measurement.
+- **Item 8 (path-aware resolution):** `forge` and `beacon` before implementation, plus the API ripple above. The trie
+  tracks paths on reads but not on writes (`put`/`remove`), and storage-trie and RPC callers must carry the account
+  owner.
+- **Item 6 (changesets):** needs an atomic multi-CF batch (exists), `deleteRange` for pruning (exists, not atomic, so
+  pruning must be idempotent) and a new CF.
+- **Item 10 (retiring the copy):**
+  - The DC-1 barrier is already met by the synced `snapSyncDone` commit.
+  - The hand-off sample (spec 022 decision 11) lives in `PathToHashExporter` and must move.
+  - The audit and finalization must become position-aware.
+
+**The in-place problem, and the two options.** CF `n` is multi-version: sibling branches coexist by hash. `t`/`u` hold
+one version per position.
+
+- **geth PBSS:**
+  - a disk layer plus up to 128 in-memory diff layers by root;
+  - reads walk the layers and check keccak at `(path, hash)`;
+  - reverse diffs in the freezer allow rollback.
+- **Besu Bonsai:**
+  - one head state plus a per-block trie log of prior and new values;
+  - a reorg rolls back to the common ancestor and forward again;
+  - history reads layer trie logs over a snapshot, bounded at about 512 blocks.
+
+| | Option X: frozen base | **Option Y: changesets (chosen 2026-11-06)** |
+| --- | --- | --- |
+| How | `t`/`u` never change. Look in CF `n` first, else at `(owner, path)` with a keccak check; post-pivot nodes stay in CF `n` under reference counts. | Path nodes are written in place, with a per-block changeset `(owner, path, prior, new)` in the same batch and an in-memory overlay of recent blocks for siblings and non-head roots. Reference counts are retired on Path. |
+| Size (first estimate) | about 1,100 LOC + tests | adds about 1.5–2.5k LOC (item 6) before the copy is retired |
+| Size (vault's slice design, same day, Path chains only) | about 6,000 lines with tests: item 8 ≈ 3,400 plus retiring the copy ≈ 2,850; derived from Y's slices, not designed separately | about 12,000 lines with tests over 11 PRs; item 6 alone ≈ 5,800. The first estimate left out the readers, the overlay isolation, head moves and the Engine API, and the hand-off and guard. The user kept Y. |
+| Cost | The base is never pruned; "present means complete" must hold over the union of base and CF `n`. | The overlay and reorg handling are the hard part. It freezes the changeset format first (amendment request #2). |
+
+**ETC.** `storage-scheme` is set per chain. ETC SNAP and the checkpoint importer pay the same per-node `get`, since they
+share the reference-counted `update`; #1724 left that for `forge`. The review suggested doing Path first and ETC later
+(a 10a/10b split). Under the user's standing rule of 2026-11-06 (one code path for both chains, no staged plans; spec
+Clarifications), both chains move together in the copy-removal track. Moving ETC adds `forge`'s scope: PoW reorgs, block
+generation and mining over the new layout, ETC SNAP on Path, and the position-assigning checkpoint importer (FR-032).
+The sizes above are for the Path chains; vault's revision re-prices the track with ETC included.
+
+**Interim relief on 0.11.x** (information only; the user chose to remove the copy, not to speed it up). These are
+existing, reversible flags with no format effect:
+- `partition-index-and-filters = true` (applies to new SSTs)
+- `max-open-files = -1`
+- a larger memory budget
+
+A per-chunk `multiGet` would load each filter once per batch. A copy that skips the read and assumes refs=1 is
+**unsafe**: it undercounts shared nodes.

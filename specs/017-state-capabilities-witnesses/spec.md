@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-11
 
-**Status**: Draft (2026-10-30). (stub). Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
+**Status**: Parked (2026-11-06). Waits for execution-specs to release `ExecutionWitness` (today only on the `projects/zkevm` branch, draft PR #2268); reopens with `/speckit-specify` from the 2026-11-06 review below. (stub). Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's
 review of staging 0.9.59: the recorder is one `MptStorage` decorator at `BlockExecution.buildInitialWorld` (DC-3),
 the BAL prefetcher stays enabled (DC-2), and DC-6 to DC-10 name the gaps the decorator alone does not cover.
 **Revised again 2026-10-11 (Ethereum roadmap alignment)**: ETH mainnet is the design driver. The witness is now
@@ -14,6 +14,12 @@ self-check (DC-14), and the stateless core keeps a dependency boundary that spec
 To be fleshed out with `/speckit-specify`
 and `/speckit-clarify`, then `/speckit-plan` and `/speckit-tasks`. The Design constraints section below is binding
 on that later work.
+
+**Closed (Parked) 2026-11-06.** Parked by the user's decision ("wait for the format"). The witness format is not yet
+released: `ExecutionWitness` exists only on execution-specs' `projects/zkevm` branch, and `debug_executionWitness` is not
+in execution-apis. Nothing makes witnesses mandatory: EIP-8025 was declined for Hegotá. Spec 018's copy removal (items 8,
+6 and 10, both chains) goes first and no longer waits for this spec; 018 still depends on it for items 7 and 9. Spec 021 runs without
+it. The review below is the input for the reopening.
 
 **Depends on**: spec 016's amendment of 2026-10-11, which delivers `StateIngest` (T055) and the env freeze ratchet
 (T054). **Spec 017 starts after spec 016 completes** (user decision: 017 comes after 016).
@@ -25,6 +31,63 @@ reads, SyncMode lives in SyncController, R4 scoped to Address/TrieKey/Wei, recor
 accepted as written." The source recommendation split the data plane into two typed capabilities (R1), kept SNAP on the
 ingest side (R2), added a `SyncMode` ADT (R3), opaque domain types (R4), execution witnesses (R5) and a backfill mode
 for historical witnesses (R6).
+
+## Review 2026-11-06 (input for the reopening; not yet applied to the sections below)
+
+*A read-only review of staging `49dd46d1b` (v0.10.47) by `beacon`, plus a web check of the roadmap. The sections below
+still read as written on 2026-10-11; `/speckit-specify` applies this review when the spec reopens.*
+
+**The seam holds.** Every block-import world is built in `BlockExecution.buildInitialWorld` (`BlockExecution.scala:358-388`,
+with the `staged.fold` at 377-380). None of these reads state outside that world:
+- the EIP-4788 and EIP-2935 system calls, the Amsterdam preamble, and EIP-7002/7251/8282;
+- withdrawals and the DAO drain.
+
+EIP-6110 parsing, the requests hash, post-execution validation and BAL validation read no state at all.
+
+**Facts that changed or were missed:**
+- **In-block writes (DC-3, FR-002).** The world is persisted after every transaction (`BlockPreparator.scala:689-693`),
+  so later `get`s fetch nodes written earlier in the same block. A plain node recorder therefore records post-state
+  nodes, as it does for code persisted in the block (`InMemoryWorldStateProxy.scala:85-94`) and for the BAL builder's
+  post-state reads. Reference witnesses carry pre-state only.
+- **EXTCODEHASH (DC-6, DC-11).** It hashes the code bytes (`OpCode.scala:643`), where geth reads the account's codeHash,
+  so the witness would carry extra code. The fix touches `vm/` (beacon and forge).
+- **BLOCKHASH ancestors (DC-7).** `AncestorBlockHashes` is now a stateful class with lazy header reads and a
+  canonical-index fallback (`AncestorBlockHashes.scala:44-92`). Capture must wrap `headerByHash`, fail the fallback, and
+  always include the parent header.
+- **Incomplete witnesses (FR-005).** An absent node or code surfaces as any `MissingNodeException` subtype (Account,
+  Storage, Code, Corrupt), not only `MissingRootNodeException`.
+- **Flat slot storage (DC-8).** No world gets `flatSlotStorage`, SNAP included.
+- **Block preparation (OQ-4).** `BlockPreparator.prepareBlock` is at 1043-1063 and is used by the PoW and testmode
+  generators only. The Engine API proposer goes through `buildInitialWorld` (`isProposer` is ignored), so capture must
+  skip proposer runs.
+- **Paths around the seam.** `TestModeBlockExecution` overrides `buildInitialWorld`, so hive in testmode bypasses the
+  recorder. `BlockImportGate.alreadyExecuted` short-circuits re-execution, so a witness can go missing.
+- **SyncMode (G-4, FR-007).** `enum SyncMode { Snap, Regular }` already exists (`SyncController.scala:2707`), and
+  "Backfill" already names SNAP's background chain download.
+- **Prerequisites.** `StateIngest` exists with `Durability = {Default}` only and exposes `stateTries`, which weakens
+  DC-4. `verify.py` has no rule that bans a name. No slow tier (#1483) exists. T-000's dead ext-VM config is still in
+  `utils/Config.scala:453-490`.
+
+**The roadmap, re-verified 2026-11-06:**
+- **The format.** `ExecutionWitness` is SSZ with three fields, `state`, `codes` and `headers` (RLP), and **no `keys`**.
+  The host-recording rules are normative. Fixtures cover Amsterdam and later only.
+- **The RPC.** `debug_executionWitness` is not in execution-apis, and the client shapes differ: geth returns JSON
+  headers and never fills `keys`; Besu has no `keys`. The successor is a REST+SSZ Engine endpoint
+  (`POST /engine/v1/payloads/witness`, execution-apis #885, open, already implemented by reth and Nethermind).
+- **How reth builds it.** reth re-executes the block on its parent state and builds the witness from the recorded key
+  set plus a proof walk: 018's DC-7 mechanism. A full node serves the last 10,064 blocks.
+- **Mandates.** No official "last N blocks" requirement was found. EIP-8025 (optional proofs) was declined for Hegotá
+  (2026-10-15). EIP-7864 is still a draft with no fork, and EIP-8297 competes with it.
+- **EIP-8282** (builder requests, in Glamsterdam) is an end-of-block request call.
+
+**Recommendations for the reopening:**
+- **Recorder:** build the key-set recorder plus proof walk once, here, instead of `RecordingMptStorage` now and 018's
+  key-set recorder later. It avoids the in-block-writes problem and survives flat reads.
+- **First release:** both chains on the same code path, under the user's standing rule of 2026-11-06 ("we build for eth
+  and etc is along for the ride"; no staged plans). ETH drives the design and the fixtures; ETC is checked by the
+  differential and the stateless re-execution, since the conformance fixtures are Amsterdam-only. Scope the witness
+  store, backfill and the REST endpoint at the reopening, as one design rather than as later stages.
+- **Naming:** rename the new `SyncMode` and "backfill", or extend the existing ones.
 
 ## Problem
 

@@ -11,6 +11,13 @@ Track H after GT-3. **Revised 2026-10-17**: engine chosen by bake-off (not fixed
 tier (Track H); ETC on the unified layout is decided, not gated. **Revised again 2026-10-17 (read-serving)**: Track R (bounded read executors, streaming codecs,
 fixed-width `UInt256`), the GT-1 RPC read-load arm against Geth, Besu, Erigon and Reth, the `dbLock` close-fence as a
 standalone fix PR, and the deployment topology (DC-16); see research §16 for the assessment that prompted them.
+**Revised 2026-11-06 (after T063; spec Clarifications, session 2026-11-06):**
+- **Track C** (Phase 1b), the unified path-live layout for both chains, runs first after 0.11.0, on RocksDB, ahead of
+  Track E and of spec 017. Spec 017 is parked until execution-specs releases `ExecutionWitness`, and only items 7 and 9
+  depend on it.
+- Track F's items 6 and 8 and the copy and Hash-scheme retirement of item 10 move into Track C.
+- Under the user's standing rule (one infrastructure for both chains, no staged or release-level transitions, no external
+  users of old versions), the transition windows in this plan are removed.
 
 ## Summary
 
@@ -157,7 +164,8 @@ two in `ledger/`, plus the deletion in `snap/`. Track H touches one file in `jso
 | FFM bindings over vendored source (if an FFM-bound engine wins) | No stable Maven artifact for libmdbx exists (research §8); a snapshot from a dormant repo is not a dependency a consensus client can carry | `lmdbjava` is published and is in the bake-off; it loses only if its measured properties lose |
 | An append-only segment store we own | Immutable chain data must not compete with state for engine pages at gigablock volumes (DC-13); reth and Erigon both converged on this | keeping chain data in the state engine is the status quo being measured against |
 | An optional networked cold store | Logs over long ranges, witnesses and aged history are scans, not point reads (research §13); the hot tier should not carry them | files only (era + witness files) is the GT-3 alternative and may win |
-| Two engines compiled in for one minor release | Operators need a build that opens both layouts to plan a resync; CI needs both for SC-001 | a hard cut would leave no differential oracle and no safe rollback for a live Sepolia node |
+| Two engines compiled in, within Track E only *(revised 2026-11-06)* | CI needs both for SC-001's differential while Track E is in development | the "one minor release" operator window is removed under the user's standing rule: no external operator relies on old datadirs. RocksDB is removed in the same track once SC-001 and the soaks are green |
+| A pinned pre-track jar as the oracle *(Track C, 2026-11-06)* | Track C deletes the Hash scheme, so no in-tree build can serve as the roots-equal oracle after C8 | keeping the Hash scheme in tree as an oracle would keep two layouts, which the standing rule rules out |
 
 ## Phase 0 — Research and measurement (after spec 016; off the node host)
 
@@ -196,7 +204,504 @@ on the OQs.
 - GT-2: constitution amendment + INF-007 merged.
 - Re-run the Constitution Check.
 
-## Phase 2 — Track E: the engine (after spec 017 completes)
+## Phase 1b — Track C: the unified path-live layout (after 0.11.0; before Track E and spec 017)
+
+**Status**: design **revised after S0 review rounds 1 and 2** (`beacon` for ETH, `forge` for ETC). Round 1 (2026-11-06): 3 REJECTs
+resolved, every SIGN WITH CHANGES applied. **Round 2 (2026-11-07): no REJECT; every SIGN WITH CHANGES applied** (see "S0 record
+round 1" and "round 2" below). There is no round 3: each reviewer verifies the applied changes at the owning slice's PR, and
+"S0 prerequisites per slice" says which text each slice waits on. C1 to C3a wait on nothing. Written by `vault`. Companion: [data-model.md](./data-model.md) (formats, overlay, design record A
+to I). Evidence base: `wt/plan-018-021` at staging `49dd46d1b` (v0.10.47). Nothing here is implemented.
+
+Track C runs first, after 0.11.0, on RocksDB with today's `DataSource`, ahead of Track E and of spec 017. It depends on
+neither, nor on GT-1 or the constitution amendment.
+
+### The rules this plan is built to (user, 2026-11-06)
+
+- **One infrastructure, both chains.** ETH is the build target and ETC comes along. Item 10 is one gate: ETH, Sepolia,
+  Platåberget **and ETC (Mordor, mainnet)** move onto the same path-keyed layout (nodes in place, changesets, overlay,
+  write-through) in this track, and the **Hash scheme is retired in it**: CF `n` as live state, `ReferenceCountNodeStorage`,
+  `ReferenceCountedStateStorage`, `CachedReferenceCountedStateStorage`, `storage-scheme`, `PathToHashExporter`. There is no
+  10a/10b split. Consensus rules still differ per chain by config (`forBlock` versus `forTimestamp`); only the storage
+  infrastructure is shared.
+- **No legacy-datadir machinery.** One layout marker. A datadir without it, on either chain, is refused at start with a resync
+  message unless it is empty. No adoption, no migration, no legacy reader, no finished-copy versus mid-copy detection. This
+  reverses the user's earlier adopt-in-place choice.
+- **No release-level transition.** No flag ships default-off for a release and flips later; no "one minor release" windows.
+  The only flag is an in-development guard that keeps staging green between PRs and is deleted, together with the Hash-scheme
+  code, in the last slice.
+- Kept: Option Y, write-through (no journal), the changeset record, checkpoint import funded and required, T064's intent on a
+  fresh datadir, the overlay budget left to M1 and M2. **Two pruning modes on both chains, `basic` and `archive`: `inmemory` is
+  retired** (user, later on 2026-11-06, reversing "keep all three") and rejected at start on both chains with a clear message,
+  with no deprecation window.
+
+### Summary
+
+| Item | Slices | What it delivers |
+| --- | --- | --- |
+| 8, path-aware node resolution | C1, C2a, C2b | The trie reports positions; a position store resolves by `(owner, path)` with hash verification; every reader can be handed it; the typed `StateFault`s exist |
+| 6, changesets | C3a, C3b, C3c, C4a, C4b, C4d, C4e (C4c is withdrawn; its id is not reused) | The `BlockDiff` record and CF `v`; the in-place canonical commit under the state lock; the proposer view, the bypass writers and the ported test harnesses; the overlay; head moves planned from the anchor; the PoS arms (Engine API, local recovery, finality-aware retention) and the PoW arms (pinned branches, `SYNC-FORK`, result mapping) |
+| 10, one gate | C5a, C5b, C5c, C6, C7, C8a, C8b | Hand-off without a copy, with the ancestor window; the layout guard; the audit, on-demand fetch and recovery scans by position; the checkpoint v2 format and importer; ETC enablement and mainnet readiness; the soak and exit gate; then deletion of the exporter and the Hash scheme and removal of the guard flag |
+
+**Order.** Item 6 lands before item 10, as decided. Because C3 and C4 cannot be soaked on a live chain without a hand-off that
+does not publish, the hand-off (C5) is built behind the same in-development guard before the soak (C7). The guard
+`fukuii.state.path-live` is `false` while slices land, selects the unified layout when `true`, and is removed in C8b; no
+release is cut from the track with the guard as an operator option, and the soak runs with it on. **The harness port (C3c) is
+before every slice that claims a roots-equal check**, because a gate that ran on the Hash-scheme harnesses would prove nothing
+about the position store (S0 record, item 14).
+
+**The oracle.** The Hash scheme is deleted in this track, so no in-tree build can serve as the differential oracle after C8.
+Before C1 the last pre-track release is **pinned as a jar outside the tree** (SHA-256 recorded), with recorded roots for the
+fixed Mordor, Sepolia and Platåberget ranges, **and the ETH hive and EEST baselines (pass lists per suite)**, and kept until
+EG-12 passes and the first ETC v2 archive has been re-imported on a second datadir, and at least one release past C8b. Every
+"roots equal" check below is against it. For ETC mainnet there is no pre-state to record: its oracle is the chain itself,
+through an import from genesis validated block by block against the canonical headers (EG-1).
+
+### Slices
+
+Sizes are rough, in lines, main code / tests. A slice that would exceed about 1,500 lines of main code is split. After S0
+round 2 the additions total about **21,200 lines (about 11,050 main, 10,140 tests)**; the retirement of `inmemory` and the Hash scheme removes about 6,800 (about
+3,300 main, 3,500 tests) and migrates about 700 more test lines. Round 2 added about 390 main and 570 test lines (round 1 plus the `inmemory`
+retirement had brought the figure to about 20,200): the no-anchor refusal and the reset-owner prior (C3b, +60 / +110), the
+MockedMiner wait (C3c, +20 / +40), `saveLastBlock` and the reverse-depth refusal (C4b, +60 / +100), the escalation trigger,
+hysteresis, cool-down, loop guard and ordered clear (C4d, +150 / +180), the generation pause (C4e, +30 / +40), the symmetric
+guard (C5a, +10 / +20) and the ancestor-window chaining plus the genesis-anchor clear (C5c, +60 / +80). The first estimate was about 15,000; the increase is what the
+reviews priced and the first draft had not: the ported harnesses (C3c), the by-hash in-block layer, the state lock and the anchor
+compare-and-set, per-block reset tracking, local recovery, the PoS and PoW arms split out of one slice, the
+ancestor window, and the larger checkpoint format. Research 17's "about 1,100 for Option X plus 1.5-2.5k for item 6" priced
+none of it. (`inmemory` was costed at about 450 main and 400 test lines in C4c and is withdrawn.) Nothing here is measured; M1 to M14 (data-model 13) replace the guesses, and the sizes are set again at the end of C0.
+
+| Slice | Content | Owner / review |
+| --- | --- | --- |
+| **C0** | **S0**: rounds 1 and 2 are done (records below). Golden vectors 1 to 3 (verified independently by both reviewers) and the oracle tests frozen; the pre-track jar pinned with the hive and EEST baselines and the fixed ranges' roots recorded; the **EIP-8246 text read from an EIPs clone, and the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures recorded** (on the pinned jar's harness now, on the ported harness at C3c); the source of the ETC 0-5.1M blocks named or listed open (it gates C7, not code); M14 measured; M1 reports the largest observed diff against `max-record-bytes`. Docs and measurements only | vault authors; the reviewers have signed (no round 3); user accepts the remaining open items |
+| **C1** | Item 8a. `NibblePath`; position threading through `MerklePatriciaTrie.put`, `remove` and `fix`; reporting of replaced and absorbed nodes only; the first-event prior rule; `MptTraversals.collapseTrieAt`; the additive `MptStorage` members (`getAt`, `forOwner`, `resetOwner`, `updateNodesAt`, `rawNodesAt`); `MptStorageDecorator`. Consensus byte-identical on both chains. **M7 on Mordor within the spec 007 allocation budget is a merge gate** | vault; **forge and beacon before code**, both review the PR; wraith; eye |
+| **C2a** | Item 8b. The position store's read side: `PathMptStorage` (verifying, owner-scoped), the stale / corrupt / absent classification, the `StateFault` hierarchy, the anchor-only `StateView`, `PathStateStorage` read members, owner threading in `InMemoryWorldStateProxy` **and in the genesis loader's storage tries**, `PathPrefetchReader` over `view(parent)`, the seven implementors on the decorator base. Wired behind the in-development guard | vault; beacon (execution read path, BAL prefetch); forge (shared `InMemoryWorldStateProxy`, genesis); prism |
+| **C2b** | Item 8c. The readers: `Blockchain` and `BlockchainReader` state reads, `eth_getStorageAt` / `eth_getProof` / GraphQL signatures, the four readers the first table omitted, `StxLedger` and simulate, SNAP serving by root view and the served-root window clamp, checkpoint export (v1 here), the four recovery walkers, the hash-only mpt walkers, the **allow-list grep ratchet** on the four state accessors, `GetNodeData`, RPC stale-view retry | vault; **conduit** (RPC signatures); **herald** (SNAP serving); beacon; eye |
+| **C3a** | Item 6a. `BlockDiff`, `BlockDiffCodec` (structure-only rejections, the incomplete tombstone), `ChangesetStorage` (CF `v`, height index), `StateChangesetNamespace`, config keys. The format is a one-way door: golden vectors 1 to 3 signed before merge | vault; prism; **forge and beacon sign the golden vectors** |
+| **C3b** | Item 6b. `PathStagedState` with the **by-hash in-block layer** and the first-event prior; per-block reset tracking and the prefix-scan enumeration of a replaced storage trie with its bound and tombstone; **the state lock, the anchor compare-and-set, the epoch and the `StateMove` publication for the canonical commit**; `buildExtra(adopted)`; the three already-applied cases; **an absent anchor refuses every in-place writer**; `isBlockApplied` and `stateAvailable`; `stageBlock(parent, bn)`; the `basic` and `archive` modes; `executeBlock(staged = None)` throws; **a reset owner's priors come from the prefix scan** | vault; **beacon and forge before code**; eye |
+| **C3c** | Item 6b'. The **proposer view** for every proposer path (PoW generators, `eth_getWork`, `NoOmmersBlockGenerator`, `test_mineBlocks`, the Engine API builder, MockedMiner chaining **and its wait for the import**, the cached-world rule); the **bypass writers** (`ChainImporter` lenient and strict, test mode); the **genesis commit** (owner-scoped, empty alloc, refusal of non-empty storage when `ethCompatibleStorage = false`); the **port of the harnesses** (`EthereumTestHelper`, `EthereumTestExecutor`, `ForkChoiceBlockchainTestsSpec`, `EestBlockchainReplay`, `RpcCompatNode`) | vault; **beacon and forge before code** (proposer, genesis); conduit (RPC harness); eye |
+| **C4a** | Item 6c. `StateOverlay`: forward layers, the reverse index, the full `StateView`, move-log reads, eviction, **pinned layers**, metrics | vault; beacon (isolation); forge reviews; prism |
+| **C4b** | Item 6d. The **move core**: `HeadMove` planned from the anchor's records, `HeadMovePrepared` carried into `promoteToCanonicalHead` and `rewriteCanonicalIndex`, chunked deep moves, startup reconciliation I1 and the index check I6, the sampled post-move check, the `ConsensusStateFault` results and `Consensus.isLocalStateFault`; **`saveLastBlock` a no-op on a path-live store and `executeAndValidateBlocks` stopping at the first commit that no longer extends the anchor; the refusal on reverse depth with `reorg.max-depth` defaulting to the retention floor** | vault; **beacon and forge before code**; eye |
+| **C4c** | **Withdrawn: the `inmemory` mode is retired** (user, 2026-11-06). Its work (the undo ring, the persisted tail, the clean-shutdown flush, the restart-reach rules, the mode's durability tests) is not done. What the remaining modes needed from it is already elsewhere: the state-move lock and the crash matrix (C3b, C4b), the finalization durability test (C5a). The id is not reused, so the references to C4d and C4e stay valid. The mode's rejection at start (a one-line config check with a test) is part of C5a | n/a |
+| **C4d** | Item 6f, **PoS arms**. `forkchoiceUpdated` ordering; the designated-head arm as reverse-then-commit; `StateRecovery` (local re-execution); the Engine API answer table and the INVALID layer drop; finality-aware retention; **the escalation route: a direct `StateEscalationRequested` message to `SyncController` with PoS hysteresis (64 consecutive refusals), the cool-down and loop guard, the ordered clear (one synced batch with `clearSnapSyncDone`, then CF `v`, `t`, `u`, with a `state.reset-pending` key)**; builder stale-view retry | vault; **beacon before code**; forge reviews the shared `ConsensusImpl`; eye |
+| **C4e** | Item 6g, **PoW arms**. `reorganise` with pinned branch layers and the up-front refusal **on reverse depth, not branch length**; the `SYNC-FORK` clamp; the PoW result mapping; `fork.parentSideChain` re-execution; `REORG-PARTIAL` layer reuse; escalation through `RegularSyncStuck` (with the cool-down and loop guard); `archive` moves unbounded and chunked, **with block generation paused for the move** | vault; **forge before code**; beacon reviews; eye |
+| **C5a** | Item 10 (hand-off). Hand-off without a publish (both chains); `PathHandoffSample`; `StateLayoutGuard` (one marker, one rule, **refusing a marked datadir too while the in-development flag is off**); the synced finalization commit carrying the anchor; the genesis clear and `HealInvariant.isEmpty`; **`AncestorWindow.ensure` (256 headers, 6 bodies) as a hand-off precondition**; **`pruning.mode = "inmemory"` rejected at start on both chains** | vault; beacon; forge (ETC SNAP wiring, ancestor window); eye; the 016 ratchet stays green |
+| **C5b** | Item 10 (audit and recovery). The audit, `repairNodeAt` / `deleteBadNodeAt` (position-scoped, with a real `stillReached`), both on-demand writes of the importer, the recovery scans | vault; beacon; forge (PoW importer path); eye |
+| **C5c** | Item 10 (checkpoint), **required**. Checkpoint format version 2: genesis hash in the header, the ancestor-window entries **chained by hash to the checkpoint header and matched to their bodies**, CRC32C, the trust check, the importer's assertions and code completeness, **a genesis anchor cleared at import start**, the golden stream; version 1 refused | vault; **forge and beacon sign the format** (one-way door); eye |
+| **C6** | **ETC enablement and ETC mainnet readiness.** The ETC SNAP guard (`SyncController.scala:476-480`) and Hash wiring bypassed under the guard; the peer precondition and its logging; the PoW-specific hand-off checks; the private ETC-config PoW net and its scripts; the ETC reorg matrix; the rewards and era-boundary differential harness; the EG-12 run harness | vault; **forge signs the ETC side before code**; eye |
+| **C7** | **Soak and exit gate** (below), run with the guard on. **C7 runs EG-12.** No code | eye; user |
+| **C8a** | Retirement 1. Delete `PathToHashExporter` and the publish plumbing (destructive block below), `StorageScheme` and every Hash branch in `snap/`, the `PathPublish*` messages and their specs. **Merges only after EG-12 passes** | vault; beacon; forge (ETC SNAP); prism; the 016 ratchet |
+| **C8b** | Retirement 2, **the last slice.** Delete the Hash-scheme storages in `db/`, `getBackingStorage` and `getReadOnlyStorage` as state accessors, the pruning caches and config blocks; migrate or delete the remaining tests that use them; **remove the guard flag**; rewrite the operator docs, skills and `storage-rocksdb.md`; re-run the EG-1 subset on the final tree | vault; beacon; forge; prism; eye |
+
+#### Files, size and tests per slice
+
+| Slice | Files (main; `db/` unless noted) | Lines main / tests | Tests |
+| --- | --- | --- | --- |
+| C1 | `mpt/NibblePath.scala` (new), `mpt/MerklePatriciaTrie.scala`, `mpt/MptTraversals.scala`, `mpt/MptVisitors/RlpHashingVisitor.scala`, `storage/MptStorage.scala`, `storage/MptStorageDecorator.scala` (new) | 450 / 750 | position oracles: incremental vs full diff, `StackTrie` rebuild, single and **multi-block** reverse exactness, **several persist rounds per block**, the empty trie, genesis emits nothing vanished; EEST Amsterdam fixtures through the staged layer; **pre-Atlantis intermediate-root receipts** (ethereum/tests Frontier, Homestead, EIP-150); roots and node sets equal the pinned jar's on random sequences and recorded Mordor and Sepolia ranges; decorator-completeness (reflection over `MptStorage`); ethereum/tests; **M7 gate** |
+| C2a | `storage/pathstate/PathMptStorage.scala`, `StateView.scala`, `StateExceptions.scala`, `PathStateStorage.scala`, `PathPrefetchReader.scala` (new); `components/Storages.scala`; `ledger/InMemoryWorldStateProxy.scala`; `blockchain/data/GenesisDataLoader.scala` (owner threading); the other six implementors | 1,010 / 680 | a SNAP-built position store read through the trie equals the pinned jar's reads for the same root; mismatch classification; the fault hierarchy is outside `MPTException`; prefetch on a **sibling parent** reads through `view(parent)`, stops on a fault, and `putIfCurrent` holds; decorator forwarding; `EphemDataSource` and RocksDB |
+| C2b | `domain/Blockchain.scala`, `BlockchainReader.scala`; `jsonrpc/EthUserService`, `EthProofService`, `TestService`, `graphql/GraphQLSchema`; `ledger/StxLedger`; `jsonrpc/EthSimulateService`; `network/snapserver/SnapServer`, `NetworkPeerManagerActor`; `blockchain/checkpoint/CheckpointExporter`; the four recovery actors; `mpt/LeafWalkVisitor`, `PathTrackingLeafWalkVisitor`, `ShardEnumerator`, `MptConstructionVisitor`; `StateValidator`; `scripts` (ratchet) | 840 / 650 | rpc-compat (40) and graphql (2) unchanged; `eth_getProof` golden bytes; SNAP serve differential (account ranges, storage ranges, trie nodes and proofs byte-identical to the pinned jar's for the same root); window clamp; the grep ratchet fails on an unlisted caller; RPC under a stale view retries |
+| C3a | `storage/pathstate/BlockDiff.scala`, `BlockDiffCodec.scala`, `ChangesetStorage.scala`; `storage/Namespaces.scala`; `conf/base/state.conf` | 510 / 440 | golden vectors 1 to 3 (data-model 4.3) re-derived with `java.util.zip.CRC32C`; round trip; every structural rejection; the tombstone; height index; CF created on an existing database (RocksDB test); prune idempotence |
+| C3b | `storage/pathstate/PathStagedState.scala`, `StateLock.scala` (new); `PathStateStorage` commit members; `ledger/BlockExecution.scala` (commit mode, `buildExtra`, `stageBlock(parent, bn)`, the `staged = None` guard); `domain/Blockchain.scala`; `storage/StateStorage.scala` | 1,550 / 1,060 | import fixed Platåberget, Sepolia and Mordor ranges with the guard on: **every root equals the pinned jar's**; the Amsterdam BAL `before`/`after` reads work (by-hash layer); apply then reverse leaves every row as it was; injected failure mid-batch leaves nothing; first-event prior; replaced-trie deletion: tx1 writes, tx2 destroys, tx3 recreates; EIP-161 removal with storage; the bound writes a tombstone and **never fails the block**; **a reset owner's priors are the scanned parent rows (tx1 writes, tx2 destroys, tx3 recreates over a dead position, then reverse: every row of `u` as the parent's)**; **with the anchor deleted, FCU, the importer and a repair are refused and `t`/`u` are byte-identical**; the lock and the compare-and-set under a **deterministic interleaving test** (importer commit, `moveHead`, `newPayload` on `view(head)`, a builder view); `[IMPORT-COMMIT]` |
+| C3c | `ledger/BlockExecution.scala` (`executeForProposer`), `BlockPreparator.scala` (`prepareBlock`); `consensus/pow/blocks/*`, `MockedMiner`; `jsonrpc/EthMiningService`; `consensus/engine/EngineApiService.scala` (builder); `blockchain/data/ChainImporter.scala`, `GenesisDataLoader.scala`; `testmode/*`, `jsonrpc/TestService`; test harnesses under `src/test` | 670 / 1,140 | proposer never writes a row on an Amsterdam build with a BAL, withdrawals, all five system calls and the empty-payload fallback; a mined block with ommers has the root its import computes; MockedMiner rebuilds after import **and waits for a slow import (two blocks one second apart)**; hive startup import on the unified store, **post-merge side blocks included**; the ported harnesses run on the position store (EG-2 is then meaningful) |
+| C4a | `storage/pathstate/StateOverlay.scala`, `ForwardLayer.scala`, `ReverseIndex.scala`, `StateView.scala` (full), metrics | 910 / 750 | view of the block k back equals the state replayed from scratch; reader-versus-move interleavings; budgets, eviction and **pinning**; move-log age and `StateMove.pre` values (a coalesced reverse-plus-forward batch); a concurrency stress run |
+| C4b | `storage/pathstate/HeadMove.scala`; `domain/BlockchainWriter.scala`; `consensus/ReorgStateHandler.scala`, `Consensus.scala`, `ConsensusImpl.scala` (result types); `blockchain/sync/regular/BlockImporter.scala` (`isLocalStateFault`) | 710 / 700 | plan from the anchor even when the index is ahead or behind; the batch contains the index, the pointer and the state; chunked moves; I1 rules 1 to 4 and I6; the writer table as a test; the sampled post-move check catches an injected interior fault; **a competing head move between blocks 2 and 3 of a 5-block batch leaves best equal to the anchor, commits 1 and 2 and reports a fault for 3 to 5; a fork at `best - 2` with a 300-block branch is accepted and one at `best - retained - 1` is refused `Deep`; a reorg at the finalized lag (about 90) is not refused** |
+| C4c | *(withdrawn: `inmemory` retired)* | 0 / 0 | |
+| C4d | `consensus/engine/EngineApiService.scala`, `ForkChoiceManager.scala`; `storage/pathstate/StateRecovery.scala` (new); `consensus/ConsensusImpl.scala` (designated-head arm); `blockchain/sync/SyncController.scala` (escalation); `AppStateStorage` | 850 / 880 | the answer table; **kill -9 between `newPayload` and FCU, restart with no peers, the consensus client reaches VALID with no resync**; FCU refused leaves `currentState`, safe and finalized, payload id unchanged; INVALID_REQUESTS drops the layer and the gate memo; a designated-head branch longer than `max-forward-layers`; a side-payload chain longer than the budget, then FCU; reorg at the finalized lag (about 90); fault injection into `newPayload`, FCU and the builder; **escalation: each trigger induced; 63 consecutive refusals do not escalate and the 64th does; a second trigger inside the cool-down does not (and survives a restart); a re-offered branch is dropped at ERROR by the loop guard; kill -9 at every step of the ordered clear recovers to a clean SNAP; the anchor is never deleted before `SnapSyncDone` is cleared; healing over a tombstone-skipped dead trie (one test)**; hive Engine API suites |
+| C4e | `consensus/ConsensusImpl.scala`, `ConsensusAdapter.scala`; `blockchain/sync/regular/BlockImporter.scala`, `BlockQueue`; `storage/pathstate/StateOverlay.scala` (pin); the miner and builder pause hook | 530 / 540 | a heavier branch of 33, 50 and 64 blocks adopted, **and one of 300 blocks forking at `best - 2`**; a branch above the pinned bytes raises the retryable `BranchTooLarge`, a fork deeper than the retained depth is refused `Deep` (reverse depth, not length), never invalid; **block generation waits during a chunked archive move**; `REORG-PARTIAL` layers re-used; `fork.parentSideChain` with a lost layer re-executed; the `SYNC-FORK` rewind clamped and escalating; result mapping never reaches `reportIfProvenInvalid`; archive moves of thousands of blocks in chunks, interrupted and recovered |
+| C5a | `blockchain/sync/snap/controller/SnapFinalization.scala`; `storage/PathHandoffSample.scala`, `StateLayoutGuard.scala`, `AncestorWindow.scala` (new); `nodebuilder/NodeBuilder.scala`; `snap/heal/HealInvariant.scala` | 810 / 670 | guard table (empty, marked, other version, any non-empty unmarked datadir, each chain; **a marked datadir with the flag off, an unmarked one with it on**); finalization crash matrix; the sample on a seeded store (port of `PathToHashExportCheckSpec`); genesis clear idempotence; **the ancestor window: BLOCKHASH in the first 256 blocks and an ommer whose parent is below the pivot**; `StateIngestDurabilitySpec` order under `basic` and `archive`, and kill -9 right after the synced finalization commit leaves the rows, the anchor and the pointer; `inmemory` rejected at start on both chains; `snap-split/verify.py` green |
+| C5b | `blockchain/sync/BackgroundAudit.scala`, `snap/heal/AuditWalk.scala`; `storage/pathstate/` repair members; `regular/BlockImporter.scala`; `StorageRecoveryActor`, `BytecodeRecoveryActor`, `CombinedRecoveryScanner`/`Actor` | 910 / 650 | audit over a store with injected absent, bad-keccak and moved positions; a stale read never deletes; **a decodable node that differs from the expected one is never deleted**; on-demand fetch by position fills a hole mid-import (ETH and PoW importer); both `saveNode` call sites are `repairNodeAt`; recovery scans match the pinned jar's verdicts |
+| C5c | `blockchain/checkpoint/CheckpointArchive.scala` (v2), `CheckpointExporter.scala`, `CheckpointImporter.scala` | 860 / 680 | export then import: every root equal, on seeded tries, Mordor, Sepolia; slot-0-leaf shared across tries; identical storage roots across owners; corrupt entry, hash mismatch, CRC32C, truncation, the four assertions; wrong genesis hash and wrong expected block hash refused; **an ancestor window that does not chain (a wrong `parentHash`, a gap, a body that does not match its header) refused `BadFormat`, and `min(256, N)` headers accepted when N < 256; a crash mid-import after a genesis commit leaves no anchor**; the golden stream (data-model E.1); code completeness; version 1 refused; M9 |
+| C6 | `blockchain/sync/SyncController.scala` (guard); the peer-count logging; `consensus/pow/*` (if the PoW paths need changes beyond C3c); test harnesses and `scripts` | 440 / 550 | ETC PoW reorg matrix on Mordor and the **private ETC-config PoW net** (two or three fukuii miners plus a core-geth, Olympia at a low block); mined root equals import root; rewards and era-boundary differential; ETC ethereum/tests; the EG-12 harness; M10, M13 |
+| C8a | delete `snap/PathToHashExporter.scala` and 3 specs; `StorageScheme`, `SnapHashTrie` and every `StorageScheme.Hash` arm (64 references, 18 files); `PathPublish*` in `SNAPSyncController` and two dispatch specs | about -2,000 / -1,000 | `sbt pp`; 016 ratchet; the EG-1 subset |
+| C8b | delete `ReferenceCountNodeStorage` (520), `CachedReferenceCountedStorage` (292), `FastSyncNodeStorage`, the Hash classes of `StateStorage.scala`, pruning caches and config; remove the guard; migrate the remaining tests | about -1,300 / -2,500, plus 700 migrated | `sbt pp`; `grep` for every removed symbol is empty; EG-1 subset on the final tree |
+
+#### S0 prerequisites per slice (round 2)
+
+"Satisfied" means the text is in data-model.md or this plan as of this revision; the named reviewer verifies it at that slice's
+PR, and a deviation reopens the item.
+
+- **C0:** read the EIP-8246 text (EIPs clone) and record the 658-fixture pass count; name or list open the ETC block source; M14; M1 with the
+  largest diff against `max-record-bytes`; pin the jar, the baselines and the golden vectors. Prerequisites: none.
+- **C1, C2a, C2b, C3a:** none. Round 2 confirms nothing blocks them (item 1 signed, golden vectors verified).
+- **C3b:** beacon item 3 (iii), the no-anchor rule (data-model 7.0), and forge item 5, the reset-owner prior (3.6). Satisfied.
+- **C3c:** forge item 12, MockedMiner waits for the import (data-model E). Satisfied.
+- **C4a:** none.
+- **C4b:** forge item 3 (a) `saveLastBlock` and stop at the first non-extending commit (7.1) and (b), with beacon item 3 (i), the
+  reverse-depth refusal and the `reorg.max-depth` default (6.4, 10). Satisfied.
+- **C4d:** beacon item 3 (i) and the escalation (a) to (c): the direct message, hysteresis, the ordered clear, `state.reset-pending`
+  (Part 2 D); forge R2.3 loop guard and cool-down. Satisfied.
+- **C4e:** forge item 3 (b), (c) and (d): reverse-depth refusal, loop guard and cool-down, generation pause (6.4, 7.3, D). Satisfied.
+- **C5a:** forge item 7, the symmetric flag-off refusal (data-model 5.3). Satisfied.
+- **C5b:** none.
+- **C5c:** forge item 8 (a) and (b), the one-way door: the window chained by hash and the genesis-anchor clear (E.1). Satisfied;
+  **both reviewers sign the format again at the C5c PR before merge**, as for any one-way door.
+- **C6:** none beyond C5a.
+- **C7:** beacon item 5 (i) and the escalation (d) in the gate (EG-4, EG-15, EG-14; satisfied); **the ETC 0 to 5.1M block source named
+  (open item 1; not satisfied)**, for EG-1's ETC half.
+- **C8a:** EG-12 passes. **C8b:** none new (the symmetric guard goes with the flag).
+
+#### Test matrices (C3b, C3c, C4a to C4e, C5a, C6)
+
+**Reorg matrix, PoS and PoW** (C4b, C4d, C4e; each case checks the state root, the position map against a from-scratch replay,
+the best pointer and the canonical index): extend by one; `newPayload` then `forkchoiceUpdated`; sibling of the head, promoted;
+reorg of depth 1, 2, 8, `history - 1`, `history`, `history + 1` (the last refused with `ReorgTooDeep`, pointer unmoved); a
+reorg at the finalized lag (about 90) on a consensus-driven chain; a side branch executed in the overlay and never promoted; a
+block applied, reversed, then re-adopted without re-execution; a duplicate `newPayload` while the first is executing; the
+designated-head arm with a branch **longer than `max-forward-layers`**; a **side-payload chain longer than the budget, then
+`forkchoiceUpdated`**; `forkchoiceUpdated` **refused**, with `currentState`, safe and finalized state and the payload id
+unchanged; an `INVALID_REQUESTS` payload whose layer is dropped and whose gate memo is forgotten; `forkchoiceUpdated` **with
+attributes racing a move**; a **heavier PoW branch of 33, 50 and 64 blocks** adopted, a **300-block branch forking at `best - 2`**
+adopted (a shallow fork is never refused on length), one above the pinned bytes refused retryably (`BranchTooLarge`), and a fork
+deeper than the retained depth refused `Deep`; a `saveLastBlock` after a degraded commit writes nothing; the `SYNC-FORK` blind rewind of 128 against a reach of 64; a fork point at the SNAP pivot (the lowest legal one).
+
+**ETC PoW matrix** (C6, on Mordor, on the private ETC-config PoW net, and on recorded ETC blocks; forge reviews each case): a
+heavier fork of depth 1 and 2 (the routine case); a heavier fork of depth `history`; `REORG-PARTIAL`, where the executed prefix
+does not outweigh the head and the old head stays, **and its side blocks are re-enqueued**; a fork whose blocks carry ommers
+that reference the abandoned branch; the `SYNC-FORK` rewind; an import batch of many blocks each adopted in turn; a mined block
+imported via `MinedBlockImport`, **with ommers**; a proposer run on a stale parent; MockedMiner across several head moves; a
+range spanning an ECIP-1017 era boundary with every miner and ommer balance compared; **SELFDESTRUCT on every ETC fork,
+EIP-161 touch-deletion from Atlantis (block 8,772,000) including an "empty" account with non-empty storage, and the CREATE2
+recreate at the same address** (tx1 writes A's storage, tx2 destroys A, tx3 recreates A with S'; the owner's rows equal S''s trie
+and a reverse restores the parent); on the private net with Olympia at a low block: the treasury credit every block, the
+base-fee floor and genesis `HefPostOlympia` (`GenesisDataLoader.scala:237-238`). The `ethCompatibleStorage = false` position
+test is scoped to **private nets** (no shipped chain, ETC included, sets it false).
+
+**Crash matrix** (kill -9 at each injected point, restart, assert I1 to I6 and the answers the Engine API gives): after overlay
+commit and before `forkchoiceUpdated`, **restarting with no peers**; before a promotion batch; after it; during retention
+pruning (`basic`); during a two-block forward promotion; **during a chunk of a deep move**; **during side-branch execution,
+after the index names the side blocks and before `settleHead` (I6)**; at each of the startup reconciliation rules (data-model
+5.1); during SNAP finalization before and after the synced commit; during genesis and its clear; during a checkpoint import
+before and after its final synced batch; **at each step of an escalation (the synced batch of `clearSnapSyncDone` and the anchor delete,
+the `deleteRange` of CF `v`, of `t` and of `u`, the `state.reset-pending` removal)**, and **during a checkpoint import that started
+on a genesis anchor**. For the first: `newPayload(B+1)` answers ACCEPTED (not VALID, not INVALID), local
+re-execution runs, and the consensus client reaches VALID with no resync.
+
+**Isolation and concurrency matrix** (C3b, C4a): a reader on the anchor view during an importer canonical commit (never
+`CorruptNodeException`); a reader that starts before a move and finishes after it, for a position the move touched, one it did
+not, and a view older than `max-view-age-moves`; an execution that is retried; a prefetch that stops; an audit read that meets
+a moved position (counted as moved, never deleted); **the deterministic interleaving test**: the importer's canonical commit,
+FCU's `moveHead`, `newPayload` on `view(head)` and a builder view, in every order a controllable scheduler can produce, with the
+final position map equal to a from-scratch replay; rpc-compat and `debug_traceBlock` **during a regular-sync burst**.
+
+**Fault-injection matrix** (C2a, C4d): a `StaleStateViewException`, `StateUnavailable`, `ReorgTooDeep`, `BranchTooLarge` and a
+`CorruptNodeException` injected into `newPayload`, `forkchoiceUpdated`, the importer, the PoW consensus path and the builder.
+Assert: never INVALID, never `markInvalidRecursive`, never `reportInvalid`, never a delete, never a provider blacklisted.
+
+### S0 review checklist: decisions `forge` and `beacon` must sign before any code
+
+"Sign" means: agree, or say what changes. **Rounds 1 (2026-11-06) and 2 (2026-11-07) are done; the rows below state the design as revised by both,
+and the two S0 records after this table hold each reviewer's verdict per item.** Items 1 to 5 can change a block's outcome or the
+chain a node follows; 6 to 15 are consequences to accept. `forge` signs the ETC side of every item before code and `beacon`
+the ETH side; where both are named, both sign.
+
+| # | Decision (as revised by round 1) | Specified in | Why it matters | Signs |
+| --- | --- | --- | --- | --- |
+| 1 | **Position emission and the vanished-position rule**: the 32-byte stored rule and the always-stored root; the empty trie has no rows; the prior is fixed at the **first event** at a position (a position created in the block has prior None); only **replaced or absorbed** nodes are reported (not the branch `fix` resolves and leaves); a node under execution is answered **by hash** from the staged layer, then by position from the parent view; the oracles include multi-block reverse, several persist rounds per block, EEST Amsterdam fixtures and the pre-Atlantis intermediate-root networks | data-model 2, 3, 6.2, 8 | A missed or extra position leaves a stale or missing node, or lets a reverse restore the wrong state; a position-keyed in-block layer fails every Amsterdam block. It is inside `MerklePatriciaTrie`, which both chains execute | forge and beacon |
+| 2 | **Commit timing and state availability**: `newPayload` executes into the overlay; state reaches disk at `forkchoiceUpdated`; `parentValidated` becomes "state available"; the Engine API claims table (VALID, ACCEPTED, SYNCING, INVALID) is pinned; an unavailable parent is **re-executed locally**, with no peer; a post-execution INVALID drops the layer; the new faults never extend `MPTException` | data-model 6.3.2, 7.2, Part 2 D | Changes what the Engine API can claim about a parent after a crash, and which errors can ever become INVALID | beacon; forge reviews the shared code |
+| 3 | **Head moves**: planned **from the anchor's records**, never the index; **one state lock with an anchor compare-and-set** over every in-place batch; the state batch is **contributed into** `promoteToCanonicalHead` and `rewriteCanonicalIndex` before their commit; `currentState` is set only after a successful move; a block that is a forward layer is **promoted**, not dropped; the designated-head arm is reverse-then-commit; PoW branches are **pinned**; chunked deep moves; runtime refusals escalate and never apply I1 rule 4; the corrected writer audit (importer lenient path, test mode); the `SYNC-FORK` clamp; PoW result mapping. **Round 2:** the refusal is on **reverse depth** (`best - fork`), not branch length, and `reorg.max-depth` defaults to the retention floor; **an absent anchor refuses every in-place writer**; `saveLastBlock` writes nothing on a path-live store and the batch stops at the first commit that no longer extends the anchor; block generation pauses during a chunked move | data-model 5.1, 6.4, 7.0, 7.1, 7.3, Part 2 A, C, D | A reorg that moves the pointer without the state, or the state without the pointer, or a diff applied onto the wrong base, forks the node from its own history | forge (PoW) and beacon (PoS) |
+| 4 | **Isolation**: every in-place batch is a state move that publishes pre-batch values and bumps the epoch; "anchor view" is decided at read time; the importer's delete is position-scoped with a real `stillReached`; the fault hierarchy and the caller mapping are pinned by fault injection; RPC retries a stale view; the lock is the fallback | data-model 6.3 | The missing-node machinery deletes and refetches; a stale read mistaken for corruption would delete a node the head needs, and a storage fault must never become INVALID | beacon; forge reviews |
+| 5 | **Replaced storage tries**: account removal, recreation, EIP-161 touch-deletion, ETC's SELFDESTRUCT (no EIP-6780 on any ETC fork), Amsterdam's clear: **per-block reset tracking; enumeration by prefix scan of CF `u`**; ordering within a block; above the bound the deletion is **skipped and the record is an incomplete tombstone**, so a valid block is never failed; reverse across a tombstone is refused. **Round 2:** for a reset owner every prior is the scanned parent row (overriding the first-event prior), the tombstone refusal is required, and EG-4 and EG-15 assert zero tombstones | data-model 3 rule 6, 4.2, 10, 13 (M15) | A local resource bound must not fail a canonical block (a mining node would mine a minority fork) | beacon (EIP-6780, EIP-8246) and forge (ETC semantics) |
+| 6 | **Genesis on the unified layout and `HealInvariant.isEmpty`**: owner-scoped, insert-only, **no BlockDiff for genesis**; test mode uses the same commit; non-empty genesis storage is refused when `ethCompatibleStorage = false`; SNAP start clears `t`/`u` and the anchor | data-model 5.4 | Otherwise every fresh datadir is pre-invariant and pays the walk spec 022 removes | beacon; forge for ETC |
+| 7 | **The layout guard**: one marker, refuse any non-empty unmarked datadir on either chain, no adoption, no probe of CF `n`. **Round 2:** while the in-development flag exists, a build with it off also refuses a datadir that has the marker | data-model 5.2, 5.3 | A wrong refusal strands a node; a wrong stamp runs on a half-state | beacon; forge; user |
+| 8 | **Checkpoint format v2 and the importer**: genesis hash in the header, the **256-header and 6-body ancestor window** as tags 0x03 and 0x04, CRC32C, the operator-supplied expected block hash and the stated trust in total difficulty, the importer's four assertions, code completeness, a golden stream; v1 refused. **Round 2:** the ancestor window is chained by `parentHash` to the checkpoint header and each body matches its header (`min(256, N)` when N < 256); a genesis anchor is cleared at import start | data-model E.1 | A one-way door, and ETC's resync path | forge and beacon |
+| 9 | **`get(hash)` on a position store** answers the account root and overlay nodes only; the recorder sits **above** the cache and records parent-state reads only; every hash-only walker is converted or allow-listed under a grep ratchet; a hit by hash can mask a positional hole | data-model 6.5, 9 | The witness recorder must see every parent-state read | beacon; herald confirms |
+| 10 | **Owner threading and RPC signatures**: `forOwner`, `getAt`; the four omitted readers; an allow-list ratchet on the four state accessors; RPC retries a stale view | data-model 8, Part 2 E | The one RPC-visible code change | conduit, beacon; forge |
+| 11 | **ETC consensus unchanged on the unified layout**: the evidence is **an offline import of ETC blocks 0 to 5.1M from genesis (the block source is an open item)**, validated per header, with pinned-jar node-set equality every 100k blocks**, a Mordor import from genesis across 2,000,000 and 2,520,000, the ETC ethereum/tests job on the ported harness, `ForkChoiceBlockchainTestsSpec` under `basic` and `archive`, a private ETC-config net for Olympia, and M7. **Round 2:** the block source is logistics and gates EG-1's ETC half (C7), not code; forge signed without it | plan EG-1, EG-2, EG-6 | The track moves ETC's storage with no Hash fallback in tree, and no ETC mainnet pre-state exists | forge |
+| 12 | **Block generation and mining**: a proposer view, content-addressed and fresh per attempt, for **every** proposer path; MockedMiner rebuilds from the mined block **and waits for that block's import (round 2)**; cached worlds are never committed or read stale; a stale view retries the build; the mined root equals the import root, with ommers and on the Olympia net | data-model E table | A proposer write in place would corrupt the head | forge (PoW) and beacon (builder) |
+| 13 | **Moot: the `inmemory` mode is retired** (user, 2026-11-06). The mode is rejected at start on both chains, and the ring, the persisted tail and the restart-reach rules are not designed. Nothing remains to sign | data-model 4.6 | n/a | none |
+| 14 | **Retirement scope**: what is deleted and what stays (the hash-keyed store over `EphemDataSource`); the harnesses are **ported in C3c, before any gate**; both `saveNode` call sites become `repairNodeAt` before `FastSyncNodeStorage` goes; the pinned jar keeps its hive and EEST baselines and its retention | plan C3c, C5b, C8a, C8b | Nothing in tree can be the oracle after C8, and a gate on the Hash-scheme harnesses proves nothing | forge, beacon |
+| 15 | **ETC SNAP on the unified layout and the EG-12 route**: guard removal; **the ancestor window** as a hand-off precondition (C5a); the peer precondition; Mordor proven in the dev loop (`tasks.md:391,480`), ETC mainnet never | data-model G | The ETC resync path before a checkpoint archive exists | forge |
+
+### S0 record (round 1, 2026-11-06)
+
+Reviews: `beacon` (ETH side: 3 SIGN, 11 SIGN WITH CHANGES, 1 REJECT, plus the golden vectors) and `forge` (ETC side: 8 SIGN
+WITH CHANGES, 2 REJECT, 3 no objection), both read-only, both against the tree at `49dd46d1b`. Neither could read a
+reference-client clone or the EIPs; their go-ethereum and EIP claims are from memory and the code's own citations, and the
+design marks them "verify" (C0 checks the EIP-8246 text against execution-specs). "Not reviewed" means the reviewer's table did
+not list the item. Every finding is applied, except where the last column says otherwise. The letters are the reviewers' own.
+
+| # | beacon | forge | Change made | Where | Round 2 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | SIGN WITH CHANGES: 1a prior at first touch; 1b only replaced or absorbed nodes; 1c in-block layer by hash; 1d multi-persist and multi-block reverse oracles; 1e empty trie; 1f EEST fixtures | SIGN WITH CHANGES: pre-Atlantis intermediate-root receipts; genesis storage owner threading; genesis emits no vanished positions; M7 a C1 merge gate | All applied. The prior is fixed at the first event; `fix` reports only absorbed nodes; the staged layer answers by hash then by position; the empty trie has no rows; the oracle list grew; genesis tries are owner-scoped | data-model 2, 3, 5.4, 6.1-6.2, 8; plan C1, C2a, C3b | **beacon, forge** (a consensus-adjacent rule changed) |
+| 2 | SIGN WITH CHANGES: 2a claims table; 2b one answer for "parent stored, state unavailable"; 2c recover locally; 2d INVALID drops the layer; 2e not an `MPTException`; 2f overlay commit | no objection | The table is pinned (ACCEPTED for `newPayload`, SYNCING for `forkchoiceUpdated`); `StateRecovery` re-executes locally on a bounded dispatcher, never inline; `dropLayer` and `BlockImportGate.forget`; the `StateFault` hierarchy sits outside `MPTException`; `adoptEachBlock = false` is an overlay commit | data-model 6.3.2, 7.2, D; plan C4d | **beacon** |
+| 3 | **REJECT**: 3a corrected writer table; 3b plan from the anchor; 3c state lock and compare-and-set; 3d batch-contributing hook; 3e FCU ordering; 3f forward-layer promotion; 3g designated-head arm; 3h ETH reach and recovery | SIGN WITH CHANGES: pin PoW branch layers; clamp the `SYNC-FORK` rewind and never apply rule 4; PoW result mapping; `parentSideChain` re-execution; index check I6; `REORG-PARTIAL` layer reuse | **Resolution of the REJECT:** the writer table is corrected (importer lenient path, test mode) and an unstaged `executeBlock` throws; every plan is made from the anchor's records; one state lock with an anchor compare-and-set guards every in-place batch, a commit that finds the anchor moved becomes an overlay commit; `HeadMovePrepared` is `.and`ed into the pointer batch before its commit; `currentState` is set after the move; a forward-layer block is promoted; the designated-head arm is reverse-then-commit; the retention floor follows the finality lag; refusals escalate. PoW: pinned layers and an up-front refusal, the clamp, new `ConsensusResult`s, local re-execution of lost side blocks, I6, layer reuse | data-model 5.1, 6.4, 7.0, 7.1, 7.3, A, C, C.1, D; plan C3b, C4b, C4d, C4e | **beacon, forge** |
+| 4 | SIGN WITH CHANGES: 4a every in-place batch is a move; 4b pre-batch bytes; 4c anchor view at read time; 4d position-scoped delete; 4e fault mapping; 4f memory-model note; 4g RPC retry; 4h M5 under catch-up | no objection (a second stale failure must map to a retryable non-invalid result on PoW) | All applied; the PoW mapping is in the fault table | data-model 6.3.1-6.3.3, 7.0; plan C3b, C4a | **beacon** (forge reviews) |
+| 5 | SIGN WITH CHANGES: 5a the guard never fails a valid block; 5b per-block reset tracking; 5c enumerate outside the EVM path; 5d holes do not block import; 5e tests; 5f verify EIP-8246 | **REJECT**: skip above the bound and mark incomplete; enumerate by prefix scan of CF `u`; in-block ordering; ETC vectors; fix risk 6 | **Resolution of the REJECT:** above the bound the dead trie's deletion is skipped and the record becomes an incomplete tombstone (flag bit 1); the block commits; a reverse across a tombstone is refused; the owner's rows are listed by prefix scan, so a hole cannot fail a block; reset tracking is per block and across transactions; the ordering and ETC test vectors are in the matrix; risk 6 is corrected (no EIP-161 on ETC before Atlantis) | data-model 3 rule 6, 4.2, 4.3 vector 3, 10, 14; plan C3a, C3b, C6 | **beacon, forge**; C0 checks the EIP-8246 text |
+| 6 | SIGN WITH CHANGES (minor): 6a test-mode genesis; 6b empty-alloc root | SIGN WITH CHANGES: owner-scoped genesis; no genesis BlockDiff; harnesses seed through the genesis commit; `ethCompatibleStorage = false` mismatch | Applied: the genesis commit has no BlockDiff, is owner-scoped and insert-only; test mode and the harnesses use it (C3c); the mismatch is resolved by **refusing** non-empty genesis storage on such a net (a private-net case) | data-model 5.4, 2; plan C3c | **beacon, forge** |
+| 7 | SIGN | not reviewed | No change | data-model 5.2, 5.3 | **forge** (not reviewed in round 1) |
+| 8 | SIGN WITH CHANGES (minor): 8a golden stream; 8b code completeness | SIGN WITH CHANGES: genesis hash in the header; ancestor window (tags 0x03, 0x04); trusted total difficulty and an expected block hash; the four importer assertions; checksum decided | All applied; CRC32C chosen | data-model E.1; plan C5c | **beacon, forge** (one-way door) |
+| 9 | SIGN WITH CHANGES: 9a recorder above the cache; 9b parent-state reads only; 9c hash-only walker ratchet; 9d positional holes | no objection | All applied; `GetNodeData` removal by eth/67 recorded | data-model 6.5, 9; plan C2b | **beacon** |
+| 10 | SIGN WITH CHANGES: 10a four omitted readers; 10b allow-list ratchet; 10c RPC retry | not reviewed | All applied | data-model E; plan C2b | **beacon, conduit, forge** (not reviewed) |
+| 11 | SIGN (no ETH impact) | SIGN WITH CHANGES: offline import of ETC 0-5.1M from genesis; Mordor import across 2,000,000 and 2,520,000; ethereum/tests on the ported harness; `ForkChoiceBlockchainTestsSpec`; a private net for Olympia | All applied to the gate; **the source of the 0-5.1M blocks is not named: an open item** | plan EG-1, EG-2, EG-6; open items | **forge** |
+| 12 | SIGN WITH CHANGES: 12a content-addressed, fresh per attempt; 12b stale view retries; 12c Amsterdam test; 12d `testing_commitBlockV1` | SIGN WITH CHANGES: every proposer path named; MockedMiner chaining; the cached world rule; context; mined root with ommers and Olympia | All applied | data-model E, 6.2; plan C3c | **beacon, forge** |
+| 13 | SIGN WITH CHANGES: 13a persisted floor or re-pivot; 13b matrix | **REJECT**: persist a tail of K diffs; optional shutdown flush; `ReorgTooDeep(restart)` must escalate; M11 against fork depths | **Moot: mode retired** (user, later on 2026-11-06). Round 1's resolution (a persisted tail of K = 16 and a shutdown flush) is withdrawn with the mode. What survives, because it is not specific to `inmemory`: `ReorgTooDeep` and `StateUnavailable` escalate through the stuck-sync escape valve, never strand | data-model 4.6, D | **none** (moot; dropped from both lists) |
+| 14 | SIGN WITH CHANGES: 14a port the harnesses before the gate; 14b baselines in the jar | SIGN WITH CHANGES: migrate before C7; both `saveNode` sites; jar retention until EG-12 and a second import | All applied: the harness port is in C3c; `repairNodeAt` replaces both sites in C5b; the jar keeps hive and EEST pass lists and is kept until EG-12 passes and past C8b | plan oracle paragraph, C3c, C5b, C8a, C8b; data-model 7.5 | **beacon, forge** |
+| 15 | SIGN (no ETH impact; ETH's Path selection must be unchanged) | SIGN WITH CHANGES: the EG-12 route; the ancestor window; C6 renamed | Applied: `AncestorWindow.ensure` is a hand-off precondition (C5a); C6 is "ETC enablement and ETC mainnet readiness"; the peer precondition | data-model G; plan C5a, C6, EG-12 | **forge** |
+| GV-1 | SIGN WITH CHANGES: vector 2's 2-byte prior breaks the inline rule | n/a | Vector 2 now has a 37-byte extension-node prior (219 bytes, CRC `707894bf`); the codec is stated to check structure only (the inline rule is a writer assertion); vector 3, an incomplete tombstone, is added (144 bytes, CRC `ae4e831f`). Vector 1 is unchanged | data-model 3, 4.2, 4.3 | **beacon** re-derives, **forge** |
+
+**The reviews' unlisted risks, each as a design change, a slice task or a gate item.**
+
+| Risk | Resolution |
+| --- | --- |
+| beacon R1, forge 8: harnesses and the lenient import bypass the position store | C3c ports them; an unstaged `executeBlock` throws; the lenient import is converted (data-model 7.6, A) |
+| beacon R2: concurrent writers, no compare-and-set | the state lock and compare-and-set (data-model 7.0); a deterministic interleaving test is a gate item (EG-3) |
+| beacon R3: Amsterdam BAL before/after reads | the by-hash in-block layer (data-model 6.2); the Amsterdam test in C3b and C3c |
+| beacon R4: storage exceptions on the INVALID path | the `StateFault` hierarchy and the caller table; the fault-injection matrix (EG-3) |
+| beacon R5, 11: ETH reach below the finality lag; reorg across the pivot | finality-aware retention; `ReorgTooDeep(Pivot)`; escalation (data-model 4.5, B, D) |
+| beacon R6: FCU sets `currentState` before the move | order reversed (data-model 7.3) |
+| beacon R7: coalescing and `fix` | rules 1 and 5 of data-model 3 |
+| beacon R8, forge 1: layers against long branches | pinned layers; the designated-head arm without a stack; the up-front refusal (data-model 6.4) |
+| beacon R9: BAL prefetch unplaced | `PathPrefetchReader` in C2a |
+| beacon R10: system calls | EG-1 includes Prague and Amsterdam ranges with request activity |
+| forge 2: recovery paths deeper than the reach | the `SYNC-FORK` clamp; escalation instead of rule 4 |
+| forge 3: PoW error mapping | the PoW `ConsensusResult`s (data-model C.1) |
+| forge 4, 5: the size guard fails a valid block; replaced-trie walk meets holes | tombstone; prefix scan (data-model 3 rule 6) |
+| forge 6: index ahead of state during `reorganise` | invariant I6 (data-model 5.1) |
+| forge 7: archive reach 1024 against a 3,700 to 7,000-block ETC reorg | archive moves are unbounded and chunked; only views are bounded (data-model 4.6, 7.3) |
+| forge 8: EG-2 does not test the unified layout | C3c; EG-2 is valid only after it |
+| forge 9: MockedMiner and getWork worlds | data-model E, block generation |
+| forge 10: `ethCompatibleStorage = false` is not ETC | the wording and the test are scoped to private nets |
+| both: wrong file:line or fact (`walkTrie` at `:274-306`; ETC's trie is about 90M nodes; no EIP-161 on ETC before Atlantis; the first reader table omitted four readers; the SYNCING versus ACCEPTED answer) | corrected in data-model E.1, 14, 3, E and D |
+
+**Round 2 re-sign list (as set after round 1; round 2 is done, see its record below).** `beacon`: items 1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 14 and the golden vectors (GV-1, vectors 1 to 3
+re-derived independently). `forge`: items 1, 3, 5, 6, 8, 11, 12, 14, 15, and items 7 and 10 (not reviewed in round 1). **Item 13
+is moot and is on neither list.**
+Items 7, 11 and 15 stand signed by `beacon`, and 2, 4 and 9 by `forge`; both are asked to read the changes to those items for ETH
+or ETC impact. `conduit` and `herald` confirm C2b (item 10) and the `GetNodeData` answer (item 9). **Open in round 2 beyond the
+re-signs:** the EIP-8246 text against execution-specs (beacon 5f, C0), and the source of the ETC 0-5.1M blocks (open item 1).
+
+### S0 record (round 2, 2026-11-07)
+
+Reviews, both read-only, both of the revised design: `beacon` (ETH side: **10 SIGN, 3 SIGN WITH CHANGES, 0 REJECT**; the three are
+item 3, item 5 and the escalation route; items 7, 11 and 15 stand from round 1; item 13 moot) and `forge` (ETC side: **5 SIGN**
+(1, 6, 10, 14, 15), **6 SIGN WITH CHANGES** (3, 5, 7, 8, 11, 12), **0 REJECT**; no objection to 2, 4 and 9 after reading their
+changes). Both re-derived golden vectors 1 to 3 independently (153 bytes CRC32C `8d0afd3e`, 219 bytes `707894bf`, 144 bytes
+`ae4e831f`; each pinned string equals its field-by-field construction). **Every change below is applied** (the text is in
+data-model.md and in this plan); "applied" does not mean re-reviewed: each reviewer verifies the applied text at the PR of the slice
+that owns it (the next section), and there is no round 3. The letters are the reviewers' own.
+
+| # | beacon | forge | Change made | Where | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | SIGN (note: rule 6's scan takes physical rows as priors, a departure from rule 3's logical prior; say so) | SIGN | The exception is stated in rule 3: harmless, because a forward move deletes the junk and a reverse writes it back unreachable | data-model 3 rule 3 | applied |
+| 2 | SIGN (nit: the dedupe row said "canonical entry present"; the code needs header plus receipts and admits side payloads) | no objection | The row is aligned with `EngineApiService.scala:407-416` | data-model D | applied |
+| 3 | SIGN WITH CHANGES: (i) the reorg depth is the retention floor, not `pruning.history`, and the measure is reverse depth, not branch length; (ii) the PoS escalation trigger (see ESC); (iii) an absent anchor refuses every in-place writer | SIGN WITH CHANGES: (a) `importToTop` and `saveLastBlock`; (b) refuse on fork depth, not branch length; (c) escalation loop guard and cool-down (see ESC); (d) pause block generation during a chunked archive move | (i, b) `reorg.max-depth` defaults to the retention floor; a move is refused up front only when `best - fork.number` exceeds the retained depth; branch length is bounded by pinned bytes only. (iii) "No anchor" fails the compare-and-set for 7.1, 7.3 and 7.5; only the writers that create the anchor run without one. (a) `saveLastBlock` writes nothing on a path-live store and `executeAndValidateBlocks` stops at the first commit that no longer extends the anchor (`ConsensusStateFault` for the rest). (d) Generation waits during a chunked move | data-model 6.4, 7.0, 7.1, 7.3, 10, A, C.1; plan C3b, C4b, C4e | applied |
+| 4 | SIGN | no objection | none | | |
+| 5 | SIGN WITH CHANGES: (i) gate on zero tombstones (EG-4, EG-15; C0/M1 shows the largest diff well below `max-record-bytes`); (ii) recommended: keep a record-size-only diff resident as a reverse diff until finalized; (iii) the EIP-8246 text is still open | SIGN WITH CHANGES: for a reset owner the prior of every scanned position is the parent row's bytes, overriding the first-event prior; **keep the reverse refusal across a tombstone** (required: no priors, and later blocks record prior None over leftovers); add a measurement of rows per deleted owner | (i) EG-4 and EG-15 assert zero tombstones; ETC and Mordor runs record the count and explain any non-zero one; M1 reports the largest diff. (ii) recorded as recommended, **not built**. (iii) a C0 task. Forge: the prior rule and the two reasons for the refusal are in rule 6; new measurement **M15** (rows per deleted owner, tombstones, on the ETC import and the Mordor imports) sets `max-entries-per-owner-delete` | data-model 3 rule 6, 13 (M15), 14; plan EG-1, EG-4, EG-15, C0, C3b | applied |
+| 6 | SIGN | SIGN | none | | |
+| 7 | stands | SIGN WITH CHANGES (development only): a build with the in-development flag off must also refuse a datadir that has the marker | One line in `StateLayoutGuard`, removed with the flag in C8b; a test starts a marked datadir with the flag off and an unmarked one with it on | data-model 5.3; plan C5a | applied |
+| 8 | SIGN | SIGN WITH CHANGES (one-way door): (a) bind the ancestor window by hash; (b) clear a genesis anchor at import start | (a) the `0x03` headers chain by `parentHash` to the checkpoint header and each `0x04` body matches its header, else `BadFormat`; `min(256, N)` when N < 256; a second golden stream does not chain. (b) `beginCheckpointImport` clears `t`/`u` and the genesis anchor first, idempotently | data-model E.1, 5.4; plan C5c | applied |
+| 9, 10 | SIGN | no objection (9); SIGN (10) | none | | |
+| 11 | stands | SIGN WITH CHANGES: (a) the stale text "`basic` and `inmemory`"; (b) open item 1 said the sign-off depends on the block source (it does not); recommendation: a core-geth export primary, fukuii's own sync acceptable | (a) fixed to `basic` and `archive` (checklist row 11). (b) open item 1 reworded: the source is logistics and **gates C7 and EG-1's ETC half, not code**; both candidates and forge's preference are recorded; the user left the choice open | plan checklist 11, open item 1, EG-1 | applied |
+| 12 | SIGN | SIGN WITH CHANGES (minor): MockedMiner must wait for the import of the mined block (or retry), because `MiningFailed` drops the run to `waiting()` | The E table row says so, with a test of two blocks one second apart and a slow import | data-model E; plan C3c | applied |
+| 14, 15 | SIGN | SIGN | none | | |
+| GV 1 to 3 | SIGN, re-derived | verified | none | | |
+| ESC | SIGN WITH CHANGES (vault's escalation re-SNAP): (a) the PoS trigger does not exist (`handleBeaconHead` only records the head and hints a running SNAP, and an FCU-side refusal produces no importer strikes), so add a direct message with hysteresis; (b) the anchor delete goes in the same synced batch as `clearSnapSyncDone()` or strictly after it, under the state lock after clearing the overlay, the gate memo and pending recovery; (c) clear `t` and `u` too; (d) EG-14 gains an induced escalation | SIGN WITH CHANGES (R2.3): a loop guard; a cool-down; note: tombstone leftovers keep "present means complete" only while a dead owner's rows are untouched (add one test); note: `ReorgTooDeep(Incomplete)` can escalate on a routine reorg across a tombstoned head (M15 keeps it rare) | (a) `StateEscalationRequested` from the FCU and `newPayload` refusal path to `SyncController`, sent after `escalation-refusals` (64, about 2 epochs) consecutive refusals; (b, c) one synced batch (`clearSnapSyncDone`, anchor delete, `state.escalation.last`, `state.reset-pending`), then `deleteRange` of CF `v`, `t`, `u`; (d) EG-14 asserts SYNCING and ACCEPTED, then VALID, one escalation. Forge: `escalation-cooldown` (6 h, persisted, counted) and the loop guard (a re-offered branch is dropped at ERROR, never a second escalation); the healing test is in C4d; the tombstone note is in 3.6 and risk 6 | data-model D, 5.1, 5.2, 10, 11, 14; plan C4d, EG-3, EG-14 | applied |
+
+**Adaptations and one reconciliation, stated so the reviewers can object.**
+- *Vault's addition, `state.reset-pending`.* Beacon's order (b then c) leaves a crash window between the synced batch and the
+  `deleteRange` calls in which a restart would resume SNAP over the old rows and owe the walk spec 022 removed. A start that finds
+  the key repeats the three idempotent `deleteRange` calls first; a plain mid-SNAP restart has no such key and keeps its rows.
+- *Reconciliation (forge item 3b against 6.4).* Forge wrote that above the pinned bytes "the recorded reverse-then-commit fallback is
+  taken". The design had `BranchTooLarge` (retryable, never invalid) as the default over the cap and reverse-then-commit as the
+  recorded alternative, switched on only if M13 shows real branches above it. It stays that way; forge confirms at C4e.
+- *Hysteresis.* "N consecutive FCUs, or about 2 epochs" is one key, `escalation-refusals = 64`, which is 2 epochs at one
+  `forkchoiceUpdated` per 12 s slot.
+- *EIP-8246 pass count.* Beacon asked for it on the ported harness; that harness is C3c, after C0, so C0 records the count on the pinned
+  jar's harness and C3c records it again on the ported one.
+- *Zero tombstones.* Asserted on ETH (EG-4, EG-15) as beacon asked; on ETC and Mordor the count is recorded and any non-zero value is
+  explained before `max-entries-per-owner-delete` is frozen, because forge asked for a measurement, not an assertion.
+
+**Text inconsistencies forge listed (R2.5), each fixed:** the stale "`basic` and `inmemory`" in checklist row 11; item 13 named in the
+forge routing line and in data-model C.1; open item 1 saying item 11 depended on the block source. **The unlisted risks of round 1**
+(forge's three: PoW branches over 32 blocks, recovery deeper than the reach, ommer and BLOCKHASH ancestors after hand-off; beacon's
+R1 to R3) are reported covered by both reviewers, with the changes above (3b, loop guard and cool-down, 8a) as the remaining edges.
+
+**Open after round 2.** Nothing blocks code on C1 to C3a. Two C0 deliverables stay open and neither is a design change: the
+**EIP-8246 text** (read from an EIPs clone; the storage design does not depend on it) and the **source of the ETC 0 to 5.1M blocks**
+(open item 1; it gates C7).
+
+### Destructive change (C8a and C8b): the vault protocol blocks
+
+```
+DELETION REQUIRED: PathToHashExporter (321 lines), startPathPublish and onPathPublishDone (about 75 lines in
+SnapFinalization), the PathPublish* messages, getBulkLoadStorage, and three specs (about 560 lines)
+Rationale: once execution, commit and serving read the position store (C2 to C5) the copy has no reader, and keeping it would
+  keep a second writer of CF n, which the one-layout rule forbids.
+Chesterton's Fence: it bridged SNAP's path-keyed output to execution's hash-keyed reads (its own doc, lines 16-34); it carried
+  the FR-044 durability property (StateIngest.scala:71-92) and the hand-off sample (spec 022 D9). The sample is ported to
+  PathHandoffSample (C5a); the durability property is met by the synced anchor commit (C5a); the copy's read-bound cost is what
+  T063 measured (35.7k down to 9.2k nodes/s, 10.8 h, stopped at 40-50%).
+Alternative considered: Option X (frozen base read through, about 1,100 LOC), a per-chunk multiGet, keeping the exporter behind
+  a flag. The user chose Option Y on 2026-11-06 and ruled out flags that outlive development.
+Recommend: DELETE in C8a, after the C7 gate and EG-12.
+
+DELETION REQUIRED: the Hash scheme as live state: ReferenceCountNodeStorage (520), CachedReferenceCountedStorage (292),
+FastSyncNodeStorage (30), the Archive, ReferenceCounted and CachedReferenceCounted classes of StateStorage.scala (about 350),
+StorageScheme and its 64 references in 18 main files, spec 022's Hash-only mechanisms (excluded-account seed, per-edge reference
+counts), the `inmemory` pruning mode (`CachedReferenceCountedStorage`, its LRU and the inmemory-pruning-node-caching block), and about 3,500 lines of their tests
+Rationale: ETC moves onto the unified layout in this track; with no Hash-layout datadir allowed to start, none of it has a caller.
+Chesterton's Fence: it is today's production storage for ETC and the whole of ETC's SNAP and pruning; it keeps a node alive by
+  reference count where an in-place store needs none. Its properties are replaced as follows: reorg undo by BlockDiff (7.3),
+  pruning by retention (4.5), the duplicate-commit guard by isBlockApplied, the `inmemory` mode is retired, not replaced (4.6).
+  RETAINED: SerializingMptStorage over ArchiveNodeStorage over EphemDataSource, for list tries and tests.
+Alternative considered: keep the Hash scheme for ETC until a later gate (the earlier 10b), and run two layouts in one binary.
+  The standing rule rejects it: one infrastructure, no staged transition.
+Recommend: DELETE in C8b, the last slice, after the C7 gate; KEEP-AND-GUARD (the in-development flag) until then.
+```
+
+### Exit gate for Track C (C7 runs it; nothing in C8a or C8b merges before it reports, and C8a also waits for EG-12)
+
+All runs use the unified layout with the in-development guard on, and compare with the pinned pre-track jar. **EG-2 and every
+roots-equal item run on the ported harnesses of C3c**; a run on the Hash-scheme harnesses would measure the wrong store.
+
+| # | Check | Pass condition |
+| --- | --- | --- |
+| EG-1 | **Roots-equal import differential.** ETH: fixed ranges of Platåberget and Sepolia, **including Prague and Amsterdam ranges with request and block-access-list activity**, and an ETH mainnet range if a mainnet state exists. **ETC: an offline import from genesis** of ETC blocks 0 to 5,100,000 (`ChainImporter.importChainFileStrict` over a `chain.rlp` export; **the source is open item 1: a core-geth export (forge's recommended primary) or a fukuii full sync with SNAP off (acceptable), decided later; it gates C7 and this half of EG-1, not code**), and a Mordor import from genesis to 2,600,000 (era 0 to 1, Agharta 301,243, Phoenix 999,983, ECIP-1099 2,520,000) | ETH: every state root, receipt root and gas-used equal, and `requestsHash` and `blockAccessListHash` equal explicitly. ETC: **every block validates against its canonical header** (state root, receipts root including the pre-Atlantis intermediate roots, gas used), node-set equality with the pinned jar **every 100,000 blocks**, and every miner and ommer balance equal across the 5,000,000 era boundary and Mordor's two. At Platåberget and Mordor scale the position store walked from the anchor equals a `StackTrie` rebuild. `app.db.state.record.tombstones` is recorded over the ETC import and the Mordor runs (a non-zero count is explained before the bound is frozen, M15). Mordor also under `archive` (EG-10) |
+| EG-2 | ethereum/tests and EEST on the ported harnesses | the ETH job and the ETC job green; **`ForkChoiceBlockchainTestsSpec`** (Istanbul and Berlin, i.e. Phoenix and Magneto, through `reorganise`) green under `basic` and `archive`; the pre-Byzantium and EIP-150 networks green (intermediate-root receipts) |
+| EG-3 | the matrices of C3b to C6: reorg (PoS and PoW), ETC PoW, crash, isolation and concurrency, fault injection | all green; I1 to I6 asserted; **the deterministic interleaving test** over the importer commit, `moveHead`, `newPayload` and a builder view gives a position map equal to a from-scratch replay; the fault-injection runs never produce INVALID, `markInvalidRecursive`, `reportInvalid` or a delete; the no-anchor refusal and the escalation tests (hysteresis, cool-down, loop guard, kill at every step) pass |
+| EG-4 | **Fresh Sepolia sync with 24 h of head following (the T063 rerun)**, under a real consensus client | no `[PATH-PUBLISH]`; hand-off time, disk (expect about 150 GB below T063's 300-340 GB), import p50 and p99 and `[IMPORT-COMMIT]` against the pinned jar (DC-14), heap and RSS, overlay gauges, `app.db.state.view.stale` and `.retries`, the audit's first pass clean; **`app.db.state.record.tombstones == 0`** (a tombstone at the head would turn a routine depth-1 reorg into a multi-hour re-SNAP) |
+| EG-5 | **T064's intent on a FRESH datadir** | on a fresh Mordor datadir and then on EG-4's datadir once its measurements are taken: rows deleted, bytes corrupted and positions moved are found and filled, the hand-off completes with no copy, and the audit's first pass records its time and findings |
+| EG-6 | **ETC end to end** | a fresh Mordor SNAP sync and 24 h of head following with a local miner, **and a private ETC-config PoW net** (two or three fukuii miners plus a core-geth) that produces routine depth 1 to 3 forks, **with Olympia at a low block** (treasury credit every block, the base-fee floor, genesis `HefPostOlympia`): mined blocks valid, each mined block's root equal to its import root (with ommers), ECIP-1017 rewards unchanged, M7 and M10 |
+| EG-7 | repository gates | `sbt pp`; the 016 ratchet; the 017 and stateless-closure dependency checks (DC-8): `NibblePath` is in `mpt/`, no new `db/` import reaches the closure; the grep ratchets (state accessors, hash-only walkers) |
+| EG-8 | DC-14 figures in every slice's PR | p50 and p99 `[IMPORT-TIMING]`, longest read wait, bytes written per block, database size, RSS, `[STORAGE-PERF]` |
+| EG-9 | **Checkpoint v2 round trip, both chains** | export from the Mordor and Sepolia nodes, import into fresh datadirs: every root equal; the ETC resync time recorded (SC-013). The **ETC mainnet half is EG-12's export**: import it into a fresh datadir, check root equality, follow the head for 1 h |
+| EG-10 | **Both pruning modes, and the retired one** | `archive` passes EG-1's Mordor and Platåberget runs; a test shows `pruning.mode = "inmemory"` is **rejected at start on both chains** with the message naming the retired mode and the two that remain; the finalization durability test (kill -9 right after the synced commit) passes under `basic` and `archive` |
+| EG-11 | after C8b, on the final tree | `grep` for every removed symbol is empty; `sbt pp`; an EG-1 subset and a short head-follow on each chain, with the flag gone |
+| EG-12 | **First successful ETC mainnet sync** *(user decision, 2026-11-06; fukuii has never completed one; forge's route)* | a fresh ETC mainnet **SNAP sync on the unified layout with public ETC peers** reaches the head with no copy and the root equal to the head's `stateRoot`, then follows the head for 24 h. **Passes only with:** zero rejected canonical blocks; zero `REORG-EXEC-FAIL`; the number of routine fork moves (depth 1 to 2) followed, recorded; **the ancestor-window check** (BLOCKHASH in the first 256 blocks and an ommer whose parent is below the pivot) passing; the number of snap-capable ETC peers recorded at start (**fewer than 2: the user decides whether a declared local core-geth peer is allowed in the run**); time, disk, heap, RSS and CPU recorded against spec 007's finding. The node then exports the first ETC v2 archive, which is re-imported (EG-9) and followed for 1 h. **Ownership:** C5a the ancestor window, C6 ETC enablement and mainnet readiness (guard removal, peer precondition and logging, the PoW-specific hand-off checks, the run harness), C5c the export, C7 the run. **C8a does not merge before EG-12 passes.** A checkpoint is impossible as a route (no archive exists) and a sync from genesis takes one to three months |
+| EG-13 | **Hive and EEST** | each suite at least equals the pinned jar's recorded baseline: `ethereum/engine` (paris, shanghai, cancun, prague, osaka and amsterdam variants; the reorg, sidechain, invalid-ancestor, "Re-org to Previously Validated Sidechain" and "Transaction Re-Org" families), `ethereum/rpc-compat`, `ethereum/graphql`, `ethereum/consensus`, and EEST `consume-engine` and `consume-rlp` for Cancun through Amsterdam (eip7928, eip6780, eip7610, eip8246 and the 7002, 7251 and 8282 system contracts) |
+| EG-14 | **A consensus-client devnet** (kurtosis `ethereum-package`: Lighthouse or Prysm, fukuii and a second execution client) | induced reorgs (a late block, a partition) are followed; the crash matrix under a real consensus client: **kill -9 between `newPayload` and `forkchoiceUpdated`, restart with no peers, the consensus client reaches VALID with no resync**; **an induced escalation**: lower `state.retention.max-blocks` on the devnet and force a deeper reorg, then assert SYNCING (forkchoiceUpdated) and ACCEPTED (newPayload) during the re-SNAP, then VALID, with no manual step, one escalation only (cool-down), and `t`, `u` and CF `v` cleared at its start |
+| EG-15 | **Platåberget live head-follow, at least 6 h**, beside EG-4 | it has the largest blocks, where `max-layer-bytes`, the tombstone guard and the `forkchoiceUpdated` latency (M6, against an 8 s consensus-client timeout) bind; **`app.db.state.record.tombstones == 0`** over the whole run, and the largest diff reported against `max-record-bytes` (M1) |
+| EG-16 | **RPC under catch-up** | rpc-compat and `debug_traceBlock` during a regular-sync burst: the stale-view rate is measured (M5 extended), no request returns a stale-view error, and import latency stays within the DC-14 bound |
+
+### Risks and rollback, per slice
+
+There is no operator-facing rollback after C8b and none is promised: the client is not in production, and a datadir written
+by the unified layout is re-synced to go anywhere else. Until C8b the in-development guard is the rollback; after it, revert
+the PR on staging.
+
+| Slice | Risk | Signal | Rollback |
+| --- | --- | --- | --- |
+| C1 | the shared trie change alters either chain's roots or allocation; a missed or extra position | roots versus the pinned jar; the oracles; M7 (a merge gate) | revert (additive and inert until C2a wires it) |
+| C2a, C2b | a reader is handed a hash-only call on a position store and throws; the window clamp changes SNAP serving; the prefetch feeds execution an unverified node | decorator-completeness test; the grep ratchets; SNAP serve differential; rpc-compat | guard off |
+| C3a | the record format is wrong and shipped | golden vectors signed in C0; read by nothing until C3b | revert before C3b; after C3b a change is a layout-marker bump (data-model 4.4) |
+| C3b | the staged commit diverges from the pinned jar's roots; an Amsterdam block fails to execute; two writers interleave; a writer runs with no anchor while SNAP owns `t`/`u`; a reverse after destroy-then-recreate leaves holes | EG-1 per PR; the by-hash tests; the deterministic interleaving test | guard off |
+| C3c | a proposer or an unstaged path writes a row; the harnesses still run on the Hash store | the proposer-never-writes test; `executeBlock(staged = None)` throws; a harness that does not touch the position store fails a canary | guard off |
+| C4a | a stale read is misclassified; pinned layers exhaust memory | isolation matrix; `view.stale` and `verify.mismatch`; `overlay.pinned.bytes` | switch to the reader-writer lock (data-model 6.3.3), a one-class change |
+| C4b | a pointer writer is missed; a move is planned from a stale index | the writer table as a test; `anchor.lag.blocks`; startup rule 4 rewinds loudly | guard off |
+| C4d | the Engine API claims VALID or INVALID where it must not; local re-execution runs inline or never; an escalation fires on a consensus-client flip-flop, loops, or bricks the datadir on a crash | the answer table; fault injection; the crash test under a real consensus client; the escalation counters and the suppressed counter; the kill-at-every-step test | guard off |
+| C4e | a heavier PoW branch cannot be adopted; a shallow fork is refused on length; a refusal strands the node | the 33-, 50- and 64-block cases; escalation counters; M13 | switch the PoW arm to reverse-then-commit with rollback (data-model 6.4) |
+| C5a | the guard refuses a good datadir or stamps a bad one; hand-off waits forever on the ancestor window | the guard table; M12 | guard off |
+| C5b | the audit or the importer deletes a valid node | the stale-never-deletes and the different-valid-node tests | guard off |
+| C5c | the v2 stream and importer disagree; a version 1 archive or a wrong-chain archive is imported | round-trip tests; the golden stream; the v1 and genesis-hash refusal tests | revert; the format is a one-way door, so it is signed in round 2 |
+| C6 | ETC SNAP or mining breaks on the unified layout | EG-6; EG-12; the ETC PoW matrix | guard off |
+| C7 | the gate fails, or EG-12 does not pass | any EG item | C8 does not merge; fix forward |
+| C8a, C8b | a deleted path was still used; the oracle jar is lost | `grep`, `sbt pp`, EG-11 | revert the PR on staging |
+
+### Specialist routing (additions for Track C)
+
+- `vault`: owns every slice, the data-model section, the golden vectors, the overlay, the lock and the isolation code, the retirement.
+- `forge`: **signs the ETC side before code** (S0 items 1, 3, 5, 6, 7, 8, 10, 11, 12, 14, 15; item 13 is moot; both reviews are
+  recorded in the S0 records, and the applied round-2 changes are verified at the owning slice's PR); **before code** on C1, C3b, C3c, C4b, C4e, C5c and C6; reviews every other slice; owns the ETC gate (EG-1 ETC, EG-2's
+  `ForkChoiceBlockchainTestsSpec`, EG-6, EG-9 ETC, EG-12).
+- `beacon`: signs the ETH side of every item; **before code** on C1, C2a, C3b, C3c, C4b, C4d and C5c; reviews every other slice;
+  owns EG-1 for ETH, EG-4, EG-13, EG-14, EG-15.
+- `conduit`: C2b RPC signatures, the stale-view retry and rpc-compat; the RPC harness port in C3c; confirms
+  `debug_executionWitness` and the trace paths are unchanged; EG-16.
+- `herald`: C2b SNAP serving by root view and the window clamp; the `GetNodeData` answer; C5a and C6 peer behaviour (the
+  snap-peer precondition); peer interop on the serve differential.
+- `eye`: validates every slice; runs the differential against the pinned jar, the matrices, the harness canary, the devnets and
+  the soak.
+- `prism`: non-consensus review of C2a, C3a, C4a, C5a, C5b, C8a, C8b.
+- `wraith`: compile fallout from the `MptStorage` additions, the `commitWith` mode and the deletions.
+- `flow`, `loom`, `mithril`: not needed.
+
+
+### Project-structure additions and deletions (for plan.md "Source Code")
+
+```text
+src/main/scala/com/chipprbots/ethereum/db/storage/
+├── MptStorage.scala                  # getAt, forOwner, updateNodesAt, rawNodesAt (additive; hash-keyed default kept for list tries)
+├── MptStorageDecorator.scala         # NEW: forwards every member; the wrapping implementors derive from it
+├── PathHandoffSample.scala           # NEW: the spec 022 D9 sample, ported from PathToHashExporter
+├── StateLayoutGuard.scala            # NEW: the one marker, the one rule
+├── AncestorWindow.scala              # NEW: 256 headers and 6 bodies below the pivot, a hand-off precondition
+└── pathstate/                        # NEW package
+    ├── PathStateStorage.scala, PathMptStorage.scala, PathStagedState.scala, PathPrefetchReader.scala, StateLock.scala
+    ├── BlockDiff.scala, BlockDiffCodec.scala, ChangesetStorage.scala
+    ├── StateOverlay.scala, ForwardLayer.scala, ReverseIndex.scala, StateView.scala
+    ├── HeadMove.scala, StateRecovery.scala   # moveHead, startup reconciliation I1 and I6; local re-execution
+    └── StateExceptions.scala         # the StateFault hierarchy: StaleStateViewException, ReorgTooDeep, StateUnavailable, BranchTooLarge
+src/main/scala/com/chipprbots/ethereum/mpt/NibblePath.scala   # NEW (in mpt/, so the stateless closure gains no db/ import)
+src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/ # CheckpointArchive v2, exporter, importer (C5c)
+src/main/resources/conf/base/state.conf                        # NEW: fukuii.state.*; the guard key is deleted in C8b
+
+DELETED in C8a/C8b: snap/PathToHashExporter.scala, StorageScheme, SnapHashTrie and the Hash arms in snap/,
+  db/storage/ReferenceCountNodeStorage.scala, CachedReferenceCountedStorage.scala, FastSyncNodeStorage.scala, the Hash classes of
+  StateStorage.scala, inmemory-pruning-node-caching.conf, the storage-scheme config key (no deprecation window)
+```
+
+### What the rest of spec 018 must change when this plan is accepted (not done here)
+
+- `spec.md` Scope items 6, 8 and 10 and `plan.md` Phase 3: item 10 is **one gate** (no 10a/10b); F2 (changesets), F3
+  (path-aware resolution) and the hand-off part of F4 move to Track C; F4 keeps only what Track E needs.
+- `spec.md` DC-9 and FR-016: the layout moves for **both chains in this track**; **no deprecation window** for
+  `storage-scheme` (deleted outright); the refusal is the one marker rule of data-model 5.3, for any non-empty unmarked datadir.
+  G-7 is met by Track C. DC-11's two-engine "one minor release" window is also removed under the standing rule (spec
+  clarification of DC-11); both engines coexist only within Track E as its differential oracle.
+- `spec.md` FR-010 and Key Entities: the record key is `blockHash ++ kind` with a height index; amendment #2's row records
+  "local part ships in C3a".
+- `spec.md` DC-3, OQ-5 and Edge Cases: the `inmemory` mode is **retired** (OQ-5's recommendation), which closes its durability gap by
+  removal; `pruning.mode = "inmemory"` is rejected at start, with no deprecation window. The "`pruning.mode = inmemory`" edge case
+  becomes "rejected at start".
+- `spec.md` Edge Cases: add "a datadir without the layout marker", "a block executed but not promoted at a crash", "a reorg
+  deeper than `pruning.history`: `ReorgTooDeep`"; the T063 mid-copy case is now simply "refused".
+- `research.md` 17: replace the Option Y cost row with this plan's sizes once C0 resets them.
+- `.claude/agent-protocols/storage-rocksdb.md`: the unified-layout rules (anchor, diff, overlay, "never write `t`/`u` outside a
+  batch that carries the anchor"), in C8b.
+
+### Decisions made 2026-11-06
+
+1. Option Y reconfirmed, with the size estimate seen. (The estimate has since risen from about 15,000 to about 20,200 added
+   lines after S0 round 1 and to about 21,200 after round 2; the user has not yet seen those figures.)
+2. Write-through confirmed: the disk layer is the canonical head; state, BlockDiff, anchor and best pointer in one batch; no
+   journal.
+3. Checkpoint import onto the unified layout is **funded and required** (C5c): it is ETC's resync path.
+4. T064's intent runs on a **fresh** datadir (EG-5). The held T063 datadir is not used.
+5. **Two pruning modes on both chains, `basic` and `archive`; `inmemory` is retired** (user, later the same day, reversing the
+   earlier "keep all three") and rejected at start. This closes the INF-006 section 4 gap by removal; C4c is withdrawn.
+6. The overlay budget stays a guess until M1 and M2.
+7. **Standing rule:** one infrastructure for both chains; ETC moves and the Hash scheme is retired in this track; no
+   legacy-datadir machinery (the earlier adopt-in-place choice is reversed); no release-level transition, only a short-lived
+   in-development guard removed in the last slice; no 10a/10b split.
+8. **The first successful ETC mainnet sync gates Track C** (EG-12); the old ETC datadir on `fukuii-fc` was deleted on the
+   user's instruction, and fukuii has never synced ETC mainnet.
+
+### Remaining open items (genuinely open)
+
+1. **The source of the ETC blocks 0 to 5,100,000 for forge's offline import is OPEN, decided later (user, 2026-11-06).**
+   Candidates, none chosen:
+   - (a) a `chain.rlp` from `geth export` (core-geth) on a synced ETC node: is there one, and is its history complete from
+     genesis?
+   - (b) fukuii's own full sync from genesis over p2p with SNAP off, stopped at a height: the whole chain is one to three months
+     (`specs/022-snap-heal-convergence/research.md:351`), early blocks are small, and **M14 in C0 measures 0 to 1M** to say whether
+     it is feasible; it also makes the import itself the oracle.
+   **What in the gate depends on it:** EG-1's ETC half (blocks 0 to 5.1M validated per header, node-set equality with the pinned
+   jar every 100,000 blocks, miner and ommer balances across the 5,000,000 era boundary); **the only coverage of the pre-Atlantis
+   ETC rules** (ECIP-1010, ECIP-1017 era 0 to 1, the pre-Spurious-Dragon rules without EIP-161) and of the pre-Atlantis
+   intermediate-root receipts on real ETC data, since Mordor starts at Atlantis and ethereum/tests has no ETC 3M-8.77M network;
+   **Forge signed S0 item 11 in round 2 without the source: it is logistics, and it gates EG-1's ETC half (C7), not code.** Forge's recommendation: **(a) a core-geth `export` of 0 to 5,100,000 is primary** (one deterministic file replayed by the pinned jar and the new build, no p2p variance); **(b) fukuii's own sync from genesis is acceptable**, since the canonical headers are the root oracle either way and both builds can sync the same heights for the 100k node-set checkpoints, and M14 decides (b)'s cost. The user left the choice open. What does *not* depend on it: EG-12 (the ETC mainnet SNAP sync and 24 h
+   follow), the Mordor imports from genesis, the ETC ethereum/tests job, EG-6, and every ETH item. If no source is named, EG-1's ETC
+   half is unmeetable, item 11 stays open, and ETC's pre-Atlantis rules are covered only by ethereum/tests (Frontier, Homestead,
+   EIP-150) and are not exercised on real data.
+2. **Pinned oracle jar, recorded roots, hive and EEST baselines:** who keeps them, and for how long after the gate (the plan says
+   until EG-12 passes, a second import of the first ETC archive, and one release past C8b).
+3. **The snap-peer precondition for EG-12:** if fewer than 2 snap-capable ETC peers are visible, may a declared local core-geth
+   peer be used? (The user decides, per forge.)
+4. **Hosts for EG-6 (the private ETC-config PoW net), EG-14 (the consensus-client devnet) and EG-15 (Platåberget, 6 h):** which
+   machines, and the Ethash DAG on the miners.
+5. **The EIP-8246 text** has not been read by anyone against the EIP itself (beacon 5f and round 2): neither reviewer had an EIPs clone. C0 reads it and records the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures (baseline 1 passing before #1422, `specs/009-amsterdam-fork-support/baselines/eest-v21-amsterdam-2026-09-26.txt:24`). Track C's storage design does not depend on the text: rule 6 triggers on the parent's storage root, and the one shape it needs (storage cleared, account kept) is what the code and `AmsterdamSelfDestructSpec` already produce.
+6. **Archive view reach** (`state.archive.view-reach = 1024`) and its disk cost, after M1 and M9.
+
+## Phase 2 — Track E: the engine (after Track C and GT-1; no longer waits for spec 017, clarified 2026-11-06)
 
 Each slice is one PR, behaviour-neutral, with the DC-12 figures in the PR body and SC-001 green.
 
@@ -217,6 +722,10 @@ Track E exit: SC-001, SC-003, SC-004, SC-006, SC-009 green on both chains; the 1
 chosen engine.
 
 ## Phase 3 — Track F: the flat data model (after Track E's SC-001)
+
+*(Revised 2026-11-06.)* Slices F2 (changesets), F3 (path-aware resolution) and F4 (single-write SNAP ingest, the exporter
+and Hash-scheme retirement, ETC on the unified layout) are delivered by **Track C** (Phase 1b, slices C1–C8b). Their rows
+below are kept for history. Track F keeps F1, F5, F6, F6b, F7 and F8, re-based on Track C's layout.
 
 | Slice | Content | Owner / review |
 | --- | --- | --- |
