@@ -16,7 +16,7 @@ a read-serving track (Track R), the enterprise analytics user story (US-8), the 
 `dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
 added as comparators in the GT-1 harness (FR-028).
 
-**In flight**: `fukuii-fc` (local session), branch `wt/plan-018-021`: `/speckit-clarify` and the copy-removal plan, 2026-11-06
+**In flight**: `fukuii-fc` (local session), PR #1729 (branch `docs/spec-018-021-planning`): Track C planned; implementation starts after 0.11.0
 
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,
