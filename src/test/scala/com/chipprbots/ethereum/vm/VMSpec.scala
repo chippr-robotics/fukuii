@@ -68,7 +68,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers:
         VMTest
       ) in new ContractCreation:
         val codeSize: Int = evmBlockchainConfig.maxCodeSize.get.toInt + 1
-        val contractCode: ByteString = ByteString(Array.fill(codeSize)(-1.toByte))
+        val contractCode: ByteString = ByteString(Array.fill(codeSize)((-1).toByte))
 
         val context: PC = getContext(
           inputData = initCode(contractCode),

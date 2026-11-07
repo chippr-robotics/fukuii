@@ -296,7 +296,7 @@ trait DiscoveryServiceBuilder extends Logger:
               val task =
                 if delayMillis > 0 then IO.sleep(scala.concurrent.duration.FiniteDuration(delayMillis, "ms")) *> send
                 else send
-              task.unsafeRunAndForget()(runtime)
+              task.unsafeRunAndForget()(using runtime)
             }
           )
         }

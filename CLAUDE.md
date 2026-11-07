@@ -32,16 +32,16 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 |---------|-------------|-------------|
 | `sbt compile-all` | Compiles all modules + test sources | After every file change (exception: core domain sweeps — use `sbt compile` instead, then `compile-all` once at end; see `testing-protocol.md`) |
 | `sbt compile` | Root main sources only — no test/IT/Benchmark | **Core domain type sweeps only** (BlockHeader, Account, Block, Transaction → 50+ dependents) — avoids cascade on every file; `compile-all` once at end |
-| `sbt scalafmtAll` | scalafmt across ALL modules (formatting only) | After every migration commit; safe at any time |
-| `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, Evm, etc.) |
-| `sbt formatAll` | scalafixAll + scalafmtAll across all modules | Pre-PR on a clean codebase ONLY — aborts on pre-existing scalafix violations |
-| `sbt formatCheck` | Verify formatting without writing | CI / pre-flight check |
-| `sbt pp` | compile-all + formatAll + quick + integration tests | Pre-PR gate — same caveat as formatAll |
+| `sbt scalafmtAll` | scalafmt on the **root project only**, its main, `Test` and `IntegrationTest` sources; not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`), and not `src/evmTest`, `src/rpcTest` or `src/benchmark` | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
+| `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, scalanet, etc.) |
+| `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp and root, and scalafmtAll on scalanet and scalanetDiscovery | After editing any module, and before a PR. The four scalafixed modules (root, bytes, crypto, rlp) have been scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings; it rewrites files, so read `git diff` after |
+| `sbt formatCheck` | The read-only form of `formatAll`: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | Runs in CI, in the required "Test and Build" job (since #1721); run it locally before pushing |
+| `sbt pp` | compile-all, scalafmtAll on bytes, crypto, rlp and root, then `rlp / test`, sbt's `testQuick` and `IntegrationTest / test` | Pre-PR gate. It runs no scalafix and does not format scalanet, so run `formatCheck` as well |
 | `sbt "testOnly *Foo*"` | Single test class (seconds) | After each phase that changes logic — not compile-only phases |
 | `./scripts/fukuii-test only "*Foo*"` | Wrapper for targeted test | Same as testOnly — prefer this form |
 | `./scripts/fukuii-test essential` | Full testEssential via wrapper | **End of thread only, once** — 24 min, do not run between phases |
 | `./scripts/fukuii-test quick` | `crypto / test` only (~20 s) | Fast smoke check of the crypto sub-module |
-| `sbt testEssential` | Tier 1 full suite (24 min, 3,621 tests) | End of thread only — stalls development if run mid-thread |
+| `sbt testEssential` | Tier 1 full suite (24 min, 7,219 root tests plus rlp 46, bytes 11, crypto 80) | End of thread only — stalls development if run mid-thread |
 | `sbt testStandard` | Tier 2 tests | Before opening a PR |
 | `sbt testComprehensive` | Tier 3 full compliance suite (<3 h) | Release gate only |
 | `sbt testVM testCrypto` | Tagged test subsets | Targeted validation of specific subsystem |
@@ -53,13 +53,18 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 3. After Phase 2 (main migration) and Phase 3 (callers) → `testOnly *<ActorName>*` + any touched caller specs
 4. End of thread, once → full `testEssential` to confirm baseline holds
 
-**The two format commands that look similar but are not:**
+**The format commands that look similar but are not:**
 - `scalafmt` → root module only → **wrong for this codebase**
-- `scalafmtAll` → all modules → **always use this one**
-- `formatAll` → runs scalafix first → aborts mid-migration on pre-existing violations → **pre-PR only**
+- `scalafmtAll` / `scalafmtCheckAll` → the root project only (main, `Test` and `IntegrationTest` sources) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**. `formatAll` and `formatCheck` run the same root commands, so the root's `src/evmTest`, `src/rpcTest` and `src/benchmark` sources are formatted by no alias
+- `formatAll` / `formatCheck` → every module (scalafmt on all six; scalafix on bytes, crypto, rlp and root) → **use these after editing a submodule**. They no longer abort on old scalafix findings, so a finding they report is new: fix it, do not suppress it
 
-Modules: root `main`, plus `bytes`, `crypto`, `rlp`, `Evm`, `Benchmark`,
-`RpcTest`, `IntegrationTest`.
+**scalafix parser gotcha (scalafix 0.14.9 bundles scalameta 4.17.4):** a fewer-braces template opened on a continuation
+line, as in `it should "x" in` followed by `new X:` on the next line, breaks the parse of the *next* sibling
+(`indent` expected, or `;` expected but `:` found), and `scalafixAll --check` fails on the file. Write `in (new X: ... )`
+instead. The same-line `in new X:` is fine. Spec 020 PR 6b-1 (#1719) rewrote every affected site in the test sources.
+
+Modules: root `main`, plus `bytes`, `crypto`, `rlp`, `scalanet`, `scalanetDiscovery`; `Evm`, `Benchmark`, `RpcTest` and
+`IntegrationTest` are configurations of the root, not modules.
 
 ## Shared agent protocols
 
@@ -73,8 +78,8 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `consensus-change-protocol.md` | Hard stop + routing table before touching consensus paths |
 | `inline-cleanup.md` | "Hunt and seek" — what to fix opportunistically, what to log in CHASE-QUEUE |
 | `logging-standards.md` | Preferred logging API, levels, message format, SLF4J patterns |
-| `scala3-style.md` | S1–S11 Scala 3 standards with grep-verifiable ratchets (S11: opaque type full-layer propagation) |
-| `scala3-given-migration.md` | G1–G3 operational pitfalls for `given/using` migration (P3a findings, applies to P3b) |
+| `scala3-style.md` | S1–S12 Scala 3 standards with grep-verifiable ratchets (S11: opaque type full-layer propagation; S12: `boundary`/`break` safety), and the `-source:3.9` mapping |
+| `scala3-given-migration.md` | G1–G3 operational pitfalls for `given/using` migration (P3a findings; P3b is done) |
 | `pekko-typed-api.md` | P1–P25 Pekko Typed API preferences + TL1/TL2 Cats Effect integration rules |
 | `pre-migration-checklist.md` | LOOM pre-flight: grep each actor for sender(), returns, timers, workers before migrating |
 | `migration-handoff.md` | Continuation file protocol when a thread ends mid-migration |
@@ -184,7 +189,7 @@ Paste exact error messages. If clean, write: "sbt compile-all — 0 errors".
 One specific instruction: "Open X.scala line N and change Y to Z."
 
 ## Test baseline
-Last known result: e.g. "3,621 / 0 — run before and after any change."
+Last known result: e.g. "7,219 / 0 — run before and after any change."
 ```
 
 **The continuation thread** reads this file as its first action before anything
@@ -211,7 +216,7 @@ For comprehensive changes, cycle through:
 ## Conventions
 
 - Add files to git individually; know what you're committing (avoid `git add .`).
-- Run `sbt scalafmtAll` before committing during a migration. Run `sbt pp` (which includes `formatAll`) only before a PR on a clean codebase.
+- Run `sbt formatAll` before committing (`scalafmtAll` alone only covers the root project). Run `sbt pp` and `sbt formatCheck` before a PR.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
 
@@ -220,7 +225,14 @@ For comprehensive changes, cycle through:
 New features are built through the Spec Kit workflow, not ad hoc:
 `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`
 (use `/speckit-clarify` and `/speckit-analyze` to de-risk). Spec artifacts live
-under `specs/<NNN-feature-name>/`.
+under `specs/<NNN-feature-name>/`. **Every spec carries a lifecycle header**
+(`**Status**: <Word> (<date>). …`, optional `**In flight**` and `**Release**`);
+the vocabulary, closure procedure and index rules are in
+`docs/development/spec-lifecycle.md`, and `specs/README.md` is the generated
+index of all specs by status (`python3 -I scripts/specs/index.py`; CI checks it).
+Read the index's Open rows before trusting any "current plan" paragraph, and set
+`**In flight**` before editing a spec another session may hold. Spec directories
+are never moved or renumbered.
 
 **The project constitution at `.specify/memory/constitution.md` is binding.**
 Read it before planning or implementing. Highlights:
@@ -235,22 +247,40 @@ Read it before planning or implementing. Highlights:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/020-scala-3-9-lts-migration/plan.md` (Scala 3.3.8 → 3.9.0 LTS and sbt 1.10.7 → 1.13.0,
-NO behaviour change; between spec 016 (done) and spec 017. Build tool first, compiler second
-in one-commit-per-step `-source:3.4-migration` … `3.9-migration` rewrites run ON the 3.9
-compiler (3.3.8 rejects them), tooling third, libraries last (none forced). Final flag is
-`-source:3.9`, not `future` (future on 3.9 = new-syntax + 1,541 implicit errors); `import x.*`
-is kept by a CI grep step plus a scalafix `DisableSyntax.regex`. scalafmt STAYS 3.8.3 in 020
-(3.8.4–3.11.5 cannot parse the `taggedAs (…) in new Fixture:` test shape; DC-8 forbids the
-hand edit) — 3.11 is follow-up FU-1 before 017. scapegoat compiler plugin 3.3.6 → 3.4.1 MUST
-ride with the compiler. 8 hand fixes (E172 Ordering → `using`, E171 McpService) precede the
-3.4 step. Given prioritisation: 364 of 371 E205 sites are `RLPImplicits`' duplicate anonymous
-givens — fixed at the 9 definitions (forge + beacon), not at call sites. Warnings: 365 →
-605 (DC-4 ceiling) → 91 post-chain. Consensus oracle = `ChainImporter` against canonical
-headers on fixed Mordor and Platåberget ranges, 3.3 jar vs 3.9 jar on a frozen datadir copy;
-`[IMPORT-TIMING]` p50/p99 within 10%. Range files come from `debug_getRawBlock`, NOT
-`admin_exportChain` (length-prefixed, importer cannot read it). Five published modules
-(bytes, crypto, rlp, scalanet, scalanetDiscovery) break TASTy → MINOR bump to 0.10.0.)
+`specs/022-snap-heal-convergence/plan.md` (#1671, 0.11.0 blocker). SNAP healing never
+converged on a live chain: after healing drained, a full-trie verification walk (787 M nodes,
+~17 h on Sepolia; 16–20 h on ETC mainnet) gated completion, and every pivot re-peg (~12 min)
+made its result stale. Root cause: fukuii breaks "present on disk ⇒ complete subtree".
+- V1, both schemes: healing writes a parent before its children, then a re-peg drops the
+  children.
+- V2: the account trie commits accounts whose storage or code is incomplete.
+- V3, Path: aliases are lost, so two contracts with an identical storage root lose the second
+  owner's storage trie.
+
+Fix (geth/Nethermind/Besu parity), on both schemes:
+- healed nodes are held in memory with an outstanding-child count, and complete chains are
+  committed in one RocksDB batch, released only after the write returns (#1549 is live on
+  the heal path);
+- DEEPEST-FIRST dispatch is required for correctness: FIFO plus children-first holds the whole
+  trie. At the held-memory cap, pause new subtrees only, never children of held nodes;
+- requests are keyed by path (Path) or by hash with reference counts (Hash);
+- a durable excluded-account set: Path deletes the account's trie positions, Hash seeds its
+  storage root and code against the current root on every re-peg; code is a dependency of
+  its leaf;
+- completion = nothing pending, held or excluded for the current root;
+- the full walk becomes a background audit of the hash store after handoff;
+- the persisted frontier (CF `g`) is retired; an invariant marker in AppState forces one
+  repair pass on pre-invariant datadirs (no marker, checkpoint import in progress, or
+  `clearDoneOnStart`).
+
+Both schemes read the HASH-keyed store after sync; Path is an extra export layer. So Hash
+stays for 0.11.0, and retiring both is spec 018 DC-9. Six slices; the gate removal (slice 5)
+lands LAST, or task #73 returns. Release gates: fresh Mordor and fresh Sepolia sync, each
+followed by 24 h following the head. Reviews: beacon (Path), forge (Hash), vault (write
+order).)
+Also active: `specs/020-scala-3-9-lts-migration/plan.md` (Scala 3.3.8 → 3.9.0, no behaviour
+change). PR 3/4 land before 022 code; PR 5's mechanical `-rewrite` is regenerated after 022
+lands.
 Prior plans: `specs/009-amsterdam-fork-support/plan.md`,
 `specs/016-snap-controller-split/plan.md`, `specs/007-hotpath-alloc-reduction/plan.md`.
 <!-- SPECKIT END -->

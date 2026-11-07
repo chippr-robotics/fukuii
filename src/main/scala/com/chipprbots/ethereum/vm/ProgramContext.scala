@@ -295,5 +295,11 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
       * Amsterdam block executes and handed to each child frame unchanged; see [[BlockAccessRecorder]]. `None` — every
       * ETC and pre-Amsterdam path, and every RPC execution — records nothing.
       */
-    accessRecorder: Option[BlockAccessRecorder] = None
+    accessRecorder: Option[BlockAccessRecorder] = None,
+    /** eth_simulateV1 / eth_call `blockOverrides.blobBaseFee`: the value BLOBBASEFEE pushes instead of the one derived
+      * from the header's excessBlobGas (go-ethereum sets `BlockContext.BlobBaseFee`, simulate.go:364). `None` — block
+      * import, block building and every call without the override — derives it, as always. Handed to each child frame
+      * unchanged.
+      */
+    blobBaseFeeOverride: Option[BigInt] = None
 )

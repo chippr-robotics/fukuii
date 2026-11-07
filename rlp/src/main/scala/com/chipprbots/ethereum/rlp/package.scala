@@ -117,7 +117,7 @@ package object rlp:
     def toBytes(implicit di: DummyImplicit): ByteString = ByteString(toBytes: Array[Byte])
     def toBytes: Array[Byte] = encode(this.toRLPEncodable)
 
-  type RLPCodec[T] = RLPEncoder[T] with RLPDecoder[T]
+  type RLPCodec[T] = RLPEncoder[T] & RLPDecoder[T]
 
   object RLPCodec:
     def instance[T](enc: T => RLPEncodeable, dec: PartialFunction[RLPEncodeable, T])(implicit
@@ -136,8 +136,7 @@ package object rlp:
         override def encode(obj: T): RLPEncodeable = enc.encode(obj)
         override def decode(rlp: RLPEncodeable): T = dec.decode(rlp)
 
-    implicit class Ops[A](val codec: RLPCodec[A]) extends AnyVal:
-
+    extension [A](codec: RLPCodec[A])
       /** Given a codec for type A, make a coded for type B. */
       def xmap[B](f: A => B, g: B => A): RLPCodec[B] =
         new RLPEncoder[B] with RLPDecoder[B]:

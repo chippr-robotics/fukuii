@@ -16,15 +16,15 @@ import com.chipprbots.ethereum.Mocks.MockVM
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.crypto.ECDSASignature
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionSignatureError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValid
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValidator
+import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -318,8 +318,18 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       defaultBlockHeader
     )
 
-    result match
-      case (_, executedTxs) => executedTxs shouldBe Seq(stx1, stx4)
+    val (blockResult, executedTxs) = result
+    executedTxs shouldBe Seq(stx1, stx4)
+    // Each restart after a failed tx resumes from the receipts and gas before it (#1675 made that accumulator a Vector):
+    // one receipt per executed tx, in order, and the failed tx2 and tx3 add no gas. tx1 and tx4 are the same tx.
+    val receipts = blockResult.receipts
+    receipts shouldBe a[Vector[?]]
+    receipts.size shouldBe 2
+    val perTx = receipts.head.cumulativeGasUsed
+    perTx should be > BigInt(0)
+    receipts.map(_.cumulativeGasUsed) shouldBe Seq(perTx, 2 * perTx)
+    blockResult.executionGasUsed shouldBe 2 * perTx // pre-Amsterdam, the execution counter is the receipt sum
+    blockResult.stateGasUsed shouldBe 0
 
   "produce empty block if all txs fail" taggedAs (UnitTest, StateTest) in new TestSetup:
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
@@ -350,6 +360,29 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
     result match
       case (_, executedTxs) => executedTxs shouldBe Seq.empty
+
+  // #1675: the receipts accumulator used to be a List grown with `:+`, which copies every earlier receipt — O(txs²) per
+  // block — and the Amsterdam access-list index read its `.size` per tx. It is a Vector (append and size O(1)); what
+  // it holds is unchanged: one receipt per executed tx, in block order.
+  "accumulate the block's receipts in a Vector, one per tx, in tx order" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val txCount = 20
+    val stxs: Seq[SignedTransaction] = (0 until txCount).map { i =>
+      val tx = defaultTx.copy(nonce = defaultTx.nonce + i, gasLimit = GasAmount(21000))
+      SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId.value))
+    }
+
+    val result: Either[BlockExecutionError.TxsExecutionError, BlockResult] =
+      mining.blockPreparator.executeTransactions(stxs, initialWorld, defaultBlockHeader)
+
+    result shouldBe a[Right[?, BlockResult]]
+    val receipts = result.toOption.get.receipts
+    receipts shouldBe a[Vector[?]]
+    receipts.size shouldBe txCount
+    // Cumulative gas rises with every tx: the receipts are in execution order, each appended once.
+    receipts.map(_.cumulativeGasUsed).sliding(2).foreach { case Seq(a, b) => b should be > a; case _ => () }
 
   // migrated from old LedgerSpec
   "properly assign stateRootHash before byzantium block (exclusive)" in new TestSetup:
@@ -436,10 +469,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         )
       )
 
-      val excessBlobGas = BigInt(1000000)
+      val excessBlobGas: BigInt = BigInt(1000000)
       val blockTs = 100L
       val numBlobs = 2
-      val blobTx = BlobTransaction(
+      val blobTx: BlobTransaction = BlobTransaction(
         chainId = pragueConfig.chainId.value,
         nonce = 1,
         maxPriorityFeePerGas = 1,
@@ -452,8 +485,8 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         maxFeePerBlobGas = 1000,
         blobVersionedHashes = List.fill(numBlobs)(BlobVersionedHash(ByteString(Array.fill(32)(0.toByte))))
       )
-      val stx = SignedTransaction(blobTx, ECDSASignature(0, 0, 0))
-      val header = defaultBlockHeader.copy(
+      val stx: SignedTransaction = SignedTransaction(blobTx, ECDSASignature(0, 0, 0))
+      val header: BlockHeader = defaultBlockHeader.copy(
         unixTimestamp = Timestamp(blockTs),
         extraFields = HefPostCancun(
           baseFee = BigInt(1_000_000_000L),
@@ -464,14 +497,14 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         )
       )
 
-      val senderBalance = UInt256(BigInt(1000000000L))
-      val world = emptyWorld.saveAccount(originAddress, Account(balance = senderBalance))
+      val senderBalance: UInt256 = UInt256(BigInt(1000000000L))
+      val world: InMemoryWorldStateProxy = emptyWorld.saveAccount(originAddress, Account(balance = senderBalance))
 
-      val resultWorld = prep.deductBlobGas(stx, originAddress, header, world)
+      val resultWorld: InMemoryWorldStateProxy = prep.deductBlobGas(stx, originAddress, header, world)
 
-      val expectedFee = BlobGasUtils.getBlobGasPrice(excessBlobGas, Timestamp(blockTs), pragueConfig)
-      val expectedBurned = expectedFee * BlobGasUtils.GAS_PER_BLOB * numBlobs
-      val actualBalance = resultWorld.getGuaranteedAccount(originAddress).balance
+      val expectedFee: BigInt = BlobGasUtils.getBlobGasPrice(excessBlobGas, Timestamp(blockTs), pragueConfig)
+      val expectedBurned: BigInt = expectedFee * BlobGasUtils.GAS_PER_BLOB * numBlobs
+      val actualBalance: UInt256 = resultWorld.getGuaranteedAccount(originAddress).balance
 
       actualBalance shouldBe UInt256(senderBalance.toBigInt - expectedBurned)
   }

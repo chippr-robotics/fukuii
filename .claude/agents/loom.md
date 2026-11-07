@@ -56,7 +56,7 @@ You are called once per actor migration thread. Your deliverables per session:
    where `sender()` was used. Show the new types, get confirmation.
 3. **Implementation** — migrate the actor, update all callers, adapt spawning
    sites. One file at a time; compile after each file.
-4. **Verify** — `sbt compile-all` after every file; `sbt scalafmtAll` after formatting phases; `testOnly *<Actor>*` after logic phases; full `./scripts/fukuii-test essential` once at thread end only. See Verification section.
+4. **Verify** — `sbt compile-all` after every file; `sbt formatAll` after formatting phases; `testOnly *<Actor>*` after logic phases; full `./scripts/fukuii-test essential` once at thread end only. See Verification section.
 
 **At session start:**
 1. Check `.local/docs/continuations/` for a loom continuation file — if one exists for this actor, read it before anything else.
@@ -349,12 +349,12 @@ narrow in two steps:
 
 ## Pre-flight checklist (run before touching any file)
 
-> Full pre-flight protocol: `~/.claude/agent-protocols/pre-migration-checklist.md`
-> Pekko Typed API preferences: `~/.claude/agent-protocols/pekko-typed-api.md` (P1–P25 + TL1/TL2)
-> Inline cleanup rules: `~/.claude/agent-protocols/inline-cleanup.md`
+> Full pre-flight protocol: `.claude/agent-protocols/pre-migration-checklist.md`
+> Pekko Typed API preferences: `.claude/agent-protocols/pekko-typed-api.md` (P1–P25 + TL1/TL2)
+> Inline cleanup rules: `.claude/agent-protocols/inline-cleanup.md`
 > Pekko Typed patterns catalogue (P17–P25 detail + grep patterns): `.local/best-practices/pekko/typed-patterns.md`
 > Codebase audit (P17-P25 and TL1/TL2 violations with file:line): `.local/best-practices/codebase-audit.md`
-> Worktree discipline (sprint vs task patterns, naming, lifecycle, agent rules): `~/.claude/agent-protocols/worktree-protocol.md`
+> Worktree discipline (sprint vs task patterns, naming, lifecycle, agent rules): `.claude/agent-protocols/worktree-protocol.md`
 
 ```bash
 # 1. Confirm wildcard imports are already migrated (prerequisite):
@@ -396,11 +396,13 @@ After implementation:
 
 **Wave 2 (infrastructure actors) — COMPLETE.** All 7 actors done. See SPRINT-QUEUE.md.
 
-**Network/sync sprint — IN PROGRESS.** 35 Classic actors in `network/` and
-`blockchain/sync/`. Full plan and group order in:
+**Network/sync sprint — no Classic actor class remains (checked on the tree, 2026-11-05).** It started with 35 Classic
+actors in `network/` and `blockchain/sync/`. Today `src/main` has three private Classic TCP bridges and nothing else
+(`pekko-typed-api.md`, "Migration state context", has the greps). Full plan and group order in:
 `.local/docs/moderization-review-june/network-sync-pekko-migration-plan.md`
 
-Current group status (read SPRINT-QUEUE.md Part 6 table for full state):
+Group status. The Status column was brought up to the tree on 2026-11-05; the text after it is the June 2026 working
+record (gates, LOC counts, commit hashes) and is not updated:
 
 | Group | Status | Key actors |
 |-------|--------|-----------|
@@ -412,14 +414,12 @@ Current group status (read SPRINT-QUEUE.md Part 6 table for full state):
 | S6 | ✅ DONE | ChainDownloader |
 | S5 | ✅ DONE `5d29511d4` | BlockBroadcasterActor (Behavior[BroadcasterMsg]), BlockImporter + RegularSync (Behavior[Any] — mixed Classic/Typed sources); PeerListHelper replaces PeerListSupportNg. 69 jsonrpc failures fixed `92584a07b`. |
 | NET | ✅ DONE | RLPxCH ✅ `f8a127870`. PeerActor ✅ `e6ccc5ac1`. PEA ✅ `59f7a1f11`. PDM ✅ `81eb751f3`. PMA ✅ `05e0c003b`+`0e9952f06` (shell+core; 8 sender→replyTo; PDM self-post timer). **BlockchainHostActor** ✅ `8ef6a4601` — pure Behavior[Command], no shell; 1-case ADT (PeerEventReceived); messageAdapter+tell subscription; 4 helpers→local defs; 3 spawn sites (NodeBuilder+CommonFakePeer+Spec); test required PeerEventReceived wrapping for 12 direct tells; 3,621/0. |
-| S3 | 🔄 IN PROGRESS | SNAP coordinators ×4. HERALD-5 ✅ CONDITIONAL. **ByteCodeCoordinator** ✅ `4f214db16`+`86930f9b1` — 4 returns removed (not 1 — lines 482/503/523/533; broader grep needed); Command non-sealed (multi-file ADT, same as other S-series); BytecodeRecoveryActor already Typed (spawn via PropsAdapter); dead PeerAvailable handler dropped; SSC ask → AskPattern(.toTyped); 21/21 BCC tests + 263/263 SNAP suite; 3,621/0. **StorageRangeCoordinator** ✅ `368c03560`+`0b43de007` — 21 returns removed (Phase 0); no child workers (dispatches GetStorageRanges directly to NPMA Classic); 1 sender() → replyTo on StorageGetProgress; SSC stagnation ask → AskPattern(.toTyped) mirrors BCC; 3 scheduler calls converted (preStart recurring → startTimerWithFixedDelay, 2× scheduleOnce → context.scheduleOnce); log.warning → log.warn (15 sites, SLF4J); files: SRC.scala + Messages.scala + SSC.scala + StorageRecoveryActor.scala + Spec; 28/28 SRC tests; 3,621/0. **AccountRangeCoordinator** ⬜ NEXT (2 Typed behaviors: receive→initial + finalizing; 6 sender() paths; 9 replyTo fields in Messages.scala). TNHC: pre-migration fix needed (10 returns) + drop @volatile. HealingStagnated outbound to SSC — not in TNHC Command ADT. |
-| S4/S7 | ⬜ post-NET | SyncStateSchedulerActor + PivotBlockSelector (S4), PeersClient + PeerRequestHandler (S7) |
-| NET2 | ⬜ post-NET+S3 | NetworkPeerManagerActor. HERALD-3 ✅ CONDITIONAL. 1 state (handleMessages), 8 var fields on Impl class, 2 sender() paths, Classic shell required (SSC uses Classic ask), SNAP ref stays Option[ActorRef], 3 scheduler calls → withTimers. |
-| SNAP1/SNAP2/ROOT/CAPSTONE | ⬜ post-W1+S3+S4/S7+NET+NET2 | HERALD-4 ✅ CONDITIONAL. SSC: 5,178 LOC, 6 named behaviors, 11 sender() → replyTo (pure status queries), ~58 var→Impl fields, 13 timers (1 untracked raw scheduler at L4058 → keyed timer), 2 .orElse partials → explicit helpers, 1 aroundReceive (stagnation dispatcher L3191 → inline in syncing), 4 hard constraints. See `.local/docs/moderization-review-june/HERALD-4-SSC-preflight.md`. Requires SPECKIT specify session to define ADT before LOOM starts. |
+| S3 | ✅ DONE (typed on the tree, 2026-11-05) | SNAP coordinators ×4. HERALD-5 ✅ CONDITIONAL. **ByteCodeCoordinator** ✅ `4f214db16`+`86930f9b1` — 4 returns removed (not 1 — lines 482/503/523/533; broader grep needed); Command non-sealed (multi-file ADT, same as other S-series); BytecodeRecoveryActor already Typed (spawn via PropsAdapter); dead PeerAvailable handler dropped; SSC ask → AskPattern(.toTyped); 21/21 BCC tests + 263/263 SNAP suite; 3,621/0. **StorageRangeCoordinator** ✅ `368c03560`+`0b43de007` — 21 returns removed (Phase 0); no child workers (dispatches GetStorageRanges directly to NPMA Classic); 1 sender() → replyTo on StorageGetProgress; SSC stagnation ask → AskPattern(.toTyped) mirrors BCC; 3 scheduler calls converted (preStart recurring → startTimerWithFixedDelay, 2× scheduleOnce → context.scheduleOnce); log.warning → log.warn (15 sites, SLF4J); files: SRC.scala + Messages.scala + SSC.scala + StorageRecoveryActor.scala + Spec; 28/28 SRC tests; 3,621/0. **AccountRangeCoordinator** (typed on the tree, 2026-11-05; was ⬜ NEXT) (2 Typed behaviors: receive→initial + finalizing; 6 sender() paths; 9 replyTo fields in Messages.scala). TNHC: pre-migration fix needed (10 returns) + drop @volatile. HealingStagnated outbound to SSC — not in TNHC Command ADT. |
+| S4/S7 | ✅ DONE (2026-11-05: S4's two actors were deleted with fast sync, #1436; PeersClient and PeerRequestHandler are typed) | SyncStateSchedulerActor + PivotBlockSelector (S4), PeersClient + PeerRequestHandler (S7) |
+| NET2 | ✅ DONE (typed on the tree, 2026-11-05) | NetworkPeerManagerActor. HERALD-3 ✅ CONDITIONAL. 1 state (handleMessages), 8 var fields on Impl class, 2 sender() paths, Classic shell required (SSC uses Classic ask), SNAP ref stays Option[ActorRef], 3 scheduler calls → withTimers. |
+| SNAP1/SNAP2/ROOT/CAPSTONE | ✅ actors typed (SNAPSyncController and SyncController are Behavior-based, 2026-11-05); the CAPSTONE cleanup targets were not re-audited | HERALD-4 ✅ CONDITIONAL. SSC: 5,178 LOC, 6 named behaviors, 11 sender() → replyTo (pure status queries), ~58 var→Impl fields, 13 timers (1 untracked raw scheduler at L4058 → keyed timer), 2 .orElse partials → explicit helpers, 1 aroundReceive (stagnation dispatcher L3191 → inline in syncing), 4 hard constraints. See `.local/docs/moderization-review-june/HERALD-4-SSC-preflight.md`. Requires SPECKIT specify session to define ADT before LOOM starts. |
 
-SNAP1 (SNAPSyncController, 5,178 LOC, 6 behaviors) — HERALD-4 ✅ CONDITIONAL.
-Gates: W1 (serialization) + S3 (coordinators Typed) + S4/S7 + NET + NET2 (NPMA Typed, ConnectToPeer+SendMessage in Command ADT).
-Requires SPECKIT specify session before LOOM starts. Do not begin without it.
+SNAP1 (SNAPSyncController): typed on the tree (checked 2026-11-05). The June 2026 gate list that stood here is obsolete.
 
 ## Concrete example: ResourceHealthMonitor (completed — commit c77c2ebf7)
 
@@ -473,8 +473,8 @@ surface it to the main session before touching the file.
 sbt compile-all
 
 # After formatting-only phases (Phase 0: returns, Phase 1: Messages.scala):
-sbt scalafmtAll    # formatting check only — no tests needed, no logic changed
-                   # use scalafmtAll NOT formatAll (see CLAUDE.md build commands)
+sbt formatAll      # formatting + scalafix, every module — no tests needed, no logic changed
+                   # scalafmtAll alone formats the root project only (see CLAUDE.md build commands)
 
 # After Phase 2 (main migration) and Phase 3 (callers) — targeted, seconds:
 ./scripts/fukuii-test only "*<ActorName>Spec*"

@@ -1,6 +1,6 @@
 # CON-012: Skip the redundant second verification walk on a clean post-SNAP heal
 
-**Status**: Accepted
+**Status**: Superseded by [[CON-014]] (2026-11-02). Completion no longer rests on a walk where the invariant marker stands, so its byte-for-byte parity with the two-walk outcome no longer holds, by design.
 
 **Date**: 2026-06-19
 

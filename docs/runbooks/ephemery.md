@@ -11,6 +11,10 @@ Shape of the chain (checked for `ephemery-164`, 2026-09-24 → 2026-10-22): merg
 BPO2 at epoch 4096 (~18.2 days in), no Amsterdam. Deposit contract
 `0x00000000219ab540356cBB839Cbe05303d7705Fa`, ~284 genesis accounts including the system contracts.
 
+From `ephemery-165` (2026-10-22) every fork through Amsterdam, BPO1 and BPO2 included, is active at genesis, so block 0 has
+the 23-field header. Check any new iteration the same way: the hash fukuii computes must equal the release's published one,
+`GENESIS_HASH` in `release.env`.
+
 **Traffic is close to zero.** On 2026-10-17 (iteration 164, head ~133,300) a sample of every 50th block
 from genesis found 3 transactions in 2,666 blocks, and the last 2,000 blocks had none (no blobs). Importing
 Ephemery exercises empty-block processing, system calls and withdrawals; anything that needs real
@@ -42,8 +46,8 @@ Requires bash >= 4, `curl`, `tar`, `jq`. It writes `OUT/ephemery-N/` and points 
 | `OUT/ephemery-local.conf` | your overrides (ports, JWT); created once, never overwritten, included by every iteration's conf |
 
 The script refuses (non-zero exit, nothing written) a release whose genesis declares something fukuii
-cannot represent: a non-zero block fork, an unknown fork key (e.g. `bpo3Time`), a non-zero TTD,
-Amsterdam at genesis, or a header quantity it cannot re-encode.
+cannot represent: a non-zero block fork, an unknown fork key (e.g. `bpo3Time`), a non-zero TTD, or a header
+quantity it cannot re-encode.
 
 **Why a re-encoded genesis.** `GenesisDataLoader` parses `timestamp`, `gasLimit`, `difficulty`,
 `baseFeePerGas`, `blobGasUsed` and `excessBlobGas` as hex even without `0x`; Ephemery writes the
@@ -88,9 +92,9 @@ another node or an sbt build on the 16 GB soak host.
 
 Lighthouse has no built-in Ephemery network; use the release directory as `--testnet-dir`. It reads the CL
 bootnodes from `boot_enr.yaml` in that directory, so no `--boot-nodes` flag is needed (`release.env` also
-carries them as `BOOTNODE_ENR_LIST`, from the release's `boot_enr.txt`, for other CL clients). Osaka/Fulu is
-active at genesis, so the CL must be Fulu-capable (the `sigp/lighthouse:v8.3.0-rc.0` image already on the
-host is).
+carries them as `BOOTNODE_ENR_LIST`, from the release's `boot_enr.txt`, for other CL clients). From `ephemery-165`
+Amsterdam and its consensus counterpart Gloas are active at genesis, so the CL must support them:
+`sigp/lighthouse:v8.3.0-rc.0` followed `ephemery-165` to the head (2026-11-01).
 
 ```bash
 source OUT/current/release.env      # sets OUT_DIR (absolute), TESTNET_DIR

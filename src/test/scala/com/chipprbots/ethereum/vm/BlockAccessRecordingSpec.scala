@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.vm
 
-import org.apache.pekko.util.ByteString
-
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers

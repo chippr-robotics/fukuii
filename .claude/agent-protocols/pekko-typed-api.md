@@ -11,10 +11,27 @@ Referenced by: loom.md, prism.md
 
 ## Migration state context
 
-The codebase is mid-migration from Classic to Typed. During migration, Classic
-adapters (`.toClassic`, `PropsAdapter`, `Behavior[Any]`) are intentional scaffolding —
-do not flag them as violations until CAPSTONE. Post-CAPSTONE, all of the below
-apply universally.
+**The Classic-to-Typed migration of the actor classes is finished (checked on the tree, 2026-11-05).** The node is a
+Typed codebase on a Classic `ActorSystem`: `NodeBuilder.classicSystem` hosts every actor
+(`classicSystem.spawn(<Behavior>)`) and `given system: ActorSystem[Nothing] = classicSystem.toTyped`. The only Classic
+actor classes left in `src/main` are three private TCP bridges, which must stay Classic because Pekko IO's `Tcp` API
+is Classic-only: `ServerActor.TcpEventBridge` and `RLPxConnectionHandler`'s `OutboundTcpBridge` and `InboundTcpBridge`.
+The Classic adapter use left is the handful of sites the last three greps below list.
+
+```bash
+grep -rnE "extends (ClassicActor|Actor|AbstractActor)\b" src/main --include="*.scala"
+# 3 hits: the TCP bridges. (`extends Actor\b` alone finds 0: the Classic base class is imported as `ClassicActor`.)
+grep -rn "PropsAdapter" src/main --include="*.scala" | grep -vE ':[0-9]+:\s*(//|\*|/\*)'
+# 2 hits: network/PeerActor.scala and network/rlpx/RLPxConnectionHandler.scala (the Classic-callable factories)
+grep -rn "\.toClassic" src/main --include="*.scala" | grep -vE ':[0-9]+:\s*(//|\*|/\*)'
+# 5 hits: PeerManagerActor (2), ServerActor (2), RLPxConnectionHandler (1)
+grep -rn "Behavior\[Any\]" src/main --include="*.scala"
+# 2 hits, both in doc comments (BytecodeRecoveryActor, StorageRecoveryActor); no `Behavior[Any]` is left in code
+```
+
+So the old allowance ("Classic adapters are intentional scaffolding until CAPSTONE") no longer covers new code: a
+`.toClassic`, `PropsAdapter` or `Behavior[Any]` outside the sites above is a violation, and the rules below apply
+universally.
 
 ---
 

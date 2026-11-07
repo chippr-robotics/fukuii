@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.common.SimpleMap
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.mpt
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.encode as encodeRLP
@@ -34,6 +35,29 @@ object MerklePatriciaTrie:
 
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
+
+  /** The store holds an entry under `hash`, and it is not that node: it does not decode, or it decodes to a shape a
+    * stored node never has (a bare empty value or a 32-byte hash reference) and fails its hash.
+    *
+    * It extends [[MissingNodeException]] on purpose, as [[MissingCodeException]] does: the node this hash names is not
+    * in the store, which says nothing about the block being executed, so every consumer that handles a missing node
+    * (the importer's delete-then-fetch, the Engine API's SYNCING answer, the RPC services' "state unavailable") handles
+    * this the same way. Thrown as a plain decode error it was a block import failure, blamed on the honest peer that
+    * sent the block (spec 022 T062). `detail` says what was wrong with the bytes, and `cause` is what reading them
+    * threw, kept so that a fault taken for corruption still shows where it came from.
+    */
+  class CorruptNodeException(
+      hash: ByteString,
+      val detail: String,
+      override val location: Option[ByteString] = None,
+      cause: Option[Throwable] = None
+  ) extends MissingNodeException(
+        hash,
+        s"Stored trie node ${Hex.toHexString(hash.toArray)} is corrupt ($detail), treated as missing"
+      ):
+    cause.foreach(initCause)
+    override def withLocation(loc: ByteString): CorruptNodeException =
+      new CorruptNodeException(hash, detail, Some(loc), Option(getCause))
 
   class MissingStorageNodeException(
       hash: ByteString,
@@ -91,18 +115,24 @@ object MerklePatriciaTrie:
   def apply[K, V](
       source: MptStorage
   )(implicit kSerializer: ByteArrayEncoder[K], vSerializer: ByteArraySerializable[V]): MerklePatriciaTrie[K, V] =
-    new MerklePatriciaTrie[K, V](None, source)(kSerializer, vSerializer)
+    new MerklePatriciaTrie[K, V](None, source)(using kSerializer, vSerializer)
 
   def apply[K, V](rootHash: Array[Byte], source: MptStorage)(implicit
       kSerializer: ByteArrayEncoder[K],
       vSerializer: ByteArraySerializable[V]
   ): MerklePatriciaTrie[K, V] =
     if EmptyRootHash.sameElements(rootHash) then MerklePatriciaTrie(source)
-    else new MerklePatriciaTrie[K, V](Some(mpt.HashNode(rootHash)), source)(kSerializer, vSerializer)
+    else new MerklePatriciaTrie[K, V](Some(mpt.HashNode(rootHash)), source)(using kSerializer, vSerializer)
 
 trait NodesKeyValueStorage extends SimpleMap[NodeHash, NodeEncoded, NodesKeyValueStorage]:
   def persist(): Unit
   def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(get)
+
+  /** One result per key, none of which can fail the batch: see [[RawNodeRead]]. The stores a long walk reads override
+    * this with one no-fill batch; this default is for the rest, one read at a time.
+    */
+  def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    keys.map(key => RawNodeRead.decoding(get(key).fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_))))
 
 class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNode], val nodeStorage: MptStorage)(
     implicit
@@ -273,7 +303,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       .map { root =>
         val NodeInsertResult(newRoot, nodesToRemoveFromStorage) = put(root, keyNibbles, vSerializer.toBytes(value))
         val newRootNode = nodeStorage.updateNodesInStorage(newRoot = Some(newRoot), toRemove = nodesToRemoveFromStorage)
-        new MerklePatriciaTrie(newRootNode, nodeStorage)(kSerializer, vSerializer)
+        new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
       }
       .getOrElse {
         val newRoot = LeafNode(ByteString(keyNibbles), ByteString(vSerializer.toBytes(value)))
@@ -298,10 +328,10 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
           case NodeRemoveResult(true, Some(newRoot), nodesToRemoveFromStorage) =>
             val newRootNode =
               nodeStorage.updateNodesInStorage(newRoot = Some(newRoot), toRemove = nodesToRemoveFromStorage)
-            new MerklePatriciaTrie(newRootNode, nodeStorage)(kSerializer, vSerializer)
+            new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
           case NodeRemoveResult(true, None, nodesToRemoveFromStorage) =>
             nodeStorage.updateNodesInStorage(newRoot = None, toRemove = nodesToRemoveFromStorage)
-            new MerklePatriciaTrie(None, nodeStorage)(kSerializer, vSerializer)
+            new MerklePatriciaTrie(None, nodeStorage)(using kSerializer, vSerializer)
           case NodeRemoveResult(false, _, _) => this
       }
       .getOrElse {

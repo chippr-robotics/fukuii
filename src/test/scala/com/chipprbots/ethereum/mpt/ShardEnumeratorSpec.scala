@@ -128,3 +128,77 @@ class ShardEnumeratorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
       assert(total == pairs.size, s"expected ${pairs.size} leaves across shards, got $total")
     }
   }
+
+  // spec 022 T050a: a hole below the root does not stop the scan. It is a shard like the child would have been, whose walk
+  // meets it, so the count, half of the resume tag, does not depend on the hole.
+  private def buildWithNodes(
+      entries: Seq[(Array[Byte], Array[Byte])]
+  ): (ByteString, MptStorage, NodeStorage) =
+    val (stateStorage, nodes, _) = StateStorage.createTestStateStorage(EphemDataSource())
+    val storage = stateStorage.getBackingStorage(0)
+    val trie = entries.foldLeft(freshTrie(storage)) { case (t, (k, v)) => t.put(k, v) }
+    (ByteString(trie.getRootHash), storage, nodes)
+
+  // Forty bytes of value: too long to inline, so every leaf is a stored node its parent refers to by hash.
+  private val spread: Seq[(Array[Byte], Array[Byte])] =
+    (0 until 16).map(i => (Array[Byte]((i << 4).toByte), Array.fill[Byte](40)(i.toByte)))
+
+  test("an absent child is a shard of its own, as a HashNode, and the count does not change", UnitTest, MPTTest) {
+    val (root, storage, nodes) = buildWithNodes(spread)
+    val before = ShardEnumerator.enumShards(root, storage)
+    val hole = storage.get(root.toArray).asInstanceOf[BranchNode].children(5).asInstanceOf[HashNode]
+    nodes.update(Seq(ByteString(hole.hash)), Nil)
+
+    val after = ShardEnumerator.enumShards(root, storage)
+
+    assert(after.map(_.pathPrefix) == before.map(_.pathPrefix))
+    assert(after(5).root.isInstanceOf[HashNode], "the absent child stays unresolved")
+    assert(after.indices.filterNot(_ == 5).forall(i => !after(i).root.isInstanceOf[HashNode]))
+  }
+
+  test("the shard for an absent child is walked as a hole, not a failure", UnitTest, MPTTest) {
+    val (root, storage, nodes) = buildWithNodes(spread)
+    val hole = storage.get(root.toArray).asInstanceOf[BranchNode].children(5).asInstanceOf[HashNode]
+    nodes.update(Seq(ByteString(hole.hash)), Nil)
+    val shard = ShardEnumerator.enumShards(root, storage)(5)
+
+    val holes = mutable.ArrayBuffer.empty[ByteString]
+    MptTraversals.dispatch(
+      shard.root,
+      new PathTrackingLeafWalkVisitor(storage, shard.pathPrefix, (_, _) => fail("no leaf here"), Some(holes += _))
+    )
+    assert(holes.toSeq == Seq(ByteString(5.toByte)))
+  }
+
+  test("EDGE: an extension root over an absent node is one shard, at the extended prefix", UnitTest, MPTTest) {
+    val entries = (1 to 3).map(i => (Array[Byte](0x11, (i << 4).toByte), Array.fill[Byte](40)(i.toByte)))
+    val (root, storage, nodes) = buildWithNodes(entries)
+    val extension = storage.get(root.toArray).asInstanceOf[ExtensionNode]
+    nodes.update(Seq(ByteString(extension.next.asInstanceOf[HashNode].hash)), Nil)
+
+    val shards = ShardEnumerator.enumShards(root, storage)
+
+    assert(shards.size == 1)
+    assert(shards.head.pathPrefix == extension.sharedKey)
+    assert(shards.head.root.isInstanceOf[HashNode])
+  }
+
+  test("an absent root throws: no trie is not an empty trie", UnitTest, MPTTest) {
+    val (root, storage, nodes) = buildWithNodes(spread)
+    nodes.update(Seq(root), Nil)
+    intercept[MerklePatriciaTrie.MissingNodeException](ShardEnumerator.enumShards(root, storage))
+  }
+
+  test("a child that will not decode still throws: only an absent node is a hole", UnitTest, MPTTest) {
+    val (root, storage, nodes) = buildWithNodes(spread)
+    val child = storage.get(root.toArray).asInstanceOf[BranchNode].children(5).asInstanceOf[HashNode]
+    val threeItems = com.chipprbots.ethereum.rlp.encode(
+      com.chipprbots.ethereum.rlp.RLPList(
+        com.chipprbots.ethereum.rlp.RLPValue(Array[Byte](1)),
+        com.chipprbots.ethereum.rlp.RLPValue(Array[Byte](2)),
+        com.chipprbots.ethereum.rlp.RLPValue(Array[Byte](3))
+      )
+    )
+    nodes.update(Nil, Seq(ByteString(child.hash) -> threeItems))
+    intercept[MerklePatriciaTrie.MPTException](ShardEnumerator.enumShards(root, storage))
+  }

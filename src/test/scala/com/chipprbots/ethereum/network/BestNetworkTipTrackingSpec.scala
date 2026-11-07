@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network
 
 import java.net.InetSocketAddress
 
+import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -155,7 +156,7 @@ class BestNetworkTipTrackingSpec extends AnyFlatSpec with Matchers:
     val peerEventBus: TestProbe = TestProbe()
     val calibrationTarget: TestProbe = TestProbe()
 
-    val peersInfoHolder = classicSystem
+    val peersInfoHolder: ActorRef = classicSystem
       .spawn(
         NetworkPeerManagerActor.behavior(
           peerManager.ref.toTyped[PeerManagerActor.Command],

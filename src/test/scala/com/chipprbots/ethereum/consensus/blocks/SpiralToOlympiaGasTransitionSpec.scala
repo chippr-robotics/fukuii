@@ -13,20 +13,20 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
-import com.chipprbots.ethereum.consensus.validators.DifficultyAgnosticValidator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderGasLimitError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
-import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.consensus.validators.DifficultyAgnosticValidator
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
-import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -294,7 +294,7 @@ class SpiralToOlympiaGasTransitionSpec
         )
         val minerWith60MConfig = new TestableGen(BigInt(60_000_000))
         val preOlympiaBlock = olympiaBlock - 1
-        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(configWithSpiralSchedule)
+        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(using configWithSpiralSchedule)
         result shouldBe SpiralGasLimit
       }
 
@@ -312,7 +312,7 @@ class SpiralToOlympiaGasTransitionSpec
         )
         val minerWith60MConfig = new TestableGen(BigInt(60_000_000))
         val preOlympiaBlock = olympiaBlock - 1
-        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(configNoSchedule)
+        val result = minerWith60MConfig.calcGasLimit(SpiralGasLimit, preOlympiaBlock)(using configNoSchedule)
         result should be > SpiralGasLimit
       }
     }

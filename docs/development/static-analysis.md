@@ -5,7 +5,7 @@
 **Repository**: chippr-robotics/fukuii  
 **Purpose**: Inventory current static analysis toolchain for state, versioning, appropriateness, ordering, and current issues
 
-> **Note**: This document was originally created during the Scala 2 to 3 migration. The migration was completed in October 2025, and Phase 5 cleanup has been completed. The project now uses Scala 3.3.7 exclusively with all Scala 2 cross-compilation support removed.
+> **Note**: This document was originally created during the Scala 2 to 3 migration. The migration was completed in October 2025, and Phase 5 cleanup has been completed. The project now uses Scala 3.9.0 exclusively with all Scala 2 cross-compilation support removed.
 
 ---
 
@@ -38,7 +38,7 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 
 ## Scala Version Support
 
-**Primary Version:** Scala 3.3.7 (LTS)
+**Primary Version:** Scala 3.9.0 (LTS)
 
 **Migration Status:**
 - ✅ Migration from Scala 2.13 completed in October 2025
@@ -391,7 +391,7 @@ coverageExcludedFiles := Seq(
 
 ### Current CI Workflow (`.github/workflows/ci.yml`)
 
-**Build Strategy**: ✅ Scala 3.3.7 only (Phase 5 cleanup completed)
+**Build Strategy**: ✅ Scala 3.9.0 only (Phase 5 cleanup completed)
 
 **Execution Order**:
 1. **Compile** - `sbt compile-all` (compiles all modules)
@@ -401,13 +401,13 @@ coverageExcludedFiles := Seq(
 5. **Build** - `sbt assembly` + `sbt dist` (distribution artifacts)
 
 **Configuration**:
-- **Scala 3.3.7 LTS**: Single version pipeline (compilation, formatting, Scapegoat, tests, coverage, build artifacts)
+- **Scala 3.9.0 LTS**: Single version pipeline (compilation, formatting, Scapegoat, tests, coverage, build artifacts)
 
 **Missing from CI**:
 - ❌ SonarQube integration (optional enhancement)
 
 **Integrated in CI**:
-- ✅ Scala 3.3.7 LTS (single version)
+- ✅ Scala 3.9.0 LTS (single version)
 - ✅ Scapegoat analysis (Scala 3 compatible)
 - ✅ Code coverage measurement with Scoverage
 - ✅ Coverage reports published as artifacts (30-day retention)
@@ -447,14 +447,14 @@ compile-all → scalafmt (all modules) → testQuick → IntegrationTest
 
 ### `formatAll`
 ```
-compile-all → scalafixAll → scalafmtAll (all modules)
+compile-all → scalafixAll + scalafmtAll (root, bytes, crypto, rlp) → scalafmtAll (scalanet, scalanetDiscovery)
 ```
 - Applies all formatting fixes
 - ✅ Good for batch updates
 
 ### `formatCheck`
 ```
-compile-all → scalafixAll --check → scalafmtCheckAll (all modules)
+compile-all → scalafixAll --check (root, bytes, crypto, rlp) → scalafmtCheckAll (all six modules)
 ```
 - Checks all formatting without changes
 - ✅ Used in CI
@@ -500,7 +500,7 @@ compile-all → scapegoat (all modules)
 **Notes**: 
 - Scalastyle has been removed (October 26, 2025) as it was unmaintained since 2017. Its functionality has been migrated to Scalafix and Scalafmt.
 - Scala3-Migrate has been removed (November 2025 - Phase 5) as migration is complete
-- CI runs on Scala 3.3.7 LTS only (no cross-compilation)
+- CI runs on Scala 3.9.0 LTS only (no cross-compilation)
 - All tools are now Scala 3 compatible
 
 ---

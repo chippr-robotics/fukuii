@@ -113,9 +113,128 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Clear the SNAP-sync-done flag. Used by the regular-sync stuck escape valve to force a SNAP re-sync from a recent
     * pivot when post-SNAP regular sync hits permanently-unfetchable state nodes (e.g., stuck many blocks behind
     * canonical tip with no peer able to serve our parent stateRoot).
+    *
+    * The heal invariant marker goes in the same write (spec 022 D7): every caller re-enters SNAP on state that regular
+    * sync has written to, or that was found wanting (a stuck import, a failed hand-off, `clearDoneOnStart`), so what is
+    * present there is not vouched for any more. Here, so that no caller can forget it.
+    *
+    * The audit's clean anchor and its place go with it (spec 022 T053): a re-SNAP can land on the same pivot, and a
+    * clean pass of the state it replaced says nothing of the state it writes.
     */
   def clearSnapSyncDone(): DataSourceBatchUpdate =
-    remove(Keys.SnapSyncDone)
+    update(toRemove = Seq(Keys.SnapSyncDone, Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor), toUpsert = Nil)
+      .and(SnapSyncProgressStorage.forgetAudit(dataSource))
+
+  // ========================================
+  // Heal invariant marker (spec 022 D7, data-model.md "Invariant marker")
+  // ========================================
+
+  /** Whether the marker stands: "everything present here was written under present implies complete". It does NOT mean
+    * complete. A value of another version does not stand.
+    */
+  def hasSnapHealInvariant(): Boolean =
+    get(Keys.SnapHealInvariant).contains(SnapHealInvariantVersion)
+
+  /** Whether a marker of any version is there. What decides a removal: nothing vouches for what this binary writes
+    * under another version's rule, so that marker goes as this version's does. Only "it stands" looks at the version.
+    */
+  def isSnapHealInvariantPresent(): Boolean =
+    get(Keys.SnapHealInvariant).isDefined
+
+  /** Stamp the marker. One write with the removal of the checkpoint key, since the stamp means whatever an interrupted
+    * import left has been repaired. Commit with `commitSync` (T042).
+    */
+  def stampSnapHealInvariant(): DataSourceBatchUpdate =
+    update(
+      toRemove = Seq(Keys.CheckpointImportInProgress),
+      toUpsert = Seq(Keys.SnapHealInvariant -> SnapHealInvariantVersion)
+    )
+
+  /** Remove the marker. Commit with `commitSync` (T042). */
+  def clearSnapHealInvariant(): DataSourceBatchUpdate =
+    remove(Keys.SnapHealInvariant)
+
+  /** Why this datadir's next finalisation may not claim that no account's bytecode is missing, if it may not (spec 022
+    * T050a, data-model.md "Invariant marker"). The walk reads no code, so only the recovery scan can settle this.
+    */
+  def getSnapCodeScanOwed(): Option[String] =
+    get(Keys.SnapCodeScanOwed)
+
+  /** What is present is not vouched for and the code scan is owed: the marker goes and `reason` is recorded, in one
+    * write. Commit with `commitSync`.
+    */
+  def markSnapCodeScanOwed(reason: String): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.SnapHealInvariant), toUpsert = Seq(Keys.SnapCodeScanOwed -> reason))
+
+  /** The finalisation that withholds `bytecodeRecoveryDone` takes this with it: from there the flag carries the debt.
+    */
+  def clearSnapCodeScanOwed(): DataSourceBatchUpdate =
+    remove(Keys.SnapCodeScanOwed)
+
+  /** What the last clean background-audit pass covered (spec 022 decision 7): the SNAP pivot, or
+    * [[AppStateStorage.AuditNoPivot]] on a node with no pivot. A pass is owed when this differs from the current one.
+    */
+  def getSnapAuditCleanAnchor(): Option[String] =
+    get(Keys.SnapAuditCleanAnchor)
+
+  def putSnapAuditCleanAnchor(anchor: String): DataSourceBatchUpdate =
+    put(Keys.SnapAuditCleanAnchor, anchor)
+
+  /** What a clean pass records now, and what [[isSnapAuditOwed]] compares with: this datadir's SNAP pivot. A
+    * checkpoint-synced node sets the done flags and no pivot, so it has the fixed value.
+    */
+  def snapAuditAnchor(): String =
+    getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
+
+  /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
+    * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
+    * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
+    * none.
+    */
+  def isSnapAuditOwed(): Boolean =
+    isSnapSyncDone() &&
+      (!getSnapAuditCleanAnchor().contains(snapAuditAnchor()) || !isBytecodeRecoveryDone() || !isStorageRecoveryDone())
+
+  /** The running or interrupted checkpoint import, `<state root hex>:<start ms>`, if any. While it is here the datadir
+    * is pre-invariant, whatever else it holds.
+    */
+  def getCheckpointImportInProgress(): Option[String] =
+    get(Keys.CheckpointImportInProgress)
+
+  /** A checkpoint import is about to write: the importer writes parent-first, so a present node can sit over an absent
+    * child until it ends. The marker goes in the same write, so no crash can leave it standing over that. Commit with
+    * `commitSync`, before the first node (T042).
+    *
+    * The audit's clean anchor and its place go too: every checkpoint import has the same anchor, so nothing else would
+    * say the state is new (spec 022 T053).
+    */
+  def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
+    update(
+      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor),
+      toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
+    ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
+
+  /** The import's CRC checked: it goes in the batch that writes the import's done flags. */
+  def endCheckpointImport(): DataSourceBatchUpdate =
+    remove(Keys.CheckpointImportInProgress)
+
+  /** Whether CF `g` has had its one-time clear (spec 022 D6). */
+  def isHealingFrontierRetired(): Boolean =
+    get(Keys.SnapHealFrontierRetired).exists(_.toBoolean)
+
+  /** The one-time clear of CF `g` is done. Commit with `commitSync`. */
+  def markHealingFrontierRetired(): DataSourceBatchUpdate =
+    put(Keys.SnapHealFrontierRetired, true.toString)
+
+  /** Whether this datadir's genesis was first stored by a binary that writes under the invariant, so that no older
+    * binary's state can be in it unless a sync's own keys say so (see `HealInvariant.isEmpty`).
+    */
+  def isDatadirCreatedUnderInvariant(): Boolean =
+    get(Keys.SnapHealDatadirCreated).contains(SnapHealDatadirCreatedVersion)
+
+  /** The genesis has just been stored for the first time. */
+  def markDatadirCreatedUnderInvariant(): DataSourceBatchUpdate =
+    put(Keys.SnapHealDatadirCreated, SnapHealDatadirCreatedVersion)
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -171,6 +290,12 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Mark storage recovery as completed */
   def storageRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.StorageRecoveryDone, true.toString)
+
+  /** Mark storage recovery as NOT done, so the next start's recovery scan runs. Written when a finalisation withholds
+    * it (spec 022 T050a): a datadir SNAP has been through before can hold `true` from that cycle.
+    */
+  def clearStorageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, false.toString)
 
   // ========================================
   // Resumable recovery scan progress
@@ -530,16 +655,34 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * target. `SyncController.start()` uses this to spawn a standalone `ChainDownloader` alongside regular sync.
     */
   def needsBackfillResume(): Boolean =
-    if !isSnapSyncDone() then return false
-    val target = getBackfillTarget()
-    if target <= 0 then return false
-    getBackfillBestHeader() < target ||
-    getBackfillBestBody() < target ||
-    getBackfillBestReceipt() < target
+    if !isSnapSyncDone() then false
+    else
+      val target = getBackfillTarget()
+      if target <= 0 then false
+      else
+        getBackfillBestHeader() < target ||
+        getBackfillBestBody() < target ||
+        getBackfillBestReceipt() < target
 
 object AppStateStorage:
   type Key = String
   type Value = String
+
+  /** The value of `snap.heal.invariant`. A later version of the rule writes another, and older marks do not stand. 3:
+    * version 2 stamped an empty datadir and then downloaded with spec 022's H0 and H1 still open, so its mark says less
+    * than this one's (research R-5d). 4: this version is the first reader that skips a walk on the marker's word, and a
+    * run of an earlier jar can have lost track with its marker standing, so a version 3 mark costs one walk (research
+    * R-5g).
+    */
+  val SnapHealInvariantVersion: Value = "4"
+
+  /** The value of `snap.heal.datadirCreated`. Apart from the marker's: it says who created the datadir, and that did
+    * not change with version 4. A datadir with an older value counts as not empty.
+    */
+  val SnapHealDatadirCreatedVersion: Value = "3"
+
+  /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
+  val AuditNoPivot: Value = "no-pivot"
 
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
@@ -572,3 +715,9 @@ object AppStateStorage:
     val BackfillBestHeader = "BackfillBestHeader"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
+    val SnapHealInvariant = "snap.heal.invariant"
+    val CheckpointImportInProgress = "checkpoint.import.inProgress"
+    val SnapHealFrontierRetired = "snap.heal.frontierRetired"
+    val SnapHealDatadirCreated = "snap.heal.datadirCreated"
+    val SnapCodeScanOwed = "snap.heal.codeScanOwed"
+    val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"

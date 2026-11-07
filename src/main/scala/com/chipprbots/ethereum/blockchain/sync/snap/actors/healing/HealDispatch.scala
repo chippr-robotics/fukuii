@@ -15,6 +15,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingRequestTimeout
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
@@ -23,17 +26,18 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
   * (`healDispatchArms`, the stagnation pulse, the pivot re-peg), the response processing C-H5 will move, or rule (d)
   * keeps them in the core, so the Impl keeps them as fields. The dispatch writes `pivotRefreshRequested` and
   * `pivotRefreshRequestedAt` (the stagnation escalation in `handleTimeout`), `lastHealedAtMs` (its re-fire guard),
-  * `healRate` and `lastThrottleAdjustMs` (the throttle update), and mutates the task queue, its dedup set, the
-  * in-flight map, the per-peer cooldown and `responseBytes` maps and the attempt counters; it reads the rest.
-  * `lastThrottleAdjustMs` is touched only by the dispatch, but its initializer is not a literal, so rule (d) keeps it
-  * in the core; `maxConcurrentRequests`, `rawFlushThreshold` and `healingStagnationTimeoutMs` are immutable vals rule
-  * (d) keeps in the core.
+  * `healRate` and `lastThrottleAdjustMs` (the throttle update), and mutates the task queue, the in-flight map, the
+  * per-peer cooldown and `responseBytes` maps and the attempt counters; it reads the rest. It does not touch the live
+  * heal requests (spec 022 D2): a request stays live while it is in flight, so dispatching or re-queueing it changes
+  * nothing there. `lastThrottleAdjustMs` is touched only by the dispatch, but its initializer is not a literal, so rule
+  * (d) keeps it in the core; `maxConcurrentRequests`, `rawFlushThreshold` and `healingStagnationTimeoutMs` are
+  * immutable vals rule (d) keeps in the core. `newSubtreesPaused` is the core's held-memory pause (spec 022 D1).
   */
 private[actors] trait HealDispatchState:
   def stateRoot: ByteString
   def serveRoot: ByteString
-  def pendingTasks: mutable.ArrayDeque[HealingEntry]
-  def pendingHashSet: mutable.Set[ByteString]
+  def pendingTasks: HealTaskQueue[HealingEntry]
+  def healRequests: HealRequestBook
   def activeRequests: mutable.Map[BigInt, ActiveRequest]
   def maxInFlightPerPeer: Int
   def maxConcurrentRequests: Int
@@ -43,11 +47,12 @@ private[actors] trait HealDispatchState:
   def knownAvailablePeers: mutable.Set[Peer]
   def peerCooldownUntilMs: mutable.Map[String, Long]
   def peerResponseBytesTarget: mutable.Map[String, BigInt]
-  def healAttempts: mutable.Map[ByteString, Int]
+  def healAttempts: HealAttemptMap
   var healRate: Double
   var lastThrottleAdjustMs: Long
-  def rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])]
+  def rawNodeBuffer: FlushBuffer
   def rawFlushThreshold: Int
+  def newSubtreesPaused: Boolean
   var lastHealedAtMs: Long
   def healingStagnationTimeoutMs: Long
   def totalNodesHealed: Int
@@ -119,9 +124,9 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     * log + unservable-count metric). This is OBSERVATION ONLY — it MUST NOT force-complete, abandon, or declare
     * completion: the content-hash check (C4) guarantees a wrong/missing node can never be accepted, so a stuck node
     * simply keeps the walk from finding zero, which is the correct no-false-completion behaviour (SC-002). The map is
-    * bounded by the pending-task set (only ever keyed by hashes being re-queued; cleared on every serve-root advance
-    * and decayed when a task is satisfied). No-op when decoupling is disabled — the coupled path's behaviour is
-    * byte-identical to today (SC-006).
+    * bounded by the live requests (only ever keyed by hashes being re-queued; cleared on every serve-root advance and
+    * whenever the requests go, `pruneFetchCounters`; decayed when a task is satisfied). No-op when decoupling is
+    * disabled — the coupled path's behaviour is byte-identical to today (SC-006).
     */
   def noteUnservableAttempt(hash: ByteString): Unit =
     if decoupledHealServeRoot then
@@ -129,7 +134,7 @@ private[actors] trait HealDispatch extends HealDispatchApi:
       healAttempts.update(hash, attempts)
       if attempts == decoupledHealMaxAttemptsNoRefresh + 1 then
         // Crossed the threshold for the first time since the last serve-root advance — surface it once.
-        val unservable = healAttempts.count { case (_, n) => n > decoupledHealMaxAttemptsNoRefresh }
+        val unservable = healAttempts.unservableCount
         log.warn(
           s"[HEAL-SERVE-ROOT] Heal task ${Hex.toHexString(hash.take(4).toArray)} unservable after $attempts " +
             s"attempts with no serve-root advance (threshold=$decoupledHealMaxAttemptsNoRefresh). " +
@@ -222,19 +227,15 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     (batchSize.toDouble / healThrottle).toInt.max(1)
 
   private def requestNextBatch(peer: Peer): Option[BigInt] =
+    // spec 022 D1: deepest first (the queue's order); at the held-memory cap only fetches that let held nodes commit.
+    lazy val batch: Seq[HealingEntry] = pendingTasks.dequeue(effectiveBatchSize, paused = newSubtreesPaused)
     if pendingTasks.isEmpty then
       log.debug("No pending healing tasks")
       None
     else if pivotRefreshRequested then None
     else if statelessPeers.contains(peer.id.value) then None
+    else if batch.isEmpty then None
     else
-      val effectiveBatch = effectiveBatchSize
-      val takeCount = effectiveBatch.min(pendingTasks.size)
-      val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
-      pendingTasks.dropInPlace(takeCount)
-      // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
-      batch.foreach(e => pendingHashSet -= e.hash)
-
       val requestId = requestTracker.generateRequestId()
       val responseBytes = responseBytesTargetFor(peer)
 
@@ -248,7 +249,7 @@ private[actors] trait HealDispatch extends HealDispatchApi:
       // before it is ever stored — see handleResponse (C4). The walk root used for completeness is unchanged.
       val request = GetTrieNodes(
         requestId = requestId,
-        // spec 009 T005/C1: under `movingRootDeltaHeal` collapse the fetch root to the completeness root `stateRoot`
+        // #1374 T005/C1: under `movingRootDeltaHeal` collapse the fetch root to the completeness root `stateRoot`
         // so the content-hash gate (keccak(node) == requested task hash) matches BY CONSTRUCTION — the spec-004
         // wrong-axis fix. Flag OFF: byte-identical to spec-004 (serve root when decoupled, else the walk root).
         rootHash = if movingRootDeltaHeal then stateRoot else if decoupledHealServeRoot then serveRoot else stateRoot,
@@ -286,18 +287,21 @@ private[actors] trait HealDispatch extends HealDispatchApi:
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
 
-    // Re-queue all timed-out tasks unconditionally — aligned with go-ethereum and Besu pipeline
+    // Re-queue the timed-out tasks a request still waits on — aligned with go-ethereum and Besu pipeline
     // behaviour. Both reference clients never permanently abandon nodes: go-ethereum puts them
     // straight back into trieTasks (no counter); Besu re-queues at the pipeline level after each
     // RetryingGetTrieNodeFromPeerTask attempt. Permanently unservable nodes are handled by the
-    // stagnation → pivot-refresh path, not a per-node retry cap.
+    // stagnation → pivot-refresh path, not a per-node retry cap. spec 022 review beacon N6: as the response path does, it
+    // goes out again from the next alias position, so a peer that cannot serve one path does not starve the others, and
+    // a hash nothing waits on any more is not queued again.
     var requeued = 0
     tasks.foreach { task =>
-      pendingHashSet += task.hash
-      pendingTasks += task
-      requeued += 1
-      // spec 004 T015/FR-006: a timed-out task is unsatisfied — bump its attempt counter (surfacing only).
-      noteUnservableAttempt(task.hash)
+      healRequests.nextWaiter(task.hash, task.pathset).foreach { live =>
+        pendingTasks += HealingEntry(live.pathset, task.hash)
+        requeued += 1
+        // spec 004 T015/FR-006: a timed-out task is unsatisfied — bump its attempt counter (surfacing only).
+        noteUnservableAttempt(task.hash)
+      }
     }
 
     if requeued > 0 then log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})")
@@ -346,3 +350,45 @@ private[actors] trait HealDispatch extends HealDispatchApi:
             eligiblePeers = List(peer)
           }
       if eligiblePeers.nonEmpty then for peer <- eligiblePeers if pendingTasks.nonEmpty do dispatchIfPossible(peer)
+
+/** The per-task count of unsatisfied fetch attempts (spec 004 T015/FR-006: content-mismatch drops, empty responses,
+  * timeout re-queues), keyed by node hash, that also keeps how many tasks are past the unservable threshold (`attempts
+  * > threshold`).
+  *
+  * The healing gauge pulse ([[FrontierPersistence.emitHealingFrontierGauges]]) and the threshold crossing
+  * ([[HealDispatch.noteUnservableAttempt]]) read that number. They used to recount the whole map, which is bounded only
+  * by the pending-task set, on every pulse (#1675). Every change to the map goes through `addOne`, `subtractOne` or
+  * `clear`, which adjust the count, so it always equals `count { case (_, n) => n > threshold }`.
+  *
+  * `threshold` is read when an entry changes. It is configuration, constant for the map's life; it is a function only
+  * so that the map can be built before the value is initialized.
+  */
+final class HealAttemptMap(threshold: () => Int) extends mutable.AbstractMap[ByteString, Int]:
+  private val underlying = mutable.HashMap.empty[ByteString, Int]
+  private var pastThreshold = 0
+
+  /** How many tasks have more than `threshold` attempts. O(1). */
+  def unservableCount: Int = pastThreshold
+
+  override def get(key: ByteString): Option[Int] = underlying.get(key)
+
+  override def iterator: Iterator[(ByteString, Int)] = underlying.iterator
+
+  override def size: Int = underlying.size
+
+  override def knownSize: Int = underlying.size
+
+  override def addOne(elem: (ByteString, Int)): this.type =
+    val (key, attempts) = elem
+    val limit = threshold()
+    underlying.put(key, attempts).foreach(previous => if previous > limit then pastThreshold -= 1)
+    if attempts > limit then pastThreshold += 1
+    this
+
+  override def subtractOne(key: ByteString): this.type =
+    underlying.remove(key).foreach(previous => if previous > threshold() then pastThreshold -= 1)
+    this
+
+  override def clear(): Unit =
+    underlying.clear()
+    pastThreshold = 0

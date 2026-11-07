@@ -392,10 +392,14 @@ object SnapServer extends Logger:
         // Root not found — return empty (sparse), matching go-ethereum's handler.go behaviour.
         TrieNodes(requestId, Seq.empty)
       else
+        // Peer-supplied: read by index from an indexed copy. Decoded RLP lists are Vectors now; the decoder's old Queue
+        // made paths(idx) O(idx) and this loop quadratic (#1672/#1675).
+        val indexedPaths = paths.toIndexedSeq
         var idx = 0
-        while idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+        while idx < indexedPaths.size && (accumulated < maxBytes || collected.isEmpty) &&
+          System.currentTimeMillis() < deadline
         do
-          val pathSet = paths(idx)
+          val pathSet = indexedPaths(idx)
           if pathSet.size == 1 then
             // Single-element path: account-trie node lookup (HP-encoded partial path).
             val nibbles = decodeHpPath(pathSet.head.toArray)

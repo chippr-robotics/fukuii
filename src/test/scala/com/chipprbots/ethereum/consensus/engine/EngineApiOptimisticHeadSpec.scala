@@ -73,7 +73,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
         blockExec,
         forkChoiceManager,
         Some(pendingTxManager)
-      )(blockchainConfig, typedScheduler)
+      )(using blockchainConfig, typedScheduler)
 
       private val genesisStateRoot =
         val world = InMemoryWorldStateProxy(
@@ -139,7 +139,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
           )
         )
         val candidate = Block(template, BlockBody(Nil, Nil, withdrawals = Some(Nil)))
-        blockExec.executeBlockNoValidation(candidate)(blockchainConfig) match
+        blockExec.executeBlockNoValidation(candidate)(using blockchainConfig) match
           case Right((_, gasUsed, computedStateRoot)) =>
             Block(
               template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)),
@@ -207,7 +207,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
 
     /** THE DEFECT. Mirrors hive invalid_payload.go:104-245 for the six "Syncing=True" tx fields. */
     "not return VALID for an unexecuted block after a SYNCING forkchoiceUpdated named it as head" taggedAs UnitTest in
-      new Setup:
+      (new Setup:
         val (block1, block2) = buildWithheldParentAndChild()
         val badBlock2: Block = withBadStateRoot(block2)
         val badPayload: ExecutionPayload = blockToPayload(badBlock2)
@@ -252,12 +252,13 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
 
         // hive CALL 7 — the invalid block must not be exposed to the eth namespace.
         blockchainReader.getBlockHeaderByNumber(2).map(_.hash) should not be Some(badBlock2.header.hash)
+      )
 
     /** THE MIRROR. hive payload_execution.go:390-436, "Valid NewPayload->ForkchoiceUpdated on Syncing Client". Guards
       * against over-correcting: removing the dedup shortcut must let the re-send genuinely re-execute.
       */
     "re-execute and return VALID for a valid block re-sent after its withheld parent arrives" taggedAs UnitTest in
-      new Setup:
+      (new Setup:
         val (block1, block2) = buildWithheldParentAndChild()
         val childPayload: ExecutionPayload = blockToPayload(block2)
 
@@ -287,6 +288,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
             .forkchoiceUpdated(syncingForkChoice(childPayload.blockHash), payloadAttributes = None)
             .unsafeRunSync()
         finalFcu.toOption.map(_.payloadStatus.status) shouldBe Some(Valid)
+      )
 
     /** Unit-level pin on the split: the notify-only entry point must publish BeaconHead and write nothing. */
     "publish BeaconHead without promoting the branch when notifyBeaconHead is used" taggedAs UnitTest in new Setup:
@@ -295,7 +297,7 @@ class EngineApiOptimisticHeadSpec extends AnyWordSpec with Matchers:
       val (_, block2) = buildWithheldParentAndChild()
       blockchainWriter.storeBlockByHashOnly(block2).commit()
 
-      val probe: TestProbe = TestProbe()(classicSystem)
+      val probe: TestProbe = TestProbe()(using classicSystem)
       forkChoiceManager.setListener(probe.ref)
 
       forkChoiceManager.notifyBeaconHead(syncingForkChoice(block2.header.hash.value))

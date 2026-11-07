@@ -9,6 +9,8 @@ import org.apache.pekko.stream.scaladsl.Sink
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.Future
+
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -41,8 +43,8 @@ class PeerEventBusActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     NetworkTest
   ) in new TestSetup:
 
-    val probe1: TestProbe = TestProbe()(classicSystem)
-    val probe2: TestProbe = TestProbe()(classicSystem)
+    val probe1: TestProbe = TestProbe()(using classicSystem)
+    val probe2: TestProbe = TestProbe()(using classicSystem)
     val classifier1: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.WithId(PeerId("1")))
     val classifier2: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.AllPeers)
     peerEventBusActor ! SubscribeCmd(classifier1, probe1.ref.toTyped[PeerEvent])
@@ -69,12 +71,14 @@ class PeerEventBusActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     // take(N) makes each stream demand-driven and self-terminating — no PoisonPill needed.
     // The stream completes as soon as N elements have been delivered, so Sink.seq's Future
     // resolves without any termination race against Pekko system-message priority.
-    val stream1 = PeerEventBusActor.messageSource(peerEventBusActor, classifier1).take(1).runWith(Sink.seq)
-    val stream2 = PeerEventBusActor.messageSource(peerEventBusActor, classifier2).take(2).runWith(Sink.seq)
+    val stream1: Future[Seq[MessageFromPeer]] =
+      PeerEventBusActor.messageSource(peerEventBusActor, classifier1).take(1).runWith(Sink.seq)
+    val stream2: Future[Seq[MessageFromPeer]] =
+      PeerEventBusActor.messageSource(peerEventBusActor, classifier2).take(2).runWith(Sink.seq)
 
     // Sync: syncProbe subscribed after both stream SubscribeCmds (same test thread → FIFO).
     // Once syncProbe confirms both publishes, both stream actors have their elements buffered.
-    val syncProbe: TestProbe = TestProbe()(classicSystem)
+    val syncProbe: TestProbe = TestProbe()(using classicSystem)
     peerEventBusActor ! SubscribeCmd(classifier2, syncProbe.ref.toTyped[PeerEvent])
 
     val msgFromPeer: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))

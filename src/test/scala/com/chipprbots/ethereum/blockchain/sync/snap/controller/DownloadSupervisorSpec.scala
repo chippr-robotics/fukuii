@@ -128,7 +128,7 @@ private[snap] class StubDownloadSupervisorState(
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.AccountRangeSync
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers, snapSyncConfig, networkPeerManager and childFactories are constructor vals)
   def syncConfig: SyncConfig = notUsed("syncConfig")
@@ -181,6 +181,7 @@ private[snap] class StubDownloadSupervisorState(
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = notUsed("triggerHealingForMissingNodes")
   var healingStarts: Int = 0
   def startStateHealing(): Unit = healingStarts += 1
+  def reopenHealing(): Unit = ()
   val launches: mutable.ArrayBuffer[(TrieRoot, Int)] = mutable.ArrayBuffer.empty
   def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -342,6 +343,8 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.spawns.receiveAll() match
       case Seq(b: ChildSpawn.ByteCode, s: ChildSpawn.StorageRange) =>
         b.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        b.recordExcluded shouldBe true // spec 022 review vault F4: the SNAP controller's spawns record
+        s.recordExcluded shouldBe true
         s.stateRoot shouldBe root.value
         (s.mptStorage should be).theSameInstanceAs(storage)
         s.initialMaxInFlightPerPeer shouldBe 3
@@ -516,6 +519,43 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
 
     h.module.launches should have size 1
     h.module.dormantReasons.toSeq shouldBe Seq("no snap-capable peers after the capability grace period")
+  }
+
+  it should "not launch a second account coordinator when the capability check fires with one already running (#1516)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(root)
+    h.module.downloadPeers = Map(peer("a"))
+    val running = TestInbox[AccountRangeCoordinator.Command]()
+    h.module.accountRangeCoordinator = Some(running.ref)
+    var result: Option[Behavior[Command]] = None
+
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+    h.module.dormantReasons shouldBe empty
+    running.hasMessages shouldBe false
+  }
+
+  // spec 022 PR 5b, hunter 3: since `coordinatorGoneArms` clears the account handle once accounts are complete, the handle
+  // no longer says a phase has run. A timer outliving a fast account phase must not start a second one mid-storage.
+  it should "have nothing to do at a capability check once accounts are complete: no second account phase, no dormancy" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(root)
+    h.module.accountsComplete = true
+    h.module.accountRangeCoordinator = None
+    var result: Option[Behavior[Command]] = None
+
+    h.module.downloadPeers = Map(peer("a"))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+
+    h.module.downloadPeers = Map(peer("b", snap = false))
+    h.call(m => result = Some(m.checkSnapCapabilityArms(CheckSnapCapability)))
+    result shouldBe Some(Behaviors.same[Command])
+    h.module.launches shouldBe empty
+    h.module.dormantReasons shouldBe empty
   }
 
   it should "offer the snap-serving peers on each download tick arm" taggedAs UnitTest in {
@@ -842,6 +882,8 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
         (a.mptStorage should be).theSameInstanceAs(h.module.launchStorage)
         a.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
         b.intakeBudget.exists(_ eq h.module.intakeBudget) shouldBe true
+        b.recordExcluded shouldBe true
+        s.recordExcluded shouldBe true
         s.initialMaxInFlightPerPeer shouldBe 2
         s.snapProgressStorage.exists(_ eq h.module.snapProgressStorage) shouldBe true
       case other => fail(s"expected account, bytecode and storage spawns, got $other")

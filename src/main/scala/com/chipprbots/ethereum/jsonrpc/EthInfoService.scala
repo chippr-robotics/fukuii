@@ -16,13 +16,14 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.keystore.KeyStore
-import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
+import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -164,6 +165,7 @@ class EthInfoService(
   def syncing(@unused req: SyncingRequest): ServiceResponse[SyncingResponse] =
     syncingController
       .askForTyped[SyncProtocol.Status](replyTo => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(replyTo)))(
+        using
         timeout = askTimeout,
         scheduler = typedScheduler
       )
@@ -391,19 +393,31 @@ class EthInfoService(
   /** eth_call (go-ethereum `internal/ethapi` `BlockChainAPI.Call` -> `DoCall` -> `doCall`). The message is built by
     * [[CallTxBuilder]] (CallDefaults / ToMessage) and run by `StxLedger.simulateCall` (ApplyMessage). State overrides
     * are applied to the block's state and block overrides to its header first, as `doCall` does.
+    *
+    * A frame that fails is an error, as geth's `Call` returns `result.Return(), result.Err`: a revert is code 3 with
+    * its data, and any other VM error (out of gas, invalid opcode, ...) is -32000 with geth's message. Never an empty
+    * result: a caller that reads `0x` as success would be told a message that runs out of gas succeeds.
     */
   def call(req: CallRequest): ServiceResponse[CallResponse] =
+    callOutcome(req).map(_.flatMap { r =>
+      r.vmError match
+        case Some(com.chipprbots.ethereum.vm.RevertOccurs) => Left(revertError(r.vmReturnData))
+        case Some(error) => Left(JsonRpcError.LogicError(CallErrors.vmErrorMessage(error)))
+        case None        => Right(CallResponse(r.vmReturnData))
+    })
+
+  /** The message call eth_call runs, with its VM outcome as it came out of the frame: a failed frame is a `Right` whose
+    * `vmError` is set. GraphQL's `call` reads its `status` from that (geth `result.Failed()`); a `Left` is a pre-check
+    * failure (geth `preCheck` / `buyGas` / intrinsic gas), which geth's GraphQL returns as an error.
+    */
+  def callOutcome(req: CallRequest): ServiceResponse[TxResult] =
     IO {
       for
         // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
         prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
         (msg, world) = prepared
         r <- stxLedger.simulateCall(msg.stx, msg.header, world, msg.options, tracer = None).left.map(preCheckError)
-        response <- r.vmError match
-          case Some(com.chipprbots.ethereum.vm.RevertOccurs) => Left(revertError(r.vmReturnData))
-          // Other VM errors (out of gas, etc) — return the frame's output, as before
-          case _ => Right(CallResponse(r.vmReturnData))
-      yield response
+      yield r
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }

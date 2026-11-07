@@ -26,12 +26,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ReadyStorageChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.TrieNodeWrite
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -39,12 +39,14 @@ import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
+import com.chipprbots.ethereum.testing.TrieStoreSpy
 
 /** Everything `StorageOrderedApply` needs, as a stub (spec 016 FR-016 (b), C-S2): its `StorageOrderedApplyState`, the
   * coordinator's `StorageRangeEnv` (with a `StateIngest` whose only live member is `pathNodes`), the
@@ -56,7 +58,8 @@ private[actors] class StubStorageOrderedApplyState(
     val snapSyncController: ActorRef[SNAPSyncController.Command],
     val storageScheme: StorageScheme,
     val deferredMerkleization: Boolean,
-    pathNodeStore: Option[PathNodeStorage]
+    pathNodeStore: Option[PathNodeStorage],
+    val mptStorage: TestMptStorage = new TestMptStorage()
 ) extends StorageOrderedApplyState
     with StorageRangeEnv
     with StorageApplyCoreApi
@@ -92,8 +95,8 @@ private[actors] class StubStorageOrderedApplyState(
   val maxConcurrentStorageAccounts: Int = 256
   val intakeBudget: Option[SnapIntakeBudget] = None
   val processing: StorageRangeCoordinator.ProcessingSettings = StorageRangeCoordinator.ProcessingSettings.Inline
-  val mptStorage: TestMptStorage = new TestMptStorage()
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = true, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("StateIngest.appState")
     def stateTries: StateStorage = notReached("StateIngest.stateTries")
@@ -105,9 +108,10 @@ private[actors] class StubStorageOrderedApplyState(
     def validatorFactory: MptStorage => StateValidator = notReached("StateIngest.validatorFactory")
     def durability: StateIngest.Durability = StateIngest.Durability.Default
     def trieStore(pivot: BigInt): MptStorage = notReached("StateIngest.trieStore")
-    def snapProgress: SnapSyncProgressStorage = notReached("StateIngest.snapProgress")
+    // spec 022 T033: where a root mismatch is recorded.
+    lazy val snapProgress: SnapSyncProgressStorage =
+      new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notReached("StateIngest.healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("StateIngest.bfsQueue")
   val flatBatchEntryThreshold: Int = 1000
 
@@ -261,14 +265,28 @@ class StorageOrderedApplySpec extends AnyFlatSpec with Matchers:
     m.storageTrieCursor.contains(Account) shouldBe false
   }
 
-  it should "commit no trie for an empty chunk and mark the account against its claimed root" taggedAs UnitTest in {
+  // Until spec 022 T050a (H1) this asserted a marker against the claimed root: the account was vouched for with its root
+  // never written. Only a claim of the empty root is what no slots computes.
+  it should "commit no trie for an empty chunk, and mark only an account that claims the empty root" taggedAs UnitTest in {
     val controller = TestInbox[SNAPSyncController.Command]()
     val m = module(controller, deferredMerkleization = false)
     m.applyOrderedStorageChunk(peer("p1"), StorageTask(Account, Root, m.zeroSlotHash, key(0x7f)), Seq.empty, Seq.empty)
 
     m.pendingAccountTries shouldBe empty
     m.completedAccountCount shouldBe 1L
-    m.stagedMarkers.toSeq shouldBe Seq(Account -> Root)
+    m.stagedMarkers shouldBe empty
+    m.excludedRecorder.pending shouldBe true
+
+    val claimsNone = ByteString(MerklePatriciaTrie.EmptyRootHash)
+    val other = key(0x42)
+    m.applyOrderedStorageChunk(
+      peer("p1"),
+      StorageTask(other, claimsNone, m.zeroSlotHash, key(0x7f)),
+      Seq.empty,
+      Seq.empty
+    )
+    m.completedAccountCount shouldBe 2L
+    m.stagedMarkers.toSeq shouldBe Seq(other -> claimsNone)
   }
 
   it should "stream a Hash-scheme chunk into a trie whose nodes reach mptStorage on commit" taggedAs UnitTest in {
@@ -300,6 +318,37 @@ class StorageOrderedApplySpec extends AnyFlatSpec with Matchers:
     m.trieNodeWrites shouldBe empty
     store.foreachStorageNodeChunk(1000)(chunk => stored += chunk.size)
     stored should be > 0
+  }
+
+  // spec 022 T050a (beacon): the marker holds on Path under pruning.mode = inmemory only because a Path write never goes
+  // through the trie store, which is the node cache there. Only a heal was pinned.
+  private def appliedThroughSpy(scheme: StorageScheme): (TrieStoreSpy, PathNodeStorage) =
+    val controller = TestInbox[SNAPSyncController.Command]()
+    val store = new PathNodeStorage(EphemDataSource())
+    val spy = new TrieStoreSpy
+    val pathNodes = Option.when(scheme == StorageScheme.Path)(store)
+    val m = new StubStorageOrderedApplyState(controller.ref, scheme, false, pathNodes, spy) with StorageOrderedApply
+    val served = slots(0x10, 0x20, 0x30)
+    m.applyOrderedStorageChunk(
+      peer("p1"),
+      StorageTask(Account, hashRoot(served), m.zeroSlotHash, key(0x7f)),
+      served,
+      Seq.empty
+    )
+    m.flushTrieNodeWrites()
+    (spy, store)
+
+  it should "write nothing through the trie store on Path" taggedAs UnitTest in {
+    val (spy, store) = appliedThroughSpy(StorageScheme.Path)
+    var stored = 0
+    store.foreachStorageNodeChunk(1000)(chunk => stored += chunk.size)
+    withClue("it did write: ")(stored should be > 0)
+    spy.writes shouldBe 0
+  }
+
+  it should "write through the trie store on Hash, so the spy's zero on Path means something" taggedAs UnitTest in {
+    val (spy, _) = appliedThroughSpy(StorageScheme.Hash)
+    spy.writes should be > 0
   }
 
   it should "not reach the Path node store when it flushes an empty buffer" taggedAs UnitTest in {

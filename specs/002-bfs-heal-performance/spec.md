@@ -4,9 +4,12 @@
 
 **Created**: 2026-06-13
 
-**Status**: Draft
-
+**Status**: Superseded by 022 (2026-10-30). Shipped (51 of 59 tasks; 14 main-source sites cite it), then its BFS dispatch was replaced by spec 022's deepest-first dispatch (D1) and held-node commit (D3).
 **Input**: User description: "Post-SNAP BFS state-healing walk: performance, redundancy-avoidance, and observability on resource-constrained ETC mainnet hosts."
+
+**Closed** (2026-10-30):
+- Reason: mechanism replaced after shipping. Spec 022 FR-019 marks the BFS heal design superseded.
+- Lives on in: the heal actors under `blockchain/sync/snap/`, as reshaped by 022 slices 1–3 (#1682, #1684, #1685).
 
 ## Context & Background
 

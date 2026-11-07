@@ -238,22 +238,24 @@ class InvalidChainReportingSpec
     altChain(0).hash.value should not be initialBestBlock.hash.value
 
   it should "NOT report when the branch fails on missing state" taggedAs (UnitTest, ConsensusTest) in
-    new ConsensusSetup:
+    (new ConsensusSetup:
       val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
       failAt(branch(1), MissingParentError)
 
       whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
 
       reported shouldBe empty
+    )
 
   it should "NOT report a gas-used mismatch — BlockImporter owns that case" taggedAs (UnitTest, ConsensusTest) in
-    new ConsensusSetup:
+    (new ConsensusSetup:
       val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
       failAt(branch(1), ValidationAfterExecError("Block has invalid gas used, expected 183600 but got 0"))
 
       whenReady(consensusUnderTest.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture())(_ => ())
 
       reported shouldBe empty
+    )
 
   it should "report a gas-used mismatch MID-BATCH when the block's own receipts prove it" taggedAs (
     UnitTest,
@@ -527,7 +529,7 @@ class InvalidChainReportingSpec
     "leave exactly P8', P9', P10' INVALID with latestValidHash = P7' (batch = side 6..14)" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new HiveGasUsedReorgSetup:
+    ) in (new HiveGasUsedReorgSetup:
       importBatchThroughTheImporterRule(side)
 
       engineApi.invalidBlocksSnapshot shouldBe Map(
@@ -535,6 +537,7 @@ class InvalidChainReportingSpec
         p9.hash.value -> p7.hash.value,
         p10.blockHash -> p7.hash.value
       )
+    )
 
   it should "leave exactly P8', P9', P10' INVALID when the batch also carries the common prefix 1..5" taggedAs (
     UnitTest,
@@ -679,7 +682,7 @@ class InvalidChainReportingSpec
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
       .when(*, *, *, *)
       .anyNumberOfTimes()
       .onCall { (blocks, _, _, _) =>
@@ -720,7 +723,7 @@ class InvalidChainReportingSpec
       blockExecution,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
   /** hive's `Invalid Missing Ancestor Syncing ReOrg, GasUsed, CanonicalReOrg=True`, at the moment the peer delivers the
     * side chain.
@@ -767,7 +770,7 @@ class InvalidChainReportingSpec
 
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
     (blockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
       .when(*, *, *, *)
       .anyNumberOfTimes()
       .onCall { (blocks, weight, _, _) =>
@@ -783,7 +786,7 @@ class InvalidChainReportingSpec
     lazy val fcm: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
     lazy val engineApi: EngineApiService =
-      new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(
+      new EngineApiService(blockchainReader, blockchainWriter, blockExecution, fcm, None)(using
         blockchainConfig,
         typedScheduler
       )
@@ -860,7 +863,7 @@ class InvalidChainReportingSpec
       blockExec,
       forkChoiceManager,
       None
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
 object InvalidChainReportingSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)

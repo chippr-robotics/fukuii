@@ -211,13 +211,13 @@ object PrecompiledContracts:
 
       val g = gas(context.inputData, etcFork, ethFork)
 
-      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) = (
+      val (result, error, gasRemaining) = (
         if g <= context.startGas then
           exec(context.inputData) match
             case Some(returnData) => (returnData, None, context.startGas - g)
             case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
-      ): @unchecked
+      ): (ByteString, Option[ProgramError], BigInt)
 
       frameResult(context, result, gasRemaining, error)
 
@@ -328,13 +328,13 @@ object PrecompiledContracts:
       // Hive maps London→olympiaBlockNumber, which we must ignore on ETH to avoid firing
       // EIP-7883 pre-Osaka.
       val g = gasWithOsaka(context.inputData, etcFork, ethFork, isOsaka, isEthereum)
-      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) = (
+      val (result, error, gasRemaining) = (
         if g <= context.startGas then
           exec(context.inputData) match
             case Some(returnData) => (returnData, None, context.startGas - g)
             case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
-      ): @unchecked
+      ): (ByteString, Option[ProgramError], BigInt)
 
       frameResult(context, result, gasRemaining, error)
 

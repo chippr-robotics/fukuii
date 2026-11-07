@@ -75,7 +75,9 @@ class EthashBlockHeaderValidatorSpec
     }.toSeq.flatten
 
     forAll(cases) { (blockHeader, parentBlock, supportsDaoFork, valid) =>
-      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(createBlockchainConfig(supportsDaoFork)) match
+      PoWBlockHeaderValidator.validate(blockHeader, parentBlock.header)(using
+        createBlockchainConfig(supportsDaoFork)
+      ) match
         case Right(_)                      => assert(valid)
         case Left(DaoHeaderExtraDataError) => assert(!valid)
         case _                             => fail()
@@ -120,7 +122,7 @@ class EthashBlockHeaderValidatorSpec
   ) in {
     val zero = validBlockHeader.copy(difficulty = Difficulty.Zero)
     val mergeConfig = blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
-    MockedPowBlockHeaderValidator.validate(zero, validParent.header)(mergeConfig) shouldBe Right(BlockHeaderValid)
+    MockedPowBlockHeaderValidator.validate(zero, validParent.header)(using mergeConfig) shouldBe Right(BlockHeaderValid)
   }
 
   it should "return a failure if created based on invalid gas used" taggedAs (UnitTest, ConsensusTest) in {
@@ -232,7 +234,8 @@ class EthashBlockHeaderValidatorSpec
     val blockNumber: BigInt = (parentHeader.number + 1).value
     val blockTimestamp: Timestamp = parentHeader.unixTimestamp + 6
 
-    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
+    val difficulty: Difficulty =
+      EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
     val expected: BigInt = BigInt("22638070358408")
 
     difficulty.value shouldBe expected
@@ -252,7 +255,8 @@ class EthashBlockHeaderValidatorSpec
     val blockNumber: BigInt = (parentHeader.number + 1).value
     val blockTimestamp: Timestamp = parentHeader.unixTimestamp + 6
 
-    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
+    val difficulty: Difficulty =
+      EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
     val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096264")
 
     difficulty.value shouldBe blockDifficultyWihtoutBomb
@@ -266,7 +270,8 @@ class EthashBlockHeaderValidatorSpec
     val blockNumber: BigInt = afterRewardReductionBlockHeader.number.value
     val blockTimestamp: Timestamp = afterRewardReductionBlockHeader.unixTimestamp
 
-    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
+    val difficulty: Difficulty =
+      EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
 
     /** Expected calculations: blockNumber = 5863375 // < 5900000 timestampDiff = 6 x = 3480699544328087 / 2048 = c = (1
       * \- (6 / 9)) = 0,33 // > -99 fakeBlockNumber = 5863375 - 3000000 = 2863375 extraDifficulty = 134217728
@@ -301,9 +306,10 @@ class EthashBlockHeaderValidatorSpec
     val blockNumber: BigInt = (parentHeader.number + 1).value
     val blockTimestamp: Timestamp = parentHeader.unixTimestamp + 6
 
-    val difficulty = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(
-      blockchainConfigWithoutDifficultyBombRemoval
-    )
+    val difficulty: Difficulty =
+      EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(using
+        blockchainConfigWithoutDifficultyBombRemoval
+      )
     val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096265")
 
     difficulty.value shouldBe blockDifficultyWihtoutBomb

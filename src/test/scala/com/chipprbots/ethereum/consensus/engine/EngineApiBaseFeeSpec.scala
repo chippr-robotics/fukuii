@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -85,7 +85,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val genesisStateRoot =
       val world = InMemoryWorldStateProxy(
@@ -150,7 +150,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
           else HefPostShanghai(baseFee = baseFee, withdrawalsRoot = BlockHeader.EmptyMpt)
       )
       val block = Block(template, BlockBody(Nil, Nil, withdrawals = if paris then None else Some(Nil)))
-      blockExec.executeBlockNoValidation(block)(blockchainConfig) match
+      blockExec.executeBlockNoValidation(block)(using blockchainConfig) match
         case Right((_, gasUsed, computedStateRoot)) =>
           Block(template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)), block.body)
         case Left(error) => throw new RuntimeException(s"Failed to execute block: ${error.describe}")
@@ -186,7 +186,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       BaseFeeCalculator.calcBaseFee(genesisHeader, blockchainConfig) shouldBe BigInt(7)
 
     "accept the payload whose base fee equals the EIP-1559 value" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val status = newPayloadStatus(ParentBaseFee)
+      val status: PayloadStatusV1 = newPayloadStatus(ParentBaseFee)
       withClue(s"validationError=${status.validationError}: ") {
         status.status shouldBe Valid
       }
@@ -195,7 +195,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val status = newPayloadStatus(BigInt(1))
+      val status: PayloadStatusV1 = newPayloadStatus(BigInt(1))
       status.status shouldBe Invalid
       status.latestValidHash shouldBe Some(genesisHeader.hash.value)
       status.validationError.getOrElse("") should include(BaseFeeErrorFragment)
@@ -204,12 +204,12 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val status = newPayloadStatus(BigInt(6))
+      val status: PayloadStatusV1 = newPayloadStatus(BigInt(6))
       status.status shouldBe Invalid
       status.validationError.getOrElse("") should include(BaseFeeErrorFragment)
 
     "reject base fee 8, one above the EIP-1559 value" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val status = newPayloadStatus(BigInt(8))
+      val status: PayloadStatusV1 = newPayloadStatus(BigInt(8))
       status.status shouldBe Invalid
       status.validationError.getOrElse("") should include(BaseFeeErrorFragment)
 
@@ -219,7 +219,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val status = newPayloadStatus(BigInt(1), paris = true)
+      val status: PayloadStatusV1 = newPayloadStatus(BigInt(1), paris = true)
       status.status shouldBe Invalid
       status.validationError.getOrElse("") should include(BaseFeeErrorFragment)
 
@@ -227,7 +227,7 @@ class EngineApiBaseFeeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val status = newPayloadStatus(ParentBaseFee, paris = true)
+      val status: PayloadStatusV1 = newPayloadStatus(ParentBaseFee, paris = true)
       withClue(s"validationError=${status.validationError}: ") {
         status.status shouldBe Valid
       }

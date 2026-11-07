@@ -4,9 +4,12 @@
 
 **Created**: 2026-06-21
 
-**Status**: Draft
-
+**Status**: Parked (2026-10-30). The StackTrie allocation work landed (`mpt/StackTrie.scala` cites this spec); the remaining 7 tasks are unscheduled. Reopens if a SNAP CPU profile on the reference host is merkleization-bound again, or folds into spec 018 Track F / spec 021.
 **Input**: User description: "Reduce hot-path CPU allocations in the SNAP-sync merkleization and keccak-256 path to improve sync throughput and cut GC/allocation pressure, especially on CPU-constrained hosts. Pure performance — byte-for-byte identical behavior, no consensus change."
+
+**Closed** (2026-10-30):
+- Reason: partially shipped, remainder not scheduled; spec 021 (fixed-width UInt256) and 018 Track F now own the hot paths it targeted.
+- Reopen condition: in the sentence above.
 
 ## Context & Motivation
 

@@ -35,8 +35,8 @@ Signals that a candidate should be wired instead of deleted:
   where one piece got forgotten)
 
 **Action:** Identify the wiring point. If wiring is in-scope for the current
-task, wire it. If out of scope, add a DEFER entry to DEFERRED-BACKLOG.md with
-the candidate, the wiring point, and the gap it would fill.
+task, wire it. If out of scope, log a `DEFER` entry (see "Where deferred items go")
+with the candidate, the wiring point, and the gap it would fill.
 
 ### DELETE — genuinely dead code
 
@@ -70,9 +70,19 @@ Signals that the decision should be escalated:
   question
 - Git history shows it was part of a larger planned feature that was never finished
 
-**Action:** Do NOT delete. Add a DEFER entry to DEFERRED-BACKLOG.md. Describe:
+**Action:** Do NOT delete. Log a `DEFER` entry (see "Where deferred items go"). Describe:
 what the code does, what gap it fills, what the wiring point would be, and why
 the decision is deferred.
+
+### Where deferred items go
+
+There is no `DEFERRED-BACKLOG.md`: an earlier version of this protocol named one, and none has ever been tracked in git.
+Deferred items are `DEFER` entries in `.claude/agent-protocols/working-docs/CHASE-QUEUE.md` (format in
+`inline-cleanup.md`, Rule 1). That file is **local and gitignored** (`.gitignore`: `.claude/agent-protocols/working-docs/`),
+and the directory is not in a fresh checkout or worktree: create it on first use. Because it is local, a deferral
+another contributor must see goes into a GitHub issue as well, and the code's `@nowarn` or comment cites the issue
+number (the convention in `warning-ratchet.md`, Step 3). A sprint with its own ledger, such as spec 020's
+`dc4-ledger.md`, records the deferral there with its date and owner.
 
 ---
 
@@ -139,7 +149,7 @@ type (`InMemoryWorldStateProxy`) is alive and used directly by `BlockExecution`
 and `BlockPreparator`. `LocalVM` was a wrapper that was never instantiated and
 never needed.
 
-### AdaptiveSyncStrategy — DELETE defensible, gap real (see DEFERRED-BACKLOG Part 9)
+### AdaptiveSyncStrategy — DELETE defensible, gap real (extraction deferred)
 
 **What it was:** 193-line adaptive sync orchestrator with peer-count and latency
 guards, strategy fallback chain (SnapSync → FastSync → FullSync), and per-strategy
@@ -155,7 +165,7 @@ fallback triggers. `AdaptiveSyncStrategy` would have short-circuited this at sta
 failure handling) eventually converges. The decision logic should be re-extracted
 as a lightweight pure function, not a class with mutable state.
 
-**See:** DEFERRED-BACKLOG.md Part 9 — `SyncStartupStrategy` extraction.
+**Deferred:** the `SyncStartupStrategy` extraction. (The backlog file this entry once cited no longer exists.)
 
 ### DeltaSpikeGauge — DELETE (correct)
 
@@ -184,7 +194,7 @@ CHASE-QUEUE entry notes before executing the clearout prompt. The three-question
 assessment should take at most 5 minutes — it is not a deep investigation.
 
 If the verdict is WIRE or DEFER, change the entry type from `DEAD` to `DEFER`
-and add a DEFERRED-BACKLOG entry. Remove it from the clearout queue.
+(the entry stays in CHASE-QUEUE, see "Where deferred items go"). Remove it from the clearout queue.
 
 ---
 

@@ -46,7 +46,7 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     dynamicFeeTx(Some(senderAddress), value = 1, gasLimit = gasLimit, config = amsterdamConfig)
 
   private def admitted(stxs: Seq[SignedTransaction], head: Timestamp): Seq[SignedTransaction] =
-    SignedTransactionWithSender.getStatelessValidTransactions(stxs, head)(amsterdamConfig)
+    SignedTransactionWithSender.getStatelessValidTransactions(stxs, head)(using amsterdamConfig)
 
   // ── Pool admission ──────────────────────────────────────────────────────────
 
@@ -67,7 +67,9 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     admitted(Seq(selfTransfer(11999)), atAmsterdam) shouldBe empty
 
     // And through sender recovery: the self-transfer is admitted with its real sender.
-    SignedTransactionWithSender.getSignedTransactions(Seq(selfTransfer(12000)), atAmsterdam)(amsterdamConfig) shouldBe
+    SignedTransactionWithSender.getSignedTransactions(Seq(selfTransfer(12000)), atAmsterdam)(using
+      amsterdamConfig
+    ) shouldBe
       Seq(SignedTransactionWithSender(selfTransfer(12000), senderAddress))
   }
 
@@ -85,13 +87,13 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     SignedTransactionWithSender.getStatelessValidTransactions(
       Seq(selfTransfer(12000), call200(28000)),
       atAmsterdam
-    )(preAmsterdamConfig) shouldBe empty
+    )(using preAmsterdamConfig) shouldBe empty
   }
 
   // ── Replay of a stored block ────────────────────────────────────────────────
 
   private def of(header: BlockHeader, stxs: Seq[SignedTransaction], config: BlockchainConfig) =
-    SignedTransactionWithSender.getSignedTransactionsOfBlock(header, stxs)(config).map(_.tx)
+    SignedTransactionWithSender.getSignedTransactionsOfBlock(header, stxs)(using config).map(_.tx)
 
   "Replaying an Amsterdam block" should "keep every transaction it carries" taggedAs (UnitTest, ConsensusTest) in {
     // Both are valid at Amsterdam. The pool's pre-WI-14 rules (Osaka's, no floor) refused the self-transfer, and the
@@ -105,7 +107,9 @@ class StatelessFilterActiveForkSpec extends AnyFlatSpec with Matchers with Amste
     ConsensusTest
   ) in {
     val txs = (0 until 20).map(n => dynamicFeeTx(Some(senderAddress), 1, 12000, nonce = n, config = amsterdamConfig))
-    SignedTransactionWithSender.getSignedTransactionsOfBlock(amsterdamHeader(46, 460), txs)(amsterdamConfig) shouldBe
+    SignedTransactionWithSender.getSignedTransactionsOfBlock(amsterdamHeader(46, 460), txs)(using
+      amsterdamConfig
+    ) shouldBe
       txs.map(SignedTransactionWithSender(_, senderAddress))
   }
 

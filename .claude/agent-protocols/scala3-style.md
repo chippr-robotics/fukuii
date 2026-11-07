@@ -16,25 +16,41 @@ Each standard below has a current state (enforced / partially enforced / not yet
 Once a standard is fully enforced via scalafix rule or compiler flag, it becomes a build error.
 That is the definition of done for that standard — not "we cleaned it once."
 
+Counts below were run on the tree at spec 020 PR 7 (2026-11-05, Scala 3.9.0, `-source:3.9`). Where the compiler or
+scalafix enforces a standard, the enforcing line is named; `sbt formatCheck` (scalafix `--check` on bytes, crypto, rlp
+and root; scalafmt on all six modules) runs in CI.
+
 ---
 
 ## Standards
 
 ### S1 — No `return` statements
-**Status:** Partially enforced. DisableSyntax.noReturns not yet in `.scalafix.conf` (C2 chore).
+**Status:** Enforced for the root project, bytes, crypto and rlp: `DisableSyntax.noReturns = true` in `.scalafix.conf`,
+checked by `formatCheck` in CI (spec 020 PR 6b-2 removed the findings). Two groups of `return` remain on purpose or by
+gap:
+- 9 sites in `vm/PrecompiledContracts.scala`, each marked `// scalafix:ok DisableSyntax.return` (consensus and crypto
+  code; where a DEFER comment is present it says an expression rewrite is byte-level risky). forge decides, not a style
+  sweep.
+- 21 sites in `scalanet/discovery` (`Discv4SyncResponder`, `Discv5SyncResponder`, `Packet`). `formatCheck` runs
+  scalafix on neither scalanet module, so nothing stops a new one there.
 
 ```bash
-grep -rn "\breturn\b" src/main/ --include="*.scala" | grep -v "//\|\""
-# Target: 0 hits
+# every `return` keyword in main sources of every module; comment-only lines dropped
+grep -rnw "return" src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src \
+    --include="*.scala" | grep -vE '^[^:]+:[0-9]+:\s*(//|\*|/\*)'
+# 2026-11-05: 35 hits = 9 scalafix:ok (PrecompiledContracts) + 21 (scalanet/discovery) + 5 words inside a
+# trailing comment or string (StdNode x2, ReferenceCountNodeStorage, CallErrors, BlockHeader)
 ```
 
-Fix: restructure as expression. `if (cond) return` → `if (!cond) { ... }`.
-Ratchet: `DisableSyntax.noReturns = true` in `.scalafix.conf`.
+(The older form `grep -rn "\breturn\b" src/main` prints 381 lines on this tree, 378 in `.scala` files, 243 of them `@return` in scaladoc, so it was no ratchet.)
+
+Fix: restructure as an expression (`if cond then a else b`, a `match`, an `Either`/`Option` combinator). Where that
+cannot be done, `scala.util.boundary` and `break`, under S12: a `break` is not a `return`.
 
 ---
 
 ### S2 — No `null`
-**Status:** Not yet audited.
+**Status:** Not yet audited. The grep below prints 160 lines (2026-11-05).
 
 ```bash
 grep -rn "\bnull\b" src/main/ --include="*.scala" | grep -v "//\|test\|@null"
@@ -48,17 +64,28 @@ Exception: JNI/interop boundary code — narrow `@nowarn` + comment.
 ---
 
 ### S3 — `given/using` over `implicit`
-**Status:** COMPLETE — W2-P3a (`7210311bb`, 334 sites). Override-chain sites
-intentionally kept as `implicit val/lazy val` (see `scala3-given-migration.md` G3).
+**Status:** P3a done (W2-P3a, `7210311bb`, 334 sites), but not "complete": 73 `implicit` val and def definitions remain
+in `src/main` (modifier forms such as `implicit override`, `implicit private` and `private implicit` included). The build is `-source:3.9`, which still accepts `implicit`. Spec 020 made the 3.7 prioritisation sites
+explicit (DC-3, `specs/020-scala-3-9-lts-migration/dc3-sites.md`) and rewrote every `implicit` parameter list that
+needed a `using` (PR 5a); an implicit parameter passed without `using` is now a build error (see the `-source`
+mapping). What stays `implicit` stays on purpose or by decision. Some of the kinds, not an exhaustive list:
+- override-chain definitions: `implicit` members that something overrides, and the overrides (9 `implicit override`
+  definitions in 7 files). `given` is final, so they must stay (see `scala3-given-migration.md` G3 for the list);
+- `implicit def` conversions (`UInt256` x5, `FunctorOps`) and the codec and serializer instances;
+- the Pekko-HTTP `Json4sSupport` and `JsonRpcHttpServer` members, whose signatures follow the library;
+- `implicit override` and `implicit private` members (controllers, services, `PeerManagerActor`, ...): 30 of the
+  73 sites (`implicit` followed or preceded by `override`, `private` or `protected`). Each is a candidate for a decision, not yet one.
 
 ```bash
-grep -rn "implicit val\|implicit def\|implicit lazy val" src/main/ --include="*.scala" \
+rg -n -g '*.scala' --pcre2 '\bimplicit\s+(?:(?:override|private(?:\[\w+\])?|protected(?:\[\w+\])?|final|lazy)\s+)*(?:val|def)\b|\b(?:override|private(?:\[\w+\])?|protected(?:\[\w+\])?|final|lazy)\s+implicit\s+(?:(?:override|private|protected|final|lazy)\s+)*(?:val|def)\b' src/main \
   | grep -v "consensus/\|vm/\|crypto/\|//\|@nowarn\|not given.*override"
-# Target: only the intentional override-chain sites (annotated with "not given" comment)
+# 2026-11-05: 60 hits (73 before the filters). The older form, `grep "implicit val\|implicit def\|implicit lazy val"`,
+# misses every modifier form and printed 38 (44 unfiltered). The `not given.*override` comments the filter expects are
+# gone from this tree: new override-chain sites need their own comment saying why (G3).
 ```
 
-Ratchet: GivenUsing scalafix rule — add to `.scalafix.conf` after confirming
-override-chain `implicit val` sites are excluded from the rule.
+Ratchet: none. A `GivenUsing` scalafix rule is not in `.scalafix.conf` and was not added by spec 020: the remaining
+sites are decided one by one, not rewritten as a sweep.
 
 **Scalafix rule ordering (CRITICAL):** Apply S3 before S4. Extension method bodies
 that call `given`-converted implicits need the new import form (`import X.{given, *}`)
@@ -74,20 +101,41 @@ the implicit to a `given`. Order: **S3 → S4 → S5 → S6**.
 ---
 
 ### S4 — Extension methods over `implicit class`
-**Status:** Not yet started (Part 3b, after Part 3a — P3a now complete).
+**Status:** Done for the extension-type sites (spec 020 PR 5b, 2026-11-04). The conversion wrappers are kept by decision
+(note below).
 
 ```bash
-grep -rn "implicit class\b" src/main/ --include="*.scala" | grep -v "//\|consensus/\|vm/"
-# Target: 0 hits
+grep -rnE "implicit +((final|sealed|abstract|private(\[[A-Za-z_]+\])?|protected(\[[A-Za-z_]+\])?) +)*class\b" \
+    src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src --include="*.scala" \
+  | grep -vE '^[^:]+:[0-9]+:\s*(//|\*)' \
+  | grep -v "Enc(" | grep -vE "ByteString(Self|Array|Byte)Element|BufferConversionOps"
+# Target: 0 hits (0 on 2026-11-05, both forms). Main sources of every module, the published ones included (bytes, rlp, crypto, scalanet,
+# scalanetDiscovery); modifier forms included; only comment-only lines are dropped, not lines with a trailing `//`.
+# `implicit` and `class` on different lines, or an annotation between them:
+rg -U --pcre2 -n -g '*.scala' 'implicit\b(?:\s|@\w+(?:\([^)]*\))?)+(?:(?:final|sealed|abstract|private(?:\[\w+\])?|protected(?:\[\w+\])?|case)\s+)*class\b' \
+  src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src \
+  | grep -v "Enc(" | grep -vE "ByteString(Self|Array|Byte)Element|BufferConversionOps"
 ```
 
 Fix: `implicit class Foo(val x: T) { def bar = ... }` → `extension (x: T) def bar = ...`
-**Do not start until Part 3a complete.**
+
+**Note (2026-11-04, spec 020 PR 5b):** the conversion wrappers stay `implicit class` by user decision: the 43 message
+wrappers (`XEnc(val underlyingMsg) extends MessageSerializableImplicit`), the 12 other encoders, consensus ones among them (`BlockHeaderEnc`,
+`BlockBodyEnc`, `AccountEnc`, `WithdrawalEnc`, `BlockEnc`, `OmmersSeqEnc`, `ECDSASignatureEnc`, `SignedTransactionEnc`,
+the `ReceiptBloom*` ones, `MptNodeEnc`) and bytes' `ByteString{Self,Array,Byte}Element`. Each adds a supertype
+(`RLPSerializable`, `MessageSerializableImplicit`, `ByteStringElement`) that an `extension` cannot give, so the grep
+above excludes them by name (`Enc(`, and the bytes and scalanet names). The exemption is by name, so a new wrapper
+with another name shows up as a hit: decide it explicitly. **They must be converted (for example to `given Conversion`) before any move
+to `-source:future`, which rejects `implicit class`.** The first version of the grep (`implicit class\b`) missed the
+modifier forms (`implicit final class`, `implicit private class`); the five sites it hid (`RichMining`, `RichResponse`,
+`ConnectedPeersOps` in `src/main`; `DiscoveryNetwork.ChannelOps` and `Discv5SyncResponder.IterableHasAsScala` in
+scalanetDiscovery) were converted in PR 5b, C6. In the published modules the only `implicit class` left are bytes'
+`ByteString{Self,Array,Byte}Element` wrappers and scalanet's dead `BufferConversionOps`.
 
 ---
 
 ### S5 — Scala 3 enum over sealed trait + case objects
-**Status:** Not yet started (Part 3d, opportunistic).
+**Status:** Not yet started (Part 3d, opportunistic). The grep below prints 113 lines (2026-11-05).
 
 Target candidates: `SyncPhase`, `BlacklistReason`, `ForkId` codes.
 ```bash
@@ -99,22 +147,23 @@ Fix: Replace where all cases are objects with no fields, or simple value enums.
 
 ---
 
-### S6 — `A & B` intersection syntax over `A with B` in self-types
-**Status:** 337 occurrences (E003 warning). Part 1 backlog.
+### S6 — `A & B` intersection syntax over `A with B` in types
+**Status:** Done and enforced. The self-type grep below prints 0 lines (2026-11-05), and the build has
+`-Wconf:msg=with as a type operator has been deprecated:error`, so `with` as a type operator in any position is a
+compile error (the 3.4 rewrite cleared the 2 sites, spec 020 PR 3). The old "337 occurrences" figure and the
+`-source:future` ratchet no longer apply: the build is `-source:3.9` (see the `-source` mapping).
 
 ```bash
 grep -rn "self:.*with\b" src/main/ --include="*.scala" | grep "=>"
-# Target: 0 hits
+# Target: 0 hits (0 on 2026-11-05)
 ```
 
-Fix: `self: A with B =>` → `self: A & B =>`
-Mechanical (bucket A). Safe scalafix or sed pass.
-Ratchet: `-source:future` flag already set — `with` in self-types is a warning. Promote to error after cleanup.
+Fix: `self: A with B =>` → `self: A & B =>`. `with` in a class `extends` clause is unchanged and still correct.
 
 ---
 
 ### S7 — No `asInstanceOf`
-**Status:** Not yet audited.
+**Status:** Not yet audited. The grep below prints 18 lines (2026-11-05).
 
 ```bash
 grep -rn "asInstanceOf\[" src/main/ --include="*.scala" | grep -v "consensus/\|vm/\|crypto/\|//"
@@ -128,7 +177,7 @@ Route to FORGE if in consensus paths.
 ---
 
 ### S8 — No `isInstanceOf` outside pattern matching
-**Status:** 59 occurrences. Part 3c backlog.
+**Status:** 8 occurrences (2026-11-05; 59 in the June audit). Part 3c backlog.
 
 ```bash
 grep -rn "isInstanceOf\[" src/main/ --include="*.scala" | grep -v "//\|consensus/\|vm/"
@@ -141,7 +190,7 @@ Bucket B/C depending on context.
 ---
 
 ### S9 — No `println` / `System.out` in main sources
-**Status:** 28 occurrences. C5 chore.
+**Status:** 7 occurrences (2026-11-05; 28 in the June audit). C5 chore.
 
 ```bash
 grep -rn "println\|System\.out\|System\.err" src/main/ --include="*.scala" | grep -v "//\|Benchmark"
@@ -154,9 +203,9 @@ Ratchet: DisableSyntax can flag `println` — add after cleanup.
 ---
 
 ### S10 — Braceless syntax for new code
-**Status:** Config change pending (C1 chore). No mass rewrite.
+**Status:** The scalafmt config is in place (`rewrite.scala3.removeOptionalBraces = true` in `.scalafmt.conf`). No mass rewrite.
 
-New code written after C1 (scalafmt config): use braceless where scalafmt accepts it.
+New code: use braceless where scalafmt accepts it.
 Do not rewrite existing brace-based code in bulk — creates noise in diffs.
 Opportunistic: if you're rewriting a method body anyway, write it braceless.
 
@@ -238,7 +287,108 @@ grep -rn "Seq\[(ByteString, ByteString)\]\|Vector\[(ByteString, ByteString)\]" \
   src/main/ --include="*.scala" | grep -v "//"
 ```
 
+The four greps are leads, not a violation count. On the 2026-11-05 tree they print 355, 4, 24 and 41 lines (in the order
+above); read each hit before acting on it.
+
 Ratchet: none yet — enforce via PRISM review and MITHRIL sweep after LOOM CAPSTONE.
+
+---
+
+### S12 — `boundary`/`break`: no handler between a closure's `break` and its `boundary`
+
+**Status:** Rule, added with spec 020 PR 7. `return` is banned (S1), so `scala.util.boundary` is the replacement where
+an `if/else` or `match` restructuring is not enough. A `break` has a trap that `return` did not.
+
+**Mechanism** (`javap` on scala-library 3.9.0):
+`scala.util.boundary$Break extends java.lang.RuntimeException`, while `scala.runtime.NonLocalReturnControl`, the
+exception a `return` inside a closure throws, `extends scala.util.control.ControlThrowable`. `NonFatal` and `Try` let a
+`ControlThrowable` through, so a `return` crossed them. A `RuntimeException` they catch. A `break` in the same method as
+its `boundary` is compiled to a jump and throws nothing. A `break` inside a closure (a lambda, the body of `map`,
+`foreach` or `collect`, a by-name argument, a `Future` or `IO` block), or in a method that receives the `Label` as a
+`using` parameter (a `break` that leaves its own method), is a throw. A `for ... do` loop over a collection is a
+`foreach` closure too, so a `break` in its body is a throw; a `while` loop is not a closure.
+
+**Rule:** between a `break` that is a throw (in a closure, or in a method called with the `Label`) and its `boundary`
+there must be no `Try`, no `NonFatal` handler,
+no `catch` on `Exception` or `RuntimeException` (or a wildcard `catch case _`), no `IO` or `Future` combinator that
+recovers (`recover`, `handleError`, `attempt`) and no actor behaviour whose supervision sees the exception. Any of them
+swallows the `break`: the method carries on, or the actor sees a failed message, where the code reads as an early exit.
+
+**Never break across an async boundary.** A `break` inside a `Future` or `IO` body that runs on another thread, or after
+the `boundary` has returned, never reaches the `boundary`: it surfaces as a failed `Future` or `IO` (or is lost). Keep
+the `boundary` inside the async body, or return a value out of it instead of breaking.
+
+**Prefer restructuring** to a `boundary` at all: an `if/else`, a `match`, `Either`/`Option` combinators, a `fold`.
+Where a `boundary` stays, keep every `break` in the method body itself and put none in a lambda. `return` remains
+banned (scalafix `DisableSyntax.noReturns`).
+
+**Where it applies** (6 files use `boundary` on the 2026-11-05 tree):
+
+```bash
+grep -rlE "scala\.util\.(boundary|\{[^}]*boundary)|^\s*boundary(\[[^]]*\])?(:| *\{)" \
+    src/main bytes/src/main rlp/src/main crypto/src/main scalanet/src scalanet/discovery/src --include="*.scala"
+# 6 files: jsonrpc/EthSimulateService, jsonrpc/EthSimulateJsonMethodsImplicits,
+#          blockchain/sync/snap/SNAPSyncController, and snap/controller/{PivotSelector,SnapResumePlanner,SnapFinalization}
+```
+
+All six files were checked against this rule on 2026-11-05 and are safe: `EthSimulateService` first, then the other
+five, reading every `break` and what lies between it and its `boundary`. What to keep true when you edit them:
+
+- `EthSimulateService` has the most closure `break`s. In `applyStateOverrides` the `break`s at `:230` and `:235` sit in
+  `ov.movePrecompileToAddress.foreach`, inside a `for (address, ov) <- sortedOverrides do` loop, and `:240` sits in that
+  loop; `:515` is in `stateOverrides.foreach`; and the `for ... do` loops over `blockStateCalls` and `calls` hold more
+  (`:416`, `:450`, `:681`, `:697`, `:710`, `:1128`, `:1143`, `:1151`, `:1172`; lines as of 2026-11-05). All are safe
+  because `Option.foreach` and `Seq.foreach` have no handler and no `Try`, `catch` or `Future` lies between a `break`
+  and its `boundary`.
+- The invariant there: `ethSimulate` wraps `doSimulate` in `IO { ... }.recover { case _: MissingNodeException => ... }`.
+  That is safe only because each of the six `boundary`s (`applyStateOverrides`, `doSimulate`, three more helpers and
+  `decodeErrorString`) sits in the same method as the `break`s it catches and none takes a `Label`, so no `Break` can
+  leave `doSimulate` for the `IO`. Keep it so: a `break` that reached the `IO` would fail it, since `recover` here
+  handles only `MissingNodeException`.
+- `EthSimulateJsonMethodsImplicits.decodeBlockStateCall`: every `break` is in the method body (match arms, `if`), none in
+  a lambda, so each is a jump.
+- `SNAPSyncController.startSnapSync` owns the one `boundary` for `PivotSelector` (`resumeInterruptedBootstrap`,
+  `selectPivotAndStart`) and `SnapResumePlanner` (`recoverAccountsComplete`, `healAtNewerPivot`). Their `break`s go
+  through a `using Label` from other methods, so they are always throws. They are called directly from the boundary body,
+  and no `try`, `Try`, `NonFatal` or `Future` lies on that path. Keep it so: do not call them from inside a closure or a
+  handler.
+- `SnapFinalization.finalizeSnapSync`: the `break(Behaviors.same)` in the `getSnapSyncStateRoot().foreach` lambda is the
+  only closure `break` among the other five files. It is safe because `Option.foreach` has no handler; wrapping it in a
+  `Try` would break it. The method's two `try ... catch NonFatal` blocks hold no `break`.
+
+The SNAP `boundary` bodies build actor behaviours, so the supervision clause above is the one to remember there.
+
+---
+
+## `-source:3.9`: what the build enforces, and where
+
+The build compiles with `-source:3.9` (`scala3Options` in `build.sbt`). It replaced `-source:future`. INF-009
+(decision 2) gives the reason: `future` on 3.9 would have cost about 1,541 implicit-to-given sites after a 63-file
+syntax rewrite, and it rejects `implicit class` (the conversion wrappers of S4). The one thing `future` was kept for,
+`import x.*`, is enforced elsewhere: scalafix `DisableSyntax.regex` (`.scalafix.conf`, ids `scala2ImportWildcard` and
+`scala2ImportRename`) and `scripts/ci/check_scala_imports.sh` in CI. The ledger of every warning category and each
+deferral is `specs/020-scala-3-9-lts-migration/dc4-ledger.md`.
+
+| Level | What it changes | State of the tree |
+|-------|-----------------|-------------------|
+| 3.4 | alphanumeric method in infix position must be declared `infix`; `_` as a type wildcard (write `?`); `with` as a type operator (write `&`); illegal literal `-98.toByte` (E028, write `(-98).toByte`) | cleared by the 3.4 rewrite (PR 3); each is a build error through `-Wconf` (`warning-ratchet.md`) |
+| 3.5 | no source change | none |
+| 3.6, 3.7 | given prioritisation changes; an implicit parameter list passed without `using` is flagged | 381 prioritisation sites (rows of `dc3-sites.md`; GT-1 measured 371) resolved by DC-3 (PR 4); 564 `using` inserted in 197 files (PR 5a); E205 and the `using` message are build errors |
+| 3.8 | SIP-62 "better fors" (enabled from `-source:3.8`) | no rewrite diff and no warning, yet **not elaboration-neutral** (below) |
+| 3.9 | no rewrite diff; nothing new enforced | `-source:3.9` set (PR 6) |
+
+**Better fors (SIP-62), the silent change.** From `-source:3.8` a `for` comprehension is desugared differently, and no
+rewrite or warning announces it: a trailing `map(identity)` after the last generator is dropped, and a value
+definition in the `for` (`y = ...`) is desugared without the tuple wrapping. A review of the 3.7 and 3.9 jars
+(forge, spec 020 PR 6; `dc4-ledger.md`, "Better fors") found 159 differing entries and a net change of `map` removals
+on lawful single-valued monads only (`Either`, `Option`, `Try`, `EitherT`, `IO`, `Resource`, scodec `Attempt`), where
+`fa.map(identity)` is `fa`. It found no change on `List`, `Seq`, `Vector`, `Iterator`, `Array`, `Map`, `Future`, Pekko
+`Source` or fs2. The effect is real on `List`-shaped value definitions too (checked with `javap` on a scratch file), so a
+new `for` over a type whose `map` is observable (a custom `map` with a side effect) needs the same review.
+
+**Writing new code at this level:** `(-98).toByte`; `a.m(b)` or a backticked `` a `m` b `` or an `infix` declaration;
+`?` for a wildcard type argument; `A & B`; `val (a, b): (A, B) = e` becomes an ascription on `e`; `using` at a call site
+that passes an implicit argument explicitly; `import x.*` or `import x.{given, *}`.
 
 ---
 
@@ -246,4 +396,4 @@ Ratchet: none yet — enforce via PRISM review and MITHRIL sweep after LOOM CAPS
 
 Standards S3–S11 do NOT apply to `consensus/`, `vm/`, `crypto/`, `domain/` without
 specialist review. Those paths require FORGE (ETC) or BEACON (ETH) before any
-idiom modernization. See `consensus-change-protocol.md`.
+idiom modernization. See `consensus-change-protocol.md`. S12 is a safety rule and applies wherever `boundary` is used.

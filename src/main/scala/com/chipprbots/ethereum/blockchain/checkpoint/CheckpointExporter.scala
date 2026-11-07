@@ -5,9 +5,9 @@ import java.io.FileOutputStream
 import java.nio.file.Path
 import java.util.zip.GZIPOutputStream
 
-import scala.annotation.tailrec
-
 import org.apache.pekko.util.ByteString
+
+import scala.annotation.tailrec
 
 import org.slf4j.LoggerFactory
 

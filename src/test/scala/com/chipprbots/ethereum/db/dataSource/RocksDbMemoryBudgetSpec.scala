@@ -3,11 +3,10 @@ package com.chipprbots.ethereum.db.dataSource
 import java.io.File
 import java.nio.file.Files
 
-import com.typesafe.config.ConfigFactory
-import com.typesafe.config.ConfigValueFactory
-
 import scala.collection.immutable.ArraySeq
 
+import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigValueFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 

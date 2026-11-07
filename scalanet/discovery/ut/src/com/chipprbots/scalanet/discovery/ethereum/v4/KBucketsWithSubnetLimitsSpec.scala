@@ -65,7 +65,7 @@ class KBucketsWithSubnetLimitsSpec extends AnyFlatSpec with Matchers with Inspec
 
   it should "not decrement if the peer is not in the table" in new Fixture:
     override lazy val ips = Vector("1.2.3.4")
-    val removed = kBuckets.remove(makePeer(makeIp("1.2.3.5")))
+    val _ = kBuckets.remove(makePeer(makeIp("1.2.3.5")))
     kBuckets.tableLevelCounts should not be empty
     kBuckets.bucketLevelCounts should not be empty
 

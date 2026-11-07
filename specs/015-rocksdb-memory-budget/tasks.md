@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Done; boxes below are as they were at closure.
+
 # Tasks: RocksDB Memory Budget (spec 015)
 
 **Spec**: [spec.md](./spec.md) | **Plan**: [plan.md](./plan.md)

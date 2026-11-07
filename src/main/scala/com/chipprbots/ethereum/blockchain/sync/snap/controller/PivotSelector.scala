@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.consensus.engine.PoSBlockHeaderValidator
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait PivotSelectionApi:
   def currentNetworkBestFromSnapPeers(): Option[BigInt]
@@ -101,7 +101,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
             snapPeersForPivot
-              .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+              .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
               .headOption
               .map(_.peerInfo.maxBlockNumber)
 
@@ -388,7 +388,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
       .filter(_.peerInfo.remoteStatus.supportsSnap)
       .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
-      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
       .headOption
       .map(_.peerInfo.maxBlockNumber)
 
@@ -424,14 +424,18 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
             if pivotBlockNumber == BigInt(0) then header.difficulty.value else pivotBlockNumber.max(genesisTD)
           (proxy, "BLOCK_NUMBER_PROXY")
         }
-    stateIngest.chainWriter.storeBlockHeader(header).commit()
+    // #1434: one batch, so a crash cannot leave the best block on the previous pivot while the new pivot's header is
+    // stored: startup routing compares SNAP's saved pivot with the best block.
     stateIngest.chainWriter
-      .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
-      .commit()
-    // Always advance the self-reported best-block pointer so STATUS messages show the correct
-    // pivot block number.
-    stateIngest.appState
-      .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
+      .storeBlockHeader(header)
+      .and(
+        stateIngest.chainWriter
+          .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
+      )
+      .and(
+        stateIngest.appState
+          .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
+      )
       .commit()
     ctx.log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +
@@ -595,7 +599,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
     val networkBestBlockOpt =
       snapPeersForPivot
-        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
         .headOption
         .map(_.peerInfo.maxBlockNumber)
 
@@ -604,7 +608,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     // advertising the real network head yet (or those peers are excluded/blacklisted/disconnected).
     val topPeerHeights =
       peersToDownloadFrom.values.toList
-        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
         .take(5)
         .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
         .mkString(", ")

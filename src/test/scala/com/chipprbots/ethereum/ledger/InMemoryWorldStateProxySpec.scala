@@ -11,8 +11,10 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.Generators
@@ -295,6 +297,43 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
     }
 
     changedReadState.getAccount(address1) shouldEqual Some(changedAccount)
+
+  // spec 022 T062: on Mordor a corrupt account leaf failed import as a decode error ("Invalid Node", or an out-of-bounds
+  // read), or decoded (0x80) and read as no account at all. It is a missing account node, so the importer fetches it.
+  it should "read a corrupt account leaf as a missing account node, with the leaf's hash" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val root: ByteString = InMemoryWorldStateProxy
+      .persistState(worldState.saveAccount(address1, Account(0, 100)).saveAccount(address2, Account(0, 200)))
+      .stateRootHash
+    val leafHash: ByteString =
+      MerklePatriciaTrie[Address, Account](root.toArray, blockchain.getBackingMptStorage(-1))(using
+        Address.hashedAddressEncoder,
+        Account.accountSerializer
+      ).getProof(address1).flatMap(_.lastOption) match
+        case Some(leaf: LeafNode) => ByteString(leaf.hash)
+        case other                => fail(s"no account leaf for address1: $other")
+    leafHash should not be root
+
+    Seq(Array(0x01.toByte), Array(0xc1.toByte), Array(0x80.toByte)).foreach { junk =>
+      storagesInstance.storages.nodeStorage.put(leafHash, junk)
+      val fresh = InMemoryWorldStateProxy(
+        storagesInstance.storages.evmCodeStorage,
+        blockchain.getBackingMptStorage(-1),
+        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        UInt256.Zero,
+        root,
+        noEmptyAccounts = false,
+        ethCompatibleStorage = true
+      )
+      withClue(s"0x${Hex.toHexString(junk)}: ") {
+        val thrown = intercept[MissingAccountNodeException](fresh.getAccount(address1))
+        thrown.hash shouldBe leafHash
+        thrown.accountAddress shouldBe address1.bytes
+        thrown.location shouldBe defined
+      }
+    }
 
   it should "properly handle address collision during initialisation" in new TestSetup:
     // This is a known test vector from Ethereum/ETC general state tests

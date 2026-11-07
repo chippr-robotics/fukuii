@@ -8,14 +8,14 @@ import cats.effect.IO
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.GasPrice
 import com.chipprbots.ethereum.transactions.TxAdmission
 import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.utils.BlockchainConfig

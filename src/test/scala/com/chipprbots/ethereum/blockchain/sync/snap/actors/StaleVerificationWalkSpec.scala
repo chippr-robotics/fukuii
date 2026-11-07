@@ -101,7 +101,7 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
         stateRoot = ByteString(rootA.hash),
         networkPeerManager =
           testKit.createTestProbe[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]().ref,
-        requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+        requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
         mptStorage = storage,
         batchSize = 16,
         snapSyncController = controller.ref,
@@ -133,7 +133,7 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
       stateRoot = ByteString(roots.head.hash),
       networkPeerManager =
         testKit.createTestProbe[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]().ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controller.ref,

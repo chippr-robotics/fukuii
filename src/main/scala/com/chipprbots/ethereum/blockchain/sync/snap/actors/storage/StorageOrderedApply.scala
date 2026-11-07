@@ -15,8 +15,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PrebuiltStorageTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.ReadyStorageChunk
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.TrieNodeWrite
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `StorageOrderedApply` reads and writes (spec 016 C-S2, research.md R14b). The core's behaviour
   * arms, the peer dispatch (C-S1) or the response processing and done markers that C-S3/C-S4 will move touch every one
@@ -117,8 +120,14 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
           )
     )
 
-  /** Commit a fully-downloaded contract trie. Compares the computed root against the task's claimed `storageRoot`;
-    * mismatches log a warning but are otherwise accepted — healing reconciles. Returns the contract's storage root.
+  /** Commit a fully-downloaded contract trie and return the root it computes. The caller compares that with the task's
+    * claimed `storageRoot`: a mismatch gets no done marker and an excluded entry, so healing owns it.
+    *
+    * No trie means no slot was applied and nothing was written, so the root computed here is the empty trie's. An
+    * account that claims the empty root is then complete. One that claims anything else is not: that root was never
+    * written, whatever the response said, and nothing checks an absence proof. The routes in are a lone
+    * proof-of-absence (a peer past its snapshot window, a non-geth or hostile peer), an empty slot set in a batched
+    * response, and a pivot refresh that wiped the trie before an empty sub-range came back (spec 022 T050a, H1).
     */
   private def commitAccountTrie(accountHash: ByteString, claimedRoot: ByteString): ByteString =
     pendingAccountTries.remove(accountHash) match
@@ -133,9 +142,14 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
           .setStoragePendingTries(pendingAccountTries.size.toLong)
         computedRoot
       case None =>
-        // First/only response for an account with no slots, or proof-of-absence path —
-        // no trie was ever created. Caller still wants a non-null root reference.
-        claimedRoot
+        val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+        if claimedRoot.isEmpty || claimedRoot == emptyRoot then claimedRoot
+        else
+          log.warn(
+            s"Storage of account ${accountHash.take(4).toHex} ended with no trie: claimed=${claimedRoot.take(4).toHex} " +
+              "was never written, and nothing checks an absence proof — healing will fetch it"
+          )
+          emptyRoot
 
   /** [[commitAccountTrie]] for a trie a worker built whole (its nodes are already written): same check and log. */
   private def commitPrebuiltRoot(
@@ -172,12 +186,10 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
   def flushTrieNodeWrites(): Unit =
     if trieNodeWrites.nonEmpty then
       val startNs = System.nanoTime()
-      val updates = trieNodeWrites.toList
-      trieNodeWrites.clear()
       val pns = stateIngest.pathNodes.getOrElse(
         throw new IllegalStateException("PathScheme requires pathNodeStorage to be set")
       )
-      pns.dataSource.update(updates)
+      StorageOrderedApply.commitBuffered(trieNodeWrites)(pns.dataSource.update)
       trieWriteNanos += System.nanoTime() - startNs
 
   /** Write the nodes a worker built for an account served whole in one response. */
@@ -224,7 +236,7 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
       val perAccount =
         pendingOrderedChunks.getOrElseUpdate(
           accountHash,
-          mutable.TreeMap.empty[ByteString, ReadyStorageChunk](ByteStringOrdering)
+          mutable.TreeMap.empty[ByteString, ReadyStorageChunk](using ByteStringOrdering)
         )
       perAccount.update(task.next, ReadyStorageChunk(peer, task, accountSlots, proofForThisTask))
       log.debug(
@@ -439,6 +451,29 @@ private[actors] trait StorageOrderedApply extends StorageTrieFlushApi with Stora
             // max-empty skip, abandoned and force-complete paths never mark: a resume downloads those again. A root
             // mismatch is not marked either, so a restart retries it rather than leaving it all to healing.
             if rootVerified then stageDoneMarker(accountHash, task.storageRoot)
+            // spec 022 T033: the trie this download built, if it built one, is not the account's. Durable when this
+            // message ends: a clean end of the phase wipes the only other trace (R-5a).
+            else
+              excludedRecorder.stage(
+                Seq(
+                  ExcludedAccount(
+                    accountHash,
+                    ExcludedReason.StorageRootMismatch,
+                    claimedStorageRoot = task.storageRoot
+                  )
+                )
+              )
 
         task = task.copy(done = true, pending = false)
         recordCompletedTask(task)
+
+private[actors] object StorageOrderedApply:
+
+  /** Write the buffered node updates, and clear the buffer only once the write has returned. Clearing first would drop
+    * the nodes if the write throws, and a caller that survived the exception could then record a done marker over nodes
+    * that were never written (#1549). On a throw the buffer is left intact and the exception propagates.
+    */
+  def commitBuffered[A](buffer: mutable.Buffer[A])(write: Seq[A] => Unit): Unit =
+    if buffer.nonEmpty then
+      write(buffer.toList)
+      buffer.clear()

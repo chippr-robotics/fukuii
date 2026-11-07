@@ -84,6 +84,14 @@ class BlockchainReader(
     */
   def getReceiptsByHash(blockhash: BlockHash): Option[Seq[Receipt]] = receiptStorage.get(blockhash.value)
 
+  /** Whether receipts are stored for the block `blockhash`, without decoding them
+    * ([[com.chipprbots.ethereum.db.storage.TransactionalKeyValueStorage.containsKey]]).
+    *
+    * Not quite `getReceiptsByHash(blockhash).isDefined`: stored receipts that cannot be decoded count as present here,
+    * where `getReceiptsByHash` would fail on them. The decode failure moves to the first real read of them.
+    */
+  def hasReceipts(blockhash: BlockHash): Boolean = receiptStorage.containsKey(blockhash.value)
+
   /** EIP-7928: the block access list of the Amsterdam block `blockHash`, as the canonical RLP its header's
     * `blockAccessListHash` commits to — the bytes `engine_getPayloadBodiesByHash/RangeV2` and eth/71 serve. `None` for
     * a pre-Amsterdam or ETC block, and for one whose list was never stored or has been pruned.

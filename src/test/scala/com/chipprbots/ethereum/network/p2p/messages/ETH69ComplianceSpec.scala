@@ -5,12 +5,12 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.testing.Tags.*
-import com.chipprbots.ethereum.domain.BloomFilter
 
 /** Wire-format compliance tests for ETH68 and ETH69.
   *
@@ -187,7 +187,6 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "decode from ETH68 decoder (not ETH69)" in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts68(BigInt(1), RLPList())
         val encoded = msg.toBytes
         decoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, encoded) match
@@ -224,7 +223,6 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       }
 
       "decode from ETH69 decoder (not ETH68)" in {
-        import com.chipprbots.ethereum.rlp.*
         val msg = ETHPackets.Receipts69(BigInt(1), RLPList())
         val encoded = msg.toBytes
         decoder(Capability.ETH69).fromBytes(Codes.ReceiptsCode, encoded) match
@@ -455,7 +453,8 @@ class ETH69ComplianceSpec extends AnyWordSpec with Matchers:
       "decode as stub (empty genesis) for clean UselessPeer rejection" taggedAs UnitTest in {
         import com.chipprbots.ethereum.rlp.*
         // Mirrors the live DECODE_ERROR observed on 5.161.72.73:30303:
-        // RLPList(Queue(RLPValue(45), RLPValue(89), ...)) — 8 RLPValues, no embedded RLPList.
+        // RLPList(Queue(RLPValue(45), RLPValue(89), ...)) — 8 RLPValues, no embedded RLPList. (Logged before
+        // #1672/#1675; decoded lists are Vectors now, so it prints as RLPList(Vector(...)).)
         val eightAllValueBytes = encode(
           RLPList(
             RLPValue(Array[Byte](45)),

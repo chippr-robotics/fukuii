@@ -82,12 +82,12 @@ class PeerListHelper(
   def getPeerById(peerId: PeerId): Option[Peer] = peers.get(peerId).map(_.peer)
 
   def getPeerWithHighestBlock: Option[PeerWithInfo] =
-    peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering).headOption
+    peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering).headOption
 
   def getSnapPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
-      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
       .headOption
 
   def blacklistIfHandshaked(peerId: PeerId, duration: FiniteDuration, reason: BlacklistReason): Unit =

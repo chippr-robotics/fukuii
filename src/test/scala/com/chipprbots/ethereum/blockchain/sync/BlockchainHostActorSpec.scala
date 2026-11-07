@@ -23,13 +23,14 @@ import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.domain.BlockAccessList.CodeChange
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.PlatabergetBalVectors
+import com.chipprbots.ethereum.domain.PlatabergetBalVectors.LiveAccessList
 import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.mpt.ExtensionNode
@@ -37,6 +38,7 @@ import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
@@ -119,19 +121,19 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       .storeReceipts(BlockHash(known1), Seq.empty)
       .and(blockchainWriter.storeReceipts(BlockHash(known2), Seq.empty))
       .commit()
-    val onlyKnown1 = com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPList())
+    val onlyKnown1: RLPList = com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPList())
 
     blockchainHost ! BlockchainHostActor.PeerEventReceived(
       MessageFromPeer(ETHPackets.GetReceipts(BigInt(1), Seq(known1, unknown, known2)), peerId)
     )
-    val eth68 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    val eth68: SendMessageCmd = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     ByteString(eth68.message.toBytes) shouldBe
       ByteString(ETHPackets.Receipts68.Receipts68Enc(ETHPackets.Receipts68(BigInt(1), onlyKnown1)).toBytes: Array[Byte])
 
     blockchainHost ! BlockchainHostActor.PeerEventReceived(
       MessageFromPeer(ETHPackets.GetReceipts69(BigInt(2), Seq(known1, unknown, known2)), peerId)
     )
-    val eth69 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    val eth69: SendMessageCmd = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     ByteString(eth69.message.toBytes) shouldBe
       ByteString(ETHPackets.Receipts69.Receipts69Enc(ETHPackets.Receipts69(BigInt(2), onlyKnown1)).toBytes: Array[Byte])
 
@@ -340,7 +342,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(1), hashes), peerId)
     )
 
-    val response = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    val response: SendMessageCmd = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     response.message.underlyingMsg match
       case ETHPackets.BlockBodies(reqId, returned) =>
         reqId shouldBe BigInt(1)
@@ -362,7 +364,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       MessageFromPeer(ETHPackets.GetBlockBodies(BigInt(1), Seq(hash)), peerId)
     )
 
-    val response = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
+    val response: SendMessageCmd = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     response.message.underlyingMsg match
       case ETHPackets.BlockBodies(reqId, returned) =>
         reqId shouldBe BigInt(1)
@@ -400,7 +402,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new TestSetup:
-    val live = PlatabergetBalVectors.load(PlatabergetBalVectors.Block275654)
+    val live: LiveAccessList = PlatabergetBalVectors.load(PlatabergetBalVectors.Block275654)
     val unknown: ByteString = ByteString(Hex.decode("88" * 32))
     blockchainWriter.storeBlockAccessList(BlockHash(live.blockHash), live.accessList).commit()
     blockchainReader.getBlockAccessListByHash(BlockHash(live.blockHash)) shouldBe Some(live.bytes)
@@ -445,8 +447,8 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
   // EIP-8159: "Responses containing a single BAL that exceeds 2 MiB are still valid, as the soft limit governs when to
   // stop appending additional items, not the maximum size of an individual item."
   it should "serve one list over 2 MiB on its own" taggedAs (UnitTest) in new TestSetup:
-    val oversized = listOfSize(3 * 1024 * 1024)
-    val small = listOfSize(16)
+    val oversized: BlockAccessList = listOfSize(3 * 1024 * 1024)
+    val small: BlockAccessList = listOfSize(16)
     val (bigHash, smallHash) = (ByteString(Hex.decode("b1" * 32)), ByteString(Hex.decode("b2" * 32)))
     blockchainWriter.storeBlockAccessList(BlockHash(bigHash), oversized).commit()
     blockchainWriter.storeBlockAccessList(BlockHash(smallHash), small).commit()
@@ -504,7 +506,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
   // go-ethereum stops on `bytes >= softResponseLimit`: lists totalling exactly 2 MiB end the reply, even ahead of an
   // unavailable entry that would add nothing; one byte under, both the 0x80 and the next list still ship.
   it should "stop at exactly 2 MiB served, and not one byte under it" taggedAs (UnitTest) in new TestSetup:
-    val Limit = 2 * 1024 * 1024
+    val Limit: Int = 2 * 1024 * 1024
     // listOfSize(n) encodes to n + 46 bytes once every length takes a three-byte prefix.
     val (atLimit, underLimit, small) = (listOfSize(Limit - 46), listOfSize(Limit - 47), listOfSize(16))
     atLimit.toBytes.length shouldBe Limit
@@ -514,7 +516,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
     Seq(atHash -> atLimit, underHash -> underLimit, smallHash -> small).foreach((hash, list) =>
       blockchainWriter.storeBlockAccessList(BlockHash(hash), list).commit()
     )
-    val unknown = ByteString(Hex.decode("88" * 32))
+    val unknown: ByteString = ByteString(Hex.decode("88" * 32))
 
     val (atReply, _) = requestBlockAccessLists(Seq(atHash, unknown, smallHash))
     atReply.entries.map(wireBytes) shouldBe Seq(atLimit.toBytes)
@@ -526,7 +528,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
   // answered as unavailable, and logged at ERROR, rather than failing the reply and stopping the actor for every peer.
   it should "answer an unreadable stored list as unavailable, and keep serving" taggedAs (UnitTest) in new TestSetup:
     val (damagedHash, goodHash) = (ByteString(Hex.decode("d1" * 32)), ByteString(Hex.decode("d2" * 32)))
-    val good = listOfSize(16)
+    val good: BlockAccessList = listOfSize(16)
     // A list header promising three bytes, followed by one.
     storagesInstance.storages.blockAccessListStorage
       .put(damagedHash, ByteString(Array(0xc3, 0x01).map(_.toByte)))

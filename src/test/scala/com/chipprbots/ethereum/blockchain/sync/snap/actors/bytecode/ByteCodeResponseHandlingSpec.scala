@@ -24,12 +24,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.B
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.WorkerRef
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeWorker
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -43,6 +44,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.testing.NoRandomAccessSeq
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestEvmCodeStorage
 
@@ -58,6 +60,10 @@ private[actors] class StubByteCodeResponseHandlingState(
     with ByteCodeEnv
     with ByteCodeDispatchApi
     with ByteCodeCompletionApi:
+
+  // spec 022 T033: where a give-up is recorded.
+  val progressStore: SnapSyncProgressStorage =
+    new SnapSyncProgressStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
 
   // ByteCodeResponseHandlingState
   val activeTasks: mutable.Map[BigInt, ActiveByteCodeRequest] = mutable.Map.empty
@@ -78,6 +84,7 @@ private[actors] class StubByteCodeResponseHandlingState(
   def intakeBudget: Option[SnapIntakeBudget] = None
   def maxWorkers: Int = notUsed("maxWorkers")
   // Only `bytecode` is read; any other member fails loudly.
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(progressStore, enabled = true, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notUsed("appState")
     def stateTries: StateStorage = notUsed("stateTries")
@@ -89,9 +96,8 @@ private[actors] class StubByteCodeResponseHandlingState(
     def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
     def durability: StateIngest.Durability = StateIngest.Durability.Default
     def trieStore(pivot: BigInt): MptStorage = notUsed("trieStore")
-    def snapProgress: SnapSyncProgressStorage = notUsed("snapProgress")
+    def snapProgress: SnapSyncProgressStorage = progressStore
     def storageDone: SnapStorageDoneStorage = notUsed("storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notUsed("healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notUsed("bfsQueue")
 
   // ByteCodeDispatchApi and ByteCodeCompletionApi, recorded
@@ -166,7 +172,10 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.bytesDownloaded shouldBe codes.map(_.size.toLong).sum
     m.consecutiveTaskFailures shouldBe 0
     m.hashFailureCounts shouldBe empty
-    controller.receiveAll() shouldBe Seq(SNAPSyncController.ProgressBytecodesDownloaded(2L))
+    controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.ByteCodesStored(codes.map(kec256(_))),
+      SNAPSyncController.ProgressBytecodesDownloaded(2L)
+    )
     worker.receiveAll() shouldBe Seq(ByteCodeWorkerRelease(BigInt(7)))
     m.idled.toSeq shouldBe Seq(worker.ref)
     m.calls.toSeq shouldBe Seq(s"grow p1 1000 ${codes.map(_.size).sum}", "clear p1")
@@ -189,7 +198,10 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.completedTaskCount shouldBe 0L
     m.bytecodesDownloaded shouldBe 1L
     m.activeTasks shouldBe empty
-    controller.receiveAll() shouldBe Seq(SNAPSyncController.ProgressBytecodesDownloaded(1L))
+    controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.ByteCodesStored(Seq(kec256(served))),
+      SNAPSyncController.ProgressBytecodesDownloaded(1L)
+    )
     m.completionChecks shouldBe 1
   }
 
@@ -230,6 +242,21 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.completionChecks shouldBe 1
   }
 
+  // #1675: the subsequence check reads the requested hashes by index. A request is bounded (85 hashes), but the
+  // task's Seq can be a linear one; the check indexes its own Vector copy rather than the task's Seq.
+  it should "match a response against the requested hashes without random access into the task's Seq" taggedAs UnitTest in {
+    val (m, _) = newModule()
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val codes = (1 to 5).map(code)
+    inFlight(m, NoRandomAccessSeq.from(codes.map(kec256(_))), worker.ref, peer("p1"))
+
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq(codes(0), codes(2), codes(4))))
+
+    Seq(0, 2, 4).foreach(i => m.bytecodeStore.get(kec256(codes(i))) shouldBe Some(codes(i)))
+    m.bytecodesDownloaded shouldBe 3L
+    m.cooldowns shouldBe empty
+  }
+
   it should "ignore a response for an unknown request" taggedAs UnitTest in {
     val (m, controller) = newModule()
 
@@ -258,4 +285,37 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.filterAndDedupeCodeHashes(
       Seq(h1, ByteString(Array[Byte](1, 2, 3)), Account.EmptyCodeHash.value, h2, h1)
     ) shouldBe Seq(h1, h2)
+  }
+
+  // ---- spec 022 T033, T036 ---------------------------------------------------------------------------------------------
+
+  it should "acknowledge nothing when the write fails: the bytecode is not there to depend on (T036)" taggedAs UnitTest in {
+    val controller = TestInbox[SNAPSyncController.Command]()
+    val failingCodes = new TestEvmCodeStorage():
+      override def put(key: ByteString, value: ByteString): DataSourceBatchUpdate =
+        throw new RuntimeException("injected code write failure")
+    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref) with ByteCodeResponseHandling
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val c = code(1)
+    inFlight(m, Seq(kec256(c)), worker.ref, peer("p1"))
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq(c)))
+    controller.receiveAll().collect { case a: SNAPSyncController.ByteCodesStored => a } shouldBe empty
+  }
+
+  it should "record a hash it gives up on, durably, before it forgets it (T033)" taggedAs UnitTest in {
+    val (m, _) = newModule()
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val exhausted = kec256(code(1))
+    val retried = kec256(code(2))
+    m.hashFailureCounts(exhausted) = 49
+    inFlight(m, Seq(exhausted, retried), worker.ref, peer("p1"))
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), Seq.empty))
+    m.excludedRecorder.flush() shouldBe true // the coordinator's, when the message ends
+    m.progressStore.excludedPage(None, 10) shouldBe Seq(
+      com.chipprbots.ethereum.db.storage.ExcludedAccount(
+        exhausted,
+        com.chipprbots.ethereum.db.storage.ExcludedReason.CodeMissing
+      )
+    )
+    m.pendingTasks.toSeq shouldBe Seq(ByteCodeTask(Seq(retried)))
   }

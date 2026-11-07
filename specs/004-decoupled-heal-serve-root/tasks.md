@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Done; boxes below are as they were at closure.
+
 ---
 description: "Task list for Decoupled Heal Serve-Root (spec 004)"
 ---

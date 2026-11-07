@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.EestBlockchainReplay
@@ -125,7 +125,7 @@ object EestBuilderReplay:
             blockExecution,
             new ForkChoiceManager(blockchainReader, blockchainWriter),
             None
-          )(config, null)
+          )(using config, null)
 
           val JArray(blocks) = t \ "blocks": @unchecked
           val outcomes: Seq[Either[String, Unit]] = blocks.zipWithIndex.flatMap { case (b, i) =>

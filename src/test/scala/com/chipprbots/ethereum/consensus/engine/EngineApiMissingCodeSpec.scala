@@ -20,6 +20,10 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.ledger.*
+import com.chipprbots.ethereum.metrics.Metrics
+import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -91,7 +95,7 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     val callTx: SignedTransaction =
       SignedTransaction.sign(
@@ -174,6 +178,8 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       block
 
     def dropCode(): Unit = evmCodes.remove(codeHash.value).commit()
+    def holesOf(kind: String): Double =
+      Option(Metrics.get().registry.find("engine.state.hole").tag("kind", kind).counter()).fold(0d)(_.count())
     def restoreCode(): Unit = evmCodes.put(codeHash.value, code).commit()
 
     def toPayload(block: Block): ExecutionPayload =
@@ -208,10 +214,10 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
 
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
 
       withClue(s"status=${status.status} validationError=${status.validationError}: ") {
         (status.status == Accepted || status.status == Syncing) shouldBe true
@@ -219,16 +225,103 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       status.latestValidHash shouldBe None
       engineApi.invalidBlocksSnapshot shouldBe empty
 
+    // spec 022 FR-014: execution's own report of the hole. Removing the service's call leaves every other test here green.
+    "count the hole as engine_state_hole_total{kind}, once however often the consensus client retries" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val block1: Block = buildBlock1()
+      dropCode()
+      val before: Double = holesOf("code")
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      holesOf("code") shouldBe before + 1d
+
+    // The other call site: a hole that reaches the service as an exception. It sits in a `catch`, which is why the
+    // reporter must not throw.
+    "count a hole that arrives as an exception too, and still answer" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          throw new MissingRootNodeException(ByteString(Array.fill[Byte](32)(0x44)))
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("node")
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      (status.status == Accepted || status.status == Syncing) shouldBe true
+      holesOf("node") shouldBe before + 1d
+
+    // beacon: the store throws MissingRootNodeException for any node it does not hold, so only the parent's root says this
+    // one is the root. Both call sites have to pass it, for the label T063 reads to mean anything.
+    "call a hole the root where it is the parent's state root, however execution reports it" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          throw new MissingRootNodeException(genesisHeader.stateRoot.value)
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("root")
+      engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      holesOf("root") shouldBe before + 1d
+
+    "call it the root when execution returns the error too" taggedAs (UnitTest, ConsensusTest) in new Setup:
+      override lazy val blockExec: BlockExecution = new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBlockFull(
+            block: Block,
+            alreadyValidated: Boolean,
+            suppliedBlockAccessList: Option[BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          Left(BlockExecutionError.MPTError(new MissingRootNodeException(genesisHeader.stateRoot.value)))
+      val block1: Block = buildBlock1()
+      val before: Double = holesOf("root")
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      (status.status == Accepted || status.status == Syncing) shouldBe true
+      holesOf("root") shouldBe before + 1d
+
     "execute the same block and answer VALID once the bytecode is present (no verdict was cached)" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
       engineApi.newPayload(toPayload(block1)).unsafeRunSync().status should not be Invalid
 
       restoreCode()
-      val status = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
       engineApi.invalidBlocksSnapshot shouldBe empty
 
@@ -236,15 +329,56 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = buildBlock1()
+      val block1: Block = buildBlock1()
       dropCode()
       engineApi.newPayload(toPayload(block1)).unsafeRunSync()
 
-      val fcu = engineApi
+      val fcu: Either[String, ForkchoiceUpdatedResponse] = engineApi
         .forkchoiceUpdated(
           ForkChoiceState(block1.hash.value, ByteString(new Array[Byte](32)), ByteString(new Array[Byte](32))),
           None
         )
         .unsafeRunSync()
       fcu.toOption.map(_.payloadStatus.status) should not be Some(Invalid)
+  }
+
+  // spec 022 T062, beacon: the sender's account leaf in the parent state holds 0x80, which decodes to an empty value.
+  // It read as "no account" before, so newPayload executed this valid block against a sender with no balance, found it
+  // invalid, removed it and recorded the verdict. A stored entry that is not its node is a missing node now: the block
+  // waits for its state. Nothing is stubbed: the engine's own producer builds the block, and execution reads the archive
+  // store the corrupt bytes are planted in.
+  "engine_newPayload over a stored account node that is not that node" should {
+
+    "answer ACCEPTED/SYNCING, never INVALID, keep the block, and answer VALID once the node is repaired" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val block1: Block = buildBlock1()
+      val nodes = storagesInstance.storages.nodeStorage
+      val senderLeaf: ByteString =
+        MerklePatriciaTrie[Address, Account](genesisHeader.stateRoot.value.toArray, blockchain.getBackingMptStorage(0))(
+          using
+          Address.hashedAddressEncoder,
+          Account.accountSerializer
+        ).getProof(sender).flatMap(_.lastOption) match
+          case Some(leaf: LeafNode) => ByteString(leaf.hash)
+          case other                => fail(s"no account leaf for the sender: $other")
+      val good: Array[Byte] = nodes.get(senderLeaf).getOrElse(fail("the sender's leaf is not stored by its hash"))
+      nodes.put(senderLeaf, Array(0x80.toByte))
+
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+
+      withClue(s"status=${status.status} validationError=${status.validationError}: ") {
+        (status.status == Accepted || status.status == Syncing) shouldBe true
+      }
+      status.latestValidHash shouldBe None
+      engineApi.invalidBlocksSnapshot shouldBe empty
+      withClue("the block is kept, by hash: ") {
+        blockchainReader.getBlockHeaderByHash(block1.hash) shouldBe defined
+      }
+
+      nodes.put(senderLeaf, good)
+      val repaired: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
+      engineApi.invalidBlocksSnapshot shouldBe empty
   }

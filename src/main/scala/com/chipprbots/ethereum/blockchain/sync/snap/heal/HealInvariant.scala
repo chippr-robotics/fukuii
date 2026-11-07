@@ -1,0 +1,208 @@
+package com.chipprbots.ethereum.blockchain.sync.snap.heal
+
+import scala.util.control.NonFatal
+
+import org.slf4j.Logger
+
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+
+/** The rules of the invariant marker and the retirement of CF `g` (spec 022 D6, D7; data-model.md "Invariant marker").
+  *
+  * The marker (`snap.heal.invariant`, AppState `s`) says everything present here was written under "present implies
+  * complete". It does not say complete. It is stamped on an empty datadir at a SNAP start and at a clean walk
+  * completion; a datadir without it gets one repair pass, which is the verification walk healing runs there, and the
+  * marker records how that went. A walk over holes that outlasts a re-peg does not finish: it fills what it found and
+  * the run hands off unmarked (T050a). Where it stands, healing completes with no walk (T051).
+  *
+  * Every write here is one synced batch, so no crash can leave half of one.
+  */
+object HealInvariant:
+
+  /** What a SNAP start found. */
+  enum AtSnapStart:
+
+    /** The marker stands: this datadir needs no repair pass. */
+    case Stands
+
+    /** The datadir was empty, and is stamped now. */
+    case StampedEmpty
+
+    /** No marker, and not empty: this run's clean walk, if one finishes, is the repair pass, and stamps. */
+    case PreInvariant(reason: String)
+
+    /** The marker cannot hold on this scheme and pruning mode (see [[canHold]]). `clearedOne`: one was found, and
+      * removed.
+      */
+    case CannotHold(clearedOne: Boolean)
+
+  /** Whether "present implies complete" can hold on disk at all. Not on the Hash scheme under `pruning.mode =
+    * inmemory`: there the trie store is the node cache, which writes healed nodes to disk one by one as it evicts them,
+    * least recently used first, so a crash can leave a present node over an absent child (spec 022 review vault V3, R1,
+    * V-N2). The Path scheme is not affected: its heal commits, account phase and storage phase all write to the two
+    * Path column families through `PathNodeStorage`, in atomic batches, and never touch the cache, which only the
+    * hand-off's export goes through, behind its own barrier (#1581). Hence scheme-aware (V-N2 (4)).
+    *
+    * Nor under `deferred-merkleization = true`, on either scheme: no trie is built during the download and a lone
+    * absence still gets a done marker, which vouches for flat slots alone (H1, tasks.md T050a).
+    *
+    * Where it cannot hold, the verification walk stays at every start and every completion: that walk is the repair,
+    * and there is no second mechanism (V-N2 (3)).
+    */
+  def canHold(scheme: StorageScheme, deferredMerkleization: Boolean, trieNodesCachedInMemory: Boolean): Boolean =
+    !deferredMerkleization && (scheme == StorageScheme.Path || !trieNodesCachedInMemory)
+
+  /** Whether a storage task's done marker holds what it claims once written. Not on the Hash scheme building the trie
+    * during the download under `pruning.mode = inmemory`: storage trie nodes go through the node cache there, not
+    * RocksDB, so they could be lost with a marker on disk. The Path scheme writes through `PathNodeStorage`, other
+    * pruning modes write through, and a deferred build makes no trie.
+    *
+    * With no markers a restarted storage coordinator cannot sweep (spec 022 T050a, hunter W1.3), since its task file
+    * would name every account. That never leaves a marker standing over what it lost: where these do not hold, neither
+    * does [[canHold]], and the walk stays at every completion. `InvariantMarkerSpec` goes through every combination.
+    */
+  def doneMarkersHold(
+      scheme: StorageScheme,
+      deferredMerkleization: Boolean,
+      trieNodesCachedInMemory: Boolean
+  ): Boolean =
+    scheme == StorageScheme.Path || deferredMerkleization || !trieNodesCachedInMemory
+
+  /** Run at every SNAP start, before anything of this run is written. The checkpoint key outranks the marker: while it
+    * is set, the datadir is pre-invariant whatever else it holds.
+    */
+  def atSnapStart(appState: AppStateStorage, pathNodes: Option[PathNodeStorage], canHold: Boolean): AtSnapStart =
+    val present = appState.isSnapHealInvariantPresent()
+    // A repair run's clean walk stamps the trie and says nothing of code, so the scan is owed (the user's decision,
+    // 2026-10-31), and stays owed across a restart that finds the stamp. Written once: a later start changes nothing.
+    def preInvariant(reason: String): AtSnapStart =
+      if present || appState.getSnapCodeScanOwed().isEmpty then appState.markSnapCodeScanOwed(reason).commitSync()
+      AtSnapStart.PreInvariant(reason)
+    if !canHold then
+      if present then appState.clearSnapHealInvariant().commitSync()
+      AtSnapStart.CannotHold(clearedOne = present)
+    else
+      appState.getCheckpointImportInProgress() match
+        case Some(importing)                         => preInvariant(s"a checkpoint import did not finish ($importing)")
+        case None if appState.hasSnapHealInvariant() => AtSnapStart.Stands
+        case None if isEmpty(appState, pathNodes) =>
+          appState.stampSnapHealInvariant().commitSync()
+          AtSnapStart.StampedEmpty
+        case None =>
+          // A marker of another version, if there is one, does not stand, so it goes with this write.
+          preInvariant("no marker, and not an empty datadir")
+
+  /** Run where an account phase is about to start, before it writes (spec 022 T050a). True when a marker was removed.
+    *
+    * On the Path scheme a node's position holds one node, so a phase that starts over existing nodes can rewrite a
+    * region at another root. If a state then returns to an earlier value and a second interruption falls between
+    * rewriting a descendant and rewriting the node, a node with the right hash sits over a wrong child. Publish keys
+    * every node by its own keccak, so what that leaves in the store execution reads is an absence, which throws, and
+    * never a wrong root.
+    *
+    * Only a fresh phase over nodes already there withdraws (the accounts-complete flag set with no task-file pointer
+    * persisted is one, and so is a supervisor restart of a launch that had nothing to resume from): the marker says
+    * nothing of those nodes. So does a launch with cursors whose task files were rejected or are gone: every partial
+    * range starts over (beacon 1). `resumesRanges` is whether the task files came too, the one case a partial range
+    * goes on from its cursor. A launch whose cursors are all complete re-downloads nothing, and withdraws too with no
+    * files: that errs to the walk, and it is rare. A real resume keeps the marker, supervisor restart included (the
+    * user's decision, 2026-11-01): a multi-day sync restarts many times, and the background audit covers that crash
+    * class, one hole at a time. A clean walk stamps the marker again, so a withdrawal costs one walk on such a run.
+    *
+    * Nothing here on Hash: nodes are content-addressed, so a node's bytes cannot change under it. Nor at a
+    * storage-phase restart: its chunks verify against the task's root.
+    */
+  def withdrawForPathAccountPhase(
+      appState: AppStateStorage,
+      pathNodes: Option[PathNodeStorage],
+      scheme: StorageScheme,
+      resumesRanges: Boolean
+  ): Boolean =
+    val withdraw = scheme == StorageScheme.Path && appState.isSnapHealInvariantPresent() &&
+      !resumesRanges && pathNodes.exists(!_.isEmpty)
+    if withdraw then appState.clearSnapHealInvariant().commitSync()
+    withdraw
+
+  /** A run that knows its bookkeeping has lost something (spec 022 T050a; the user's decision, 2026-10-31, in place of
+    * a hard stop, which would halt a node that could finish, and at Sepolia's size on a false timeout). The marker goes
+    * and the code scan is owed, in one synced write, so a later PR's walk-skip cannot take this datadir's word: a walk
+    * that completes clean covers the trie and storage (a lazy hand-off has none behind it, and leaves them to the scan
+    * and the audit), the recovery scan at the next start covers code, which the walk never reads, as far as it can
+    * read, and the node keeps going. A clean full walk may stamp the marker again; only a finalisation settles the
+    * debt.
+    *
+    * `log` is the caller's: the shipped logback.xml keeps `...sync.snap` at ERROR, so a logger of this object's would
+    * lose the WARN.
+    *
+    * False when the write failed. Nothing was claimed or changed then, so the caller holds whatever it was about to end
+    * and comes back to this, as for a `StoreFailed` sweep: going on would leave the marker vouching for what was lost.
+    */
+  def lostTrack(appState: AppStateStorage, reason: String, log: Logger): Boolean =
+    try
+      appState.markSnapCodeScanOwed(reason).commitSync()
+      log.warn(
+        s"[HEAL-INVARIANT] Lost track: $reason. Marker withdrawn, so the walk stays for this run, and the code scan " +
+          "runs at the next start"
+      )
+      true
+    catch
+      case NonFatal(e) =>
+        log.error(s"[HEAL-INVARIANT] Lost track ($reason), and could not withdraw the marker; trying again", e)
+        false
+
+  /** Whether this datadir is empty for the marker's purposes, conservatively: when in doubt it is not, since a stamp
+    * over state an older binary wrote is the one thing that must not happen, and the doubt costs one walk.
+    *
+    * The hash-keyed store cannot be asked: it holds the genesis trie on every datadir, and a partial checkpoint import
+    * from an older binary leaves nodes there and no other trace. So the positive evidence is
+    * `isDatadirCreatedUnderInvariant`, written when the genesis is first stored, which a datadir created by an older
+    * binary never has. On top of that, nothing may say a sync has been here: each key below is written by a sync before
+    * it writes a trie node, or says that it finished; none is written before the first SNAP start.
+    * (`BootstrapPivotBlock` and `SyncStartingBlock` are, so they prove nothing.) The Path families are looked at
+    * directly: one seek each.
+    */
+  def isEmpty(appState: AppStateStorage, pathNodes: Option[PathNodeStorage]): Boolean =
+    appState.isDatadirCreatedUnderInvariant() &&
+      appState.getCheckpointImportInProgress().isEmpty &&
+      appState.getBestBlockNumber() == 0 &&
+      !appState.isSnapSyncDone() &&
+      !appState.isFastSyncDone() &&
+      appState.getSnapSyncPivotBlock().isEmpty &&
+      appState.getSnapSyncMinPivotBlock().isEmpty &&
+      appState.getSnapSyncBootstrapTarget().isEmpty &&
+      appState.getSnapSyncStateRoot().isEmpty &&
+      appState.getSnapSyncFinalizedRoot().isEmpty &&
+      appState.getSnapSyncProgress().isEmpty &&
+      appState.getSnapAccountResumeCheckpoint().isEmpty &&
+      !appState.isSnapSyncAccountsComplete() &&
+      !appState.isSnapSyncStorageComplete() &&
+      !appState.isSnapSyncBytecodeComplete() &&
+      appState.getSnapSyncStorageFilePath().forall(_.isEmpty) &&
+      appState.getSnapSyncCodeHashesPath().forall(_.isEmpty) &&
+      pathNodes.forall(_.isEmpty)
+
+  /** The one-time clear of CF `g` (spec 022 D6), at every node start until it has happened. True when it ran.
+    *
+    * A crash at any step is safe. Before the range delete: nothing has happened, and the next start does it. After it,
+    * before the key: the next start does it again, one more tombstone on an empty family. After the key: done. The key
+    * is synced, and it and the range delete go through the same WAL, so expect the delete to survive with it; nothing
+    * here depends on that. Nothing in the node reads `g` any more, so the worst a lost or failed clear can cost is disk
+    * space. That space stays taken until something compacts `g`: nothing here does (see
+    * `HealingFrontierStorage.clearAll`).
+    */
+  def retireFrontierOnce(appState: AppStateStorage, frontier: HealingFrontierStorage): Boolean =
+    if appState.isHealingFrontierRetired() then false
+    else
+      frontier.clearAll()
+      appState.markHealingFrontierRetired().commitSync()
+      true
+
+  /** The operator's `fukuii.snap.clearDoneOnStart`: healing is to run again because what it finished is doubted, so
+    * what is present is not vouched for, done or not (D7). One synced write. True when SNAP was marked done.
+    */
+  def clearDoneOnStart(appState: AppStateStorage): Boolean =
+    val wasDone = appState.isSnapSyncDone()
+    appState.clearSnapSyncDone().commitSync()
+    wasDone

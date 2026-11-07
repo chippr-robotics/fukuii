@@ -4,6 +4,15 @@
 
 The Engine API surface has been implemented and validated against the Sepolia network with healthy peers. This document defines the next architectural phase.
 
+> **Superseded in part (2026-10-30, user decision D-1 in spec 023, `specs/023-fleet-topology/spec.md`).** The
+> process model below — several chain instances in one JVM
+> ("Multi-Network Runtime", "In-Process L2 Architecture", "Cross-Instance Communication", "Phase 2: Multi-Instance
+> Runtime") — is retired: fukuii runs **one process per chain per role**, and the in-process runtime (`runtime/`,
+> `conf/multi-instance.conf`, `fukuii runtime`) is removed by spec 023 FR-006. The name **Orbita** now denotes the
+> separate control-plane project that runs fukuii processes as a fleet, not a chain instance inside fukuii. The
+> pluggable-consensus idea (Engine API as the seam, consensus modules as separate processes) stands; new consensus
+> families remain out of scope (spec 023 D-2). The sections below are kept as history.
+
 ## Context
 
 fukuii is a Scala 3 EVM execution client, forked from IOHK Mantis, maintained under Chippr Robotics LLC. Its origin is Ethereum Classic, but its architectural goal is broader: a general-purpose EVM execution engine that can participate in any consensus model or network role without forking or rewriting the engine.

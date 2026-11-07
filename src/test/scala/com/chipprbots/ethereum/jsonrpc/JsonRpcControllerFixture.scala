@@ -32,18 +32,18 @@ import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
-import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.keystore.KeyStore
-import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -63,7 +63,7 @@ object JsonRpcControllerFixture:
       mockFactory: org.scalamock.scalatest.MockFactory,
       actorTestKit: ActorTestKit
   ): JsonRpcControllerFixture =
-    new JsonRpcControllerFixture()(system, mockFactory, actorTestKit)
+    new JsonRpcControllerFixture()(using system, mockFactory, actorTestKit)
 
 class JsonRpcControllerFixture(implicit
     system: ActorSystem,
@@ -230,7 +230,7 @@ class JsonRpcControllerFixture(implicit
     filterManager,
     filterConfig,
     blockchainReader
-  )(system)
+  )(using system)
   val personalService: TestPersonalService = new TestPersonalService
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
@@ -243,7 +243,7 @@ class JsonRpcControllerFixture(implicit
     null,
     new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
     null
-  )(scala.concurrent.ExecutionContext.global)
+  )(using scala.concurrent.ExecutionContext.global, summon)
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(

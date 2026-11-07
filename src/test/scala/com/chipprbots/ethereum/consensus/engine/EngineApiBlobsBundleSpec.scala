@@ -5,7 +5,6 @@ import java.security.SecureRandom
 import org.apache.pekko.util.ByteString
 
 import ethereum.ckzg4844.CKZG4844JNI
-
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -36,7 +35,7 @@ class EngineApiBlobsBundleSpec extends AnyWordSpec with Matchers with BeforeAndA
   implicit private val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 
   // buildBlobsBundle reads nothing but its arguments.
-  private val service = new EngineApiService(null, null, null, null, None)(null, null)
+  private val service = new EngineApiService(null, null, null, null, None)(using null, null)
 
   private val zeroBlob = Array.fill[Byte](CKZG4844JNI.BYTES_PER_BLOB)(0) // all-zero field elements: a valid blob
   private val commitment = Array.fill[Byte](48)(0xc0.toByte) // carried verbatim, never checked here

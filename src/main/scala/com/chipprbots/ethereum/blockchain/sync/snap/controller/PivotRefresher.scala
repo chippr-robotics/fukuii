@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait PivotRefresherState:
   var clPivotHint: Option[CLPivotHint]
@@ -168,8 +168,11 @@ private[snap] trait PivotRefresher
                 "Peers likely lack snapshot databases."
             )
             if recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes") then
-              enterDormantMode(
-                s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+              // #1515: continue in the dormant behaviour, which is the one that handles DormantWakeUp.
+              earlyBehavior = Some(
+                enterDormantMode(
+                  s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+                )
               )
             else
               val restartDelay = math.min(30 * criticalFailureCount, 120).seconds
@@ -449,7 +452,7 @@ private[snap] trait PivotRefresher
           .filter(_ > 0)
 
     if newPivotOpt.isEmpty then
-      // spec 009 T014 (Moving-Root Delta Heal — bounded re-peg last-resort). Under `movingRootDeltaHeal`, a re-peg
+      // #1374 T014 (Moving-Root Delta Heal — bounded re-peg last-resort). Under `movingRootDeltaHeal`, a re-peg
       // during StateHealing that finds NO suitable served root counts against a budget; once exhausted, take the SAME
       // fail-SAFE lazy-heal handoff the (now-rare) HealingRootUnservable signal uses — completeSnapSync() → on-demand
       // GetTrieNodes during block execution. CONSTRAINT 1 (never fail-OPEN): completeSnapSync → finalizeSnapSync STILL
@@ -718,7 +721,7 @@ private[snap] trait PivotRefresher
             // update root, clear pending tasks and stateless peers, then re-walk the trie with the new root to
             // discover missing nodes.
             pivotRefreshed(newStateRoot.value)
-            // spec 009 T014: a successful re-peg landed a fresh served root — reset the bounded no-root budget so the
+            // #1374 T014: a successful re-peg landed a fresh served root — reset the bounded no-root budget so the
             // lazy-heal last-resort only fires after a fresh run of consecutive empty re-peg attempts. Harmless flag-OFF
             // (the budget is never incremented unless movingRootDeltaHeal && StateHealing).
             healRepegNoRootAttempts = 0

@@ -4,8 +4,14 @@
 
 **Created**: 2026-10-08
 
-**Status**: Draft. Phase 0 (characterization) is complete for the controller. **Amended 2026-10-11**: state
+**Status**: Done (2026-10-30). Complete (R1 #1622; spec 020 OQ-4/5 record it). The 39 unticked boxes are the S0 pins, the per-slice checklist template and T054–T056; T056 (lighter WAL) is now spec 018 E3.
 capability boundary (`StateIngest`, env freeze ratchet); see the amendment section near the end.
+
+**Release**: 0.10.x
+
+**Closed** (2026-10-30):
+- Reason: shipped; `StateIngest` (T055) exists and the controller is split into modules (#1401).
+- Lives on in: `blockchain/sync/snap/controller/`; routing in `.claude/agent-protocols/snap-sync.md`.
 
 **Issue**: #1401 "Split SNAPSyncController"
 

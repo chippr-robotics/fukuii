@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.PendingResponse
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -91,6 +92,7 @@ private[actors] class StubStoragePeerDispatchState(
   val storageScheme: StorageScheme = StorageScheme.Hash
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   def mptStorage: MptStorage = throw new UnsupportedOperationException("StoragePeerDispatch read mptStorage")
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = false, log)
   def stateIngest: StateIngest = throw new UnsupportedOperationException("StoragePeerDispatch read stateIngest")
   val flatBatchEntryThreshold: Int = 1000
 
@@ -111,7 +113,7 @@ class StoragePeerDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
   final private class Harness:
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     private var action: () => Unit = () => ()
     private var captured: StubStoragePeerDispatchState & StoragePeerDispatch = null
     val kit: BehaviorTestKit[StorageRangeCoordinator.Command] =

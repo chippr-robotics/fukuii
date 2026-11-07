@@ -1,5 +1,12 @@
 # 011 - Evict genesis-head crawlers
 
+**Status**: Done (2026-10-30). Implemented: `genesis-head-eviction-grace` / `genesis-head-exclusion-duration` in `PeerConfiguration` and `conf/base/network.conf`.
+
+**Closed** (2026-10-30):
+- Reason: shipped.
+- Lives on in: `network/PeerManagerActor.scala` eviction and `utils/InstanceConfig.scala` config.
+
+
 ## Problem
 Sepolia v0.9.1: `[SNAP-PEERS] snapCapable=9 excluded=5 served=4 ... best-block-is-genesis(maxBlock=0) x5`.
 All five were `cap=ETH71 client=other(enrscout) networkId=11155111 bestHash=<Sepolia genesis> latestBlock=0`:

@@ -16,7 +16,7 @@ trait FiniteField[A]:
 object FiniteField:
   def apply[T](implicit field: FiniteField[T]): FiniteField[T] = field
   object Ops:
-    implicit class FiniteFieldOps[T](t: T)(implicit F: FiniteField[T]):
+    extension [T](t: T)(using F: FiniteField[T])
       def +(o: T): T = F.add(t, o)
       def *(o: T): T = F.mul(t, o)
       def -(o: T): T = F.sub(t, o)

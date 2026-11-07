@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -97,7 +98,7 @@ class SnapHeapWatchdogSpec extends AnyFlatSpec with Matchers:
     var reading: Option[OldGenReading] = None
     var empty: Boolean = false
     val budget = new SnapIntakeBudget(100L, 100L)
-    val events = mutable.ArrayBuffer.empty[Any]
+    val events: ArrayBuffer[Any] = mutable.ArrayBuffer.empty[Any]
     val watchdog = new SnapHeapWatchdog(
       new HeapPressureHysteresis(0.75, 0.60),
       () => reading,

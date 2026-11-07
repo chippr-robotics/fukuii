@@ -41,6 +41,11 @@ trait BfsQueueStorage:
   /** Delete all entries and reset the counter to 0. */
   def clear(): Unit
 
+  /** What this queue's entries live in, by identity and name: two queues with one scope share their entries, and so
+    * their walk lease (`heal.WalkLease`). This instance alone, unless it writes through to a shared store.
+    */
+  def walkScope: (AnyRef, Seq[Byte]) = (this, Nil)
+
 object BfsQueueStorage:
 
   val DefaultChunkSize: Int = 50_000
@@ -89,16 +94,19 @@ class RocksDbBfsQueueStorage(dataSource: DataSource, namespace: Namespace) exten
 
   private val writeCounter = new AtomicLong(0L)
 
+  /** The column family: every wrapper over it, of whichever controller instance, shares its entries. */
+  override def walkScope: (AnyRef, Seq[Byte]) = (dataSource, namespace)
+
   def counter: Long = writeCounter.get()
 
   def enqueueBatch(entries: Seq[(Array[Byte], Seq[Array[Byte]], Boolean)]): Unit =
-    if entries.isEmpty then return
-    val upserts = entries.map { case (hash, pathset, isStorage) =>
-      val key = longToBytes(writeCounter.getAndIncrement())
-      val value = encodeEntry(hash, pathset, isStorage)
-      (key, value)
-    }
-    dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = Seq.empty, toUpsert = upserts)))
+    if entries.nonEmpty then
+      val upserts = entries.map { case (hash, pathset, isStorage) =>
+        val key = longToBytes(writeCounter.getAndIncrement())
+        val value = encodeEntry(hash, pathset, isStorage)
+        (key, value)
+      }
+      dataSource.update(Seq(DataSourceUpdateOptimized(namespace, toRemove = Seq.empty, toUpsert = upserts)))
 
   def iterateRange(from: Long, to: Long, chunkSize: Int = DefaultChunkSize): Iterator[Seq[BfsEntry]] =
     dataSource match

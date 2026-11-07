@@ -28,8 +28,9 @@ import com.chipprbots.ethereum.utils.Config
   * built as go-ethereum builds them (`CallDefaults` + `ToTransaction(types.DynamicFeeTxType)`,
   * internal/ethapi/simulate.go).
   *
-  *   - an accessList is honoured (execution and intrinsic gas), and an explicit `"type": "0x1"` gives an EIP-2930
-  *     transaction with a type-1 receipt; an authorizationList gives an EIP-7702 transaction with a type-4 receipt
+  *   - an accessList is honoured (execution and intrinsic gas), and gasPrice with an accessList gives an EIP-2930
+  *     transaction with a type-1 receipt (a `"type"` in the call is not read, as in geth, #1660 item 10); an
+  *     authorizationList gives an EIP-7702 transaction with a type-4 receipt
   *   - malformed fields are -32602, never silently absent
   *   - `validation: true` follows geth's preCheck: nonce (-38010 / -38011), tip above fee cap (-32602), fee cap below
   *     the base fee (-38012, gasPrice included)
@@ -149,7 +150,7 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     tx \ "accessList" \\ "storageKeys" shouldBe JArray(List(JString(Slot)))
   }
 
-  it should "build an EIP-2930 transaction with a type-1 receipt for an explicit type 0x1" taggedAs (
+  it should "build an EIP-2930 transaction with a type-1 receipt for gasPrice with an accessList (a \"type\" is not read)" taggedAs (
     UnitTest,
     RPCTest
   ) in {
@@ -166,11 +167,28 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     (tx \ "accessList" \ "address")(0) shouldBe JString(To)
   }
 
-  it should "default the gas price of an explicit type 0x1 call to zero" taggedAs (UnitTest, RPCTest) in {
+  it should "ignore an explicit type 0x1, as geth's TransactionArgs does: an accessList alone is a 0x2 transaction" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // transaction_args.go:42-71 (no Type field), :537-560 (ToTransaction(DynamicFeeTxType))
     val (block, _) = ethNode.ok(oneBlock(s"""{"from":"$From","to":"$To","type":"0x1",$accessList}"""))
-    block.transactions.head.tx match
-      case t: TransactionWithAccessList => t.gasPrice shouldBe GasPrice(0)
-      case other                        => fail(s"expected an EIP-2930 transaction, got $other")
+    block.transactions.head.tx shouldBe a[TransactionWithDynamicFee]
+    block.receipts.head shouldBe a[Type02Receipt]
+  }
+
+  it should "ignore type 0x0 with no fee fields at a London block: a 0x2 transaction, not a legacy one" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val (block, _) = ethNode.ok(oneBlock(s"""{"from":"$From","to":"$To","type":"0x0"}"""))
+    block.transactions.head.tx shouldBe a[TransactionWithDynamicFee]
+  }
+
+  it should "ignore an unknown type 0x9 and a type 0x4 without an authorizationList" taggedAs (UnitTest, RPCTest) in {
+    for t <- List("0x9", "0x4") do
+      ethNode.ok(oneBlock(s"""{"from":"$From","to":"$To","type":"$t"}""")) match
+        case (block, _) => block.transactions.head.tx shouldBe a[TransactionWithDynamicFee]
   }
 
   it should "build an EIP-7702 transaction with a type-4 receipt for an authorizationList" taggedAs (
@@ -351,12 +369,14 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     cancunNode.error(oneBlock(call))._1 shouldBe -32602
   }
 
-  it should "still refuse an explicit type 0x4 up front (-32602, fukuii explicit-type rule)" taggedAs (
+  it should "report an authorizationList with a \"type\":\"0x4\" as ErrTxTypeNotSupported (-32603): the type is not read" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    cancunNode.error(oneBlock(s"""{"from":"$From","to":"$To","type":"0x4","authorizationList":[$Auth]}""")) shouldBe
-      (-32602, "transaction type not supported: type 4 not active at block 30")
+    val (code, message) =
+      cancunNode.error(oneBlock(s"""{"from":"$From","to":"$To","type":"0x4","authorizationList":[$Auth]}"""))
+    code shouldBe -32603
+    message should include("transaction type not supported: setcode tx")
   }
 
   "eth_simulateV1 on ETC before Olympia" should "default to a legacy transaction, as geth's CallDefaults does without a base fee" taggedAs (
@@ -382,10 +402,10 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
     ) shouldBe (-32000, "maxFeePerGas and maxPriorityFeePerGas are not valid before London is active")
   }
 
-  it should "refuse an explicit type 0x2 (-32602)" taggedAs (UnitTest, RPCTest) in {
-    new Node(etcConfig, baseTimestamp = 1_000_000L)
-      .error(oneBlock(s"""{"from":"$From","to":"$To","type":"0x2"}""")) shouldBe
-      (-32602, "transaction type not supported: type 2 not active at block 30")
+  it should "ignore an explicit type 0x2 (a legacy transaction on ETC before Olympia)" taggedAs (UnitTest, RPCTest) in {
+    val (block, _) = new Node(etcConfig, baseTimestamp = 1_000_000L)
+      .ok(oneBlock(s"""{"from":"$From","to":"$To","type":"0x2"}"""))
+    block.transactions.head.tx shouldBe a[LegacyTransaction]
   }
 
   it should "refuse an authorizationList with ErrTxTypeNotSupported (-32603)" taggedAs (UnitTest, RPCTest) in {

@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BlacklistPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.NoSuitablePeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request.RequestBuilder
-import com.chipprbots.ethereum.blockchain.sync.PeersClient.ResponseMessage
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.ResponseMessage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message

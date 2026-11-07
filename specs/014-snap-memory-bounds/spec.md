@@ -4,9 +4,12 @@
 
 **Created**: 2026-10-08
 
-**Status**: Implemented (CI-validated; not yet soaked)
-
+**Status**: Done (2026-10-30). Implemented and CI-validated; the soak named in the spec has not been run. 13 main-source sites cite it.
 ## Problem
+
+**Closed** (2026-10-30):
+- Reason: shipped (memory bounds for SNAP healing).
+- Open validation: the soak; record it in the 022 release gates if still wanted.
 
 During the SNAP storage phase the heap grows without a ceiling, and on a 16 GB host it drives systemd-oomd to
 kill the node. This must hold up on ETH mainnet, which has many times Sepolia's contracts, so every bound has to be

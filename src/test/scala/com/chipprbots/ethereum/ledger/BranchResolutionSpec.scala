@@ -18,9 +18,9 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
@@ -29,11 +29,11 @@ import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.testing.Tags.*
 
 class BranchResolutionSpec
@@ -72,7 +72,7 @@ class BranchResolutionSpec
       branchResolution.resolveBranch(headers) shouldEqual UnknownBranch
 
     "report new better branch found when headers form a branch of higher chain weight than corresponding known headers" in
-      new BranchResolutionTestSetupImpl:
+      (new BranchResolutionTestSetupImpl:
         val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
 
         setBestBlockNumber(10)
@@ -83,9 +83,10 @@ class BranchResolutionSpec
         oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
 
         branchResolution.resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
+      )
 
     "report no need for a chain switch the headers do not have chain weight greater than currently known branch" in
-      new BranchResolutionTestSetupImpl:
+      (new BranchResolutionTestSetupImpl:
         val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
 
         setBestBlockNumber(10)
@@ -96,6 +97,7 @@ class BranchResolutionSpec
         oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
 
         branchResolution.resolveBranch(headers) shouldEqual NoChainSwitch
+      )
 
     "correctly handle a branch that goes up to the genesis block" in new BranchResolutionTestSetupImpl:
       val headers: NonEmptyList[BlockHeader] = genesisHeader :: getChainHeadersNel(1, 10, genesisHeader.hash.value)

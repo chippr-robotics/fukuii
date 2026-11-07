@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait StateValidationState:
   var validationInProgress: Boolean
@@ -93,7 +93,10 @@ private[snap] trait StateValidationModule extends ValidationApi:
           val retryMsg = s"root node missing after $validationRetryCount validation retries"
           if recordCriticalFailure(retryMsg) then
             ctx.log.error("Too many critical SNAP failures — entering dormant mode")
-            enterDormantMode(s"validation retry exhausted: $retryMsg")
+            // #1515: continue in the dormant behaviour (its DormantWakeUp handler), and give the round after the
+            // wake-up a fresh retry budget, as the restart branch below does.
+            validationRetryCount = 0
+            earlyBehavior = Some(enterDormantMode(s"validation retry exhausted: $retryMsg"))
           else
             ctx.log.warn(
               s"Root node missing after $validationRetryCount validation attempts. " +
@@ -112,7 +115,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
         ctx.log.error("Recovering through healing phase")
         validationInProgress = false
         currentPhase = StateHealing
-        startStateHealing()
+        reopenHealing()
       earlyBehavior.getOrElse(Behaviors.same)
 
     // Storage trie validation result handlers.
@@ -135,7 +138,7 @@ private[snap] trait StateValidationModule extends ValidationApi:
       ctx.log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
       validationInProgress = false
       currentPhase = StateHealing
-      startStateHealing()
+      reopenHealing()
       Behaviors.same
 
     case ValidationRetry(_) =>
@@ -165,13 +168,13 @@ private[snap] trait StateValidationModule extends ValidationApi:
       .Future {
         val v = stateIngest.validatorFactory(storage)
         (v.validateAccountTrie(expectedRoot), System.currentTimeMillis() - start)
-      }(snapValidationEc)
+      }(using snapValidationEc)
       .onComplete {
         case scala.util.Success((result, elapsed)) =>
           selfRef ! ValidateAccountTrieResult(generation, result, elapsed)
         case scala.util.Failure(e) =>
           selfRef ! ValidateAccountTrieResult(generation, Left(e.getMessage), -1L)
-      }(snapValidationEc)
+      }(using snapValidationEc)
 
   private def spawnStorageValidation(generation: Long, expectedRoot: ByteString, pivot: BigInt): Unit =
     val storage = getOrCreateMptStorage(pivot)
@@ -181,13 +184,13 @@ private[snap] trait StateValidationModule extends ValidationApi:
       .Future {
         val v = stateIngest.validatorFactory(storage)
         (v.validateAllStorageTries(expectedRoot), System.currentTimeMillis() - start)
-      }(snapValidationEc)
+      }(using snapValidationEc)
       .onComplete {
         case scala.util.Success((result, elapsed)) =>
           selfRef ! ValidateStorageTriesResult(generation, result, elapsed)
         case scala.util.Failure(e) =>
           selfRef ! ValidateStorageTriesResult(generation, Left(e.getMessage), -1L)
-      }(snapValidationEc)
+      }(using snapValidationEc)
 
   def validateState(): Unit =
     if !snapSyncConfig.stateValidationEnabled then
@@ -198,15 +201,16 @@ private[snap] trait StateValidationModule extends ValidationApi:
     else
       (stateRoot, pivotBlock) match
         case (Some(expectedRoot), Some(pivot)) =>
-          // #1188: short-circuit when the round-2 healing trie walk just verified the same root.
-          // The walk visits every node in the account trie + every storage trie via DFS — same
-          // work `validateAccountTrie + validateAllStorageTries` would redo. Belt-and-suspenders:
-          // only honoured when captured root *equals* current `stateRoot`, so any pivot refresh
-          // or restart naturally invalidates the signal (root changes → no match → full validation).
+          // #1188: short-circuit when healing has just reported the same root complete. A walk visits every node in the
+          // account trie + every storage trie via DFS — same work `validateAccountTrie + validateAllStorageTries` would
+          // redo — and where the invariant marker stands (spec 022 T051) that work is the gate the spec removes, the
+          // background audit doing it after hand-off. Belt-and-suspenders: only honoured when captured root *equals*
+          // current `stateRoot`, so any pivot refresh or restart naturally invalidates the signal (root changes → no
+          // match → full validation).
           if healingValidatedRoot.contains(expectedRoot) then
             ctx.log.info(
-              s"Skipping redundant state validation — healing trie walk verified the entire " +
-                s"account+storage trie against ${expectedRoot.value.take(8).toHex} (clean signal)"
+              s"Skipping state validation — healing reported the account+storage trie complete at " +
+                s"${expectedRoot.value.take(8).toHex} (clean signal)"
             )
             // Consume the signal so a re-entry (e.g. after a future healing-recovery cycle that
             // didn't finish with a clean walk) doesn't reuse a stale positive.

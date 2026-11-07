@@ -148,7 +148,6 @@ class ETH68ComplianceSpec extends AnyWordSpec with Matchers:
 
   "ETH68 Receipts68" when {
     import ETHPackets.Receipts68.*
-    import com.chipprbots.ethereum.rlp.*
 
     "encoding" should {
 

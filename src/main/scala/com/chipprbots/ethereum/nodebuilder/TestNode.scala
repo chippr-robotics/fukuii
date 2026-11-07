@@ -62,7 +62,7 @@ class TestNode(
         storagesInstance.storages.transactionMappingStorage,
         this,
         classicSystem.toTyped.scheduler
-      )(ioRuntime)
+      )(using ioRuntime)
     )
 
   lazy val currentBlockchainConfig: AtomicReference[BlockchainConfig] = new AtomicReference(initBlockchainConfig)

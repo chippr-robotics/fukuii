@@ -67,7 +67,7 @@ case class PeriodicConsistencyCheck(
         blockNumberMappingStorage,
         blockHeadersStorage,
         shutdown
-      )(log)
+      )(using log)
     tick(timers)
     Behaviors.same
   }

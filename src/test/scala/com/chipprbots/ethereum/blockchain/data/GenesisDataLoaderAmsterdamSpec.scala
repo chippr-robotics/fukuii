@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.blockchain.data
 
-import org.apache.pekko.util.ByteString
-
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+
+import org.apache.pekko.util.ByteString
 
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
@@ -20,8 +20,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Block.BlockDec
 import com.chipprbots.ethereum.domain.Block.BlockEnc
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.ledger.EestBlockchainReplay

@@ -50,7 +50,7 @@ One specific instruction. Not a plan — a single first move:
 "Open X.scala line N and replace Y with Z, then run sbt compile-all."
 
 ## Test baseline
-Last verified result: "3,621 / 0 — verified after Phase 0 commit <sha>"
+Last verified result: "7,219 / 0 — verified after Phase 0 commit <sha>"
 If not run yet: "Not run — compile-only phases so far."
 
 ## Known hazards

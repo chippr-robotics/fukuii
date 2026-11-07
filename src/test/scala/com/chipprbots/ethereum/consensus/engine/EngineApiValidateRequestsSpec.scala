@@ -7,7 +7,6 @@ import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -74,7 +73,7 @@ class EngineApiValidateRequestsSpec extends AnyWordSpec with Matchers:
     )
 
   private def stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] =
         IO.pure(PayloadStatusV1(PayloadStatus.Syncing, latestValidHash = None, validationError = None))
 

@@ -62,7 +62,7 @@ private[actors] class StubAccountTaskLifecycleState(
   val emptyResponseStrikes: mutable.Map[PeerId, Int] = mutable.Map.empty
   var pivotRefreshRequested: Boolean = false
   val pendingTasks: mutable.PriorityQueue[AccountTask] =
-    mutable.PriorityQueue.empty[AccountTask](Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
+    mutable.PriorityQueue.empty[AccountTask](using Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse)
   val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] = mutable.Map.empty
   val completedTasks: mutable.ArrayBuffer[AccountTask] = mutable.ArrayBuffer.empty
   var lastDispatchOrResponseMs: Long = 0L
@@ -132,7 +132,7 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   final private class Harness:
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     private val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    private val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    private val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     private var action: () => Unit = () => ()
     private var captured: StubAccountTaskLifecycleState & AccountTaskLifecycle = null
     val kit: BehaviorTestKit[AccountRangeCoordinator.Command] =

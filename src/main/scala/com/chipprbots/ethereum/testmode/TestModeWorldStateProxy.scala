@@ -106,5 +106,5 @@ object TestModeWorldStateProxy:
       MerklePatriciaTrie[Address, Account](
         stateRootHash.toArray[Byte],
         accountsStorage
-      )(Address.hashedAddressEncoder, accountSerializer)
+      )(using Address.hashedAddressEncoder, accountSerializer)
     )

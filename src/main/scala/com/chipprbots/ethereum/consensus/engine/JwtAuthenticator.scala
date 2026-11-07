@@ -40,25 +40,26 @@ class JwtAuthenticator(secretHex: String) extends Logger:
 
   private def validateToken(token: String): Either[String, Unit] =
     val parts = token.split('.')
-    if parts.length != 3 then return Left("Invalid JWT format")
-
-    val headerPayload = s"${parts(0)}.${parts(1)}"
-    val expectedSig = hmacSha256(headerPayload)
-    val actualSig = parts(2)
-
-    if !constantTimeEquals(base64UrlDecode(expectedSig), base64UrlDecode(actualSig)) then Left("Invalid JWT signature")
+    if parts.length != 3 then Left("Invalid JWT format")
     else
-      // Decode payload and check iat (issued-at) claim
-      val payloadJson = new String(java.util.Base64.getUrlDecoder.decode(parts(1)))
-      val iatPattern = """"iat"\s*:\s*(\d+)""".r
-      iatPattern.findFirstMatchIn(payloadJson) match
-        case Some(m) =>
-          val iat = m.group(1).toLong
-          val now = Instant.now().getEpochSecond
-          if Math.abs(now - iat) > MaxClockSkewSeconds then
-            Left(s"JWT expired: iat=$iat, now=$now, skew=${Math.abs(now - iat)}s")
-          else Right(())
-        case None => Left("Missing iat claim")
+      val headerPayload = s"${parts(0)}.${parts(1)}"
+      val expectedSig = hmacSha256(headerPayload)
+      val actualSig = parts(2)
+
+      if !constantTimeEquals(base64UrlDecode(expectedSig), base64UrlDecode(actualSig)) then
+        Left("Invalid JWT signature")
+      else
+        // Decode payload and check iat (issued-at) claim
+        val payloadJson = new String(java.util.Base64.getUrlDecoder.decode(parts(1)))
+        val iatPattern = """"iat"\s*:\s*(\d+)""".r
+        iatPattern.findFirstMatchIn(payloadJson) match
+          case Some(m) =>
+            val iat = m.group(1).toLong
+            val now = Instant.now().getEpochSecond
+            if Math.abs(now - iat) > MaxClockSkewSeconds then
+              Left(s"JWT expired: iat=$iat, now=$now, skew=${Math.abs(now - iat)}s")
+            else Right(())
+          case None => Left("Missing iat claim")
 
   private def hmacSha256(data: String): String =
     val mac = Mac.getInstance("HmacSHA256")
@@ -70,13 +71,14 @@ class JwtAuthenticator(secretHex: String) extends Logger:
     java.util.Base64.getUrlDecoder.decode(s)
 
   private def constantTimeEquals(a: Array[Byte], b: Array[Byte]): Boolean =
-    if a.length != b.length then return false
-    var result = 0
-    var i = 0
-    while i < a.length do
-      result |= a(i) ^ b(i)
-      i += 1
-    result == 0
+    if a.length != b.length then false
+    else
+      var result = 0
+      var i = 0
+      while i < a.length do
+        result |= a(i) ^ b(i)
+        i += 1
+      result == 0
 
   private def hexToBytes(hex: String): Array[Byte] =
     val clean = if hex.startsWith("0x") then hex.substring(2) else hex

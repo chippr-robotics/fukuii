@@ -115,7 +115,7 @@ class JsonRpcHttpServerSpec
     buildInfoRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
       status shouldEqual StatusCodes.OK
 
-      val expected = Extraction.decompose(BuildInfo.toMap)(DefaultFormats)
+      val expected = Extraction.decompose(BuildInfo.toMap)(using DefaultFormats)
       val jsonResponse = JsonMethods.parse(responseAs[String])
       val diff = expected.diff(jsonResponse)
 
@@ -170,7 +170,7 @@ class JsonRpcHttpServerSpec
   // HttpEntity.Default over a Source, which is what a real client's batch POST looks like
   // when the body does not arrive in a single buffered chunk.
   it should "pass a valid batch json request received as a streamed entity to the controller" taggedAs
-    (UnitTest, RPCTest) in new TestSetup:
+    (UnitTest, RPCTest) in (new TestSetup:
       mockJsonRpcController.handleRequest
         .expects(*)
         .twice()
@@ -197,6 +197,7 @@ class JsonRpcHttpServerSpec
         }
         (responseAs[String] should not).include("-32700")
       }
+    )
 
   it should "return BadRequest when malformed request is received" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val jsonRequestInvalid: ByteString = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")

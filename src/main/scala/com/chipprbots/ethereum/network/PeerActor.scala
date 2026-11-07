@@ -4,8 +4,8 @@ import java.net.InetSocketAddress
 import java.net.URI
 
 import org.apache.pekko.NotUsed
-import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.ActorRef as ClassicActorRef
+import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
@@ -19,10 +19,10 @@ import scala.concurrent.duration.*
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.network.PeerActor.Status.*
+import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerOnWrongNetwork
-import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -97,7 +97,7 @@ object PeerActor:
   private case object StopActor extends Command
 
   // Death-watch notification for the RLPx child (replaces Classic Terminated)
-  final private case class RlpxTerminated(ref: ActorRef[RLPxConnectionHandler.Command]) extends Command
+  final private[network] case class RlpxTerminated(ref: ActorRef[RLPxConnectionHandler.Command]) extends Command
 
   // =========================================================================
   // Public message/value types
@@ -226,7 +226,7 @@ object PeerActor:
     private val log = context.log
 
     private def schedule(delay: FiniteDuration, msg: Command): Cancellable =
-      context.system.scheduler.scheduleOnce(delay, () => context.self ! msg)(context.executionContext)
+      context.system.scheduler.scheduleOnce(delay, () => context.self ! msg)(using context.executionContext)
 
     // Spawn (or, in tests, obtain) a fresh RLPx child for each (re)connection attempt — mirrors the Classic
     // createRlpxConnection lifecycle (the RLPx child stops itself on failure, freeing the "rlpx-connection" name
@@ -481,12 +481,23 @@ object PeerActor:
         Disconnect.reasonToString(reason)
       )
       rlpxConnection.sendMessage(Disconnect(reason))
-      schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-      disconnected()
+      disconnected(rlpxConnection, schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor))
 
-    private def disconnected(): Behavior[Command] =
+    /** The poison-pill timer only exists to let a Disconnect frame flush. If the REMOTE closes TCP, RLPx stops itself
+      * (TcpClosed / TcpConnectionTerminated / TcpWriteFailed / AckTimeout) and there is nothing left to wait for: stop
+      * at once so PeerManagerActor's death-watch publishes PeerDisconnected now rather than disconnectPoisonPillTimeout
+      * (15 s) later (#1527). Against a silent remote the pill still governs. This is a plain stop, never a reconnect,
+      * so it cannot reintroduce the self-reconnect/duplicate churn fixed in `handleHandshakedTerminated`. The pending
+      * pill is cancelled so no StopActor reaches dead letters.
+      */
+    private def disconnected(rlpxConnection: RLPxConnection, pill: Cancellable): Behavior[Command] =
       Behaviors.receiveMessage {
-        case StopActor => Behaviors.stopped
+        case StopActor =>
+          pill.cancel()
+          Behaviors.stopped
+        case RlpxTerminated(ref) if ref == rlpxConnection.ref =>
+          pill.cancel()
+          Behaviors.stopped
         case GetStatus(replyTo) =>
           replyTo ! StatusResponse(Disconnected)
           Behaviors.same
@@ -575,8 +586,7 @@ object PeerActor:
       status match
         case Handshaked =>
           // graceful stop — let the Disconnect wire message flush before stopping
-          schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor)
-          disconnected()
+          disconnected(rlpxConnection, schedule(peerConfiguration.disconnectPoisonPillTimeout, StopActor))
         case _ =>
           Behaviors.stopped
 

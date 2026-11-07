@@ -7,6 +7,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
@@ -42,6 +43,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockRangeUpdate
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
@@ -268,9 +270,36 @@ class BlockFetcherSpec
       testKit.stop(blockFetcher)
 
     // BF-1A: ETH/69 head-following via BlockRangeUpdate
+    "should spawn its state-node fetcher again when it stops, and answer the fetch it held as exhausted (#1694)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup:
+      // Nothing supervises that child. Left dead, every fetch after it went to dead letters, and the importer, which
+      // escalates on exhausted fetches only, waited on a missing node for good (forge).
+      startFetcher() // answered, so the fetcher and its children are up
+      val importerReplies: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FetchResponse] =
+        testKit.createTestProbe[FetchResponse]()
+      def fetchCode(): Unit =
+        blockFetcher ! BlockFetcher.FetchStateNode(
+          ByteString(Array.fill[Byte](32)(0x5a)),
+          importerReplies.ref,
+          isByteCode = true
+        )
+        peersClient.fishForMessage(3.seconds) {
+          case PeersClient.Request(_: GetByteCodes, _, _, _) => true
+          case _                                             => false
+        }
+
+      fetchCode()
+      testKit.system.classicSystem.actorSelection(blockFetcher.path / "state-node-fetcher") !
+        org.apache.pekko.actor.PoisonPill
+
+      importerReplies.expectMessage(5.seconds, BlockFetcher.FetchedStateNode(ETHPackets.NodeData(Nil)))
+      fetchCode() // asked of a peer again, by the new one
+
     "should include BlockRangeUpdateCode in peer event subscription" taggedAs (UnitTest, SyncTest) in new TestSetup:
       blockFetcher ! BlockFetcher.Start(importer.ref.toTyped[BlockImporter.Command], 0)
-      val sub = peerEventBus.expectMsgType[SubscribeCmd]
+      val sub: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
       sub.to match
         case MessageClassifier(codes, _) =>
           codes should contain(Codes.BlockRangeUpdateCode)
@@ -399,10 +428,10 @@ class BlockFetcherSpec
   }
 
   trait TestSetup extends TestSyncConfig:
-    val peersClient: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val peerEventBus: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val importer: TestProbe = TestProbe()(testKit.system.classicSystem)
-    val regularSync: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val peersClient: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val peerEventBus: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val importer: TestProbe = TestProbe()(using testKit.system.classicSystem)
+    val regularSync: TestProbe = TestProbe()(using testKit.system.classicSystem)
 
     lazy val validators = new MockValidatorsAlwaysSucceed
 
@@ -415,7 +444,7 @@ class BlockFetcherSpec
       peerResponseTimeout = 5.minutes
     )
 
-    val fakePeerActor: TestProbe = TestProbe()(testKit.system.classicSystem)
+    val fakePeerActor: TestProbe = TestProbe()(using testKit.system.classicSystem)
     val fakePeer: Peer = Peer(PeerId("fakePeer"), new InetSocketAddress("127.0.0.1", 9000), fakePeerActor.ref, false)
 
     lazy val blockFetcher: ActorRef[BlockFetcher.FetchCommand] = testKit.spawn(

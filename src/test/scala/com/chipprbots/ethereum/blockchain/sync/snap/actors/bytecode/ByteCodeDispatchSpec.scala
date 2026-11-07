@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.B
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator.WorkerRef
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeWorker
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -59,6 +60,7 @@ private[actors] class StubByteCodeDispatchState(val requestTracker: SNAPRequestT
   def snapSyncController: ActorRef[SNAPSyncController.Command] = notUsed("snapSyncController")
   def intakeBudget: Option[SnapIntakeBudget] = None
   def stateIngest: StateIngest = notUsed("stateIngest")
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(notUsed("snapProgress"), enabled = false, log)
 
   // ByteCodeQueueApi
   def pendingHashCount: Long = pendingTasks.iterator.map(_.codeHashes.size.toLong).sum
@@ -73,7 +75,7 @@ private[actors] class StubByteCodeDispatchState(val requestTracker: SNAPRequestT
 class ByteCodeDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
   private def newModule(maxWorkers: Int = 4): StubByteCodeDispatchState & ByteCodeDispatch =
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     new StubByteCodeDispatchState(tracker, maxWorkers) with ByteCodeDispatch
 
   private def peer(id: String): Peer =

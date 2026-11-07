@@ -20,6 +20,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -47,8 +51,9 @@ private class StubHealDispatchState(
   // HealDispatchState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
   var serveRoot: ByteString = stateRoot
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
-  val pendingHashSet: mutable.Set[ByteString] = mutable.Set.empty
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](e => HealRequest.depthOf(e.pathset), _.hash, _ => false)
+  val healRequests: HealRequestBook = new HealRequestBook()
   val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map.empty
   var maxInFlightPerPeer: Int = 2
   var maxConcurrentRequests: Int = 16
@@ -58,10 +63,11 @@ private class StubHealDispatchState(
   val knownAvailablePeers: mutable.Set[Peer] = mutable.Set.empty
   val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map.empty
   val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty
-  val healAttempts: mutable.Map[ByteString, Int] = mutable.Map.empty
+  val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   var healRate: Double = 0.0
   var lastThrottleAdjustMs: Long = 0L
-  val rawNodeBuffer: mutable.ArrayBuffer[(ByteString, Array[Byte])] = mutable.ArrayBuffer.empty
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
+  var newSubtreesPaused: Boolean = false
   val rawFlushThreshold: Int = 1000
   var lastHealedAtMs: Long = System.currentTimeMillis()
   val healingStagnationTimeoutMs: Long = 5 * 60 * 1000
@@ -76,13 +82,10 @@ private class StubHealDispatchState(
   def mptStorage: MptStorage = throw new UnsupportedOperationException("HealDispatch read mptStorage")
   def stateIngest: StateIngest = throw new UnsupportedOperationException("HealDispatch read stateIngest")
   val storageScheme: StorageScheme = StorageScheme.Hash
-  val prunedHealVerification: Boolean = true
-  val frontierPersistenceEnabled: Boolean = false
   val decoupledHealMaxAttemptsNoRefresh: Int = 2
   val frontierHighWater: Int = 100
   val frontierLowWater: Int = 10
   val frontierBackpressureMaxWaitMs: Long = 0L
-  val scopedHealMaxPaths: Int = 200_000
   val healedCodeCheck: Boolean = false
 
   // FrontierGaugesApi
@@ -107,7 +110,7 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
   ):
     val controller: TestInbox[SNAPSyncController.Command] = TestInbox[SNAPSyncController.Command]()
     val peerManager: TestInbox[NetworkPeerManagerActor.Command] = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     val module: StubHealDispatchState & HealDispatch =
       new StubHealDispatchState(peerManager.ref, tracker, controller.ref, batchSize, decoupled, movingRoot)
         with HealDispatch
@@ -124,7 +127,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     def queue(n: Int, from: Int = 0): Seq[HealingEntry] =
       val entries = (from until from + n).map(i => HealingEntry(Seq(ByteString(Array(i.toByte))), node(i)))
       module.pendingTasks ++= entries
-      module.pendingHashSet ++= entries.map(_.hash)
       entries
 
     /** Stop the request tracker's timers for whatever is still in flight. */
@@ -145,7 +147,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     h.cancelInFlight()
     h.module.activeRequests.clear()
     h.module.pendingTasks.clear()
-    h.module.pendingHashSet.clear()
     size
 
   "HealDispatch" should "throttle the batch size up under flush backpressure, cap it, and recover to the full batch" taggedAs UnitTest in {
@@ -210,7 +211,6 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
       request.paths shouldBe entries.map(_.pathset)
       request.responseBytes shouldBe Initial
       m.pendingTasks shouldBe empty
-      m.pendingHashSet shouldBe empty
       m.activeRequests.keySet shouldBe Set(request.requestId)
       m.activeRequests(request.requestId).tasks shouldBe entries
       h.tracker.isPending(request.requestId) shouldBe true
@@ -269,12 +269,12 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     sent should have size 1
     val request = sent.head._1
 
+    entries.foreach(e => m.healRequests.add(HealRequest.ofNode(e.pathset, e.hash)))
     m.handleTimeout(request.requestId, entries, p)
     m.activeRequests shouldBe empty
     m.peerCooldownUntilMs.get(p.id.value).exists(_ > System.currentTimeMillis()) shouldBe true
     m.responseBytesTargetFor(p) shouldBe Initial / 2
     m.pendingTasks.toSeq shouldBe entries
-    m.pendingHashSet shouldBe entries.map(_.hash).toSet
     m.healAttempts shouldBe empty // surfacing counts only under decoupling
     h.sent() shouldBe empty // the only peer is cooling: no synchronous floor revive
     h.module.selfInbox.receiveAll() shouldBe Seq(HealingCheckCompletion)
@@ -288,10 +288,10 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     val p = peer("p1")
     val entries = h.queue(1)
     m.pendingTasks.clear()
-    m.pendingHashSet.clear()
     m.totalNodesHealed = 17
     m.lastHealedAtMs = System.currentTimeMillis() - 6 * 60 * 1000
 
+    entries.foreach(e => m.healRequests.add(HealRequest.ofNode(e.pathset, e.hash)))
     m.handleTimeout(BigInt(1), entries, p)
     m.healAttempts(entries.head.hash) shouldBe 1
     m.pivotRefreshRequested shouldBe true
@@ -304,6 +304,30 @@ class HealDispatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     m.handleTimeout(BigInt(2), entries, p)
     m.healAttempts(entries.head.hash) shouldBe 2
     h.controller.hasMessages shouldBe false
+  }
+
+  // spec 022 review beacon N6, eye F9 (3): as the response path, not unconditionally.
+  it should "put a timed-out fetch back from the next alias position, and not at all when nothing waits on it" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    val p = peer("p")
+    val hash = ByteString(Array.fill[Byte](32)(0x21))
+    val first = Seq(ByteString(Array[Byte](0, 0x11)))
+    val second = Seq(ByteString(Array[Byte](0, 0x22)))
+    m.healRequests.add(HealRequest.atPosition(first, hash))
+    m.healRequests.add(HealRequest.atPosition(second, hash))
+
+    m.handleTimeout(BigInt(1), Seq(HealingEntry(first, hash)), p)
+    withClue("the next alias position: ")(m.pendingTasks.toSeq shouldBe Seq(HealingEntry(second, hash)))
+
+    m.pendingTasks.clear()
+    m.handleTimeout(BigInt(2), Seq(HealingEntry(second, hash)), p)
+    withClue("and round again: ")(m.pendingTasks.toSeq shouldBe Seq(HealingEntry(first, hash)))
+
+    m.pendingTasks.clear()
+    val orphan = HealingEntry(first, ByteString(Array.fill[Byte](32)(0x31)))
+    m.handleTimeout(BigInt(3), Seq(orphan), p)
+    withClue("no live request waits on this one: ")(m.pendingTasks.toSeq shouldBe empty)
   }
 
   it should "revive the soonest-expiring cooling peer only on the periodic floor, never a stateless one" taggedAs UnitTest in {

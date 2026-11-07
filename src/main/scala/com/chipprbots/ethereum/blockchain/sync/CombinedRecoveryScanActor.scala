@@ -22,22 +22,35 @@ import com.chipprbots.ethereum.db.storage.StateStorage
   *
   * Replaces the two legacy single-threaded full-trie walks (`BytecodeRecoveryActor` + `StorageRecoveryActor` scan
   * phases). The scan is read-only and runs on a bounded pool, so it doesn't block the actor; the result is piped back
-  * through `pipeToSelf`. A scan failure (or an empty trie) emits empty gap sets — recovery then proceeds straight to
-  * regular sync, which fetches any residue on-demand.
+  * through `pipeToSelf`.
+  *
+  * What it reports (spec 022 T050a; the user's decision, 2026-10-31):
+  *   - A pass that completed, holes or not. An absent node below the root is counted and walked around, so the gap sets
+  *     cover what could be read and `holes` says how many subtrees could not be. An empty trie is a pass with nothing
+  *     in it.
+  *   - A scan that could not run: the root is absent, a node would not decode, or the store failed. `failed` is set,
+  *     the gap sets are empty, and the controller must not read that as "no gaps". It settles nothing.
   */
 object CombinedRecoveryScanActor:
 
   // Not marked private so the return type of `apply` doesn't leak a private type;
   // ScanDone (the only subtype) remains private so no caller can construct a Command.
   sealed trait Command
-  private case class ScanDone(result: RecoveryScanResult) extends Command
+  private case class ScanDone(result: Option[RecoveryScanResult]) extends Command
 
   /** Sent to SyncController when the combined scan finishes. The controller spawns the (download-only) recovery actors
     * for whichever phases it still needs.
+    *
+    * @param holes
+    *   see [[RecoveryScanResult.holes]]
+    * @param failed
+    *   the scan could not run, so the rest of this says nothing about the trie
     */
   final case class CombinedScanComplete(
       missingBytecodes: Seq[ByteString],
-      missingStorageTries: Seq[(ByteString, ByteString)]
+      missingStorageTries: Seq[(ByteString, ByteString)],
+      holes: Long,
+      failed: Boolean
   )
 
   def apply(
@@ -67,19 +80,28 @@ object CombinedRecoveryScanActor:
             shardDepth = snapSyncConfig.recoveryScanShardDepth
           )
           scanner.run()
-        }(ctx.executionContext)
+        }(using ctx.executionContext)
       ) {
-        case Success(result) => ScanDone(result)
+        case Success(result) => ScanDone(Some(result))
         case Failure(ex) =>
-          asyncLog.error("Combined recovery scan failed — reporting no gaps; regular sync will fetch on-demand", ex)
-          ScanDone(RecoveryScanResult(Vector.empty, Vector.empty))
+          asyncLog.error("Combined recovery scan could not run: nothing was scanned, and nothing is settled by it", ex)
+          ScanDone(None)
       }
-      Behaviors.receiveMessage { case ScanDone(result) =>
-        ctx.log.info(
-          s"Combined recovery scan complete: ${result.missingBytecodes.size} missing bytecodes, " +
-            s"${result.missingStorageTries.size} missing storage tries"
-        )
-        syncController ! CombinedScanComplete(result.missingBytecodes, result.missingStorageTries)
-        Behaviors.stopped
+      Behaviors.receiveMessage {
+        case ScanDone(Some(result)) =>
+          ctx.log.info(
+            s"Combined recovery scan complete: ${result.missingBytecodes.size} missing bytecodes, " +
+              s"${result.missingStorageTries.size} missing storage tries, ${result.holes} subtrees unreadable"
+          )
+          syncController ! CombinedScanComplete(
+            result.missingBytecodes,
+            result.missingStorageTries,
+            result.holes,
+            failed = false
+          )
+          Behaviors.stopped
+        case ScanDone(None) =>
+          syncController ! CombinedScanComplete(Nil, Nil, holes = 0L, failed = true)
+          Behaviors.stopped
       }
     }

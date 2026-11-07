@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockAccessList.AccountChanges
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.ledger.EestBlockchainReplay
@@ -69,7 +70,7 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
   private val UnsupportedFork = -38005
 
   /** Records the payload that reaches the service; answers SYNCING. */
-  private class RecordingService extends EngineApiService(null, null, null, null, None)(null, null):
+  private class RecordingService extends EngineApiService(null, null, null, null, None)(using null, null):
     val received = new AtomicReference[Option[ExecutionPayload]](None)
     override def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] =
       IO(received.set(Some(payload))).as(PayloadStatusV1(PayloadStatus.Syncing))
@@ -309,7 +310,7 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
       null, // never reached: an unknown parent is not executed
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       None
-    )(config, null)
+    )(using config, null)
     def newPayloadV5(ps: List[JValue]): JsonRpcResponse =
       new EngineApiController(service, None, config)
         .handleRequest(JsonRpcRequest("2.0", "engine_newPayloadV5", Some(JArray(ps)), Some(JInt(1))))
@@ -330,12 +331,12 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Fixture:
-      val response = newPayloadV5(goldenParams)
+      val response: JsonRpcResponse = newPayloadV5(goldenParams)
 
       response.error shouldBe None
       // ACCEPTED, not INVALID "block hash mismatch": the parent is unknown, so the hash check is all that ran.
       status(response) shouldBe Some("ACCEPTED")
-      val header = blockchainReader
+      val header: BlockHeader = blockchainReader
         .getBlockHeaderByHash(BlockHash(goldenBlockHash))
         .getOrElse(fail("the block was not stored under the payload's blockHash"))
       header.blockAccessListHash shouldBe Some(ByteString(kec256(goldenBal.toArray)))
@@ -346,7 +347,7 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new Fixture:
       // EEST bal_invalid_hash_mismatch: a well-formed list that is not the one the block hash commits to.
-      val response = newPayloadV5(withBal(goldenParams, BlockAccessList.Empty.toBytes))
+      val response: JsonRpcResponse = newPayloadV5(withBal(goldenParams, BlockAccessList.Empty.toBytes))
 
       status(response) shouldBe Some("INVALID")
       response.result.map(_ \ "latestValidHash") shouldBe Some(JNull)
@@ -357,11 +358,11 @@ class EngineApiNewPayloadV5Spec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Fixture:
-      val low = Address(ByteString(Array.fill(20)(0x01.toByte)))
-      val high = Address(ByteString(Array.fill(20)(0x02.toByte)))
-      def account(a: Address) = AccountChanges(a, Nil, Nil, Nil, Nil, Nil)
+      val low: Address = Address(ByteString(Array.fill(20)(0x01.toByte)))
+      val high: Address = Address(ByteString(Array.fill(20)(0x02.toByte)))
+      def account(a: Address): AccountChanges = AccountChanges(a, Nil, Nil, Nil, Nil, Nil)
       // A balance change whose value carries a leading zero byte: RLP-valid, not the canonical integer.
-      val nonMinimalBalance = ByteString(
+      val nonMinimalBalance: ByteString = ByteString(
         rlp.encode(
           RLPList(
             RLPList(

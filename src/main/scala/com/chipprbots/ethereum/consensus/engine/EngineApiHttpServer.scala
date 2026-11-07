@@ -202,7 +202,7 @@ class EngineApiHttpServer(
       // Shut down the dedicated IORuntime pools after the ActorSystem is gone so any
       // in-flight handler IOs have already drained.
       ioRuntime.shutdown()
-    }(scala.concurrent.ExecutionContext.parasitic)
+    }(using scala.concurrent.ExecutionContext.parasitic)
 
   /** Synchronous shutdown convenience for shutdown hooks that don't have an ec available. */
   def stopSync(timeout: FiniteDuration = 10.seconds): Unit =

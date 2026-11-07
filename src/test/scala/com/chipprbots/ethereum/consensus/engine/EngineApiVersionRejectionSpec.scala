@@ -9,19 +9,18 @@ import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai
-import com.chipprbots.ethereum.domain.BloomFilter
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -53,10 +52,10 @@ class EngineApiVersionRejectionSpec extends AnyWordSpec with Matchers:
   private val nonZeroHash32 = "0x" + "ab" * 32
 
   private def stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null) {}
+    new EngineApiService(null, null, null, null, None)(using null, null) {}
 
   private def stubServiceWithBlock(block: Block): EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def getPayload(payloadId: ByteString): IO[Either[String, Block]] =
         IO.pure(Right(block))
 

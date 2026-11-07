@@ -83,7 +83,7 @@ private[actors] trait StorageDoneMarkers extends StorageCompletedTaskApi:
       slots: Seq[(ByteString, ByteString)]
   ): Unit =
     if slots.nonEmpty then
-      val sorted = slots.sortBy(_._1)(ByteStringOrdering)
+      val sorted = slots.sortBy(_._1)(using ByteStringOrdering)
       pendingFlatBatchAccounts += ((accountHash, sorted))
       pendingFlatBatchEntries += sorted.size
       if pendingFlatBatchEntries >= flatBatchEntryThreshold then flushPendingFlatBatch()
@@ -124,12 +124,12 @@ private[actors] trait StorageDoneMarkers extends StorageCompletedTaskApi:
           combined.commit()
           System.currentTimeMillis() - startMs
         }
-      }(ec).onComplete {
+      }(using ec).onComplete {
         case scala.util.Success(elapsedMs) =>
           selfRef ! FlatBatchFlushComplete(forStateRoot, entries, elapsedMs, batchSeq)
         case scala.util.Failure(e) =>
           selfRef ! FlatBatchFlushFailed(forStateRoot, entries, e.getMessage)
-      }(ec)
+      }(using ec)
 
   /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
     * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed

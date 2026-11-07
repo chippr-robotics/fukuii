@@ -50,7 +50,7 @@ class ServerActorSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
   ) in {
     val holder = freshHolder()
     val pm = TestProbe()
-    val realTcpManager = org.apache.pekko.io.IO(Tcp)(classicSystem)
+    val realTcpManager = org.apache.pekko.io.IO(Tcp)(using classicSystem)
 
     val actor = testKit.spawn(
       // Port 0 = let the OS choose a free port. Loopback so this never opens an external listener.

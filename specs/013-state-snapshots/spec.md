@@ -1,6 +1,6 @@
 # Spec 013: State Snapshots for Fast ETH-Family Sync
 
-**Status**: Draft
+**Status**: Draft (2026-10-30).
 **Date**: 2026-10-07
 **Scope**: ETH-family chains (Sepolia now, Ethereum mainnet next). ETC/Mordor behaviour is unchanged.
 **Owners**: `vault` (storage), `beacon` (ETH trust model), `forge` (ETC-untouched sign-off), `herald` (distribution)
@@ -292,3 +292,20 @@ Measured on the reference 4-core / 16 GB / SATA SSD host with a CL attached.
 - **[NEEDS CLARIFICATION] Q3 Optional trie-node profile**: ship Path-native node sections in v2.0 to avoid the
   rebuild, accepting a larger file and tighter coupling to the Path layout, or defer until Phase 0 measures the
   rebuild cost?
+
+## 11. Fleet alignment (2026-10-30) — pending acceptance
+
+*Added by the alignment review in `specs/023-fleet-topology/alignment-review.md` §3. Nothing here changes a section
+above until the user accepts it; when accepted, edit the section named and mark the row.*
+
+| # | Section | Request | Needed by |
+| --- | --- | --- | --- |
+| 1 | §5.5 export on a running node | In a fleet the exporter runs on a `replica` or `archive` (any role with a verified root at block N); `ingest` exports only in the single-node operator profile, where the rate-limiter design above applies. | 023 DC-8 (keep `ingest` unloaded) |
+| 2 | §Scope, §5.4, §5.11 | Extend v2 to the **ETC family**: same flat format, anchor = the fleet's own `ingest` head (ETC has no CL; finality is genesis-only per 025 DC-5), content check = §5.4's root recomputation unchanged. v2 becomes the one seed format for both families; checkpoint archive v1 (hash-keyed, host-trusted) is retired with the Hash scheme under 018 DC-9. | 026 FR-001, OQ-3; 018 row 9 |
+| 3 | §5.9 catch-up | Add the third strategy: apply 025 change records from N+1 to head (the follower default 026 GT-1 measures). Re-execution and healing remain for the single-node profile. | 026 GT-1 |
+| 4 | §5.7 incremental snapshots | Lowest priority once followers apply records; keep as Phase 4 only. | §8 |
+| 5 | Q2 mainnet budget | Split: fleet-internal seeds live in the operator's object store (no public egress); the public publisher flow is a separate product decision. | §10 |
+| 6 | §5.5 export source, §5.2 Phase 0, AC5 | **No populated flat source exists today** (verified on staging 9e003ab): `FlatAccountStorage` is never written; `FlatSlotStorage` is written only by the SNAP download and is frozen at the pivot (018 research.md:69); ETC has no flat state (018 research.md:72). Until 018 Track F makes flat state authoritative, the exporter MUST **walk the trie at a frozen root** (the RocksDB checkpoint still provides the frozen view) and emit leaves in key order into the v2 format. The "no visited-set" argument and AC5's budget assume a scan and must be re-derived for a walk; Phase 0 measures the walk (one figure in hand: Mordor, 4,780,490 nodes in 36.6 s, idle SSD, from the 022 session). | 026 FR-001 (the first seed of any follower is a walk) |
+| 7 | §2 item 2 | "Path-scheme reads rely on flat state" is out of date: flat stores are never read by execution (018 spec.md:48). Reword. | — |
+| 8 | §5.10 crash safety | Reuse spec 022 slice 4's markers instead of a separate "unfinished snapshot" record: `checkpoint.import.inProgress` while writing, `snap.heal.invariant = 2` stamped only after the §5.4 root check (022 `data-model.md`). | 022 slice 4 |
+| 9 | §5.9(b), §8 Phase 0 | §5.9(b) cites specs 001–006 for healing; spec 022 replaces that mechanism. Sepolia Phase 0 MUST use the fresh-sync datadir from 022's Sepolia release gate, not the kept datadir (known holes). | 022 gates |

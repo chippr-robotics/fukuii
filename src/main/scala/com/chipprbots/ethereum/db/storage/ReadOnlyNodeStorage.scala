@@ -42,6 +42,17 @@ class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesK
       else missKeys.zip(wrapped.multiGet(missKeys)).toMap
     keys.map(k => buffer.getOrElse(k, missResults.getOrElse(k, None)))
 
+  /** [[multiGet]]'s buffer-shadows-wrapped semantics over the wrapped store's raw read. */
+  override def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    val missKeys = keys.filterNot(buffer.contains)
+    val missResults: Map[NodeHash, RawNodeRead] =
+      if missKeys.isEmpty then Map.empty else missKeys.zip(wrapped.multiGetRaw(missKeys)).toMap
+    keys.map { k =>
+      buffer.get(k) match
+        case Some(buffered) => buffered.fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_))
+        case None           => missResults.getOrElse(k, RawNodeRead.Absent)
+    }
+
   /** This function updates the KeyValueStore by deleting, updating and inserting new (key-value) pairs.
     *
     * @param toRemove
@@ -53,7 +64,11 @@ class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesK
     *   the new DataSource after the removals and insertions were done.
     */
   override def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesKeyValueStorage =
-    toRemove.foreach(elementToRemove => buffer -= elementToRemove)
+    // Removals are ignored on purpose (#1607). Trie nodes are content-addressed: a node an update replaces can still be
+    // referenced by an earlier root this session persisted, or be re-created later, and dropping it from the buffer
+    // makes that root unreadable ("State node doesn't exist"). The removal never reached the DB anyway (`persist` only
+    // forwards upserts, since nothing writes `None` into the buffer), so ignoring it is exact; memory stays bounded by
+    // the request's lifetime.
     toUpsert.foreach { case (toUpsertKey, toUpsertValue) => buffer += (toUpsertKey -> Some(toUpsertValue)) }
     this
 

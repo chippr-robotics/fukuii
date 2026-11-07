@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
+import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionSignatureError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValidator
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -12,9 +13,8 @@ import com.chipprbots.ethereum.domain.UInt256.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.StateBeforeFailure
 import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.DebugTrace
-import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.ImportProfile
 import com.chipprbots.ethereum.vm.{PC as _, *}
@@ -279,6 +279,8 @@ class BlockPreparator(
     if overrides.precompileRelocations.nonEmpty then
       ctx = ctx.copy(precompileRelocations = overrides.precompileRelocations)
     if overrides.traceTransfers then ctx = ctx.copy(traceTransfers = true)
+    // BLOBBASEFEE reads the override too, not only the sender's blob-gas charge (updateSenderAccountBeforeExecution)
+    if overrides.blobBaseFeeOverride.isDefined then ctx = ctx.copy(blobBaseFeeOverride = overrides.blobBaseFeeOverride)
     if tracer.isDefined then ctx = ctx.copy(tracer = tracer)
     // EIP-7928: the transaction's block-access recorder, while an Amsterdam block executes.
     if accessRecorder.isDefined then ctx = ctx.copy(accessRecorder = accessRecorder)
@@ -881,7 +883,9 @@ class BlockPreparator(
     * @param acumGas,
     *   accumulated gas of the previoulsy executed transactions of the same block
     * @param acumReceipts,
-    *   accumulated receipts of the previoulsy executed transactions of the same block
+    *   accumulated receipts of the previoulsy executed transactions of the same block, in execution order. A `Vector`:
+    *   each step appends one receipt and (on an Amsterdam block) reads the count, both O(1) here, where the `List` this
+    *   used to be made each append copy every earlier receipt, O(txs²) per block (#1675).
     * @return
     *   a BlockResult if the execution of all the transactions in the block was successful or a BlockExecutionError if
     *   one of them failed
@@ -892,7 +896,7 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       blockHeader: BlockHeader,
       acumGas: BigInt = 0,
-      acumReceipts: Seq[Receipt] = Nil,
+      acumReceipts: Vector[Receipt] = Vector.empty,
       acumExecutionGas: BigInt = 0,
       acumStateGas: BigInt = 0,
       // EIP-7928: the block's access-list builder, on an Amsterdam block only. Each executed transaction is folded in
@@ -1011,7 +1015,7 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy,
       blockHeader: BlockHeader,
       acumGas: BigInt = 0,
-      acumReceipts: Seq[Receipt] = Nil,
+      acumReceipts: Vector[Receipt] = Vector.empty,
       executed: Seq[SignedTransaction] = Nil,
       acumExecutionGas: BigInt = 0,
       acumStateGas: BigInt = 0
@@ -1029,7 +1033,7 @@ class BlockPreparator(
           worldState,
           blockHeader,
           gas,
-          receipts,
+          receipts.toVector,
           executed ++ signedTransactions.take(txIndex),
           execGas,
           stateGas

@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 
 import scala.annotation.switch
 import scala.annotation.tailrec
-import scala.collection.immutable.Queue
+import scala.collection.mutable
 
 /** Recursive Length Prefix (RLP) encoding. <p> The purpose of RLP is to encode arbitrarily nested arrays of binary
   * data, and RLP is the main encoding method used to serialize objects in Ethereum. The only purpose of RLP is to
@@ -252,19 +252,28 @@ private[rlp] object RLP:
           RLPValue(if isEmpty then Array.empty[Byte] else data.slice(start, end + 1)) -> (end + 1)
         case ItemBounds(start, end, true, _) =>
           if depth >= MaxNestingDepth then throw RLPException(s"RLP nesting depth exceeds maximum of $MaxNestingDepth")
-          RLPList(decodeListRecursive(data, start, end - start + 1, Queue(), depth + 1)*) -> (end + 1)
+          val items = decodeListRecursive(data, start, end - start + 1, Vector.newBuilder[RLPEncodeable], depth + 1)
+          RLPList(items*) -> (end + 1)
 
+  /** Decodes the items of a list, in order, into a `Vector` (#1675). Callers index decoded lists (`items(i)` in the
+    * header, trie-node and transaction decoders) and walk them head/tail (`+:` extractors); a `Vector` makes both
+    * effectively constant-time, where the immutable `Queue` this used to build made each `items(i)` O(i). Not an
+    * `ArraySeq`: its `tail` copies, so the head/tail walks would become quadratic instead. Only the collection type
+    * changed: items are decoded and appended in the same order, and the loop ends under the same condition, so the set
+    * of accepted inputs and the decoded values are exactly as before.
+    */
   @tailrec
   private def decodeListRecursive(
       data: Array[Byte],
       pos: Int,
       length: Int,
-      acum: Queue[RLPEncodeable],
+      acum: mutable.Builder[RLPEncodeable, Vector[RLPEncodeable]],
       depth: Int
-  ): Queue[RLPEncodeable] =
-    if length == 0 then acum
+  ): Vector[RLPEncodeable] =
+    if length == 0 then acum.result()
     else
       val (decoded, decodedEnd) = decodeWithPos(data, pos, depth)
-      decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum :+ decoded, depth)
+      acum += decoded
+      decodeListRecursive(data, decodedEnd, length - (decodedEnd - pos), acum, depth)
 
 private case class ItemBounds(start: Int, end: Int, isList: Boolean, isEmpty: Boolean = false)

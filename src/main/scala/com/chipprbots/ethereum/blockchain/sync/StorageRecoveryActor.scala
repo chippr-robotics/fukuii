@@ -20,16 +20,18 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
-import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MptVisitors.*
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 
 /** Storage recovery actor for Bug 20 hardening.
   *
@@ -128,6 +130,18 @@ object StorageRecoveryActor:
     coordinatorForTesting = None
   )
 
+  /** What the recovery coordinator takes from the node's SNAP configuration, as the SNAP path's `DownloadSupervisor`
+    * passes it (#1595). Left at the coordinator's defaults, a Path-scheme node (ETH) ran the Hash branch and wrote no
+    * storage cursors. The Path node store itself reaches the coordinator through `stateIngest.pathNodes`.
+    */
+  final private[sync] case class CoordinatorWiring(
+      storageScheme: StorageScheme,
+      snapProgressStorage: Option[SnapSyncProgressStorage]
+  )
+
+  private[sync] def coordinatorWiring(snapSyncConfig: SNAPSyncConfig, stateIngest: StateIngest): CoordinatorWiring =
+    CoordinatorWiring(snapSyncConfig.storageScheme, Some(stateIngest.snapProgress))
+
   /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
   private[sync] def testApply(
       stateRoot: ByteString,
@@ -170,7 +184,7 @@ object StorageRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(
+            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(using
               ctx.executionContext
             )
           ) {
@@ -204,8 +218,9 @@ object StorageRecoveryActor:
               coordinatorForTesting match
                 case Some(testRef) => testRef.toTyped[actors.StorageRangeCoordinator.Command]
                 case None =>
-                  val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
+                  val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
                   val mptStorage = stateIngest.stateTries.getBackingStorage(pivotBlockNumber)
+                  val wiring = coordinatorWiring(snapSyncConfig, stateIngest)
                   ctx.spawn(
                     Behaviors
                       .supervise(
@@ -220,6 +235,8 @@ object StorageRecoveryActor:
                           snapSyncController = srcAdapter,
                           initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                           minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                          snapProgressStorage = wiring.snapProgressStorage,
+                          storageScheme = wiring.storageScheme,
                           stateIngest = stateIngest
                         )
                       )

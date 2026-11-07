@@ -138,10 +138,11 @@ private[snap] class StubStagnationWatchdogState(
   def recordCriticalFailure(reason: String): Boolean =
     criticalFailures += reason
     criticalFailureLimitReached
+  var dormantBehavior: Behavior[Command] = Behaviors.same
   val dormantEntries: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   def enterDormantMode(reason: String): Behavior[Command] =
     dormantEntries += reason
-    Behaviors.same
+    dormantBehavior
   def restartSnapSync(reason: String): Behavior[Command] = notUsed("restartSnapSync")
   val refreshes: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   def refreshPivotInPlace(
@@ -168,14 +169,13 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
 
   /** The module on its stub, and the kit that runs it. */
   final private class Harness(config: SNAPSyncConfig = SNAPSyncConfig()):
-    private var action: () => Unit = () => ()
+    private var action: () => Behavior[Command] = () => Behaviors.same
     private var captured: StubStagnationWatchdogState & StagnationWatchdog = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
         captured = new StubStagnationWatchdogState(ctx, timers, config) with StagnationWatchdog
         Behaviors.receiveMessage { _ =>
           action()
-          Behaviors.same
         }
       }
     })
@@ -189,6 +189,13 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
 
     /** Run `f` on the module while the kit processes a message. */
     def call(f: StubStagnationWatchdogState & StagnationWatchdog => Unit): Unit =
+      action = () =>
+        f(module)
+        Behaviors.same
+      kit.run(PollHandshakedPeers)
+
+    /** Run `f` on the module while the kit processes a message, and make the behaviour it returns the kit's. */
+    def become(f: StubStagnationWatchdogState & StagnationWatchdog => Behavior[Command]): Unit =
       action = () => f(module)
       kit.run(PollHandshakedPeers)
 
@@ -315,6 +322,23 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.module.lastAccountProgressMs should be > 0L
   }
 
+  it should "continue in the dormant behaviour when the account stall budget trips the critical-failure limit (#1515)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.peers = Map(snapPeer("snap-1"))
+    h.module.criticalFailureLimitReached = true
+    // The behaviour enterDormantMode returns must become the actor's: the kit stops when it is returned.
+    h.module.dormantBehavior = Behaviors.stopped
+    val stalled = AccountCoordinatorProgress(accountStats(downloaded = 0L, completed = 0, pending = 3))
+    h.module.consecutiveAccountStallRefreshes = 10
+    h.module.lastAccountProgressMs = 0L
+    h.module.lastPivotRestartMs = 0L
+
+    h.become(_.accountRangeArms(stalled))
+
+    h.module.dormantEntries should have size 1
+    h.kit.isAlive shouldBe false
+  }
+
   it should "refresh the pivot once on a storage stall, then force-complete storage" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
@@ -361,6 +385,22 @@ class StagnationWatchdogSpec extends ScalaTestWithActorTestKit(ManualTime.config
     h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage)
     h.module.refreshes shouldBe empty
     h.module.storageStagnationRefreshAttempted shouldBe false
+  }
+
+  // spec 022 review hunter W4: the coordinator's retry timer does not survive a supervisor restart; this does.
+  it should "say force-complete again each minute while the phase has not ended" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.storagePhaseComplete = false
+    val noWork = StorageCoordinatorProgress(storageStats(completed = 5, active = 0, pending = 0))
+
+    h.call(_.byteCodeAndStorageArms(noWork))
+    h.call(_.byteCodeAndStorageArms(noWork))
+    withClue("not on every check: ")(h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage))
+
+    h.module.forceCompleteSentAtMs = 0L // a minute and more ago
+    h.call(_.byteCodeAndStorageArms(noWork))
+    h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.ForceCompleteStorage)
   }
 
   it should "track bytecode progress, then force-complete bytecodes on a stall" taggedAs UnitTest in {

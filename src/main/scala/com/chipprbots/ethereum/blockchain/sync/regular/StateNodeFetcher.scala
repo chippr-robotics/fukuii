@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.*
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchResponse
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
@@ -41,7 +42,8 @@ class StateNodeFetcher(
     val peersClient: ActorRef[PeersClient.Command],
     val syncConfig: SyncConfig,
     val supervisor: ActorRef[FetchCommand],
-    context: ActorContext[StateNodeFetcher.StateNodeFetcherCommand]
+    context: ActorContext[StateNodeFetcher.StateNodeFetcherCommand],
+    source: String = StateNodeFetcher.ImportSource
 ) extends AbstractBehavior[StateNodeFetcher.StateNodeFetcherCommand](context)
     with FetchRequest[StateNodeFetcher.StateNodeFetcherCommand]:
 
@@ -80,6 +82,17 @@ class StateNodeFetcher(
             if staleRequestIds.size > 1024 then staleRequestIds = Set.empty
             staleRequestIds ++= liveRequestIds
             liveRequestIds = Set.empty
+            // spec 022 FR-014: counted here, once a fetch: not at the importer's send sites, nor in the de-dup above, which
+            // a 30 s retry refires. So a hash fetched again after an exhaust is a new fetch, and counts again.
+            val cause = if isByteCode then "code" else "node"
+            SNAPSyncMetrics.incrementStateOnDemandFetch(cause, source)
+            log.info(
+              "[STATE-ONDEMAND] source={} cause={} hash={} position={}",
+              source,
+              cause,
+              ByteStringUtils.hash2string(hash),
+              describePosition(paths)
+            )
             log.debug(
               "Start fetching {} {} (snap paths available: {}, fallback root available: {})",
               if isByteCode then "bytecode" else "state node",
@@ -261,6 +274,18 @@ class StateNodeFetcher(
                     updated.triedPeers
                   )
                   Behaviors.same[StateNodeFetcherCommand]
+                case None if stateNodeRequester.onFallbackRoot =>
+                  // At the fallback root the path is the parent root's, and the subtree under it may have changed since
+                  // (a hot account changes every block): an honest peer serves what is there now, which is not the
+                  // wanted node. So no blacklist (spec 022 T062, where 776 honest peers were); the fetch rotates and
+                  // spends its retry budget as for an empty reply.
+                  log.warn(
+                    "SNAP TrieNodes: got {} nodes at the fallback root but none matched target hash, rotating peer " +
+                      "(no blacklist: the subtree may have moved since the parent root)",
+                    nodes.size
+                  )
+                  rotateToNextPeer(stateNodeRequester, peer.id)
+                  Behaviors.same[StateNodeFetcherCommand]
                 case None =>
                   log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, rotating peer", nodes.size)
                   peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
@@ -280,7 +305,7 @@ class StateNodeFetcher(
       .map { fallback =>
         // New root ⇒ a different set of peers may be able to serve it, so reset the rotation
         // exclusion and re-evaluate the whole snap pool against the fallback root.
-        req.copy(stateRoot = Some(fallback), fallbackStateRoot = None, triedPeers = Set.empty)
+        req.copy(stateRoot = Some(fallback), fallbackStateRoot = None, triedPeers = Set.empty, onFallbackRoot = true)
       }
 
   /** True when the wanted node is the ACCOUNT-trie root: its hash is the request's own stateRoot, or every requested
@@ -380,7 +405,9 @@ class StateNodeFetcher(
     )
     liveRequestIds += request.requestId
     val resp = makeRequest(
-      Request.create(request, BestSnapPeerExcluding(excludePeers))((msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
+      Request.create(request, BestSnapPeerExcluding(excludePeers))(
+        using (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)
+      ),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {
@@ -406,7 +433,9 @@ class StateNodeFetcher(
     )
     liveRequestIds += request.requestId
     val resp = makeRequest(
-      Request.create(request, BestSnapPeerExcluding(excludePeers))((msg: GetByteCodes) => new GetByteCodesEnc(msg)),
+      Request.create(request, BestSnapPeerExcluding(excludePeers))(
+        using (msg: GetByteCodes) => new GetByteCodesEnc(msg)
+      ),
       StateNodeFetcher.RetryStateNodeRequest
     )
     context.pipeToSelf(resp.unsafeToFuture()) {
@@ -419,16 +448,29 @@ object StateNodeFetcher:
   def apply(
       peersClient: ActorRef[PeersClient.Command],
       syncConfig: SyncConfig,
-      supervisor: ActorRef[FetchCommand]
+      supervisor: ActorRef[FetchCommand],
+      source: String = ImportSource
   ): Behavior[StateNodeFetcherCommand] =
-    Behaviors.setup(context => new StateNodeFetcher(peersClient, syncConfig, supervisor, context))
+    Behaviors.setup(context => new StateNodeFetcher(peersClient, syncConfig, supervisor, context, source))
+
+  /** Who a fetcher fetches for, as `state_ondemand_fetch_total`'s `source`: import's, or the background audit's own. */
+  val ImportSource: String = "import"
+  val AuditSource: String = "audit"
+
+  /** The position a fetch names, account hash then trie path, as hex: at most a few, since a fetch can name many. */
+  private def describePosition(paths: Option[Seq[Seq[ByteString]]]): String =
+    paths.fold("unknown") { groups =>
+      val shown = groups.take(2).map(_.map(ByteStringUtils.hash2string).mkString("/")).mkString(",")
+      if groups.size > 2 then s"$shown and ${groups.size - 2} more" else shown
+    }
 
   // Bounded retry budget: 30 FULL ROTATIONS × 5s backoff ≈ 150s per missing node before signaling exhaustion
   // to BlockImporter. A bad reply from one snap peer rotates to the next untried peer immediately (no backoff,
   // BestSnapPeerExcluding over StateNodeRequester.triedPeers); only when every snap peer has been tried does
   // PeersClient answer NoSuitablePeer, which backs off, resets the rotation set and consumes one attempt. (History:
   // 10 / ≈50s exhausted before a serving peer was sampled and stalled regular sync ~14 min on ETC mainnet, 2026-06-02.)
-  // Kept well under BlockImporter's ~15 min StuckEscapeThreshold so a slow fetch can't trip an unwanted SNAP re-sync.
+  // Each exhaust counts once towards BlockImporter's StuckEscapeThreshold; the importer's retries of the same fetch keep
+  // this count (see the de-dup in FetchStateNode), so they cannot hold an exhaust off.
   val MaxStateNodeFetchRetries: Int = 30
   val BackoffInterval: FiniteDuration = 5.seconds
 
@@ -461,5 +503,7 @@ object StateNodeFetcher:
       // Snap peers already tried for the CURRENT root that returned empty/wrong responses.
       // Excluded from the next GetTrieNodes/GetByteCodes peer selection so each retry samples a
       // different server. Reset when we switch roots or cycle through the whole pool.
-      triedPeers: Set[PeerId] = Set.empty
+      triedPeers: Set[PeerId] = Set.empty,
+      // Asking at the fallback root, where a node that does not match is no proof a peer is lying (spec 022 T062).
+      onFallbackRoot: Boolean = false
   )

@@ -48,32 +48,32 @@ class SNAPFakePeer(
     p.setAutoPilot(
       new AutoPilot:
         def run(sender: ActorRef, msg: Any): AutoPilot =
-          if dropped.get() then return this
-          msg match
-            case NetworkPeerManagerActor.SendMessageCmd(rawMsg, _) =>
-              rawMsg.underlyingMsg match
-                case req: GetAccountRange =>
-                  accountRangeHandler(req).foreach { resp =>
-                    sender ! AccountRangeCoordinator.AccountRangeResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetStorageRanges =>
-                  storageRangesHandler(req).foreach { resp =>
-                    sender ! StorageRangeCoordinator.StorageRangesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetByteCodes =>
-                  byteCodesHandler(req).foreach { resp =>
-                    sender ! ByteCodeCoordinator.ByteCodesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case req: GetTrieNodes =>
-                  trieNodesHandler(req).foreach { resp =>
-                    sender ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(resp)
-                    served.incrementAndGet()
-                  }
-                case _ => // ignore unknown messages
-            case _ => // ignore non-SendMessage messages
+          if !dropped.get() then
+            msg match
+              case NetworkPeerManagerActor.SendMessageCmd(rawMsg, _) =>
+                rawMsg.underlyingMsg match
+                  case req: GetAccountRange =>
+                    accountRangeHandler(req).foreach { resp =>
+                      sender ! AccountRangeCoordinator.AccountRangeResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetStorageRanges =>
+                    storageRangesHandler(req).foreach { resp =>
+                      sender ! StorageRangeCoordinator.StorageRangesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetByteCodes =>
+                    byteCodesHandler(req).foreach { resp =>
+                      sender ! ByteCodeCoordinator.ByteCodesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case req: GetTrieNodes =>
+                    trieNodesHandler(req).foreach { resp =>
+                      sender ! TrieNodeHealingCoordinator.TrieNodesResponseMsg(resp)
+                      served.incrementAndGet()
+                    }
+                  case _ => // ignore unknown messages
+              case _ => // ignore non-SendMessage messages
           this
     )
     p
@@ -101,7 +101,7 @@ object SNAPFakePeer:
       storageRangesHandler = req => Some(StorageRanges(req.requestId, Seq.empty, Seq.empty)),
       byteCodesHandler = req => Some(ByteCodes(req.requestId, Seq.empty)),
       trieNodesHandler = req => Some(TrieNodes(req.requestId, Seq.empty))
-    )(system)
+    )(using system)
 
   /** Create a non-responsive peer — never sends any response. Used to test timeout paths. */
   def nonResponsive(system: ActorSystem, id: String): SNAPFakePeer =
@@ -111,7 +111,7 @@ object SNAPFakePeer:
       storageRangesHandler = _ => None,
       byteCodesHandler = _ => None,
       trieNodesHandler = _ => None
-    )(system)
+    )(using system)
 
   /** Create a peer that returns AccountRange with no proof and no accounts. Simulates a peer that cannot serve the
     * current root (triggers stateless marking).
@@ -123,7 +123,7 @@ object SNAPFakePeer:
       storageRangesHandler = req => Some(StorageRanges(req.requestId, Seq.empty, Seq.empty)),
       byteCodesHandler = req => Some(ByteCodes(req.requestId, Seq.empty)),
       trieNodesHandler = req => Some(TrieNodes(req.requestId, Seq.empty))
-    )(system)
+    )(using system)
 
   /** Create a peer with fully custom per-type handlers. */
   def custom(
@@ -140,8 +140,8 @@ object SNAPFakePeer:
       storageRangesHandler = storageRangesHandler,
       byteCodesHandler = byteCodesHandler,
       trieNodesHandler = trieNodesHandler
-    )(system)
+    )(using system)
 
   private def makePeer(id: String, system: ActorSystem): Peer =
-    val probe = TestProbe(s"$id-peer-ref")(system)
+    val probe = TestProbe(s"$id-peer-ref")(using system)
     PeerTestHelpers.createTestPeer(id, probe.ref)

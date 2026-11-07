@@ -6,17 +6,17 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.BlockBody.BlockBodyRLPEncodableDec
+import com.chipprbots.ethereum.domain.BlockBody.toBlockBody
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkId.*
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.*
-import com.chipprbots.ethereum.rlp.RLPCodec.Ops
+import com.chipprbots.ethereum.rlp.RLPCodec.xmap
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.*
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.ByteUtils
 
 /** ETH/68+ wire protocol packet definitions — the single canonical source.
@@ -102,8 +102,7 @@ object ETHPackets:
   object TypedTransaction:
     extension (encodables: Seq[RLPEncodeable])
       def toTypedRLPEncodables: Seq[RLPEncodeable] =
-        import Transaction.ByteArrayTransactionTypeValidator
-        import Transaction.TransactionTypeValidator
+        import Transaction.isValidTransactionType
         val result = new scala.collection.mutable.ArrayBuffer[RLPEncodeable](encodables.size)
         var i = 0
         val items = encodables.toIndexedSeq

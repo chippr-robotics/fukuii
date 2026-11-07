@@ -9,9 +9,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-import scala.util.control.NonFatal
-
 import org.apache.pekko.util.ByteString
+
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
@@ -190,7 +190,7 @@ object BalPrefetcher extends Logger:
       val valid =
         committedHash.contains(bal.hash) && bal.validateFor(transactionCount, gasLimit).isRight
       if valid then
-        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(
+        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(using
           Address.hashedAddressEncoder,
           Account.accountSerializer
         )

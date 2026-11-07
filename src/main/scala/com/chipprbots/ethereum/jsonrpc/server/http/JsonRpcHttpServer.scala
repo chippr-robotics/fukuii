@@ -7,8 +7,6 @@ import org.apache.pekko.http.cors.javadsl.CorsRejection
 import org.apache.pekko.http.cors.scaladsl.CorsDirectives.*
 import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
-import scala.concurrent.Future
-
 import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.server.*
@@ -18,6 +16,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.syntax.all.*
 
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 
 import com.typesafe.config.Config as TypesafeConfig
@@ -193,7 +192,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.unsafeToFuture()(runtime))
+    complete(httpResponseF.unsafeToFuture()(using runtime))
 
   private def handleHealthcheck(): StandardRoute =
     val responseF = jsonRpcHealthChecker.healthCheck
@@ -210,7 +209,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.unsafeToFuture()(runtime))
+    complete(httpResponseF.unsafeToFuture()(using runtime))
 
   private def handleGraphQL(svc: GraphQLService, body: String): StandardRoute =
     GraphQLService.parseJsonBody(body) match
@@ -233,7 +232,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
         complete(fut)
 
   private def handleBuildInfo(): StandardRoute =
-    val buildInfo = Serialization.writePretty(BuildInfo.toMap)(DefaultFormats)
+    val buildInfo = Serialization.writePretty(BuildInfo.toMap)(using DefaultFormats)
     complete(
       HttpResponse(
         status = StatusCodes.OK,
@@ -253,12 +252,14 @@ object JsonRpcHttpServer extends Logger:
     config.mode match
       case "http" =>
         Right(
-          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(actorSystem)
+          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using
+            actorSystem
+          )
         )
       case "https" =>
         Right(
           new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext, graphQLService)(
-            actorSystem
+            using actorSystem
           )
         )
       case _ => Left(s"Cannot start JSON RPC server: Invalid mode ${config.mode} selected")

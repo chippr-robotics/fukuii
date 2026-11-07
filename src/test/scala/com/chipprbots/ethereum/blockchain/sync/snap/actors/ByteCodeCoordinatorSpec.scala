@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
-import org.scalatest.concurrent.Eventually
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -18,7 +17,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -63,7 +61,8 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig =
         ByteCodeCoordinator.ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
-      backpressureLowWatermark: Int = 25000
+      backpressureLowWatermark: Int = 25000,
+      recordExcluded: Boolean = true
   ): org.apache.pekko.actor.typed.ActorRef[ByteCodeCoordinator.Command] =
     testKit.spawn(
       ByteCodeCoordinator(
@@ -74,15 +73,28 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
         snapSyncController = snapSyncController,
         cooldownConfig = cooldownConfig,
         backpressureHighWatermark = backpressureHighWatermark,
-        backpressureLowWatermark = backpressureLowWatermark
+        backpressureLowWatermark = backpressureLowWatermark,
+        recordExcluded = recordExcluded
       )
     )
+
+  // spec 022 T033: where a force-complete records what it abandons.
+  // spec 022 review vault F3: a store whose synced writes can fail.
+  final private class SyncFailingSource extends com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+    @volatile var failSync: Boolean = false
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      if failSync then throw new java.io.IOException("synthetic excluded-set write failure")
+      super.updateSync(updates)
+  private val progressSource = new SyncFailingSource
+  // The app-state store a test points at a code-hash file; none means the coordinator may not read it.
+  private var codeFilePointer: Option[AppStateStorage] = None
+  private val progressStore = new SnapSyncProgressStorage(progressSource)
 
   // ByteCodeCoordinator takes one `StateIngest` (spec 016 C-B1). It reads only `bytecode`; any other member fails
   // loudly, so a test that reaches one is a change in what the coordinator reads.
   private def bytecodeIngest(evmCodeStorage: EvmCodeStorage): StateIngest =
     new StateIngest:
-      def appState: AppStateStorage = notReached("appState")
+      def appState: AppStateStorage = codeFilePointer.getOrElse(notReached("appState"))
       def stateTries: StateStorage = notReached("stateTries")
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = notReached("pathNodes")
@@ -92,9 +104,8 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
       def validatorFactory: MptStorage => StateValidator = notReached("validatorFactory")
       def durability: StateIngest.Durability = StateIngest.Durability.Default
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
-      def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
+      def snapProgress: SnapSyncProgressStorage = progressStore
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   private def notReached(member: String): Nothing =
@@ -116,7 +127,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   "ByteCodeCoordinator" should "initialize with empty task queue" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -133,7 +144,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "queue contract accounts for download" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -159,7 +170,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "create workers when peers are available" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -185,7 +196,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "handle task completion" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -209,7 +220,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   // 1 second waiting for the next ByteCodePeerAvailable tick from SNAPSyncController.
   it should "dispatch pending task immediately on ByteCodeTaskComplete without a new ByteCodePeerAvailable" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -251,7 +262,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "report completion when all bytecodes downloaded" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -276,7 +287,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "handle task failures gracefully" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -297,7 +308,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "accept ByteCodes as a subsequence and re-queue missing hashes" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -347,7 +358,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "reject out-of-order ByteCodes responses and retry" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -401,7 +412,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "reject duplicate bytecodes in a ByteCodes response" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -451,7 +462,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "cool down peers after empty ByteCodes responses" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -496,7 +507,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "allow a cooled-down peer to dispatch immediately after ByteCodePivotRefreshed" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -541,7 +552,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "dispatch new tasks to a peer retained in knownAvailablePeers after ByteCodePivotRefreshed" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -585,7 +596,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "reject a bytecode whose kec256 hash is not in the requested list and put peer in cooldown" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -640,7 +651,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   // `pendingTasks.isEmpty && activeTasks.isEmpty` and there's no per-task failure cap).
   it should "force-complete bytecode sync, abandoning pending tasks (#1164)" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -666,6 +677,375 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     // Force-complete drains the queue and signals the parent.
     coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
     snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+
+    // spec 022 T033: every hash it abandoned is in the durable excluded set by the time it reports.
+    val recorded = progressStore.excludedPage(None, 1000).map(_.subject).toSet
+    codeHashes.foreach(h => recorded should contain(h))
+  }
+
+  // Spec 022 review items 5, 7 (vault F3, F4; hunter W4).
+  private def forceCompleteFixture(recordExcluded: Boolean) =
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = bccProps(
+      evmCodeStorage = new TestEvmCodeStorage(),
+      networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
+      batchSize = 4,
+      snapSyncController = snapSyncController.ref,
+      cooldownConfig = testCooldownConfig,
+      recordExcluded = recordExcluded
+    )
+    (coordinator, snapSyncController)
+
+  it should "report nothing and keep its queue while a force-complete's record cannot be written" taggedAs UnitTest in {
+    val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = true)
+    val hash = kec256(ByteString("force-complete-write-failure"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+    progressSource.failSync = true
+    try
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      snapSyncController.expectNoMessage(200.millis)
+      withClue("nothing went onto disk, and the actor did not die of it: ") {
+        progressStore.excludedPage(None, 1000).map(_.subject) should not contain hash
+      }
+    finally progressSource.failSync = false
+
+    coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes // what its retry timer sends
+    snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+    progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash)
+  }
+
+  // Spec 022 review hunter N5: healing asks again every minute, and the queue must not grow by a task each time.
+  it should "not queue a hash a second time when asked to skip what is queued" taggedAs UnitTest in {
+    val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+    var captured: ByteCodeCoordinatorImpl = null
+    val kit = org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors.setup[ByteCodeCoordinator.Command] { ctx =>
+        org.apache.pekko.actor.typed.scaladsl.Behaviors.withTimers { timers =>
+          captured = new ByteCodeCoordinatorImpl(
+            ctx,
+            timers,
+            bytecodeIngest(new TestEvmCodeStorage()),
+            testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            new SNAPRequestTracker()(using classicSystem.scheduler),
+            4,
+            testCooldownConfig,
+            controller.ref,
+            backpressureHighWatermark = 50000,
+            backpressureLowWatermark = 25000
+          )
+          captured.start()
+        }
+      }
+    )
+    val hash = kec256(ByteString("asked-every-minute"))
+    val other = kec256(ByteString("asked-once"))
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash), skipQueued = true))
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash, other), skipQueued = true))
+    captured.pendingTasks.flatMap(_.codeHashes).toSeq should contain theSameElementsAs Seq(hash, other)
+    kit.run(ByteCodeCoordinator.AddByteCodeTasks(Seq(hash)))
+    withClue("the account phase's stream is not filtered: ") {
+      captured.pendingTasks.flatMap(_.codeHashes).count(_ == hash) shouldBe 2
+    }
+  }
+
+  // Spec 022 review item 1 (hunter C1): a supervisor restart empties the queue, and nothing asks for these again.
+  it should "record the hashes it still owes when a supervisor restarts it" taggedAs UnitTest in {
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = testKit.spawn(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors
+        .supervise(
+          ByteCodeCoordinator(
+            stateIngest = bytecodeIngest(new TestEvmCodeStorage()),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
+            batchSize = 4,
+            snapSyncController = snapSyncController.ref,
+            recordExcluded = true
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    val hash = kec256(ByteString("restart-owed"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+    eventually(progressStore.excludedPage(None, 1000).map(_.subject) should contain(hash))
+  }
+
+  // Spec 022 round 2 review B (hunter W1): the restart's own record can fail for the same reason the actor restarted.
+  it should "read the code-hash file back before a clean end when it has been restarted, minus the code that is stored" taggedAs UnitTest in {
+    val (recorded, lost, storedHash) = cleanEndAfterRestart(pointerCount = Some(2L))
+    recorded should contain(lost)
+    recorded should not contain storedHash
+  }
+
+  // Review vault W3: a reset blanks the count and leaves the path, which is then the last cycle's file.
+  it should "not read back a code-hash file with no count: it is an earlier cycle's" taggedAs UnitTest in {
+    val (recorded, lost, _) = cleanEndAfterRestart(pointerCount = None)
+    recorded should not contain lost
+  }
+
+  /** A coordinator holding one hash is restarted with the record of that failing, and the phase then ends. Returns what
+    * the excluded set holds, the lost hash, and the hash whose code is stored.
+    */
+  private def cleanEndAfterRestart(pointerCount: Option[Long]): (Seq[ByteString], ByteString, ByteString) =
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val codes = new TestEvmCodeStorage()
+    val stored = ByteString("restart-stored-code")
+    val storedHash = kec256(stored)
+    codes.put(storedHash, stored).commit()
+    val lost = kec256(ByteString(s"restart-file-lost-$pointerCount")) // the excluded set is shared between tests
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, (storedHash ++ lost).toArray)
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(pointerCount)).commit()
+    codeFilePointer = Some(appState)
+    try
+      val coordinator = testKit.spawn(
+        org.apache.pekko.actor.typed.scaladsl.Behaviors
+          .supervise(
+            ByteCodeCoordinator(
+              stateIngest = bytecodeIngest(codes),
+              networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+              requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
+              batchSize = 4,
+              snapSyncController = snapSyncController.ref,
+              recordExcluded = true
+            )
+          )
+          .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+      )
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(lost))
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      progressSource.failSync = true
+      try
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+        alive.receiveMessage(30.seconds)
+      finally progressSource.failSync = false
+      withClue("the restart's own record failed: ") {
+        progressStore.excludedPage(None, 1000).map(_.subject) should not contain lost
+      }
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      // Standing in for the timer: with a path and no count the wait for the pointer has to run out.
+      if pointerCount.isEmpty then coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
+      snapSyncController.fishForMessage(30.seconds) {
+        case SNAPSyncController.ByteCodeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      (progressStore.excludedPage(None, 1000).map(_.subject), lost, storedHash)
+    finally codeFilePointer = None
+
+  // spec 022 T050a, the user's decision of 2026-10-31: the walk never reads code, so what a restarted bytecode coordinator
+  // cannot read back is owed to the recovery scan, and the marker goes with it. The phase still ends.
+  private def restartedCoordinatorRig(
+      appState: AppStateStorage
+  ): (
+      org.apache.pekko.actor.typed.ActorRef[ByteCodeCoordinator.Command],
+      org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
+  ) =
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    codeFilePointer = Some(appState)
+    val coordinator = testKit.spawn(
+      org.apache.pekko.actor.typed.scaladsl.Behaviors
+        .supervise(
+          ByteCodeCoordinator(
+            stateIngest = bytecodeIngest(new TestEvmCodeStorage()),
+            networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+            requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
+            batchSize = 4,
+            snapSyncController = snapSyncController.ref,
+            recordExcluded = true
+          )
+        )
+        .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+    )
+    val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+    alive.receiveMessage(30.seconds)
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+    alive.receiveMessage(30.seconds)
+    (coordinator, snapSyncController)
+
+  private def awaitByteCodeEnd(
+      snapSyncController: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[SNAPSyncController.Command]
+  ): Unit =
+    snapSyncController.fishForMessage(30.seconds) {
+      case SNAPSyncController.ByteCodeSyncComplete =>
+        org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+      case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+    }
+    ()
+
+  it should "withdraw the marker and owe the scan when the code-hash file cannot be read after a restart" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    appState
+      .putSnapSyncCodeHashesPath("/nonexistent/spec022-code-hashes.bin")
+      .and(appState.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("code-hash file could not be read")
+    finally codeFilePointer = None
+  }
+
+  it should "withdraw the marker and owe the scan with no code-hash file, once the wait for its pointer runs out" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("no code-hash file")
+    finally codeFilePointer = None
+  }
+
+  it should "withdraw the marker and owe the scan when a restarted coordinator is force-completed with no file" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+      appState.getSnapCodeScanOwed().get should include("no code-hash file")
+    finally codeFilePointer = None
+  }
+
+  it should "not end the phase while the withdrawal cannot be written, and end it once it can" taggedAs UnitTest in {
+    val writesFail = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val appState = new AppStateStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+          if writesFail.get() then throw new RuntimeException("cannot write")
+          super.updateSync(updates)
+    )
+    appState.stampSnapHealInvariant().commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      writesFail.set(true)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      coordinator ! ByteCodeCoordinator.CodeFilePointerWaitOver
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ controller.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      heard should not contain SNAPSyncController.ByteCodeSyncComplete
+      appState.hasSnapHealInvariant() shouldBe true
+
+      writesFail.set(false)
+      coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion // what the status pulse brings
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe false
+    finally codeFilePointer = None
+  }
+
+  it should "keep the marker when the code-hash file reads back" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, kec256(ByteString("reads-back")).toArray)
+    appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(Some(1L))).commit()
+    try
+      val (coordinator, controller) = restartedCoordinatorRig(appState)
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe true
+      appState.getSnapCodeScanOwed() shouldBe None
+    finally codeFilePointer = None
+  }
+
+  it should "keep the marker on a coordinator that has not restarted: its memory says all of it" taggedAs UnitTest in {
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    appState.stampSnapHealInvariant().commit()
+    codeFilePointer = Some(appState)
+    try
+      val (coordinator, controller) = forceCompleteFixture(recordExcluded = true)
+      coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+      awaitByteCodeEnd(controller)
+      appState.hasSnapHealInvariant() shouldBe true
+      appState.getSnapCodeScanOwed() shouldBe None
+    finally codeFilePointer = None
+  }
+
+  // spec 022 T050a (vault, forge N-c): the wait is by the clock, not a count of the checks that happen to come.
+  it should "not let a burst of checks use up the wait for the code-hash file's pointer" taggedAs UnitTest in {
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val codes = new TestEvmCodeStorage()
+    val lost = kec256(ByteString("restart-file-burst"))
+    val file = java.nio.file.Files.createTempFile("excluded-code-file", ".bin")
+    file.toFile.deleteOnExit()
+    java.nio.file.Files.write(file, lost.toArray)
+    val appState = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    codeFilePointer = Some(appState)
+    try
+      val coordinator = testKit.spawn(
+        org.apache.pekko.actor.typed.scaladsl.Behaviors
+          .supervise(
+            ByteCodeCoordinator(
+              stateIngest = bytecodeIngest(codes),
+              networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]().ref,
+              requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
+              batchSize = 4,
+              snapSyncController = snapSyncController.ref,
+              recordExcluded = true
+            )
+          )
+          .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
+      )
+      val alive = testKit.createTestProbe[ByteCodeCoordinator.ByteCodeProgress]()
+      coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(lost))
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      progressSource.failSync = true
+      try
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(null) // the handler throws: a supervisor restart
+        coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref) // answered by the new incarnation
+        alive.receiveMessage(30.seconds)
+      finally progressSource.failSync = false
+      coordinator ! ByteCodeCoordinator.NoMoreByteCodeTasks
+      (1 to 20).foreach(_ => coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion)
+      coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(alive.ref)
+      alive.receiveMessage(30.seconds)
+      var heard = Seq.empty[SNAPSyncController.Command]
+      try while true do heard = heard :+ snapSyncController.receiveMessage(200.millis)
+      catch case _: AssertionError => ()
+      withClue("twenty checks in a moment are not two minutes: ") {
+        heard should not contain SNAPSyncController.ByteCodeSyncComplete
+      }
+      appState.putSnapSyncCodeHashesPath(file.toString).and(appState.putSnapSyncCodeHashesCount(Some(1L))).commit()
+      coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion
+      snapSyncController.fishForMessage(30.seconds) {
+        case SNAPSyncController.ByteCodeSyncComplete =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      progressStore.excludedPage(None, 1000).map(_.subject) should contain(lost)
+    finally codeFilePointer = None
+  }
+
+  it should "write nothing to the excluded set when it is a recovery actor's: nothing would read it (vault F4)" taggedAs UnitTest in {
+    val (coordinator, snapSyncController) = forceCompleteFixture(recordExcluded = false)
+    val hash = kec256(ByteString("force-complete-recovery"))
+    coordinator ! ByteCodeCoordinator.StartByteCodeSync(Seq(hash))
+    coordinator ! ByteCodeCoordinator.ForceCompleteByteCodes
+    snapSyncController.expectMessage(SNAPSyncController.ByteCodeSyncComplete)
+    progressStore.excludedPage(None, 1000).map(_.subject) should not contain hash
   }
 
   // ForceCompleteByteCodes may fire while tasks are still in activeTasks (e.g. the 10-min stall
@@ -674,7 +1054,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   // activeTasks.size) would be broken, and any subsequent coordinator reuse would leak workers.
   it should "return active workers to idle pool on ForceCompleteByteCodes mid-flight" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -716,7 +1096,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "handle ForceCompleteByteCodes when queues are already empty" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 
@@ -748,7 +1128,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "remove a terminated worker from the pool and re-queue its active task" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -783,7 +1163,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "remove a terminated worker with no active task without affecting pending dispatch" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -824,7 +1204,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   // equal the pre-dispatch idle count (workers returned), and dispatch must succeed again.
   it should "restore workers to idle pool when a peer disconnects mid-flight" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe = testKit.createTestProbe[Any]()
@@ -866,7 +1246,7 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   it should "emit ByteCodeBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
-    val requestTracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
 

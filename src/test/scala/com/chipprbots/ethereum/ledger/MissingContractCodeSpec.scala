@@ -47,7 +47,7 @@ class MissingContractCodeSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new Setup:
-    val thrown = intercept[MissingCodeException](world.getCode(contract))
+    val thrown: MissingCodeException = intercept[MissingCodeException](world.getCode(contract))
     thrown.hash shouldBe codeHash.value
     thrown.accountAddress shouldBe contract.bytes
 
@@ -65,7 +65,7 @@ class MissingContractCodeSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     ConsensusTest
   ) in new Setup:
-    val created = Address(ByteString(Array.fill[Byte](20)(0x18)))
+    val created: Address = Address(ByteString(Array.fill[Byte](20)(0x18)))
     emptyWorld.saveAccount(created, Account(codeHash = codeHash)).saveCode(created, code).getCode(created) shouldBe code
 
   it should "return empty code, without throwing, for an EOA and for an absent account" taggedAs (

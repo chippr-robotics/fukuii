@@ -43,6 +43,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordi
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -125,7 +127,7 @@ private[snap] class StubSyncLifecycleState(
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.AccountRangeSync
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers and snapSyncConfig are constructor vals)
   private val dataSource = EphemDataSource()
@@ -270,6 +272,8 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent = true
     m.bytecodesEstimatedTotal = 500L
     m.healingValidatedRoot = Some(root)
+    m.healingCleanWalkRoot.set(root.value)
+    m.healingDecidedRoot.set(root.value)
     m.coordinatorGeneration = 4L
     m.validationGeneration = 6L
     m.validationInProgress = true
@@ -328,6 +332,31 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.calls shouldBe empty
   }
 
+  // spec 022 T050a: `stopAll()` takes a handle as it stops the coordinator, so its report matches nothing. At the controller
+  // that report mostly lands in `bootstrapping` or `dormantRetry`, which drop it, so a controller test does not see this
+  // (`SNAPCoordinatorGoneSpec`). It matters when a stop takes long enough for the controller to be back in `syncing`.
+  it should "cost nothing for a report from a coordinator stopAll stopped, for each of the four" taggedAs UnitTest in {
+    val h = new Harness()
+    val m = h.module
+    m.appStateStorage.stampSnapHealInvariant().commit()
+    val account = TestInbox[AccountRangeCoordinator.Command]()
+    val storage = TestInbox[StorageRangeCoordinator.Command]()
+    val byteCode = TestInbox[ByteCodeCoordinator.Command]()
+    val healing = TestInbox[TrieNodeHealingCoordinator.Command]()
+    m.accountRangeCoordinator = Some(account.ref)
+    m.storageRangeCoordinator = Some(storage.ref)
+    m.bytecodeCoordinator = Some(byteCode.ref)
+    m.trieNodeHealingCoordinator = Some(healing.ref)
+    h.call(_.stopAll())
+
+    Seq[ActorRef[Nothing]](account.ref, storage.ref, byteCode.ref, healing.ref).foreach { ref =>
+      h.call(_.coordinatorGoneArms(CoordinatorGone(ref)))
+    }
+
+    m.appStateStorage.getSnapCodeScanOwed() shouldBe None
+    m.appStateStorage.hasSnapHealInvariant() shouldBe true
+  }
+
   it should "stay dormant at wake-up without a SNAP peer, doubling the backoff" taggedAs UnitTest in {
     val h = new Harness()
     h.become(_.enterDormantMode("first"))
@@ -358,6 +387,8 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent shouldBe false
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
+    withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
+    withClue("spec 022: nor an earlier decision: ")(m.healingDecidedRoot.get() shouldBe null)
     m.coordinatorGeneration shouldBe 5L
     m.validationGeneration shouldBe 7L
     m.validationInProgress shouldBe false
@@ -394,7 +425,15 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
       .and(m.appStateStorage.putSnapSyncCodeHashesCount(Some(34L)))
       .commit()
     m.progressMonitor.incrementAccountsSynced(900L)
+    m.stateIngest.snapProgress.recordExcluded(
+      Seq(ExcludedAccount(ByteString(Array.fill[Byte](32)(7)), ExcludedReason.StorageAbandoned))
+    )
     h.become(_.restartSnapSync("stalled"))
+    withClue(
+      "a restart may resume cursors, and accounts behind them are not re-fed: only the planner wipes the set: "
+    ) {
+      m.stateIngest.snapProgress.hasAnyExcluded shouldBe true
+    }
     m.pendingPivotRefresh shouldBe None
     m.pivotProbeRequestId shouldBe None
     m.proactiveRollNeedsProbe shouldBe false
@@ -408,6 +447,8 @@ class SyncLifecycleSpec extends ScalaTestWithActorTestKit(ManualTime.config) wit
     m.forceCompleteStorageSent shouldBe false
     m.bytecodesEstimatedTotal shouldBe 0L
     m.healingValidatedRoot shouldBe None
+    withClue("spec 022: no earlier walk's proof outlives this: ")(m.healingCleanWalkRoot.get() shouldBe null)
+    withClue("spec 022: nor an earlier decision: ")(m.healingDecidedRoot.get() shouldBe null)
     m.appStateStorage.isSnapSyncAccountsComplete() shouldBe false
     m.appStateStorage.isSnapSyncStorageComplete() shouldBe false
     m.appStateStorage.isSnapSyncBytecodeComplete() shouldBe false

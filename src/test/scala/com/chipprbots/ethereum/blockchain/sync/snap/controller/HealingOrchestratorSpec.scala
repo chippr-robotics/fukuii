@@ -39,7 +39,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -82,10 +81,61 @@ private[snap] class StubHealingOrchestratorState(
     with PivotSelectionApi
     with ByteCodeRequestApi:
 
-  private val dataSource = EphemDataSource()
+  // Records whether each write was synced (`updateSync`), and the keys it wrote (spec 022 T027).
+  val syncedWrites: mutable.ArrayBuffer[(Boolean, Seq[ByteString])] = mutable.ArrayBuffer.empty
+  // spec 022 T040: what was written to CF `g`, by any route.
+  val frontierWrites: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  // The keys removed by a synced write (spec 022 review vault F2, F3).
+  val syncedRemovals: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
+  // spec 022 T043: a synced write of this key fails (the disk is full, say).
+  var failSyncedWritesOf: Option[String] = None
+  // How many writes `syncedWrites` held at each range delete, to tell what came before it (spec 022 T050a).
+  val rangeDeletesAt: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
+  private val dataSource = new EphemDataSource(Map.empty):
+    private def keys(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Seq[ByteString] =
+      updates.flatMap {
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, _, up) => up.map(u => ByteString(u._1))
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, _, up) => up.map(u => ByteString(u._1.toArray))
+      }
+    private def recordFrontier(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      updates.foreach {
+        case u: com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+            if u.namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace =>
+          frontierWrites += "update"
+        case u: com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+            if u.namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace =>
+          frontierWrites += "update"
+        case _ => ()
+      }
+    override def deleteRange(
+        namespace: com.chipprbots.ethereum.db.dataSource.DataSource.Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte]
+    ): Unit =
+      if namespace == com.chipprbots.ethereum.db.storage.Namespaces.HealingFrontierNamespace then
+        frontierWrites += "deleteRange"
+      rangeDeletesAt += syncedWrites.size
+      super.deleteRange(namespace, fromKey, toKeyExclusive)
+    override def update(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      syncedWrites += ((false, keys(updates)))
+      recordFrontier(updates)
+      super.update(updates)
+    override def updateSync(updates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      failSyncedWritesOf.foreach { key =>
+        if keys(updates).contains(ByteString(key.getBytes("UTF-8"))) then
+          throw new RuntimeException(s"cannot write $key")
+      }
+      syncedWrites += ((true, keys(updates)))
+      syncedRemovals ++= updates.flatMap {
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized(_, removed, _) =>
+          removed.map(ByteString(_))
+        case com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(_, removed, _) =>
+          removed.map(k => ByteString(k.toArray))
+      }
+      recordFrontier(updates)
+      super.update(updates)
 
   // HealingOrchestratorState
-  var trieWalkInProgress: Boolean = false
   var healRepegNoRootAttempts: Int = 0
   var healingServeRootRequestInFlight: Boolean = false
   var lastHealingServeRootBlock: Option[BigInt] = None
@@ -96,14 +146,15 @@ private[snap] class StubHealingOrchestratorState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
-  def ec: ExecutionContext = notUsed("ec")
+  def ec: ExecutionContext = ExecutionContext.parasitic
+  var trieNodesCachedInMemory: Boolean = false
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
   var stateRoot: Option[TrieRoot] = None
   var currentPhase: SyncPhase = SyncPhase.StateHealing
   val progressMonitor: SyncProgressMonitor = new SyncProgressMonitor(scheduler)
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
 
   // SnapControllerEnv (ctx, timers, snapSyncConfig, syncController, networkPeerManager and childFactories are
   // constructor vals)
@@ -120,13 +171,12 @@ private[snap] class StubHealingOrchestratorState(
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None
 
-  // The healing stores the healing spawn reads through `stateIngest` (spec 016 C-H1); in production they are the
-  // controller's `HealingOrchestrator` lazy vals, here plain stores over the stub's data source.
-  lazy val healingFrontierStore: Option[HealingFrontierStorage] = Some(new HealingFrontierStorage(dataSource))
+  // The healing store the healing spawn reads through `stateIngest` (spec 016 C-H1); in production it is the
+  // controller's `HealingOrchestrator` lazy val, here a plain in-memory store.
   lazy val bfsQueueStore: Option[BfsQueueStorage] = Some(new InMemoryBfsQueueStorage())
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
-  val stateIngest: StateIngest = new ForwardingStateIngest(
+  val stateIngest: ForwardingStateIngest = new ForwardingStateIngest(
     appStateStorage,
     stateStorage,
     flatSlotStorage,
@@ -135,7 +185,6 @@ private[snap] class StubHealingOrchestratorState(
     blockchainReader,
     blockchainWriter,
     validatorFactory,
-    healingFrontierStore,
     bfsQueueStore
   )
 
@@ -179,10 +228,9 @@ private[snap] class StubHealingOrchestratorState(
   * capabilities and callee Api traits, inside a `BehaviorTestKit` so that `ctx.spawn`, `ctx.log` and the timers are
   * real (spawns and timers are recorded as effects). Each module call runs while the kit processes a message, as it
   * would in the controller. The healing spawn reads `coordinatorGeneration` and `healingWalkLocalOnly` and writes
-  * `trieWalkInProgress` and `healRepegNoRootAttempts`; the serve-root check reads `pendingPivotRefresh`, `isPoSChain`
-  * and `clPivotHint` and writes `healingServeRootRequestInFlight` or `lastHealingServeRootBlock`; the healed-code hold
-  * reads and writes `healedCodeHashes` and `coordinatorGeneration`; the walk-complete arm writes `trieWalkInProgress`
-  * and `healingValidatedRoot`.
+  * `healRepegNoRootAttempts`; the serve-root check reads `pendingPivotRefresh`, `isPoSChain` and `clPivotHint` and
+  * writes `healingServeRootRequestInFlight` or `lastHealingServeRootBlock`; the healed-code hold reads and writes
+  * `healedCodeHashes` and `coordinatorGeneration`; the clean completion writes `healingValidatedRoot`.
   */
 class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with AnyFlatSpecLike with Matchers:
 
@@ -229,18 +277,16 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
   private def scheduledTimers(effects: Seq[Effect]): Seq[(Any, Any, FiniteDuration)] =
     effects.collect { case t: Effect.TimerScheduled[?] => (t.key, t.msg, t.delay) }
 
-  "HealingOrchestrator" should "spawn the healing coordinator once, resetting the walk flag and the re-peg budget" taggedAs UnitTest in {
+  "HealingOrchestrator" should "spawn the healing coordinator once, resetting the re-peg budget" taggedAs UnitTest in {
     val config = SNAPSyncConfig()
     val h = new Harness(config)
     h.module.pivotBlock = Some(pivot)
     h.module.stateRoot = Some(root)
-    h.module.trieWalkInProgress = true
     h.module.healRepegNoRootAttempts = 7
     h.module.coordinatorGeneration = 3
 
     h.call(_.startStateHealing())
 
-    h.module.trieWalkInProgress shouldBe false
     h.module.healRepegNoRootAttempts shouldBe 0
     h.module.trieNodeHealingCoordinator.isDefined shouldBe true
     h.module.mptStorageRequests.toSeq shouldBe Seq(pivot)
@@ -254,8 +300,14 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     spawn.stateRoot shouldBe root.value
     (spawn.mptStorage should be).theSameInstanceAs(h.module.mptStorage)
     spawn.walkLocalOnly.exists(_ eq h.module.healingWalkLocalOnly) shouldBe true
-    spawn.frontierPersistenceEnabled shouldBe config.healingFrontierPersistence
-    spawn.healingFrontierStorage shouldBe defined
+    withClue("spec 022 D5, T038b: production works the excluded set, and a restart finds the current root: ") {
+      spawn.excludedAccounts shouldBe true
+      h.factories.lastHealingCurrentRoot.get().exists(_ eq h.module.healingCurrentRoot) shouldBe true
+      h.module.healingCurrentRoot.get() shouldBe spawn.stateRoot
+    }
+    withClue("spec 022 5d: `SNAPSyncConfig` defers merkleization by default, and no marker can hold there: ") {
+      spawn.markerMayStand shouldBe false
+    }
     spawn.bfsQueueStorageOpt shouldBe defined
     h.kit.childInbox[TrieNodeHealingCoordinator.Command]("trie-node-healing-coordinator-3").receiveAll() shouldBe Seq(
       TrieNodeHealingCoordinator.StartTrieNodeHealing(root.value),
@@ -263,12 +315,79 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     )
 
     // A second start finds the coordinator in place and changes nothing.
-    h.module.trieWalkInProgress = true
+    h.module.healRepegNoRootAttempts = 5
     h.call(_.startStateHealing())
 
-    h.module.trieWalkInProgress shouldBe true
+    h.module.healRepegNoRootAttempts shouldBe 5
     h.factories.healingSpawns.get shouldBe 1
     spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // beacon W1: a second start can come after a completion has been taken, with finalisation still to read the record.
+  it should "leave what is on record alone on a second start, and send nothing" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
+
+    h.call(_.startStateHealing())
+
+    h.module.healingDecidedRoot.get() shouldBe root.value
+    h.module.healingCleanWalkRoot.get() shouldBe root.value
+    coordinator.hasMessages shouldBe false
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // hunter 1: where validation could not vouch for the state, nothing before it stands, and the coordinator, having said so
+  // once, would not say so again.
+  it should "forget what is on record when healing is reopened, and have the coordinator decide again" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    h.module.healingCleanWalkRoot.set(root.value)
+
+    h.call(_.reopenHealing())
+
+    h.module.healingDecidedRoot.get() shouldBe null
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+  }
+
+  // forge: not only where a decision is on record. An undecided coordinator would otherwise wait for its watchdog, and one
+  // that has walked clean never hears from that.
+  it should "ask when healing is reopened with nothing on record too" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.reopenHealing())
+
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+  }
+
+  it should "ask the coordinator there is to decide again, and spawn one if there is none, rather than sit silent" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.call(_.askHealingAgain())
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+    spawnedNames(h.effects()) shouldBe empty
+
+    h.module.trieNodeHealingCoordinator = None
+    h.call(_.askHealingAgain())
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    spawnedNames(h.effects()) should have size 1
   }
 
   it should "ask the parent for a newer serve root once, and not while a pivot refresh is pending" taggedAs UnitTest in {
@@ -334,7 +453,7 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     scheduledTimers(effects) shouldBe Seq((RequestByteCodes, RequestByteCodes, 1.second))
     h.kit.childInbox[ByteCodeCoordinator.Command]("bytecode-coordinator-4").receiveAll() shouldBe Seq(
       ByteCodeCoordinator.StartByteCodeSync(Seq.empty),
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
 
@@ -358,61 +477,164 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
     h.module.coordinatorGeneration shouldBe 3L
     spawnedNames(h.effects()) shouldBe empty
     coordinator.receiveAll() shouldBe Seq(
-      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing)),
+      ByteCodeCoordinator.AddByteCodeTasks(Seq(missing), skipQueued = true),
       ByteCodeCoordinator.NoMoreByteCodeTasks
     )
   }
 
-  it should "forget the whole healed-code hold on reset" taggedAs UnitTest in {
+  it should "forget the healed codeHashes and the bytecode force-complete on reset" taggedAs UnitTest in {
     val h = new Harness()
     h.module.healedCodeHashes += ByteString(Array.fill[Byte](32)(5))
-    h.module.awaitingHealedCode = true
-    h.module.healedCodeWaitExhausted = true
     h.module.bytecodeForceCompleted = true
-    // The kit records TimerCancelled only for an active timer, so arm the wait timer first.
-    h.call(_.timers.startSingleTimer(HealedCodeWaitTimerKey, HealedCodeWaitTimeout, 1.second))
-    h.effects()
 
     h.call(_.resetHealedCodeHold())
 
     h.module.healedCodeHashes shouldBe empty
-    h.module.awaitingHealedCode shouldBe false
-    h.module.healedCodeWaitExhausted shouldBe false
     h.module.bytecodeForceCompleted shouldBe false
-    h.effects().collect { case c: Effect.TimerCancelled => c.key } shouldBe Seq(HealedCodeWaitTimerKey)
   }
 
-  it should "finish healing on a clean trie walk and enter validation" taggedAs UnitTest in {
+  private val excludedEntry =
+    com.chipprbots.ethereum.db.storage.ExcludedAccount(
+      ByteString(Array.fill[Byte](32)(6)),
+      com.chipprbots.ethereum.db.storage.ExcludedReason.StorageSkipped
+    )
+
+  // spec 022 T050a (vault): the other order could heal an older anchored root with the entries gone. All three sites.
+  private def droppedAfterTheAnchor(complete: StubHealingOrchestratorState & HealingOrchestrator => Unit): Unit =
+    val h = new Harness()
+    h.module.trieNodeHealingCoordinator = Some(TestInbox[TrieNodeHealingCoordinator.Command]().ref)
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+    h.module.currentPhase = SyncPhase.StateHealing
+    // On the stub's recording source, so that its range delete is seen with the anchor's write.
+    h.module.stateIngest.snapProgress =
+      new com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage(h.module.appStateStorage.dataSource)
+    h.module.stateIngest.snapProgress.recordExcluded(Seq(excludedEntry.copy(dormant = true)))
+    h.module.syncedWrites.clear()
+    h.module.rangeDeletesAt.clear()
+
+    h.call(complete)
+
+    h.module.stateIngest.snapProgress.hasAnyExcluded shouldBe false
+    val anchor = h.module.syncedWrites.indexWhere { case (synced, keys) =>
+      synced && keys.contains(ByteString(AppStateStorage.Keys.SnapSyncStateRoot.getBytes("UTF-8")))
+    }
+    withClue(s"writes ${h.module.syncedWrites}, deletes at ${h.module.rangeDeletesAt}: ") {
+      anchor should be >= 0
+      h.module.rangeDeletesAt.size shouldBe 1
+      h.module.rangeDeletesAt.head should be > anchor
+    }
+
+  it should "drop the dormant entries after the anchor at the clean completion" taggedAs UnitTest in {
+    droppedAfterTheAnchor(_.completeHealingWalkClean())
+  }
+
+  it should "set the current heal root as a re-peg goes out, for a coordinator a supervisor restarts (T038b)" taggedAs UnitTest in {
+    val h = new Harness()
+    val moved = ByteString(Array.fill[Byte](32)(0x5b))
+    h.call(_.pivotRefreshed(moved))
+    h.module.healingCurrentRoot.get() shouldBe moved
+  }
+
+  it should "finish healing on the coordinator's decision and enter validation" taggedAs UnitTest in {
     val h = new Harness()
     val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
     h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
     h.module.pivotBlock = Some(pivot)
     h.module.stateRoot = Some(root)
-    h.module.trieWalkInProgress = true
 
-    h.call(_.stateHealingArms(TrieWalkComplete(0)))
+    h.call(_.completeHealingWalkClean())
 
-    h.module.trieWalkInProgress shouldBe false
     h.module.healingValidatedRoot shouldBe Some(root)
     h.module.currentPhase shouldBe SyncPhase.StateValidation
     h.module.validations shouldBe 1
     h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
     h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(root.value)
-    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.WalkStateChanged(false))
+    coordinator.receiveAll() shouldBe empty
   }
 
-  it should "schedule another walk round while nodes are still missing" taggedAs UnitTest in {
+  it should "persist the healed pivot block and root in one synced write at the healing exit (spec 022 T027)" taggedAs UnitTest in {
     val h = new Harness()
+    h.module.pivotBlock = Some(pivot)
     h.module.stateRoot = Some(root)
-    h.module.trieWalkInProgress = true
+    h.module.syncedWrites.clear()
+    h.call(_.completeHealingWalkClean())
+    val anchorWrites = h.module.syncedWrites.filter(_._2.size == 2)
+    anchorWrites.map(_._1) shouldBe Seq(true) // one write, both anchors, synced
+    h.module.syncedWrites.filterNot(_._1) shouldBe empty // nothing else unsynced on the way out
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+    h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(root.value)
+  }
 
-    h.call(_.stateHealingArms(TrieWalkComplete(5)))
+  // spec 022 slice 6: validation's re-walk feeds the coordinator, not a controller walk, and completion keeps its one route.
+  it should "queue what validation's re-walk found for the coordinator and have it decide again, with no controller walk" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.stateRoot = Some(root)
+    h.module.healingDecidedRoot.set(root.value)
+    val missing = Seq(Seq(ByteString(Array[Byte](0))) -> ByteString(Array.fill[Byte](32)(3)))
 
-    h.module.trieWalkInProgress shouldBe false
-    h.module.healingValidatedRoot shouldBe None
+    h.call(_.stateHealingArms(ValidationMissingNodes(missing)))
+
+    coordinator.receiveAll() shouldBe Seq(
+      TrieNodeHealingCoordinator.QueueMissingNodes(missing),
+      TrieNodeHealingCoordinator.HealingCheckCompletion
+    )
+    h.module.healingDecidedRoot.get() shouldBe null
     h.module.currentPhase shouldBe SyncPhase.StateHealing
     h.module.validations shouldBe 0
-    scheduledTimers(h.effects()) shouldBe Seq(("scheduled-trie-walk", ScheduledTrieWalk, 2.minutes))
+    withClue("the peer tick the completion cancelled comes back, and no walk is scheduled: ") {
+      scheduledTimers(h.effects()) shouldBe Seq((RequestTrieNodeHealing, RequestTrieNodeHealing, 1.second))
+    }
+  }
+
+  // forge, spec 022 slice 6b: at the finding, not when the re-walk answers, so an empty or failed re-walk cannot complete on
+  // the coordinator's earlier clean pass either.
+  it should "have the coordinator forget its clean pass as soon as validation finds something missing" taggedAs UnitTest in {
+    val h = new Harness()
+    val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+    h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+    h.module.currentPhase = SyncPhase.StateValidation
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.triggerHealingForMissingNodes(Seq(root.value)))
+
+    coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.QueueMissingNodes(Seq.empty))
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+  }
+
+  it should "have healing decide again when validation's re-walk finds nothing or fails" taggedAs UnitTest in {
+    Seq[Command](ValidationMissingNodes(Seq.empty), ValidationRewalkFailed("walk failed")).foreach { result =>
+      withClue(s"$result: ") {
+        val h = new Harness()
+        val coordinator = TestInbox[TrieNodeHealingCoordinator.Command]()
+        h.module.trieNodeHealingCoordinator = Some(coordinator.ref)
+        h.module.currentPhase = SyncPhase.StateHealing
+        h.module.stateRoot = Some(root)
+
+        h.call(_.stateHealingArms(result))
+
+        coordinator.receiveAll() shouldBe Seq(TrieNodeHealingCoordinator.HealingCheckCompletion)
+        h.module.validations shouldBe 0
+        scheduledTimers(h.effects()) shouldBe Seq((RequestTrieNodeHealing, RequestTrieNodeHealing, 1.second))
+      }
+    }
+  }
+
+  it should "start a coordinator when validation's re-walk reports and none is running" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.StateHealing
+    h.module.pivotBlock = Some(pivot)
+    h.module.stateRoot = Some(root)
+
+    h.call(_.stateHealingArms(ValidationMissingNodes(Seq.empty)))
+
+    h.module.trieNodeHealingCoordinator shouldBe defined
+    h.module.currentPhase shouldBe SyncPhase.StateHealing
+    h.module.validations shouldBe 0
   }
 
   // #1555 fix (a): "all healing peers stateless" is a report that the root is unservable, so the refresh must carry

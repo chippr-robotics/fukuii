@@ -1,5 +1,12 @@
 # 012 - Remember good snap peers
 
+**Status**: Done (2026-10-30). Implemented: proven SNAP servers are scored and persisted to `<datadir>/snap-good-peers.v1` and dialled first at startup.
+
+**Closed** (2026-10-30):
+- Reason: shipped.
+- Lives on in: the snap good-peers store and dialer under `network/`.
+
+
 ## Problem
 After a restart the three geth peers that carried ~80% of storage traffic (83719e@34.62.15.50, dfd16d@34.72.230.69,
 c00917@34.55.116.156) never reconnected on their own; re-adding one by hand with `net_connectToPeer` raised

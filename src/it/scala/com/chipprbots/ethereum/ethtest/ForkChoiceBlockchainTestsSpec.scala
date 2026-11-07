@@ -87,64 +87,69 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
     }
     val genesisRoot = InMemoryWorldStateProxy.persistState(world1).stateRootHash
     val genesisHeader = TestConverter.toBlockHeader(test.genesisBlockHeader.get)
-    if genesisHeader.stateRoot.value != genesisRoot then
-      return Outcome(name, Some("genesis pre-state root mismatch"), 0)
-    blockchainWriter.save(
-      Block(genesisHeader, BlockBody(Nil, Nil)),
-      Nil,
-      ChainWeight.totalDifficultyOnly(genesisHeader.difficulty.value),
-      saveAsBestBlock = true
-    )
-
-    val results = test.blocks.map { tb =>
-      val block = Block(
-        TestConverter.toBlockHeader(tb.blockHeader),
-        BlockBody(tb.transactions.map(TestConverter.toTransaction), tb.uncleHeaders.map(TestConverter.toBlockHeader))
+    if genesisHeader.stateRoot.value != genesisRoot then Outcome(name, Some("genesis pre-state root mismatch"), 0)
+    else
+      blockchainWriter.save(
+        Block(genesisHeader, BlockBody(Nil, Nil)),
+        Nil,
+        ChainWeight.totalDifficultyOnly(genesisHeader.difficulty.value),
+        saveAsBestBlock = true
       )
-      (block, consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, bc).unsafeRunSync()(IORuntime.global))
-    }
-    val failures = results.collect { case (block, BlockImportFailed(err)) =>
-      s"block ${block.number} ${block.header.hashAsHexString}: $err"
-    }
-    val reorgs = results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
 
-    val head = blockchainReader.getBestBlock.map(_.header)
-    val headError = (lastBlockHash, head) match
-      case (Some(expected), Some(h)) if h.hash.value != expected =>
-        Some(s"head ${h.number} ${h.hashAsHexString} != lastblockhash ${Hex.toHexString(expected.toArray)}")
-      case (_, None) => Some("no head")
-      case _         => None
+      val results = test.blocks.map { tb =>
+        val block = Block(
+          TestConverter.toBlockHeader(tb.blockHeader),
+          BlockBody(tb.transactions.map(TestConverter.toTransaction), tb.uncleHeaders.map(TestConverter.toBlockHeader))
+        )
+        (
+          block,
+          consensusAdapter
+            .evaluateBranchBlock(block)(using IORuntime.global, bc)
+            .unsafeRunSync()(using IORuntime.global)
+        )
+      }
+      val failures = results.collect { case (block, BlockImportFailed(err)) =>
+        s"block ${block.number} ${block.header.hashAsHexString}: $err"
+      }
+      val reorgs = results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
 
-    val postError = head.flatMap { h =>
-      val world = InMemoryWorldStateProxy(
-        storagesInstance.storages.evmCodeStorage,
-        blockchain.getReadOnlyMptStorage(),
-        (_: BigInt) => None,
-        bc.accountStartNonce,
-        h.stateRoot.value,
-        noEmptyAccounts = false,
-        ethCompatibleStorage = bc.ethCompatibleStorage
-      )
-      test.postState.iterator
-        .flatMap { case (addr, expected) =>
-          val address = Address(ByteString(hex(addr)))
-          val actual = world.getAccount(address).getOrElse(Account.empty(bc.accountStartNonce))
-          val storage = world.getStorage(address)
-          val slotErrors = expected.storage.iterator.collect {
-            case (k, v) if storage.load(big(k)) != big(v) => s"$addr[$k] = ${storage.load(big(k))} != $v"
+      val head = blockchainReader.getBestBlock.map(_.header)
+      val headError = (lastBlockHash, head) match
+        case (Some(expected), Some(h)) if h.hash.value != expected =>
+          Some(s"head ${h.number} ${h.hashAsHexString} != lastblockhash ${Hex.toHexString(expected.toArray)}")
+        case (_, None) => Some("no head")
+        case _         => None
+
+      val postError = head.flatMap { h =>
+        val world = InMemoryWorldStateProxy(
+          storagesInstance.storages.evmCodeStorage,
+          blockchain.getReadOnlyMptStorage(),
+          (_: BigInt) => None,
+          bc.accountStartNonce,
+          h.stateRoot.value,
+          noEmptyAccounts = false,
+          ethCompatibleStorage = bc.ethCompatibleStorage
+        )
+        test.postState.iterator
+          .flatMap { case (addr, expected) =>
+            val address = Address(ByteString(hex(addr)))
+            val actual = world.getAccount(address).getOrElse(Account.empty(bc.accountStartNonce))
+            val storage = world.getStorage(address)
+            val slotErrors = expected.storage.iterator.collect {
+              case (k, v) if storage.load(big(k)) != big(v) => s"$addr[$k] = ${storage.load(big(k))} != $v"
+            }
+            Iterator(
+              Option.when(actual.balance.toBigInt != big(expected.balance))(s"$addr balance"),
+              Option.when(actual.nonce.toBigInt != big(expected.nonce))(s"$addr nonce")
+            ).flatten ++ slotErrors
           }
-          Iterator(
-            Option.when(actual.balance.toBigInt != big(expected.balance))(s"$addr balance"),
-            Option.when(actual.nonce.toBigInt != big(expected.nonce))(s"$addr nonce")
-          ).flatten ++ slotErrors
-        }
-        .nextOption()
-    }
+          .nextOption()
+      }
 
-    // ValidBlocks: every block is valid, so any import failure is a failure in its own right.
-    val verdict =
-      headError.orElse(postError).orElse(failures.headOption).map(e => (e +: failures.take(3)).mkString(" | "))
-    Outcome(name, verdict, reorgs)
+      // ValidBlocks: every block is valid, so any import failure is a failure in its own right.
+      val verdict =
+        headError.orElse(postError).orElse(failures.headOption).map(e => (e +: failures.take(3)).mkString(" | "))
+      Outcome(name, verdict, reorgs)
 
   private def runCategory(category: String): Seq[Outcome] =
     val dir = new File(s"$Base/$category")

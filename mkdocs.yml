@@ -167,6 +167,7 @@ nav:
       - CI/CD: development/ci-cd.md
       - Branch Protection: development/branch-protection.md
       - Codespaces: development/codespaces.md
+      - Spec Lifecycle: development/spec-lifecycle.md
     - Testing:
       - testing/README.md
       - Test Tagging Guide: testing/TEST_TAGGING_GUIDE.md

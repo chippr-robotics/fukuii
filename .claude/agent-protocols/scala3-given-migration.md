@@ -1,8 +1,10 @@
 # Scala 3 given/using Migration — Operational Notes
 
 Pitfalls discovered during W2-P3a (`implicit → given/using`, 334 sites, commit
-`7210311bb`). P3b and any future sprint touching `given` instances must read this
-first.
+`7210311bb`). Any sprint touching `given` instances must read this first.
+
+**Status (2026-11-05):** P3a and P3b are both done. P3b (`implicit class` → `extension`) landed in spec 020 PR 5b
+(#1714, 2026-11-04); see "P3b: done" below.
 
 Used by: MITHRIL (primary), LOOM, WRAITH
 Referenced by: scala3-style.md (S3)
@@ -115,20 +117,50 @@ subclass injection.
 
 ---
 
-## P3b applicability
+## P3b: done (spec 020 PR 5b, #1714, 2026-11-04)
 
-P3b converts `implicit class` → `extension`. These G1–G3 pitfalls apply in P3b
-as follows:
+P3b converted `implicit class` → `extension`. What was converted, what was kept, and why:
 
-| Pitfall | Applies in P3b? | How |
+- **Converted:** the extension-type sites: 11 in `domain/` (`BlockDec`, `BlockHeaderByteArrayDec`, `BlockBlodyDec`,
+  `AccountDec`, `BigIntAsUInt256`, `TransactionTypeValidator`, `ByteArrayTransactionTypeValidator`, `BlockHeaderDec`,
+  `BlockBodyRLPEncodableDec`, `WithdrawalDec`, `WithdrawalBytesDec`), then the published modules' (rlp `RLPCodec.Ops`;
+  crypto `FiniteField.Ops.FiniteFieldOps`; bytes `Padding` and `ByteStringOps`; six in scalanet) and the five
+  modifier-form sites the first grep missed. Each was checked by a `javap` comparison of every call edge before and
+  after (DC-3). S4's grep reports 0.
+- **Kept, by dated decision (user, 2026-11-04):** the conversion wrappers stay `implicit class`: the `XEnc` message and
+  consensus encoders (`extends MessageSerializableImplicit` / `RLPSerializable`), bytes'
+  `ByteString{Self,Array,Byte}Element`, and scalanet's unused `BufferConversionOps`. Each adds a supertype that an
+  `extension` cannot give. The exemption is by name in S4's grep (`scala3-style.md`), so a new wrapper under another
+  name shows up as a hit and must be decided. They must change (for example to `given Conversion`) before any move to
+  `-source:future`, which rejects `implicit class`.
+- **API change in the published modules** (bytes, rlp, crypto, scalanet): the removed wrapper classes and their
+  replacement extensions are listed in `specs/020-scala-3-9-lts-migration/release-note-p3b.md`, and in the CHANGELOG's
+  Unreleased section.
+
+How G1–G3 applied in P3b:
+
+| Pitfall | Applied in P3b? | How |
 |---------|-----------------|-----|
 | G1 — `{given, *}` imports | Indirectly | If an `extension` method body accesses a `given` from a companion, check the import form |
-| G2 — anonymous given type | No | P3b converts `implicit class`, not `given` definitions |
-| G3 — given is final | **Yes — do not "fix" these** | Override-chain `implicit val` sites that P3a left intentionally must not be touched in P3b. They are NOT missed conversions. |
+| G2 — anonymous given type | No | P3b converted `implicit class`, not `given` definitions |
+| G3 — given is final | **Yes — these were not touched** | Override-chain `implicit val` sites that P3a left intentionally are not missed conversions |
 
-**Before P3b begins:** run the following to confirm the intentional `implicit
-val/lazy val` sites are still present and comment-annotated:
+**The override-chain sites today** (G3): the `implicit override` definitions in `src/main`, and the `implicit` members
+they override:
+
 ```bash
-grep -rn "not given.*override\|given is final\|overridden in subclass" src/main/ --include="*.scala"
+rg -n -g '*.scala' --pcre2 '\bimplicit\s+override\b|\boverride\s+implicit\b' src/main
+# 2026-11-05: 9 hits in 7 files
 ```
-These comments are load-bearing documentation — do not remove them.
+
+| Overridden member | Overridden in |
+|-------------------|---------------|
+| `PeerDiscoveryManagerBuilder.ioRuntime`, `PortForwardingBuilder.ioRuntime` (both in `NodeBuilder.scala`) | the combining class in `NodeBuilder.scala` (`implicit override lazy val ioRuntime`); test fixtures override it too |
+| `NodeBuilder.blockchainConfig` | `TestNode` |
+| `JsonMethodsImplicits.formats` | `EthSimulateJsonMethodsImplicits` |
+| `Json4sSupport.serialization` and `.formats` (abstract) | `object Json4sSupport`, `RateLimit` |
+| `JsonRpcBaseController.executionContext` (abstract) | `JsonRpcController`, `FaucetJsonRpcController` |
+
+The comment grep this section used to prescribe, `grep -rn "not given.*override\|given is final\|overridden in subclass"
+src/main/`, prints 0 on this tree: the P3a comments did not survive. A new override-chain `implicit` needs its own
+comment saying why it is not a `given`; do not convert the members in the table.

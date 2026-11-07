@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import org.apache.pekko.util.ByteString
+
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
@@ -7,14 +9,13 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.domain.StorageKey
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256.*
-import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.vm.Generators.*
 
 import Fixtures.blockchainConfig

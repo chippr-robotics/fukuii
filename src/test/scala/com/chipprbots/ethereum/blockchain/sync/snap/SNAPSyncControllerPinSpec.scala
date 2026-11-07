@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -49,33 +50,23 @@ class SNAPSyncControllerPinSpec
 
   private val manualTime: ManualTime = ManualTime()(using system)
 
-  /** #1502: the controller does not forward `prunedHealVerification` to the healing coordinator, so the coordinator
-    * always gets its own default (true), whatever `pruned-heal-verification` says. The #1502 fix changes this one value
-    * (to the configured flag) on purpose; every assertion below that reads it follows.
-    */
-  private def todayForwardedPrunedHealVerification(@annotation.unused configured: Boolean): Boolean = true // #1502
-
   private val Pivot = BigInt(10_000)
   private val Root = ByteString(Array.fill(32)(0x11.toByte))
 
   /** A healing config whose forwarded values all differ from `TrieNodeHealingCoordinator.apply`'s defaults, so a spawn
     * site that dropped a forward (and fell back to the coordinator default) is caught field by field.
     */
-  private def healingConfig(frontierPersistence: Boolean, prunedHeal: Boolean = true): SNAPSyncConfig =
+  private def healingConfig(): SNAPSyncConfig =
     SNAPSyncConfig(
       deferredMerkleization = false,
       healingBatchSize = 11,
       healingConcurrency = 7,
       healingVisitedCap = 12_345,
-      healingFrontierPersistence = frontierPersistence,
-      prunedHealVerification = prunedHeal,
       healingTraversalParallelism = 3,
       healingMinParallelism = 1,
       healingReservedCores = 5,
       healingFrontierHighWater = 4_321,
       healingFrontierLowWater = 1_234,
-      scopedHealVerification = false,
-      scopedHealMaxPaths = 999,
       decoupledHealServeRoot = true,
       decoupledHealMaxAttemptsNoRefresh = 5,
       movingRootDeltaHeal = true
@@ -84,7 +75,7 @@ class SNAPSyncControllerPinSpec
   // ── #1378 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController.apply" should
-    "#1378: arm the 5 s handshaked-peer poll: GetHandshakedPeersCmd at once and after every 5 s, unprompted" taggedAs UnitTest in new Fixture:
+    "#1378: arm the 5 s handshaked-peer poll: GetHandshakedPeersCmd at once and after every 5 s, unprompted" taggedAs UnitTest in (new Fixture:
       spawnController(SNAPSyncConfig())
       // start()'s immediate poll. No PollHandshakedPeers is ever sent by this test.
       npm.expectMessageType[GetHandshakedPeersCmd]
@@ -93,102 +84,112 @@ class SNAPSyncControllerPinSpec
         manualTime.timePasses(1.second)
         npm.expectMessageType[GetHandshakedPeersCmd]
       }
+    )
 
-  // ── #1319 / spec-002 ───────────────────────────────────────────────────────────────────────────
+  // ── the healing spawn's arguments ─────────────────────────────────────────────────────────────
 
   "SNAPSyncController healing spawn" should
-    "#1319/spec-002: pass frontierPersistenceEnabled = true via startStateHealing when healing-frontier-persistence is on" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = true)
-      val snap = startHealingViaStartStateHealing(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe true
-      assertFullHealingTuple(spawn, cfg, snap)
+    "spec 016 S0b: forward every healing setting via startStateHealing" taggedAs UnitTest in (new Fixture:
+      val cfg: SNAPSyncConfig = healingConfig()
+      val snap: ActorRef[Command] = startHealingViaStartStateHealing(cfg)
+      assertFullHealingTuple(expectHealingSpawn(), cfg, snap)
+    )
+
+  // spec 022 T052: `startStateHealingWithInterleave` had one way in, this signal, on Hash. Outside healing the arm now takes
+  // nothing, so `startStateHealing` is the one route to the spawn, and the pins of the second route went with it.
+  it should
+    "spec 022 T052: spawn nothing on a StateHealingComplete from outside healing: the interleave route is gone" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(healingConfig())
+      snap ! SNAPSyncController.StateHealingComplete
+      awaitProcessed(snap)
+      factories.healingSpawns.get() shouldBe 0
+    )
+
+  // spec 022 5d: the spawn says whether the marker can hold, and that is `canHold` with what this run is on.
+  it should
+    "spec 022 5d: tell the coordinator the marker may stand with the trie built and the trie store on disk" taggedAs UnitTest in (new Fixture:
+      startHealingViaStartStateHealing(healingConfig())
+      expectHealingSpawn().markerMayStand shouldBe true
+    )
 
   it should
-    "#1319/spec-002: pass frontierPersistenceEnabled = false via startStateHealing when healing-frontier-persistence is off" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = false)
-      val snap = startHealingViaStartStateHealing(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe false
-      assertFullHealingTuple(spawn, cfg, snap)
+    "spec 022 5d: hand the coordinator the record it says its decision in" taggedAs UnitTest in (new Fixture:
+      startHealingViaStartStateHealing(healingConfig())
+      expectHealingSpawn()
+      factories.lastHealingDecidedRoot.get() shouldBe defined
+    )
 
   it should
-    "#1319/spec-002: pass frontierPersistenceEnabled = true via startStateHealingWithInterleave when healing-frontier-persistence is on" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = true)
-      val snap = startHealingViaInterleave(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe true
-      assertFullHealingTuple(spawn, cfg, snap)
-
-  it should
-    "#1319/spec-002: pass frontierPersistenceEnabled = false via startStateHealingWithInterleave when healing-frontier-persistence is off" taggedAs UnitTest in new Fixture:
-      val cfg = healingConfig(frontierPersistence = false)
-      val snap = startHealingViaInterleave(cfg)
-      val spawn = expectHealingSpawn()
-      spawn.frontierPersistenceEnabled shouldBe false
-      assertFullHealingTuple(spawn, cfg, snap)
-
-  // M6a merges the two spawn blocks; both routes must keep building the same coordinator.
-  it should
-    "#1319/spec-002: build the same healing coordinator via startStateHealing and startStateHealingWithInterleave" taggedAs UnitTest in {
-      Seq(true, false).foreach { persistence =>
-        val cfg = healingConfig(frontierPersistence = persistence)
-        val viaStart = new Fixture:
-          startHealingViaStartStateHealing(cfg)
-        val viaInterleave = new Fixture:
-          startHealingViaInterleave(cfg)
-        comparable(viaStart.expectHealingSpawn(), viaStart) shouldBe
-          comparable(viaInterleave.expectHealingSpawn(), viaInterleave)
-      }
+    "spec 022 5d (vault V3): tell the coordinator no marker may stand under in-memory pruning" taggedAs UnitTest in {
+      // In-memory pruning keeps healed nodes in its node cache and writes them as the cache evicts them, one by one, so
+      // a present node can stand over a child a crash lost with the cache.
+      def inMemory(f: Fixture): Unit =
+        f.stateStorageOverride = Some(
+          new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
+            f.storagesInstance.storages.nodeStorage,
+            10,
+            new com.chipprbots.ethereum.db.cache.LruCache[ByteString, com.chipprbots.ethereum.db.storage.HeapEntry](
+              new com.chipprbots.ethereum.utils.NodeCacheConfig:
+                override val maxSize: Long = 1000
+                override val maxHoldTime: FiniteDuration = 60.minutes
+            )
+          )
+        )
+      val viaStart = new Fixture:
+        inMemory(this)
+        startHealingViaStartStateHealing(healingConfig())
+      viaStart.expectHealingSpawn().markerMayStand shouldBe false
     }
 
-  // ── spec-005 (store gate and forwarding; the config default and parsing are in SNAPSyncControllerSpec) ──────────
-
   it should
-    "spec-005: create the healing frontier store when pruned-heal-verification is on, even with frontier persistence off" taggedAs UnitTest in new Fixture:
-      startHealingViaStartStateHealing(healingConfig(frontierPersistence = false, prunedHeal = true))
-      expectHealingSpawn().healingFrontierStorage shouldBe defined
-
-  it should
-    "spec-005: create no healing frontier store when frontier persistence and pruned-heal-verification are both off" taggedAs UnitTest in new Fixture:
-      startHealingViaStartStateHealing(healingConfig(frontierPersistence = false, prunedHeal = false))
-      expectHealingSpawn().healingFrontierStorage shouldBe empty
-
-  it should
-    "spec-005: create the healing frontier store when frontier persistence is on, even with pruned-heal-verification off" taggedAs UnitTest in new Fixture:
-      startHealingViaStartStateHealing(healingConfig(frontierPersistence = true, prunedHeal = false))
-      expectHealingSpawn().healingFrontierStorage shouldBe defined
-
-  it should
-    "spec-005: forward pruned-heal-verification to the healing coordinator as today (not forwarded, #1502)" taggedAs UnitTest in {
-      Seq(true, false).foreach { pruned =>
-        val viaStart = new Fixture:
-          startHealingViaStartStateHealing(healingConfig(frontierPersistence = false, prunedHeal = pruned))
-        val viaInterleave = new Fixture:
-          startHealingViaInterleave(healingConfig(frontierPersistence = false, prunedHeal = pruned))
-        // #1502: today the coordinator gets true even when pruned-heal-verification = false.
-        viaStart.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
-        viaInterleave.expectHealingSpawn().prunedHealVerification shouldBe todayForwardedPrunedHealVerification(pruned)
-      }
+    "spec 022 T044 (vault R1): leave an older binary's completeness marker in CF `g` alone at a spawn under in-memory pruning" taggedAs UnitTest in {
+      // A completeness marker was written after flushes whose persist does nothing under in-memory pruning. Nothing
+      // reads CF `g` now, and nothing writes to it at the spawn.
+      def inMemoryWithStaleMarker(f: Fixture): com.chipprbots.ethereum.db.storage.HealingFrontierStorage =
+        f.stateStorageOverride = Some(
+          new com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage(
+            f.storagesInstance.storages.nodeStorage,
+            10,
+            new com.chipprbots.ethereum.db.cache.LruCache[ByteString, com.chipprbots.ethereum.db.storage.HeapEntry](
+              new com.chipprbots.ethereum.utils.NodeCacheConfig:
+                override val maxSize: Long = 1000
+                override val maxHoldTime: FiniteDuration = 60.minutes
+            )
+          )
+        )
+        val store = new com.chipprbots.ethereum.db.storage.HealingFrontierStorage(
+          f.storagesInstance.storages.flatSlotStorage.dataSource
+        )
+        store.markComplete()
+        store
+      val f = new Fixture
+      val store = inMemoryWithStaleMarker(f)
+      f.startHealingViaStartStateHealing(healingConfig())
+      f.expectHealingSpawn()
+      // spec 022 T044: the spawn no longer clears it: nothing reads CF `g` now, and nothing writes to it. The
+      // one-time clear at node start takes it, and `HealInvariant` keeps the invariant marker off this mode.
+      store.isComplete shouldBe true
     }
 
   // ── #1371 ──────────────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController download completion" should
-    "#1371: skip healing (no healing coordinator) with deferred merkleization, a fresh cursor and storage force-completed" taggedAs UnitTest in new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
+    "#1371: skip healing (no healing coordinator) with deferred merkleization, a fresh cursor and storage force-completed" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = true))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 0
       // It took the lazy-healing handoff instead: completeSnapSync finalised at the pivot.
       parent.expectMessage(SNAPSyncController.SnapSyncFinalized(Pivot))
+    )
 
   it should
-    "#1371 (control): start healing on the same force-completed path when deferred merkleization is off" taggedAs UnitTest in new Fixture:
-      val snap = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
+    "#1371 (control): start healing on the same force-completed path when deferred merkleization is off" taggedAs UnitTest in (new Fixture:
+      val snap: ActorRef[Command] = enterStorageRecovery(SNAPSyncConfig(deferredMerkleization = false))
       snap ! SNAPSyncController.StorageRangeSyncForceCompleted
       awaitProcessed(snap)
       factories.healingSpawns.get() shouldBe 1
+    )
 
   // ── Fixture ────────────────────────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,9 @@ class SNAPSyncControllerPinSpec
     val factories = new RecordingChildFactories(spawns.ref)
     private val progressProbe = testKit.createTestProbe[SyncProgress]()
 
+    /** The state storage the controller gets; the node's own (archive pruning) unless a case sets another. */
+    var stateStorageOverride: Option[com.chipprbots.ethereum.db.storage.StateStorage] = None
+
     def spawnController(config: SNAPSyncConfig): ActorRef[SNAPSyncController.Command] =
       given ExecutionContext = system.executionContext
       testKit.spawn(
@@ -212,7 +216,7 @@ class SNAPSyncControllerPinSpec
           blockchainReader,
           blockchainWriter,
           appStateStorage,
-          storagesInstance.storages.stateStorage,
+          stateStorageOverride.getOrElse(storagesInstance.storages.stateStorage),
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.flatSlotStorage,
           npm.ref,
@@ -295,14 +299,6 @@ class SNAPSyncControllerPinSpec
       factories.healingSpawns.get() shouldBe 0
       snap
 
-    /** Route 2: from the storage resume, `StateHealingComplete` reaches `syncing`'s arm, which (Hash scheme, no trie
-      * walk running) calls `startStateHealingWithInterleave`; there is no healing coordinator yet, so it spawns one.
-      */
-    def startHealingViaInterleave(config: SNAPSyncConfig): ActorRef[SNAPSyncController.Command] =
-      val snap = enterStorageRecovery(config)
-      snap ! SNAPSyncController.StateHealingComplete
-      snap
-
     /** Every argument of the healing spawn, field by field, against the config and the fixture. */
     def assertFullHealingTuple(
         spawn: ChildSpawn.Healing,
@@ -317,7 +313,6 @@ class SNAPSyncControllerPinSpec
       spawn.snapSyncController shouldBe snap
       spawn.concurrency shouldBe cfg.healingConcurrency
       spawn.visitedCap shouldBe cfg.healingVisitedCap
-      spawn.healingFrontierStorage.isDefined shouldBe (cfg.healingFrontierPersistence || cfg.prunedHealVerification)
       spawn.healingWriterEcOverride shouldBe None
       spawn.healingReaderEcOverride shouldBe None
       spawn.traversalParallelism shouldBe cfg.healingTraversalParallelism
@@ -329,27 +324,10 @@ class SNAPSyncControllerPinSpec
       spawn.frontierHighWater shouldBe cfg.healingFrontierHighWater
       spawn.frontierLowWater shouldBe cfg.healingFrontierLowWater
       spawn.frontierBackpressureMaxWaitMs shouldBe TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs
-      spawn.scopedHealVerification shouldBe cfg.scopedHealVerification
-      spawn.scopedHealMaxPaths shouldBe cfg.scopedHealMaxPaths
-      spawn.prunedHealVerification shouldBe todayForwardedPrunedHealVerification(cfg.prunedHealVerification)
-      spawn.frontierPersistenceEnabled shouldBe cfg.healingFrontierPersistence
       spawn.decoupledHealServeRoot shouldBe cfg.decoupledHealServeRoot
       spawn.decoupledHealMaxAttemptsNoRefresh shouldBe cfg.decoupledHealMaxAttemptsNoRefresh
       spawn.movingRootDeltaHeal shouldBe cfg.movingRootDeltaHeal
       spawn.evmCodeStorage shouldBe Some(storagesInstance.storages.evmCodeStorage)
       spawn.walkLocalOnly shouldBe defined
       spawn.walkLocalOnly.get.get() shouldBe false
-
-  /** The healing spawn with every per-instance reference replaced by what identifies it in its own fixture. */
-  private def comparable(spawn: ChildSpawn.Healing, f: Fixture): ChildSpawn.Healing =
-    spawn.copy(
-      networkPeerManager = if spawn.networkPeerManager == f.npm.ref then null else spawn.networkPeerManager,
-      requestTracker = null,
-      mptStorage = null,
-      snapSyncController = null,
-      healingFrontierStorage = spawn.healingFrontierStorage.map(_ => null),
-      bfsQueueStorageOpt = spawn.bfsQueueStorageOpt.map(_ => null),
-      evmCodeStorage =
-        spawn.evmCodeStorage.map(s => if s eq f.storagesInstance.storages.evmCodeStorage then null else s),
-      walkLocalOnly = spawn.walkLocalOnly.map(b => if b.get() then b else null)
-    )
+      spawn.markerMayStand shouldBe true

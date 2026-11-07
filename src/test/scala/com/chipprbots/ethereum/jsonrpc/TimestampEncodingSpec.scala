@@ -9,10 +9,10 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.jsonrpc.EthSimulateService.SimulateBlockResult
-import com.chipprbots.ethereum.jsonrpc.EthSimulateService.EthSimulateResponse
-import com.chipprbots.ethereum.jsonrpc.EthSimulateJsonMethodsImplicits.given
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits.given
+import com.chipprbots.ethereum.jsonrpc.EthSimulateJsonMethodsImplicits.given
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService.EthSimulateResponse
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService.SimulateBlockResult
 import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.given
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config

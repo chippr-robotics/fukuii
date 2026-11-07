@@ -7,7 +7,6 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
-
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
@@ -257,7 +256,7 @@ trait PeerDiscoveryManagerBuilder:
                       .getOrElse(blockchainReader.genesisHeader.unixTimestamp.toLong)
                 )
               )
-            )(discoveryIoRuntime),
+            )(using discoveryIoRuntime),
             randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
           )(using discoveryIoRuntime)
         )
@@ -355,7 +354,7 @@ trait ConsensusBuilder:
       blockExecution,
       blockValidation,
       Some((block: Block, config: BlockchainConfig) =>
-        consensusAdapter.evaluateBranchBlock(block)(IORuntime.global, config)
+        consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, config)
       )
     )
 
@@ -539,7 +538,7 @@ trait NetServiceBuilder:
 
   lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(instanceConfig.config)
 
-  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(
+  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(using
     classicSystem.toTyped.scheduler
   )
 
@@ -621,7 +620,7 @@ trait FilterManagerBuilder:
 trait DebugServiceBuilder:
   self: NetworkPeerManagerActorBuilder & PeerManagerActorBuilder & ActorSystemBuilder =>
 
-  lazy val debugService = new DebugService(peerManager, networkPeerManager)(classicSystem.toTyped.scheduler)
+  lazy val debugService = new DebugService(peerManager, networkPeerManager)(using classicSystem.toTyped.scheduler)
 
 trait EthProofServiceBuilder:
   self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
@@ -746,7 +745,7 @@ trait EthFilterServiceBuilder:
     filterManager,
     filterConfig,
     blockchainReader
-  )(classicSystem)
+  )(using classicSystem)
 
 trait PersonalServiceBuilder:
   self: KeyStoreBuilder & BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder &
@@ -790,7 +789,7 @@ trait McpServiceBuilder:
     blockchainConfig,
     nodeStatusHolder,
     storagesInstance.storages.transactionMappingStorage
-  )(classicSystem.dispatcher, classicSystem.toTyped.scheduler)
+  )(using classicSystem.dispatcher, classicSystem.toTyped.scheduler)
 
 trait KeyStoreBuilder:
   self: SecureRandomBuilder & KeyStoreConfigBuilder =>
@@ -841,13 +840,13 @@ trait AdminServiceBuilder:
       import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
       syncController.askForTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status](replyTo =>
         SyncController.WrappedSyncProtocol(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.GetStatus(replyTo))
-      )(
+      )(using
         timeout = org.apache.pekko.util.Timeout(
           instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
         ),
         scheduler = classicSystem.toTyped.scheduler
       )
-  )(classicSystem.toTyped.scheduler)
+  )(using classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:
   this: PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder & BlockchainConfigBuilder =>
@@ -977,7 +976,7 @@ trait EngineApiBuilder extends Logger:
       builderGasCeil = mining.config.generic.gasLimitTarget,
       reorgState = blockchain,
       txGossipGate = Some(txGossipGate)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
   // a ChainInstance with its own InstanceConfig does not share).
@@ -1104,7 +1103,7 @@ trait JSONRpcWsServerBuilder:
       jsonRpcController,
       subscriptionManager,
       jsonRpcConfig.wsServerConfig
-    )(classicSystem)
+    )(using classicSystem)
 
 trait OmmersPoolBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & MiningConfigBuilder =>
@@ -1219,13 +1218,13 @@ trait PortForwardingBuilder:
             ()
           }
         }
-        .unsafeToFuture()(ioRuntime)
+        .unsafeToFuture()(using ioRuntime)
     else
       // Resource was already started by another thread
       Future.unit
 
   def stopPortForwarding(): Future[Unit] =
-    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.unsafeToFuture()(ioRuntime))
+    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.unsafeToFuture()(using ioRuntime))
 
 trait ShutdownHookBuilder:
   self: Logger & InstanceConfigProvider =>
@@ -1285,7 +1284,8 @@ trait GenesisDataLoaderBuilder:
       blockchainReader,
       blockchainWriter,
       storagesInstance.storages.evmCodeStorage,
-      storagesInstance.storages.stateStorage
+      storagesInstance.storages.stateStorage,
+      () => storagesInstance.storages.appStateStorage.markDatadirCreatedUnderInvariant().commitSync()
     )
 
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
@@ -1405,5 +1405,5 @@ trait Node
       // to 60000000 so every client converges to the same next-block gas limit; fukuii's default
       // mining.gas-limit-target is already 60000000.
       miningConfig.gasLimitTarget
-    )(blockchainConfig)
+    )(using blockchainConfig)
   )

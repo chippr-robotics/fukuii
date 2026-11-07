@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.controller
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
@@ -20,7 +22,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP
   * Invariants kept from the code this replaces:
   *   - `stopAll()` stops exactly the four coordinators, in the order the stop sites always used (account, bytecode,
   *     storage, healing). It never stops the ChainDownloader (it survives restart and dormancy) and never the heap
-  *     watchdog. There is no `ctx.watch`, and supervision is unchanged.
+  *     watchdog. Supervision is unchanged. Each spawn site watches its coordinator with `CoordinatorGone`, which only
+  *     the handle it stops under counts (`SyncLifecycle.coordinatorGoneArms`): `stopAll()` clears a handle as it stops
+  *     it.
   *   - Each fan-out sends to the coordinators that exist, in the order the replaced call sites used.
   */
 private[snap] trait CoordinatorHandles:
@@ -29,6 +33,25 @@ private[snap] trait CoordinatorHandles:
   var bytecodeCoordinator: Option[TypedActorRef[ByteCodeCoordinator.Command]] = None
   var storageRangeCoordinator: Option[TypedActorRef[StorageRangeCoordinator.Command]] = None
   var trieNodeHealingCoordinator: Option[TypedActorRef[TrieNodeHealingCoordinator.Command]] = None
+
+  /** spec 022 T038b: the heal root the controller is on, set before every re-peg goes out, and read by a healing
+    * coordinator's setup: a supervisor restart runs that setup again and nothing replays a re-peg, so this is how the
+    * new incarnation finds the current root.
+    */
+  lazy val healingCurrentRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
+  /** spec 022 T043: the root of the healing coordinator's last clean full walk, set as it reports completion. What
+    * backs the invariant marker: the Hash controller's own trie walk stops at present hash nodes, so it cannot vouch
+    * for what is below them. Void (null) once a later look at the trie has found something missing.
+    */
+  lazy val healingCleanWalkRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
+
+  /** spec 022 5d: the root the healing coordinator decided is complete, set before the signal, walk or no walk. Not by
+    * a hand-off. The controller takes `StateHealingComplete` only for the root it is on, and finalisation lets a marker
+    * stand on this or on [[healingCleanWalkRoot]]. Only the clean walk's root stamps: this one is no proof, and a
+    * `lostTrack` that lands after the decision must not be undone.
+    */
+  lazy val healingDecidedRoot: AtomicReference[ByteString] = new AtomicReference[ByteString]()
 
   /** The ChainDownloader. Kept apart from the four coordinators: `stopAll()` does not touch it. */
   lazy val chainDownloader: ChainDownloaderHandle = new ChainDownloaderHandle(stopChild)
@@ -59,6 +82,7 @@ private[snap] trait CoordinatorHandles:
 
   /** A pivot refresh landed on `newStateRoot`: notify every existing coordinator. */
   def pivotRefreshed(newStateRoot: ByteString): Unit =
+    healingCurrentRoot.set(newStateRoot)
     accountRangeCoordinator.foreach(_ ! AccountRangeCoordinator.PivotRefreshed(newStateRoot))
     storageRangeCoordinator.foreach(_ ! StorageRangeCoordinator.StoragePivotRefreshed(newStateRoot))
     bytecodeCoordinator.foreach(_ ! ByteCodeCoordinator.ByteCodePivotRefreshed)

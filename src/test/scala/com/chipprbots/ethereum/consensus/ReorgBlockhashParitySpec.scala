@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpec
@@ -48,16 +49,16 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     "keep the heavier old head and index, so the next canonical block's BLOCKHASH matches core-geth" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // Canonical h1..h15 at difficulty 1000. Side branch s6..s13 forks after h5: s6..s12 at 1000, s13 at 5000 and
       // consensus-invalid (tampered stateRoot). Whole branch: 12000 > 10000 for h6..h15, so it is selected and executed;
       // the executed prefix s6..s12 is 7000 < 10000, so core-geth's head never leaves h15.
-      val oldChain = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
-      val h5 = oldChain(4)
-      val h15 = oldChain(14)
-      val h16 = oracle.extendCanonical(h15, 1, difficulty = 1000, readBlockhashOf = Some(8)).head
-      val sidePrefix = oracle.extendSide(h5, 7, difficulty = 1000, tag = 0x51)
-      val s13Invalid = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
+      val h5: Block = oldChain(4)
+      val h15: Block = oldChain(14)
+      val h16: Block = oracle.extendCanonical(h15, 1, difficulty = 1000, readBlockhashOf = Some(8)).head
+      val sidePrefix: List[Block] = oracle.extendSide(h5, 7, difficulty = 1000, tag = 0x51)
+      val s13Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
 
       node.importAll(oldChain) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe h15.hash
@@ -74,15 +75,16 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importOne(h16) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe h16.hash
       node.storedBlockhash(h16, slot = 16) shouldBe oldChain(7).hash.value
+    )
 
   it should "move the head to the executed prefix when it is heavier, and drop the old index above it" taggedAs (
     UnitTest,
     ConsensusTest
   ) in new Fixture:
     // Canonical h1..h15 at 1000. Side s6..s8 at 5000 each (15000 > 10000 for h6..h15), s9 invalid.
-    val oldChain = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
-    val sidePrefix = oracle.extendSide(oldChain(4), 3, difficulty = 5000, tag = 0x52)
-    val s9Invalid = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
+    val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
+    val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 3, difficulty = 5000, tag = 0x52)
+    val s9Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
 
     node.importAll(oldChain) shouldBe a[BlockImportedToTop]
     node.importAll(sidePrefix :+ s9Invalid) shouldBe a[BlockImportFailed]
@@ -98,7 +100,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // The ordinary ETC uncle race, across a restart. Canonical a1..a10. b10, a heavier sibling of a10, arrives and
       // wins. The node restarts, losing the in-memory block queue that held the orphaned a10. Then a11 (child of a10)
       // arrives by NewBlock and outweighs b10. a10 is on disk with a chain weight, so the queue roots a11 directly on
@@ -107,12 +109,12 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       //
       // a11 and a12 both store BLOCKHASH(10). a11 is EXECUTED while the index still names b10 at height 10 (the index is
       // only settled after execution), so it needs the ancestry walk; a12 executes after the index is settled.
-      val aChain = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
-      val a9 = aChain(8)
-      val a10 = aChain(9)
-      val a11 = oracle.extendCanonical(a10, 1, difficulty = 1000, readBlockhashOf = Some(10)).head
-      val a12 = oracle.extendCanonical(a11, 1, difficulty = 1000, readBlockhashOf = Some(10)).head
-      val b10 = oracle.extendSide(a9, 1, difficulty = 1500, tag = 0x53).head
+      val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+      val a9: Block = aChain(8)
+      val a10: Block = aChain(9)
+      val a11: Block = oracle.extendCanonical(a10, 1, difficulty = 1000, readBlockhashOf = Some(10)).head
+      val a12: Block = oracle.extendCanonical(a11, 1, difficulty = 1000, readBlockhashOf = Some(10)).head
+      val b10: Block = oracle.extendSide(a9, 1, difficulty = 1500, tag = 0x53).head
 
       node.importAll(aChain) shouldBe a[BlockImportedToTop]
       node.importOne(b10) shouldBe a[ChainReorganised]
@@ -132,19 +134,20 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importOne(a12) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe a12.hash
       node.storedBlockhash(a12, slot = 12) shouldBe a10.hash.value
+    )
 
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture:
+    ) in (new Fixture:
       // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
       // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
       // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
       // block as best, so the file's last block won whatever its TD.
-      val aChain = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
-      val lighterSide = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
-      val heavierSide = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
+      val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
+      val lighterSide: List[Block] = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
+      val heavierSide: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
 
       node.importFile(aChain ++ lighterSide)
       node.bestHash shouldBe aChain.last.hash
@@ -153,6 +156,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importFile(heavierSide)
       node.bestHash shouldBe heavierSide.last.hash
       (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
+    )
 
   it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
     UnitTest,
@@ -162,8 +166,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     // difficulty 0, so two chains always weigh the same and a TD rule can never choose. core-geth's
     // ForkChoice.ReorgNeeded returns true for any block at or past the TTD: on import, each valid block becomes the
     // head. The TD fork choice above kept the FIRST chain in the file instead (hive consensus 1143/0 -> 1143/2).
-    val aChain = oracle.extendCanonical(oracle.genesis, 3, difficulty = 0)
-    val bChain = oracle.extendSide(oracle.genesis, 3, difficulty = 0, tag = 0x63)
+    val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 0)
+    val bChain: List[Block] = oracle.extendSide(oracle.genesis, 3, difficulty = 0, tag = 0x63)
 
     node.importFile(aChain ++ bChain)
     node.bestHash shouldBe bChain.last.hash
@@ -175,10 +179,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   /** Both hosts on a chain whose terminal total difficulty is 0, as hive configures post-merge fixtures. */
   class PostMergeFixture:
-    val oracle = new Oracle:
+    val oracle: Oracle = new Oracle:
       implicit override lazy val blockchainConfig: BlockchainConfig =
         super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
-    val node = new Node:
+    val node: Node = new Node:
       implicit override lazy val blockchainConfig: BlockchainConfig =
         super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
 
@@ -308,7 +312,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       block
 
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
-  val SenderKeyPair = generateKeyPair(secureRandom)
+  val SenderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
   val SenderAddress: Address = Address(SenderKeyPair)
   val Miner: Address = Address(0x6d696e)
 

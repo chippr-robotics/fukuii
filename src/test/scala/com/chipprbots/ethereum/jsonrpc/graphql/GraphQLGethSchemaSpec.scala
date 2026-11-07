@@ -64,9 +64,6 @@ class GraphQLGethSchemaSpec extends AnyFlatSpec with Matchers:
     val known = Seq(
       // geth dropped totalDifficulty after the merge; hive's graphql tests 14/16/51 still query it, and ETC is PoW.
       "Block.totalDifficulty: geth - / fukuii : BigInt!",
-      // Amsterdam (EIP-7928 / EIP-7843) Block fields geth added in #35469; not yet served by fukuii's GraphQL.
-      "Block.blockAccessListHash: geth : Bytes32 / fukuii -",
-      "Block.slotNumber: geth : Long / fukuii -",
       // EIP-4895 amount in Gwei: geth types it Long, fukuii BigInt. Both render 0x-hex, so the JSON is the same.
       "Withdrawal.amount: geth : Long! / fukuii : BigInt!"
     )

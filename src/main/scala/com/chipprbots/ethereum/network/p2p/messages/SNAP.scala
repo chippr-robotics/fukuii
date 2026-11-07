@@ -8,7 +8,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.ByteUtils
 
 /** SNAP/1 protocol messages
@@ -181,7 +181,7 @@ object SNAP:
               accountsList: RLPList,
               proofList: RLPList
             ) =>
-          val accounts = accountsList.items.map {
+          val accounts = accountsList.items.toVector.map {
             case RLPList(RLPValue(hashBytes), accountRLP: RLPEncodeable) =>
               val hash = ByteString(hashBytes)
               val account = rlp.encode(accountRLP).toAccount
@@ -191,7 +191,7 @@ object SNAP:
                 s"Cannot decode account data. Expected RLPList[2] [hash, body], got: ${other.getClass.getSimpleName}"
               )
           }
-          val proof = proofList.items.map {
+          val proof = proofList.items.toVector.map {
             case RLPValue(proofBytes) => ByteString(proofBytes)
             case other =>
               throw new RuntimeException(
@@ -269,7 +269,7 @@ object SNAP:
               RLPValue(limitHashBytes),
               RLPValue(responseBytesBytes)
             ) =>
-          val accountHashes = accountHashesList.items.map {
+          val accountHashes = accountHashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -348,9 +348,9 @@ object SNAP:
               slotsList: RLPList,
               proofList: RLPList
             ) =>
-          val slots = slotsList.items.map {
+          val slots = slotsList.items.toVector.map {
             case accountSlots: RLPList =>
-              accountSlots.items.map {
+              accountSlots.items.toVector.map {
                 case RLPList(RLPValue(hashBytes), RLPValue(valueBytes)) =>
                   (ByteString(hashBytes), ByteString(valueBytes))
                 case other =>
@@ -363,7 +363,7 @@ object SNAP:
                 s"Cannot decode storage slots for account. Expected RLPList, got: ${other.getClass.getSimpleName}"
               )
           }
-          val proof = proofList.items.map {
+          val proof = proofList.items.toVector.map {
             case RLPValue(proofBytes) => ByteString(proofBytes)
             case other =>
               throw new RuntimeException(
@@ -400,7 +400,8 @@ object SNAP:
       requestId: BigInt,
       hashes: Seq[ByteString],
       responseBytes: BigInt
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.GetByteCodesCode
     override def toShortString: String =
       s"GetByteCodes(reqId=$requestId, hashes=${hashes.size}, bytes=$responseBytes)"
@@ -426,7 +427,7 @@ object SNAP:
               hashesList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val hashes = hashesList.items.map {
+          val hashes = hashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -460,7 +461,8 @@ object SNAP:
   case class ByteCodes(
       requestId: BigInt,
       codes: Seq[ByteString]
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.ByteCodesCode
     override def toShortString: String =
       s"ByteCodes(reqId=$requestId, codes=${codes.size})"
@@ -484,7 +486,7 @@ object SNAP:
               RLPValue(requestIdBytes),
               codesList: RLPList
             ) =>
-          val codes = codesList.items.map {
+          val codes = codesList.items.toVector.map {
             case RLPValue(codeBytes) => ByteString(codeBytes)
             case other =>
               throw new RuntimeException(
@@ -523,7 +525,8 @@ object SNAP:
       rootHash: ByteString,
       paths: Seq[Seq[ByteString]], // List of paths (each path is a list of node hashes)
       responseBytes: BigInt
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.GetTrieNodesCode
     override def toShortString: String =
       s"GetTrieNodes(reqId=$requestId, paths=${paths.size}, bytes=$responseBytes)"
@@ -555,9 +558,9 @@ object SNAP:
               pathsList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val paths = pathsList.items.map {
+          val paths = pathsList.items.toVector.map {
             case path: RLPList =>
-              path.items.map {
+              path.items.toVector.map {
                 case RLPValue(hashBytes) => ByteString(hashBytes)
                 case other =>
                   throw new RuntimeException(
@@ -597,7 +600,8 @@ object SNAP:
   case class TrieNodes(
       requestId: BigInt,
       nodes: Seq[ByteString]
-  ) extends Message:
+  ) extends Message
+      with ETHPackets.HasRequestId:
     override def code: Int = Codes.TrieNodesCode
     override def toShortString: String =
       s"TrieNodes(reqId=$requestId, nodes=${nodes.size})"
@@ -621,7 +625,7 @@ object SNAP:
               RLPValue(requestIdBytes),
               nodesList: RLPList
             ) =>
-          val nodes = nodesList.items.map {
+          val nodes = nodesList.items.toVector.map {
             case RLPValue(nodeBytes) => ByteString(nodeBytes)
             case other =>
               throw new RuntimeException(
@@ -685,7 +689,7 @@ object SNAP:
               hashesList: RLPList,
               RLPValue(responseBytesBytes)
             ) =>
-          val hashes = hashesList.items.map {
+          val hashes = hashesList.items.toVector.map {
             case RLPValue(hashBytes) => ByteString(hashBytes)
             case other =>
               throw new RuntimeException(
@@ -747,7 +751,7 @@ object SNAP:
             ) =>
           AccessLists(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            accessListsList.items
+            accessListsList.items.toVector
           )
         case rlpList: RLPList =>
           throw new RuntimeException(

@@ -1,5 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.ActorRef
@@ -12,10 +16,6 @@ import scala.concurrent.duration.*
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.domain.Account
@@ -113,7 +113,7 @@ class ForceCompletedStorageVerificationSpec
     val coordinator = HealingTrieFixtures.spawnCoordinator(
       stateRoot = ByteString(startRoot.hash),
       networkPeerManager = npm.ref,
-      requestTracker = new SNAPRequestTracker()(classicSystem.scheduler),
+      requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler),
       mptStorage = storage,
       batchSize = 16,
       snapSyncController = controller.ref,

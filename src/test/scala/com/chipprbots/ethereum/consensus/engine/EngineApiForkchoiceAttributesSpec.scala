@@ -14,7 +14,6 @@ import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -60,7 +59,7 @@ class EngineApiForkchoiceAttributesSpec extends AnyWordSpec with Matchers:
   )
 
   /** Records what reaches the service, so a test can tell "rejected at the boundary" from "applied, then rejected". */
-  private class RecordingService extends EngineApiService(null, null, null, null, None)(null, null):
+  private class RecordingService extends EngineApiService(null, null, null, null, None)(using null, null):
     val calls = new ConcurrentLinkedQueue[(ForkChoiceState, Option[PayloadAttributes])]()
     override def forkchoiceUpdated(
         forkChoiceState: ForkChoiceState,

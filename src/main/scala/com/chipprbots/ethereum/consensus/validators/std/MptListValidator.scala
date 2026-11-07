@@ -33,6 +33,6 @@ object MptListValidator:
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
     val trie = MerklePatriciaTrie[Int, K](
       source = stateStorage
-    )(intByteArraySerializable, vSerializable)
+    )(using intByteArraySerializable, vSerializable)
     val trieRoot = toValidate.zipWithIndex.foldLeft(trie)((trie, r) => trie.put(r._2, r._1)).getRootHash
     hash.sameElements(trieRoot)

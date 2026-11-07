@@ -115,6 +115,34 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     ds.cacheStats shouldBe None
   }
 
+  // spec 022 T053: a long walk reads each node once, and its reads must not push import's working set out of the cache.
+  "RocksDbDataSource.multiGetOptimizedNoFill" should "answer as multiGetOptimized does, and leave the block cache cold" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val writer = RocksDbDataSource(config(dbPath, statisticsEnabled = true), Namespaces.nsSeq)
+    writer.update(Seq(DataSourceUpdate(Ns, Nil, (0 until N).map(i => key(i) -> value(i)))))
+    writer.close()
+
+    val reader = RocksDbDataSource(config(dbPath, statisticsEnabled = true), Namespaces.nsSeq)
+    def misses: Long = reader.cacheStats.get._2
+    val keys = (0 until N).map(i => key(i).toArray) :+ (Array.fill[Byte](31)(1) :+ 2.toByte)
+    try
+      val noFill = reader.multiGetOptimizedNoFill(Ns, keys)
+      noFill.last shouldBe None
+
+      val beforeSecondPass = misses
+      reader.multiGetOptimizedNoFill(Ns, keys)
+      withClue("nothing was kept, so a second pass misses again: ")(misses should be > beforeSecondPass)
+
+      // The control: the filling read answers the same, and its second pass misses nothing.
+      noFill.map(_.map(_.toSeq)) shouldBe reader.multiGetOptimized(Ns, keys).map(_.map(_.toSeq))
+      val filled = misses
+      reader.multiGetOptimized(Ns, keys)
+      misses shouldBe filled
+    finally reader.destroy()
+  }
+
   // ---------------------------------------------------------------------------------------
   // issue #1355 — iterateSyncRange: self-contained refill batches, locked + closed per batch.
   // The fix shipped in 92fc8f6b5 / v0.8.0 (e16855453); these are the two regression tests the
@@ -131,6 +159,40 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
 
   private def keyToInt(bytes: Array[Byte]): Int =
     ByteBuffer.wrap(bytes).getInt()
+
+  // spec 022 review (vault): the bound is the override's, not the trait's filter over a full scan.
+  "RocksDbDataSource.scanRangeLimit" should "stop at the limit, in key order, inside [from, to)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    val dir = Files.createTempDirectory("rocks-scan-limit").toAbsolutePath.toString
+    val ds = RocksDbDataSource(config(dir, statisticsEnabled = false), Namespaces.nsSeq)
+    try
+      ds.update(Seq(DataSourceUpdateOptimized(Ns, Nil, (1 to 9).map(i => Array[Byte](1, i.toByte) -> Array(i.toByte)))))
+      ds.update(
+        Seq(
+          DataSourceUpdateOptimized(
+            Ns,
+            Nil,
+            Seq(Array[Byte](0, 5) -> Array[Byte](0), Array[Byte](2, 1) -> Array[Byte](0))
+          )
+        )
+      )
+      def scan(from: Array[Byte], to: Array[Byte], limit: Int): Seq[List[Byte]] =
+        ds.scanRangeLimit(Ns, from, to, limit).map(_._1.toList).toSeq
+      scan(Array[Byte](1), Array[Byte](2), 3) shouldBe Seq(List[Byte](1, 1), List[Byte](1, 2), List[Byte](1, 3))
+      withClue("from is inclusive, to exclusive: ") {
+        scan(Array[Byte](1, 3), Array[Byte](1, 5), 10) shouldBe Seq(List[Byte](1, 3), List[Byte](1, 4))
+      }
+      withClue("a limit past the range ends at the range: ") {
+        scan(Array[Byte](1), Array[Byte](2), 100) should have size 9
+      }
+      withClue("an empty range, and a zero limit: ") {
+        scan(Array[Byte](1, 20), Array[Byte](2), 5) shouldBe empty
+        scan(Array[Byte](1), Array[Byte](2), 0) shouldBe empty
+      }
+    finally ds.destroy()
+  }
 
   "RocksDbDataSource.iterateSyncRange" should "yield exactly the keys in [fromKey, toKeyExcl) in order, once each, across multiple refill batches, and handle an inclusive fromKey and empty ranges" taggedAs (
     UnitTest,
@@ -226,7 +288,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
       // anything: the pass path is fast and deterministic every time; only a genuine
       // lock/resource leak would time out, and we want that to fail loudly here rather than
       // hang this shared, resource-constrained test JVM indefinitely.
-      val closed = Future(ds.close())(ExecutionContext.global)
+      val closed = Future(ds.close())(using ExecutionContext.global)
       Await.result(closed, 10.seconds)
 
       // Prove no native handle / OS-level lock survives: a fresh DataSource can reopen the same

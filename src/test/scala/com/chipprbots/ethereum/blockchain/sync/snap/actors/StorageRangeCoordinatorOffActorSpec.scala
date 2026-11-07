@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -36,7 +35,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** #1533: StorageRanges responses are verified (and whole-account tries built) on a worker pool, and applied on the
   * coordinator in arrival order. These tests drive the pipeline with an ExecutionContext that runs nothing until told
@@ -84,7 +83,7 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
       useOwnedPool: Boolean = false
   ): Fixture =
     val ec = new ManualEc
-    val tracker = new SNAPRequestTracker()(classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     val pathNodes = new PathNodeStorage(EphemDataSource())
     val mpt = new RecordingMptStorage
     var captured: StorageRangeCoordinatorImpl = null
@@ -130,7 +129,6 @@ class StorageRangeCoordinatorOffActorSpec extends ScalaTestWithActorTestKit() wi
       def trieStore(pivot: BigInt): MptStorage = notReached("trieStore")
       def snapProgress: SnapSyncProgressStorage = notReached("snapProgress")
       def storageDone: SnapStorageDoneStorage = notReached("storageDone")
-      def healingFrontier: Option[HealingFrontierStorage] = notReached("healingFrontier")
       def bfsQueue: Option[BfsQueueStorage] = notReached("bfsQueue")
 
   private def notReached(member: String): Nothing =

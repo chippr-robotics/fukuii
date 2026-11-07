@@ -20,6 +20,8 @@ Examples:
 - [INF-005: Docker Deployment Strategy and Container Best Practices](INF-005-docker-deployment-strategy.md) - Accepted
 - [INF-006: SNAP State-Ingest Capability and the Exporter Durability Boundary](INF-006-snap-state-ingest-capability.md) - Proposed
 - [INF-007: JDK 25 Baseline and the C2 ReduceAllocationMerges Workaround](INF-007-jdk-25-baseline.md) - Accepted
+- INF-008: reserved by spec 018 (storage layout)
+- [INF-009: Scala 3.9 LTS Toolchain](INF-009-scala-3-9-lts.md) - Accepted
 
 ## Creating a New Infrastructure ADR
 

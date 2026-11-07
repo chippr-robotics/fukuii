@@ -47,7 +47,7 @@ class EngineApiAmsterdamGasLimitSpec extends AnyWordSpec with Matchers:
   private val osaka = configFor("Osaka")
 
   private def service(config: BlockchainConfig, ceiling: BigInt) =
-    new EngineApiService(null, null, null, null, None, builderGasCeil = ceiling)(config, null)
+    new EngineApiService(null, null, null, null, None, builderGasCeil = ceiling)(using config, null)
 
   private def parent(gasLimit: BigInt): BlockHeader =
     Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(100), gasLimit = GasAmount(gasLimit))

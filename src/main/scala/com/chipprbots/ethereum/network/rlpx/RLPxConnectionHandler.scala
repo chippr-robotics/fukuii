@@ -3,17 +3,26 @@ package com.chipprbots.ethereum.network.rlpx
 import java.net.InetSocketAddress
 import java.net.URI
 
-import org.apache.pekko.actor.{Actor as ClassicActor, ActorRef as ClassicActorRef, Cancellable, Props, Terminated}
-import org.apache.pekko.actor.typed.{ActorRef, Behavior}
-import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors}
+import org.apache.pekko.actor.Actor as ClassicActor
+import org.apache.pekko.actor.ActorRef as ClassicActorRef
+import org.apache.pekko.actor.Cancellable
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Terminated
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
-import org.apache.pekko.io.{IO, Tcp}
+import org.apache.pekko.io.IO
+import org.apache.pekko.io.Tcp
 import org.apache.pekko.io.Tcp.*
 import org.apache.pekko.util.ByteString
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.*
-import scala.util.{Failure, Success, Try}
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -25,8 +34,8 @@ import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.*
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
-import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
 import com.chipprbots.ethereum.network.p2p.SNAP2MessageDecoder
+import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
@@ -312,7 +321,7 @@ object RLPxConnectionHandler:
       tcpManagerForTest: Option[ClassicActorRef] = None
   ): Behavior[Command] = Behaviors.setup { context =>
     val peerId: String = parent.path.name
-    val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(context.system.classicSystem))
+    val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(using context.system.classicSystem))
     new Impl(
       capabilities,
       authHandshaker,
@@ -361,7 +370,7 @@ object RLPxConnectionHandler:
       context.system.scheduler.scheduleOnce(
         delay,
         new Runnable:
-          def run() = context.self ! msg
+          def run(): Unit = context.self ! msg
       )
 
     private def bridgeWrite(bridge: ClassicActorRef, data: ByteString): Unit =

@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `StoragePeerDispatch` reads and writes (spec 016 C-S1, research.md R14b: 23, plus
   * `peerHealth`). The core's behaviour arms, or the response processing, ordered apply and done markers that C-S2…S4

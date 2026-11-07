@@ -9,9 +9,11 @@ import scala.concurrent.Future
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapTrie
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.*
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 /** The coordinator state `StorageResponseProcessing` reads and writes (spec 016 C-S4, research.md R14b). The core's
   * behaviour arms (pivot refresh, force-complete, peer loss, the processing result, progress), `onPostStop`, the peer
@@ -79,6 +81,10 @@ private[actors] trait StorageResponseProcessing:
       distinctRoots: Int
   ): Unit =
     val accountHash = task.accountHash
+    // spec 022 T033: durable when this message ends; a clean end of the phase wipes the only other trace (R-5a).
+    excludedRecorder.stage(
+      Seq(ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned, claimedStorageRoot = task.storageRoot))
+    )
     staleRootFailuresByAccount.remove(accountHash)
     // Give up the WHOLE account, not just the task that tripped the cap: a large account may be split into
     // parallel subtasks sharing one stale `storageRoot`; if only this subtask were dropped, each sibling would need K
@@ -149,8 +155,8 @@ private[actors] trait StorageResponseProcessing:
         val skip = jobTasks.iterator.map(_.accountHash).filter(abandonedAccounts.contains).toSet
         val prebuildScheme = Option.when(!deferredMerkleization)(storageScheme)
         val selfRef = self
-        Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(processingEc)
-          .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(
+        Future(verifyServedSlots(jobTasks, jobResponse, skip, prebuildScheme))(using processingEc)
+          .onComplete(outcome => selfRef ! StorageResponseProcessed(seq, generation, outcome))(using
             ExecutionContext.parasitic
           )
 
@@ -202,8 +208,8 @@ private[actors] trait StorageResponseProcessing:
     processingPool.foreach(_.shutdown()) // running jobs finish (they hold no resources); nothing new is accepted
 
   def handleResponse(response0: StorageRanges): Unit =
-    // Index the decoded response once (O(n)): the decoder's Queue makes every `slots(i)` O(i), and the ascending-order
-    // checks below and in MerkleProofVerifier index by position (#1533).
+    // Index the response once (O(n)): the ascending-order checks below and in MerkleProofVerifier index by position
+    // (#1533). Decoded RLP lists are Vectors now; the decoder's old Queue made every `slots(i)` O(i) (#1672/#1675).
     val response = indexedResponse(response0)
     requestTracker.validateStorageRanges(response) match
       case Left(error) =>
@@ -247,16 +253,17 @@ private[actors] trait StorageResponseProcessing:
         s"received ${response.slots.size} slot sets (served=$servedCount, proofs=${response.proof.size})"
     )
 
-    // Proof-of-absence: server returned 0 slots WITH proof nodes. Per the snap/1 protocol,
-    // this is a valid cryptographic proof that no slots exist in [startingHash, limitHash]
-    // at the current state root. The account's storage is empty or was modified/cleared
-    // since the original pivot. Healing will validate the final trie.
-    // IMPORTANT: do NOT mark the peer stateless — it served a valid, well-formed response.
+    // Proof-of-absence: server returned 0 slots WITH proof nodes. Per the snap/1 protocol this
+    // proves no slots exist in [startingHash, limitHash] at the root it was asked about, but nothing
+    // here checks the proof, so it counts for liveness only: the range is finished with. What it does
+    // to the account is decided at commit: with no trie a non-empty root is not verified, gets no done
+    // marker and an excluded entry, and healing fetches it (spec 022 T050a, H1).
+    // IMPORTANT: do NOT mark the peer stateless — it served a well-formed response.
     // Only fall through to stateless marking when proofs == 0 (peer gave us nothing at all).
     def handleProofOfAbsence(): Unit =
       // Route through the same ordered-completion/cursor bookkeeping as any other served chunk
-      // (applyOrderedStorageChunk / applyReadyStorageChunk): a proof-of-absence response is a
-      // complete, valid answer for THIS chunk's [next, last] — like a served chunk whose slots
+      // (applyOrderedStorageChunk / applyReadyStorageChunk): a proof-of-absence response is taken as a
+      // complete answer for THIS chunk's [next, last] — like a served chunk whose slots
       // reach task.last, just with zero slots — so it must advance storageTrieCursor and count
       // towards accountSubtaskCounters the same way. Continuation and subtask chunks are always
       // dispatched solo (requestNextRanges/isInitialRange), so this is reached for genuinely
@@ -267,10 +274,9 @@ private[actors] trait StorageResponseProcessing:
       val task = tasks.head
       applyOrderedStorageChunk(peer, task, Seq.empty, response.proof)
       log.warn(
-        s"Storage proof-of-absence accepted: account=${task.accountString} " +
+        s"Storage proof-of-absence taken, proof unchecked: account=${task.accountString} " +
           s"storageRoot=${task.storageRoot.take(4).toHex} range=${task.rangeString} " +
-          s"proofNodes=${response.proof.size} peer=${peer.id.value}. " +
-          s"Account storage empty/changed at current pivot — healing will validate."
+          s"proofNodes=${response.proof.size} peer=${peer.id.value}."
       )
       // Peer is healthy — clear any penalty state it accumulated.
       statelessPeers.remove(peer.id.value)
@@ -301,6 +307,10 @@ private[actors] trait StorageResponseProcessing:
         emptyResponsesByTask.update(key, attempts)
 
         if attempts >= maxEmptyResponsesPerTask then
+          // spec 022 T033: durable when this message ends; a clean end of the phase wipes the only other trace (R-5a).
+          excludedRecorder.stage(
+            Seq(ExcludedAccount(task.accountHash, ExcludedReason.StorageSkipped, claimedStorageRoot = task.storageRoot))
+          )
           skipped += 1
           val doneTask = task.copy(done = true, pending = false)
           recordCompletedTask(doneTask)

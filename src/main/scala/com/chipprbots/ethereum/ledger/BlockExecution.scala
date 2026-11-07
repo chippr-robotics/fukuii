@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersEr
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
@@ -19,7 +20,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.StateReadCacheConfig
-import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -506,8 +506,7 @@ class BlockExecution(
     val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
     val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
       blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if !pragueActive && !etcOlympiaActive then return world
-
+    if !pragueActive && !etcOlympiaActive then world
     // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
     // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
     // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
@@ -515,28 +514,28 @@ class BlockExecution(
     // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
     // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
     // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
-    if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then return world
+    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
+    else
+      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
+      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
+      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
+      // the account was absent so getStorage threw.
+      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
+        val account = world
+          .getAccount(HistoryStorageAddress)
+          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          .copy(nonce = UInt256(1))
+        world
+          .saveAccount(HistoryStorageAddress, account)
+          .saveCode(HistoryStorageAddress, HistoryStorageCode)
+      else world
 
-    // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
-    // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
-    // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
-    // the account was absent so getStorage threw.
-    val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-      val account = world
-        .getAccount(HistoryStorageAddress)
-        .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        .copy(nonce = UInt256(1))
-      world
-        .saveAccount(HistoryStorageAddress, account)
-        .saveCode(HistoryStorageAddress, HistoryStorageCode)
-    else world
-
-    // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
-    val parentHashValue = UInt256(block.header.parentHash.value)
-    val slot = (blockNumber - 1) % HistoryServeWindow
-    val storage = w1.getStorage(HistoryStorageAddress)
-    val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-    w1.saveStorage(HistoryStorageAddress, updatedStorage)
+      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+      val parentHashValue = UInt256(block.header.parentHash.value)
+      val slot = (blockNumber - 1) % HistoryServeWindow
+      val storage = w1.getStorage(HistoryStorageAddress)
+      val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
+      w1.saveStorage(HistoryStorageAddress, updatedStorage)
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
     *
@@ -845,45 +844,45 @@ object BlockExecution:
       world: InMemoryWorldStateProxy,
       accessRecorder: Option[BlockAccessRecorder]
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
-    if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then return Right((world, Nil))
+    if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then Right((world, Nil))
+    else
+      val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+      var w = world
+      val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
 
-    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
-    var w = world
-    val outputs = scala.collection.mutable.ListBuffer.empty[ByteString]
-
-    // EIP-7685: Execute system calls to request contracts and collect output.
-    // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
-    // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
-    // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
-    // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
-    // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
-    //
-    // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
-    // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
-    // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
-    // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
-    // queue on both sides of the fork and requires byte-identical requests and storage.
-    var failure: Option[String] = None
-    for (queueAddr, requestType) <- BlockExecution.systemCallTargets(header.unixTimestamp)
-    do
-      val code = w.getCode(queueAddr)
-      if failure.isEmpty && code.nonEmpty then
-        // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
-        // makes the call, which reads the target as any call does. All four share block access index n + 1.
-        accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
-        val context =
-          BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
-        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
-        val result = vm.run(context)
-        result.error match
-          case Some(err) =>
-            failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
-          case None =>
-            w = InMemoryWorldStateProxy.persistState(result.world)
-            // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
-            // Empty returndata (no queued requests) means no bytes are emitted for this type.
-            if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
-    failure.toLeft((w, outputs.toSeq))
+      // EIP-7685: Execute system calls to request contracts and collect output.
+      // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
+      // Prague: EIP-7002 (withdrawals) and EIP-7251 (consolidations). Amsterdam adds the two EIP-8282 builder
+      // predeploys. The SYSTEM_ADDRESS call is not optional bookkeeping: each predeploy's dequeue path clears the
+      // per-block slots its user path dirtied (for the builder deposit contract, slots 0x01 and 0x03), so skipping
+      // the call leaves those slots set and forks the storage root -> account RLP -> STATE ROOT.
+      //
+      // GAS: on an Amsterdam block every system call, the pre-existing EIP-7002/7251 ones included, gets EIP-8037's
+      // state-gas reservoir BESIDE its unchanged 30,000,000 execution grant (see `systemCallContext`). The queue
+      // predeploys are bounded loops that never read GAS, so for them it changes nothing; that is asserted, not assumed:
+      // `AmsterdamBuilderRequestsSpec` runs the fixture's real withdrawal and consolidation bytecode over a non-empty
+      // queue on both sides of the fork and requires byte-identical requests and storage.
+      var failure: Option[String] = None
+      for (queueAddr, requestType) <- BlockExecution.systemCallTargets(header.unixTimestamp)
+      do
+        val code = w.getCode(queueAddr)
+        if failure.isEmpty && code.nonEmpty then
+          // EIP-7928: execution-specs `process_checked_system_transaction` checks the code on an untracked state, then
+          // makes the call, which reads the target as any call does. All four share block access index n + 1.
+          accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
+          val context =
+            BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
+          val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
+          val result = vm.run(context)
+          result.error match
+            case Some(err) =>
+              failure = Some(s"SYSTEM_CONTRACT_CALL_FAILED: system call to $queueAddr failed: $err")
+            case None =>
+              w = InMemoryWorldStateProxy.persistState(result.world)
+              // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
+              // Empty returndata (no queued requests) means no bytes are emitted for this type.
+              if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+      failure.toLeft((w, outputs.toSeq))
 
   /** The body of `BlockExecution.collectDepositRequests` (see there), shared with eth_simulateV1. Moved here unchanged.
     */

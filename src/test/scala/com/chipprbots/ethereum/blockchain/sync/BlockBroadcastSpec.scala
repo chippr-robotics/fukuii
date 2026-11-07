@@ -603,7 +603,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   ) in {
     // Both PoW and PoS configurations must send NewBlock to ETH68 peers
     for isPoW <- Seq(true, false) do
-      val pm: TestProbe = TestProbe()(testKit.system.classicSystem)
+      val pm: TestProbe = TestProbe()(using testKit.system.classicSystem)
       val bb = new BlockBroadcast(pm.ref, isPoWChain = isPoW)
 
       val blockHeader: BlockHeader = Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(1001))
@@ -628,7 +628,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
         Peer(
           PeerId(s"eth68peer-$isPoW"),
           new java.net.InetSocketAddress("127.0.0.1", 0),
-          TestProbe()(testKit.system.classicSystem).ref.toTyped[PeerActor.Command],
+          TestProbe()(using testKit.system.classicSystem).ref.toTyped[PeerActor.Command],
           false
         )
 
@@ -733,7 +733,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     SyncTest
   ) in new PoSTestSetup:
     val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
-    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val peers: Map[PeerId, PeerWithInfo] = Map(peer.id -> PeerWithInfo(peer, eth69Info))
     val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
     val secondHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1010)) // +10, below the 32-block gate
 
@@ -753,7 +753,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     SyncTest
   ) in new PoSTestSetup:
     val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
-    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val peers: Map[PeerId, PeerWithInfo] = Map(peer.id -> PeerWithInfo(peer, eth69Info))
     val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
     val secondHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1032)) // exactly +32
 
@@ -778,7 +778,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     SyncTest
   ) in new PoSTestSetup:
     val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
-    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val peers: Map[PeerId, PeerWithInfo] = Map(peer.id -> PeerWithInfo(peer, eth69Info))
     val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
     val reorgedHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(900)) // moved backward
 
@@ -803,7 +803,7 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     SyncTest
   ) in new PoSTestSetup:
     val eth69Info: PeerInfo = eth69PeerInfoAt(BigInt(500))
-    val peers = Map(peer.id -> PeerWithInfo(peer, eth69Info))
+    val peers: Map[PeerId, PeerWithInfo] = Map(peer.id -> PeerWithInfo(peer, eth69Info))
     val firstHead: BlockHeader = baseBlockHeader.copy(number = BlockNumber(1000))
     val secondHead: BlockHeader =
       baseBlockHeader.copy(number = BlockNumber(1010)) // +10 — would be throttled by default

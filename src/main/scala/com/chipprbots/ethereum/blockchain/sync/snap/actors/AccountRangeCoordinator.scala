@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -12,6 +13,9 @@ import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.LinkedHashSet
+import scala.collection.mutable.PriorityQueue
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.blocking
@@ -22,16 +26,19 @@ import scala.util.Success
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
 import com.google.common.hash.PrimitiveSink
+import org.slf4j.Logger
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 // The call-site map for the snap-split verify adoption mode (spec 016 T064, C-A3): the dropped parameter and the
 // StateIngest member that replaces it. `mptStorage` (the core's per-pivot trie store) and `storageDone` stay explicit
@@ -114,7 +121,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // (see `finalizeTrie`). For the actor-thread code below we use `ctx.log`; the Future uses
   // `futureLog` (a plain SLF4J logger) instead.
   val log = ctx.log
-  val futureLog = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
+  val futureLog: Logger = org.slf4j.LoggerFactory.getLogger(classOf[AccountRangeCoordinatorImpl])
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   var stateRoot: ByteString = initialStateRoot
@@ -135,7 +142,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
   // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
-  val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val statelessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
   // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
@@ -144,7 +151,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
-  val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  val snaplessPeers: mutable.Set[PeerId] = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Strike counter for empty-with-empty-proof responses (the only signal that drives
   // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
   // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
@@ -160,7 +167,8 @@ private[actors] class AccountRangeCoordinatorImpl(
   //   * any successful response from peer → recordPeerSuccess clears strikes
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
-  val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  val emptyResponseStrikes: mutable.Map[PeerId, Int] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   var pivotRefreshRequested = false
 
   // Task management — resume ranges from saved positions (core-geth parity).
@@ -193,8 +201,10 @@ private[actors] class AccountRangeCoordinatorImpl(
           //     are therefore missing or wrong on disk. The state healing walk from the pivot root fetches exactly
           //     those (missing by hash; Path scheme also verifies keccak at the path) and stops at every subtree that
           //     is present — so nothing is trusted that healing has not checked against the final root.
-          //   - `resumeProgress.nonEmpty` latches `resumedStaleCursors` in the controller, which forces that healing
-          //     walk even under deferred merkleization. Correctness never depends on the resumed StackTrie's root.
+          //   - `resumeProgress.nonEmpty` latches `resumedStaleCursors` in the controller, which forces healing even under
+          //     deferred merkleization, where it walks. Where the invariant marker stands that discovery from the root is
+          //     all it runs (spec 022 T051), the background audit looking after hand-off. Correctness never depends on the
+          //     resumed StackTrie's root.
           //   - Storage/bytecode work for accounts below the cursor is NOT re-derived from the network: it is the
           //     carried prefix of the task files, replayed by `ReplayCarriedContracts`.
           log.info(
@@ -219,19 +229,20 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
-  val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks*)(
+  val pendingTasks: PriorityQueue[AccountTask] = mutable.PriorityQueue[AccountTask](remainingTasks*)(using
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
   // requestId -> (task, worker, peer)
-  val activeTasks = mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
+  val activeTasks: mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)] =
+    mutable.Map[BigInt, (AccountTask, WorkerRef, Peer)]()
   // Seeded with the ranges already complete on resume (#1597): every snapshot builds its cursor map from pending,
   // active, storing and completed tasks, so a skipped range left out of here dropped out of every later checkpoint, and
   // the next restart saw one cursor fewer than the layout and rejected the whole record.
-  val completedTasks = mutable.ArrayBuffer[AccountTask](skippedTasks*)
+  val completedTasks: ArrayBuffer[AccountTask] = mutable.ArrayBuffer[AccountTask](skippedTasks*)
 
   // Worker pool
-  val workers = mutable.ArrayBuffer[WorkerRef]()
-  val idleWorkers = mutable.LinkedHashSet.empty[WorkerRef]
+  val workers: ArrayBuffer[WorkerRef] = mutable.ArrayBuffer[WorkerRef]()
+  val idleWorkers: LinkedHashSet[WorkerRef] = mutable.LinkedHashSet.empty[WorkerRef]
 
   // #1184: dispatch-stalled detector — silent peers (no FIN/RST) leave activeTasks slots
   // held forever; the worker→TaskFailed cascade depends on a response that never arrives.
@@ -255,7 +266,7 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Statistics
   var accountsDownloaded: Long = 0
   var bytesDownloaded: Long = 0
-  val startTime = System.currentTimeMillis()
+  val startTime: Long = System.currentTimeMillis()
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
   var consumedKeyspace: BigInt =
@@ -305,17 +316,11 @@ private[actors] class AccountRangeCoordinatorImpl(
   var contractAccountsCount: Long = 0
   var contractStorageCount: Long = carriedStorageCount
 
-  // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
-  // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
+  // Unique codeHashes for bytecode download: a Bloom filter for dedup + a temp file for the hashes. At handoff, reads
+  // ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
   // Bug 20 fix: the original ask-based handoff timed out (5s) and OOMed when reading the full file.
-  implicit private object ByteStringFunnel extends Funnel[ByteString]:
-    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
-      into.putBytes(from.toArray)
-  val codeHashBloom: BloomFilter[ByteString] = BloomFilter.create[ByteString](
-    ByteStringFunnel,
-    3_000_000,
-    0.0001 // ~4MB for 3M expected entries at 0.01% FPR
-  )
+  // Built on first use: it is large (see `newCodeHashBloom`), and a coordinator with no contract work never needs it.
+  lazy val codeHashBloom: BloomFilter[ByteString] = AccountRangeCoordinator.newCodeHashBloom()
   val uniqueCodeHashesFos = new FileOutputStream(uniqueCodeHashesFile.toFile, true)
   val uniqueCodeHashesOut = new BufferedOutputStream(uniqueCodeHashesFos, 65536)
   var uniqueCodeHashesCount: Long = carriedCodeHashesCount
@@ -323,21 +328,21 @@ private[actors] class AccountRangeCoordinatorImpl(
   // Tasks whose response is being inserted chunk-by-chunk (`StoreAccountChunk`). They are in neither `pendingTasks`
   // nor `activeTasks` meanwhile; without this a snapshot taken in that window omits the range entirely and a resume
   // would restart it from its start. Keyed by `task.last`; the task's `next` is already advanced past the response.
-  val storingTasks = mutable.Map.empty[ByteString, AccountTask]
+  val storingTasks: mutable.Map[ByteString, AccountTask] = mutable.Map.empty[ByteString, AccountTask]
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
-  val knownAvailablePeers = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
-  val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
-  val peerCooldownUntilMs = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
   // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
-  val lastDispatchTimeMs = mutable.Map.empty[String, Long]
+  val lastDispatchTimeMs: mutable.Map[String, Long] = mutable.Map.empty[String, Long]
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
   // Exponential backoff from 60s to 5min.
@@ -842,13 +847,13 @@ private[actors] class AccountRangeCoordinatorImpl(
             val selfRef = ctx.self
             Future {
               blocking(finalizeTrie())
-            }(accountTrieEc)
+            }(using accountTrieEc)
               .onComplete {
                 case Success(result) => selfRef ! TrieFlushComplete(gen, result)
                 // `Status.Failure` is Classic ask protocol with no Typed equivalent — route the
                 // exception through an explicit internal Command instead.
                 case Failure(ex) => selfRef ! TrieFlushFailed(gen, ex.getMessage)
-              }(accountTrieEc)
+              }(using accountTrieEc)
             // Switch to finalizing state so no message can touch the trie during flush.
             finalizing()
           else Behaviors.same
@@ -921,6 +926,25 @@ private[actors] class AccountRangeCoordinatorImpl(
         else Some(estimatedBig.toLong)
 
 object AccountRangeCoordinator:
+
+  /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia's logs show 13.5M through the old filter
+    * (3M entries at 1e-4), whose false-positive rate had reached about 0.53 by then, which implies about 16M. ETH
+    * mainnet's count has not been measured here. Expected hashes lost in a whole sync: about 1e-12 at 17M, 2e-6 at 30M,
+    * 2e-3 at 40M, and climbing steeply past that, so `identifyContractAccounts` warns at this load.
+    */
+  private[actors] val CodeHashBloomExpectedEntries: Long = 40_000_000L
+  private[actors] val CodeHashBloomFpp: Double = 1e-9
+
+  private object ByteStringFunnel extends Funnel[ByteString]:
+    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
+      into.putBytes(from.toArray)
+
+  /** The dedup filter of the unique code-hash file. A false positive loses a hash for good (see
+    * `ContractWorkCarry.identifyContractAccounts`), so it is sized for that, not for memory: about 206 MiB in one array
+    * for as long as the coordinator lives, and 30 hash functions per operation (spec 022 T050a, H3).
+    */
+  private[actors] def newCodeHashBloom(): BloomFilter[ByteString] =
+    BloomFilter.create[ByteString](ByteStringFunnel, CodeHashBloomExpectedEntries, CodeHashBloomFpp)
 
   /** Why the account phase has tasks pending and nothing in flight. */
   enum IdleStallVerdict:
@@ -1103,8 +1127,26 @@ object AccountRangeCoordinator:
       storageDone: Option[SnapStorageDoneStorage] = None,
       intakeBudget: Option[SnapIntakeBudget] = None
   ): Behavior[Command] =
+    // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
+        // A supervisor restart starts the phase over what the last incarnation wrote, from the launch's cursors and root,
+        // which the pivot may have moved on from. The controller's resume planning never sees it (spec 022 T050a). With
+        // the task files it is a resume, and keeps the marker as any resume does: the audit covers that crash class (the
+        // user's decision, 2026-11-01). Without them every partial range starts over: a fresh phase over what is there.
+        if incarnations.getAndIncrement() > 0 &&
+          HealInvariant.withdrawForPathAccountPhase(
+            stateIngest.appState,
+            stateIngest.pathNodes,
+            storageScheme,
+            resumesRanges = carriedTaskFiles.isDefined
+          )
+        then
+          ctx.log.warn(
+            "[HEAL-INVARIANT] Marker withdrawn: the account coordinator restarted, with nothing to resume from, over existing Path nodes. " +
+              "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
+          )
         val impl = new AccountRangeCoordinatorImpl(
           ctx = ctx,
           timers = timers,

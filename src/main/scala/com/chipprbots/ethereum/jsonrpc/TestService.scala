@@ -31,10 +31,10 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.Block.*
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -469,5 +469,4 @@ class TestService(
 
   private val emptyLogRlpHash: ByteString = ByteString(crypto.kec256(rlp.encode(RLPList())))
 
-  implicit private class RichResponse[A](response: A):
-    def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))
+  extension [A](response: A) private def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))

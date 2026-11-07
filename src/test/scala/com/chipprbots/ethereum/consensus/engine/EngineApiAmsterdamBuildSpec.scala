@@ -197,7 +197,7 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
           new ForkChoiceManager(blockchainReader, blockchainWriter),
           Some(pendingTxManager),
           builderGasCeil = gasCeil
-        )(config, classicSystem.toTyped.scheduler)
+        )(using config, classicSystem.toTyped.scheduler)
       else
         new EngineApiService(
           blockchainReader,
@@ -205,7 +205,7 @@ class EngineApiAmsterdamBuildSpec extends AnyWordSpec with Matchers:
           blockExecution,
           new ForkChoiceManager(blockchainReader, blockchainWriter),
           None
-        )(config, null)
+        )(using config, null)
 
     def call(method: String, params: List[JValue]): JsonRpcResponse =
       new EngineApiController(service, None, config)

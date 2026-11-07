@@ -3,7 +3,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.actor.ActorSystem
-
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActorRef
@@ -36,7 +35,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
   // ─── T2.1 Tier 1: exact interpolation from NewBlock ───────────────────────
   "SyncController CalibrateChainWeightFromPeer" should
     "apply Tier 1 interpolation when peerTD and peerMaxBlock are both provided" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -52,10 +51,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe expected
+    )
 
   // ─── T2.2 Tier 2: STATUS-only, no block number ────────────────────────────
   it should "apply Tier 2 (peerTD direct) when peerMaxBlock is 0" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -67,10 +67,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe peerTD
+    )
 
   // ─── T2.3 Tier 3 entry: sentinel triggers local chain computation ──────────
   it should "call calibrateTDFromLocalChain when peerTD is 0 (ETH69 sentinel)" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -82,10 +83,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Proof: retry was scheduled — advance 30 min and expect CalibrateChainWeightNowCmd
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T2.4 Tier 3 failure: retry is scheduled when anchor not found ─────────
   it should "schedule a 30-minute retry when calibrateTDFromLocalChain returns false" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -97,10 +99,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
       // No second message without advancing clock again
       networkPeerManager.expectNoMessage(100.millis)
+    )
 
   // ─── T2.5 Tier 3 success: no retry when anchor found and TD written ────────
   it should "not schedule a retry when calibrateTDFromLocalChain succeeds" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupAnchorChain(bestBlockNum = 10, anchorNum = 7, anchorTD = BigInt("7000000000000000"))
       drainRegistration()
 
@@ -110,10 +113,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T2.6 Plausibility gate — below threshold: no write ───────────────────
   it should "not write chain weight when calibratedTD is below genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // bestBlock.number = 1; peerTD=100, peerMaxBlock=100000 → calibratedTD = 0 via integer div
       setupBestBlock(blockNum = BigInt(1))
       drainRegistration()
@@ -126,10 +130,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
 
       blockchainReader.getChainWeightByHash(beforeHash) shouldBe beforeWeight
+    )
 
   // ─── T2.7 Plausibility gate — above threshold: write succeeds ─────────────
   it should "write chain weight when calibratedTD is above genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -144,11 +149,12 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       stored shouldBe defined
       stored.get.totalDifficulty.value should be > BigInt("17179869184000")
+    )
 
   // ─── T3.1 Core traversal: anchor at h7, accumulate h8-h10 ─────────────────
   "calibrateTDFromLocalChain" should
     "find the anchor at h7 and accumulate h8+h9+h10 difficulties" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val anchorTD: BigInt = BigInt("7000000000000000") // 7×10^15 > 7 × 10^13 → plausible anchor
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 7, length = 4) // h7, h8, h9, h10
       val h7: BlockHeader = chain(0); val h8: BlockHeader = chain(1); val h9: BlockHeader = chain(2);
@@ -172,13 +178,14 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       val stored: Option[ChainWeight] = blockchainReader.getChainWeightByHash(h10.hash)
       stored shouldBe defined
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T3.2 No anchor within MaxWalkBlocks: defer ────────────────────────────
   it should "return false and schedule retry when no plausible anchor found within walk limit" taggedAs (
     UnitTest,
     SyncTest
   ) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -189,10 +196,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.3 Idempotent: bestBlock already has correct TD ────────────────────
   it should "be idempotent when bestBlock already has a plausible stored TD" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // bestBlock h10 has anchorTD that passes the plausibility check already
       val correctTD: BigInt = BigInt("24000000000000000000000") // 24e21 >> 10 × 10^13
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 10, length = 1)
@@ -212,10 +220,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // No retry needed — success
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T3.4 Broken parentHash chain aborts cleanly ─────────────────────────
   it should "abort without writing when parentHash lookup returns None" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // Build h10 whose parentHash points to a header that is NOT stored
       val h10: BlockHeader = Fixtures.Blocks.Genesis.header.copy(
         number = BlockNumber(10),
@@ -238,26 +247,23 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Retry is scheduled (abort returns false → scheduleTDCalibrationRetry)
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.5 Plausibility gate blocks write of low computed TD ───────────────
   it should "not write when accumulated TD is below genesisWeight × 1000" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
-      // Anchor at h1 with absurdly low anchorTD — accumulated result < genesis × 1000
-      // Actually 1×10^12 < 1×10^13 → NOT a plausible anchor! So the walk will abort, not return a below-threshold result.
-      // Instead: use a large-numbered block with barely-above-threshold anchor that still leads to below-genesis*1000 result.
-      // Simplest: anchor with TD=1 (passes BigInt check), but 1 < genesis*1000 → plausibility rejects it.
-      // Use anchor TD that passes the walk-check (> blockNum × MinTDPerBlock) but the final WRITE plausibility fails.
-      // h1 with anchorTD = 2×10^13 (> 1×10^13, so plausible anchor) → accumulated td = 2×10^13 + 0 gaps
-      // genesis.difficulty ≈ 1.7×10^10, genesisWeight*1000 ≈ 1.7×10^13 < 2×10^13 → passes write gate too.
-      // So we need: anchorTD > blockNum × 10^13 (to find the anchor) but accumulated td < genesisWeight * 1000.
-      // This is structurally impossible if genesisWeight is based on genesis.difficulty (1.7×10^10) and anchorTD > blockNum×10^13:
-      //   anchorTD > blockNum × 10^13 ≥ 1 × 10^13 (for blockNum ≥ 1)
-      //   genesisWeight * 1000 ≈ 1.7×10^13
-      // So min plausible anchorTD ≈ 10^13 + ε, which is right around the threshold.
-      // For blockNum=1: anchorTD must be > 10^13. Threshold is 1.7×10^13. If anchorTD=1.1×10^13 → write gate rejects.
-      val tightAnchor: BigInt = BigInt("11000000000000") // 1.1×10^13 > 1×10^13 → found as anchor
-      val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 1, length = 1)
-      val h1: BlockHeader = chain(0)
+    (new RegularSyncSetup:
+      // An anchor that clears the walk's floor (HeadChainWeight.floor: genesis weight 1.7×10^10 + 131072 per block) but
+      // whose accumulated TD fails the write gate (genesisWeight × 1000 ≈ 1.7×10^13): h1 with 1.1×10^13, zero gap.
+      //
+      // #1654: h1's parent is NOT stored. With genesis as its parent, as this test first had it, the head's exact weight
+      // is derivable (genesis weight + h1 difficulty) and is written before Tier 3 runs (see the #1654 tests below), so
+      // this write gate would never be reached.
+      val tightAnchor: BigInt = BigInt("11000000000000") // 1.1×10^13: above the floor, below the write gate
+      val h1: BlockHeader = Fixtures.Blocks.Genesis.header.copy(
+        number = BlockNumber(1),
+        parentHash = BlockHash(fakeMissingHash)
+      )
+      blockchainWriter.storeBlockHeader(h1).commit()
       blockchainWriter.storeChainWeight(h1.hash, ChainWeight.totalDifficultyOnly(tightAnchor)).commit()
       setBestBlockHeader(h1)
       drainRegistration()
@@ -272,10 +278,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // Retry is scheduled (plausibility failure → returns false)
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.6 Boundary: gap = MaxWalkBlocks exactly succeeds ──────────────────
   it should "succeed when gap equals MaxWalkBlocks (10000 headers above anchor)" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val MaxWalk = 10000
       // Build chain: h1 (anchor), h2...h10001 (10000 headers above anchor)
       val anchorTD: BigInt = BigInt("10000000000000000") // 10^16 >> threshold
@@ -299,10 +306,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       stored shouldBe defined
       val expectedTD: BigInt = anchorTD + chain.tail.foldLeft(BigInt(0))((acc, h) => acc + h.difficulty.value)
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T3.7 Boundary: gap = MaxWalkBlocks + 1 defers ───────────────────────
   it should "defer when gap is one past MaxWalkBlocks" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       val MaxWalk = 10000
       // Chain of MaxWalk+2 headers; anchor is at head (h1), gap = MaxWalk+1
       val chain: Vector[BlockHeader] = buildParentHashChain(startNum = 1, length = MaxWalk + 2)
@@ -325,10 +333,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       blockchainReader.getChainWeightByHash(bestHdr.hash) shouldBe beforeWeight
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T3.8 Walk stops at the FIRST plausible anchor (closest to bestBlock) ─
   it should "stop at the first plausible anchor encountered while walking backward" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       // h5 and h10 both have plausible TDs; walk from h15 should find h10 first
       val anchorTD_5: BigInt = BigInt("5000000000000000") // would give wrong lower td
       val anchorTD_10: BigInt = BigInt("10000000000000000") // correct anchor (first hit from h15)
@@ -355,11 +364,12 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       val gapHeaders: Vector[BlockHeader] = chain.slice(6, 11) // h11..h15
       val expectedTD: BigInt = anchorTD_10 + gapHeaders.foldLeft(BigInt(0))(_ + _.difficulty.value)
       stored.get.totalDifficulty.value shouldBe expectedTD
+    )
 
   // ─── T4.1 Retry loop: two consecutive 30-minute retries ──────────────────
   "ChainWeightCalibration retry loop" should
     "fire CalibrateChainWeightNowCmd again after each failed attempt" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -376,10 +386,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectMsg(CalibrateChainWeightNowCmd)
+    )
 
   // ─── T4.2 Retry terminates on success ────────────────────────────────────
   it should "stop scheduling retries when calibrateTDFromLocalChain succeeds" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -403,10 +414,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       )
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
 
   // ─── T4.3 ETH68 peer appears at retry: tier 2 fires, no local chain ───────
   it should "use Tier 2 (not local chain) when an ETH68 peer appears at retry time" taggedAs (UnitTest, SyncTest) in
-    new RegularSyncSetup:
+    (new RegularSyncSetup:
       setupBestBlock(blockNum = BigInt(24720000))
       drainRegistration()
 
@@ -428,8 +440,224 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
       testScheduler.timePasses(30.minutes)
       networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  // ─── #1654: an exact stored head weight is never replaced by an estimate ──
+  //
+  // The chains below are Mordor-scale: ~9e6 difficulty per block and TD 174823251167868 at the head, the Mordor source
+  // node's `before=` value from the issue. The fixture genesis is ETC mainnet's (TD 17179869184).
+
+  "#1654 timed calibration" should
+    "keep an exact stored head weight through Tier 1, Tier 2 and Tier 3 (Mordor source-node restart)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in
+    (new RegularSyncSetup:
+      // Pivot P has no stored parent (SNAP, headers not backfilled); P+1 and P+2 were imported on top of it, so each
+      // stored weight is its parent's plus its difficulty.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorHeadTD - MordorDifficulty * 2, length = 3)
+      val head: BlockHeader = chain.last
+      def headTD: BigInt = blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value
+      headTD shouldBe MordorHeadTD
+      drainRegistration()
+
+      // Tier 1: before #1654 this wrote peerTD * 15,000,002 / 15,000,007, a linear guess.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt("174823400000000"), MordorPivot + 7)
+      )
+      headTD shouldBe MordorHeadTD
+      // Tier 2: the peer's TD as is.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt("174823400000000"), BigInt(0))
+      )
+      headTD shouldBe MordorHeadTD
+      // Tier 3: no write, and no 30-minute retry either: there is nothing to calibrate.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
+      )
+      headTD shouldBe MordorHeadTD
+      blockchainReader.getChainWeightByHash(chain(1).hash).get.totalDifficulty.value shouldBe
+        MordorHeadTD - MordorDifficulty
+      testScheduler.timePasses(30.minutes)
+      networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  it should "never rewrite the genesis weight while genesis is the best block" taggedAs (UnitTest, SyncTest) in
+    (new RegularSyncSetup:
+      val genesis: BlockHeader = Fixtures.Blocks.Genesis.header
+      blockchainWriter.save(
+        Block(genesis, BlockBody(Nil, Nil)),
+        Seq.empty,
+        ChainWeight.totalDifficultyOnly(genesis.difficulty.value),
+        saveAsBestBlock = true
+      )
+      drainRegistration()
+
+      // A fresh full-sync node 30 s in, with only an ETH68 STATUS seen: before #1654, Tier 2 stored the network's TD as
+      // the genesis weight, and every block imported afterwards carried it.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt("24000000000000000000000"), BigInt(0))
+      )
+
+      blockchainReader.getChainWeightByHash(genesis.hash).get.totalDifficulty.value shouldBe genesis.difficulty.value
+    )
+
+  it should "derive the head weight from its parent's instead of writing a peer estimate" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorHeadTD - MordorDifficulty * 2, length = 3)
+      val head: BlockHeader = chain.last
+      // An earlier calibration overwrote the head (the issue's `after=` value), and no block was imported since.
+      blockchainWriter
+        .storeChainWeight(head.hash, ChainWeight.totalDifficultyOnly(BigInt("174823332424315")))
+        .commit()
+      drainRegistration()
+
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt("174823400000000"), MordorPivot + 7)
+      )
+
+      blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value shouldBe MordorHeadTD
+    )
+
+  it should "still write an estimate when the head's parent has no stored weight (pivot not backfilled)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val pivot: BigInt = BigInt(24720000)
+      // BLOCK_NUMBER_PROXY: SNAP finalization's last resort, `td = pivot`.
+      val chain: Vector[BlockHeader] = saveLinkedChain(BlockHash(fakeMissingHash), pivot, pivot, length = 1)
+      drainRegistration()
+
+      val peerTD: BigInt = BigInt("24000000000000000000000")
+      val peerMaxBlock: BigInt = BigInt(25000000)
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock)
+      )
+
+      blockchainReader.getChainWeightByHash(chain.last.hash).get.totalDifficulty.value shouldBe
+        peerTD * pivot / peerMaxBlock
+    )
+
+  it should "still write an estimate on a chain whose links hold but whose base is a block-number proxy" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      // P stores `td = P`, and P+1 was imported on top: its link holds, but the parent's weight is below the floor.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorPivot, length = 2)
+      val head: BlockHeader = chain.last
+      blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value shouldBe
+        MordorPivot + MordorDifficulty
+      drainRegistration()
+
+      val peerTD: BigInt = BigInt("174823400000000")
+      val peerMaxBlock: BigInt = MordorPivot + 11
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock)
+      )
+
+      blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value shouldBe
+        peerTD * head.number.value / peerMaxBlock
+    )
+
+  it should "find a Mordor-scale anchor in Tier 3, which the 10^13-per-block floor never could" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      // Anchor A = 15,000,000 holds a real Mordor-scale TD (1.748e14 < 15M x 10^13 = 1.5e20). The three headers above it
+      // carry block-number proxies, so the walk must pass them and stop at A.
+      val anchorTD: BigInt = MordorHeadTD - MordorDifficulty * 3
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, anchorTD, length = 4)
+      chain.tail.foreach { h =>
+        blockchainWriter.storeChainWeight(h.hash, ChainWeight.totalDifficultyOnly(h.number.value)).commit()
+      }
+      val head: BlockHeader = chain.last
+      drainRegistration()
+
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
+      )
+
+      blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value shouldBe MordorHeadTD
+      testScheduler.timePasses(30.minutes)
+      networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  // ─── #1654 on a flat PoS chain (difficulty 0 after the merge) ─────────────
+  //
+  // Post-merge every block adds 0, so a block's weight equals its parent's: the frozen terminal TD. These pin at the
+  // handler what HeadChainWeightSpec pins at `classify` (beacon review).
+
+  it should "write nothing on a post-merge head above a SNAP pivot whose TD was a peer-interpolated estimate" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      // Pivot P stored PEER_INTERPOLATED_TD (plausible, but a guess); P+1..P+3 were imported on top at difficulty 0, so
+      // each stores its parent's weight unchanged. The base is estimated; every link holds.
+      val pivotEstimate: BigInt = SepoliaFrozenTD * PoSPivot / (PoSPivot + 100)
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 4, difficulty = BigInt(0))
+      def weights: Vector[BigInt] =
+        chain.map(h => blockchainReader.getChainWeightByHash(h.hash).get.totalDifficulty.value)
+      weights shouldBe Vector.fill(4)(pivotEstimate)
+      drainRegistration()
+
+      // Tier 1: before #1654 this wrote frozenTD * (P+3) / (P+53), below the frozen TD the parent carries.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, PoSPivot + 53)
+      )
+      // Tier 2 and Tier 3 (ETH68 STATUS only; pure ETH69).
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, BigInt(0))
+      )
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
+      )
+
+      weights shouldBe Vector.fill(4)(pivotEstimate)
+      testScheduler.timePasses(30.minutes)
+      networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  it should "still run the estimate path when the post-merge head is the SNAP pivot itself (no parent weight)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val pivotEstimate: BigInt = SepoliaFrozenTD * PoSPivot / (PoSPivot + 100)
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 1, difficulty = BigInt(0))
+      drainRegistration()
+
+      val peerMaxBlock: BigInt = PoSPivot + 53
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, peerMaxBlock)
+      )
+
+      // Unchanged from before #1654: Tier 1's linear interpolation.
+      blockchainReader.getChainWeightByHash(chain.head.hash).get.totalDifficulty.value shouldBe
+        SepoliaFrozenTD * PoSPivot / peerMaxBlock
+    )
 
   // ─── Base test setup ──────────────────────────────────────────────────────
+
+  // Sepolia: the TD frozen at the merge, and a post-merge SNAP pivot height.
+  private val SepoliaFrozenTD: BigInt = BigInt("17000018015853232")
+  private val PoSPivot: BigInt = BigInt(9500000)
+
+  private val MordorPivot: BigInt = BigInt(15000000)
+  private val MordorDifficulty: BigInt = BigInt(9000000)
+  private val MordorHeadTD: BigInt = BigInt("174823251167868")
 
   trait RegularSyncSetup extends EphemBlockchainTestSetup with TestSyncConfig with TestSyncPeers:
 
@@ -568,6 +796,35 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
         blockchainWriter.storeBlockHeader(h).commit()
         buf += h
         prev = h
+      buf.toVector
+
+    /** #1654: save `length` blocks (header + empty body) numbered from `startNum`, the first a child of `parentHash`,
+      * each with `difficulty` (Mordor-scale by default; 0 for a post-merge chain). The first stores `firstWeight`; each
+      * later one stores its parent's weight plus its difficulty, as block import does. The last becomes the best block.
+      * Returns them in ascending order.
+      */
+    def saveLinkedChain(
+        parentHash: BlockHash,
+        startNum: BigInt,
+        firstWeight: BigInt,
+        length: Int,
+        difficulty: BigInt = MordorDifficulty
+    ): Vector[BlockHeader] =
+      val buf = scala.collection.mutable.ArrayBuffer.empty[BlockHeader]
+      var parent = parentHash
+      var weight = ChainWeight.totalDifficultyOnly(firstWeight)
+      for i <- 0 until length do
+        val n = startNum + i
+        val h = Fixtures.Blocks.Genesis.header.copy(
+          number = BlockNumber(n),
+          parentHash = parent,
+          difficulty = Difficulty(difficulty),
+          extraData = ByteString(n.toByteArray)
+        )
+        if i > 0 then weight = weight.increase(h)
+        blockchainWriter.save(Block(h, BlockBody(Nil, Nil)), Seq.empty, weight, saveAsBestBlock = i == length - 1)
+        buf += h
+        parent = h.hash
       buf.toVector
 
     /** Convenience: build anchor chain and configure anchor TD at the first block. */

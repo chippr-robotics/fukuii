@@ -212,8 +212,7 @@ class ChainDownloader private (
         blockchainReader.getBlockHeaderByNumber(i) match
           case Some(header) =>
             if i > bodyFloor && !bodyStoredFor(header) then bodiesQueue :+= header.hash.value
-            if i > receiptFloor && blockchainReader.getReceiptsByHash(header.hash).isEmpty then
-              receiptsQueue :+= header.hash.value
+            if i > receiptFloor && !blockchainReader.hasReceipts(header.hash) then receiptsQueue :+= header.hash.value
             i += 1
           case None =>
             // The header cursor claimed this block was stored contiguously. It is not: do not skip it silently. Re-derive
@@ -785,6 +784,10 @@ class ChainDownloader private (
     * happens, matching stops (nothing later in `items` is tried either — position is unrecoverable past a response that
     * doesn't correspond to what was asked for).
     */
+  @annotation.nowarn("id=E029")
+  // DEFERRED 2026-11-05 (spec 020 DC-4, see specs/020-scala-3-9-lts-migration/dc4-ledger.md): Scala 3.9 says this
+  // match may not be exhaustive (counter-example `(_, Seq(_, _*))`). The cases look complete, so it may be a false
+  // positive on `Seq()` / `+:`, but adding a case would be a behaviour change (DC-8): analysed in a follow-up (#1716).
   @tailrec
   private def matchOrderedSubsequence[Item](
       remainingHashes: Seq[ByteString],
@@ -804,6 +807,11 @@ class ChainDownloader private (
     * (`BlockBody.shapeMismatch`, O(1): no trie work, so it costs nothing over the read the presence check already did).
     * CQ-020-07: SNAP finalization once wrote an empty placeholder body for the pivot, and a presence-only check meant
     * the backfill never replaced it. A body this check rejects is fetched again and validated like any other.
+    *
+    * Unlike receipts (a raw presence check, `hasReceipts`), this has to decode the body when one is stored: the shape
+    * check reads whether its transaction, ommer and withdrawal lists are empty, and the stored (boopickle) form only
+    * says that after every transaction before them is read. An absent body costs only the read, and the scans call this
+    * once per block above the body cursor (#1675).
     */
   private def bodyStoredFor(header: BlockHeader): Boolean =
     blockchainReader.getBlockBodyByHash(header.hash).exists(body => BlockBody.shapeMismatch(header, body).isEmpty)
@@ -963,7 +971,7 @@ class ChainDownloader private (
     var n = current + 1
     while n <= limit && blockchainReader
         .getBlockHeaderByNumber(n)
-        .exists(h => blockchainReader.getReceiptsByHash(h.hash).isDefined)
+        .exists(h => blockchainReader.hasReceipts(h.hash))
     do n += 1
     if n - 1 > current then appStateStorage.putBackfillBestReceipt(n - 1).commit()
 
@@ -1281,8 +1289,7 @@ class ChainDownloader private (
             val needsReceiptCheck = i > receiptFloor
             if !bodiesReceiptsDeferred && needsBodyCheck && !bodyStoredFor(header)
             then bodiesQueue :+= header.hash.value
-            if !bodiesReceiptsDeferred && needsReceiptCheck &&
-              blockchainReader.getReceiptsByHash(header.hash).isEmpty
+            if !bodiesReceiptsDeferred && needsReceiptCheck && !blockchainReader.hasReceipts(header.hash)
             then receiptsQueue :+= header.hash.value
             i += 1
           case None =>

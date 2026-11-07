@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pruning.PruneSupport
@@ -30,18 +32,39 @@ import encoding.*
   * Storing snapshot info this way allows for easy construction of snapshot key (based on a block number and number of
   * snapshots) and therefore, fast access to each snapshot individually.
   */
-class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends NodesKeyValueStorage:
+class ReferenceCountNodeStorage(
+    nodeStorage: NodesStorage,
+    bn: BigInt,
+    trackNetDeltas: Boolean = false,
+    recordSnapshots: Boolean = true
+) extends NodesKeyValueStorage:
 
   import ReferenceCountNodeStorage.*
 
   /** Net reference-count change this instance has applied per node (the sum over its `update` calls). A staged block
     * owns one instance for its whole execution, so this is exactly what the block did to the counts; it becomes the
     * block's undo record (see [[ReferenceCountNodeStorage.abandonRecordWrites]]).
+    *
+    * Filled only when `trackNetDeltas` is set, which `stageBlock` alone does: one entry per node the instance touches,
+    * held until it is dropped, so it is bounded by one block's writes there and by nothing on an instance that lives
+    * through a bulk load. The Path publish (`PathToHashExporter`) streams the whole state through one instance and kept
+    * ~100 B per node, an OutOfMemoryError at Sepolia's size (T063, spec 022 Gate 2). Nothing reads the deltas of an
+    * instance that was not asked to track them, so the counts it writes are the same either way.
     */
   private val netDeltaByNode = scala.collection.mutable.LinkedHashMap.empty[NodeHash, Int]
 
-  /** Non-zero net reference-count changes applied so far, in first-touched order. */
-  def netDeltas: Seq[(NodeHash, Int)] = netDeltaByNode.iterator.filter(_._2 != 0).toSeq
+  /** Non-zero net reference-count changes applied so far, in first-touched order. Throws on an instance that does not
+    * track them: an empty answer there would drop the block's `bd` undo record without a word.
+    */
+  def netDeltas: Seq[(NodeHash, Int)] =
+    if !trackNetDeltas then
+      throw new IllegalStateException(
+        "ReferenceCountNodeStorage was not created with trackNetDeltas: it keeps no per-node deltas to report"
+      )
+    netDeltaByNode.iterator.filter(_._2 != 0).toSeq
+
+  /** How many nodes' deltas this instance holds right now (0 unless it tracks them). */
+  private[storage] def trackedDeltaEntries: Int = netDeltaByNode.size
 
   def get(key: ByteString): Option[NodeEncoded] =
     nodeStorage.get(key).map(node => storedNodeFromBytes(node).nodeEncoded.toArray)
@@ -55,6 +78,17 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
   override def multiGet(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
     nodeStorage.multiGet(keys).map(_.map(node => storedNodeFromBytes(node).nodeEncoded.toArray))
 
+  /** As [[multiGet]] for a walk: no block-cache fill, and an entry that does not unwrap is that entry's result, where
+    * [[multiGet]] throws for the batch (spec 022 T053).
+    */
+  override def multiGetRaw(keys: Seq[NodeHash]): Seq[RawNodeRead] =
+    nodeStorage.multiGetNoFill(keys).map {
+      case None => RawNodeRead.Absent
+      case Some(stored) =>
+        try RawNodeRead.Bytes(storedNodeFromBytes(stored).nodeEncoded.toArray)
+        catch case NonFatal(_) => RawNodeRead.Undecodable
+    }
+
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): ReferenceCountNodeStorage =
 
     val deathRowKey = drRowKey(bn)
@@ -65,10 +99,11 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
     val upsertChanges = prepareUpsertChanges(toUpsert, bn)
     val changes = prepareRemovalChanges(toRemove, upsertChanges, bn)
 
-    changes.foreach { case (key, (storedNode, snapshot)) =>
-      val delta = storedNode.references - snapshot.storedNode.fold(0)(_.references)
-      if delta != 0 then netDeltaByNode.update(key, netDeltaByNode.getOrElse(key, 0) + delta)
-    }
+    if trackNetDeltas then
+      changes.foreach { case (key, (storedNode, snapshot)) =>
+        val delta = storedNode.references - snapshot.storedNode.fold(0)(_.references)
+        if delta != 0 then netDeltaByNode.update(key, netDeltaByNode.getOrElse(key, 0) + delta)
+      }
 
     val (toUpsertUpdated, snapshots) =
       // Use List prepend (O(1)) instead of Seq append (O(n)) to avoid O(n²) for large node sets
@@ -82,7 +117,11 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
         }
       (upsertRevAcc.reverse, snapshotRevAcc.reverse)
 
-    val snapshotToSave: Seq[(NodeHash, Array[Byte])] = getSnapshotsToSave(bn, snapshots)
+    // A bulk load (`recordSnapshots = false`) is never rolled back by block number, so it keeps no rows to roll back
+    // with. They were one `sk` row per trie node, and the `sck` count they add up to is what a prune of that height has
+    // to read back (see `pruneReporting`).
+    val snapshotToSave: Seq[(NodeHash, Array[Byte])] =
+      if recordSnapshots then getSnapshotsToSave(bn, snapshots) else Nil
 
     val deathRow =
       if currentDeathRow.nonEmpty then Seq(deathRowKey -> currentDeathRow.toArray[Byte])
@@ -140,11 +179,37 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
   ): Option[(StoredNode, StoredNodeSnapshot)] =
     storedNodes
       .get(nodeKey)
-      .orElse(nodeStorage.get(nodeKey).map(storedNodeFromBytes).map(sn => sn -> StoredNodeSnapshot(nodeKey, Some(sn))))
+      .orElse(
+        nodeStorage.get(nodeKey).map(unwrapStored(nodeKey, _)).map(sn => sn -> StoredNodeSnapshot(nodeKey, Some(sn)))
+      )
+
+  /** The wrapper stored under `nodeKey`, read to count a reference to it. One that does not unwrap is a corrupt node,
+    * as a read of it is (spec 022 T062): thrown raw, a decode error is no `MPTException`, so block execution did not
+    * catch it and the import blamed the peer that sent the block. It throws before `update` writes anything. The read
+    * itself is outside the check: a failing database goes through as it is.
+    */
+  private def unwrapStored(nodeKey: NodeHash, stored: Array[Byte]): StoredNode =
+    try storedNodeFromBytes(stored)
+    catch
+      case NonFatal(e) =>
+        throw SerializingMptStorage.corrupt(
+          nodeKey,
+          s"stored wrapper does not unwrap: ${e.getClass.getSimpleName}: ${e.getMessage}",
+          Some(e)
+        )
 
 object ReferenceCountNodeStorage extends PruneSupport with Logger:
 
   val nodeKeyLength = 32
+
+  /** The reference count of a node the background audit repaired (spec 022 decision 1). Its real count cannot be known:
+    * the blocks that referenced it incremented a node that was not there. A low guess is how a node gets pruned while
+    * live, the next decrement sends it to a death row with other tries still using it, so it is pinned high instead and
+    * never reaches zero: a leak of a few nodes, not a loss. 2^30, not `Int.MaxValue`: `incrementReferences` adds
+    * without a check, and a wrapped count is negative. This leaves about a billion steps each way, for increments, for
+    * decrements and for `setBlockApplied`'s undo.
+    */
+  val RepairedNodeReferences: Int = 1 << 30
 
   def drRowKey(bn: BigInt): ByteString =
     ByteString("dr".getBytes()) ++ ByteString(bn.toByteArray)
@@ -174,9 +239,17 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       val deathRowKey = drRowKey(blockNumber)
-      val snapshotKeys: Seq[NodeHash] = snapshotKeysUpTo(blockNumber, snapshotCount)
       val toBeRemoved = getNodesToBeRemovedInPruning(blockNumber, deathRowKey, nodeStorage)
-      nodeStorage.updateCond((deathRowKey +: snapshotsCountKey +: snapshotKeys) ++ toBeRemoved, Nil, inMemory)
+      // A block's snapshot rows go in this write, as they always did. A height written in bulk has one row per node
+      // (a datadir an earlier version published at Sepolia's pivot: tens of millions, one per trie node), and holding
+      // all those keys at once, twice over, is what ran a 4 GB heap out: they go first, in bounded writes. The count
+      // key and the death row stay for the last write, so an interrupted prune finds its `sck` and finishes the rest.
+      val inThisWrite: Seq[NodeHash] =
+        if snapshotCount <= MaxSnapshotKeysPerWrite then snapshotKeysUpTo(blockNumber, snapshotCount)
+        else
+          deleteSnapshotRowsInBatches(blockNumber, snapshotCount, nodeStorage, inMemory)
+          Nil
+      nodeStorage.updateCond((deathRowKey +: snapshotsCountKey +: inThisWrite) ++ toBeRemoved, Nil, inMemory)
       removed = toBeRemoved
     }
 
@@ -350,6 +423,22 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     maybeSnapshotCount match
       case Some(snapshotCount) => f(snapshotsCountKey, snapshotCount)
       case None                => ()
+
+  /** How many snapshot keys one prune write carries at most (see [[pruneReporting]]). */
+  private[storage] val MaxSnapshotKeysPerWrite = 10000
+
+  private def deleteSnapshotRowsInBatches(
+      blockNumber: BigInt,
+      snapshotCount: BigInt,
+      nodeStorage: NodesStorage,
+      inMemory: Boolean
+  ): Unit =
+    val keyOf = getSnapshotKey(blockNumber)(_)
+    var from = BigInt(0)
+    while from < snapshotCount do
+      val until = (from + MaxSnapshotKeysPerWrite).min(snapshotCount)
+      nodeStorage.updateCond((from until until).map(keyOf), Nil, inMemory)
+      from = until
 
   private def snapshotKeysUpTo(blockNumber: BigInt, snapshotCount: BigInt): Seq[ByteString] =
     val getSnapshotKeyFn = getSnapshotKey(blockNumber)(_)

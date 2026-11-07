@@ -9,10 +9,13 @@ This guide helps you get started with the GitHub Actions workflows configured fo
 Always run these commands locally before pushing:
 
 ```bash
-# Format your code
-sbt scalafmtAll
+# Format your code (every module)
+sbt formatAll
 
-# Check everything (format, style, tests)
+# Check format and scalafix the way CI does
+sbt formatCheck
+
+# Compile, scalafmt and run the tests
 sbt pp
 ```
 
@@ -300,11 +303,8 @@ The dependency check workflow will run and report on changes.
 ### Fix Formatting Issues
 
 ```bash
-# Auto-format all code
-sbt scalafmtAll
-
-# Run scalafix
-sbt scalafixAll
+# Auto-format all code: scalafmt on every module, scalafix on root, bytes, crypto, rlp
+sbt formatAll
 
 # Commit formatted code
 git add .

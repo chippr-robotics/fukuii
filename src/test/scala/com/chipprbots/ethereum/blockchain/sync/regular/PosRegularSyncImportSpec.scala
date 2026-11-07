@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.PickBlocks
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -89,7 +90,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       UnitTest,
       SyncTest,
       ConsensusTest
-    ) in new ImporterFixture():
+    ) in (new ImporterFixture():
       start()
       requestPick()
       servePick(ahead.take(50))
@@ -97,6 +98,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout) // sent once the import is done
       blockchainReader.getBestBlockNumber shouldBe head.number.value + 50
       stop()
+    )
 
   it should "import the head's extension out of a post-rewind batch instead of looping forever (#1432)" taggedAs (
     UnitTest,
@@ -109,7 +111,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     requestPick()
     servePick(canonical.takeRight(66) ++ ahead.take(10))
 
-    val next = fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
+    val next: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks](importTimeout)
     // Unfixed: "Imported no blocks" and the head stays at N.
     blockchainReader.getBestBlockNumber shouldBe head.number.value + 10
 
@@ -130,8 +132,8 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     // Two idle SyncRetryTicks put two PickBlocks in flight; the fetcher answers both.
     requestPick()
     requestPick()
-    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
-    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val first: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
 
     val (started, release) = holdBatchStartingAt(head.number.value + 1)
     try
@@ -156,8 +158,8 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     start()
     // The batch shape the fix targets — it starts 65 below the head — but it leaves the canonical chain at N-2 and so
     // displaces N-2..N: a side branch, and not one the CL head descends from.
-    val keep = canonical.takeRight(66).takeWhile(_.number.value <= head.number.value - 3)
-    val side = keep ++ BlockHelpers.generateChain(5, keep.last, amsterdamBlock)
+    val keep: List[Block] = canonical.takeRight(66).takeWhile(_.number.value <= head.number.value - 3)
+    val side: List[Block] = keep ++ BlockHelpers.generateChain(5, keep.last, amsterdamBlock)
     requestPick()
     servePick(side)
 
@@ -173,9 +175,9 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     ConsensusTest
   ) in new ImporterFixture():
     start()
-    val side = BlockHelpers.generateChain(5, canonical(canonical.size - 4), amsterdamBlock) // N-2'..N+2'
+    val side: List[Block] = BlockHelpers.generateChain(5, canonical(canonical.size - 4), amsterdamBlock) // N-2'..N+2'
     // The CL's tip arrives through engine_newPayload, which stores it by hash only, one hop above the side branch.
-    val clTip = BlockHelpers.generateChain(1, side.last, amsterdamBlock).head
+    val clTip: Block = BlockHelpers.generateChain(1, side.last, amsterdamBlock).head
     blockchainWriter.storeBlockByHashOnly(clTip).commit()
     clHead = Some(clTip.hash.value)
     requestPick()
@@ -194,12 +196,12 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     start()
     requestPick()
     requestPick()
-    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
-    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val first: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
 
     val (started, release) = holdBatchStartingAt(head.number.value + 1)
     raiseForkRecoveryFromImport(head.number.value + 1)
-    val finished = importsDone()
+    val finished: Long = importsDone()
     try
       first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
       started.await(10, TimeUnit.SECONDS) shouldBe true
@@ -225,8 +227,8 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     start()
     requestPick()
     requestPick()
-    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
-    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val first: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
 
     failAt(ahead.head)
     val (started, release) = holdBatchStartingAt(head.number.value + 1)
@@ -249,9 +251,9 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     "drop the canonical prefix of a post-rewind batch and execute only the head's extension (#1592)" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new ImporterFixture(postMerge = false):
+    ) in (new ImporterFixture(postMerge = false):
       start()
-      val batch = canonical.takeRight(66) ++ ahead.take(10)
+      val batch: List[Block] = canonical.takeRight(66) ++ ahead.take(10)
       requestPick()
       servePick(batch)
 
@@ -264,6 +266,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       executedNumbers shouldBe ahead.take(10).map(_.number.value)
       blockchainReader.getBestBlockNumber shouldBe head.number.value + 10
       stop()
+    )
 
   it should "still resolve a batch that arrives mid-import on arrival — serialisation is gated off here" taggedAs (
     UnitTest,
@@ -275,8 +278,8 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     start()
     requestPick()
     requestPick()
-    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
-    val second = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val first: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val second: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
 
     val (started, release) = holdBatchStartingAt(head.number.value + 1)
     try
@@ -298,10 +301,10 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     // raised StartForkRecovery, on every chain. The only ETC change is that flag — no consensus rule moves.
     start()
     requestPick()
-    val first = fetcher.expectMessageType[BlockFetcher.PickBlocks]
+    val first: PickBlocks = fetcher.expectMessageType[BlockFetcher.PickBlocks]
 
     raiseForkRecoveryFromImport(head.number.value + 1)
-    val finished = importsDone()
+    val finished: Long = importsDone()
     first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
     awaitImportDoneSent(finished)
     importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer))
@@ -390,7 +393,7 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
     private val execution: BlockExecution = stub[BlockExecution]
     (execution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(_: BlockchainConfig))
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
       .when(*, *, *, *)
       .anyNumberOfTimes()
       .onCall { (blocks, weight, _, _) =>

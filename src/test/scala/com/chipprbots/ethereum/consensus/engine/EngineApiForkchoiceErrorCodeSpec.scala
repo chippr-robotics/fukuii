@@ -10,7 +10,6 @@ import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
-
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -72,6 +71,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
     implicit lazy val typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
 
     lazy val engineApi = new EngineApiService(blockchainReader, blockchainWriter, blockExec, forkChoiceManager, None)(
+      using
       blockchainConfig,
       typedScheduler
     )
@@ -156,16 +156,18 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
   "engine_forkchoiceUpdated with attributes refused by the version check (-38003)" should {
 
     "answer -38002, not -38003, when the safe block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val unknown = ByteString(Array.fill(32)(0x5a.toByte))
-      val response = fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(missingBeaconRoot))
+      val unknown: ByteString = ByteString(Array.fill(32)(0x5a.toByte))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       response.result shouldBe None
       // Nothing was applied: the forkchoice state was refused before it reached the ForkChoiceManager.
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -38002, not -38003, when the finalized block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val unknown = ByteString(Array.fill(32)(0x5b.toByte))
-      val response = fcu(3, block1.header.hash.value, finalized = unknown, payloadAttributes = Some(missingBeaconRoot))
+      val unknown: ByteString = ByteString(Array.fill(32)(0x5b.toByte))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, finalized = unknown, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
@@ -174,7 +176,7 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new Setup:
       // hive `Inconsistent Safe in ForkchoiceState`, with attributes the version check refuses on top.
-      val response =
+      val response: JsonRpcResponse =
         fcu(3, block1.header.hash.value, safe = side1.header.hash.value, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
@@ -183,22 +185,23 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val invalidHead = ByteString(Array.fill(32)(0x6c.toByte))
+      val invalidHead: ByteString = ByteString(Array.fill(32)(0x6c.toByte))
       engineApi.invalidChainReporter.reportInvalid(invalidHead, genesis.header.hash.value)
 
-      val response = fcu(3, invalidHead, payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse = fcu(3, invalidHead, payloadAttributes = Some(missingBeaconRoot))
       response.error shouldBe None
       payloadStatusOf(response) shouldBe Some("INVALID")
 
     "answer SYNCING, not -38003, when the head is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
       // hive `Invalid PayloadAttributes, Missing BeaconRoot, Syncing=True`.
-      val response = fcu(3, ByteString(Array.fill(32)(0x7d.toByte)), payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse =
+        fcu(3, ByteString(Array.fill(32)(0x7d.toByte)), payloadAttributes = Some(missingBeaconRoot))
       response.error shouldBe None
       payloadStatusOf(response) shouldBe Some("SYNCING")
 
     "answer -38003 after applying a consistent forkchoice state" taggedAs (UnitTest, ConsensusTest) in new Setup:
       // hive `Invalid PayloadAttributes, *, Syncing=False`: the error, AND the head moved.
-      val response = fcu(3, block1.header.hash.value, payloadAttributes = Some(missingBeaconRoot))
+      val response: JsonRpcResponse = fcu(3, block1.header.hash.value, payloadAttributes = Some(missingBeaconRoot))
       response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
       blockchainReader.getBestBlock.map(_.header.hash) shouldBe Some(block1.header.hash)
@@ -207,25 +210,27 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
   "engine_forkchoiceUpdated with attributes that pass the version check" should {
 
     "answer -38002 when the safe block is unknown" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val unknown = ByteString(Array.fill(32)(0x5c.toByte))
-      val response = fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(wellFormedV3))
+      val unknown: ByteString = ByteString(Array.fill(32)(0x5c.toByte))
+      val response: JsonRpcResponse =
+        fcu(3, block1.header.hash.value, safe = unknown, payloadAttributes = Some(wellFormedV3))
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -38003 for a zero timestamp, after applying the forkchoice state" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
+      (new Setup:
         // The service's own attribute check (timestamp), as opposed to the controller's version check.
-        val response =
+        val response: JsonRpcResponse =
           fcu(1, block1.header.hash.value, payloadAttributes = Some(attrs(0L, withdrawals = false, beaconRoot = false)))
         response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
         blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+      )
 
     "answer -38005 for a fork outside the method's window, without applying anything" taggedAs (
       UnitTest,
       ConsensusTest
     ) in new Setup:
       // hive `ForkchoiceUpdatedV3 To Request Shanghai Payload, Non-Null Beacon Root`.
-      val response =
+      val response: JsonRpcResponse =
         fcu(
           3,
           block1.header.hash.value,
@@ -246,30 +251,31 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
   "engine_forkchoiceUpdated with a forkchoiceState that does not match ForkchoiceStateV1" should {
 
     "answer -32602 when a field is missing" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val response = send(3, stateWith("safeBlockHash", None), None)
+      val response: JsonRpcResponse = send(3, stateWith("safeBlockHash", None), None)
       response.error.map(_.code) shouldBe Some(InvalidParams)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -32602 for a hash that is not hex" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val response = send(3, stateWith("headBlockHash", Some(JString("0x" + "zz" * 32))), None)
+      val response: JsonRpcResponse = send(3, stateWith("headBlockHash", Some(JString("0x" + "zz" * 32))), None)
       response.error.map(_.code) shouldBe Some(InvalidParams)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -32602 for a hash that is not 32 bytes" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val twentyBytes = hex(block1.header.hash.value.take(20))
-      val response = send(3, stateWith("headBlockHash", Some(JString(twentyBytes))), None)
+      val twentyBytes: String = hex(block1.header.hash.value.take(20))
+      val response: JsonRpcResponse = send(3, stateWith("headBlockHash", Some(JString(twentyBytes))), None)
       response.error.map(_.code) shouldBe Some(InvalidParams)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "answer -32602 for a hash without its 0x prefix, instead of applying it" taggedAs (UnitTest, ConsensusTest) in
-      new Setup:
-        val unprefixed = hex(block1.header.hash.value).drop(2)
-        val response = send(3, stateWith("headBlockHash", Some(JString(unprefixed))), None)
+      (new Setup:
+        val unprefixed: String = hex(block1.header.hash.value).drop(2)
+        val response: JsonRpcResponse = send(3, stateWith("headBlockHash", Some(JString(unprefixed))), None)
         response.error.map(_.code) shouldBe Some(InvalidParams)
         blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+      )
 
     "answer -32602 for a hash that is not a string" taggedAs (UnitTest, ConsensusTest) in new Setup:
-      val response = send(3, stateWith("finalizedBlockHash", Some(JInt(0))), None)
+      val response: JsonRpcResponse = send(3, stateWith("finalizedBlockHash", Some(JInt(0))), None)
       response.error.map(_.code) shouldBe Some(InvalidParams)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
@@ -277,8 +283,8 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val upperCase = "0x" + hex(block1.header.hash.value).drop(2).toUpperCase
-      val response = send(3, stateWith("headBlockHash", Some(JString(upperCase))), None)
+      val upperCase: String = "0x" + hex(block1.header.hash.value).drop(2).toUpperCase
+      val response: JsonRpcResponse = send(3, stateWith("headBlockHash", Some(JString(upperCase))), None)
       response.error shouldBe None
       payloadStatusOf(response) shouldBe Some("VALID")
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
@@ -286,12 +292,13 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
     "leave a payloadAttributes decoding failure at -38003" taggedAs (UnitTest, ConsensusTest) in new Setup:
       // Attributes that do not match their structure are -38003 (cancun.md point 2.1), not -32602; only the
       // forkchoiceState's structure is -32602.
-      val noPrevRandao = JObject(
+      val noPrevRandao: JObject = JObject(
         "timestamp" -> JString("0x" + CancunTs.toHexString),
         "suggestedFeeRecipient" -> JString("0x" + "00" * 20),
         "withdrawals" -> JArray(Nil),
         "parentBeaconBlockRoot" -> JString("0x" + "ab" * 32)
       )
-      val response = send(3, stateWith("safeBlockHash", Some(JString(hex(zero32)))), Some(noPrevRandao))
+      val response: JsonRpcResponse =
+        send(3, stateWith("safeBlockHash", Some(JString(hex(zero32)))), Some(noPrevRandao))
       response.error.map(_.code) shouldBe Some(InvalidPayloadAttributes)
   }

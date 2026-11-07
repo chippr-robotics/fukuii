@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import org.apache.pekko.actor.typed.{ActorRef as TypedActorRef, Behavior}
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
+import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import scala.concurrent.duration.FiniteDuration

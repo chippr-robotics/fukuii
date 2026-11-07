@@ -24,13 +24,19 @@ import com.chipprbots.ethereum.db.storage.MptStorage
   */
 object ShardEnumerator:
 
-  /** A disjoint subtree of the state trie. `root` is already resolved (never a bare [[HashNode]]); its children may
-    * still be HashNodes that the walk resolves on demand.
+  /** A disjoint subtree of the state trie. `root` is already resolved, and its children may still be HashNodes that the
+    * walk resolves on demand. The exception is a subtree whose top node the store does not hold (spec 022 T050a):
+    * `root` is then that bare [[HashNode]], so its walk meets the hole and counts it, as for one deeper down. It is one
+    * shard whichever way it goes. Under a branch at depth 1 that is the one shard its child would have been, so the
+    * count does not depend on the hole. Elsewhere (a greater depth, or under an extension) a hole is one shard in place
+    * of a subtree's worth, and nothing fills a hole during a scan, so a restart mid-scan finds the same count; a count
+    * that did change only starts the scan afresh.
     */
   final case class Shard(pathPrefix: ByteString, root: MptNode)
 
   /** Resolve `rootHash` and split into shards by descending `depth` branch levels (default 1 = up to 16 shards). An
-    * empty trie (`EmptyRootHash`, never stored) yields no shards.
+    * empty trie (`EmptyRootHash`, never stored) yields no shards. An absent root throws: with no root there is no trie
+    * to split, which is not the same thing as an empty one.
     */
   def enumShards(rootHash: ByteString, storage: MptStorage, depth: Int = 1): Vector[Shard] =
     if java.util.Arrays.equals(rootHash.toArray, MerklePatriciaTrie.EmptyRootHash) then Vector.empty
@@ -40,18 +46,28 @@ object ShardEnumerator:
     case h: HashNode => storage.get(h.hashNode)
     case other       => other
 
+  /** A node below the root. Absent, it stays the unresolved HashNode it is; a node that fails to decode still throws.
+    * The store reports such a node as a `CorruptNodeException`, a missing node for execution's sake, so it is let
+    * through first: here it is a failure, not a hole (spec 022 T062).
+    */
+  private def resolveBelowRoot(node: MptNode, storage: MptStorage): MptNode =
+    try resolve(node, storage)
+    catch
+      case e: MerklePatriciaTrie.CorruptNodeException => throw e
+      case _: MerklePatriciaTrie.MissingNodeException => node
+
   private def expand(prefix: ByteString, node: MptNode, storage: MptStorage, depth: Int): Vector[Shard] =
     node match
       case NullNode           => Vector.empty
       case _ if depth <= 0    => Vector(Shard(prefix, node))
       case _: LeafNode        => Vector(Shard(prefix, node)) // a single account — can't split further
+      case _: HashNode        => Vector(Shard(prefix, node)) // absent from the store: nothing to split
       case ext: ExtensionNode =>
         // The extension consumes shared nibbles without branching, so it does NOT spend a shard level.
-        expand(prefix ++ ext.sharedKey, resolve(ext.next, storage), storage, depth)
+        expand(prefix ++ ext.sharedKey, resolveBelowRoot(ext.next, storage), storage, depth)
       case br: BranchNode =>
         (0 until BranchNode.numberOfChildren).iterator.flatMap { i =>
           br.children(i) match
             case NullNode => Iterator.empty
-            case child    => expand(prefix ++ ByteString(i.toByte), resolve(child, storage), storage, depth - 1)
+            case child => expand(prefix ++ ByteString(i.toByte), resolveBelowRoot(child, storage), storage, depth - 1)
         }.toVector
-      case h: HashNode => expand(prefix, storage.get(h.hashNode), storage, depth)

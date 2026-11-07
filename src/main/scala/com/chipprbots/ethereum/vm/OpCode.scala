@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.domain.StorageKey
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256.*
-import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
+import com.chipprbots.ethereum.utils.ByteStringUtils.padToByteString
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.*
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.EtcFork
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.EthFork
@@ -498,7 +498,7 @@ sealed abstract class TernaryOp(code: Int, baseGasFn: FeeSchedule => BigInt)(
     stack1.push(res)
 
 sealed abstract class ConstOp(code: Int)(
-    val f: ProgramState[? <: WorldStateProxy[_, ? <: Storage[_]], ? <: Storage[_]] => UInt256
+    val f: ProgramState[? <: WorldStateProxy[?, ? <: Storage[?]], ? <: Storage[?]] => UInt256
 ) extends OpCode(code, 0, 1, _.G_base)
     with ConstGas
     with StackOnlyOp:
@@ -521,13 +521,13 @@ case object MUL extends BinaryOp(0x02, _.G_low)(_ * _) with ConstGas
 
 case object SUB extends BinaryOp(0x03, _.G_verylow)(_ - _) with ConstGas
 
-case object DIV extends BinaryOp(0x04, _.G_low)(_ div _) with ConstGas
+case object DIV extends BinaryOp(0x04, _.G_low)(_ `div` _) with ConstGas
 
-case object SDIV extends BinaryOp(0x05, _.G_low)(_ sdiv _) with ConstGas
+case object SDIV extends BinaryOp(0x05, _.G_low)(_ `sdiv` _) with ConstGas
 
-case object MOD extends BinaryOp(0x06, _.G_low)(_ mod _) with ConstGas
+case object MOD extends BinaryOp(0x06, _.G_low)(_ `mod` _) with ConstGas
 
-case object SMOD extends BinaryOp(0x07, _.G_low)(_ smod _) with ConstGas
+case object SMOD extends BinaryOp(0x07, _.G_low)(_ `smod` _) with ConstGas
 
 case object ADDMOD extends TernaryOp(0x08, _.G_mid)(_.addmod(_, _)) with ConstGas
 
@@ -544,9 +544,9 @@ case object LT extends BinaryOp(0x10, _.G_verylow)(_ < _) with ConstGas
 
 case object GT extends BinaryOp(0x11, _.G_verylow)(_ > _) with ConstGas
 
-case object SLT extends BinaryOp(0x12, _.G_verylow)(_ slt _) with ConstGas
+case object SLT extends BinaryOp(0x12, _.G_verylow)(_ `slt` _) with ConstGas
 
-case object SGT extends BinaryOp(0x13, _.G_verylow)(_ sgt _) with ConstGas
+case object SGT extends BinaryOp(0x13, _.G_verylow)(_ `sgt` _) with ConstGas
 
 case object EQ extends BinaryOp(0x14, _.G_verylow)(_ == _) with ConstGas
 
@@ -1365,7 +1365,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
           stateGasReservoir = state.stateGasReservoir,
           evmStateGasUsed = state.evmStateGasUsed,
           // EIP-7928: the create frame records into the same index's recorder, whatever its outcome.
-          accessRecorder = state.env.accessRecorder
+          accessRecorder = state.env.accessRecorder,
+          blobBaseFeeOverride = state.env.blobBaseFeeOverride
         )
 
         val ((result, newAddress), stack2) = this match
@@ -1601,7 +1602,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       stateGasReservoir = state.stateGasReservoir,
       evmStateGasUsed = state.evmStateGasUsed,
       // EIP-7928: the child records into the same index's recorder, whatever its outcome.
-      accessRecorder = state.env.accessRecorder
+      accessRecorder = state.env.accessRecorder,
+      blobBaseFeeOverride = state.env.blobBaseFeeOverride
     )
 
     // Recomputed rather than threaded: the world is unchanged since `execute` decided it, so this is the
@@ -2027,10 +2029,13 @@ case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas:
     val bcConfig = state.env.evmConfig.blockchainConfig
     val excessBlobGas = state.env.blockHeader.excessBlobGas.getOrElse(BigInt(0))
     val fraction = bcConfig.blobParamsAt(timestamp).baseFeeUpdateFraction
-    val fee = com.chipprbots.ethereum.utils.BlobParams.fakeExponential(
-      com.chipprbots.ethereum.utils.BlobParams.MinBlobBaseFee,
-      excessBlobGas,
-      fraction
+    // eth_simulateV1 `blockOverrides.blobBaseFee` replaces the derived fee (go-ethereum BlockContext.BlobBaseFee)
+    val fee = state.env.blobBaseFeeOverride.getOrElse(
+      com.chipprbots.ethereum.utils.BlobParams.fakeExponential(
+        com.chipprbots.ethereum.utils.BlobParams.MinBlobBaseFee,
+        excessBlobGas,
+        fraction
+      )
     )
     state.withStack(state.stack.push(UInt256(fee))).step()
 

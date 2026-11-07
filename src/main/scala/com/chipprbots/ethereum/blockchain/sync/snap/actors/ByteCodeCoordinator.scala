@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -7,13 +8,23 @@ import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.LinkedHashSet
+import scala.collection.mutable.Queue
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.bytecode.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedSweep
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
+import com.chipprbots.ethereum.db.storage.ExcludedAccount
+import com.chipprbots.ethereum.db.storage.ExcludedReason
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 
 /** ByteCodeCoordinator manages bytecode download workers. Contains ALL business logic previously in ByteCodeDownloader:
@@ -40,7 +51,13 @@ private[actors] class ByteCodeCoordinatorImpl(
     backpressureHighWatermark: Int,
     backpressureLowWatermark: Int,
     // Spec 014: shared admission gate (counts codeHashes, not batched tasks). None = not wired (tests).
-    val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
+    val intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None,
+    // spec 022 T033: whether what this coordinator gives up on goes into the durable excluded set. Only the SNAP
+    // controller's spawns: the set is read by SNAP healing, and a recovery actor runs after that (review vault F4).
+    recordExcluded: Boolean = false,
+    // spec 022 round 2 review B: whether a supervisor restart replaced an earlier incarnation of this coordinator. What
+    // that one held is gone, so this one reads the code-hash file back before the phase ends.
+    restartedIncarnation: Boolean = false
 ) extends ByteCodeDispatch
     with ByteCodeResponseHandling
     with ByteCodeEnv
@@ -53,23 +70,27 @@ private[actors] class ByteCodeCoordinatorImpl(
 
   val log = context.log
 
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, recordExcluded, log)
+
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
   var maxInFlightPerPeer: Int = cooldownConfig.maxInFlightPerPeer
 
-  val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+  val peerFailureCounts: mutable.Map[PeerId, Int] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  val peerCooldownUntilMillis: mutable.Map[PeerId, Long] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
 
   // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
   // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
-  val hashFailureCounts = mutable.Map.empty[ByteString, Int]
+  val hashFailureCounts: mutable.Map[ByteString, Int] = mutable.Map.empty[ByteString, Int]
 
   // Track known available peers for redispatch when activeTasks is empty.
   // tryRedispatchPendingTasks() previously derived peers from activeTasks.values, leaving it
   // unable to dispatch when activeTasks was empty (all peers in cooldown). This caused an
   // unnecessary 2-minute stall window after simultaneous peer failures.
   // Deduped by remoteAddress — same pattern as TrieNodeHealingCoordinator.
-  val knownAvailablePeers = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
   // Consecutive task failure guard: if all peers repeatedly fail with no progress,
   // force-complete bytecode sync rather than hanging indefinitely. Threshold 100 matches
@@ -78,9 +99,10 @@ private[actors] class ByteCodeCoordinatorImpl(
   private val maxConsecutiveTaskFailures: Int = 100
 
   // Task management
-  val pendingTasks = mutable.Queue[ByteCodeTask]()
+  val pendingTasks: Queue[ByteCodeTask] = mutable.Queue[ByteCodeTask]()
 
-  val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
+  val activeTasks: mutable.Map[BigInt, ActiveByteCodeRequest] =
+    mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
 
   // Completion bookkeeping (#1233). Previously `completedTasks: mutable.ArrayBuffer[ByteCodeTask]`
   // retained the full task object — including `task.bytecodes: Seq[ByteString]`, the actual
@@ -96,9 +118,9 @@ private[actors] class ByteCodeCoordinatorImpl(
   private[actors] var backpressureActive: Boolean = false
 
   // Worker pool
-  val workers = mutable.ArrayBuffer[WorkerRef]()
+  val workers: ArrayBuffer[WorkerRef] = mutable.ArrayBuffer[WorkerRef]()
   val maxWorkers = 32
-  val idleWorkers = mutable.LinkedHashSet.empty[WorkerRef]
+  val idleWorkers: LinkedHashSet[WorkerRef] = mutable.LinkedHashSet.empty[WorkerRef]
 
   // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
@@ -114,7 +136,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   // diagnostics so operators can correlate force-completes with later BytecodeRecoveryActor activity.
   private var bytecodesAbandoned: Long = 0
 
-  val peerResponseBytesTarget = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
+  val peerResponseBytesTarget: mutable.Map[PeerId, BigInt] =
+    mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
 
   // preStart equivalent: record start time, schedule the recurring status pulse, log. Called once by the
   // behavior factory. The Typed `startTimerWithFixedDelay` replaces the Classic Cancellable; it auto-cancels
@@ -131,7 +154,139 @@ private[actors] class ByteCodeCoordinatorImpl(
   // caught by `WorkerTerminated` below via `context.watchWith`, which removes the dead worker and re-queues
   // its in-flight task. PostStop logs final stats (formerly `postStop`).
   def active(): Behavior[Command] = Behaviors
-    .receiveMessage[Command] {
+    .receiveMessage[Command] { msg =>
+      val next = handleCommand(msg)
+      // A decision is durable when its message ends. One that had to wait for this write may have held the completion.
+      if excludedRecorder.pending && excludedRecorder.flushThrottled() then checkCompletion()
+      next
+    }
+    .receiveSignal {
+      case (_, org.apache.pekko.actor.typed.PostStop) =>
+        // Formerly `postStop`: the recurring status timer auto-cancels with the behavior.
+        excludedRecorder.flush(): Unit // only a decision whose write has been failing is left
+        codeFileSweep.cancel()
+        log.info(
+          s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
+            (if bytecodesAbandoned > 0 then s", abandoned $bytecodesAbandoned via force-complete" else "")
+        )
+        Behaviors.same
+      case (_, org.apache.pekko.actor.typed.PreRestart) =>
+        // spec 022 review hunter C1: a supervisor restart empties the queue, and nothing fetches these hashes again.
+        // Best effort (the write may be why this is restarting): the phase's force-complete leaves its flag unset anyway.
+        excludedRecorder.stage(undecidedCodeHashes)
+        excludedRecorder.flush(): Unit
+        codeFileSweep.cancel()
+        Behaviors.same
+    }
+
+  // spec 022 round 2 review B: the code-hash file's part of ending the phase, once per incarnation, and only after a
+  // restart: a healthy run's memory says all of it.
+  private val codeFileSweep = new ExcludedSweep
+  private var codeFileSwept: Boolean = false
+  private var forceCompleteWanted: Boolean = false
+  private var codeFilePointerWaitOver: Boolean = false
+
+  private def lostTrack(reason: String): Boolean = HealInvariant.lostTrack(stateIngest.appState, reason, log)
+
+  private def codeFileSweepDue: Boolean = restartedIncarnation && recordExcluded && !codeFileSwept
+
+  /** The code-hash file and the entries it was recorded as holding. The two are written together and a reset blanks
+    * only the count, so a path with no count is an earlier cycle's, not this phase's list (review vault W3).
+    */
+  private def codeFile: Option[(java.nio.file.Path, Long)] =
+    try
+      val appState = stateIngest.appState
+      for
+        path <- appState.getSnapSyncCodeHashesPath().filter(_.nonEmpty)
+        count <- appState.getSnapSyncCodeHashesCount()
+      yield (java.nio.file.Paths.get(path), count)
+    catch
+      case scala.util.control.NonFatal(e) =>
+        log.error("Could not read where the code-hash file is; going on without it", e)
+        None
+
+  /** Start reading the code-hash file back into the excluded set (`ExcludedTaskFile`), off this actor: its end sends
+    * `CodeFileSwept`, and that brings back whatever was waiting. With no file to read, what this coordinator does not
+    * hold in memory has no entry: the run has lost track (spec 022 T050a), so the recovery scan covers it, and false.
+    * True, as if a sweep ran, when that could not be written: the phase does not end over it, and the next check or
+    * force-complete comes back here.
+    */
+  private def startCodeFileSweep(): Boolean =
+    codeFile match
+      case Some((file, expected)) =>
+        val code = stateIngest.bytecode
+        val record = excludedRecorder.recordNow
+        val selfRef = context.self
+        val ec = context.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+        val token = codeFileSweep.start(ec)(work =>
+          ExcludedTaskFile.recordMissingCode(
+            file,
+            Some(expected),
+            hash => code.get(hash).isDefined,
+            record,
+            work.cancelled,
+            chunkDone = work.chunkDone
+          )
+        )((t, outcome) => selfRef ! CodeFileSwept(t, outcome))
+        timers.startSingleTimer(CodeFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
+        true
+      case None =>
+        val recorded = lostTrack(
+          "a restarted bytecode coordinator has no code-hash file to read back: what it does not hold in memory has no " +
+            "entry in the excluded set"
+        )
+        codeFileSwept = recorded
+        !recorded
+
+  private def onCodeFileSwept(outcome: ExcludedTaskFile.Outcome): Unit =
+    val resume = if forceCompleteWanted then ForceCompleteByteCodes else ByteCodeCheckCompletion
+    outcome match
+      case ExcludedTaskFile.Outcome.Recorded(hashes) =>
+        codeFileSwept = true
+        log.info(s"Recorded $hashes missing bytecode hash(es) from the code-hash file (${codeFileSweep.lastRun})")
+        context.self ! resume
+      case ExcludedTaskFile.Outcome.Unreadable(cause) =>
+        // spec 022 T050a: what a restart lost has no entry, so the run has lost track. A failed write goes round again.
+        log.error("Could not read the code-hash file; going on with what is in memory", cause)
+        if lostTrack(s"the code-hash file could not be read: $cause") then
+          codeFileSwept = true
+          context.self ! resume
+        else timers.startSingleTimer(resume, ForceCompleteRetryDelay)
+      case ExcludedTaskFile.Outcome.StoreFailed(cause) =>
+        log.error("Could not record the code-hash file's missing hashes; trying again shortly", cause)
+        timers.startSingleTimer(resume, ForceCompleteRetryDelay)
+      case ExcludedTaskFile.Outcome.Cancelled => ()
+
+  /** Whether the phase's clean end waits for the code-hash file: a restarted incarnation, which does not know what the
+    * one before it held. The file's pointer is persisted just after the account phase's end reaches this actor, so that
+    * is worth a short wait, by the clock (`PointerWaitLimit`): what checks here comes in bursts.
+    */
+  private def codeFileSweepHoldsCompletion: Boolean =
+    if codeFileSweep.running then true
+    else if !codeFileSweepDue then false
+    else if codeFile.isEmpty && !codeFilePointerWaitOver then
+      if !timers.isTimerActive(CodeFilePointerWaitOver) then
+        timers.startSingleTimer(CodeFilePointerWaitOver, ExcludedSweep.PointerWaitLimit)
+        log.info("Bytecode phase drained after a restart: waiting for the code-hash file's pointer before it ends")
+      true
+    else startCodeFileSweep()
+
+  /** `received` without the hashes already queued or in flight. One pass over the queue, so only for a small ask, not
+    * the account phase's stream: healing asks for what it waits on again every minute (spec 022 review hunter N5).
+    */
+  private def notQueuedCodeHashes(received: Seq[ByteString]): Seq[ByteString] =
+    val owed =
+      (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes)).toSet
+    received.filterNot(owed)
+
+  /** The hashes this coordinator still owes, queued or in flight, as the entries a give-up on them makes. */
+  private def undecidedCodeHashes: Seq[ExcludedAccount] =
+    (pendingTasks.iterator.flatMap(_.codeHashes) ++ activeTasks.valuesIterator.flatMap(_.task.codeHashes))
+      .map(ExcludedAccount(_, ExcludedReason.CodeMissing))
+      .toSeq
+
+  private def handleCommand(msg: Command): Behavior[Command] =
+    msg match
       case StartByteCodeSync(codeHashes) =>
         log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
 
@@ -141,9 +296,10 @@ private[actors] class ByteCodeCoordinatorImpl(
         log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
         Behaviors.same
 
-      case AddByteCodeTasks(received, skipPresent) =>
-        val codeHashes = skipPresentCodeHashes(received, skipPresent)
-        val alreadyPresent = received.size - codeHashes.size
+      case AddByteCodeTasks(received, skipPresent, skipQueued) =>
+        val wanted = if skipQueued then notQueuedCodeHashes(received) else received
+        val codeHashes = skipPresentCodeHashes(wanted, skipPresent)
+        val alreadyPresent = wanted.size - codeHashes.size
         if alreadyPresent > 0 then
           // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
           snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(alreadyPresent.toLong)
@@ -282,28 +438,62 @@ private[actors] class ByteCodeCoordinatorImpl(
         notifyBackpressureIfChanged()
         Behaviors.same
 
+      case CodeFileSwept(token, outcome) =>
+        if codeFileSweep.finish(token) then onCodeFileSwept(outcome)
+        Behaviors.same
+
+      case CodeFileSweepTimedOut(token) =>
+        codeFileSweep.chunkFinishedSinceLastLook(token) match
+          case Some(true) => timers.startSingleTimer(CodeFileSweepTimedOut(token), ExcludedSweep.NoChunkLimit)
+          case Some(false) if codeFileSweep.finish(token) =>
+            onCodeFileSwept(
+              ExcludedTaskFile.Outcome.Unreadable(
+                new java.util.concurrent.TimeoutException(
+                  s"the read of the file hung: no chunk finished in ${ExcludedSweep.NoChunkLimit}"
+                )
+              )
+            )
+          case _ => ()
+        Behaviors.same
+
+      case CodeFilePointerWaitOver =>
+        codeFilePointerWaitOver = true
+        checkCompletion()
+        Behaviors.same
+
       case ForceCompleteByteCodes =>
         // #1164: When bytecode sync stagnates (e.g., a small set of code hashes no peer can serve),
         // the existing completion check is unreachable because pendingTasks doesn't drain. Mirrors
         // StorageRangeCoordinator.ForceCompleteStorage. Missing bytecodes can be recovered post-SNAP
         // via BytecodeRecoveryActor.
-        val abandonedPending = pendingTasks.size
-        val abandonedActive = activeTasks.size
-        val abandonedTotal = abandonedPending + abandonedActive
-        log.warn(
-          s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
-            s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
-            "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
-        )
-        bytecodesAbandoned += abandonedTotal
-        pendingTasks.clear()
-        // Mark workers idle so they don't keep dispatching; drop active task tracking.
-        activeTasks.values.foreach(active => markWorkerIdle(active.worker))
-        activeTasks.clear()
-        // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
-        noMoreTasksExpected = true
-        log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
-        snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
+        // spec 022 T033: durable before they are dropped, and by hash: this download does not know the accounts that use
+        // them. Healing cannot complete until the code is there. A failed write drops nothing and reports nothing.
+        forceCompleteWanted = true
+        excludedRecorder.stage(undecidedCodeHashes)
+        if codeFileSweep.running then
+          log.debug("ForceCompleteByteCodes: reading the code-hash file — ignoring duplicate")
+        else if codeFileSweepDue && startCodeFileSweep() then ()
+        else if !excludedRecorder.flush() then
+          log.error("Could not record the bytecode hashes a force-complete would abandon — trying again shortly")
+          timers.startSingleTimer(ForceCompleteByteCodes, ForceCompleteRetryDelay)
+        else
+          val abandonedPending = pendingTasks.size
+          val abandonedActive = activeTasks.size
+          val abandonedTotal = abandonedPending + abandonedActive
+          log.warn(
+            s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
+              s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
+              "Missing bytecodes are fetched on demand at import, and by BytecodeRecoveryActor at the next start (bytecodeRecoveryDone stays unset)."
+          )
+          bytecodesAbandoned += abandonedTotal
+          pendingTasks.clear()
+          // Mark workers idle so they don't keep dispatching; drop active task tracking.
+          activeTasks.values.foreach(active => markWorkerIdle(active.worker))
+          activeTasks.clear()
+          // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
+          noMoreTasksExpected = true
+          log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
+          snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
         Behaviors.same
 
       case WorkerTerminated(worker) =>
@@ -328,6 +518,7 @@ private[actors] class ByteCodeCoordinatorImpl(
         Behaviors.same
 
       case ByteCodeStatusPulse =>
+        if codeFileSweepDue then checkCompletion()
         val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
         val elapsedSecs = (System.currentTimeMillis() - bytecodeStartMs) / 1000.0
         val rate = if elapsedSecs > 0 then (bytecodesDownloaded / elapsedSecs).toLong else 0L
@@ -359,15 +550,6 @@ private[actors] class ByteCodeCoordinatorImpl(
       case other =>
         log.debug(s"ByteCodeCoordinator received unhandled command: $other")
         Behaviors.unhandled
-    }
-    .receiveSignal { case (_, org.apache.pekko.actor.typed.PostStop) =>
-      // Formerly `postStop`: the recurring status timer auto-cancels with the behavior.
-      log.info(
-        s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
-          (if bytecodesAbandoned > 0 then s", abandoned $bytecodesAbandoned via force-complete" else "")
-      )
-      Behaviors.same
-    }
 
   /** Pending work in codeHashes (each queued task batches up to `batchSize`). The queue is bounded by the intake gate,
     * so this walk stays a few thousand tasks long.
@@ -405,11 +587,28 @@ private[actors] class ByteCodeCoordinatorImpl(
       snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
 
   def checkCompletion(): Unit =
-    if noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty then
+    // A decision still to be written holds the completion: the phase's end may be the last trace of what it gave up on.
+    if noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty && excludedRecorder.flushThrottled() &&
+      !codeFileSweepHoldsCompletion
+    then
       log.info("Bytecode sync complete!")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
 object ByteCodeCoordinator:
+
+  /** How soon a force-complete tries again after its record could not be written. */
+  private[actors] val ForceCompleteRetryDelay: FiniteDuration = 5.seconds
+
+  /** The read of the code-hash file has ended (`ExcludedTaskFile`). */
+  final private[actors] case class CodeFileSwept(token: Long, outcome: ExcludedTaskFile.Outcome) extends Command
+
+  /** The read of the code-hash file's watchdog looks: with no chunk finished since the last look it is treated as
+    * unreadable, and told to stop.
+    */
+  final private[actors] case class CodeFileSweepTimedOut(token: Long) extends Command
+
+  /** A restarted coordinator has waited `ExcludedSweep.PointerWaitLimit` for the code-hash file's pointer. */
+  private[actors] case object CodeFilePointerWaitOver extends Command
 
   /** Command protocol for the Typed coordinator (Group S3). All subtypes live in this companion so the trait is sealed
     * — Scala 3 file-scope sealing enables exhaustive match checking at every call site.
@@ -423,7 +622,8 @@ object ByteCodeCoordinator:
   /** Incrementally add bytecode download tasks (geth-aligned: inline dispatch from account responses). Coordinator
     * deduplicates and batches these into ByteCodeTasks.
     */
-  case class AddByteCodeTasks(codeHashes: Seq[ByteString], skipPresent: Boolean = false) extends Command
+  case class AddByteCodeTasks(codeHashes: Seq[ByteString], skipPresent: Boolean = false, skipQueued: Boolean = false)
+      extends Command
 
   /** Signal that no more bytecode tasks will arrive (all accounts downloaded). Coordinator may now report completion
     * when pending + active tasks drain.
@@ -527,8 +727,11 @@ object ByteCodeCoordinator:
       cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
       backpressureLowWatermark: Int = 25000,
-      intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None
+      intakeBudget: Option[com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[Command] =
+    // A supervisor restart runs this setup again, over this same closure.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
         new ByteCodeCoordinatorImpl(
@@ -542,7 +745,9 @@ object ByteCodeCoordinator:
           snapSyncController,
           backpressureHighWatermark = backpressureHighWatermark,
           backpressureLowWatermark = backpressureLowWatermark,
-          intakeBudget = intakeBudget
+          intakeBudget = intakeBudget,
+          recordExcluded = recordExcluded,
+          restartedIncarnation = incarnations.getAndIncrement() > 0
         ).start()
       }
     }

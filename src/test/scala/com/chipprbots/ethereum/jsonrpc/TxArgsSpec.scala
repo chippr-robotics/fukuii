@@ -23,6 +23,15 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
 
   private def dec(json: String): Either[JsonRpcError, TxArgs] = TxArgsJson.decode(parse(json))
   private def ok(json: String): TxArgs = dec(json).value
+
+  /** The args as an internal caller builds them with an explicit type: the decoder ignores a request's `type` (geth's
+    * TransactionArgs has no such field; #1660 item 10), so the type of `json` is set programmatically here.
+    */
+  private def typed(json: String): TxArgs =
+    val t = org.json4s.jvalue2monadic(parse(json)).\("type") match
+      case org.json4s.JsonAST.JString(h) => Some(Integer.decode(h).toByte)
+      case _                             => None
+    ok(json).copy(txType = t)
   private def decErr(json: String): String =
     val e = dec(json).left.value
     e.code shouldBe -32602
@@ -52,7 +61,8 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       "blobs":["$blob"],"commitments":["$c48"],"proofs":["$p48"],
       "authorizationList":[$Auth]
     }""")
-    a.txType shouldBe Some(3.toByte)
+    // the request's `"type":"0x3"` is not read (geth's TransactionArgs has no such field)
+    a.txType shouldBe None
     a.from shouldBe Some(Address(A1))
     a.to shouldBe Some(Address(A2))
     a.gas shouldBe Some(GasAmount(21000))
@@ -108,7 +118,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       decErr(s"""{"value":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "value", "hexutil.Big")
       decErr(s"""{"nonce":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "nonce", "hexutil.Uint64")
       decErr(s"""{"input":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "input", "hexutil.Bytes")
-      decErr(s"""{"type":"$bad"}""") should include("invalid transaction type")
+      ok(s"""{"type":"$bad"}""").txType shouldBe None
     decErr(s"""{"to":"0x${"\u0663" * 40}"}""") shouldBe gethTypeErr("invalid hex string", "to", "common.Address")
     decErr(s"""{"blobVersionedHashes":["0x${"\uff21" * 64}"]}""") shouldBe
       gethTypeErr("invalid hex string", "blobVersionedHashes", "common.Hash")
@@ -206,13 +216,9 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     decErr("""{"accessList":{}}""") should include("non-array")
   }
 
-  it should "decode the type field as an execution-apis byte" taggedAs (UnitTest) in {
-    ok("""{"type":"0x2"}""").txType shouldBe Some(2.toByte)
-    ok("""{"type":"0x02"}""").txType shouldBe Some(2.toByte)
-    ok("""{"type":"0x0"}""").txType shouldBe Some(0.toByte)
-    decErr("""{"type":"0x"}""") should include("invalid transaction type")
-    decErr("""{"type":"0x102"}""") should include("invalid transaction type")
-    decErr("""{"type":"2"}""") should include("invalid transaction type")
+  it should "ignore the type field, as geth's TransactionArgs does, whatever it holds" taggedAs (UnitTest) in {
+    for t <- List(""""0x2"""", """"0x0"""", """"0x"""", """"0x102"""", """"2"""", "5", "null", """"0x9"""") do
+      ok(s"""{"type":$t,"nonce":"0x1"}""") shouldBe TxArgs(nonce = Some(1))
   }
 
   // ----------------------------------------------------------------------------------------------
@@ -239,7 +245,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       a.validateForCall.left.value.message shouldBe msg
       a.resolveType().left.value.message shouldBe msg
     // the conflict wins even over an explicit type
-    ok(s"""{"type":"0x2","to":"$A1","gasPrice":"0x1","maxFeePerGas":"0x2"}""")
+    typed(s"""{"type":"0x2","to":"$A1","gasPrice":"0x1","maxFeePerGas":"0x2"}""")
       .resolveType()
       .left
       .value
@@ -287,7 +293,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     }
   }
 
-  it should "reject gasPrice with accessList or blob fields when no type is given (deliberate deviation from geth)" taggedAs (
+  it should "make gasPrice with an accessList an EIP-2930 transaction, and reject gasPrice with blob fields (deliberate deviation from geth)" taggedAs (
     UnitTest
   ) in {
     val al = s""""accessList":[]"""
@@ -295,8 +301,6 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     val blobs = s""""blobs":["0x${"00" * TxArgsJson.BlobLength}"]"""
     val cases = Table(
       ("fields", "defaultType", "error"),
-      (al, 0, TxArgsError.GasPriceWithAccessListUntyped),
-      (al, 2, TxArgsError.GasPriceWithAccessListUntyped),
       (bh, 0, TxArgsError.GasPriceWithBlobFields),
       (blobs, 0, TxArgsError.GasPriceWithBlobFields),
       (s"$al,$bh", 0, TxArgsError.GasPriceWithBlobFields)
@@ -308,8 +312,9 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       args.toTransaction(Mainnet).left.value shouldBe error
       error.toJsonRpcError.code shouldBe -32602
     }
-    TxArgsError.GasPriceWithAccessListUntyped.message shouldBe
-      """gasPrice with accessList requires "type": "0x1" (or use maxFeePerGas/maxPriorityFeePerGas)"""
+    // geth ToTransaction: "a gasprice together with an access list is an EIP-2930 transaction" (transaction_args.go:555-560)
+    for default <- List(0, 2) do
+      ok(s"""{"to":"$A1","gasPrice":"0x1",$al}""").resolveType(default.toByte) shouldBe Right(1.toByte)
     TxArgsError.GasPriceWithBlobFields.message shouldBe
       "blob fields require a blob transaction; gasPrice is not allowed"
     // the call path keeps geth ToMessage semantics (lists are kept, not dropped), so it does not apply this rule
@@ -320,13 +325,13 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     TxArgs().resolveType(5.toByte) shouldBe Left(TxArgsError.UnsupportedDefaultType(5))
   }
 
-  it should "let an explicit type win and validate it against the fields present" taggedAs (UnitTest) in {
+  it should "let a programmatically set type win and validate it against the fields present" taggedAs (UnitTest) in {
     val bh = s""""blobVersionedHashes":["$H1"]"""
     val au = s""""authorizationList":[$Auth]"""
     val accepted = Table(
       ("type", "fields"),
       ("0x0", """"gasPrice":"0x1","chainId":"0x1""""),
-      ("0x1", """"gasPrice":"0x1","accessList":[]"""), // builds 2930; without the type this is an error
+      ("0x1", """"gasPrice":"0x1","accessList":[]"""), // builds 2930, as inference does too
       ("0x1", ""),
       ("0x2", """"maxFeePerGas":"0x2","maxPriorityFeePerGas":"0x1","accessList":[]"""),
       ("0x2", ""),
@@ -334,7 +339,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       ("0x4", s""""maxFeePerGas":"0x2",$au""")
     )
     forAll(accepted) { (t, fields) =>
-      val a = ok(s"""{"type":"$t","to":"$A1"${if fields.isEmpty then "" else "," + fields}}""")
+      val a = typed(s"""{"type":"$t","to":"$A1"${if fields.isEmpty then "" else "," + fields}}""")
       a.resolveType() shouldBe Right(Integer.decode(t).toByte)
       a.validateForCall.isRight shouldBe true
     }
@@ -355,18 +360,18 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       ("0x4", s""""proofs":["0x${"00" * 48}"]""", "proofs")
     )
     forAll(rejected) { (t, fields, bad) =>
-      val a = ok(s"""{"type":"$t","to":"$A1",$fields}""")
+      val a = typed(s"""{"type":"$t","to":"$A1",$fields}""")
       a.resolveType() shouldBe Left(TxArgsError.FieldNotValidForType(bad, Integer.decode(t).toByte))
     }
     TxArgsError.FieldNotValidForType("gasPrice", 2).message shouldBe
       """field "gasPrice" is not valid for transaction type 0x2"""
   }
 
-  it should "reject unsupported explicit types and creates for types 0x3 and 0x4" taggedAs (UnitTest) in {
-    ok("""{"type":"0x5"}""").resolveType() shouldBe Left(TxArgsError.TxTypeNotSupported)
-    ok("""{"type":"0x7f"}""").resolveType() shouldBe Left(TxArgsError.TxTypeNotSupported)
-    ok("""{"type":"0x3"}""").resolveType() shouldBe Left(TxArgsError.BlobTxCreate)
-    ok("""{"type":"0x4"}""").resolveType() shouldBe Left(TxArgsError.SetCodeTxCreate)
+  it should "reject unsupported programmatic types and creates for types 0x3 and 0x4" taggedAs (UnitTest) in {
+    typed("""{"type":"0x5"}""").resolveType() shouldBe Left(TxArgsError.TxTypeNotSupported)
+    typed("""{"type":"0x7f"}""").resolveType() shouldBe Left(TxArgsError.TxTypeNotSupported)
+    typed("""{"type":"0x3"}""").resolveType() shouldBe Left(TxArgsError.BlobTxCreate)
+    typed("""{"type":"0x4"}""").resolveType() shouldBe Left(TxArgsError.SetCodeTxCreate)
   }
 
   // ----------------------------------------------------------------------------------------------
@@ -443,7 +448,6 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       (MissingField("nonce", 0), -32000), // caller skipped its defaults step
       (TxTypeNotSupported, -32602),
       (FieldNotValidForType("gasPrice", 2), -32602),
-      (GasPriceWithAccessListUntyped, -32602),
       (GasPriceWithBlobFields, -32602)
     )
     forAll(codes)((e, code) => e.toJsonRpcError shouldBe JsonRpcError(code, e.message, None))
@@ -453,20 +457,13 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     TxArgsJson.decodeForSend(parse(s"""{"to":"$A1","input":"0x01"}""")).value.to shouldBe Some(Address(A1))
     TxArgsJson.decodeForSend(parse("""{"value":"0x1"}""")).left.value shouldBe
       JsonRpcError.LogicError("contract creation without any data provided")
-    TxArgsJson
-      .decodeForSend(parse(s"""{"to":"$A1","gasPrice":"0x1","accessList":[]}"""))
-      .left
-      .value
-      .code shouldBe -32602
+    TxArgsJson.decodeForSend(parse(s"""{"to":"$A1","gasPrice":"0x1","accessList":[]}""")).isRight shouldBe true
     TxArgsJson.decodeForSend(parse("""{"gas":"0x01"}""")).left.value.code shouldBe -32602
     TxArgsJson.decodeForCall(parse("""{"value":"0x1"}""")).isRight shouldBe true
     TxArgsJson.decodeForCall(parse(s"""{"blobVersionedHashes":["$H1"]}""")).left.value shouldBe
       JsonRpcError.LogicError("blob transaction of type create")
-    TxArgsJson
-      .decodeForCall(parse(s"""{"type":"0x0","to":"$A1","maxFeePerGas":"0x1"}"""))
-      .left
-      .value
-      .code shouldBe -32602
+    // a `type` is not read, so "type":"0x0" with maxFeePerGas is not a field/type conflict: the type is inferred (0x2)
+    TxArgsJson.decodeForCall(parse(s"""{"type":"0x0","to":"$A1","maxFeePerGas":"0x1"}""")).isRight shouldBe true
   }
 
   // ----------------------------------------------------------------------------------------------
@@ -491,8 +488,8 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
     // go-ethereum core/types/transaction_test.go emptyEip2718Tx (same vector as TransactionSpec)
     val args = ok("""{"type":"0x1","chainId":"0x1","nonce":"0x3","gasPrice":"0x1","gas":"0x61a8",
       "to":"0xb94f5374fce5edbc8e2a8697c15331677e6ebf0b","value":"0xa","input":"0x5544","accessList":[]}""")
-    // without an explicit type this shape is rejected (geth would silently build a legacy tx and drop the list)
-    args.copy(txType = None).toTransaction(Mainnet) shouldBe Left(TxArgsError.GasPriceWithAccessListUntyped)
+    // the type is inferred (gasPrice + accessList is 0x1), so the request's `"type"` is not needed
+    args.txType shouldBe None
     val tx = args.toTransaction(Mainnet).value
     tx shouldBe TransactionWithAccessList(
       1,
@@ -598,7 +595,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       )
     )
     forAll(missing) { (j, field, t) =>
-      ok(j).toTransaction(Mainnet) shouldBe Left(TxArgsError.MissingField(field, t.toByte))
+      typed(j).toTransaction(Mainnet) shouldBe Left(TxArgsError.MissingField(field, t.toByte))
     }
     TxArgsError.MissingField("nonce", 0).message shouldBe """missing "nonce" for transaction type 0x0"""
   }
@@ -649,7 +646,8 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       val json = TxArgsJson.encode(args)
       json.obj.toMap.get("data") shouldBe None
       json.obj.toMap.get("from") shouldBe Some(JString(A2))
-      TxArgsJson.decode(json).value shouldBe args
+      // `type` is encoded but not read back (decoder ignores it); the tx is inferred from the fields instead
+      TxArgsJson.decode(json).value shouldBe args.copy(txType = None)
       TxArgsJson.decode(json).value.toTransaction(Sepolia).value shouldBe tx
   }
 

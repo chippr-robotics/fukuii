@@ -51,6 +51,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
   // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
+  private lazy val ForceCompleteResendInterval: FiniteDuration = 1.minute
   private lazy val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private lazy val StorageStagnationThreshold: FiniteDuration =
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
@@ -66,8 +67,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   private[snap] lazy val accountRangeArms: PartialFunction[Command, Behavior[Command]] = {
     case AccountCoordinatorProgress(progress) =>
       if progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
-      then maybeRestartIfAccountStagnant(progress)
-      Behaviors.same
+      then maybeRestartIfAccountStagnant(progress).getOrElse(Behaviors.same)
+      else Behaviors.same
   }
 
   /** `syncing` arms guarded on `currentPhase == ByteCodeAndStorageSync` (P4b). */
@@ -184,9 +185,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                 s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
             )
             timers.cancel(RequestStorageRanges)
-            if !forceCompleteStorageSent then
-              forceCompleteStorageSent = true
-              storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
+            sendStorageForceComplete()
         else if workRemaining then
           val now = System.currentTimeMillis()
           val stalledForMs = now - lastStorageProgressMs
@@ -241,9 +240,22 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                   s"Promoting to healing phase (preserving downloaded state)."
               )
               timers.cancel(RequestStorageRanges)
-              if !forceCompleteStorageSent then
-                forceCompleteStorageSent = true
-                storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
+              sendStorageForceComplete()
+
+  // When the storage force-complete last went out. Read only with `forceCompleteStorageSent` set.
+  private[snap] var forceCompleteSentAtMs: Long = 0L
+
+  /** Tell the storage coordinator to force-complete, and tell it again each `ForceCompleteResendInterval` until the
+    * phase ends (spec 022 review hunter W4). Its retry after a failed record is a timer of that incarnation: a
+    * supervisor restart in between would lose it, and the phase would wait forever on the latch. A coordinator that has
+    * already acted ignores the repeat.
+    */
+  private def sendStorageForceComplete(): Unit =
+    val now = System.currentTimeMillis()
+    if !forceCompleteStorageSent || now - forceCompleteSentAtMs >= ForceCompleteResendInterval.toMillis then
+      forceCompleteStorageSent = true
+      forceCompleteSentAtMs = now
+      storageRangeCoordinator.foreach(_ ! actors.StorageRangeCoordinator.ForceCompleteStorage)
 
   /** Force-complete bytecode sync if no progress for BytecodeStagnationThreshold.
     *
@@ -276,7 +288,12 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
   // private[snap] (not private) only so the reset-table pin test can read it.
   private[snap] var consecutiveAccountStallRefreshes: Int = 0
 
-  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit =
+  /** Check the account phase for a stall. `Some(<dormant behaviour>)` when the stall budget trips the critical-failure
+    * limit and dormant mode is entered (#1515: the caller must continue in that behaviour, the one that handles
+    * `DormantWakeUp`); `None` otherwise.
+    */
+  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Option[Behavior[Command]] =
+    var dormant: Option[Behavior[Command]] = None
     if currentPhase == AccountRangeSync then
       // Only consider it a stall if there is still work to do.
       val workRemaining = progress.tasksPending > 0 || progress.tasksActive > 0
@@ -339,7 +356,7 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                   consecutiveAccountStallRefreshes = 0
                   lastAccountProgressMs = System.currentTimeMillis()
                   if recordCriticalFailure(s"account stall refresh limit exceeded: $context") then
-                    enterDormantMode(s"account stall refresh limit exceeded: $context")
+                    dormant = Some(enterDormantMode(s"account stall refresh limit exceeded: $context"))
                     true
                   else false
                 else false
@@ -358,12 +375,8 @@ private[snap] trait StagnationWatchdog extends StagnationResetApi with Stagnatio
                 // / CheckDispatchStalled) cover this independently; this is the explicit controller hook.
                 accountRangeCoordinator.foreach(_ ! actors.AccountRangeCoordinator.RecoverStalledAccountTasks)
                 refreshPivotInPlace(s"account stall: $context")
-              // end if !dormantTriggered
-            // end else (snapPeerCount > 0)
-          // end if stalledForMs >= threshold
-        // end else (no progress)
-      // end if workRemaining
-  // end if currentPhase == AccountRangeSync
+
+    dormant
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 restructure, CQ-SNAP-016-18/19), body unchanged:
     * `CheckDownloadStagnation`, the 30-s stagnation tick: the proactive pivot roll, the zero-SNAP-peer log and the

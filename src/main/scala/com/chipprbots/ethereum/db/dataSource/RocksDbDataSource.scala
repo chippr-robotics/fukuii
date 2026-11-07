@@ -173,20 +173,37 @@ class RocksDbDataSource(
     * batch; up to 16 keys per branch node in the healing DFS. Null entries in the result list indicate a cache miss.
     */
   override def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
-    if keys.isEmpty then return Seq.empty
-    import scala.jdk.CollectionConverters.*
-    dbLock.readLock().lock()
-    try
-      assureNotClosed()
-      val handle = handles(namespace)
-      val cfList = java.util.Collections.nCopies(keys.size, handle)
-      val keyList = keys.asJava
-      db.multiGetAsList(cfList, keyList).asScala.map(Option(_)).toSeq
-    catch
-      case error: RocksDbDataSourceClosedException => throw error
-      case NonFatal(error) =>
-        throw RocksDbDataSourceException(s"multiGetOptimized failed for namespace $namespace", error)
-    finally dbLock.readLock().unlock()
+    if keys.isEmpty then Seq.empty
+    else
+      import scala.jdk.CollectionConverters.*
+      dbLock.readLock().lock()
+      try
+        assureNotClosed()
+        val handle = handles(namespace)
+        val cfList = java.util.Collections.nCopies(keys.size, handle)
+        val keyList = keys.asJava
+        db.multiGetAsList(cfList, keyList).asScala.map(Option(_)).toSeq
+      catch
+        case error: RocksDbDataSourceClosedException => throw error
+        case NonFatal(error) =>
+          throw RocksDbDataSourceException(s"multiGetOptimized failed for namespace $namespace", error)
+      finally dbLock.readLock().unlock()
+
+  override def multiGetOptimizedNoFill(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
+    if keys.isEmpty then Seq.empty
+    else
+      import scala.jdk.CollectionConverters.*
+      dbLock.readLock().lock()
+      try
+        assureNotClosed()
+        val handle = handles(namespace)
+        val cfList = java.util.Collections.nCopies(keys.size, handle)
+        db.multiGetAsList(scanReadOptions, cfList, keys.asJava).asScala.map(Option(_)).toSeq
+      catch
+        case error: RocksDbDataSourceClosedException => throw error
+        case NonFatal(error) =>
+          throw RocksDbDataSourceException(s"multiGetOptimizedNoFill failed for namespace $namespace", error)
+      finally dbLock.readLock().unlock()
 
   override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
     doWrite(dataSourceUpdates, sync = false)
@@ -212,7 +229,10 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"DataSource error while deleting range", error)
     finally dbLock.writeLock().unlock()
 
-  // Read lock: compaction runs concurrently with reads and writes inside RocksDB; the lock only fences close().
+  // Read lock, held for the whole native call. Inside RocksDB a compaction runs beside reads and writes, but this lock does
+  // not let them: a writer waiting for the write lock queues behind this call, and every later read queues behind that
+  // writer (`dbLock` is not fair, but a queued writer still blocks new readers), and close() waits too. So once anything
+  // writes, this stops the data source for as long as the compaction takes: keep the range small.
   override def compactRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
     dbLock.readLock().lock()
     try
@@ -236,6 +256,14 @@ class RocksDbDataSource(
       fromKey: Array[Byte],
       toKeyExclusive: Array[Byte]
   ): Iterator[(Array[Byte], Array[Byte])] =
+    scanRangeLimit(namespace, fromKey, toKeyExclusive, Int.MaxValue)
+
+  override def scanRangeLimit(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExclusive: Array[Byte],
+      limit: Int
+  ): Iterator[(Array[Byte], Array[Byte])] =
     dbLock.readLock().lock()
     try
       assureNotClosed()
@@ -243,7 +271,7 @@ class RocksDbDataSource(
       try
         val buf = scala.collection.mutable.ArrayBuffer.empty[(Array[Byte], Array[Byte])]
         it.seek(fromKey)
-        while it.isValid && java.util.Arrays.compareUnsigned(it.key(), toKeyExclusive) < 0 do
+        while buf.size < limit && it.isValid && java.util.Arrays.compareUnsigned(it.key(), toKeyExclusive) < 0 do
           buf += ((it.key(), it.value()))
           it.next()
         buf.iterator

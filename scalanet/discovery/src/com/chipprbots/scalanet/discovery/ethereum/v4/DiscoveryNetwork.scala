@@ -65,11 +65,11 @@ object DiscoveryNetwork:
   // Pause before restarting a failed server-event consumer, so a persistent failure cannot spin.
   private[v4] val ConsumerRestartDelay: FiniteDuration = 1.second
 
-  /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key recovery
-    * and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest node
-    * (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what many
-    * IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would be.
-    * At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
+  /** Budget for inbound requests (Ping, FindNode, ENRRequest) that reach the async pipeline, each costing a key
+    * recovery and usually a signed reply (task #52). Per remote IP (whatever its source ports): generous for any honest
+    * node (go-ethereum sends a peer a handful of requests a minute) and for hive's bursts; the global bucket caps what
+    * many IPs can cost together. Requests over budget are dropped unanswered, as an unbonded or expired request would
+    * be. At most `maxTrackedIps` per-IP buckets are kept (least recently used dropped first).
     */
   case class InboundRequestLimits(
       perIpPerSecond: Int,
@@ -403,11 +403,11 @@ object DiscoveryNetwork:
               }
           }
 
-      implicit private class ChannelOps(channel: Channel[A, Packet]):
+      extension (channel: Channel[A, Packet])
 
         /** Set the expiration, pack and send the data. Return the packet so we can use the hash for expected responses.
           */
-        def send(payload: Payload): IO[Packet] =
+        private def send(payload: Payload): IO[Packet] =
           for
             expiring <- setExpiration(payload)
             packet <- pack(expiring)
@@ -419,7 +419,7 @@ object DiscoveryNetwork:
           yield packet
 
         /** Collect responses that match a partial function or raise a timeout exception. */
-        def collectResponses[T](
+        private def collectResponses[T](
             // The ID of the peer we expect the responses to be signed by.
             publicKey: PublicKey,
             // The absolute end we are willing to wait for the correct message to arrive.
@@ -469,7 +469,9 @@ object DiscoveryNetwork:
             .collect(pf)
 
         /** Collect the first response that matches the partial function or return None if one cannot be found */
-        def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
+        private def collectFirstResponse[T](
+            publicKey: PublicKey
+        )(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
           channel
             .collectResponses(publicKey: PublicKey, config.requestTimeout.fromNow)(pf)
             .head
@@ -480,7 +482,7 @@ object DiscoveryNetwork:
             }
 
         /** Collect responses that match the partial function and fold them while the folder function returns Left. */
-        def collectAndFoldResponses[T, Z](publicKey: PublicKey, timeout: FiniteDuration, seed: Z)(
+        private def collectAndFoldResponses[T, Z](publicKey: PublicKey, timeout: FiniteDuration, seed: Z)(
             pf: PartialFunction[Payload.Response, T]
         )(
             f: (Z, T) => Either[Z, Z]

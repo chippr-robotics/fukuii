@@ -26,7 +26,7 @@ Fukuii is an execution layer client for EVM-compatible networks — an independe
 **Project metadata**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Scala](https://img.shields.io/badge/Scala-3.3.7%20LTS-DC322F?logo=scala&logoColor=white)](https://www.scala-lang.org/)
+[![Scala](https://img.shields.io/badge/Scala-3.9.0%20LTS-DC322F?logo=scala&logoColor=white)](https://www.scala-lang.org/)
 [![JDK](https://img.shields.io/badge/JDK-25%20LTS-orange?logo=openjdk&logoColor=white)](https://adoptium.net/)
 [![Latest Release](https://img.shields.io/github/v/release/chippr-robotics/fukuii?include_prereleases&sort=semver)](https://github.com/chippr-robotics/fukuii/releases)
 [![Docker Pulls](https://img.shields.io/docker/pulls/chipprbots/fukuii.svg)](https://hub.docker.com/r/chipprbots/fukuii)

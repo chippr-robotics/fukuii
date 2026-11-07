@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.utils
 
 import com.typesafe.config.Config as TsConfig
 import com.typesafe.config.ConfigFactory
-
 import org.slf4j.LoggerFactory
 
 /** Sizes of the in-process read caches on the block-import path (`state-read-caches` in `base/state-read-caches.conf`).

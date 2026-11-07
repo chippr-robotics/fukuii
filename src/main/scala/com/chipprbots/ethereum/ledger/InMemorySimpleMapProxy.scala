@@ -29,11 +29,21 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (
 
   type Changes = (Seq[K], Seq[(K, V)])
 
-  def changes: Changes = cache.foldLeft(Seq.empty[K] -> Seq.empty[(K, V)]) { (acc, cachedItem) =>
-    cachedItem match
-      case (key, Some(value)) => (acc._1, acc._2 :+ key -> value)
-      case (key, None)        => (acc._1 :+ key, acc._2)
-  }
+  /** The keys to remove and the entries to upsert, each in `cache.iterator` order: the order `persist` applies them to
+    * the inner map in. One pass over the same iterator the `foldLeft` used before #1675 walked, appending to two
+    * builders, so both sequences hold the same elements in the same order as before; only the collection changed. The
+    * fold appended with `:+` onto `Seq.empty` (a `List`), copying its accumulator on every append: O(dirty²) per
+    * persist, which runs once per touched storage trie plus the account trie.
+    */
+  def changes: Changes =
+    val toRemove = Vector.newBuilder[K]
+    val toUpsert = Vector.newBuilder[(K, V)]
+    val it = cache.iterator
+    while it.hasNext do
+      it.next() match
+        case (key, Some(value)) => toUpsert += key -> value
+        case (key, None)        => toRemove += key
+    (toRemove.result(), toUpsert.result())
 
   /** Persists the changes into the underlying [[com.chipprbots.ethereum.common.SimpleMap]]
     *

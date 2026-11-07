@@ -103,4 +103,6 @@ final class CachingMptStorage(underlying: MptStorage, cache: DecodedNodeCache) e
 
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)
 
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = underlying.rawNodes(hashes)
+
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = underlying.storeRawNodes(nodes)

@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus.engine
 
+import org.apache.pekko.util.ByteString
+
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
@@ -9,8 +11,6 @@ import org.json4s.JsonAST.JNull
 import org.json4s.JsonAST.JString
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
-
-import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.testing.Tags.*
@@ -26,11 +26,11 @@ class EngineApiGetBlobsV2Spec extends AnyWordSpec with Matchers:
   implicit val ioRuntime: IORuntime = IORuntime.global
 
   private val stubService: EngineApiService =
-    new EngineApiService(null, null, null, null, None)(null, null):
+    new EngineApiService(null, null, null, null, None)(using null, null):
       override def getPayload(payloadId: ByteString): IO[Either[String, com.chipprbots.ethereum.domain.Block]] =
         IO.pure(Left("stub"))
       override def getPayloadReceipts(payloadId: ByteString) = Nil
-      override def getPayloadBlobsBundle(payloadId: ByteString) = BlobsBundleData(Nil, Nil, Nil, Nil)
+      override def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData = BlobsBundleData(Nil, Nil, Nil, Nil)
       override def getPayloadExecutionRequests(payloadId: ByteString) = Nil
 
   private def controller: EngineApiController = new EngineApiController(stubService)

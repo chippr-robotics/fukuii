@@ -21,12 +21,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator.FlatBatchFlushComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -87,6 +87,7 @@ private[actors] class StubStorageDoneMarkersState(
   def mptStorage: MptStorage = notReached("mptStorage")
   val snapProgressStorage: Option[SnapSyncProgressStorage] = None
   val storageScheme: StorageScheme = StorageScheme.Hash
+  val excludedRecorder: ExcludedRecorder = new ExcludedRecorder(stateIngest.snapProgress, enabled = false, log)
   val stateIngest: StateIngest = new StateIngest:
     def appState: AppStateStorage = notReached("StateIngest.appState")
     def stateTries: StateStorage = notReached("StateIngest.stateTries")
@@ -100,7 +101,6 @@ private[actors] class StubStorageDoneMarkersState(
     def trieStore(pivot: BigInt): MptStorage = notReached("StateIngest.trieStore")
     def snapProgress: SnapSyncProgressStorage = notReached("StateIngest.snapProgress")
     def storageDone: SnapStorageDoneStorage = notReached("StateIngest.storageDone")
-    def healingFrontier: Option[HealingFrontierStorage] = notReached("StateIngest.healingFrontier")
     def bfsQueue: Option[BfsQueueStorage] = notReached("StateIngest.bfsQueue")
 
   // StorageTrieFlushApi (counted)

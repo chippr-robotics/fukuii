@@ -4,9 +4,12 @@
 
 **Created**: 2026-06-06
 
-**Status**: Draft
-
+**Status**: Superseded by 022 (2026-10-30). The persisted heal frontier this spec scaled (CF `g`) is retired by spec 022 slice 4 (FR-016, D6); healing now walks from the pivot root with an in-memory held set.
 **Input**: User description: "Layer 1 (in the draft, validated by compile): replace the unbounded visited set with a 4M-entry LRU (insertion-order eviction, ~320 MB). This converts the OOM-restart loop into a walk that completes without crashing — and it's provably complete (pendingHashSet de-dups any re-discovered missing node; evicted present nodes only re-walk on shared refs, dominated by the childless empty-storage-root on ETC). Layers 2–3 (documented in docs/design/healing-frontier-scale.md, follow-on): Persist the frontier + resume — write pendingTasks to a dedicated RocksDB CF so restart resumes instead of re-walking the full state (O(frontier), not O(full state)). Needs a new CF + constructor wiring from SNAPSyncController. First-walk throughput — parallelise the DFS reads / RocksDB tuning."
+
+**Closed** (2026-10-30):
+- Reason: mechanism replaced. Spec 022 FR-016 bounds and then retires the persisted frontier; its data-model.md D6 clears CF `g`.
+- Lives on in: nothing; see `specs/022-snap-heal-convergence/spec.md`.
 
 ## Overview
 

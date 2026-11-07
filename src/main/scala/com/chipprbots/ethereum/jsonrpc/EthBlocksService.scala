@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.NetworkType
 
 object EthBlocksService:
   case class BestBlockNumberRequest()

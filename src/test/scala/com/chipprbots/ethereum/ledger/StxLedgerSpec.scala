@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.testing.Tags.*
@@ -109,7 +109,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     // Negative control, pinning the exact symptom: the deposit cost (343-byte runtime * 200 gas/byte) must be
     // included, not silently dropped.
     val runtimeCodeSize = 343
-    val codeDepositCost = runtimeCodeSize * 200
+    val codeDepositCost: Int = runtimeCodeSize * 200
     (estimationResult - codeDepositCost) shouldEqual BigInt(43353)
 
   /** Companion to the estimation pin above, guarding the OTHER half of the same VM branch: what a pre-Homestead

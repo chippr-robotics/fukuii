@@ -6,8 +6,8 @@ import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
@@ -310,7 +310,7 @@ trait AmsterdamFixtureVectors:
       world: InMemoryWorldStateProxy,
       config: BlockchainConfig
   ): TxResult =
-    setup.prep.executeTransaction(stx, senderAddress, header, world)(config)
+    setup.prep.executeTransaction(stx, senderAddress, header, world)(using config)
 
   /** Executes a whole transaction list, so the BLOCK-level counters can be asserted. `executeTransaction` alone gives
     * the per-transaction figure; only this reaches `BlockResult.gasUsed`, which is the header's `max()`.
@@ -322,7 +322,7 @@ trait AmsterdamFixtureVectors:
       config: BlockchainConfig
   ): BlockResult =
     setup.prep
-      .executeTransactions(txs, world, header)(config)
+      .executeTransactions(txs, world, header)(using config)
       .fold(err => throw new AssertionError(s"block execution failed: ${err.reason}"), identity)
 
   /** Type-2 transaction, matching the fixture's dominant shape. */

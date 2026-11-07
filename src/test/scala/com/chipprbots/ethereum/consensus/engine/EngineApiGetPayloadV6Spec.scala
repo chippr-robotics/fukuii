@@ -112,7 +112,7 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
 
   /** Serves `block` with `accessList`, counting how often it is resolved. */
   private class StubService(block: Block, list: Option[ByteString])
-      extends EngineApiService(null, null, null, null, None)(null, null):
+      extends EngineApiService(null, null, null, null, None)(using null, null):
     val resolved = new AtomicInteger(0)
     override def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO.pure(Right(block))
     override def resolvePayload(payloadId: ByteString): IO[Either[String, ServedPayload]] =
@@ -212,14 +212,14 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
       val config: BlockchainConfig = EestBlockchainReplay
         .configFor(blockchainConfig, "Amsterdam", BigInt(1))
         .fold(err => throw new IllegalStateException(err), identity)
-      val block = amsterdamBlock(12)
+      val block: Block = amsterdamBlock(12)
 
-      val served = new EngineApiController(new StubService(block, Some(accessList)), None, config)
+      val served: JsonRpcResponse = new EngineApiController(new StubService(block, Some(accessList)), None, config)
         .handleRequest(
           JsonRpcRequest("2.0", "engine_getPayloadV6", Some(JArray(List(JString("0x0000000000000001")))), Some(JInt(1)))
         )
         .unsafeRunSync()
-      val envelope = served.result.getOrElse(fail(s"getPayloadV6 failed: ${served.error}"))
+      val envelope: JValue = served.result.getOrElse(fail(s"getPayloadV6 failed: ${served.error}"))
 
       // A real service with an empty chain: the parent is unknown, so ACCEPTED means the block-hash check passed.
       val service = new EngineApiService(
@@ -228,10 +228,10 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
         null,
         new ForkChoiceManager(blockchainReader, blockchainWriter),
         None
-      )(config, null)
+      )(using config, null)
       val params: List[JValue] =
         List(envelope \ "executionPayload", JArray(Nil), JString(hex(beaconRoot)), envelope \ "executionRequests")
-      val response = new EngineApiController(service, None, config)
+      val response: JsonRpcResponse = new EngineApiController(service, None, config)
         .handleRequest(JsonRpcRequest("2.0", "engine_newPayloadV5", Some(JArray(params)), Some(JInt(2))))
         .unsafeRunSync()
 
@@ -243,7 +243,7 @@ class EngineApiGetPayloadV6Spec extends AnyWordSpec with Matchers:
   "engine_exchangeCapabilities" should {
 
     "advertise engine_newPayloadV5, engine_forkchoiceUpdatedV4 and engine_getPayloadV6" taggedAs UnitTest in {
-      val service = new EngineApiService(null, null, null, null, None)(null, null)
+      val service = new EngineApiService(null, null, null, null, None)(using null, null)
       val response = new EngineApiController(service, None, amsterdamConfig)
         .handleRequest(
           JsonRpcRequest("2.0", "engine_exchangeCapabilities", Some(JArray(List(JArray(Nil)))), Some(JInt(1)))

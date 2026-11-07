@@ -7,11 +7,11 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
-import com.chipprbots.ethereum.domain.Difficulty
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -22,7 +22,9 @@ class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers:
   import PoWBlockHeaderValidatorSpec.*
 
   "PoWBlockHeaderValidator" should "validate Ethash block headers" taggedAs (UnitTest, ConsensusTest, SlowTest) in {
-    PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(blockchainConfig) shouldBe Right(BlockHeaderValid)
+    PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(using blockchainConfig) shouldBe Right(
+      BlockHeaderValid
+    )
   }
 
 object PoWBlockHeaderValidatorSpec:

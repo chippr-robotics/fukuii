@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -93,7 +93,7 @@ class EngineApiStalePoolTxSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private def transfer(nonce: BigInt): SignedTransaction =
       SignedTransaction.sign(
@@ -220,14 +220,14 @@ class EngineApiStalePoolTxSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new Setup:
-      val block1 = canonicalBlock1()
+      val block1: Block = canonicalBlock1()
 
       // The hive state: the pool still holds block 1's transaction (never pruned), next to a genuinely new one.
       poolContents.set(Seq(includedTx, nextTx))
-      val block2 = buildOn(block1.header)
+      val block2: Block = buildOn(block1.header)
 
       block2.body.transactionList shouldBe Seq(nextTx)
-      val status = engineApi.newPayload(toPayload(block2)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block2)).unsafeRunSync()
       withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
 
     "produce a VALID empty payload when the pool holds ONLY already-included transactions" taggedAs (
@@ -235,12 +235,12 @@ class EngineApiStalePoolTxSpec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new Setup:
       // The exact hive block-17 shape: one stale transaction and nothing else.
-      val block1 = canonicalBlock1()
+      val block1: Block = canonicalBlock1()
       poolContents.set(Seq(includedTx))
-      val block2 = buildOn(block1.header)
+      val block2: Block = buildOn(block1.header)
 
       block2.body.transactionList shouldBe empty
-      val status = engineApi.newPayload(toPayload(block2)).unsafeRunSync()
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block2)).unsafeRunSync()
       withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
 
     "exclude a transaction that would leave a nonce gap" taggedAs (UnitTest, ConsensusTest) in new Setup:
@@ -251,9 +251,9 @@ class EngineApiStalePoolTxSpec extends AnyWordSpec with Matchers:
     "keep every executable transaction — the guard removes nothing else" taggedAs (UnitTest, ConsensusTest) in
       new Setup:
         poolContents.set(Seq(includedTx, nextTx))
-        val block1 = buildOn(genesisHeader)
+        val block1: Block = buildOn(genesisHeader)
         block1.body.transactionList shouldBe Seq(includedTx, nextTx)
-        val status = importAsCanonical(block1)
+        val status: PayloadStatusV1 = importAsCanonical(block1)
         withClue(s"validationError=${status.validationError}: ")(status.status shouldBe Valid)
   }
 
@@ -262,6 +262,6 @@ class EngineApiStalePoolTxSpec extends AnyWordSpec with Matchers:
     "return the list unchanged when the parent state cannot be read" taggedAs (UnitTest, ConsensusTest) in
       new Setup:
         // Cannot judge -> pre-existing behaviour, never a silent drop.
-        val unreadable = genesisHeader.copy(stateRoot = TrieRoot(BlockHelpers.randomHash()))
+        val unreadable: BlockHeader = genesisHeader.copy(stateRoot = TrieRoot(BlockHelpers.randomHash()))
         engineApi.executableAtParent(unreadable, Seq(includedTx, nextTx)) shouldBe Seq(includedTx, nextTx)
   }

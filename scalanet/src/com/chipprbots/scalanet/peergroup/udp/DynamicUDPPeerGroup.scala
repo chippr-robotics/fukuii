@@ -56,7 +56,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(im
 
   private val workerGroup = new NioEventLoopGroup()
 
-  private val serverQueue = CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]].unsafeRunSync()(global)
+  private val serverQueue = CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]].unsafeRunSync()(using global)
 
   // all channels in the map are open and active, as upon closing channels are removed from the map
   private[peergroup] val activeChannels = new ConcurrentHashMap[UDPChannelId, ChannelImpl]()
@@ -170,7 +170,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(im
                       potentialNewChannel.closePromise.addListener(closeChannelListener)
                       serverQueue
                         .offer(ChannelCreated(potentialNewChannel, potentialNewChannel.close))
-                        .unsafeRunSync()(global)
+                        .unsafeRunSync()(using global)
                       handleIncomingMessage(potentialNewChannel, datagram)
                 catch case NonFatal(e) => handleError(potentialNewChannel.channelId, e)
                 finally
@@ -186,7 +186,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(im
     )
 
   private def makeMessageQueue(): CloseableQueue[ChannelEvent[M]] =
-    CloseableQueue[ChannelEvent[M]](config.channelCapacity).unsafeRunSync()(global)
+    CloseableQueue[ChannelEvent[M]](config.channelCapacity).unsafeRunSync()(using global)
 
   class ChannelImpl(
       nettyChannel: NioDatagramChannel,
@@ -289,7 +289,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(im
         .handleErrorWith { e =>
           IO(logger.error(s"Failed to offer event to messageQueue: ${e.getMessage}", e))
         }
-        .unsafeRunAndForget()(global)
+        .unsafeRunAndForget()(using global)
 
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 

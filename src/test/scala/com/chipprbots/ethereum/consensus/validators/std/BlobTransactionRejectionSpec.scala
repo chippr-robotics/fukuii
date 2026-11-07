@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlymp
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
-import com.chipprbots.ethereum.utils.ForkTimestamps
 
 /** L1 — EIP-4844 blob (Type-3) transaction rejection on ETC.
   *
@@ -108,7 +107,7 @@ class BlobTransactionRejectionSpec extends AnyFlatSpec with Matchers:
       forkTimestamps = blockchainConfig.forkTimestamps.copy(cancunTimestamp = Some(0L))
     )
     val cancunHeader = etcBlockHeader.copy(unixTimestamp = Timestamp(1_000_000_000L))
-    validate(signedBlobTx, cancunHeader)(cancunCfg) match
+    validate(signedBlobTx, cancunHeader)(using cancunCfg) match
       case Left(TransactionSyntaxError(msg)) if msg.contains("TYPE_3_TX_NOT_SUPPORTED") =>
         fail("Blob tx should not be rejected for type when Cancun is active")
       case _ => succeed // Any other result (including other errors) is acceptable

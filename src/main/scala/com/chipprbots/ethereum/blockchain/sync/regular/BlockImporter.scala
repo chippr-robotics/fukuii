@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
-import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
-import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.event.Logging
 import org.apache.pekko.event.LoggingAdapter
 import org.apache.pekko.util.ByteString
@@ -17,21 +17,26 @@ import cats.implicits.*
 
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
+import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.BroadcastBlocks
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.Command
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.StorageHolePosition
+import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
@@ -46,6 +51,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeExceptio
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
@@ -59,8 +65,18 @@ import com.chipprbots.ethereum.utils.FunctorOps.*
 object BlockImporter:
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
-  // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
+  // A fetch that runs exhausts after about 160 s (StateNodeFetcher's 30 tries, 5 s apart plus each request's own short
+  // backoff), and a 5-minute backoff follows each exhaust: about 18 minutes to the escape valve. An import that asks no
+  // peer (a storage hole it cannot place, or a local state fault, spec 022 T062) is exhausted at once, so the escape
+  // comes after the two backoffs alone: about 10 minutes. Only exhausts count (see SyncRetryTick below), and a block
+  // imported clears them.
   val StuckEscapeThreshold: Int = 3
+
+  // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
+  private[regular] var resolvingRetryInterval: FiniteDuration = 30.seconds
+
+  // How long a block waits after an exhausted fetch before it is tried again. A variable only so a spec can shorten it.
+  private[regular] var exhaustBackoff: FiniteDuration = 5.minutes
 
   // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
   // 128 blocks provides enough depth to cover common shallow forks without resyncing the
@@ -68,19 +84,36 @@ object BlockImporter:
   val MaxForkAncestryDepth: Int = 128
 
   // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
-  // the progress toward StuckEscapeThreshold. Zeroed in apply() (fresh regular-sync session).
+  // the progress toward StuckEscapeThreshold. Zeroed in apply() (fresh regular-sync session), by a node delivered, and
+  // by a block imported.
   private[regular] var survivedExhausts: Int = 0
 
-  // Bulk bytecode recovery is requested at most once per process: if the scan cannot find the code (an account outside
-  // the SNAP trie, or peers that cannot serve it), the next MissingCodeException falls back to fetching that hash alone
-  // instead of looping through recovery forever. NOT zeroed in apply(): the importer is re-created when regular sync
-  // restarts after the recovery, and zeroing there would be that loop.
+  // Distinct missing codes in a process before one bulk bytecode recovery is asked for. A miss is fetched alone first, at a
+  // round trip and a re-execution of the block, because the bulk scan stops regular sync for as long as it takes to read the
+  // whole state: one missing contract on Sepolia, where that is estimated at hours, would hold the head for all of it, where
+  // a fetch took 100 ms (#1694, the user's decision of 2026-11-01). Several show there are many to find, as on a datadir from
+  // before healing waited on code, and fetching those one by one is what costs more.
+  val BulkCodeRecoveryAfterMisses: Int = 8
+
+  // Requested at most once per process: if the scan cannot find the code (an account outside the SNAP trie, or peers that
+  // cannot serve it), the next MissingCodeException falls back to fetching that hash alone instead of looping through
+  // recovery forever. NOT zeroed in apply(): the importer is re-created when regular sync restarts after the recovery, and
+  // zeroing there would be that loop. The same goes for the count of misses, or a restart would start it over.
   private val bulkCodeRecoveryClaimed = new java.util.concurrent.atomic.AtomicBoolean(false)
+  private val missingCodes = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
 
-  /** True for the first caller only. */
-  private[regular] def claimBulkCodeRecovery(): Boolean = bulkCodeRecoveryClaimed.compareAndSet(false, true)
+  /** Counts `codeHash`, and is true for the caller whose miss takes the count to the threshold, once a process. A hash
+    * met again counts once. Bounded: past the threshold nothing more is kept.
+    */
+  private[regular] def claimBulkCodeRecovery(codeHash: ByteString): Boolean =
+    if missingCodes.size < BulkCodeRecoveryAfterMisses then missingCodes.add(codeHash): Unit
+    missingCodes.size >= BulkCodeRecoveryAfterMisses && bulkCodeRecoveryClaimed.compareAndSet(false, true)
 
-  private[regular] def resetBulkCodeRecoveryForTests(): Unit = bulkCodeRecoveryClaimed.set(false)
+  private[regular] def resetBulkCodeRecoveryForTests(): Unit =
+    bulkCodeRecoveryClaimed.set(false)
+    missingCodes.clear()
+
+  private[regular] def distinctMissingCodesForTests: Int = missingCodes.size
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
     * un-canonicalises.
@@ -231,7 +264,12 @@ object BlockImporter:
     * [[Running]] — and on ETC/Mordor/Gorgoroth, where nothing is ever deferred, identical outright.
     */
   case object RunningAfterFetcherRewind extends NewBehavior
-  case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block]) extends NewBehavior
+
+  /** Waiting for a missing node. `alreadyExhausted`: the wait ends as it starts, as an exhausted fetch, because the
+    * import asked no peer (a storage node it could not locate), or because a fetch exhausted while that import ran.
+    */
+  case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block], alreadyExhausted: Boolean = false)
+      extends NewBehavior
   case class ResolvingBranch(from: BigInt) extends NewBehavior
 
   sealed trait BlockImportType:
@@ -315,6 +353,8 @@ final private class BlockImporterLogic(
     ctx.messageAdapter[BlockFetcher.FetchResponse](FetcherResponse(_))
 
   private var pendingStateNodeHash: Option[ByteString] = None
+  // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
+  private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
   private val BadBlockEvictionThreshold = 3
   private val ForkDetectThreshold = 5
@@ -385,7 +425,11 @@ final private class BlockImporterLogic(
 
       case _: ImportNewBlock => Behaviors.same
 
-      case ImportDone(newBehavior, importType) =>
+      case ImportDone(reported, importType) =>
+        val newBehavior = reported match
+          case r: ResolvingMissingNode if exhaustedDuringImport => r.copy(alreadyExhausted = true)
+          case other                                            => other
+        exhaustedDuringImport = false
         // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
         val deferred = state.deferredBatches
         val newState = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
@@ -423,6 +467,13 @@ final private class BlockImporterLogic(
         Behaviors.same
 
       case PickBlocks => Behaviors.same
+
+      // An exhausted fetch, landing while an import runs: a 30 s retry of the blocked import, most likely. Dropped, it
+      // was lost, and the re-import started the fetch again from its first try. So that import's ImportDone ends its
+      // wait with it, if it waits on a node again (forge, #1694).
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty && state.importing =>
+        exhaustedDuringImport = true
+        Behaviors.same
 
       // Late-arriving state node from a previous resolvingMissingNode phase.
       // ReceiveTimeout may have moved us back to running before the fetch completed.
@@ -479,7 +530,7 @@ final private class BlockImporterLogic(
             blockNum,
             BlockImporter.survivedExhausts,
             BlockImporter.StuckEscapeThreshold,
-            5.minutes.toSeconds
+            BlockImporter.exhaustBackoff.toSeconds
           )
           fetcher ! BlockFetcher.InvalidateBlocksFrom(
             blockNum,
@@ -487,7 +538,7 @@ final private class BlockImporterLogic(
             shouldBlacklist = false
           )
           // Don't self ! PickBlocks — that would immediately retry the same block.
-          timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, 5.minutes)
+          timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
           running(state)
 
       case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) =>
@@ -518,7 +569,9 @@ final private class BlockImporterLogic(
         // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
         // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
         // has a number→hash mapping, so branch resolution would fail for any other starting point.
-        BlockImporter.survivedExhausts += 1
+        // Not an exhaust, so it does not count towards StuckEscapeThreshold: counting it made the first exhaust the
+        // third, and a hole no peer served for about 150 s cost a re-SNAP, days on Sepolia (forge, beacon, #1694; the
+        // user's decision of 2026-11-02).
         importBlocks(blocksToRetry, blockImportType)(state)
 
       case _ => Behaviors.same
@@ -539,8 +592,10 @@ final private class BlockImporterLogic(
       case Running | RunningAfterFetcherRewind =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         running(state)
-      case ResolvingMissingNode(blocksToRetry) =>
-        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, 30.seconds)
+      case ResolvingMissingNode(blocksToRetry, alreadyExhausted) =>
+        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.resolvingRetryInterval)
+        // Sent here, not from the import: there it would reach `running`, which does not wait on a node.
+        if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
         resolvingMissingNode(blocksToRetry, blockImportType)(state)
       case ResolvingBranch(from) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
@@ -588,6 +643,9 @@ final private class BlockImporterLogic(
               b.header.gasUsed
             )
           case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
+        // The chain moved, so exhausts counted before were met at a block now behind it, and a hole the audit filled
+        // no longer counts towards a re-SNAP (forge, #1694).
+        if importedBlocks.nonEmpty then BlockImporter.survivedExhausts = 0
 
         errorOpt match
           case None => Running
@@ -623,6 +681,7 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
@@ -636,41 +695,59 @@ final private class BlockImporterLogic(
                     case ex: Exception =>
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                 val accountHash = kec256(e.accountAddress)
-                val paths: Option[Seq[Seq[ByteString]]] = e.location
-                  .map { loc =>
-                    Seq(Seq(accountHash, loc))
-                  }
-                  .orElse {
-                    val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                    Some(Seq(Seq(accountHash, emptyStoragePath)))
-                  }
+                val paths: Option[Seq[Seq[ByteString]]] = StorageHolePosition.paths(
+                  e.location,
+                  accountHash,
+                  e.hash,
+                  parentStateRoot.flatMap { root =>
+                    Try(blockchainReader.getAccountAtStateRoot(root, Address(e.accountAddress))).toOption.flatten
+                      .map(_.storageRoot.value)
+                  },
+                  hash => Try(stateStorage.getBackingStorage(failedBlock.number.value).get(hash.toArray)).toOption
+                )
                 log.info(
-                  "Missing storage node {} for account {} during import of block {}, locationKnown={}",
+                  "Missing storage node {} for account {} during import of block {}, {}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  e.location.isDefined
+                  if e.location.isDefined then "position known"
+                  else if paths.isDefined then "position found"
+                  else "position not found"
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
-                fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
-                ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+                paths match
+                  case Some(_) =>
+                    fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
+                  case None =>
+                    // With no position the fetcher would ask by hash alone (GetNodeData), which no eth/68+ peer serves,
+                    // and wait out its retries for nothing (forge, #1694). So nobody is asked: this is an exhausted
+                    // fetch at once, with its backoff, and the audit may fill the hole meanwhile.
+                    log.warning(
+                      "Storage node {} could not be located under its storage root: asking no peer, and backing off",
+                      ByteStringUtils.hash2string(e.hash)
+                    )
+                ResolvingMissingNode(
+                  NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail),
+                  alreadyExhausted = paths.isEmpty
+                )
               case e: MissingCodeException
                   if SyncController.bulkCodeRecoveryAllowed(
                     blockchainReader.isSnapSyncDone,
                     blockchainReader.bulkBytecodeRecoveryFailures
-                  ) && BlockImporter.claimBulkCodeRecovery() =>
-                // First missing contract code this process has seen. One missing contract is rarely alone: a node that
-                // took its state from SNAP can lack thousands (every contract created after the SNAP pivot and
-                // delivered by trie healing), and fetching them one by one costs a full re-execution of the block each.
-                // Hand off to SyncController, which stops regular sync, runs the bytecode recovery scan and fetches
+                  ) && BlockImporter.claimBulkCodeRecovery(e.hash) =>
+                // Enough distinct missing codes in this process (see BulkCodeRecoveryAfterMisses) to show they are not
+                // alone. Hand off to SyncController, which stops regular sync, runs the bytecode recovery scan and fetches
                 // every gap in batches, then restarts regular sync. This importer waits to be stopped.
                 val failedBlock = notImportedBlocks.head
                 log.error(
-                  "Missing contract code {} for account {} during import of block {}: requesting bulk bytecode " +
-                    "recovery (scan of the SNAP state trie, batched GetByteCodes) instead of fetching one hash at a time",
+                  "Missing contract code {} for account {} during import of block {}, with {} distinct misses so far: " +
+                    "requesting bulk bytecode recovery (scan of the SNAP state trie, batched GetByteCodes) instead of " +
+                    "fetching one hash at a time",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
-                  failedBlock.number
+                  failedBlock.number,
+                  BlockImporter.BulkCodeRecoveryAfterMisses
                 )
                 supervisor ! SyncProtocol.MissingCodeNeedsBulkRecovery(failedBlock.number.value, e.hash)
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
@@ -717,6 +794,7 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
+                deleteIfCorrupt(e.hash, failedBlock.number.value)
                 pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
@@ -794,6 +872,18 @@ final private class BlockImporterLogic(
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     RunningAfterFetcherRewind
+              case BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
+                // This node's trie is bad, and no fetch can name what to fetch. So this is an exhausted fetch at once:
+                // the fetcher is rewound without blacklisting the honest provider, the block waits out the exhaust
+                // backoff, and the third in a row asks for a SNAP re-sync, the only exit (spec 022 T062).
+                val failedBlock = notImportedBlocks.head
+                log.error(
+                  "[LOCAL-STATE-FAULT] block {} failed on this node's own state, no peer blamed: {}",
+                  failedBlock.number,
+                  error
+                )
+                pendingStateNodeHash = None
+                ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -849,6 +939,11 @@ final private class BlockImporterLogic(
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
 
+          // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
+          // is detected (spec 022 T062). The caller backs off and escalates instead.
+          case err @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
+            IO.pure((importedBlocks, Some(err)))
+
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             val failedBlock = nel.head
             log.error(
@@ -886,6 +981,36 @@ final private class BlockImporterLogic(
               selfRef ! StartForkRecovery(failedBlock.number.value)
             IO.pure((importedBlocks, Some(err)))
         }
+
+  /** Before a missing node is fetched, the entry under its hash goes if it is not that node (spec 022 T062).
+    *
+    * A stored entry that does not decode, or fails its hash, reads as a missing node (`CorruptNodeException`), but that
+    * type is gone by the time it gets here: the trie and the world state rewrap it with a position and an account. So
+    * this runs for every missing node, and it is safe to: `deleteBadNode` reads the entry again itself (under the
+    * commit lock, where the store has one) and removes only bytes that fail keccak, and an absent entry is
+    * `NoLongerBad`. It runs before any escalation, so a re-SNAP after exhausted fetches never upserts over the junk,
+    * which basic pruning's upsert would keep. A store that cannot delete, or a read that fails, leaves the fetch to go
+    * ahead as before.
+    */
+  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt): Unit =
+    if stateStorage.canRepairNodes then
+      try
+        stateStorage.deleteBadNode(hash, () => true) match
+          case BadEntryDelete.Deleted =>
+            log.error(
+              "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
+                "fetching it from peers",
+              ByteStringUtils.hash2string(hash),
+              blockNumber
+            )
+          case _ => ()
+      catch
+        case NonFatal(e) =>
+          log.error(
+            e,
+            "[STATE-CORRUPT] could not check stored trie node {} for corruption; fetching it anyway",
+            ByteStringUtils.hash2string(hash)
+          )
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
     * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest
@@ -934,7 +1059,7 @@ final private class BlockImporterLogic(
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             announceAdopted(adopted, internally)
             IO.raiseError(missingNodeException)
-          case BlockImportFailed(error) if informFetcherOnFail =>
+          case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
         }
@@ -1178,6 +1303,7 @@ final private class BlockImporterLogic(
         // Resetting at the exits instead would be wrong: if the resolver answered first, a new import could start
         // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
         // there as usual.
+        exhaustedDuringImport = false
         resolvingFork(capturedBest, snapPivot, state.notImportingBlocks().branchResolved().withoutDeferredBatches())
 
       case _ => Behaviors.same

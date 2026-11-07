@@ -9,8 +9,8 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Conformance vector **V4** — EIP-2780 moves intrinsic gas in THREE directions, not one.

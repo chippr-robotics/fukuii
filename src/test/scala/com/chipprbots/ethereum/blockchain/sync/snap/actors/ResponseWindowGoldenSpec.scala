@@ -9,6 +9,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
+import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
@@ -26,11 +27,13 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.AccountPeerDispatch
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.StubAccountPeerDispatchState
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.StoragePeerDispatch
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.storage.StubStoragePeerDispatchState
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
@@ -145,7 +148,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   private def arcWindow(): Window =
     val controller = TestInbox[SNAPSyncController.Command]()
     val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     var captured: StubAccountPeerDispatchState & AccountPeerDispatch = null
     var action: () => Unit = () => ()
     val kit = BehaviorTestKit(Behaviors.setup[AccountRangeCoordinator.Command] { ctx =>
@@ -171,7 +174,7 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   private def srcWindow(): Window =
     val controller = TestInbox[SNAPSyncController.Command]()
     val peerManager = TestInbox[NetworkPeerManagerActor.Command]()
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     var captured: StubStoragePeerDispatchState & StoragePeerDispatch = null
     var action: () => Unit = () => ()
     val kit = BehaviorTestKit(Behaviors.setup[StorageRangeCoordinator.Command] { ctx =>
@@ -192,10 +195,10 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       def stored(p: Peer): Option[BigInt] = module.peerResponseBytesTarget.get(p.id.value)
       def seed(p: Peer, value: BigInt): Unit = module.peerResponseBytesTarget(p.id.value) = value
 
-  /** A storage whose raw-node flush fails. The healing actor flushes healed nodes on a Future and only a successful one
-    * sends `FlushComplete`; until it does, `flushing` stays set and `HealingCheckCompletion` cannot start the
-    * verification BFS, which would walk the (absent) root and send further `GetTrieNodes` into the window under test.
-    * Failing here, by construction, makes that so rather than leaving it to what a test blob happens to decode to.
+  /** A storage whose raw-node flush fails, so nothing a test serves reaches the store. (It used to be what kept the
+    * completion gate shut: a failed flush left `flushing` set. Since spec 022 T026 a failed flush ends, and since slice
+    * 2 an undecodable blob is never buffered. `Healing` gives it a childless root instead, so the gate's walk asks for
+    * nothing.)
     */
   final private class FlushFailsStorage extends TestMptStorage:
     override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
@@ -359,18 +362,24 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
   /** A healing coordinator with one peer; each queued node becomes a one-node request. */
   final private class Healing(peerName: String):
-    val tracker = new SNAPRequestTracker()(system.classicSystem.scheduler)
+    val tracker = new SNAPRequestTracker()(using system.classicSystem.scheduler)
     val network: TestProbe[NetworkPeerManagerActor.Command] =
       testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     private val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     private val peerProbe = testKit.createTestProbe[NetworkPeerManagerActor.SendMessageCmd]()
     val healer: Peer = PeerTestHelpers.createTestPeer(peerName, peerProbe.ref.toClassic)
-    private val stateRoot = kec256(ByteString(s"response-window-golden-$peerName"))
-    val coordinator = HealingTrieFixtures.spawnCoordinator(
+    // A present, childless root: when the completion gate opens between the test's requests, its walk reads this leaf
+    // and finds nothing, so no request of its own enters the window under test. (The Hash controller's trie walk used to
+    // hold the gate shut here; spec 022 slice 6 removed it. An absent root would be fetched.)
+    private val storage = new FlushFailsStorage()
+    private val rootLeaf = LeafNode(ByteString(1), ByteString(1))
+    storage.putNode(rootLeaf)
+    private val stateRoot = ByteString(rootLeaf.hash)
+    val coordinator: ActorRef[Command] = HealingTrieFixtures.spawnCoordinator(
       stateRoot = stateRoot,
       networkPeerManager = network.ref,
       requestTracker = tracker,
-      mptStorage = new FlushFailsStorage(),
+      mptStorage = storage,
       batchSize = 1,
       snapSyncController = controller.ref
     )

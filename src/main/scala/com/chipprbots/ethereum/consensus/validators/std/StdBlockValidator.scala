@@ -10,12 +10,12 @@ import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BloomFilter
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Withdrawal
-import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalBytesDec
 import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalEnc
-import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.domain.Withdrawal.toWithdrawal
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
 import com.chipprbots.ethereum.utils.ByteUtils.or
@@ -200,9 +200,9 @@ object StdBlockValidator extends BlockValidator:
     * even though no withdrawals are carried. A pre-Shanghai block must RLP-encode as a 3-item list, which means
     * `body.withdrawals = None`.
     *
-    * The reverse case (Shanghai header + no withdrawals field in body) is rejected too. `Block.BlockDec.toBlock`
-    * catches it for whole blocks, but a body that never went through that decoder (a `BlockBodies` reply, a body built
-    * locally) reaches this check with the field absent.
+    * The reverse case (Shanghai header + no withdrawals field in body) is rejected too. `Block.toBlock` catches it for
+    * whole blocks, but a body that never went through that decoder (a `BlockBodies` reply, a body built locally)
+    * reaches this check with the field absent.
     */
   private def validateWithdrawalsPresence(block: Block): Either[BlockError, BlockValid] =
     (block.header.withdrawalsRoot, block.body.withdrawals) match
@@ -230,14 +230,14 @@ object StdBlockValidator extends BlockValidator:
     if withdrawals.isEmpty then BlockHeader.EmptyMpt
     else
       val serializable = new ByteArraySerializable[Withdrawal]:
-        override def fromBytes(bytes: Array[Byte]): Withdrawal = WithdrawalBytesDec(bytes).toWithdrawal
+        override def fromBytes(bytes: Array[Byte]): Withdrawal = bytes.toWithdrawal
         override def toBytes(input: Withdrawal): Array[Byte] = rlpEncode(WithdrawalEnc(input).toRLPEncodable)
       val stateStorage = com.chipprbots.ethereum.db.storage.StateStorage.getReadOnlyStorage(
         com.chipprbots.ethereum.db.dataSource.EphemDataSource()
       )
       val trie = com.chipprbots.ethereum.mpt.MerklePatriciaTrie[Int, Withdrawal](
         source = stateStorage
-      )(MptListValidator.intByteArraySerializable, serializable)
+      )(using MptListValidator.intByteArraySerializable, serializable)
       val root = withdrawals.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
       ByteString(root)
 

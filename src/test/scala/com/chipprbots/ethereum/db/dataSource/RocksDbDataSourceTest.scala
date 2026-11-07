@@ -27,3 +27,5 @@ class RocksDbDataSourceTest extends AnyFlatSpec with DataSourceTestBehavior:
     )
 
   (it should behave).like(dataSource(createDataSource))
+
+  (it should behave).like(batchUpdate(createDataSource, rejectsUnknownNamespace = true))

@@ -10,6 +10,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.*
@@ -18,7 +19,6 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges.*
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes.*
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.testing.Tags.*
 
 class SNAPRoundTripSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators:
@@ -127,6 +127,24 @@ class SNAPRoundTripSpec extends AnyWordSpec with Matchers with ScalaCheckPropert
           responseBytes <- bytesLimitGen
         yield GetTrieNodes(reqId, root, paths, responseBytes)
         forAll(gen)(msg => msg.toBytes.toGetTrieNodes shouldBe msg)
+      }
+    }
+
+    "decoders" should {
+      "produce Vectors, so indexed access into a response is not O(i) (#1672)" taggedAs UnitTest in {
+        val hash = ByteString(Array.fill(32)(1.toByte))
+        val accountRange = AccountRange(1, Seq(hash -> Account(nonce = 1)), Seq(ByteString("p"))).toBytes.toAccountRange
+        accountRange.accounts shouldBe a[Vector[?]]
+        accountRange.proof shouldBe a[Vector[?]]
+        val storage = StorageRanges(2, Seq(Seq(hash -> ByteString("v"))), Seq(ByteString("p"))).toBytes.toStorageRanges
+        storage.slots shouldBe a[Vector[?]]
+        storage.slots.head shouldBe a[Vector[?]]
+        storage.proof shouldBe a[Vector[?]]
+        ByteCodes(3, Seq(ByteString("c"))).toBytes.toByteCodes.codes shouldBe a[Vector[?]]
+        TrieNodes(4, Seq(ByteString("n"))).toBytes.toTrieNodes.nodes shouldBe a[Vector[?]]
+        val getTrieNodes = GetTrieNodes(5, hash, Seq(Seq(ByteString("a"))), 100).toBytes.toGetTrieNodes
+        getTrieNodes.paths shouldBe a[Vector[?]]
+        getTrieNodes.paths.head shouldBe a[Vector[?]]
       }
     }
 

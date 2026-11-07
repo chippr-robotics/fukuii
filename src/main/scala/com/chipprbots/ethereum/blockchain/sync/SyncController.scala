@@ -13,18 +13,21 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.BootstrapComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBootstrapFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
-import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
+import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -49,7 +52,6 @@ import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
-import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.utils.NetworkType
 
 /** Top-level sync orchestrator.
@@ -211,7 +213,8 @@ object SyncController:
       externalSchedulerOpt: Option[Scheduler] = None,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
-        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen
+        com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen,
+      backgroundAuditEnabled: Boolean = BackgroundAudit.enabledInNodeConfig
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -240,7 +243,8 @@ object SyncController:
           forkChoiceManagerOpt,
           externalSchedulerOpt,
           reorgState,
-          txGossipGate
+          txGossipGate,
+          backgroundAuditEnabled
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -281,7 +285,8 @@ object SyncController:
       reorgState: ReorgStateHandler,
       // Closed while SNAP or state recovery runs (no complete state to validate a peer tx against), opened when
       // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
-      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate
+      txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate,
+      backgroundAuditEnabled: Boolean
   ):
     // scalastyle:on parameter.number
 
@@ -293,6 +298,10 @@ object SyncController:
     private var bootstrapGeneration: Long = 0
     private var syncGeneration: Long = 0
 
+    // spec 022 T053: the full-trie walk off the critical path, alive exactly while regular sync is (decision 9).
+    private var backgroundAudit: Option[TypedActorRef[BackgroundAudit.Command]] = None
+    private var saidAuditOff: Boolean = false
+
     // Recovery recent-root roll (Task #5/#6): post-SNAP storage recovery asks for a recent canonical root
     // when the saved pivot has aged out of peers' serve window. We fetch a recent header via
     // PivotHeaderBootstrap (inline in `runningRecovery` — no transition into the deadlock-prone bootstrap
@@ -301,6 +310,8 @@ object SyncController:
 
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
+    // That recovery's scan could not run, so its failure says nothing about the code (spec 022 T050a). Read and cleared with it.
+    private var recoveryScanCouldNotRun: Boolean = false
     private var recentRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -649,7 +660,7 @@ object SyncController:
             // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
             // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
             // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
-            appStateStorage.clearSnapSyncDone().commit()
+            appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
             appStateStorage.clearFastSyncDone().commit()
             startSnapSync()
 
@@ -883,10 +894,13 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
-          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan.
-          appStateStorage.clearBytecodeRecoveryDone().commit()
+          stopBackgroundAudit()
+          // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
+          // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
+          // scan's older root while it can be read, which may never have held this code.
+          appStateStorage.clearBytecodeRecoveryDone().and(appStateStorage.clearRecoveryProgress()).commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
-          startRecovery(needBytecode = true, needStorage = false, scanRoot = bulkRecoveryScanRoot())
+          startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -900,60 +914,46 @@ object SyncController:
             missingHash
           )
           ctx.stop(regularSync)
-          appStateStorage.clearSnapSyncDone().commit()
+          stopBackgroundAudit()
+          appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
           appStateStorage.clearFastSyncDone().commit()
           startSnapSync(minPivotBlock = Some(blockNumber))
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
-          // Three-tier calibration cascade:
-          //   Tier 1 (peerTD > 0, peerMaxBlock > 0): exact interpolation from NewBlock TD+blockNum
-          //   Tier 2 (peerTD > 0, peerMaxBlock = 0): ETH68 STATUS only — peerTD direct (<0.05% over)
-          //   Tier 3 (peerTD = 0): pure ETH69 sentinel — compute from local chain DB via parentHash traversal
-          if peerTD > BigInt(0) then
-            // Tier 1 or 2: ETH68 peer TD available
-            blockchainReader.getBestBlock.foreach { bestBlock =>
-              val genesisWeight: BigInt = blockchainReader
-                .getChainWeightByHash(blockchainReader.genesisHeader.hash)
-                .map(_.totalDifficulty.value)
-                .getOrElse(blockchainReader.genesisHeader.difficulty.value)
-              val calibratedTD =
-                if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
-                else peerTD
-              if calibratedTD > genesisWeight * BigInt(1000) then
-                val storedTD: BigInt = blockchainReader
-                  .getChainWeightByHash(bestBlock.header.hash)
-                  .map(_.totalDifficulty.value)
-                  .getOrElse(BigInt(0))
-                blockchainWriter
-                  .storeChainWeight(
-                    bestBlock.header.hash,
-                    com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
-                  )
-                  .commit()
-                networkBestTD = peerTD
-                calibrationSucceeded = true
-                lastCalibrationSource = if peerMaxBlock > BigInt(0) then "NEWBLOCK_EXACT" else "ETH68_STATUS"
-                log.info(
-                  "CHAIN_WEIGHT_CALIBRATED_ON_RESUME: bestBlock={} storedTD={} calibratedTD={} source={}",
-                  bestBlock.header.number,
-                  storedTD,
-                  calibratedTD,
-                  lastCalibrationSource
-                )
-                val ratio = if storedTD > BigInt(0) then (calibratedTD / storedTD).toString else "∞"
-                log.info(
-                  s"TD_CALIBRATION_SUMMARY: block=${bestBlock.header.number} before=$storedTD after=$calibratedTD ratio=$ratio source=$lastCalibrationSource attempt=$tdCalibrationAttempt"
-                )
-            }
-          else
-            // Tier 3: pure ETH69 sentinel (0, 0) — no ETH68 peer TD seen at T+30s (or retry).
-            // Walk backward via parentHash to find a ChainDownloader anchor with plausible TD,
-            // accumulate forward. Retry every 30min until success or ETH68 peers appear.
-            tdCalibrationAttempt += 1
-            val succeeded = calibrateTDFromLocalChain()
-            if succeeded then
+          // #1654: first ask whether the best block's stored weight is already exact, or can be derived exactly from
+          // its parent's. Fork choice compares stored weights, so rewriting an exact head with an estimate leaves a
+          // jump that every fork branching below it is weighed across (see HeadChainWeight). Before this check, the
+          // timed calibration did that on every restart (Mordor: about ±80M per restart).
+          blockchainReader.getBestBlockHeader.map(h => h -> HeadChainWeight.classify(blockchainReader, h)) match
+            case Some((head, HeadChainWeight.Status.Exact(stored))) =>
               calibrationSucceeded = true
-              lastCalibrationSource = "LOCAL_CHAIN"
-            else scheduleTDCalibrationRetry()
+              lastCalibrationSource = "ALREADY_EXACT"
+              log.info(
+                "TD_CALIBRATION_SKIPPED: block={} storedTD={} reason=ALREADY_EXACT (stored = parent weight + " +
+                  "difficulty); peer data td={} block={} not used",
+                head.number,
+                stored.totalDifficulty,
+                peerTD,
+                peerMaxBlock
+              )
+            case Some((head, HeadChainWeight.Status.Derivable(stored, exact))) =>
+              blockchainWriter.storeChainWeight(head.hash, exact).commit()
+              calibrationSucceeded = true
+              lastCalibrationSource = "DERIVED_FROM_PARENT"
+              val before = stored.map(_.totalDifficulty.value.toString).getOrElse("none")
+              log.warn(
+                "CHAIN_WEIGHT_REPAIRED: block={} before={} after={} source=DERIVED_FROM_PARENT (parent weight + " +
+                  "difficulty; peer data td={} block={} not used)",
+                head.number,
+                before,
+                exact.totalDifficulty,
+                peerTD,
+                peerMaxBlock
+              )
+              log.info(
+                s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
+                  s"source=DERIVED_FROM_PARENT attempt=$tdCalibrationAttempt"
+              )
+            case _ => calibrateChainWeightEstimate(peerTD, peerMaxBlock)
           Behaviors.same
 
         case msg if isInternalMarker(msg) =>
@@ -1298,7 +1298,7 @@ object SyncController:
         val best = appStateStorage.getBestBlockNumber()
         val stranded =
           best > 0 && !appStateStorage.isSnapSyncDone() && !appStateStorage.isFastSyncDone() &&
-            !appStateStorage.isSnapSyncAccountsComplete() && !appStateStorage.getSnapSyncPivotBlock().contains(best)
+            !snapHasStake()
         val floor = Option.when(stranded)(best + 1)
         val floorUpdate = floor match
           case Some(f) =>
@@ -1332,6 +1332,22 @@ object SyncController:
         else Some(floor)
       }
 
+    /** spec 022 D6: the one-time clear of CF `g`, whatever this start goes on to do, since a node past SNAP holds the
+      * old records too. A failure costs disk space, and the next start tries again. On an upgraded datadir the space
+      * stays taken until something compacts the family (see `HealingFrontierStorage.clearAll`).
+      */
+    private def retireHealingFrontier(): Unit =
+      val frontier = new HealingFrontierStorage(flatSlotStorage.dataSource)
+      try
+        if HealInvariant.retireFrontierOnce(appStateStorage, frontier) then
+          log.info("[HEAL-INVARIANT] Persisted healing frontier (CF g) cleared")
+      catch
+        case NonFatal(e) =>
+          log.error(
+            "[HEAL-INVARIANT] Could not clear the persisted healing frontier (CF g); the next start tries again",
+            e
+          )
+
     /** Whether the chain here came from a fast sync that finished, with nothing of SNAP's at stake.
       *
       * Such a node goes to regular sync, as it did before fast sync was removed. Starting SNAP there would leave it
@@ -1346,8 +1362,19 @@ object SyncController:
       * part-way through SNAP therefore resumes SNAP, whatever FastSyncDone says.
       */
     private def fastSyncFinishedWithoutSnapStake(): Boolean =
-      appStateStorage.isFastSyncDone() && !appStateStorage.isSnapSyncAccountsComplete() &&
-        !appStateStorage.getSnapSyncPivotBlock().contains(appStateStorage.getBestBlockNumber())
+      appStateStorage.isFastSyncDone() && !snapHasStake()
+
+    /** SNAP holds part of this node's state: its saved pivot is the best block, or its accounts are complete (#1434).
+      *
+      * `SnapSyncDone` is the only guard against a stale stake: a finished node keeps AccountsComplete = true (and its
+      * saved pivot) for good, so every caller must test `isSnapSyncDone()` first, as `start()` does.
+      *
+      * The same test serves both startup branches: with do-snap-sync off, a restart mid-SNAP must not hand the partial
+      * trie to regular sync either.
+      */
+    private def snapHasStake(): Boolean =
+      appStateStorage.isSnapSyncAccountsComplete() ||
+        appStateStorage.getSnapSyncPivotBlock().contains(appStateStorage.getBestBlockNumber())
 
     /** SNAP has finalized: whatever pivot floor it started with is spent. */
     private def clearSnapPivotFloor(): Unit =
@@ -1423,10 +1450,11 @@ object SyncController:
           "Persisted best block {} not found in storage — clearing sync-done flags so SNAP can resume from persisted progress",
           persistedBest
         )
-        appStateStorage.clearSnapSyncDone().commit()
+        appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
         appStateStorage.clearFastSyncDone().commit()
 
       appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
+      retireHealingFrontier()
 
       // Load bootstrap checkpoints if enabled and DB is fresh (best block = 0).
       // The highest checkpoint becomes the bootstrap pivot — SNAPSyncController uses it
@@ -1508,10 +1536,10 @@ object SyncController:
 
       // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
       // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
+      // spec 022 D7: this also takes the invariant marker, done or not, so the next SNAP run is a repair pass.
       if syncConfig.doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean then
-        if appStateStorage.isSnapSyncDone() then
+        if HealInvariant.clearDoneOnStart(appStateStorage) then
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
-          appStateStorage.clearSnapSyncDone().commit()
 
       // FastSyncDone is a legacy flag; nothing sets it any more, and the recovery paths below still clear it. With SNAP
       // on and not done, it sends the node to regular sync only when SNAP has no stake here (see
@@ -1540,8 +1568,23 @@ object SyncController:
           logSnapStateRootDiagnostic()
           val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
           val needStorage = !appStateStorage.isStorageRecoveryDone()
-          if needBytecode || needStorage then startRecovery(needBytecode, needStorage)
-          else startRegularSync()._2
+          if !(needBytecode || needStorage) then startRegularSync()._2
+          else if auditGate == BackgroundAudit.Gate.Run then
+            // spec 022 decision 14: these flags say a pass ran, and this arm is their only reader. With the audit on, its
+            // pass is what pays them, with no block on a node where nothing is missing. Import's bulk recovery stays the
+            // backstop for code import finds really missing, so a block remains where something is.
+            log.info(
+              s"Recovery flags are down (bytecode=${!needBytecode}, storage=${!needStorage}): no scan at this start. The " +
+                "background audit pays this debt, with regular sync running."
+            )
+            startRegularSync()._2
+          else startRecovery(needBytecode, needStorage, recoveryScanRoot())
+        case (false, SyncMode.Regular) if snapHasStake() =>
+          // #1434: do-snap-sync is off, but SNAP was running here and left work behind (a restart mid-heal, or mid-download
+          // with best = pivot). Regular sync on that partial trie only fetches nodes on demand, and its stuck handler
+          // would re-run SNAP from a new pivot, discarding the download. Resume SNAP where it stopped.
+          log.warn("do-snap-sync is off, but SNAP has progress here and has not finished; resuming SNAP")
+          startSnapSync(minPivotBlock = liveSnapPivotFloor())
         case (_, SyncMode.Regular) =>
           // Says what actually happens. Regular sync fetches missing nodes on demand (redownload-missing-state-nodes);
           // when peers cannot serve them BlockImporter reports RegularSyncStuck, and that handler starts SNAP whatever
@@ -1634,6 +1677,15 @@ object SyncController:
       syncGeneration += 1
       txGossipGate.stateSyncFinished()
 
+      // spec 022 D7 (review hunter): regular sync fetches a missing node on demand and stores it alone, present over
+      // children that may be absent. A clean hand-off has written SnapSyncDone by now, with the walk behind it. Every other
+      // route here (SNAP's `Done` with no finalisation, a finalisation that found no pivot header, do-snap-sync off) has
+      // not, so what is present is no longer vouched for. No catch: a marker that cannot be removed must not be left to
+      // look true while regular sync writes under it.
+      if !appStateStorage.isSnapSyncDone() && appStateStorage.isSnapHealInvariantPresent() then
+        log.warn("[HEAL-INVARIANT] Regular sync starting with SNAP not done: marker removed")
+        appStateStorage.clearSnapHealInvariant().commitSync()
+
       // Every route out of a bulk bytecode recovery ends here, so this is where its result is checked. The recovery
       // actor marks itself done on abandonment, a crashed coordinator, or a failed scan, so success is read from the
       // code store, not from that flag. FAIL LOUDLY: the importer will hit the same code again.
@@ -1647,13 +1699,14 @@ object SyncController:
           val failures = appStateStorage.bulkBytecodeRecoveryFailures() + 1
           log.error(
             "Bulk bytecode recovery finished but contract code {} is STILL missing (failure {} of {}). Possible causes: " +
-              "no peer served it; its account is not in the scanned trie; or the scanned state root was pruned or " +
-              "unreadable, so the scan saw no gaps at all. Block import will now fetch that hash on its own.",
+              "no peer served it; its account is not in the scanned trie; a subtree the scan could not read holds it; or " +
+              "the scan could not run at all (logged above). Block import will now fetch that hash on its own.",
             com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(codeHash),
             failures,
             SyncController.MaxBulkBytecodeRecoveryFailures
           )
-          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures then
+          // A scan that could not run settles nothing, the cap included (spec 022 T050a): only a pass stops the next start's.
+          if failures >= SyncController.MaxBulkBytecodeRecoveryFailures && !recoveryScanCouldNotRun then
             log.error(
               "Giving up on bulk bytecode recovery after {} failures: marking bytecodeRecoveryDone so restarts stop " +
                 "repeating a full trie scan. Missing code is still fetched one hash at a time at import.",
@@ -1669,6 +1722,7 @@ object SyncController:
               .and(appStateStorage.putBulkBytecodeRecoveryFailures(failures))
               .commit()
       }
+      recoveryScanCouldNotRun = false
 
       // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
       // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
@@ -1756,6 +1810,7 @@ object SyncController:
         )
       regularSync ! SyncProtocol.Start
       ctx.watchWith(regularSync, RegularSyncTerminated(regularSync))
+      startBackgroundAudit()
       // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
       // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
       // far it got — spawn a standalone ChainDownloader to finish the job alongside regular sync.
@@ -1765,6 +1820,52 @@ object SyncController:
         if resumeBackfill then maybeStartBackfillResume(regularSync).getOrElse(runningRegularSync(regularSync))
         else runningRegularSync(regularSync)
       (regularSync, nextBehavior)
+
+    private def auditGate: BackgroundAudit.Gate =
+      BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
+
+    /** Every route into regular sync comes here, a restart of it included, so a previous incarnation's audit goes
+      * first. A failed audit restarts from its saved place and gives up after a few tries with nothing else harmed: it
+      * is off the critical path, and the next start tries again.
+      */
+    private def startBackgroundAudit(): Unit =
+      stopBackgroundAudit()
+      auditGate match
+        case BackgroundAudit.Gate.Run =>
+          backgroundAudit = Some(
+            ctx.spawn(
+              Behaviors
+                .supervise(
+                  BackgroundAudit.forNode(
+                    blockchainReader,
+                    appStateStorage,
+                    stateStorage,
+                    evmCodeStorage,
+                    networkPeerManager,
+                    peerEventBus,
+                    syncConfig
+                  )
+                )
+                .onFailure[Exception](
+                  SupervisorStrategy.restartWithBackoff(1.minute, 30.minutes, 0.2).withMaxRestarts(5)
+                ),
+              s"background-audit-$syncGeneration",
+              DispatcherSelector.blocking()
+            )
+          )
+        case BackgroundAudit.Gate.CannotRepair => sayAuditOff("pruning.mode = inmemory")
+        case BackgroundAudit.Gate.Disabled     => sayAuditOff(s"fukuii.sync.${BackgroundAudit.EnabledPath} = false")
+        case BackgroundAudit.Gate.NotOwed      => ()
+
+    private def sayAuditOff(why: String): Unit =
+      if !saidAuditOff then
+        saidAuditOff = true
+        log.info(s"[HEAL-AUDIT] Off: $why")
+
+    /** Decision 9. A stopped audit's Futures still finish, and they write nothing. */
+    private def stopBackgroundAudit(): Unit =
+      backgroundAudit.foreach(ctx.stop)
+      backgroundAudit = None
 
     /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. Returns
       * `Some(runningRegularSyncWithStandaloneBackfill)` when a resumer is spawned; `None` when SNAP has not completed,
@@ -1857,17 +1958,28 @@ object SyncController:
             handleRegularSyncMsg(regularSync, m)
       }
 
-    /** The trie a bulk bytecode recovery scans: the CURRENT BEST block's state root, falling back to the SNAP pivot's.
+    /** The trie a recovery scans, at a start or for a bulk bytecode recovery: the CURRENT BEST block's state root,
+      * falling back to the SNAP pivot's.
       *
-      * The best root is always intact (it is the state regular sync executes on) and covers contracts created after the
-      * pivot. The pivot root is not: with the default `basic` pruning (history 64) the pivot trie is pruned within
-      * about 64 blocks, so a missing code found days after SNAP would scan a root that no longer exists, find "no
-      * gaps", and blame the peers. Only a best root that cannot be read falls back to the pivot's.
+      * The best root is the state regular sync executes on, and it covers contracts created after the pivot. The pivot
+      * root is gone within minutes: with the default `basic` pruning (history 64) it is pruned about 64 blocks on, and
+      * a pivot sits behind the head, so catch-up passes that almost at once. Measured on Mordor (spec 022, 2026-10-31):
+      * a node stopped about 3 minutes after its hand-off had imported 87 blocks past the pivot, and the next start's
+      * scan found the pivot root absent 6 ms in. The root need not be the pivot's for storage either: the storage phase
+      * takes its (account, storage root) pairs from this same scan, asks peers at this same root, and checks each chunk
+      * against its pair's root (and rolls to a recent root when peers no longer serve this one).
       *
-      * Startup recovery (`startRecovery` with no `scanRoot`) keeps the pivot root on purpose: it runs right after SNAP
-      * finishes, when the pivot trie is fresh, and its storage phase needs the pivot's storage tries.
+      * A scan already under way keeps its root while that root can be read, so a restart mid-scan resumes (the tag in
+      * `getRecoveryProgressFor` matches) instead of starting hours of walking again. The best block can move under a
+      * scan: regular sync is stopped through the scan and the downloads, but the Engine API is not, and with a
+      * consensus client feeding the next payload `forkchoiceUpdated` moves it. That path does not prune, and nothing
+      * else does until regular sync's first saved block, so the walk is unharmed. Its block number is the best block's,
+      * since the progress does not hold one: only what a download writes is tagged with it, and those nodes belong to
+      * the best state anyway.
+      *
+      * `None` when there is no root: `startRecovery` then has nothing to scan.
       */
-    private def bulkRecoveryScanRoot(): Option[(ByteString, BigInt)] =
+    private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
       def readable(root: ByteString, number: BigInt): Boolean =
         try
           stateStorage.getBackingStorage(number).get(root.toArray)
@@ -1878,29 +1990,37 @@ object SyncController:
         root <- appStateStorage.getSnapSyncStateRoot()
         number <- appStateStorage.getSnapSyncPivotBlock()
       yield (root, number)
-      best.filter { case (r, n) => readable(r, n) } match
+      val underWay = for
+        progress <- appStateStorage.getRecoveryProgress()
+        (bestRoot, number) <- best
+        if progress.scanRoot != bestRoot && readable(progress.scanRoot, number)
+      yield (progress.scanRoot, number)
+      underWay match
         case Some(ok) =>
-          log.info("Bulk bytecode recovery scans the best block's state root (block {}).", ok._2)
+          log.info("Recovery resumes its scan on the state root it started with, at best block {}.", ok._2)
           Some(ok)
         case None =>
-          log.error(
-            "The best block's state root is not readable; the bulk bytecode recovery falls back to the SNAP pivot's root, " +
-              "which may be pruned."
-          )
-          pivot
+          best.filter { case (r, n) => readable(r, n) } match
+            case Some(ok) =>
+              log.info("Recovery scans the best block's state root (block {}).", ok._2)
+              Some(ok)
+            case None =>
+              log.error(
+                "The best block's state root is not readable; recovery falls back to the SNAP pivot's root, which may be pruned."
+              )
+              pivot
 
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
-        scanRoot: Option[(ByteString, BigInt)] = None
+        scanRoot: Option[(ByteString, BigInt)]
     ): Behavior[Command] =
       syncGeneration += 1
       txGossipGate.stateSyncStarted()
-      val stateRootOpt = scanRoot.map(_._1).orElse(appStateStorage.getSnapSyncStateRoot())
-      val pivotBlockOpt = scanRoot.map(_._2).orElse(appStateStorage.getSnapSyncPivotBlock())
 
-      (stateRootOpt, pivotBlockOpt) match
-        case (Some(stateRoot), Some(pivotBlock)) =>
+      // `pivotBlock` from here on is the scanned root's block: the best block's, unless that root could not be read.
+      scanRoot match
+        case Some((stateRoot, pivotBlock)) =>
           log.info(
             s"[SNAP-RECOVERY] Phase starting — bytecodeNeeded=$needBytecode storageNeeded=$needStorage " +
               s"generation=$syncGeneration — polling for snap-capable peers every 5s"
@@ -1920,9 +2040,8 @@ object SyncController:
           val validatorFactory: MptStorage => StateValidator = new StateValidator(_)
           val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
           val storageDoneStorage: SnapStorageDoneStorage = new SnapStorageDoneStorage(flatSlotStorage.dataSource)
-          // The healing stores (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
-          // out none (the core's are HealingOrchestrator's lazy vals, never built here).
-          val healingFrontierStorageOpt: Option[HealingFrontierStorage] = None
+          // The healing store (spec 016 C-H1): recovery never spawns the healing coordinator, so its capability hands
+          // out none (the core's is HealingOrchestrator's lazy val, never built here).
           val bfsQueueStorageOpt: Option[BfsQueueStorage] = None
           val stateIngest: StateIngest = StateIngest(
             appStateStorage,
@@ -1936,7 +2055,6 @@ object SyncController:
             StateIngest.Durability.Default,
             snapProgressStorage,
             storageDoneStorage,
-            healingFrontierStorageOpt,
             bfsQueueStorageOpt
           )
 
@@ -2032,14 +2150,39 @@ object SyncController:
               storageComplete = !needStorage
             )
 
-        case _ =>
-          log.warn("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
-          if needBytecode then appStateStorage.bytecodeRecoveryDone().commit()
-          if needStorage then appStateStorage.storageRecoveryDone().commit()
-          startRegularSync()._2
+        case None =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            "there is no state root to scan: no readable best block, no pivot"
+          )
+
+    /** spec 022 T050a (the user's decision, 2026-10-31): a scan that could not run settles nothing. Neither flag is
+      * written, and the scan's progress stays, so the next start tries again. It resumes only while that root can still
+      * be read: regular sync starts here, and under `basic` pruning about 64 blocks later the next start scans afresh
+      * on the best root. Archive and in-memory pruning keep the root, so there a failure that keeps failing is paid at
+      * every start up to the node that fails. No hard stop: regular sync fetches what it reaches on demand. A pass that
+      * did run is another matter: see `runningCombinedScan`.
+      */
+    private def recoveryCouldNotRun(needBytecode: Boolean, needStorage: Boolean, why: String): Behavior[Command] =
+      log.error(
+        s"[SNAP-RECOVERY] The recovery scan could not run: $why. Still owed: bytecode=$needBytecode storage=$needStorage. " +
+          "Neither recovery flag is written and the scan's progress is kept, so the next start tries again. Regular sync " +
+          "starts now and fetches what it reaches on demand."
+      )
+      recoveryScanCouldNotRun = true
+      RecoveryMetrics.setBytecodePhase(
+        if needBytecode then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete
+      )
+      RecoveryMetrics.setStoragePhase(if needStorage then RecoveryMetrics.PhaseIdle else RecoveryMetrics.PhaseComplete)
+      startRegularSync()._2
 
     /** Wait for the combined scan to report both gap sets, then spawn download-only recovery actors for whichever
       * phases still have gaps. Phases the scan found already complete are marked done immediately.
+      *
+      * A pass that ran settles the flags, holes or not (spec 022 T050a; the user's decision, 2026-10-31): the scan runs
+      * once, and rescanning a datadir with holes at every start would block regular sync for hours each time. So a flag
+      * means a pass ran, not that everything is there where the pass met a hole, and the WARN says so.
       */
     def runningCombinedScan(
         needBytecode: Boolean,
@@ -2051,10 +2194,25 @@ object SyncController:
     ): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
       msg match
-        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps) =>
+        case CombinedRecoveryScanActor.CombinedScanComplete(_, _, _, true) =>
+          recoveryCouldNotRun(
+            needBytecode,
+            needStorage,
+            s"state root ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString} at block $pivotBlock is absent, or " +
+              "reading the trie failed (logged above)"
+          )
+
+        case CombinedRecoveryScanActor.CombinedScanComplete(byteGaps, storGaps, holes, _) =>
           val effByte = if needBytecode then byteGaps else Nil
           val effStor = if needStorage then storGaps else Nil
           log.info(s"Combined recovery scan reported ${effByte.size} bytecode gaps, ${effStor.size} storage gaps.")
+          if holes > 0 then
+            log.warn(
+              "[SNAP-RECOVERY] The recovery scan's pass could not read {} subtree(s) this session: the store holds no node " +
+                "at the top of each, so nothing under them was looked at. The recovery flags will mean that a pass ran, not " +
+                "that code and storage are complete. The pass is not repeated: block import fetches what it reaches on demand.",
+              holes
+            )
           // Phases the combined scan found complete (no gaps) are done right now.
           if needBytecode && effByte.isEmpty then appStateStorage.bytecodeRecoveryDone().commit()
           if needStorage && effStor.isEmpty then appStateStorage.storageRecoveryDone().commit()
@@ -2345,6 +2503,66 @@ object SyncController:
       }
       recentRootBootstrap = None
 
+    /** The calibration cascade, for a best block with no exact stored weight (#1654: `HeadChainWeight.Status.NoExact`):
+      * a pivot whose parent headers are not backfilled, or a chain built on a proxy base. Tiers 1 and 2 write an
+      * ESTIMATE and log it as one.
+      *   - Tier 1 (peerTD > 0, peerMaxBlock > 0): linear interpolation `peerTD * ourBest / peerMaxBlock`. The pair
+      *     comes from a NewBlock or from an ETH68 STATUS plus the peer's probed height; either way the result is a
+      *     guess.
+      *   - Tier 2 (peerTD > 0, peerMaxBlock = 0): the peer's TD as is (ETH68 STATUS only).
+      *   - Tier 3 (peerTD = 0): pure ETH69 sentinel — accumulate from a plausible local anchor
+      *     ([[calibrateTDFromLocalChain]]).
+      */
+    private def calibrateChainWeightEstimate(peerTD: BigInt, peerMaxBlock: BigInt): Unit =
+      if peerTD > BigInt(0) then
+        // Tier 1 or 2: ETH68 peer TD available
+        blockchainReader.getBestBlock.foreach { bestBlock =>
+          val genesisWeight: BigInt = blockchainReader
+            .getChainWeightByHash(blockchainReader.genesisHeader.hash)
+            .map(_.totalDifficulty.value)
+            .getOrElse(blockchainReader.genesisHeader.difficulty.value)
+          val calibratedTD =
+            if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
+            else peerTD
+          if calibratedTD > genesisWeight * BigInt(1000) then
+            val storedTD: BigInt = blockchainReader
+              .getChainWeightByHash(bestBlock.header.hash)
+              .map(_.totalDifficulty.value)
+              .getOrElse(BigInt(0))
+            blockchainWriter
+              .storeChainWeight(
+                bestBlock.header.hash,
+                com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
+              )
+              .commit()
+            networkBestTD = peerTD
+            calibrationSucceeded = true
+            lastCalibrationSource =
+              if peerMaxBlock > BigInt(0) then "PEER_INTERPOLATED_ESTIMATE" else "PEER_STATUS_ESTIMATE"
+            log.warn(
+              "CHAIN_WEIGHT_CALIBRATED_ON_RESUME: bestBlock={} storedTD={} calibratedTD={} source={} (an ESTIMATE: " +
+                "no exact weight is stored for this block or its parent)",
+              bestBlock.header.number,
+              storedTD,
+              calibratedTD,
+              lastCalibrationSource
+            )
+            val ratio = if storedTD > BigInt(0) then (calibratedTD / storedTD).toString else "∞"
+            log.info(
+              s"TD_CALIBRATION_SUMMARY: block=${bestBlock.header.number} before=$storedTD after=$calibratedTD ratio=$ratio source=$lastCalibrationSource attempt=$tdCalibrationAttempt"
+            )
+        }
+      else
+        // Tier 3: pure ETH69 sentinel (0, 0) — no ETH68 peer TD seen at T+30s (or retry).
+        // Walk backward via parentHash to find a ChainDownloader anchor with plausible TD,
+        // accumulate forward. Retry every 30min until success or ETH68 peers appear.
+        tdCalibrationAttempt += 1
+        val succeeded = calibrateTDFromLocalChain()
+        if succeeded then
+          calibrationSucceeded = true
+          lastCalibrationSource = "LOCAL_CHAIN"
+        else scheduleTDCalibrationRetry()
+
     /** Walk backward from bestBlock via parentHash until a header with a plausible stored TD is found (ChainDownloader
       * anchor), then accumulate forward to produce the correct cumulative TD for bestBlock. Writes the result to DB if
       * plausible.
@@ -2357,10 +2575,11 @@ object SyncController:
       */
     private def calibrateTDFromLocalChain(): Boolean =
       val MaxWalkBlocks = 10000
-      // Conservative ETC lower bound: ~10^13 difficulty per block.
-      // Rejects BLOCK_NUMBER_PROXY (blockNum ≈ 24.7M << correct TD ≈ 24.64×10^21) and
-      // RegularSync wrong TDs built on a proxy base.
-      val MinTDPerBlock = BigInt("10000000000000")
+      // An anchor's stored TD must clear HeadChainWeight.floor: the genesis weight plus MinimumDifficulty (131072) per
+      // block, a bound no real Ethash chain is under. It rejects BLOCK_NUMBER_PROXY and genesis-proxy weights at any
+      // height. It replaces a fixed 10^13 per block (#1654), which mainnet cleared but Mordor (~9e6 per block, TD
+      // ~1.75e14 at block 15M) never could, so this fallback never found an anchor there.
+      val anchorGenesisWeight: BigInt = HeadChainWeight.genesisWeight(blockchainReader)
 
       blockchainReader.getBestBlockHeader match
         case None =>
@@ -2386,7 +2605,8 @@ object SyncController:
 
           while !anchorFound && !abort do
             blockchainReader.getChainWeightByHash(cur.hash) match
-              case Some(cw) if cw.totalDifficulty.value > cur.number.value * MinTDPerBlock =>
+              case Some(cw)
+                  if HeadChainWeight.isPlausible(cur.number.value, cw.totalDifficulty.value, anchorGenesisWeight) =>
                 anchorTD = cw.totalDifficulty.value
                 anchorFound = true
                 log.debug(
@@ -2474,51 +2694,6 @@ object SyncController:
         bestBlockNum
       )
 
-    def startRegularSyncForBootstrap(): TypedActorRef[RegularSync.Command] =
-      log.info("Starting regular sync for SNAP sync bootstrap")
-
-      // Version the child names so a re-invocation does not collide with a prior
-      // instance whose context.stop has not yet completed (InvalidActorNameException).
-      bootstrapGeneration += 1
-      val gen = bootstrapGeneration
-
-      val peersClient =
-        ctx.spawn(
-          Behaviors
-            .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
-            .onFailure[Throwable](
-              // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
-              SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
-            ),
-          s"peers-client-bootstrap-$gen"
-        )
-      val regularSync = ctx
-        .spawn(
-          RegularSync.apply(
-            peersClient,
-            networkPeerManager,
-            peerEventBus,
-            consensus,
-            blockchain,
-            blockchainReader,
-            blockchainWriter,
-            stateStorage,
-            evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
-            validators.blockValidator,
-            blacklist,
-            syncConfig,
-            ommersPool,
-            pendingTransactionsManager,
-            blockTopic,
-            configBuilder,
-            ctx.self,
-            reorgState
-          ),
-          s"regular-sync-bootstrap-$gen"
-        )
-      regularSync ! SyncProtocol.Start
-      regularSync
   // scalastyle:on number.of.methods
 
   /** Pick the block to roll the recovery storage download onto: `margin` blocks back from the highest known

@@ -16,8 +16,8 @@ import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto
-import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
@@ -137,34 +137,34 @@ object DnsDiscovery extends Logger:
       forkIdFilter: Option[EnrForkIdFilter],
       depth: Int
   ): Unit =
-    if depth > MaxDepth || enodes.size >= MaxRecords || visited.contains(hash) then return
-    visited += hash
+    if depth <= MaxDepth && enodes.size < MaxRecords && !visited.contains(hash) then
+      visited += hash
 
-    val subdomain = s"$hash.$domain"
-    lookupTxt(ctx, subdomain) match
-      case Some(record) if record.startsWith("enrtree-branch:") =>
-        val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
-        children.foreach { child =>
-          resolveTree(ctx, domain, child, visited, enodes, skipped, forkIdFilter, depth + 1)
-        }
+      val subdomain = s"$hash.$domain"
+      lookupTxt(ctx, subdomain) match
+        case Some(record) if record.startsWith("enrtree-branch:") =>
+          val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
+          children.foreach { child =>
+            resolveTree(ctx, domain, child, visited, enodes, skipped, forkIdFilter, depth + 1)
+          }
 
-      case Some(record) if record.startsWith("enr:") =>
-        parseEnrToEnode(record, forkIdFilter) match
-          case Right(enode) => enodes += enode
-          case Left(reason) if reason.startsWith("fork-id mismatch") =>
-            skipped += subdomain
-          case Left(_) =>
-            log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
+        case Some(record) if record.startsWith("enr:") =>
+          parseEnrToEnode(record, forkIdFilter) match
+            case Right(enode) => enodes += enode
+            case Left(reason) if reason.startsWith("fork-id mismatch") =>
+              skipped += subdomain
+            case Left(_) =>
+              log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
 
-      case Some(record) if record.startsWith("enrtree://") =>
-        // Link to another tree — skip for now (could recurse into other domains)
-        log.debug("DNS_DISCOVERY: Skipping link record at {}: {}", subdomain, record)
+        case Some(record) if record.startsWith("enrtree://") =>
+          // Link to another tree — skip for now (could recurse into other domains)
+          log.debug("DNS_DISCOVERY: Skipping link record at {}: {}", subdomain, record)
 
-      case Some(record) =>
-        log.debug("DNS_DISCOVERY: Unknown record type at {}: {}", subdomain, record.take(50))
+        case Some(record) =>
+          log.debug("DNS_DISCOVERY: Unknown record type at {}: {}", subdomain, record.take(50))
 
-      case None =>
-        log.debug("DNS_DISCOVERY: No TXT record at {}", subdomain)
+        case None =>
+          log.debug("DNS_DISCOVERY: No TXT record at {}", subdomain)
 
   /** Parse an ENR record into an enode:// URL.
     *
@@ -182,56 +182,61 @@ object DnsDiscovery extends Logger:
     try
       val base64Data = enrRecord.stripPrefix("enr:")
       val bytes = decodeBase64Url(base64Data)
-      if bytes.isEmpty then return Left("empty ENR payload")
+      if bytes.isEmpty then Left("empty ENR payload")
+      else
+        val decoded = rawDecode(bytes)
+        decoded match
+          case list: RLPList if list.items.size >= 4 =>
+            // items: [signature, seq, key1, val1, key2, val2, ...]
+            val kvPairs = list.items.drop(2) // skip signature and seq
+            val attrs = parseKVPairs(kvPairs)
 
-      val decoded = rawDecode(bytes)
-      decoded match
-        case list: RLPList if list.items.size >= 4 =>
-          // items: [signature, seq, key1, val1, key2, val2, ...]
-          val kvPairs = list.items.drop(2) // skip signature and seq
-          val attrs = parseKVPairs(kvPairs)
+            // Fork-ID filter — reject incompatible ENRs before they ever become dial candidates.
+            // ENRs without an `eth` key are accepted optimistically (handshake STATUS will decide).
+            val rejectedForkId = forkIdFilter match
+              case Some(filter) =>
+                attrs
+                  .get("eth")
+                  .flatMap { ethBytes =>
+                    try Some(ForkIdTag.decodeEthEntry(ethBytes))
+                    catch case _: Exception => None
+                  }
+                  .filter(id => !filter.accepts(id))
+              case None => None
 
-          // Fork-ID filter — reject incompatible ENRs before they ever become dial candidates.
-          // ENRs without an `eth` key are accepted optimistically (handshake STATUS will decide).
-          forkIdFilter match
-            case Some(filter) =>
-              attrs
-                .get("eth")
-                .flatMap { ethBytes =>
-                  try Some(ForkIdTag.decodeEthEntry(ethBytes))
-                  catch case _: Exception => None
-                }
-                .filter(id => !filter.accepts(id)) match
-                case Some(id) => return Left(s"fork-id mismatch: $id")
-                case None     =>
-            case None =>
+            rejectedForkId match
+              case Some(id) => Left(s"fork-id mismatch: $id")
+              case None =>
+                val ipv4Opt = attrs.get("ip").flatMap(parseIp)
+                val tcpv4Opt = attrs.get("tcp").map(parsePort)
+                val udpv4Opt = attrs.get("udp").map(parsePort)
+                val pubkeyOpt = attrs.get("secp256k1")
 
-          val ipv4Opt = attrs.get("ip").flatMap(parseIp)
-          val tcpv4Opt = attrs.get("tcp").map(parsePort)
-          val udpv4Opt = attrs.get("udp").map(parsePort)
-          val pubkeyOpt = attrs.get("secp256k1")
+                // IPv6 fallback (EIP-778: ip6/tcp6/udp6 keys) — prefer IPv4 when both present
+                val (ipOpt, tcpOpt, udpOpt) = ipv4Opt match
+                  case Some(_) => (ipv4Opt, tcpv4Opt, udpv4Opt)
+                  case None =>
+                    (
+                      attrs.get("ip6").flatMap(parseIp),
+                      attrs.get("tcp6").map(parsePort),
+                      attrs.get("udp6").map(parsePort)
+                    )
 
-          // IPv6 fallback (EIP-778: ip6/tcp6/udp6 keys) — prefer IPv4 when both present
-          val (ipOpt, tcpOpt, udpOpt) = ipv4Opt match
-            case Some(_) => (ipv4Opt, tcpv4Opt, udpv4Opt)
-            case None =>
-              (attrs.get("ip6").flatMap(parseIp), attrs.get("tcp6").map(parsePort), attrs.get("udp6").map(parsePort))
+                (ipOpt, tcpOpt, pubkeyOpt) match
+                  case (Some(ip), Some(tcpPort), Some(compressedKey)) if tcpPort > 0 =>
+                    // Decompress secp256k1 public key (33 bytes compressed -> 64 bytes uncompressed, no prefix)
+                    decompressToNodeId(compressedKey)
+                      .map { id =>
+                        val udpPort = udpOpt.getOrElse(tcpPort)
+                        if udpPort != tcpPort then s"enode://$id@${formatIp(ip)}:$tcpPort?discport=$udpPort"
+                        else s"enode://$id@${formatIp(ip)}:$tcpPort"
+                      }
+                      .toRight("invalid secp256k1 pubkey")
 
-          (ipOpt, tcpOpt, pubkeyOpt) match
-            case (Some(ip), Some(tcpPort), Some(compressedKey)) if tcpPort > 0 =>
-              // Decompress secp256k1 public key (33 bytes compressed -> 64 bytes uncompressed, no prefix)
-              decompressToNodeId(compressedKey)
-                .map { id =>
-                  val udpPort = udpOpt.getOrElse(tcpPort)
-                  if udpPort != tcpPort then s"enode://$id@${formatIp(ip)}:$tcpPort?discport=$udpPort"
-                  else s"enode://$id@${formatIp(ip)}:$tcpPort"
-                }
-                .toRight("invalid secp256k1 pubkey")
+                  case _ =>
+                    Left("missing ip/tcp/secp256k1 in ENR")
 
-            case _ =>
-              Left("missing ip/tcp/secp256k1 in ENR")
-
-        case _ => Left("ENR not an RLP list with >=4 items")
+          case _ => Left("ENR not an RLP list with >=4 items")
     catch
       case ex: Exception =>
         Left(s"ENR parse error: ${ex.getMessage}")
@@ -254,9 +259,10 @@ object DnsDiscovery extends Logger:
     else None
 
   private def parsePort(bytes: Array[Byte]): Int =
-    if bytes.isEmpty then return 0
-    // Big-endian integer
-    bytes.foldLeft(0)((acc, b) => (acc << 8) | (b & 0xff))
+    if bytes.isEmpty then 0
+    else
+      // Big-endian integer
+      bytes.foldLeft(0)((acc, b) => (acc << 8) | (b & 0xff))
 
   private def formatIp(addr: InetAddress): String =
     val host = addr.getHostAddress
@@ -269,14 +275,15 @@ object DnsDiscovery extends Logger:
     */
   private def decompressToNodeId(compressedKey: Array[Byte]): Option[String] =
     try
-      if compressedKey.length != 33 then return None
-      val point = crypto.curve.getCurve.decodePoint(compressedKey)
-      val key = new ECPublicKeyParameters(point, crypto.curve)
-      // Uncompressed encoding is 65 bytes: 0x04 prefix + 64 bytes (x || y)
-      // Node ID is the 64 bytes without prefix
-      val uncompressed = key.getQ.getEncoded(false).drop(1) // drop 0x04 prefix
-      if uncompressed.length != 64 then return None
-      Some(Hex.toHexString(uncompressed))
+      if compressedKey.length != 33 then None
+      else
+        val point = crypto.curve.getCurve.decodePoint(compressedKey)
+        val key = new ECPublicKeyParameters(point, crypto.curve)
+        // Uncompressed encoding is 65 bytes: 0x04 prefix + 64 bytes (x || y)
+        // Node ID is the 64 bytes without prefix
+        val uncompressed = key.getQ.getEncoded(false).drop(1) // drop 0x04 prefix
+        if uncompressed.length != 64 then None
+        else Some(Hex.toHexString(uncompressed))
     catch case _: Exception => None
 
   /** URL-safe Base64 decode (RFC 4648 §5, no padding). */

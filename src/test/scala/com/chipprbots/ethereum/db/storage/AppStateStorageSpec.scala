@@ -1,12 +1,13 @@
 package com.chipprbots.ethereum.db.storage
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.testing.Tags.*
-import org.apache.pekko.util.ByteString
 
 class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with ObjectGenerators:
 

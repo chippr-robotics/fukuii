@@ -4,9 +4,10 @@
 
 **Created**: 2026-09-21
 
-**Status**: Draft
-
+**Status**: Active (2026-10-30). Amsterdam is live on Platåberget (2026-08-20) and Sepolia (2026-10-06); Phase 8 (full Glamsterdam execution-layer scope, 14 tasks) and the builder slice remain. Mainnet unscheduled.
 **Input**: User description: "Amsterdam hard fork support for ETH-family chains (ETH/Sepolia/hive), timestamp-gated, with zero change to ETC/Mordor behaviour." (full description retained in `research-input.md` context below)
+
+**Release**: 0.9.0
 
 ## Context: Why Now
 

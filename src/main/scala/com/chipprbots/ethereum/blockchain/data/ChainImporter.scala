@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
-import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger

@@ -57,6 +57,15 @@ trait DataSource:
   def multiGetOptimized(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
     keys.map(k => getOptimized(namespace, k))
 
+  /** [[multiGetOptimized]] with no block-cache fill, for a long walk that reads each node once and would otherwise push
+    * import's working set out of the cache (spec 022 T053). The default calls [[getOptimizedNoFill]] per key;
+    * [[RocksDbDataSource]] makes one `multiGetAsList` JNI call with `fill_cache=false`. The answers are identical
+    * either way. It holds the read lock for the whole batch and a queued writer stalls behind it, so a caller keeps
+    * batches small.
+    */
+  def multiGetOptimizedNoFill(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
+    keys.map(k => getOptimizedNoFill(namespace, k))
+
   /** Forward range scan over `[fromKey, toKeyExclusive)` in ascending unsigned-lexicographic key order, within
     * `namespace`. Synchronous; the returned `Iterator` is materialized from the bounded window so no storage-native
     * iterator/resource outlives this call (close-on-return — abort-safe even if the caller stops consuming).
@@ -71,6 +80,17 @@ trait DataSource:
       fromKey: Array[Byte],
       toKeyExclusive: Array[Byte]
   ): Iterator[(Array[Byte], Array[Byte])]
+
+  /** [[scanRange]] that stops after `limit` entries: a page of a range too large to hold at once. The default takes the
+    * first `limit` of a whole scan; [[RocksDbDataSource]] stops its iterator there.
+    */
+  def scanRangeLimit(
+      namespace: Namespace,
+      fromKey: Array[Byte],
+      toKeyExclusive: Array[Byte],
+      limit: Int
+  ): Iterator[(Array[Byte], Array[Byte])] =
+    scanRange(namespace, fromKey, toKeyExclusive).take(limit)
 
   /** Delete every key in `[fromKey, toKeyExclusive)` (lexicographic byte order) within `namespace`.
     *

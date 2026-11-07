@@ -20,8 +20,8 @@ import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -108,7 +108,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val random = new SecureRandom()
     private val to = Address(ByteString(Array.fill(20)(0x16.toByte)))
@@ -405,12 +405,12 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new ParisSetup:
-      val childBaseFee = BaseFeeCalculator.calcBaseFee(genesisHeader, blockchainConfig)
-      val underpriced = dynamic(alice, 0, maxFeePerGas = childBaseFee - 1)
-      val transfer = legacy(bob, 0)
+      val childBaseFee: BigInt = BaseFeeCalculator.calcBaseFee(genesisHeader, blockchainConfig)
+      val underpriced: SignedTransaction = dynamic(alice, 0, maxFeePerGas = childBaseFee - 1)
+      val transfer: SignedTransaction = legacy(bob, 0)
       poolContents.set(Seq(underpriced -> 1L, transfer -> 2L))
 
-      val block1 = buildOn(genesisHeader)
+      val block1: Block = buildOn(genesisHeader)
       block1.body.transactionList shouldBe Seq(transfer)
       expectValid(block1)
 
@@ -419,11 +419,11 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new ParisSetup:
       // Unfunded sender: nothing in selection can see it (no balance check there), execution rejects it.
-      val unpayable = legacy(broke, 0)
-      val transfer = legacy(bob, 0)
+      val unpayable: SignedTransaction = legacy(broke, 0)
+      val transfer: SignedTransaction = legacy(bob, 0)
       poolContents.set(Seq(unpayable -> 1L, transfer -> 2L))
 
-      val block1 = buildOn(genesisHeader)
+      val block1: Block = buildOn(genesisHeader)
       block1.body.transactionList shouldBe Seq(transfer)
       expectValid(block1)
 
@@ -432,11 +432,11 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       ConsensusTest
     ) in new CancunSetup:
       // hive `Blob Transactions On Block 1, * (Cancun)` step 6: blob base fee 2, maxFeePerBlobGas 1.
-      val pricedOut = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 1)
-      val transfer = legacy(bob, 0)
+      val pricedOut: SignedTransaction = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 1)
+      val transfer: SignedTransaction = legacy(bob, 0)
       poolContents.set(Seq(pricedOut -> 1L, transfer -> 2L))
 
-      val block1 = buildOn(genesisHeader)
+      val block1: Block = buildOn(genesisHeader)
       block1.body.transactionList shouldBe Seq(transfer)
       block1.header.blobGasUsed shouldBe Some(BigInt(0))
       expectValid(block1)
@@ -447,9 +447,9 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
     ) in new CancunSetup:
       // Cell proofs are for BlobsBundleV2 (engine_getPayloadV5, Osaka onwards) only. Computing them here, one c-kzg call
       // per blob, made each 6-blob Cancun build take ~4.3 s (hive `In-Order Consecutive Payload Execution (Cancun)`).
-      val payable = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
-      val zeroBlob = Array.fill[Byte](ethereum.ckzg4844.CKZG4844JNI.BYTES_PER_BLOB)(0)
-      val networkForm = com.chipprbots.ethereum.rlp.encode(
+      val payable: SignedTransaction = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
+      val zeroBlob: Array[Byte] = Array.fill[Byte](ethereum.ckzg4844.CKZG4844JNI.BYTES_PER_BLOB)(0)
+      val networkForm: Array[Byte] = com.chipprbots.ethereum.rlp.encode(
         com.chipprbots.ethereum.rlp.RLPList(
           com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]),
           com.chipprbots.ethereum.rlp.RLPList(Seq.fill(6)(com.chipprbots.ethereum.rlp.RLPValue(zeroBlob))*),
@@ -462,21 +462,22 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
       val (payloadId, block1) = buildOnWithId(genesisHeader)
       block1.body.transactionList shouldBe Seq(payable)
-      val bundle = engineApi.getPayloadBlobsBundle(payloadId)
+      val bundle: BlobsBundleData = engineApi.getPayloadBlobsBundle(payloadId)
       bundle.blobs.size shouldBe 6
       bundle.commitments.size shouldBe 6
       bundle.proofs.size shouldBe 6
       bundle.cellProofsPerBlob shouldBe empty
 
     "include the same blob transaction once it can pay the blob base fee" taggedAs (UnitTest, ConsensusTest) in
-      new CancunSetup:
-        val payable = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
+      (new CancunSetup:
+        val payable: SignedTransaction = blob(alice, 0, blobs = 6, maxFeePerBlobGas = 2)
         poolContents.set(Seq(payable -> 1L))
 
-        val block1 = buildOn(genesisHeader)
+        val block1: Block = buildOn(genesisHeader)
         block1.body.transactionList shouldBe Seq(payable)
         block1.header.blobGasUsed shouldBe Some(BlobGasUtils.GAS_PER_BLOB * 6)
         expectValid(block1)
+      )
   }
 
   /** execution-apis paris.md, engine_getPayloadV1: "MUST return the most recent version of the payload that is
@@ -492,44 +493,47 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
   "engine_getPayload" should {
 
     "include a transaction that reached the pool after forkchoiceUpdated" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
-        val payloadId = requestPayload(genesisHeader)
+      (new ParisSetup:
+        val payloadId: ByteString = requestPayload(genesisHeader)
         stored(payloadId).body.transactionList shouldBe empty
 
-        val transfer = legacy(bob, 0)
+        val transfer: SignedTransaction = legacy(bob, 0)
         poolContents.set(Seq(transfer -> 1L))
         val (servedHash, servedTxs) = servedV1(getPayloadCall(1, payloadId))
 
         servedTxs shouldBe 1
-        val served = stored(payloadId)
+        val served: Block = stored(payloadId)
         servedHash shouldBe hexOf(served)
         served.body.transactionList shouldBe Seq(transfer)
         expectValid(served)
+      )
 
     "answer exactly the payload it built when the pool has not changed" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
+      (new ParisSetup:
         poolContents.set(Seq(legacy(bob, 0) -> 1L))
-        val payloadId = requestPayload(genesisHeader)
-        val built = stored(payloadId)
+        val payloadId: ByteString = requestPayload(genesisHeader)
+        val built: Block = stored(payloadId)
 
         servedV1(getPayloadCall(1, payloadId)) shouldBe ((hexOf(built), 1))
+      )
 
     "keep answering the payload it served, even after the pool changes" taggedAs (UnitTest, ConsensusTest) in
-      new ParisSetup:
+      (new ParisSetup:
         // "Client software MAY stop the corresponding build process after serving this call"; go-ethereum does
         // (Payload.Resolve), and hive's withdrawals tests ask V1 then V2 for one id and expect the same payload.
-        val payloadId = requestPayload(genesisHeader)
-        val first = servedV1(getPayloadCall(1, payloadId))
+        val payloadId: ByteString = requestPayload(genesisHeader)
+        val first: (String, Int) = servedV1(getPayloadCall(1, payloadId))
 
         poolContents.set(Seq(legacy(bob, 0) -> 1L))
         servedV1(getPayloadCall(1, payloadId)) shouldBe first
         first._2 shouldBe 0
+      )
 
     "not restart a build for attributes it is already building" taggedAs (UnitTest, ConsensusTest) in new ParisSetup:
       // "Payload building" point 6: "If a build process with given payloadAttributes already exists, client software
       // SHOULD NOT restart it" (go-ethereum: `localBlocks.has(id)`). Restarting replaced a payload already served.
-      val payloadId = requestPayload(genesisHeader)
-      val served = servedV1(getPayloadCall(1, payloadId))
+      val payloadId: ByteString = requestPayload(genesisHeader)
+      val served: (String, Int) = servedV1(getPayloadCall(1, payloadId))
 
       poolContents.set(Seq(legacy(bob, 0) -> 1L))
       requestPayload(genesisHeader) shouldBe payloadId
@@ -539,8 +543,8 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in new ParisSetup:
-      val payloadId = requestPayload(genesisHeader)
-      val transfer = legacy(bob, 0)
+      val payloadId: ByteString = requestPayload(genesisHeader)
+      val transfer: SignedTransaction = legacy(bob, 0)
       poolContents.set(Seq(transfer -> 1L))
 
       getPayloadCall(3, payloadId).error.map(_.code) shouldBe Some(-38005) // a Paris payload asked for as V3
@@ -560,9 +564,9 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
     "be the same on every engine_getPayloadV4 for one payload" taggedAs (UnitTest, ConsensusTest) in new PragueSetup:
       poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
-      val payloadId = requestPayload(genesisHeader)
+      val payloadId: ByteString = requestPayload(genesisHeader)
 
-      val first = envelope(getPayloadCall(4, payloadId))
+      val first: (String, String, List[String], String) = envelope(getPayloadCall(4, payloadId))
       withClue("the payload must carry a request, or the comparison is vacuous: ") {
         first._3.map(_.take(4)) shouldBe List("0x01")
       }
@@ -571,9 +575,9 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
     "be the same on every engine_getPayloadV5 for one payload" taggedAs (UnitTest, ConsensusTest) in new OsakaSetup:
       poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
-      val payloadId = requestPayload(genesisHeader)
+      val payloadId: ByteString = requestPayload(genesisHeader)
 
-      val first = envelope(getPayloadCall(5, payloadId))
+      val first: (String, String, List[String], String) = envelope(getPayloadCall(5, payloadId))
       withClue("the payload must carry a request, or the comparison is vacuous: ") {
         first._3.map(_.take(4)) shouldBe List("0x01")
       }
@@ -581,7 +585,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
 
     "not be taken by a call refused for its version" taggedAs (UnitTest, ConsensusTest) in new PragueSetup:
       poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
-      val payloadId = requestPayload(genesisHeader)
+      val payloadId: ByteString = requestPayload(genesisHeader)
 
       getPayloadCall(5, payloadId).error.map(_.code) shouldBe Some(-38005) // a Prague payload asked for as V5
       envelope(getPayloadCall(4, payloadId))._3.map(_.take(4)) shouldBe List("0x01")
@@ -593,7 +597,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
       // getPayloadV3 serves Cancun payloads only (cancun.md; go-ethereum checkFork(Cancun)). It used to serve a Prague
       // payload — resolving and freezing it, in the V3 envelope, which has no executionRequests at all.
       poolContents.set(Seq(withdrawalRequest(alice, 0) -> 1L))
-      val payloadId = requestPayload(genesisHeader)
+      val payloadId: ByteString = requestPayload(genesisHeader)
 
       getPayloadCall(3, payloadId).error.map(_.code) shouldBe Some(-38005)
       envelope(getPayloadCall(4, payloadId))._3.map(_.take(4)) shouldBe List("0x01")

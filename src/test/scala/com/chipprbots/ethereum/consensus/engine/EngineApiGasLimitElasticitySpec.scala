@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
-import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.domain.BloomFilter
+import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -86,7 +86,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
       blockExec,
       forkChoiceManager,
       Some(pendingTxManager)
-    )(blockchainConfig, typedScheduler)
+    )(using blockchainConfig, typedScheduler)
 
     private val genesisStateRoot =
       val world = InMemoryWorldStateProxy(
@@ -150,7 +150,7 @@ class EngineApiGasLimitElasticitySpec extends AnyWordSpec with Matchers:
         )
       )
       val block = Block(template, BlockBody(Nil, Nil, withdrawals = Some(Nil)))
-      blockExec.executeBlockNoValidation(block)(blockchainConfig) match
+      blockExec.executeBlockNoValidation(block)(using blockchainConfig) match
         case Right((_, gasUsed, computedStateRoot)) =>
           Block(
             template.copy(stateRoot = TrieRoot(computedStateRoot), gasUsed = GasAmount(gasUsed)),

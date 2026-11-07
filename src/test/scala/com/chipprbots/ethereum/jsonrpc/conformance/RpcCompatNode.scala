@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.Block.BlockDec
+import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.jsonrpc.*
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.keystore.KeyStore
@@ -202,7 +202,7 @@ class RpcCompatNode(using system: ActorSystem, testKit: ActorTestKit) extends Ep
         ethTxService,
         ethInfoService,
         ethUserService,
-        new EthFilterService(filterManager, filterConfig, blockchainReader)(system)
+        new EthFilterService(filterManager, filterConfig, blockchainReader)(using system)
       ),
       maxQueryDepth = com.chipprbots.ethereum.jsonrpc.graphql.GraphQLSchema.MaxQueryDepth,
       executionTimeout = 30.seconds

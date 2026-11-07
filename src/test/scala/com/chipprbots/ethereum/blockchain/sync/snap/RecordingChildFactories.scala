@@ -25,7 +25,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
-import com.chipprbots.ethereum.db.storage.HealingFrontierStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
@@ -86,7 +85,8 @@ object ChildSpawn:
       storageScheme: StorageScheme,
       pathNodeStorage: Option[PathNodeStorage],
       recordStorageDone: Boolean,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ) extends ChildSpawn
 
   final case class Healing(
@@ -98,7 +98,6 @@ object ChildSpawn:
       snapSyncController: ActorRef[SNAPSyncController.Command],
       concurrency: Int,
       visitedCap: Int,
-      healingFrontierStorage: Option[HealingFrontierStorage],
       healingWriterEcOverride: Option[ExecutionContext],
       healingReaderEcOverride: Option[ExecutionContext],
       traversalParallelism: Int,
@@ -110,15 +109,13 @@ object ChildSpawn:
       frontierHighWater: Int,
       frontierLowWater: Int,
       frontierBackpressureMaxWaitMs: Long,
-      scopedHealVerification: Boolean,
-      scopedHealMaxPaths: Int,
-      prunedHealVerification: Boolean,
-      frontierPersistenceEnabled: Boolean,
       decoupledHealServeRoot: Boolean,
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
       evmCodeStorage: Option[EvmCodeStorage],
-      walkLocalOnly: Option[AtomicBoolean]
+      walkLocalOnly: Option[AtomicBoolean],
+      excludedAccounts: Boolean,
+      markerMayStand: Boolean
   ) extends ChildSpawn
 
   final case class ByteCode(
@@ -130,7 +127,8 @@ object ChildSpawn:
       cooldownConfig: ByteCodePeerCooldownConfig,
       backpressureHighWatermark: Int,
       backpressureLowWatermark: Int,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ) extends ChildSpawn
 
   final case class Chain(
@@ -174,7 +172,9 @@ final class RecordingChildFactories(
     healingInbox: Option[ActorRef[TrieNodeHealingCoordinator.Command]] = None,
     byteCodeInbox: Option[ActorRef[ByteCodeCoordinator.Command]] = None,
     chainInbox: Option[ActorRef[ChainDownloader.Command]] = None,
-    stopped: Option[ActorRef[ChildStopped]] = None
+    stopped: Option[ActorRef[ChildStopped]] = None,
+    // The kinds of child that throw at every message they get, to run out their supervisor's restarts.
+    dying: () => Set[String] = () => Set.empty
 ) extends ChildFactories:
 
   val accountSpawns = new AtomicInteger(0)
@@ -183,16 +183,23 @@ final class RecordingChildFactories(
   val byteCodeSpawns = new AtomicInteger(0)
   val chainSpawns = new AtomicInteger(0)
 
+  // The latest incarnation of each kind of stub, so a test can name it to the controller.
+  val selves = new java.util.concurrent.ConcurrentHashMap[String, ActorRef[Nothing]]()
+
   private def stub[T](kind: String, inbox: Option[ActorRef[T]]): Behavior[T] =
-    Behaviors
-      .receiveMessage[T] { msg =>
-        inbox.foreach(_ ! msg)
-        Behaviors.same
-      }
-      .receiveSignal { case (_, PostStop) =>
-        stopped.foreach(_ ! ChildStopped(kind))
-        Behaviors.same
-      }
+    Behaviors.setup[T] { ctx =>
+      selves.put(kind, ctx.self)
+      Behaviors
+        .receiveMessage[T] { msg =>
+          if dying().contains(kind) then throw new RuntimeException(s"the $kind stub fails")
+          inbox.foreach(_ ! msg)
+          Behaviors.same
+        }
+        .receiveSignal { case (_, PostStop) =>
+          stopped.foreach(_ ! ChildStopped(kind))
+          Behaviors.same
+        }
+    }
 
   override def accountRangeCoordinator(
       stateRoot: ByteString,
@@ -259,7 +266,8 @@ final class RecordingChildFactories(
       storageScheme: StorageScheme,
       stateIngest: StateIngest,
       recordStorageDone: Boolean,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ): Behavior[StorageRangeCoordinator.Command] =
     storageSpawns.incrementAndGet()
     spawns ! ChildSpawn.StorageRange(
@@ -285,9 +293,20 @@ final class RecordingChildFactories(
       storageScheme,
       stateIngest.pathNodes,
       recordStorageDone,
-      intakeBudget
+      intakeBudget,
+      recordExcluded
     )
     stub(ChildStopped.Storage, storageInbox)
+
+  // spec 022 T038b: the current-root reference the last healing spawn got. Not on `ChildSpawn.Healing`: a spawn record is
+  // compared across controller instances, and each has its own reference.
+  val lastHealingDecidedRoot: java.util.concurrent.atomic.AtomicReference[
+    Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+  ] = new java.util.concurrent.atomic.AtomicReference(None)
+
+  val lastHealingCurrentRoot: java.util.concurrent.atomic.AtomicReference[
+    Option[java.util.concurrent.atomic.AtomicReference[ByteString]]
+  ] = new java.util.concurrent.atomic.AtomicReference(None)
 
   override def trieNodeHealingCoordinator(
       stateRoot: ByteString,
@@ -308,17 +327,21 @@ final class RecordingChildFactories(
       frontierHighWater: Int,
       frontierLowWater: Int,
       frontierBackpressureMaxWaitMs: Long,
-      scopedHealVerification: Boolean,
-      scopedHealMaxPaths: Int,
-      prunedHealVerification: Boolean,
-      frontierPersistenceEnabled: Boolean,
       decoupledHealServeRoot: Boolean,
       decoupledHealMaxAttemptsNoRefresh: Int,
       movingRootDeltaHeal: Boolean,
       healedCodeCheck: Boolean,
-      walkLocalOnly: Option[AtomicBoolean]
+      walkLocalOnly: Option[AtomicBoolean],
+      heldMemoryLimit: Long,
+      excludedAccounts: Boolean,
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]],
+      markerMayStand: Boolean
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     healingSpawns.incrementAndGet()
+    lastHealingCurrentRoot.set(currentRoot)
+    lastHealingDecidedRoot.set(decidedRoot)
     spawns ! ChildSpawn.Healing(
       stateRoot,
       networkPeerManager,
@@ -328,7 +351,6 @@ final class RecordingChildFactories(
       snapSyncController,
       concurrency,
       visitedCap,
-      stateIngest.healingFrontier,
       healingWriterEcOverride,
       healingReaderEcOverride,
       traversalParallelism,
@@ -340,15 +362,13 @@ final class RecordingChildFactories(
       frontierHighWater,
       frontierLowWater,
       frontierBackpressureMaxWaitMs,
-      scopedHealVerification,
-      scopedHealMaxPaths,
-      prunedHealVerification,
-      frontierPersistenceEnabled,
       decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal,
       Option.when(healedCodeCheck)(stateIngest.bytecode),
-      walkLocalOnly
+      walkLocalOnly,
+      excludedAccounts,
+      markerMayStand
     )
     stub(ChildStopped.Healing, healingInbox)
 
@@ -361,7 +381,8 @@ final class RecordingChildFactories(
       cooldownConfig: ByteCodePeerCooldownConfig,
       backpressureHighWatermark: Int,
       backpressureLowWatermark: Int,
-      intakeBudget: Option[SnapIntakeBudget]
+      intakeBudget: Option[SnapIntakeBudget],
+      recordExcluded: Boolean
   ): Behavior[ByteCodeCoordinator.Command] =
     byteCodeSpawns.incrementAndGet()
     spawns ! ChildSpawn.ByteCode(
@@ -373,7 +394,8 @@ final class RecordingChildFactories(
       cooldownConfig,
       backpressureHighWatermark,
       backpressureLowWatermark,
-      intakeBudget
+      intakeBudget,
+      recordExcluded
     )
     stub(ChildStopped.ByteCode, byteCodeInbox)
 

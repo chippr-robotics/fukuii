@@ -20,12 +20,13 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealInvariant
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.domain.TrieRoot
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 import com.chipprbots.ethereum.utils.Hex
 
 private[snap] trait SnapResumePlannerState:
@@ -130,9 +131,9 @@ private[snap] trait SnapResumePlanner
     storageDoneStorage.clear()
     ctx.log.info(s"Cleared storage-task completion markers ($reason); compacting their key range in the background")
     scala.concurrent
-      .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(snapValidationEc)
+      .Future(scala.concurrent.blocking(storageDoneStorage.compact()))(using snapValidationEc)
       .failed
-      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(
+      .foreach(e => asyncLog.warn(s"Compacting cleared storage-task completion markers failed: ${e.getMessage}"))(using
         snapValidationEc
       )
 
@@ -545,9 +546,10 @@ private[snap] trait SnapResumePlanner
   /** The account phase's resume selection (spec 016 lift before M11b, CQ-SNAP-016-33), extracted verbatim from
     * `launchAccountRangeWorkers`, which calls it at the same point: the versioned resume checkpoint, then the progress
     * store, then the legacy record (each subject to the `MaxPreservedPivotDistance` drift cap), the drift check on the
-    * preserved cursors, the `resumedStaleCursors` latch, the carried contract task files and the storage-done marker
-    * clear. It returns the cursors to resume from and the task files to carry; the account coordinator spawn and
-    * everything after it stay in `launchAccountRangeWorkers`. `currentPivot` is the caller's value, read once.
+    * preserved cursors, the `resumedStaleCursors` latch, the invariant marker's withdrawal on Path, the carried
+    * contract task files and the storage-done marker clear. It returns the cursors to resume from and the task files to
+    * carry; the account coordinator spawn and everything after it stay in `launchAccountRangeWorkers`. `currentPivot`
+    * is the caller's value, read once.
     */
   def selectAccountResume(
       rootHash: TrieRoot,
@@ -727,6 +729,20 @@ private[snap] trait SnapResumePlanner
               None
         }
 
+    // Only here is it known whether this launch resumes: without the task files every partial range starts over, on cursors
+    // or not (beacon 1).
+    if HealInvariant.withdrawForPathAccountPhase(
+        stateIngest.appState,
+        stateIngest.pathNodes,
+        snapSyncConfig.storageScheme,
+        resumesRanges = carriedTaskFiles.isDefined
+      )
+    then
+      ctx.log.warn(
+        "[HEAL-INVARIANT] Marker withdrawn: a fresh Path account phase starts over existing nodes. " +
+          "A clean full walk of the completed root stamps it again; an abandoned walk leaves it off."
+      )
+
     // Without carried task files the account phase re-identifies every contract from scratch and nothing consults
     // the completion markers; drop them so a later resume never trusts markers from before this point (an earlier SNAP
     // cycle, whose storage tries may since have been rewritten by healing or block import).
@@ -739,7 +755,11 @@ private[snap] trait SnapResumePlanner
           "Keeping storage-task completion markers: a stored account resume checkpoint that this run ignores still " +
             "relies on them"
         )
-      else clearStorageDoneMarkers("account phase starts without carried task files")
+      else
+        clearStorageDoneMarkers("account phase starts without carried task files")
+        // spec 022 D5: a cycle from nothing downloads every account again, so no decision of an earlier one still stands.
+        // With cursors resumed the accounts behind them are not downloaded again: their entries stay.
+        if resumeProgress.isEmpty then snapProgressStorage.clearExcluded()
 
     (resumeProgress, carriedTaskFiles)
 

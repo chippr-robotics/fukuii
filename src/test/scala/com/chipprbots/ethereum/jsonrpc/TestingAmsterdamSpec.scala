@@ -10,6 +10,7 @@ import cats.effect.unsafe.IORuntime
 
 import scala.io.Source
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST.*
 import org.json4s.jvalue2monadic
@@ -107,7 +108,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
 
     override lazy val validators: Validators = ValidatorsExecutor(Protocol.EngineApi)
 
-    val senderKeys = crypto.keyPairFromPrvKey(Array.fill[Byte](31)(0) :+ 9.toByte)
+    val senderKeys: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(Array.fill[Byte](31)(0) :+ 9.toByte)
     val sender: Address = Address(senderKeys)
     val recipient: Address = Address(ByteString(Array.fill(20)(0x7d.toByte)))
 
@@ -128,7 +129,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       blockExecution,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
       Some(pendingTxManager)
-    )(config, classicSystem.toTyped.scheduler)
+    )(using config, classicSystem.toTyped.scheduler)
 
     lazy val service = new TestingService(
       engineApi,
@@ -138,7 +139,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = ConfiguredTarget
-    )(config)
+    )(using config)
 
     val genesis: Block =
       val empty = InMemoryWorldStateProxy(
@@ -223,39 +224,39 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
     "build a 23-field block carrying the slot, and serve the access list its header commits to" taggedAs (
       UnitTest
     ) in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(BuildBlockRequest(genesis.header.hash.value, attrs(), Some(Seq(rawTx(0))), Some(ByteString.empty)))
         .unsafeRunSync()
-      val built = res.fold(err => fail(s"build failed: ${err.code} ${err.message}"), identity)
+      val built: BuildBlockResponse = res.fold(err => fail(s"build failed: ${err.code} ${err.message}"), identity)
 
       built.block.header.extraFields shouldBe a[HefPostAmsterdam]
       built.block.header.slotNumber shouldBe Some(BigInt(4))
       built.block.body.transactionList should have size 1
-      val list = built.blockAccessList.getOrElse(fail("no access list for an Amsterdam build"))
+      val list: ByteString = built.blockAccessList.getOrElse(fail("no access list for an Amsterdam build"))
       built.block.header.blockAccessListHash shouldBe Some(ByteString(kec256(list.toArray)))
       // The list records the transfer: sender and recipient are both in it.
-      val touched = BlockAccessList.decode(list).fold(err => fail(err), identity).accounts.map(_.address)
+      val touched: Seq[Address] = BlockAccessList.decode(list).fold(err => fail(err), identity).accounts.map(_.address)
       (touched should contain).allOf(sender, recipient)
 
       // Read-only: neither the block nor its list is stored.
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
       blockchainReader.getBlockByHash(built.block.header.hash) shouldBe None
 
-      val envelope = TestingJsonMethodsImplicits.testing_buildBlockV1.encodeJson(built)
+      val envelope: JValue = TestingJsonMethodsImplicits.testing_buildBlockV1.encodeJson(built)
       envelope \ "executionPayload" \ "slotNumber" shouldBe JString("0x4")
       envelope \ "executionPayload" \ "blockAccessList" shouldBe JString(hex(list))
       envelope \ "executionPayload" \ "blockHash" shouldBe JString(hex(built.block.header.hash.value))
       envelope \ "executionRequests" shouldBe JArray(Nil)
 
     "build toward the attributes' targetGasLimit, not the configured target" taggedAs UnitTest in new Setup:
-      val kept = service
+      val kept: BuildBlockResponse = service
         .buildBlock(BuildBlockRequest(genesis.header.hash.value, attrs(), Some(Nil), None))
         .unsafeRunSync()
         .fold(err => fail(err.message), identity)
       // The vectors: parent and target both 0xbebc200, so the child keeps it.
       kept.block.header.gasLimit.value shouldBe GenesisGasLimit
 
-      val configured = service
+      val configured: BuildBlockResponse = service
         .buildBlock(BuildBlockRequest(genesis.header.hash.value, attrs(target = None), Some(Nil), None))
         .unsafeRunSync()
         .fold(err => fail(err.message), identity)
@@ -264,13 +265,13 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
         com.chipprbots.ethereum.consensus.blocks.GasLimitCalculator.calcGasLimit(GenesisGasLimit, ConfiguredTarget)
 
     "still refuse Amsterdam attributes without a slot, with -32000" taggedAs UnitTest in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(BuildBlockRequest(genesis.header.hash.value, attrs(slot = None), Some(Nil), None))
         .unsafeRunSync()
       res.swap.map(e => (e.code, e.message)) shouldBe Right((-32000, EngineApiService.AmsterdamSlotNumberMissing))
 
     "reject an unapplicable transaction with -32000 and leave the chain untouched" taggedAs UnitTest in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, BuildBlockResponse] = service
         .buildBlock(BuildBlockRequest(genesis.header.hash.value, attrs(), Some(Seq(rawTx(999))), None))
         .unsafeRunSync()
       res.swap.map(_.code) shouldBe Right(-32000)
@@ -280,26 +281,27 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
   "testing_commitBlockV1 at an Amsterdam timestamp" should {
 
     "advance the head to a block carrying the slot, and keep its access list" taggedAs UnitTest in new Setup:
-      val committed = service
+      val committed: CommitBlockResponse = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(0))), Some(ByteString("execution-apis".getBytes))))
         .unsafeRunSync()
         .fold(err => fail(s"commit failed: ${err.code} ${err.message}"), identity)
 
-      val head = blockchainReader.getBestBlock.getOrElse(fail("no head"))
+      val head: Block = blockchainReader.getBestBlock.getOrElse(fail("no head"))
       head.header.hash.value shouldBe committed.blockHash
       head.header.slotNumber shouldBe Some(BigInt(4))
-      val stored = blockchainReader.getBlockAccessListByHash(head.header.hash).getOrElse(fail("no stored list"))
+      val stored: ByteString =
+        blockchainReader.getBlockAccessListByHash(head.header.hash).getOrElse(fail("no stored list"))
       head.header.blockAccessListHash shouldBe Some(ByteString(kec256(stored.toArray)))
 
       // eth_getBlockByNumber("latest") now shows the Amsterdam fields.
-      val json = EthBlocksJsonMethodsImplicits.blockResponseEncoder.encodeJson(
+      val json: JValue = EthBlocksJsonMethodsImplicits.blockResponseEncoder.encodeJson(
         BlockResponse(head, emitTotalDifficulty = false)
       )
       json \ "slotNumber" shouldBe JString("0x4")
       json \ "blockAccessListHash" shouldBe JString(hex(head.header.blockAccessListHash.get))
 
     "not move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
-      val res = service
+      val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(999))), None))
         .unsafeRunSync()
       res.swap.map(_.code) shouldBe Right(-32000)

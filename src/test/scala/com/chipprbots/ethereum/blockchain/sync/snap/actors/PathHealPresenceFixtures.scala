@@ -67,6 +67,13 @@ object PathHealPresenceFixtures:
   private def plainLeaf(key: Array[Byte], seed: String): LeafNode =
     LeafNode(ByteString(key), ByteString(Array[Byte](0x01)) ++ kec256(ByteString(seed)))
 
+  /** A leaf of the account trie with no storage and no code: its value is an account, so a walk reads it and has
+    * nothing to follow. The balance carries the seed, so builds that differ in it differ in this leaf.
+    */
+  private def accountLeaf(key: Array[Byte], seed: String): LeafNode =
+    val account = Account(nonce = UInt256(1L), balance = UInt256(BigInt(1, kec256(ByteString(seed)).toArray)))
+    LeafNode(ByteString(key), ByteString(Account.accountSerializer.toBytes(account)))
+
   private def branch(children: (Int, MptNode)*): BranchNode =
     val slots = Array.fill[MptNode](16)(NullNode)
     children.foreach { case (i, child) => slots(i) = HashNode(child.hash) }
@@ -94,12 +101,12 @@ object PathHealPresenceFixtures:
     * paths. That is 4 changed nodes of 8, and the extension means the changed path crosses an extension node.
     */
   def accountTrie(leafX1Seed: String): Trie =
-    val leafX1 = plainLeaf(Array[Byte](0x0a), leafX1Seed)
-    val leafX2 = plainLeaf(Array[Byte](0x0b), "path-heal-presence/leafX2")
+    val leafX1 = accountLeaf(Array[Byte](0x0a), leafX1Seed)
+    val leafX2 = accountLeaf(Array[Byte](0x0b), "path-heal-presence/leafX2")
     val brX = branch(1 -> leafX1, 2 -> leafX2)
     val ext = ExtensionNode(ByteString(Array[Byte](5, 6)), HashNode(brX.hash))
-    val leafY0 = plainLeaf(Array[Byte](0x0c), "path-heal-presence/leafY0")
-    val leafY1 = plainLeaf(Array[Byte](0x0d), "path-heal-presence/leafY1")
+    val leafY0 = accountLeaf(Array[Byte](0x0c), "path-heal-presence/leafY0")
+    val leafY1 = accountLeaf(Array[Byte](0x0d), "path-heal-presence/leafY1")
     val brY = branch(0 -> leafY0, 1 -> leafY1)
     val root = branch(0 -> ext, 1 -> brY)
     Trie(

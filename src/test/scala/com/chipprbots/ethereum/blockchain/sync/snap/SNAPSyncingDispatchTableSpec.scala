@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeStats
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
-import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags.*
@@ -33,14 +32,16 @@ import com.chipprbots.ethereum.testing.Tags.*
   *   - `AccountRangeSync`: genesis pivot, one snap peer (account, bytecode and storage children);
   *   - `ByteCodeAndStorageSync`: accounts-complete recovery with storage still to download;
   *   - `StateHealing`: accounts-complete recovery with every phase done;
-  *   - `StateValidation`: from `StateHealing`, a clean walk (`TrieWalkComplete(0)`) whose finalisation waits for an
-  *     outstanding healed account's bytecode, so the controller stays in `StateValidation`;
+  *   - `StateValidation`: from `StateHealing`, the coordinator's decision (`StateHealingComplete`) whose finalisation
+  *     stops at the A5 root guard (the pivot's stored header names another root, `parkInStateValidation`), so the
+  *     controller stays in `StateValidation`, in `syncing`'s ordinary arms;
   *   - `Completed`: storage force-completed under deferred merkleization (#1371 handoff): `finalizeSnapSync` runs, but
   *     `checkAllDownloadsComplete` discards the behaviour it returns, so the controller stays in `syncing` with
   *     `currentPhase = Completed`.
   *
-  *   - `Dormant`: from `StateValidation`, validation-retry exhaustion enters dormant mode with its behaviour discarded,
-  *     so the controller stays in `syncing` (see `SNAPResetCharacterizationSpec`).
+  * There is no `Dormant` column: since #1515 every dormant-mode entry returns the `dormantRetry` behaviour, so the
+  * controller no longer sits in `syncing` with `currentPhase = Dormant` (see `SNAPResetCharacterizationSpec` for the
+  * dormant entry and wake-up).
   *
   * Not in the table: `ChainDownloadCompletion` (no code assigns it) and `Idle` (`restartSnapSync`/`wakeFromDormant` set
   * it, then return what `startSnapSync` returns; a grep of their call sites found none that discards that result, and
@@ -58,7 +59,7 @@ class SNAPSyncingDispatchTableSpec
   import Dispatch.*
 
   private val Phases =
-    Seq("AccountRangeSync", "ByteCodeAndStorageSync", "StateHealing", "StateValidation", "Completed", "Dormant")
+    Seq("AccountRangeSync", "ByteCodeAndStorageSync", "StateHealing", "StateValidation", "Completed")
 
   private val statusProbe = testKit.createTestProbe[SyncProtocol.Status]()
   private val progressProbe = testKit.createTestProbe[SyncProgress]()
@@ -92,6 +93,7 @@ class SNAPSyncingDispatchTableSpec
     "PivotProbeTimeout" -> PivotProbeTimeout(BigInt(9105)),
     "DormantWakeUp" -> DormantWakeUp,
     "DelayedRestart" -> DelayedRestart("s0d table"),
+    "CoordinatorGone" -> CoordinatorGone(testKit.createTestProbe[Any]().ref),
     "AccountRangeProgressCmd" -> AccountRangeProgressCmd(Map.empty),
     "CheckDownloadStagnation" -> CheckDownloadStagnation,
     "AccountCoordinatorProgress" -> AccountCoordinatorProgress(AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0L)),
@@ -104,17 +106,14 @@ class SNAPSyncingDispatchTableSpec
     "RequestStorageRanges" -> RequestStorageRanges,
     "RequestTrieNodeHealing" -> RequestTrieNodeHealing,
     "EnsureSnapServerPeersConnected" -> EnsureSnapServerPeersConnected,
-    "TrieWalkResult" -> TrieWalkResult(Seq.empty),
-    "TrieWalkBatch" -> TrieWalkBatch(Seq.empty),
-    "TrieWalkComplete" -> TrieWalkComplete(0),
-    "TrieWalkFailed" -> TrieWalkFailed("s0d table"),
+    "ValidationMissingNodes" -> ValidationMissingNodes(Seq.empty),
+    "ValidationRewalkFailed" -> ValidationRewalkFailed("s0d table"),
     "ValidateAccountTrieResult(current gen)" -> ValidateAccountTrieResult(0L, Right(Seq.empty), 0L),
     "ValidateAccountTrieResult(stale gen)" -> ValidateAccountTrieResult(99L, Right(Seq.empty), 0L),
     "ValidateStorageTriesResult(current gen)" -> ValidateStorageTriesResult(0L, Right(Seq.empty), 0L),
     "ValidateStorageTriesResult(stale gen)" -> ValidateStorageTriesResult(99L, Right(Seq.empty), 0L),
     "ValidationRetry(current gen)" -> ValidationRetry(0L),
     "ValidationRetry(stale gen)" -> ValidationRetry(99L),
-    "ScheduledTrieWalk" -> ScheduledTrieWalk,
     "PollHandshakedPeers" -> PollHandshakedPeers,
     "AccountRangeSyncComplete" -> AccountRangeSyncComplete,
     "StorageFileInfoReply" -> StorageFileInfoReply(scala.util.Failure(new RuntimeException("s0d table"))),
@@ -126,7 +125,7 @@ class SNAPSyncingDispatchTableSpec
     "StateHealingComplete" -> StateHealingComplete,
     "StateHealingAbandoned" -> StateHealingAbandoned,
     "HealedCodeHashes" -> HealedCodeHashes(Seq(hash)),
-    "HealedCodeWaitTimeout" -> HealedCodeWaitTimeout,
+    "ByteCodesStored" -> ByteCodesStored(Seq(hash)),
     "HealingAllPeersStateless" -> HealingAllPeersStateless,
     "HealingRootUnservable" -> HealingRootUnservable(root),
     "StateValidationComplete" -> StateValidationComplete,
@@ -168,11 +167,9 @@ class SNAPSyncingDispatchTableSpec
       // Refresh-side bootstrap replies are guarded by `pendingPivotRefresh.isDefined` (none pending here).
       "BootstrapComplete" -> everywhere(CatchAll),
       "PivotBootstrapFailed" -> everywhere(CatchAll),
-      // A second account launch reuses the account coordinator's name (same generation) and throws.
-      "CheckSnapCapability" -> everywhere(Handled).updated("AccountRangeSync", Crashed),
+      // #1516: with an account coordinator already running the arm leaves it alone (a second launch reused its name).
       // Guarded on the phase-complete / healed-code flags.
-      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync", "StateValidation", "Dormant"),
-      "HealedCodeWaitTimeout" -> handledOnlyIn("StateValidation", "Dormant"),
+      "ByteCodeSyncComplete" -> handledOnlyIn("AccountRangeSync"),
       "StorageRangeSyncComplete" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       "StorageRangeSyncForceCompleted" -> handledOnlyIn("AccountRangeSync", "ByteCodeAndStorageSync"),
       // Guarded on currentPhase == StateHealing.
@@ -180,17 +177,13 @@ class SNAPSyncingDispatchTableSpec
       "HealingStagnated" -> handledOnlyIn("StateHealing"),
       "StateHealingAbandoned" -> handledOnlyIn("StateHealing"),
       "HealingRootUnservable" -> handledOnlyIn("StateHealing"),
-      "TrieWalkBatch" -> handledOnlyIn("StateHealing"),
-      "TrieWalkComplete" -> handledOnlyIn("StateHealing"),
-      "TrieWalkResult" -> handledOnlyIn("StateHealing"),
-      "ScheduledTrieWalk" -> handledOnlyIn("StateHealing"),
-      "TrieWalkFailed" -> handledOnlyIn("StateHealing"),
+      "ValidationMissingNodes" -> handledOnlyIn("StateHealing"),
+      "ValidationRewalkFailed" -> handledOnlyIn("StateHealing"),
       // Current-generation validation results are guarded on currentPhase == StateValidation (stale ones are dropped
-      // by an unguarded arm first, in every phase). Generation 0 is current everywhere except Dormant, whose route ran
-      // four validations (generation 4), so there the "current" samples are stale and dropped.
-      "ValidateAccountTrieResult(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
-      "ValidateStorageTriesResult(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
-      "ValidationRetry(current gen)" -> handledOnlyIn("StateValidation", "Dormant"),
+      // by an unguarded arm first, in every phase). Generation 0 is current in every phase.
+      "ValidateAccountTrieResult(current gen)" -> handledOnlyIn("StateValidation"),
+      "ValidateStorageTriesResult(current gen)" -> handledOnlyIn("StateValidation"),
+      "ValidationRetry(current gen)" -> handledOnlyIn("StateValidation"),
       // Progress replies are guarded on the phase that asked.
       "AccountCoordinatorProgress" -> handledOnlyIn("AccountRangeSync"),
       "StorageCoordinatorProgress" -> handledOnlyIn("ByteCodeAndStorageSync"),
@@ -205,12 +198,7 @@ class SNAPSyncingDispatchTableSpec
     case "StateHealing"           => f.enterStateHealing()
     case "StateValidation" =>
       val snap = f.enterStateHealing()
-      Using.resource(new SnapLogCapture) { log =>
-        snap ! HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
-        snap ! TrieWalkComplete(0)
-        log.awaitLine("[HEAL-CODE] Holding SNAP finalisation")
-      }
-      f.awaitProcessed(snap)
+      f.parkInStateValidation(snap)
       snap
     case "Completed" =>
       val snap = f.enterStorageResume(SNAPSyncConfig(deferredMerkleization = true))
@@ -218,31 +206,6 @@ class SNAPSyncingDispatchTableSpec
       f.parent.fishForMessage(10.seconds) {
         case SnapSyncFinalized(_) => FishingOutcomes.complete
         case _                    => FishingOutcomes.continueAndIgnore
-      }
-      f.awaitProcessed(snap)
-      snap
-    case "Dormant" =>
-      // SNAPResetCharacterizationSpec's route: from the StateValidation hold above, validation finds the root missing
-      // four times; the critical failure enters dormant mode, but its behaviour is discarded, so the controller stays
-      // in `syncing` with currentPhase = Dormant (healing and bytecode children stopped, healed-code hold still set).
-      val missingRoot: MptStorage => StateValidator =
-        storage => new FakeStateValidator(storage, Left("Missing root node: s0d table"), Right(Seq.empty))
-      val snap = f.enterStateHealing(
-        SNAPSyncConfig(deferredMerkleization = false, maxSnapSyncFailures = 1),
-        validatorFactory = missingRoot
-      )
-      Using.resource(new SnapLogCapture) { log =>
-        snap ! HealedCodeHashes(Seq(ByteString(Array.fill(32)(0x44.toByte))))
-        snap ! TrieWalkComplete(0)
-        log.awaitLine("[HEAL-CODE] Holding SNAP finalisation")
-        f.awaitProcessed(snap)
-        snap ! ValidationRetry(0L)
-        (1 to 3).foreach { attempt =>
-          log.awaitLine(s"Root node is missing (retry attempt $attempt of 3)")
-          f.awaitProcessed(snap)
-          f.manualTime.timePasses(500.millis)
-        }
-        log.awaitLine("Entering dormant mode")
       }
       f.awaitProcessed(snap)
       snap

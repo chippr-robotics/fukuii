@@ -36,7 +36,7 @@ git -C "$REFS/pekko-connectors" pull --ff-only 2>/dev/null | grep -v "Already up
 
 ## Core rules
 
-1. **`mapMaterializedValue` over `preMaterialize` for subscriptions** — `preMaterialize()` internally calls `Sink.asPublisher(false)`, inserting a Reactive Streams Publisher/Subscriber async boundary. Under Pekko 1.6.0, elements from a pre-materialized `actorRef` source don't flow through this boundary to `take(N).runWith(Sink.seq)` consumers. Use `mapMaterializedValue` for all actor-subscription setups. See P12 in `~/.claude/agent-protocols/pekko-typed-api.md`.
+1. **`mapMaterializedValue` over `preMaterialize` for subscriptions** — `preMaterialize()` internally calls `Sink.asPublisher(false)`, inserting a Reactive Streams Publisher/Subscriber async boundary. Under Pekko 1.6.0, elements from a pre-materialized `actorRef` source don't flow through this boundary to `take(N).runWith(Sink.seq)` consumers. Use `mapMaterializedValue` for all actor-subscription setups. See P12 in `.claude/agent-protocols/pekko-typed-api.md`.
 
 2. **`take(N)` for demand-driven stream tests** — Do not terminate test streams via `PoisonPill`. Pekko delivers system messages (Terminated) before buffered regular messages. Use `take(N).runWith(Sink.seq).futureValue` — the Future completes as soon as N elements are delivered. See P13.
 

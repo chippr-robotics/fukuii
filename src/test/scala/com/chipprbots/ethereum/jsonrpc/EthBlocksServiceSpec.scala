@@ -23,12 +23,12 @@ import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
-import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
-import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.testing.Tags.*
@@ -489,7 +489,8 @@ class EthBlocksServiceSpec
     val response: ServiceResponse[CapabilitiesResponse] = ethBlocksService.capabilities(CapabilitiesRequest())
     val result: CapabilitiesResponse = response.unsafeRunSync().toOption.value
 
-    val fullyRetained = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    val fullyRetained: CapabilitiesResource =
+      CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
     result.headNumber shouldEqual blockToRequest.number.value
     result.headHash shouldEqual blockToRequest.hash.value
     result.state shouldEqual fullyRetained
@@ -513,7 +514,7 @@ class EthBlocksServiceSpec
     val response: ServiceResponse[CapabilitiesResponse] = prunedEthBlocksService.capabilities(CapabilitiesRequest())
     val result: CapabilitiesResponse = response.unsafeRunSync().toOption.value
 
-    val expectedOldestBlock = blockToRequest.number.value - history
+    val expectedOldestBlock: BigInt = blockToRequest.number.value - history
     result.state shouldEqual CapabilitiesResource(
       disabled = false,
       oldestBlock = expectedOldestBlock,
@@ -521,7 +522,8 @@ class EthBlocksServiceSpec
     )
     result.stateproofs shouldEqual result.state
 
-    val fullyRetained = CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
+    val fullyRetained: CapabilitiesResource =
+      CapabilitiesResource(disabled = false, oldestBlock = BigInt(0), deleteStrategy = None)
     result.tx shouldEqual fullyRetained
     result.logs shouldEqual fullyRetained
     result.receipts shouldEqual fullyRetained

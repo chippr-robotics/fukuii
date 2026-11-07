@@ -17,15 +17,22 @@ import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.healing.*
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.BlockerClock
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedAccountSeeding
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushBuffer
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.FlushTicket
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
-
-// The adoption map for the snap-split verify adoption mode (spec 016 C-H1): the dropped parameter and its member.
-// adopt-map: healingFrontierStorage -> healingFrontier
 
 /** TrieNodeHealingCoordinator manages the healing phase of SNAP sync.
   *
@@ -57,22 +64,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     val frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
     val frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
     val frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
-    scopedHealVerification: Boolean = true,
-    val scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
-    // spec 005 (Pruned descend-and-stop verification). When true AND `storageScheme == Hash`, the completeness walk
-    // prunes any present node that has a durable subtree-complete record (HealingFrontierStorage CF 'g'), making a
-    // fresh node's first verification O(missing-frontier). Off OR Path scheme ⇒ the unchanged full-trie walk. Consensus
-    // safety rests on the never-false-prune invariant: prune iff present AND recorded-complete (records written only
-    // AFTER the subtree's bytes are durably committed). See `prunedEnabled`.
-    val prunedHealVerification: Boolean = true,
-    // spec 002/003 (frontier persistence + resume + completeness marker). Gates the LAYER-2 frontier MIRROR writes
-    // (persistFrontier/unpersistFrontier/clearPersistedFrontier), the [HEAL-RESTART] resume-from-persisted-frontier
-    // path, and the spec-002 `markComplete()` snapshot marker. Decoupled from store PRESENCE: spec 005 makes the store
-    // present whenever `prunedHealVerification` is on (to host the subtree-complete records), but these persistence
-    // features must stay dark unless `healing-frontier-persistence` is explicitly enabled (default off), preserving
-    // FR-005 byte-for-byte parity with pre-spec-005 behavior. The spec-005 subtree records (markSubtreeComplete /
-    // isSubtreeComplete / the descend-and-stop oracle) are gated on `prunedEnabled`, NOT on this flag.
-    val frontierPersistenceEnabled: Boolean = false,
     // spec 004 (Decoupled Heal Serve-Root). When true, the GetTrieNodes fetch targets `serveRoot` (an advancing
     // newest-servable root) instead of the walk root `stateRoot`; when false, the fetch uses `stateRoot` (coupled,
     // byte-identical to pre-spec-004). Completeness is ALWAYS judged against `stateRoot`, regardless of this flag.
@@ -80,10 +71,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // FR-006 surfacing threshold: after this many unsatisfied attempts with no serve-root advance, surface (log +
     // metric). Never force-completes.
     val decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
-    // spec 009 (Moving-Root Delta Heal). When true, the heal completes toward AND fetches against ONE current served
+    // moving-root delta heal (#1374). When true, the heal completes toward AND fetches against ONE current served
     // root: requestNextBatch (T005) collapses the fetch root to the completeness root `stateRoot`, and
     // StartTrieNodeHealing (T006) seeds an absent heal root as a frontier task and fetches it instead of handing off to
-    // lazy healing. When false, the heal uses the spec-004 walk/serve split (byte-identical to pre-spec-009). Impl
+    // lazy healing. When false, the heal uses the spec-004 walk/serve split (byte-identical to before #1374). Impl
     // default false (bare construction stays on the spec-004 path); the production default-on flows from SNAPSyncConfig
     // via the spawn sites. The content-hash store gate and the finalizeSnapSync anchor guard are byte-untouched on BOTH
     // paths — under the flag the gate matches BY CONSTRUCTION (fetch root == completeness root), never by weakening it.
@@ -96,7 +87,21 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     // Shared with the controller. True while a frontier walk is running and nothing is pending or in flight, i.e. the
     // heal needs no peers and any re-peg of the heal root can only invalidate the walk. The controller's proactive
     // heal-root re-peg (moving-root delta heal) is suppressed while it is set; None (bare construction) never suppresses.
-    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+    walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+    // spec 022 D1: the held-memory bound, in bytes (held nodes, the flush buffer and the live requests). At it, no new
+    // subtree is opened; fetches that let held nodes commit continue. `sync.snap-sync.healing.held-memory-limit`.
+    heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+    // spec 022 D5: whether this coordinator works the durable excluded set (`stateIngest.snapProgress`). The production
+    // spawn passes true; false (bare construction, most specs) never reads the store.
+    excludedAccounts: Boolean = false,
+    // spec 022 T043: where this coordinator says which root its last clean full walk, reported as completion, covered.
+    cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+    // spec 022 5d: where this coordinator says, before the signal goes out, which root it decided is complete, with a
+    // walk or without one. The controller takes a signal only for the root it is on.
+    val decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+    // spec 022 5d: whether the invariant marker can hold here at all (`HealInvariant.canHold`, from the production
+    // spawn). False (bare construction, most specs) walks at every completion and never reads the key.
+    val markerMayStand: Boolean = false
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -124,10 +129,16 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // Mutable state root — updated in-place when the controller refreshes the pivot (HealingPivotRefreshed).
   var stateRoot: ByteString = initialStateRoot
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
-  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
-  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification). One queued fetch per
+  // node hash (`healRequests` decides when one is needed). spec 022 D1: dispatched deepest first (the depth of the
+  // fetch's path), FIFO among equal depths; a fetch is classed when queued as freeing held memory (a request waiting
+  // on it has a parent edge, i.e. a held parent) or opening a new subtree, for the held-memory pause policy.
+  val pendingTasks: HealTaskQueue[HealingEntry] =
+    new HealTaskQueue[HealingEntry](
+      e => HealRequest.depthOf(e.pathset),
+      _.hash,
+      e => healRequests.fetchFreesHeld(e.hash)
+    )
   // Thread-safe mirror of pendingTasks.size, refreshed by emitHealingFrontierGauges() on the actor
   // thread. The frontier-rebuild BFS walk runs on healingWriterEc and reads this (never pendingTasks
   // directly) to apply backpressure — it pauses emission when the healing backlog is large so a
@@ -174,7 +185,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
-  var trieWalkInProgress: Boolean = false
   // Verification BFS state: gates StateHealingComplete and catches storage sub-trie gaps (Fix BUG-1/BUG-2).
   // verificationPassComplete = true only after a BFS traversal finds zero missing nodes.
   // verificationBFSRunning = true while ANY frontier walk Future (crash-recovery rebuild OR
@@ -189,17 +199,27 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // root that completes. Bounded so a root that outruns the walk cannot livelock the heal.
   private var consecutiveStaleDiscards: Int = 0
   private val MaxConsecutiveStaleDiscards: Int = 3
+  // spec 022 5d (forge 2, beacon 3): how many times the gate has seeded the current root. Bounded: the orphan drop can
+  // leave the root absent, a reseed rediscovers the same node, and each lap heals one, so stagnation never fires.
+  private var rootAttempts: Int = 0
   // Was `@volatile` under Classic: the walk's EC thread wrote it and the actor thread read it. Under Typed all
   // reads AND writes happen on the actor dispatcher — the field is set true on the actor thread before launching a
-  // walk Future (startFrontierBFS/startVerificationBFS/startScopedVerification) and set false only inside the
+  // walk Future (startFrontierBFS/startVerificationBFS) and set false only inside the
   // FrontierRebuildComplete / VerificationBFSComplete / FrontierWalkFailed message handlers. The Future bodies never
   // touch it; they communicate completion via `selfRef ! …`. So a plain var is correct (constraint #6).
   var verificationBFSRunning: Boolean = false
+  // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the token of the last walk this incarnation
+  // launched (its `WalkLease` token, set with `verificationBFSRunning`). A walk's end carries its token and is taken only
+  // when it matches: a walk another incarnation launched (a supervisor restart keeps the ActorRef, and a walk outlives
+  // its incarnation) says nothing about this incarnation's root or scope. Per incarnation: a restart forgets it.
+  var currentWalk: Option[Long] = None
+  // spec 022 review beacon 2: what the walk that last ran could not follow.
+  val walkSkips: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
-  val activeRequests = mutable.Map[BigInt, ActiveRequest]()
+  val activeRequests: mutable.Map[BigInt, ActiveRequest] = mutable.Map[BigInt, ActiveRequest]()
 
   // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
   val maxConcurrentRequests = concurrency
@@ -228,7 +248,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // 4M default is ~480-640 MB, NOT the 320 MB an 80 B/entry estimate would suggest. Completeness is
   // preserved: an evicted present node is only RE-WALKED if reached again via a shared reference
   // (extra work, never a skip), and any missing node it re-discovers is de-duplicated by
-  // `pendingHashSet`. See docs/design/healing-frontier-scale.md. Operator-tunable via
+  // `healRequests`. See docs/design/healing-frontier-scale.md. Operator-tunable via
   // `sync.snap-sync.healing-visited-cap`; raise it only from a measured `inflation_ratio` (US2) and
   // within the heap budget — do NOT set it to 20M (~2.4-3.2 GB) on a 6 GB heap (it OOMs).
   val HealingVisitedCap: Int = visitedCap
@@ -237,63 +257,451 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   val HealingReservedCores: Int = healingReservedCores
   val bfsQueue: BfsQueueStorage = stateIngest.bfsQueue.getOrElse(new InMemoryBfsQueueStorage())
   // Track last known available peers for re-dispatch after failures
-  val knownAvailablePeers = mutable.Set[Peer]()
+  val knownAvailablePeers: mutable.Set[Peer] = mutable.Set[Peer]()
 
-  // Dedup set for pending tasks — prevents the same missing node from being queued multiple times
-  val pendingHashSet = mutable.Set[ByteString]()
+  // spec 022 D2: the live heal requests, queued or in flight, keyed by trie position (Path) or node hash (Hash). A
+  // node hash is fetched once however many requests wait on it, and the served node fills them all: under Path every
+  // position that needs it (identical subtrees under two accounts), so no position is lost to a de-dup by hash. A
+  // request stays live until its node arrives, so a parent that finds a child already in flight joins that fetch
+  // instead of queueing a second one; under Hash each such parent is one more edge to the child. Replaces the
+  // `pendingHashSet` de-dup set (pending only, by hash) and the Path `pathAliases` map.
+  val healRequests: HealRequestBook = new HealRequestBook()
 
-  // Path scheme only: a node hash can be missing at MANY paths (identical subtrees / shared nodes). pendingHashSet
-  // dedups the queue by hash, so only one path per hash is requested; the others were previously dropped and the
-  // next verification walk found them missing again (fixed ~10/pass convergence). Remember the dropped paths here
-  // and write the one fetched node at every path when it arrives.
-  val pathAliases = mutable.Map[ByteString, mutable.LinkedHashMap[Seq[ByteString], HealingEntry]]()
+  // spec 022 D3 (FR-001 to FR-004): served nodes whose subtree is not all present yet. Never on disk; committed with
+  // every ancestor they complete, in one atomic write, once their last child edge closes. Dropped on a re-peg or a
+  // force-complete, after what is ready has been committed.
+  val heldNodes: HeldNodeSet = new HeldNodeSet()
 
-  // --- spec 003: scoped post-heal verification (FR-001) ---
-  // Bounded, per-round, in-memory accumulator of the nodes HEALED this round (their HealingEntry,
-  // captured at the single heal site in handleResponse). Mirrors the pendingTasks/pendingHashSet
-  // pairing: a LinkedHashMap keyed by node hash dedups re-served/re-queued nodes while preserving the
-  // authoritative HealingEntry value and a stable insertion order for deterministic seeding. The
-  // completion gate uses this as the scope for the post-heal verification BFS (re-walking only the
-  // healed subtrees) when the durable completeness marker proves full-trie coverage; otherwise it
-  // falls back to full-root verification. NOT persisted (actor field state, like pendingTasks); a
-  // restart loses it and the gate falls back to full-root (correct, slower). See spec 003 C1/C4.
-  val healedPathsThisRound: mutable.LinkedHashMap[ByteString, HealingEntry] =
-    mutable.LinkedHashMap.empty
-  // The state root the current round's healed paths were healed against (FR-009 / F5 guard). Tagged on
-  // the first capture of the round; a scoped verification is launched only when this == stateRoot.
-  var healedPathsRoot: ByteString = ByteString.empty
-  // Latched true once the round would exceed scopedHealMaxPaths (FR-011 / F4). Once set, no further
-  // capture occurs and the gate falls back to full-root verification (which covers everything).
-  var healedPathsOverflowed: Boolean = false
+  // spec 022 D1: the held-memory pause, with its last state for the transition log.
+  private var newSubtreesPausedLast: Boolean = false
 
-  // spec 003 C6/T016: observability state for the IN-FLIGHT scoped verification run. When a scoped
-  // verification is launched, scopedVerificationActive is set with its start time and seed count so the
-  // VerificationBFSComplete handler can emit the [HEAL-VERIFY-SCOPED] completion log + duration gauge.
-  // Cleared (None) on the full-root path so the completion handler does not mis-attribute a full-root run.
-  var scopedVerificationStartMs: Long = 0L
-  var scopedVerificationSeedCount: Int = 0
-  var scopedVerificationActive: Boolean = false
+  /** Whether opening new subtrees is paused: something is held, the held nodes, the flush buffer and the live requests
+    * (forge N4) together reach `heldMemoryLimit`, and something can still free memory: a queued fetch below a held node
+    * or a fetch in flight (spec 022 review beacon W1, hunter W2). Fetches that let held nodes commit are never paused,
+    * which is what keeps the bound from deadlocking; with nothing held, nothing is paused (a backlog of requests alone
+    * does not shrink by waiting); and held nodes that nothing can complete any more (orphans) do not pause either: the
+    * new subtrees go out, and the orphan guard drops them. The bound is therefore soft: the subtrees already open run
+    * to completion, deepest first.
+    */
+  def newSubtreesPaused: Boolean =
+    val bytes = heldMemoryBytes
+    val paused = HeldNodeSet.pausesNewSubtrees(
+      held = heldNodes.nonEmpty,
+      bytes = bytes,
+      limit = heldMemoryLimit,
+      // Also a commit write to retry and a bytecode on its way: each ends with held nodes committed (spec 022 review
+      // hunter W2; D4).
+      canFree = pendingTasks.hasDispatchable(paused = true) || activeRequests.nonEmpty ||
+        heldNodes.hasPendingWrites || heldNodes.awaitingCode
+    )
+    if paused != newSubtreesPausedLast then
+      newSubtreesPausedLast = paused
+      if paused then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB reached the ${heldMemoryLimit / 1024} KiB limit " +
+            s"(${heldNodes.size} held, ${rawNodeBuffer.size} buffered, ${healRequests.size} requests) — no new " +
+            s"subtree is opened until held nodes commit; their children are still fetched"
+        )
+      else if bytes >= heldMemoryLimit && heldNodes.nonEmpty then
+        log.info(
+          s"[HEAL-HELD] Held memory ${bytes / 1024} KiB is still at the limit, but nothing queued or in flight can " +
+            "complete the held nodes — new subtrees are opened again (the orphan guard drops the held nodes)"
+        )
+      else log.info(s"[HEAL-HELD] Held memory ${bytes / 1024} KiB under the limit — new subtrees are opened again")
+    paused
 
-  // --- spec 005 (Pruned descend-and-stop verification, D5/T005) ---
-  // Single scheme gate consulted at the verification entry and inside the per-child descent oracle: pruning is
-  // effective ONLY when the config flag is on AND the node uses Hash addressing (the subtree-complete record keys on
-  // the bare keccak hash — well-defined only under Hash scheme; under Path the nodes are nibble-path-keyed). Off OR
-  // Path scheme ⇒ the unchanged full-trie walk (`startVerificationBFS`), byte-identical to today. A healing frontier
-  // store must also be present for any record read/write — `prunedEnabled` is necessary but
-  // `stateIngest.healingFrontier` is the actual record sink, so each record site additionally guards on it being
-  // defined.
-  val prunedEnabled: Boolean =
-    prunedHealVerification && storageScheme == StorageScheme.Hash && stateIngest.healingFrontier.isDefined
+  /** Estimated heap of what healing holds before it is durable: held nodes, the flush buffer and the live requests. */
+  def heldMemoryBytes: Long = heldNodes.bytes + rawNodeBuffer.bytes + healRequests.bytes
 
-  // spec 005 C8/FR-009: observability for the IN-FLIGHT pruned verification run — count of present subtrees pruned
-  // (descend-and-stop hits) and the run start time, set when the verification entry takes the pruned path and read by
-  // the VerificationBFSComplete handler to emit the [HEAL-VERIFY-PRUNED] completion log + duration/pruned-count gauges.
-  var prunedVerificationActive: Boolean = false
-  var prunedVerificationStartMs: Long = 0L
-  // Pruned-subtree hits accumulated across the BFS sub-ranges of the current verification walk. AtomicLong because the
-  // oracle fires on `healingReaderEc` sub-range threads (parallel levels). Reset at the start of each pruned walk.
-  val prunedSubtreeCount: java.util.concurrent.atomic.AtomicLong =
-    new java.util.concurrent.atomic.AtomicLong(0L)
+  // --- spec 022 D5, D4: the durable excluded set and the bytecode healing waits on ---
+  // The durable set itself is the truth: this coordinator holds no entry beyond a page (`ExcludedAccountSeeding`). `None`
+  // in bare construction, which never reads the store.
+  private val excludedSeeding: Option[ExcludedAccountSeeding] =
+    Option.when(excludedAccounts)(
+      new ExcludedAccountSeeding(
+        stateIngest.snapProgress,
+        readForExcluded,
+        codeStored,
+        seedNeedsNoFetch = { case (pathset, hash) => nodeNeedsNoFetch(HealingEntry(pathset, hash)) }
+      )
+    )
+  // Whether the completion gate last stayed shut on the set. What a tick looks at, with `heldNodes.awaitingCode`.
+  private var excludedBlocking: Boolean = false
+  // Code hashes the set's entries asked for since the root last moved: asked for once a pass, and again each tick.
+  private val excludedCodeAsked = mutable.LinkedHashSet.empty[ByteString]
+  // How long each blocker has waited (round 2 review A): not reset by a re-peg or a heal, and not stopped by a walk.
+  private val blockerClock: BlockerClock = new BlockerClock()
+  // The user's decision, 2026-10-30 (plan D4): only code blocked, every hash for `MaxBlockedTicks`, so the chains waiting
+  // on it are written. From here until the root moves the gate walks and hands off lazily. It can still complete, but only if the
+  // code turns up and the set empties. `codeHandOffSent` keeps it to one message per tick.
+  private var codeHandOffArmed: Boolean = false
+  private var codeHandOffSent: Boolean = false
+  // The last tick's page of the set could not be resolved, so nothing is known about what it wants.
+  private var excludedTickFailed: Boolean = false
+  // spec 022 review (T038c): consecutive commit writes that failed (vault V6).
+  var consecutiveCommitFailures: Int = 0
+  // spec 022 review hunter-r3 N1, vault-r3 N4: pulses the give-up latch has waited for an answer.
+  private var giveUpLatchPulses: Int = 0
+  // spec 022 T038c (the A-B-A marker, forge N-r4-1, hunter N2): the walk this incarnation no longer counts, by token.
+  private var invalidatedWalk: Option[Long] = None
+
+  // spec 022 T055: when the current root was adopted, and how many nodes had been healed by then.
+  private var rootAdoptedAtMs: Long = System.currentTimeMillis()
+  private var healedAtRootAdoption: Int = 0
+
+  /** The empty path: a trie root's own position. */
+  private val rootPath: ByteString =
+    ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+
+  /** spec 022 5d: whether the invariant marker stands right now. Read at each decision, never cached: `lostTrack` can
+    * take it mid-run, and a dormant wake does not run `atSnapStart`. False with the key unread where it cannot hold
+    * (`markerMayStand`). A key that cannot be read does not stand: the walk is the safe side.
+    */
+  def markerStands(): Boolean =
+    markerMayStand &&
+      (try stateIngest.appState.hasSnapHealInvariant()
+      catch
+        case scala.util.control.NonFatal(e) =>
+          log.error("[HEAL-INVARIANT] Could not read the marker: taken as not standing, so the walk stays", e)
+          false
+      )
+
+  /** Whether this root has been reported complete, which a completion with no walk says once (forge 3). The record
+    * itself, so that whatever takes it back (a re-peg, the controller's own resets) takes this back too, and no run is
+    * left waiting on a signal that went out before.
+    */
+  private def saidComplete: Boolean = decidedRoot.exists(_.get() == stateRoot)
+
+  /** The one place healing says a root is complete (FR-011, FR-018). The decision is recorded before the signal it
+    * backs, on either route. `walked`: what completes is a clean walk of the whole of `stateRoot` (not the code-only
+    * hand-off, and not a force-complete), which is all that can stamp (T043). A walk that could not follow something
+    * completes as before and proves nothing (review beacon 2). Nor does a completion with no walk: a proof from an
+    * earlier walk of this root does not stand beside either, or a `lostTrack` after this decision would be undone by a
+    * stamp.
+    */
+  private def declareComplete(walked: Boolean): Unit =
+    decidedRoot.foreach(_.set(stateRoot))
+    cleanWalkRoot.foreach(_.set(if walked && walkSkips.get() == 0L then stateRoot else null))
+    val gateWalk =
+      if !walked then
+        if currentWalk.isEmpty then "no full-trie gate walk"
+        else "a full-trie gate walk ran but did not decide this"
+      else if walkSkips.get() != 0L then
+        s"a full-trie gate walk ran and could not follow ${walkSkips.get()} node(s): it proves nothing"
+      else if markerStands() then "a full-trie gate walk ran, as a fallback: the marker stands"
+      else "a full-trie gate walk ran: the marker did not stand"
+    log.info(
+      s"[HEAL-COMPLETE] root=${Hex.toHexString(stateRoot.toArray)} nodesHealed=$totalNodesHealed, $gateWalk, " +
+        s"${(System.currentTimeMillis() - startTime) / 1000}s since this coordinator started"
+    )
+    snapSyncController ! SNAPSyncController.StateHealingComplete
+
+  /** spec 022 5d: the current root is absent at the gate with the marker standing and nothing else to do. The orphan
+    * drop can take a held chain up to the root (T050a), and a Path task the book lost leaves a parent held that is that
+    * orphan. Mirrors the start arm: seeded under moving-root, `HealingRootUnservable` without it. Past `MaxRootReseeds`
+    * for a root, the walk. That is not an exit: a walk of an absent root finds the root and nothing else, and each lap
+    * heals, so stagnation never fires (forge, beacon). Past `MaxRootAttempts` healing gives up on this root, which
+    * re-pegs on Path and hands off lazily on Hash. Nothing is queued or in flight here, so a request still in the book
+    * is one nothing will answer, and it would have the seed refused in silence.
+    */
+  private def seedAbsentRoot(): Unit =
+    val hex = Hex.toHexString(stateRoot.take(4).toArray)
+    def fallBackToWalk(why: String): Unit =
+      log.warn(s"[HEAL] Root $hex absent, the marker stands, and $why: falling back to the full walk")
+      startVerificationBFS(stateRoot, rootPath)
+    if !movingRootDeltaHeal then
+      log.warn(s"[HEAL] Root $hex absent, the marker stands, and it cannot be seeded: saying it is unservable")
+      snapSyncController ! SNAPSyncController.HealingRootUnservable(stateRoot)
+    else if rootAttempts >= MaxRootAttempts then
+      log.warn(s"[HEAL] Root $hex absent, the marker stands, and $rootAttempts tries have not kept it: giving up on it")
+      snapSyncController ! SNAPSyncController.StateHealingAbandoned
+    else if rootAttempts >= MaxRootReseeds then
+      rootAttempts += 1
+      fallBackToWalk(s"it has been tried ${rootAttempts - 1} times already")
+    else
+      if !healRequests.isEmpty then
+        log.warn(s"[HEAL] ${healRequests.size} live request(s) are neither queued nor in flight: dropping them")
+        healRequests.clear()
+        pruneFetchCounters()
+      rootAttempts += 1
+      if enqueueRequest(HealingEntry(Seq(rootPath), stateRoot)) then
+        log.info(s"[HEAL] Root $hex absent and the marker stands: seeding it (reseed $rootAttempts), with no walk")
+        tryRedispatchPendingTasks()
+      else fallBackToWalk("the seed was refused")
+
+  /** What was true when the running walk started may no longer be: a re-peg has passed under it (even back to the same
+    * root: A -> B -> A dropped its frontier twice, and under Path may have overwritten what it read), or a node known
+    * missing was dropped, which it may have passed already. Its end counts for nothing but itself: no clean pass.
+    */
+  def invalidateRunningWalk(): Unit =
+    if verificationBFSRunning then invalidatedWalk = currentWalk
+
+  private def walkInvalidated: Boolean = invalidatedWalk.isDefined && invalidatedWalk == currentWalk
+
+  private def codeStored(codeHash: ByteString): Boolean = stateIngest.bytecode.get(codeHash).isDefined
+
+  /** The node a walk of the current root would read: by hash under Hash, at its own position, hash-checked, under Path.
+    * A read that fails throws: the entry stays, and the next pass tries again.
+    */
+  private def readForExcluded(hash: ByteString, pathset: Seq[ByteString]): Option[MptNode] =
+    storageScheme match
+      case StorageScheme.Hash =>
+        try Some(mptStorage.get(hash.toArray))
+        catch
+          // A node that does not decode is a read that fails, as it was before it read as a CorruptNodeException: taken
+          // for absent, it would be fetched and stored under basic pruning's upsert, which keeps the bad bytes.
+          case e: MerklePatriciaTrie.CorruptNodeException => throw e
+          case _: MerklePatriciaTrie.MissingNodeException => None
+      case StorageScheme.Path => readPathVerifiedNode(hash, pathset)
+
+  /** spec 022 T034, Path, at heal start: delete every account-trie position on each excluded account's key, so healing
+    * reaches it from the root and the invariant holds structurally. In batches of whole keys, so at no point is a node
+    * left present over a child this removed; a crash re-runs it (the set is durable, the deletes idempotent). A failure
+    * is logged and costs the structural guarantee only: the entries still resolve against the root, and seed.
+    */
+  private def deleteExcludedPositions(seeding: ExcludedAccountSeeding): Unit =
+    if storageScheme == StorageScheme.Path then
+      stateIngest.pathNodes.foreach { pns =>
+        try
+          val accounts = seeding.deleteAccountPositions(pns.writeNodesWithDeletes(Nil, _))
+          if accounts > 0 then
+            log.info(s"[HEAL-EXCLUDED] Deleted the account-trie positions of $accounts excluded account(s)")
+        catch
+          case scala.util.control.NonFatal(e) =>
+            log.error("[HEAL-EXCLUDED] Could not delete the positions of the excluded accounts", e)
+      }
+
+  /** One page of the excluded set against the current root: what is complete leaves the set, what is absent is queued
+    * or asked for. Its heal's responses send the next check; with nothing in flight, a check goes out while the pass
+    * has pages left or removed something (the next look may find the set empty). With nothing changed and no page left
+    * it stops: only a code write or the tick can change anything, and each sends a check.
+    */
+  private def stepExcluded(seeding: ExcludedAccountSeeding): Unit =
+    val step = seeding.step(stateRoot)
+    if step.seeds.nonEmpty then
+      queueNodes(step.seeds)
+      tryRedispatchPendingTasks()
+    val newCode = step.missingCode.filter(excludedCodeAsked.add)
+    if newCode.nonEmpty then snapSyncController ! SNAPSyncController.HealedCodeHashes(newCode)
+    if pendingTasks.isEmpty && activeRequests.isEmpty && (step.more || step.changed || !seeding.blocking) then
+      self ! HealingCheckCompletion
+
+  /** spec 022 T035, on every adopted root: start the pass over, against it. A failure is logged, and the gate tries
+    * again.
+    */
+  private def adoptRootForExcluded(): Unit =
+    excludedSeeding.foreach { seeding =>
+      seeding.restart()
+      excludedCodeAsked.clear()
+      try
+        if seeding.blocking then
+          excludedBlocking = true
+          stepExcluded(seeding)
+      catch
+        case scala.util.control.NonFatal(e) =>
+          excludedBlocking = true
+          log.error(
+            "[HEAL-EXCLUDED] Could not resolve the excluded set against the new root; the next check tries again",
+            e
+          )
+    }
+
+  /** spec 022 FR-011, the excluded set's part of the completion gate: healing may not complete while an entry counts,
+    * nor walk towards completing, unless the code hand-off is armed. Called only with everything drained and flushed. A
+    * page is worked whenever the gate stays shut (its work, or its self-check, comes back here); a set that cannot be
+    * read shuts the gate (the tick tries again).
+    */
+  private def excludedGate(): ExcludedGate =
+    excludedSeeding.fold(ExcludedGate.Clear) { seeding =>
+      try
+        excludedBlocking = seeding.blocking
+        if !excludedBlocking then ExcludedGate.Clear
+        else
+          stepExcluded(seeding)
+          // Only a pass that found nothing but code, and only if that page queued nothing: the walk starts drained.
+          if codeHandOffArmed && seeding.onlyCodeOutstanding && pendingTasks.isEmpty && activeRequests.isEmpty then
+            ExcludedGate.HandOff
+          else ExcludedGate.Held
+      catch
+        case scala.util.control.NonFatal(e) =>
+          excludedBlocking = true
+          log.error(
+            "[HEAL-EXCLUDED] Could not read the excluded set: no completion until it can be; retried each tick",
+            e
+          )
+          ExcludedGate.Held
+    }
+
+  /** spec 022 T055: what FR-017 asks the node to report. Cheap reads only: `heldMemoryBytes` keeps running totals, and
+    * the excluded count is what the last pass to end left, since a count of the set would read the store.
+    */
+  private def emitHealProgress(): Unit =
+    SNAPSyncMetrics.setHealHeld(heldNodes.size.toLong, heldMemoryBytes)
+    SNAPSyncMetrics.setHealRequests(pendingTasks.size.toLong, activeRequests.size.toLong)
+    SNAPSyncMetrics.setHealExcludedAccounts(excludedSeeding.fold(0L)(_.accountSignature.accounts))
+    SNAPSyncMetrics.setHealRootAgeSeconds((System.currentTimeMillis() - rootAdoptedAtMs) / 1000)
+
+  /** What is blocking healing, looked at each idle minute while it is blocked. `CodeOnly` means every one of these
+    * holds:
+    *   - nothing is queued or in flight, no commit or flush is failing;
+    *   - every held node would commit if its code waits closed (`HeldNodeSet.onlyCodeBlocks`): none waits on an absent
+    *     child;
+    *   - the set wants code and nothing else at this root: a pass has reached its end here, seeded nothing and read
+    *     everything (`ExcludedAccountSeeding.onlyCodeOutstanding`), or it wants nothing.
+    * `Unknown` is a pass that has not ended at this root yet: the next tick looks again. Anything else, a set that
+    * cannot be read included, is `Other`. A coordinator with no set has no durable record to commit on, so it is
+    * `Other` too.
+    */
+  private def blockerKind(): BlockerKind =
+    if pendingTasks.nonEmpty || activeRequests.nonEmpty || heldNodes.hasPendingWrites || !flushedForWalk() ||
+      (heldNodes.nonEmpty && !heldNodes.onlyCodeBlocks) || excludedTickFailed
+    then BlockerKind.Other
+    else
+      excludedSeeding.fold(BlockerKind.Other) { seeding =>
+        try
+          if !seeding.blocking then if heldNodes.awaitingCode then BlockerKind.CodeOnly else BlockerKind.Unknown
+          else if !seeding.passEnded || seeding.midPass then BlockerKind.Unknown
+          else if seeding.onlyCodeOutstanding then BlockerKind.CodeOnly
+          else BlockerKind.Other
+        catch
+          case scala.util.control.NonFatal(e) =>
+            log.error("[HEAL-EXCLUDED] Could not read the excluded set, so it is not known to want only code", e)
+            BlockerKind.Other
+      }
+
+  private def continueExcludedPass(): Unit =
+    excludedSeeding.foreach { seeding =>
+      try stepExcluded(seeding)
+      catch
+        case scala.util.control.NonFatal(e) =>
+          log.error("[HEAL-EXCLUDED] Could not go on with the excluded set; the next tick tries again", e)
+    }
+
+  /** The user's decision, 2026-10-30 (plan D4): only code blocks healing, and every hash has waited `MaxBlockedTicks`
+    * idle minutes. Record every code hash the held chains wait on, durably and first, so that from here the gate cannot
+    * open, even after a crash, a re-peg or a dropped node, until the code is really there. Then close those waits and
+    * write the chains. A record that cannot be written changes nothing, and the next tick tries again.
+    */
+  private def armCodeHandOff(): Unit =
+    val awaited = heldNodes.awaitedCode.keys.toSeq
+    try
+      excludedSeeding.foreach(_.recordMissingCode(awaited))
+      log.warn(
+        s"[HEAL-CODE] Only bytecode blocks healing, all of it for $MaxBlockedTicks idle minutes: writing ${heldNodes.size} node(s) " +
+          s"waiting only on ${awaited.size} bytecode(s), then, where the marker does not stand, a walk of the rest, then " +
+          "a lazy hand-off. Healing does not report complete; the head fetches the code on demand and the audit, or the " +
+          "next start's scan, looks for it."
+      )
+      codeHandOffArmed = true
+      excludedBlocking = true
+      verificationPassComplete = false // where one runs, the walk is part of the decision: no earlier pass stands in
+      awaited.foreach(heldNodes.codeArrived)
+      excludedCodeAsked ++= awaited
+      commitHeld()
+      if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
+    catch
+      case scala.util.control.NonFatal(e) =>
+        log.error(
+          "[HEAL-CODE] Could not record the bytecode healing waits on; nothing written, the next tick retries",
+          e
+        )
+
+  /** The armed gate's end: only code left, after a clean walk or with the marker standing. Never a completion: no
+    * record is set, so finalisation takes the marker (T043).
+    */
+  private def handOffOnCode(): Unit =
+    if !codeHandOffSent then
+      codeHandOffSent = true
+      log.warn("[HEAL-CODE] Nothing else is missing: a lazy hand-off with the bytecode still missing")
+      snapSyncController ! SNAPSyncController.StateHealingAbandoned
+
+  /** A minute in which no trie fetch could help (FR-006, T037): every blocker's clock runs, and what has waited long
+    * enough is acted on, each by its own clock (round 2 review A).
+    */
+  private def onIdleMinute(blocked: Boolean, codeBlockers: collection.Set[ByteString]): Unit =
+    blockerClock.observeCode(codeBlockers)
+    val kind = if blocked then blockerKind() else BlockerKind.Unknown
+    kind match
+      case BlockerKind.Other =>
+        blockerClock.otherBlocking(excludedSeeding.fold(BlockerClock.SetSignature.Empty)(_.accountSignature))
+      case BlockerKind.CodeOnly => blockerClock.otherGone()
+      case BlockerKind.Unknown  => if !blocked then blockerClock.otherGone()
+    blockerClock.idleMinutePassed()
+    kind match
+      case BlockerKind.CodeOnly =>
+        // Armed already, it acts again only for a chain the walk's own fetches brought in, waiting on code of its own.
+        if (!codeHandOffArmed || heldNodes.awaitingCode) && blockerClock.codeHasWaited(codeBlockers, MaxBlockedTicks)
+        then armCodeHandOff()
+      case BlockerKind.Other if blockerClock.otherHasWaited(MaxBlockedTicks) =>
+        log.error(
+          s"[HEAL-CODE] $MaxBlockedTicks idle minutes with healing blocked by more than bytecode " +
+            s"(${codeBlockers.size} bytecode(s) missing, excluded set blocking: $excludedBlocking) — abandoning " +
+            "healing: the lazy hand-off, not a completion"
+        )
+        blockerClock.otherGone()
+        snapSyncController ! SNAPSyncController.StateHealingAbandoned
+      case _ => ()
+
+  /** spec 022 T037: once a minute. Find any code whose acknowledgement was lost; if bytecode or the excluded set holds
+    * healing up, log what it waits on and ask for it again; look at the set (the gate cannot while a held chain or a
+    * walk keeps it shut); and, unless a fetch could still help, let an idle minute pass.
+    */
+  private def onBlockedTick(): Unit =
+    emitHealProgress()
+    // Any lost acknowledgement (a bytecode coordinator that a supervisor restarted, say).
+    if heldNodes.awaitingCode || excludedCodeAsked.nonEmpty || blockerClock.trackedCode.nonEmpty then
+      try
+        val stored =
+          (heldNodes.awaitedCode.keySet ++ excludedCodeAsked ++ blockerClock.trackedCode).filter(codeStored)
+        if stored.nonEmpty then onCodeStored(stored.toSeq)
+      catch
+        case scala.util.control.NonFatal(e) =>
+          log.warn(s"[HEAL-CODE] Could not read the bytecode store: ${e.getMessage}")
+    val wasBlocking = excludedBlocking
+    // With nothing queued the gate may be shut for hours (a held chain, a walk), and the bytecode download records
+    // entries of its own meanwhile, so the tick does not wait for the gate to look.
+    if pendingTasks.isEmpty && activeRequests.isEmpty then
+      excludedSeeding.foreach { seeding =>
+        try
+          excludedBlocking = seeding.blocking
+          // One pass per root is enough while it found nothing to do: a set of 200k entries is about 2M node reads, and a
+          // walk can run for hours. Again only if it found something.
+          if excludedBlocking && !seeding.lastPassQuiet then stepExcluded(seeding)
+          excludedTickFailed = false
+        catch
+          case scala.util.control.NonFatal(e) =>
+            excludedBlocking = true
+            excludedTickFailed = true
+            log.error("[HEAL-EXCLUDED] Could not look at the excluded set; the next tick tries again", e)
+      }
+    val blocked = heldNodes.awaitingCode || excludedBlocking
+    val waiting = heldNodes.awaitedCode
+    val codeBlockers: collection.Set[ByteString] = waiting.keySet ++ excludedCodeAsked
+    if blocked && codeBlockers.nonEmpty then
+      val shown = waiting.iterator.take(16).map { case (code, accounts) =>
+        s"${Hex.toHexString(code.take(4).toArray)} of ${accounts.map(a => Hex.toHexString(a.take(8).toArray)).mkString(",")}"
+      }
+      log.warn(s"[HEAL-CODE] Healing waits on ${codeBlockers.size} bytecode(s): " + shown.mkString("; "))
+      snapSyncController ! SNAPSyncController.HealedCodeHashes(codeBlockers.toSeq)
+    // A fetch that can still go out is the normal stagnation paths' business, not this one's.
+    val fetchCanHelp =
+      activeRequests.nonEmpty ||
+        (pendingTasks.nonEmpty && (!newSubtreesPaused || pendingTasks.hasDispatchable(paused = true)))
+    if !fetchCanHelp then onIdleMinute(blocked, codeBlockers)
+    codeHandOffSent = false // a refresh that keeps the root answers nothing: the gate says it again
+    // The look at the set, and at whether the wait has ended; or the set is out of the way, and nothing else would say so.
+    if blocked || wasBlocking then self ! HealingCheckCompletion
+
+  /** The bytecode of `codeHashes` has been written (D4). What waited on it commits; the set, on its next look, sees it.
+    */
+  private def onCodeStored(codeHashes: Seq[ByteString]): Unit =
+    codeHashes.foreach(blockerClock.codeStored)
+    val released = codeHashes.map(heldNodes.codeArrived).sum
+    val forTheSet = codeHashes.count(excludedCodeAsked.remove)
+    if released > 0 || forTheSet > 0 then
+      commitHeld()
+      if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
+      self ! HealingCheckCompletion
 
   // --- spec 004: decoupled heal serve-root (FR-001/FR-002) ---
   // T008: the SERVE root used to fetch missing nodes (GetTrieNodes). Initialized to the walk root so that when
@@ -303,19 +711,22 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // it — they key off `stateRoot` (the walk root) exclusively, preserving FR-007 parity by construction.
   var serveRoot: ByteString = stateRoot
   // T015 / FR-006: per-task count of fetch attempts that did not satisfy the task (content-mismatch drop, empty
-  // response, or timeout re-queue). Bounded by the pending-task set (an entry is only ever incremented for a hash
-  // that is being re-queued, and the whole map is cleared on every serve-root advance). A task that exceeds
+  // response, or timeout re-queue). Bounded by the live requests (an entry is only ever incremented for a hash that is
+  // being re-queued, dropped once the task is satisfied or given up on, and the whole map is cleared on every serve-root
+  // advance and whenever the requests go: `pruneFetchCounters`, spec 022 review hunter-r3 N2; a fill put back after a
+  // failed read keeps it; a request a conflicting one retired leaves its entry until then). A task that exceeds
   // `decoupledHealMaxAttemptsNoRefresh` with no serve-root advance in between is surfaced (log + metric) — it is
   // NEVER force-completed: the content-hash check guarantees a wrong/missing node can never be accepted, so a stuck
   // node simply keeps the walk from finding zero, which is the correct (no-false-completion) behaviour.
-  val healAttempts = mutable.Map.empty[ByteString, Int]
+  // A HealAttemptMap also keeps how many tasks are past that threshold, for the gauges (#1675).
+  val healAttempts: HealAttemptMap = new HealAttemptMap(() => decoupledHealMaxAttemptsNoRefresh)
   // T019 / FR-010: count of nodes healed via a serve root that differs from the walk root (cross-root heals).
   var crossRootHealCount: Long = 0L
   // T020: number of serve-root refreshes engaged this coordinator lifetime (observability only).
   private var serveRootRefreshCount: Long = 0L
 
   // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
-  val statelessPeers = mutable.Set[String]()
+  val statelessPeers: mutable.Set[String] = mutable.Set[String]()
   // Soft-exile strike counter (mirrors AccountRangeCoordinator.emptyResponseStrikes). A SINGLE empty
   // TrieNodes response used to permanently exile a peer for the whole root, which on a 2-peer-eligible
   // residual drains the pool to zero and stalls the heal one node short (observed live: only 2 of ~10
@@ -323,29 +734,28 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   // the threshold; any successful heal from a peer wipes its strikes. Peers rotate — one that returns
   // empty now may serve after a refresh — so the set is also auto-cleared periodically (see
   // HealingStagnationCheck). 5 strikes mirrors Account/Storage's EmptyResponseStrikeThreshold.
-  val emptyResponseStrikes = mutable.Map.empty[String, Int]
+  val emptyResponseStrikes: mutable.Map[String, Int] = mutable.Map.empty[String, Int]
   var pivotRefreshRequested: Boolean = false
   var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
+  // spec 022 review beacon N2-r3, hunter-r3 N1: a read-failure give-up escalates once per controller answer. Its own
+  // latch, not `pivotRefreshRequested`: that one stops every dispatch, and an answer that never comes or leaves it set
+  // would freeze unrelated fetches until the watchdog above. Cleared when the controller answers (resume or refresh).
+  var giveUpEscalated: Boolean = false
 
-  val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+  val peerResponseBytesTarget: mutable.Map[String, BigInt] = mutable.Map.empty[String, BigInt]
 
   // Peer cooldown
-  val peerCooldownUntilMs = mutable.Map[String, Long]()
+  val peerCooldownUntilMs: mutable.Map[String, Long] = mutable.Map[String, Long]()
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
-  val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  // spec 022 D3: nodes committed with their whole subtree, waiting for the asynchronous flush (Hash scheme).
+  val rawNodeBuffer: FlushBuffer = new FlushBuffer()
   val rawFlushThreshold = 1000
-  var flushing: Boolean = false
-
-  // spec 005 C3b/D2/T009/T012: heal-side subtree-complete seeding, DEFERRED until durable. discoverMissingChildren
-  // identifies a candidate X (a just-healed node whose direct children are ALL present on disk AND themselves
-  // recorded subtree-complete ⇒ X's whole subtree is present by induction). But X's OWN bytes are still in
-  // `rawNodeBuffer` (NOT durable) at discovery time, so recording then would be unsound (crash before flush ⇒ record
-  // present but X's bytes lost ⇒ false prune). Instead we stage candidates here and write the record ONLY in the
-  // flush path, AFTER `mptStorage.persist()` durably commits the buffered nodes (T012 record-after-persist). A crash
-  // before the flush drops the in-memory candidate ⇒ safe descend. Records are written iff `prunedEnabled`.
-  val pendingSubtreeRecords = mutable.Set[ByteString]()
+  // spec 022 review forge C1: the asynchronous flush in flight, by its ticket (a token unique in the process, so a late
+  // completion from another flush, or from the instance a supervisor restart replaced, matches nothing). `flushing` is
+  // whether it is set.
+  var flushInFlight: Option[FlushTicket] = None
 
   // preStart equivalent: log the decoupling mode once, seed gauges, and start the recurring stagnation pulse. Called
   // once by the behavior factory. The Typed `startTimerWithFixedDelay` replaces the Classic `scheduleWithFixedDelay`
@@ -368,6 +778,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     SNAPSyncMetrics.setHealingWalkRoot(shortRootLabel(stateRoot))
     SNAPSyncMetrics.setHealingServeRoot(shortRootLabel(serveRoot))
     timers.startTimerWithFixedDelay(HealingStagnationCheck, 2.minutes)
+    timers.startTimerWithFixedDelay(HealingBlockedTick, 1.minute)
     active()
 
   /** Publish whether the heal is currently a purely local walk (see `walkLocalOnly`) after every message. */
@@ -394,6 +805,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             target: org.apache.pekko.actor.typed.BehaviorInterceptor.SignalTarget[Command]
         ): Behavior[Command] =
           if signal == org.apache.pekko.actor.typed.PostStop then walkLocalOnly.foreach(_.set(false))
+          // spec 022 T038a: this incarnation is ending, so nobody will read its walk's result. It stops at its next check
+          // rather than holding the BFS column family for what may be hours.
+          if signal == org.apache.pekko.actor.typed.PostStop || signal == org.apache.pekko.actor.typed.PreRestart then
+            cancelRunningWalk()
           target(ctx, signal)
     )(activeBehavior())
 
@@ -401,7 +816,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * Each group keeps its arms in their original relative order. Every arm except the three `VerificationBFSComplete`
     * arms and the catch-all matches its own Command type and no other, so the first arm that matches a message is the
     * same arm as before for every message: the three `VerificationBFSComplete` arms sit together in
-    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm.
+    * `healVerificationArms`, and the catch-all comes last. Groups are chained in the order of their first arm. Spec 022
+    * fix round 4 puts a replaced-walk arm first among the arms of each walk end (`FrontierRebuildComplete`,
+    * `FrontierWalkFailed`, `VerificationBFSComplete`), in the same group: it takes only an end whose walk this
+    * incarnation did not launch.
     */
   private def activeBehavior(): Behavior[Command] =
     Behaviors.receiveMessage[Command](
@@ -414,84 +832,97 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         .orElse(unhandledCommandArms)
     )
 
+  /** Drop every held node, unwritten (a re-peg or a force-complete: its subtree is not all present), after the commit
+    * the caller made. A commit that failed leaves ready nodes and pending deletes: they are dropped as well, unwritten
+    * (vault V6: said at WARN). Discovery from the root finds again whatever the root still needs, deletes included
+    * (hash-checked presence).
+    */
+  private def dropHeld(reason: String): Unit =
+    if heldNodes.hasPendingWrites then
+      log.warn(
+        s"[HEAL-HELD] $reason: the last commit write failed; ${heldNodes.readyCount} ready node(s) and the pending " +
+          "deletes are dropped unwritten (discovery finds again what the root still needs)"
+      )
+    val dropped = heldNodes.heldHashes
+    heldNodes.clear()
+    if dropped.nonEmpty then log.info(s"[HEAL-HELD] $reason: dropped ${dropped.size} held node(s), never written")
+
+  /** spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): the end of a walk this incarnation did not
+    * launch, `walk`: a walk of an incarnation a supervisor restart replaced, which ran on in the shared BFS queue and
+    * reports to the same ActorRef. Its verdict says nothing about this incarnation's root or scope, so it changes
+    * nothing here: no flag, no clean pass. It gave the queue's lease back before reporting, so a walk this incarnation
+    * could not start meanwhile can start now: the completion check decides.
+    */
+  private def ignoreReplacedWalk(walk: Long, what: String): Unit =
+    log.info(
+      s"[HEAL-BFS] Ignoring the end of $what (walk $walk): a replaced incarnation of this coordinator launched it"
+    )
+    self ! HealingCheckCompletion
+
+  /** spec 022 review (beacon W1, hunter W2, forge W1): drop the held nodes nothing can complete any more. A held node's
+    * count goes down only when a child's subtree commits, and a child arrives only through a fetch queued below a held
+    * node or one in flight. With neither (and no commit pending), the held nodes are orphans: a child was lost (it did
+    * not decode, or its edge was dropped), and no fetch is coming. Waiting for the whole queue to drain first would let
+    * them keep new subtrees paused at the cap (beacon W1); so they are dropped as soon as nothing can free them, never
+    * written (nothing on disk is wrong), and discovery from the root finds them missing again: the root's own chain, as
+    * present implies complete, so where the marker stands the gate seeds the root, and elsewhere the walk finds them.
+    * With nothing queued either, every live request is orphaned too (live means queued or in flight), and the book is
+    * cleared.
+    */
+  private def dropOrphanedHeld(): Unit =
+    // A leaf waiting on its bytecode is not an orphan: the code's arrival, or the tick's give-up, ends the wait.
+    if heldNodes.nonEmpty && !heldNodes.hasPendingWrites && !heldNodes.awaitingCode && activeRequests.isEmpty &&
+      !pendingTasks.hasDispatchable(paused = true)
+    then
+      val dropped = heldNodes.heldHashes
+      log.error(
+        s"[HEAL-HELD] ${dropped.size} held node(s) wait on children that nothing queued or in flight can supply — " +
+          s"dropping them, never written (${pendingTasks.size} new-subtree fetch(es) stay queued); discovery from the " +
+          "root, or the verification walk where one runs, finds them again"
+      )
+      heldNodes.clear()
+      // hunter N2: nodes known missing were dropped, so no earlier clean pass, nor a walk running now, vouches for
+      // completion. The next walk finds them, if the current root still needs them.
+      verificationPassComplete = false
+      invalidateRunningWalk()
+      if pendingTasks.isEmpty && !healRequests.isEmpty then
+        log.error(s"[HEAL-HELD] ${healRequests.size} live request(s) are neither queued nor in flight — dropping them")
+        healRequests.clear()
+        pruneFetchCounters()
+
   /** Heal lifecycle (stays in the core): start, force-complete, walk-root re-peg, the 2-minute stagnation pulse and the
     * progress query. Arms #1, #9, #10, #21, #22 of the spec 016 C-H0 arm-order table (research.md R4c).
     */
   private[actors] lazy val healLifecycleArms: PartialFunction[Command, Behavior[Command]] = {
     case StartTrieNodeHealing(root) =>
+      // spec 022 T034: before the root's presence is looked at: on Path, an excluded account's key runs through the root.
+      excludedSeeding.foreach(deleteExcludedPositions)
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if isNodeInStorage(root, Seq(emptyPath)) then
-        // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
-        // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
-        // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
-        // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
-        log.info(
-          s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
-            s"— rebuilding frontier via local BFS in batches of $FrontierBatchSize " +
-            s"(crash recovery, go-ethereum trie.Sync.Missing() trie traversal pattern)"
-        )
-        val selfRef = self
-        val ec = healingWriterEc
-        val frontierStore = stateIngest.healingFrontier
-        import scala.concurrent.Future
-        import scala.util.control.NonFatal
-        Future {
-          // Layer 2: if a persisted frontier exists, resume from it (O(frontier)) and skip the full-state walk.
-          // Empty / absent / unreadable ⇒ fail-safe fallback to the provably-complete BFS (logged loudly).
-          val resumed: Option[Seq[HealingEntry]] = frontierStore.flatMap { store =>
-            try
-              val loaded = store.loadAll().map { case (h, ps) => HealingEntry(pathset = ps, hash = h) }
-              if store.isComplete && loaded.nonEmpty then
-                // COMPLETE snapshot (the prior rebuild BFS finished) — safe to skip the full-state walk.
-                asyncLog.info(
-                  s"[HEAL-RESTART] Resumed ${loaded.size} frontier entries from a complete persisted snapshot — skipping full-state BFS"
-                )
-                Some(loaded)
-              else if store.isComplete then
-                // COMPLETE snapshot with an EMPTY frontier: the prior rebuild ran to completion AND every
-                // node it discovered was healed (entries are unpersisted as they heal). This is the
-                // best-possible restart state, but the old `loaded.nonEmpty && isComplete` gate fell
-                // through to a ~119M-node full re-walk (~24-36h on ETC mainnet) that can discover
-                // nothing new. Nothing to re-queue — skip the rebuild and run the verification pass,
-                // which still gates StateHealingComplete. (A pivot refresh clears the marker, so the
-                // marker being set implies the current root is the one the completed walk covered.)
-                asyncLog.info(
-                  "[HEAL-RESTART] Complete persisted snapshot with empty frontier (all discovered nodes " +
-                    "healed) — skipping full-state walk, running verification pass directly"
-                )
-                Some(Seq.empty)
-              else if loaded.nonEmpty then
-                // PARTIAL frontier: the prior rebuild BFS was interrupted before completion, so the un-walked
-                // region's missing nodes are not yet recorded. Skipping the BFS would silently leave gaps —
-                // re-run the full walk (it re-persists idempotently and sets the marker on completion).
-                asyncLog.warn(
-                  s"[HEAL-RESTART] Persisted frontier has ${loaded.size} entries but no completeness marker " +
-                    s"(prior rebuild interrupted) — re-running full-state BFS to avoid skipping un-walked nodes"
-                )
-                None
-              else
-                asyncLog.info("[HEAL-RESTART] Persisted frontier empty — falling back to full-state BFS")
-                None
-            catch
-              case NonFatal(e) =>
-                asyncLog.error("[HEAL-RESTART] Failed to load persisted frontier — falling back to full-state BFS", e)
-                None
-          }
-          // Route the resume decision back to the actor thread: the start*BFS launchers mutate verificationBFSRunning
-          // and spawn more Futures, which must happen on the actor dispatcher (Typed). FrontierRebuilt is already a
-          // message, so the entries arm sends directly.
-          resumed match
-            case Some(entries) if entries.nonEmpty =>
-              selfRef ! FrontierRebuilt(entries)
-            case Some(_) =>
-              // Complete-and-empty: rebuild already proven done; verification alone decides completion.
-              selfRef ! RestartResumeVerification(root, emptyPath)
-            case None =>
-              // Mark the persisted frontier authoritative when the full walk is done (all workers complete).
-              selfRef ! RestartFullRebuild(root, emptyPath)
-        }(ec)
+        // spec 022 T051: where the marker stands there is nothing to discover: a present root is a complete one, so a check
+        // decides. Nor does anything need the walk at a restart, since what the old incarnation held was never on disk.
+        if markerStands() then
+          log.info(
+            s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage and the marker " +
+              "stands — a completion check, no walk"
+          )
+          self ! HealingCheckCompletion
+        else
+          // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
+          // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
+          // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
+          // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
+          log.info(
+            s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
+              s"— rebuilding frontier via local BFS in batches of $FrontierBatchSize " +
+              s"(crash recovery, go-ethereum trie.Sync.Missing() trie traversal pattern)"
+          )
+          // spec 022 D6: nothing persisted can shorten this. A held node is never on disk, so a restart re-discovers what
+          // is missing from the current root, with the same walk that repairs a pre-invariant datadir (T043).
+          self ! RestartFullRebuild(root, emptyPath)
+        adoptRootForExcluded()
       else if movingRootDeltaHeal then
-        // spec 009 T006/C2 (Moving-Root Delta Heal): the heal root node's OWN bytes are absent locally, but the root
+        // #1374 T006/C2 (Moving-Root Delta Heal): the heal root node's OWN bytes are absent locally, but the root
         // IS fetchable — GetTrieNodes(rootHash=stateRoot, paths=[[emptyPath]]) returns S's root node, whose keccak ==
         // stateRoot, so the content-hash gate (byte-untouched) accepts it. The local mosaic is only a content-addressed
         // CACHE that lets discovery prune already-present subtrees. SEED the root as a frontier task (empty-path) and
@@ -499,14 +930,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // below already does for an absent re-pegged root — do NOT hand off to lazy healing. Persisted nodes are NOT
         // discarded (this only ADDS the root task). `discoverMissingChildren` then drives the top-down delta from here.
         // Start-of-heal and re-peg therefore seed an absent root IDENTICALLY (one moving-root mechanism).
-        if !pendingHashSet.contains(root) && !isNodeInStorage(root, Seq(emptyPath)) then
-          val seedEntry = HealingEntry(Seq(emptyPath), root)
-          pendingTasks += seedEntry
-          pendingHashSet += root
-          persistFrontier(Seq(seedEntry)) // Layer 2: the absent heal root is a new frontier entry (mirror only)
+        val seedEntry = HealingEntry(Seq(emptyPath), root)
+        if !healRequests.contains(healRequestFor(seedEntry).key) && !isNodeInStorage(root, Seq(emptyPath)) &&
+          enqueueRequest(seedEntry)
+        then
           log.info(
             s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} absent locally — seeding it as a frontier task " +
-              s"and fetching against the single served root (spec 009 moving-root delta heal); discovery drives the " +
+              s"and fetching against the single served root (#1374, moving-root delta heal); discovery drives the " +
               s"top-down delta from the root. NOT handing off to lazy healing."
           )
           tryRedispatchPendingTasks()
@@ -517,6 +947,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} already seeded or present — no re-seed needed."
           )
           tryRedispatchPendingTasks()
+        adoptRootForExcluded()
       else
         // COMPLEMENTARY GUARD (root-cause w98gfx4wn / PR #1371 seed-guard): the walk-root node's OWN bytes are absent
         // from local storage.
@@ -568,33 +999,30 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         log.warn(
           s"[HEAL-FORCE-COMPLETE] Pivot advanced beyond SNAP serve window — " +
             s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
-            s"Signaling completion with $totalNodesHealed healed nodes."
+            s"Abandoning with $totalNodesHealed healed nodes: the lazy hand-off, not a completion."
         )
-        clearPersistedFrontier() // Layer 2: healing abandoned — drop the persisted frontier so a restart won't resume it
+        // spec 022 T025: commit what is complete, flush it (it was never flushed before the stop), drop the rest. A
+        // held node's subtree is not all present, so it is never written.
+        commitHeld()
+        flushRawNodesSync()
+        dropHeld("Force-complete")
         activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
         activeRequests.clear()
         pendingTasks.clear()
-        pendingHashSet.clear()
-        pathAliases.clear()
-        clearHealedPathsSet() // spec 003 C1: abandonment — drop the scoped-verification scope (hygiene)
-        // Path scheme: the controller treats StateHealingComplete as a VERIFIED clean walk (it runs no walk of its own),
-        // and a force-complete has not verified anything — signal abandonment so it hands off to lazy healing instead.
-        // Hash scheme: unchanged (the controller's own trie walk verifies).
-        storageScheme match
-          case StorageScheme.Hash => snapSyncController ! SNAPSyncController.StateHealingComplete
-          case StorageScheme.Path => snapSyncController ! SNAPSyncController.StateHealingAbandoned
+        healRequests.clear()
+        pruneFetchCounters()
+        // The controller treats StateHealingComplete as a decided root (it runs no walk of its own, on either scheme:
+        // spec 022 T052), and a force-complete has not verified anything: signal abandonment, the lazy hand-off.
+        snapSyncController ! SNAPSyncController.StateHealingAbandoned
         // Classic `context.stop(self)` → Typed: return a stopped behavior so the actor terminates after this message.
         Behaviors.stopped
 
     case HealingPivotRefreshed(newStateRoot) =>
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       // FR-003: a same-root refresh is a no-op. ByteString `==` is full 32-byte value equality (NOT the
-      // 4-byte log prefix). Returning here preserves a valid completeness marker and the persisted
-      // frontier — the old body would clear both via clearPersistedFrontier(), wiping a good snapshot.
+      // 4-byte log prefix).
       if newStateRoot == stateRoot then
-        log.info(
-          s"[HEAL] Pivot refresh to same root ${Hex.toHexString(stateRoot.take(4).toArray)} — " +
-            s"no-op, preserving completeness marker and frontier"
-        )
+        log.info(s"[HEAL] Pivot refresh to same root ${Hex.toHexString(stateRoot.take(4).toArray)} — no-op")
       else
         val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)
         val newRootHex = Hex.toHexString(newStateRoot.take(4).toArray)
@@ -603,21 +1031,38 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
         )
         stateRoot = newStateRoot
-        flushRawNodesSync() // Flush any buffered nodes before clearing state
-        // spec 009 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
+        invalidateRunningWalk() // T038c: even if the root comes back to the walk's, its frontier was dropped under it
+        // spec 022 5d: what was decided was for the root just left, and a signal on its way goes unheeded (the controller
+        // compares). So was a walk's proof: coming back to that root (A to B to A), what it read may have been overwritten
+        // under Path (forge N3). The reseeds are per root.
+        decidedRoot.foreach(_.set(null))
+        cleanWalkRoot.foreach(_.set(null))
+        rootAttempts = 0
+        // spec 022 T055 (SC-005): what the root just left cost.
+        SNAPSyncMetrics.recordHealNodesPerRepeg((totalNodesHealed - healedAtRootAdoption).toLong)
+        healedAtRootAdoption = totalNodesHealed
+        rootAdoptedAtMs = System.currentTimeMillis()
+        // The hand-off was for the root just left. The count stands: the next idle minute looks again from this one.
+        codeHandOffArmed = false
+        codeHandOffSent = false
+        // spec 022 T025: commit what is complete (with the stale positions already found) and flush it, then drop every
+        // held node: its subtree is not all present, so it is never written. Discovery from the new root finds again
+        // whatever the new root still needs.
+        commitHeld()
+        flushRawNodesSync()
+        dropHeld("Re-peg")
+        pruneFetchCounters()
+        // #1374 T010/C4 — RE-PEG-RETAINS-NODES INVARIANT (consensus-load-bearing): a re-peg MUST NOT delete any
         // persisted trie node. Content-addressed verified nodes (keccak-keyed) carry over unchanged under the new root
         // (~99.9% shared), so every node healed against the old root stays valid under `newStateRoot` and the
         // post-re-peg delta only SHRINKS. The ONLY state cleared on this path is in-memory frontier (pendingTasks /
-        // pendingHashSet / activeRequests, below) plus the OPTIONAL frontier-mirror CF via clearPersistedFrontier(),
-        // which operates solely on `stateIngest.healingFrontier` (CF 'g' — frontier mirror + completeness/subtree
-        // records) and NEVER touches the trie-node store `mptStorage`. If a future edit makes a re-peg drop trie nodes
+        // healRequests / activeRequests, below). If a future edit makes a re-peg drop trie nodes
         // it is a consensus bug (a referenced node could go missing under the new root → false completion / import
         // fault).
-        clearPersistedFrontier() // Layer 2: old-root frontier is stale after refresh — reseed (below) repopulates it
-        clearHealedPathsSet() // spec 003 C1/F5: old-root healed paths are stale — clear before next gate
-        pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
-        pendingHashSet.clear()
-        pathAliases.clear()
+        pendingTasks.clear() // Will be re-populated by root reseed + inline discovery
+        // spec 022 FR-007/FR-010: every request (and Path alias) of the old root goes; discovery from the new root finds
+        // each position that still needs a node again, each as its own request.
+        healRequests.clear()
         statelessPeers.clear()
         emptyResponseStrikes.clear() // fresh slate on the new root (mirrors statelessPeers clear)
         peerCooldownUntilMs.clear()
@@ -637,11 +1082,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // top-down traversal of the updated trie.
         val pivotReseedPath =
           ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        if !pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot, Seq(pivotReseedPath)) then
-          val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
-          pendingTasks += reseedEntry
-          pendingHashSet += newStateRoot
-          persistFrontier(Seq(reseedEntry)) // Layer 2: the new pivot root is a new frontier entry
+        val reseedEntry = HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        if !healRequests.contains(healRequestFor(reseedEntry).key) &&
+          !isNodeInStorage(newStateRoot, Seq(pivotReseedPath)) && enqueueRequest(reseedEntry)
+        then
           log.info(
             s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
               s"for inline discovery of pivot delta"
@@ -652,7 +1096,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         // Without this, walkRunning stays false and pending stays 0 → 316-pulse dead loop (RUN10).
         // discoverMissingChildren skips locally-held storage roots without recursing into their
         // children, so the new pivot root may be local yet have gaps in storage sub-tries.
-        if trieWalkInProgress || verificationBFSRunning then
+        // spec 022 T051: that gap is what the marker rules out. Where it stands a present root is a complete one.
+        if verificationBFSRunning then
           // A walk is already running on the SHARED bfsQueue — rebuildFrontierBFS clears the queue
           // on entry, so starting a second walk here would corrupt the running one. The pivot's
           // verificationPassComplete=false (set above) guarantees HealingCheckCompletion starts a
@@ -661,17 +1106,47 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage, " +
               s"but a frontier walk is running — verification deferred until it completes"
           )
+        else if markerStands() then
+          log.info(
+            s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage and the marker " +
+              "stands — a completion check, no walk"
+          )
+          self ! HealingCheckCompletion
         else
           log.info(
             s"[HEAL] New root ${Hex.toHexString(newStateRoot.take(4).toArray)} already in storage " +
               s"— starting verification BFS to find missing children"
           )
+          // spec 022 review forge F1: not while the flush above failed. The old root's buffered nodes are mostly the new
+          // root's too, and a walk would read them as missing; startVerificationBFS retries the write first, and if it
+          // fails again defers the walk to the completion check (verificationPassComplete is false: it walks).
           startVerificationBFS(newStateRoot, pivotReseedPath)
+        adoptRootForExcluded() // spec 022 T035: every adopted root
 
+      Behaviors.same
+
+    case HealedCodeStored(codeHashes) =>
+      onCodeStored(codeHashes)
+      Behaviors.same
+
+    case HealingBlockedTick =>
+      onBlockedTick()
       Behaviors.same
 
     case HealingStagnationCheck =>
       emitHealingFrontierGauges() // refresh backlog/in-flight gauges even when idle
+      // spec 022 review hunter W1: a commit or flush whose write failed is retried by the next one, and the last one by
+      // the completion check right after it; if that fails too and nothing is pending or in flight, no later commit or
+      // flush comes. Retry it here, every pulse, while unwritten nodes remain (a failure is logged each time). The
+      // asynchronous flush runs whether or not healing looks complete (forge F1): with nothing pending a verification
+      // walk may be the only other actor, and no walk starts over an unwritten buffer, so this is what writes it.
+      if heldNodes.hasPendingWrites || (rawNodeBuffer.nonEmpty && !flushing) then
+        log.warn(
+          s"[HEAL-COMMIT] Retrying unwritten healed nodes: ${heldNodes.readyCount} ready to commit, " +
+            s"${rawNodeBuffer.size} buffered for the flush"
+        )
+        if rawNodeBuffer.nonEmpty && !flushing then flushRawNodesAsync()
+        self ! HealingCheckCompletion
       // Periodic soft-exile auto-clear (mirrors the Account/Storage "fresh slate on the next round" intent,
       // but on every 2-min tick rather than only on pivot refresh): peers rotate and a peer that returned
       // empty for the current root earlier may now be in its serve window. While there is residual work and
@@ -691,14 +1166,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if healTotal > 0 then ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
-      // walkRunning must reflect ANY active frontier walk (inline trie walk OR the BFS
-      // rebuild/verification Future) — the same OR the watchdog gates use. Rendering only
-      // trieWalkInProgress reported walkRunning=false during a live BFS rebuild, which misled
-      // operators (and matched the pre-fix watchdog bug that double-started walks).
-      val anyWalkRunning = trieWalkInProgress || verificationBFSRunning
+      // walkRunning reflects the active frontier walk (the BFS rebuild/verification Future), the same flag the
+      // watchdog gates use. The Hash controller's own walk, once a second flag here, is gone (spec 022 slice 6).
+      val anyWalkRunning = verificationBFSRunning
       log.info(
         s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
-          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+          s"pending=${pendingTasks.size} active=${activeRequests.size} held=${heldNodes.size} " +
+          s"(${heldMemoryBytes / 1024} KiB) peers=${knownAvailablePeers.size} | " +
           s"rate=${healRate.toInt} nodes/s walkRunning=$anyWalkRunning pivotRefreshPending=$pivotRefreshRequested"
       )
       val (newM, crossed) =
@@ -716,9 +1190,11 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // verification BFS, no pending tasks, no active requests, and zero healing progress.
       // Primary fix is startVerificationBFS in HealingCheckCompletion and HealingPivotRefreshed;
       // this watchdog catches any residual edge case (e.g. stale state after pivot race).
-      if !trieWalkInProgress && !verificationBFSRunning &&
-        pendingTasks.isEmpty && activeRequests.isEmpty &&
-        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete
+      // spec 022 D4, D5: not while bytecode or the excluded set holds healing up: the tick looks after those, and no walk
+      // can find what they wait on.
+      if !verificationBFSRunning &&
+        pendingTasks.isEmpty && activeRequests.isEmpty && !heldNodes.awaitingCode && !excludedBlocking &&
+        recentHealed == 0 && !pivotRefreshRequested && !verificationPassComplete && !saidComplete
       then
         consecutiveDeadPulses += 1
         log.warn(
@@ -726,12 +1202,17 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             s"walkRunning=false verifyRunning=false pending=0 active=0 healed=0 in last 2min"
         )
         if consecutiveDeadPulses >= 3 then
-          log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
           consecutiveDeadPulses = 0
-          val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-          startVerificationBFS(stateRoot, emptyPath)
-      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty ||
-        trieWalkInProgress || verificationBFSRunning
+          if markerStands() then
+            // spec 022 T051: nothing a walk would find; a check decides, and seeds the root if it is absent.
+            log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses, and the marker stands — a completion check, no walk")
+            self ! HealingCheckCompletion
+          else
+            log.warn("[HEAL-WATCHDOG] 3 consecutive dead pulses — force-starting verification BFS")
+            // spec 022 review forge F1: started only once the flush buffer is written (startVerificationBFS); with a write
+            // that keeps failing it is deferred, and the retry above flushes again every pulse.
+            startVerificationBFS(stateRoot, rootPath)
+      else if recentHealed > 0 || pendingTasks.nonEmpty || activeRequests.nonEmpty || verificationBFSRunning
       then consecutiveDeadPulses = 0
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
@@ -746,6 +1227,17 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
           )
           pivotRefreshRequested = false
           tryRedispatchPendingTasks(allowCooldownFloor = true) // periodic tick: anti-starvation floor permitted
+
+      // spec 022 review hunter-r3 N1, vault-r3 N4: the controller answers a give-up only inside StateHealing, and a refresh
+      // that keeps the root sends nothing, so the latch has this watchdog too: after as long as the pivot-refresh one (8
+      // pulses of 2 minutes), a later give-up may escalate again.
+      if giveUpEscalated then
+        giveUpLatchPulses += 1
+        if giveUpLatchPulses >= GiveUpLatchMaxPulses then
+          log.warn("[HEAL] No answer to a read-failure give-up — a later give-up may escalate again")
+          giveUpEscalated = false
+          giveUpLatchPulses = 0
+      else giveUpLatchPulses = 0
 
       // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
       // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
@@ -815,34 +1307,40 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   }
 
   /** Frontier-rebuild BFS results and the crash-recovery full rebuild (C-H2 `FrontierRebuildBfs`). Arms #2, #3, #4, #25
-    * (research.md R4c).
+    * (research.md R4c), and before #3 and before #4 the replaced-walk arm of each (spec 022 fix round 4): the end of a
+    * walk this incarnation did not launch.
     */
   private[actors] lazy val frontierRebuildArms: PartialFunction[Command, Behavior[Command]] = {
-    case FrontierRebuilt(entries) =>
-      if entries.isEmpty then
-        log.warn(
-          "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
+    case FrontierRebuilt(entries, walkRoot) =>
+      if storageScheme == StorageScheme.Path && walkRoot != stateRoot then
+        // spec 022 review W1: a re-peg does not cancel a running walk, and its batches name positions of the root it was
+        // launched on. Under Path a request is keyed by position alone, so such an entry would stand in for the current
+        // root's request for the same position, whose node it is not. The current root's own discovery and walks find
+        // every position it needs. Nothing else changes here (no stagnation reset, no dispatch). Hash scheme: kept on
+        // purpose (T051a). A node is keyed by its hash, so a batch is mostly still wanted, and dropping it would cost a
+        // long walk its repair; keeping it costs at most one re-peg on a chain that advances.
+        log.info(
+          s"[HEAL-FRONTIER] Dropping ${entries.size} missing nodes from a walk of superseded root " +
+            s"${Hex.toHexString(walkRoot.take(4).toArray)} (current ${Hex.toHexString(stateRoot.take(4).toArray)})"
         )
-      else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
-      queueNodes(entries.map(e => (e.pathset, e.hash)))
-      lastHealedAtMs = System.currentTimeMillis()
-      tryRedispatchPendingTasks()
+      else
+        if entries.isEmpty then
+          log.warn(
+            "[HEAL-FRONTIER] Empty frontier batch received — trie may already be fully healed or storage is corrupt"
+          )
+        else log.info(s"[HEAL-FRONTIER] ${entries.size} missing nodes identified — queuing for healing")
+        queueNodes(entries.map(e => (e.pathset, e.hash)))
+        lastHealedAtMs = System.currentTimeMillis()
+        tryRedispatchPendingTasks()
 
       Behaviors.same
 
-    case FrontierRebuildComplete(missingEmitted, walkRoot) =>
-      // The full-state rebuild BFS walked the entire trie; every still-missing node is now persisted.
-      // Mark the snapshot complete so a future restart may resume it instead of re-walking (Layer 2).
+    case FrontierRebuildComplete(_, walkRoot, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"full-state rebuild of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case FrontierRebuildComplete(missingEmitted, walkRoot, _) =>
       verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
-      // spec 002/005 marker: gated on frontier persistence (default off). With it off, `FrontierRebuildComplete` is
-      // never reached via the resume path anyway (that path requires `frontierStore` defined), but guard defensively
-      // so the snapshot marker is only ever written when persistence is enabled (FR-005 parity; the marker also gates
-      // the spec-003 scoped path, which must stay dark by default).
-      if frontierPersistenceEnabled then
-        stateIngest.healingFrontier.foreach { store =>
-          store.markComplete()
-          log.info("[HEAL-RESTART] Full-state rebuild complete — persisted frontier marked as a complete snapshot")
-        }
       // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
       // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
       // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
@@ -851,15 +1349,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // conjunct holds — each excludes a specific false-completion path (research D2 + adversarial verdict):
       //   missingEmitted == 0    — the deciding walk found nothing missing (no gap discovered).
       //   totalNodesHealed == 0  — nothing healed during the walk (excludes heal-during-walk mutation;
-      //                            conservative `== 0`, D5; cumulative counter preserved across pivots).
+      //                            conservative `== 0`, D5; cumulative counter preserved across pivots). A fill
+      //                            put back or given up on writes nothing, so it is not counted and need not be:
+      //                            this arm rests on the clean full walk (missingEmitted == 0), not on the count.
       //   isComplete             — pendingTasks.isEmpty && activeRequests.isEmpty: no outstanding frontier
       //                            or in-flight request (excludes outstanding work).
       //   !flushing              — no async raw-node write/flush in flight (mirrors the HealingCheckCompletion
       //                            gate's flush guard; never mark complete ahead of durable state).
-      //   !trieWalkInProgress    — the controller's interleave trie walk is not running. Defense-in-depth: makes
-      //                            the early precondition EXACTLY match the HealingCheckCompletion gate, so
-      //                            guard-passes ⇒ gate-passes (no benign "guard fires, gate blocks, watchdog
-      //                            suppressed" interleave case on the re-heal path). First-heal: always false.
       //   walkRoot == stateRoot  — LOAD-BEARING (D4/FR-005): a HealingPivotRefreshed to a new root does NOT
       //                            cancel this in-flight walk, so a stale completion can land against a new
       //                            stateRoot; this excludes that stale-root completion. Explicit guard — does
@@ -868,8 +1364,8 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // and the StateHealingComplete send flow through the single existing chokepoint (D1, byte-parity).
       // verificationPassComplete = true also suppresses the dead-pulse watchdog (no walk #2, FR-006). The
       // else (do nothing new) is byte-identical to today — the node idles and the watchdog runs walk #2.
-      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing && !trieWalkInProgress &&
-        walkRoot == stateRoot
+      if missingEmitted == 0 && totalNodesHealed == 0 && isComplete && !flushing &&
+        walkRoot == stateRoot && !walkInvalidated
       then
         verificationPassComplete = true
         self ! HealingCheckCompletion
@@ -878,16 +1374,25 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
             "walk via HealingCheckCompletion; skipping the redundant verification walk (spec 006)"
         )
 
-      // Path scheme: a heal response can land while this walk is still flagged running, in which case its
-      // HealingCheckCompletion was skipped (`!verificationBFSRunning`) and nothing else re-triggers it until the
-      // dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear. Hash scheme: unchanged.
-      if storageScheme == StorageScheme.Path && missingEmitted > 0 then self ! HealingCheckCompletion
+      // A heal response, and its flush, can land while this walk is still flagged running: the walk's level ends, then it
+      // has a level and a queue to finish. Their HealingCheckCompletions were then skipped (`!verificationBFSRunning`),
+      // and nothing else re-triggers one until the dead-pulse watchdog (minutes). Re-evaluate now that the flag is clear.
+      // Either scheme: Path has done this since e29ddcc08, and Hash left it out for no reason of its own, until CI caught
+      // the stall (spec 022 PR 5c, InvariantMarkerSpec).
+      // spec 022 T038a: and on either scheme when this walk no longer counts: what a re-peg deferred behind it (the walk of
+      // the current root) starts here, not at the next heal response or the dead-pulse watchdog. And while the excluded
+      // set has work: a check is what looks at it next.
+      if missingEmitted > 0 || walkRoot != stateRoot || walkInvalidated || excludedBlocking then
+        self ! HealingCheckCompletion
 
       Behaviors.same
 
-    case FrontierWalkFailed =>
+    case FrontierWalkFailed(walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, "frontier walk (it failed)")
+      Behaviors.same
+
+    case FrontierWalkFailed(_) =>
       verificationBFSRunning = false
-      trieWalkInProgress = false
       log.warn(
         "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
           "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
@@ -896,22 +1401,50 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       Behaviors.same
 
     case RestartFullRebuild(root, rootPath) =>
-      // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
       // spec 006 C1/D3/FR-004: forward the walk's missing-node count (missingEmitted) and the root this walk
       // traversed (`root`, captured here) so the FrontierRebuildComplete handler can decide early completion and
       // exclude a stale completion after a pivot refresh (walkRoot == stateRoot guard).
-      startFrontierBFS(
-        root,
-        rootPath,
-        isStor = false,
-        (missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root)
-      )
+      // spec 022 review forge F1: like every frontier walk, the rebuild starts on a written flush buffer. At a fresh start
+      // the buffer is empty; if responses filled it meanwhile and its write fails, no rebuild runs: something was healed,
+      // so once the write succeeds the completion check runs the full verification walk in its place.
+      // spec 022 review (hunter W1, forge W-r4-2, vault-r3 W1, beacon W1-r4): no rebuild of a root a re-peg in the resume
+      // window has left (the re-peg seeded or walks the new root), and none while a walk runs (a completion check or a
+      // re-peg in the window started one, and two walks on the shared queue cut each other short). This incarnation has
+      // no clean pass yet, so the completion check walks the root once that walk has ended.
+      if root != stateRoot then
+        log.info(
+          s"[HEAL-RESTART] Full-state rebuild of superseded root ${Hex.toHexString(root.take(4).toArray)} dropped: " +
+            s"the heal has re-pegged to ${Hex.toHexString(stateRoot.take(4).toArray)}"
+        )
+      else if verificationBFSRunning then
+        log.info(
+          "[HEAL-RESTART] Full-state rebuild not started: a frontier walk is already running. The completion check " +
+            "walks the root once it has ended."
+        )
+      else if flushedForWalk() then
+        // Refused only by a walk of another incarnation: that walk's end sends this one a check, which walks.
+        val _ = startFrontierBFS(
+          root,
+          rootPath,
+          isStor = false,
+          (walk: Long, missingEmitted: Long) => self ! FrontierRebuildComplete(missingEmitted, root, walk)
+        )
+      else
+        log.warn(
+          "[HEAL-RESTART] Full-state rebuild not started: healed nodes waiting in the flush buffer could not be written. " +
+            "The completion check retries the write and then runs the full verification walk instead."
+        )
+        self ! HealingCheckCompletion
       Behaviors.same
   }
 
   /** Missing-node intake and peer responses (C-H5 `HealResponseProcessing`). Arms #5, #13, #15 (research.md R4c). */
   private[actors] lazy val healResponseArms: PartialFunction[Command, Behavior[Command]] = {
     case QueueMissingNodes(nodes) =>
+      // Nodes found missing outside this coordinator (validation, today: an empty queue the moment it finds them, then
+      // its re-walk's nodes): no earlier clean pass vouches for this root any more, so the gate walks again before it
+      // decides, rather than completing on that pass (forge, beacon: spec 022 slice 6b).
+      verificationPassComplete = false
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
@@ -968,11 +1501,9 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         inFlight.foreach { reqId =>
           activeRequests.remove(reqId).foreach { req =>
             requestTracker.completeRequest(reqId, 0)
-            req.tasks.foreach { task =>
-              if !pendingHashSet.contains(task.hash) then
-                pendingHashSet += task.hash
-                pendingTasks += task
-            }
+            // Back to the queue: each entry is the one fetch of a live request (`healRequests`), out of the queue
+            // while it was in flight, so it is queued exactly once.
+            pendingTasks ++= req.tasks
           }
         }
       tryRedispatchPendingTasks()
@@ -1002,12 +1533,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // construction. No-op when the feature is disabled (the fetch would ignore `serveRoot` anyway, but skipping
       // keeps the observability/counter state inert so the OFF path is byte-identical to today, SC-006).
       if movingRootDeltaHeal then
-        // spec 009 T014/FR-010: under moving-root delta heal the serve root IS the walk root (the fetch collapses to
+        // #1374 T014/FR-010: under moving-root delta heal the serve root IS the walk root (the fetch collapses to
         // `stateRoot` in requestNextBatch, T005), so the spec-004 serve-root machinery is SUPERSEDED. The controller
         // re-pegs via HealingPivotRefreshed and stops requesting serve roots (H-S6/H-S2), but a late in-flight
         // HealingServeRootRefresh could still arrive — treat it as a documented no-op (serveRoot / serveRootRefreshCount
         // stay inert). Flag OFF: byte-identical to the spec-004 path below (kept one release for A/B, FR-007).
-        log.debug("[HEAL] HealingServeRootRefresh ignored — single moving root (spec 009)")
+        log.debug("[HEAL] HealingServeRootRefresh ignored — single moving root (#1374)")
       else if !decoupledHealServeRoot then
         log.debug("[HEAL-SERVE-ROOT] HealingServeRootRefresh ignored — decoupled-heal-serve-root disabled")
       else if newServeRoot.isEmpty || newServeRoot == serveRoot then
@@ -1046,6 +1577,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // fired HealingStagnated, give a fresh stagnation window, and resume dispatching the EXISTING pending tasks.
       // NOTHING is cleared (root, pendingTasks, frontier, verificationPassComplete all preserved) — that is the
       // whole point: a slow-but-servable verification pass must survive so it can converge against one stable root.
+      giveUpEscalated = false // the controller has answered (beacon N2-r3): a later give-up may escalate again
       if pivotRefreshRequested then
         log.info(
           s"[HEAL] Resume dispatch on held root ${Hex.toHexString(stateRoot.take(4).toArray)} " +
@@ -1058,7 +1590,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
         consecutiveIdleChecks = 0
         lastHealedAtMs = System.currentTimeMillis() // give the held root a fresh healingStagnationTimeoutMs window
         tryRedispatchPendingTasks()
-      else log.debug("[HEAL] HealingResumeDispatch with no pending pivot-refresh latch — ignoring")
+        // spec 022 review beacon W1: the stall may be held nodes that nothing can complete; the check drops them.
+        self ! HealingCheckCompletion
+      else
+        log.debug("[HEAL] HealingResumeDispatch with no pending pivot-refresh latch — only a give-up's latch cleared")
 
       Behaviors.same
 
@@ -1073,99 +1608,90 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
   /** Async raw-node flush completion (C-H1 `FrontierPersistence`). Arm #14 (research.md R4c). */
   private[actors] lazy val frontierPersistenceArms: PartialFunction[Command, Behavior[Command]] = {
-    case FlushComplete(count) =>
-      flushing = false
-      log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
-      // Check if buffer filled up again during the flush
-      if rawNodeBuffer.size >= rawFlushThreshold then flushRawNodesAsync()
+    case FlushComplete(token, count) =>
+      flushCompleted(token, count)
+      // Flush what was committed during the write.
+      if rawNodeBuffer.nonEmpty then flushRawNodesAsync()
+      self ! HealingCheckCompletion
+
+      Behaviors.same
+
+    case FlushFailed(token, cause) =>
+      flushFailed(token, cause)
       self ! HealingCheckCompletion
 
       Behaviors.same
   }
 
   /** The completion gate, the verification-walk results and the crash-recovery verification launch (C-H3
-    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The three `VerificationBFSComplete` arms (#17 stale
-    * root, #18 dirty pass, #19 clean pass) are the only Command with more than one arm; they stay together, in this
-    * order, so their guards fall through exactly as before.
+    * `HealVerification`). Arms #16–#20, #24 (research.md R4c). The `VerificationBFSComplete` arms (the replaced-walk
+    * arm spec 022 fix round 4 added, then #17 stale root, #18 dirty pass, #19 clean pass) stay together, in this order,
+    * so their guards fall through as before for the end of a walk this incarnation launched.
     */
   private[actors] lazy val healVerificationArms: PartialFunction[Command, Behavior[Command]] = {
     case HealingCheckCompletion =>
-      if isComplete && !flushing && !trieWalkInProgress && !verificationBFSRunning then
-        // FIX-BUG1-VERIFY: gate: skip verification when no inline healing was done.
-        // If totalNodesHealed == 0 the coordinator was never given nodes to heal (idle case) OR
-        // all nodes were already in local storage — either way the trie is complete from our
-        // perspective. The BUG 2 pivot-reseed path (root held locally) is handled separately by
-        // HealingPivotRefreshed calling startVerificationBFS directly, not through this gate.
-        if verificationPassComplete || totalNodesHealed == 0 then
-          flushRawNodesSync()
-          log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
-          // FR-002: mark the snapshot complete ONLY on the verified-complete path — a verification BFS
-          // actually walked the trie and found zero missing nodes (verificationPassComplete == true).
-          // FR-004: do NOT mark on the pure `totalNodesHealed == 0` idle arm: the coordinator was never
-          // given work, so the trie may be untraversed and we cannot assert completeness. Setting the
-          // marker here (gated on verificationPassComplete) is the single completion chokepoint for the
-          // verification path — VerificationBFSComplete routes through HealingCheckCompletion, so this is
-          // equivalent to (and cleaner than) writing the marker inside VerificationBFSComplete.
-          if verificationPassComplete then
-            stateIngest.healingFrontier.foreach { store =>
-              // spec 005 C2/C4/T007/T012: GENUINE zero-missing closure of the whole trie from `stateRoot` — the
-              // verification BFS just confirmed zero missing descendants (verificationPassComplete && isComplete) and
-              // `flushRawNodesSync()` above durably committed every healed node-byte. ONLY now (subtree bytes durable)
-              // is it crash-safe to record the root subtree-complete (ordinary WAL-ordered `update`). This is a real
-              // closure, NOT a `visitedLru`-faked queue-drain: the gate required isComplete (no pending/active
-              // frontier) AND a clean BFS pass. Recorded only under `prunedEnabled` (Hash scheme) so a Path-scheme
-              // node never writes a hash-keyed record. The terminal `markComplete()` (fsync) follows last (D3 order).
-              if prunedEnabled then
-                store.markSubtreeComplete(stateRoot) // spec 005 root record — gated on prunedEnabled
-              // spec 002 snapshot marker — gated on frontier persistence (default off). MUST stay separate from the
-              // spec-005 root record above: with persistence off, the marker is never written, so the spec-003 scoped
-              // path (which keys off `store.isComplete`) stays dark and behavior is byte-for-byte pre-spec-005 (FR-005).
-              if frontierPersistenceEnabled then
-                store.markComplete()
-                log.info(
-                  "[HEAL-RESTART] Verification BFS complete — persisted frontier marked as a complete snapshot"
-                )
-            }
-          snapSyncController ! SNAPSyncController.StateHealingComplete
-          clearHealedPathsSet() // spec 003 C1: round closed — next round starts with a fresh scope
+      // spec 022 D3: retry a commit whose write failed.
+      if heldNodes.hasPendingWrites then commitHeld()
+      dropOrphanedHeld()
+      // spec 022 FR-011: the excluded set is the gate's last conjunct, after the flush: it is read only with everything
+      // drained and written. It holds both branches below: no completion while an entry counts, and no walk until the
+      // pass has seeded what the walk would otherwise have to find one node at a time. The armed hand-off is the one
+      // exception: it walks, and on a clean pass hands off instead of completing.
+      val mayDecide = isComplete && !flushing && !verificationBFSRunning
+      val gate = if mayDecide && flushRawNodesSync() then excludedGate() else ExcludedGate.Held
+      // A held chain or a walk keeps the gate shut for a long time: the set's pass goes on regardless, or a tick would
+      // never know what it wants.
+      if !mayDecide && pendingTasks.isEmpty && activeRequests.isEmpty && excludedSeeding.exists(_.midPass) then
+        continueExcludedPass()
+      if gate == ExcludedGate.Clear then blockerClock.otherGone()
+      if gate != ExcludedGate.Held then
+        // spec 022 review hunter-r3 C1, forge F6, beacon W1-r3 and N3-r3: where the marker does not stand, completion needs
+        // a clean walk of the current root in this incarnation (verificationPassComplete: a verification walk, or the full
+        // rebuild walk, that found nothing missing, each started only on a written flush buffer). There is no arm for
+        // "nothing was healed": a node given up on is not healed either, and a supervisor-restarted incarnation starts from
+        // zero, so in neither case does that count show that nothing is missing. With no clean pass yet, the check walks
+        // (the last `else` below).
+        // spec 022 T026: the gate's flushRawNodesSync() above wrote every buffered node, or the gate stays shut.
+        if verificationPassComplete && gate == ExcludedGate.HandOff then handOffOnCode()
+        else if verificationPassComplete then declareComplete(walked = true)
+        else if markerStands() then
+          // spec 022 T051, FR-011, FR-012: everything present here was written under present-implies-complete, so with
+          // nothing pending, in flight or held, a present root is a complete one, and no walk has anything to add. The
+          // marker and the root are read here, after the set, in this message. An absent root is seeded: it is the top of
+          // what the orphan drop can take.
+          if !isNodeInStorage(stateRoot, Seq(rootPath)) then seedAbsentRoot()
+          else if gate == ExcludedGate.HandOff then handOffOnCode()
+          else if !saidComplete then declareComplete(walked = false)
         else
           // Inline tasks done with actual healing work — verify before declaring completion to catch
           // storage sub-trie gaps that discoverMissingChildren silently skips when the storage root is
-          // already in storage. Analogous to go-ethereum's trie.Sync.Missing() trie traversal.
-          //
-          // spec 003 C4/FR-004/FR-005/FR-009/FR-011: scope the verification to ONLY the healed subtrees
-          // when full-trie coverage is durably proven and a valid in-bound same-root healed scope exists;
-          // otherwise fall back to the UNCHANGED full-root verification. The predicate is pure, evaluated
-          // at gate time (live reads), and all five operands are cheap local reads.
-          val useScoped =
-            scopedHealVerification && // F1: scoping not disabled
-              stateIngest.healingFrontier.exists(_.isComplete) && // F2/F6: full-coverage precondition proven
-              healedPathsThisRound.nonEmpty && // F3: scope present (not restart-lost / pre-first-heal)
-              !healedPathsOverflowed && // F4: within the configured bound (FR-011)
-              healedPathsRoot == stateRoot // F5: same root the scope was healed against (FR-009)
-
-          if useScoped then startScopedVerification(healedPathsThisRound.values.toSeq)
-          else
-            // spec 003 C5/T017 (US3 AS2): when the fallback engaged specifically because scoping is
-            // disabled by config, surface it once per round so an operator can see the conservative path
-            // is in effect (distinct from the precondition-not-proven / over-bound / root-changed cases).
-            if !scopedHealVerification then
-              log.info("[HEAL-VERIFY-SCOPED] scoped verification disabled by config — using full-root verification")
-            val emptyPath =
-              ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-            log.info(
-              s"[HEAL-VERIFY] All inline tasks done ($totalNodesHealed healed). " +
-                s"Starting verification BFS on locally-held trie to catch storage sub-trie gaps..."
-            )
-            startVerificationBFS(stateRoot, emptyPath)
+          // already in storage. Analogous to go-ethereum's trie.Sync.Missing() trie traversal. Always the whole root:
+          // the scoped walk needed the retired completeness marker to stand on (spec 022 D6).
+          log.info(
+            s"[HEAL-VERIFY] All inline tasks done ($totalNodesHealed healed). " +
+              s"Starting verification BFS on locally-held trie to catch storage sub-trie gaps..."
+          )
+          startVerificationBFS(stateRoot, rootPath)
 
       Behaviors.same
 
-    case VerificationBFSComplete(walkRoot, _) if walkRoot != stateRoot =>
+    case VerificationBFSComplete(walkRoot, _, walk) if !currentWalk.contains(walk) =>
+      ignoreReplacedWalk(walk, s"verification walk of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
+      Behaviors.same
+
+    case VerificationBFSComplete(walkRoot, _, _) if walkRoot == stateRoot && walkInvalidated =>
+      // spec 022 T038c: a re-peg passed under this walk and came back to its root, or a node known missing was dropped
+      // while it ran. It proves nothing about now; the same root, so it is no sign of a root that outruns the walk.
+      verificationBFSRunning = false
+      log.info("[HEAL-VERIFY] Discarding a verification walk whose starting point no longer holds — walking again")
+      reverifyCurrentRoot()
+      Behaviors.same
+
+    case VerificationBFSComplete(walkRoot, _, _) if walkRoot != stateRoot =>
       // STALE: the walk traversed a root the heal has since re-pegged away from. Its result proves nothing about the
       // current root, so it must NOT set verificationPassComplete. Release the single-flight gate and the per-run
-      // observability flags, then verify the CURRENT root explicitly. This cannot go through HealingCheckCompletion's
-      // `|| totalNodesHealed == 0` arm, which would declare completion with no walk at all.
+      // observability flags, then verify the CURRENT root explicitly (`reverifyCurrentRoot` also clears the stale
+      // verdict, so the completion check cannot complete on it).
       verificationBFSRunning = false
       consecutiveStaleDiscards += 1
       log.warn(
@@ -1184,7 +1710,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       else reverifyCurrentRoot()
       Behaviors.same
 
-    case VerificationBFSComplete(_, missingEmitted) if missingEmitted > 0 =>
+    case VerificationBFSComplete(_, missingEmitted, _) if missingEmitted > 0 =>
       consecutiveStaleDiscards = 0
       // DIRTY pass: the walk found (and queued) missing nodes. They may all have been healed by now, so `isComplete`
       // can already be true, but the walk did not descend below any node that was missing when it reached it, and
@@ -1199,36 +1725,12 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       if isComplete then reverifyCurrentRoot() else tryRedispatchPendingTasks()
       Behaviors.same
 
-    case VerificationBFSComplete(_, _) =>
+    case VerificationBFSComplete(_, _, _) =>
       verificationBFSRunning = false
       consecutiveStaleDiscards = 0
       if isComplete then
         // BFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
         verificationPassComplete = true
-        // spec 003 C6/T016: if this clean pass was the SCOPED path, emit the completion log + duration
-        // gauge so an operator can confirm engagement and the time saved vs a full-root re-walk.
-        if scopedVerificationActive then
-          val elapsedMs = System.currentTimeMillis() - scopedVerificationStartMs
-          log.info(
-            s"[HEAL-VERIFY-SCOPED] Scoped verification complete in ${elapsedMs}ms " +
-              s"over $scopedVerificationSeedCount subtrees — declaring completion"
-          )
-          SNAPSyncMetrics.setHealingScopedDurationMs(elapsedMs)
-          scopedVerificationActive = false
-        // spec 005 C8/FR-009: pruned-path completion observability — emit the savings (subtrees pruned vs nodes
-        // visited) + elapsed so an operator can confirm engagement. Same single chokepoint (C5); no new completion
-        // path. The actual root record (T007) is written crash-safely in HealingCheckCompletion AFTER the node-bytes
-        // flush, alongside the terminal markComplete (D3/T012).
-        if prunedVerificationActive then
-          val prunedElapsedMs = System.currentTimeMillis() - prunedVerificationStartMs
-          val pruned = prunedSubtreeCount.get()
-          log.info(
-            s"[HEAL-VERIFY-PRUNED] Pruned verification complete in ${prunedElapsedMs}ms — " +
-              s"$pruned present subtrees pruned (descend-and-stop), zero missing found — declaring completion"
-          )
-          SNAPSyncMetrics.setHealingPrunedSubtrees(pruned)
-          SNAPSyncMetrics.setHealingPrunedDurationMs(prunedElapsedMs)
-          prunedVerificationActive = false
         log.info(
           s"[HEAL-VERIFY] Verification BFS complete — no missing nodes found. " +
             s"Trie is fully healed ($totalNodesHealed nodes). Declaring completion."
@@ -1244,15 +1746,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case WalkStateChanged(inProgress) =>
-      trieWalkInProgress = inProgress
-
-      Behaviors.same
-
-    case RestartResumeVerification(root, rootPath) =>
-      // Marshalled back from the HEAL-RESTART crash-recovery Future so the walk launch runs on the actor thread.
-      startVerificationBFS(root, rootPath)
-      Behaviors.same
   }
 
   /** The catch-all (arm #26). Total, so it must stay last in `activeBehavior`'s chain. */
@@ -1281,11 +1774,45 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
 object TrieNodeHealingCoordinator:
 
+  /** What the excluded set says at the completion gate: nothing against this root, an entry that stands, or an entry
+    * that stands with the code hand-off armed.
+    */
+  private[actors] enum ExcludedGate:
+    case Clear, Held, HandOff
+
+  /** What has held healing up for `MaxBlockedTicks` idle minutes (see `blockerKind`). */
+  private[actors] enum BlockerKind:
+    case CodeOnly, Other, Unknown
+
   /** Floor for the per-peer in-flight healing budget (UpdateMaxInFlightPerPeer handler). Below this a single slow peer
     * holding the lone outstanding slot can stall a 1-2-peer residual heal. Peer-pool management only — no effect on
     * which nodes are stored or the content-hash gate.
     */
   val MinInFlightPerPeer: Int = 2
+
+  /** spec 022 5d: gate reseeds of one root before the walk takes over (forge 2, beacon 3). */
+  val MaxRootReseeds: Int = 3
+
+  /** spec 022 5d: reseeds and fallback walks of one root together, past which healing gives up on it (forge, beacon).
+    */
+  val MaxRootAttempts: Int = 6
+
+  /** spec 022 review vault V6: commit writes in a row that fail before healing abandons, loudly. */
+  val MaxConsecutiveCommitFailures: Int = 10
+
+  /** spec 022 review hunter-r3 N1: 2-minute pulses a read-failure give-up's latch waits for an answer. */
+  private[actors] val GiveUpLatchMaxPulses: Int = 8
+
+  /** spec 022 T037: minutes (ticks of [[HealingBlockedTick]]) with bytecode or the excluded set holding healing up and
+    * no progress at all before healing falls back to `StateHealingAbandoned`.
+    */
+  val MaxBlockedTicks: Int = 30
+
+  /** spec 022 review forge F2: fills in a row whose stored children could not be read before a healed node is given up
+    * on (not fetched again; its parents are left to the orphan guard). The first failures are fetched again: a read can
+    * fail once and work the next time.
+    */
+  val MaxConsecutiveReadFailures: Int = 3
 
   sealed trait Command
   case class StartTrieNodeHealing(stateRoot: ByteString) extends Command
@@ -1300,8 +1827,12 @@ object TrieNodeHealingCoordinator:
   final case class HealingServeRootRefresh(newServeRoot: ByteString) extends Command
   case object HealingResumeDispatch extends Command
   case object HealingForceComplete extends Command
-  case class WalkStateChanged(inProgress: Boolean) extends Command
   case class UpdateMaxInFlightPerPeer(newLimit: Int) extends Command
+
+  /** spec 022 D4: the bytecode of `codeHashes` has been written (the bytecode coordinator's acknowledgement, through
+    * the controller). Each is sent only after its write returned.
+    */
+  final case class HealedCodeStored(codeHashes: Seq[ByteString]) extends Command
   sealed trait WorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends WorkerMessage
   case class TrieNodesResponseMsg(response: TrieNodes) extends WorkerMessage with Command
@@ -1319,13 +1850,24 @@ object TrieNodeHealingCoordinator:
   )
   private[actors] case object HealingStagnationCheck extends Command
 
+  // spec 022 T037: once a minute, while bytecode or the excluded set holds healing up: log, ask again, and give up after
+  // MaxBlockedTicks with no progress.
+  private[snap] case object HealingBlockedTick extends Command
+
   // Internal messages — sent only via `selfRef ! …` from Future continuations / timers, so they must be Commands so
   // the Typed behavior can receive them. They were plain `Any` messages under Classic.
   // Internal message for async flush completion
-  private[actors] case class FlushComplete(count: Int) extends Command
+  // `token` is the flush's ticket token (FlushTicket, spec 022 review forge C1): only the flush in flight with that
+  // token releases anything (FrontierPersistence.flushCompleted).
+  private[actors] case class FlushComplete(token: Long, count: Int) extends Command
+  // spec 022 T026 (#1549): the asynchronous flush `token` threw; nothing it was writing is released.
+  private[actors] case class FlushFailed(token: Long, cause: Throwable) extends Command
 
-  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS)
-  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry]) extends Command
+  // Internal message for async frontier rebuild completion (crash-recovery BFS or verification BFS).
+  // `walkRoot` is the root the emitting walk was launched on (captured on the actor thread at launch), as
+  // FrontierRebuildComplete and VerificationBFSComplete carry it: a re-peg does not cancel a running walk, so a batch
+  // can land after `stateRoot` moved, and under the Path scheme such a batch is dropped (spec 022 review W1).
+  private[actors] case class FrontierRebuilt(entries: Seq[HealingEntry], walkRoot: ByteString) extends Command
   // Sent by startVerificationBFS when the BFS Future completes — gates verificationPassComplete.
   // Carries the root the walk was LAUNCHED against (`walkRoot`), exactly as `FrontierRebuildComplete` does. A pivot
   // re-peg does not cancel an in-flight verification walk, so its completion can land after `stateRoot` moved; the
@@ -1335,28 +1877,28 @@ object TrieNodeHealingCoordinator:
   // `missingEmitted` is the number of missing nodes the walk found. A pass that found ANY is not a clean pass even if
   // every one of them has been healed by the time it ends: the walk never descended below a node that was missing when
   // it reached it, so the healed node's present children (and their subtrees) were not verified.
-  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long) extends Command
+  // `walk` is the walk's lease token (spec 022 review hunter W1, beacon W1-r4): the end is taken only by the incarnation
+  // that launched that walk (`currentWalk`).
+  private[actors] case class VerificationBFSComplete(walkRoot: ByteString, missingEmitted: Long, walk: Long)
+      extends Command
 
-  // Layer 2: the full-state rebuild BFS finished — the persisted frontier is now a COMPLETE snapshot.
-  // Sent after the final FrontierRebuilt so the completeness marker is set only once every node is persisted.
+  // The full-state rebuild BFS finished. Sent after the final FrontierRebuilt.
   // spec 006 C1/D3/FR-004: carries the rebuild's outcome so the handler can decide early completion soundly.
   //   missingEmitted = the walk's frontierCount (number of missing nodes emitted); 0 ⇒ found everything present.
   //   walkRoot       = the root the finished walk traversed (captured at launch); compared against the live
   //                    stateRoot to exclude a stale completion after a pivot refresh (F-E).
-  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString) extends Command
+  //   walk           = the walk's lease token: taken only by the incarnation that launched it (`currentWalk`).
+  private[actors] case class FrontierRebuildComplete(missingEmitted: Long, walkRoot: ByteString, walk: Long)
+      extends Command
 
   // A frontier walk Future died with an exception. Resets the walk flags WITHOUT setting any
   // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
   // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
-  // permanently blocking every future walk (including the watchdog) until restart.
-  private[actors] case object FrontierWalkFailed extends Command
+  // permanently blocking every future walk (including the watchdog) until restart. `walk` is the walk's lease token: a
+  // failure of a walk another incarnation launched resets nothing here.
+  private[actors] case class FrontierWalkFailed(walk: Long) extends Command
 
-  // Routes the HEAL-RESTART resume decision back onto the actor thread. The crash-recovery Future (in
-  // StartTrieNodeHealing) reads the persisted frontier off-thread, then sends ONE of these so the
-  // verificationBFSRunning mutation + walk launch happen on the actor dispatcher (Typed: no off-thread state
-  // mutation). Under Classic the Future called start*BFS directly — safe only because verificationBFSRunning was
-  // @volatile. Now @volatile is gone, so the launch must be marshalled back to the actor thread.
-  private[actors] case class RestartResumeVerification(root: ByteString, rootPath: ByteString) extends Command
+  // A restart's rebuild walk, launched by a message to itself as every walk start is on the actor thread.
   private[actors] case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command
 
   /** Default cap on the frontier-rebuild walk's FIFO `visited` set: 4M entries ≈ 480-640 MB (a 32-byte ByteString key +
@@ -1376,19 +1918,17 @@ object TrieNodeHealingCoordinator:
   // warning), so a stalled drain (no peers, dead actor) can't deadlock the walk.
   val FrontierBackpressureMaxWaitMs: Long = 10.minutes.toMillis
 
-  /** Default upper bound on the in-memory healed-paths set used for scoped post-heal verification (spec 003 FR-011). A
-    * round that heals more than this many distinct nodes falls back to full-root verification rather than growing the
-    * set, bounding its worst-case heap (~200K × HealingEntry ≈ tens of MB). Operator-tunable via
-    * `sync.snap-sync.scoped-heal-max-paths`.
-    */
-  val DefaultScopedHealMaxPaths: Int = 200_000
-
   /** Default FR-006 surfacing threshold (spec 004): after this many unsatisfied heal attempts with no serve-root
     * advance in between, the coordinator surfaces the stuck task (log + metric). It NEVER force-completes — a task no
     * serve root can supply keeps the completeness walk from finding zero, so completion can never be falsely declared.
     * Operator-tunable via `sync.snap-sync.decoupled-heal-max-attempts-no-refresh`.
     */
   val DefaultDecoupledHealMaxAttemptsNoRefresh: Int = 12
+
+  /** Default held-memory bound (spec 022 D1, FR-002): 128 MiB, about 250k held nodes. Operator-tunable via
+    * `sync.snap-sync.healing.held-memory-limit`.
+    */
+  val DefaultHeldMemoryLimit: Long = 128L * 1024 * 1024
 
   /** Operator-configurable ceiling for BFS level parallelism. Effective parallelism is `min(DefaultBfsParallelism,
     * max(1, availableProcessors - 2))` so large levels are split across sub-ranges on `healingWriterEc`. See
@@ -1423,6 +1963,16 @@ object TrieNodeHealingCoordinator:
       override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, java.lang.Boolean]): Boolean =
         size() > cap
     java.util.Collections.newSetFromMap[ByteString](lru).asScala
+
+  /** Wait for every sub-range of a walk's level, and only then say how they went (spec 022 T038a). Stopping at the
+    * first failure would end the walk, and give its lease back, while the other sub-ranges still write to the queue:
+    * into the next walk's queue, at keys of their own wrapper's counter, which overwrites what that walk has enqueued
+    * and lets it miss a level's nodes and report clean. A cancelled walk's sub-ranges each stop at their next chunk.
+    */
+  def awaitSubRanges[A](results: Seq[scala.concurrent.Future[A]]): Seq[A] =
+    results
+      .map(result => scala.util.Try(scala.concurrent.Await.result(result, scala.concurrent.duration.Duration.Inf)))
+      .map(_.get)
 
   /** Effective BFS level parallelism (spec 002 R3 §1, T026/T034): `min(traversalParallelism, min(availableProcessors,
     * max(minParallelism, availableProcessors − reservedCores)))`.
@@ -1467,29 +2017,43 @@ object TrieNodeHealingCoordinator:
       frontierHighWater: Int = DefaultFrontierHighWater,
       frontierLowWater: Int = DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = FrontierBackpressureMaxWaitMs,
-      scopedHealVerification: Boolean = true,
-      scopedHealMaxPaths: Int = DefaultScopedHealMaxPaths,
-      // spec 005 pruned descend-and-stop. Exposed through the factory (the #1373 typed rewrite dropped this forward)
-      // so PrunedHealFallbackSpec's flag-OFF case can drive `prunedEnabled = false`. Production omits it and keeps the
-      // impl default (true) ⇒ byte-for-byte no-op. `prunedEnabled` also requires Hash scheme + a present frontier store.
-      prunedHealVerification: Boolean = true,
-      // spec 002 frontier persistence (Layer-2 mirror writes + completeness markers). Exposed here so production
-      // (SNAPSyncController, wired from sync.conf's healing-frontier-persistence) and tests can enable it. Defaults
-      // OFF to match the impl default and the spec-005 decoupling (store may be present for pruned-heal records only).
-      frontierPersistenceEnabled: Boolean = false,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = DefaultDecoupledHealMaxAttemptsNoRefresh,
-      // spec 009 (Moving-Root Delta Heal) — plumbing only; no behavior reads it yet (see impl ctor).
+      // moving-root delta heal (#1374); read by the impl (see its ctor).
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = DefaultHeldMemoryLimit,
+      excludedAccounts: Boolean = false,
+      // spec 022 T038b: the controller's current heal root, which it sets before it sends a re-peg. A supervisor restart
+      // runs this factory's setup again: the new incarnation starts on this root, not on the spawn's `stateRoot`.
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      markerMayStand: Boolean = false
   ): Behavior[Command] =
+    // The spawn's supervisor runs the setup below again on a restart, so this outlives an incarnation.
+    val incarnations = new java.util.concurrent.atomic.AtomicInteger(0)
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
+        // spec 022 T038b: this setup runs again at a supervisor restart. Nothing replays a re-peg then, so the new
+        // incarnation starts on the controller's current root, not the spawn's.
+        val root = currentRoot.flatMap(current => Option(current.get())).getOrElse(stateRoot)
+        // spec 022 T050a, hunter N3: nor does anything start it. It starts on that root as a process restart would: a root
+        // on disk is walked, or decided on where the marker stands, and an absent one seeded. What the last incarnation
+        // held or had queued was never on disk, so
+        // discovery from the root finds it again as absent; a commit is one atomic write, and a Hash flush a prefix of
+        // commit order, so nothing on disk stands over what it lost. Until this it waited for the dead-pulse watchdog,
+        // about 6 minutes, and without a walk at completion it would have completed on what it no longer knew.
+        if incarnations.getAndIncrement() > 0 then
+          context.log.warn(
+            s"[HEAL-RESTART] Supervisor restart: starting again on root ${Hex.toHexString(root.take(4).toArray)}"
+          )
+          context.self ! StartTrieNodeHealing(root)
         new TrieNodeHealingCoordinatorImpl(
           context,
           timers,
-          initialStateRoot = stateRoot,
+          initialStateRoot = root,
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
           mptStorage = mptStorage,
@@ -1507,15 +2071,16 @@ object TrieNodeHealingCoordinator:
           frontierHighWater = frontierHighWater,
           frontierLowWater = frontierLowWater,
           frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,
-          scopedHealVerification = scopedHealVerification,
-          scopedHealMaxPaths = scopedHealMaxPaths,
-          prunedHealVerification = prunedHealVerification,
-          frontierPersistenceEnabled = frontierPersistenceEnabled,
           decoupledHealServeRoot = decoupledHealServeRoot,
           decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
           movingRootDeltaHeal = movingRootDeltaHeal,
           healedCodeCheck = healedCodeCheck,
-          walkLocalOnly = walkLocalOnly
+          walkLocalOnly = walkLocalOnly,
+          heldMemoryLimit = heldMemoryLimit,
+          excludedAccounts = excludedAccounts,
+          cleanWalkRoot = cleanWalkRoot,
+          decidedRoot = decidedRoot,
+          markerMayStand = markerMayStand
         ).start()
       }
     }

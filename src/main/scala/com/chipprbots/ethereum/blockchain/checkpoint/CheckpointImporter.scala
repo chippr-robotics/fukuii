@@ -76,6 +76,12 @@ final class CheckpointImporter(
       header: CheckpointArchive.Header
   ): Either[ImportError, ImportResult] =
     val startMs = System.currentTimeMillis()
+    // spec 022 T042: said before the first node goes in. The nodes arrive parent-first and the CRC is checked at the end, so
+    // until then a present node can sit over an absent child, and on a failure the node falls through to SNAP on this
+    // datadir. Synced, since the nodes are not: a node on disk must imply this key is. It takes the invariant marker with
+    // it: that a marked datadir's nodes were complete says nothing of what is written from here on. A success does not
+    // bring the marker back: the done flags vouch for this root, and no walk has looked at the rest.
+    appStateStorage.beginCheckpointImport(header.blockHeader.stateRoot.value, startMs).commitSync()
     val blockNum = header.blockHeader.number
     val blockHash = header.blockHeader.hash
     // Pass the checkpoint block number so ReferenceCountNodeStorage tags nodes at the
@@ -150,6 +156,9 @@ final class CheckpointImporter(
           case Right(_)  =>
             // Header, chain weight, best-block pointer, and the done-markers all committed in a
             // single atomic batch — partial state here would be worse than no state at all.
+            // Durability barrier (#1581): under pruning.mode=inmemory the nodes written above sit only in the node cache,
+            // not the WAL. Flush them before the flags, whose synced commit then makes them durable with the flags.
+            stateStorage.forcePersist(StateStorage.SnapSyncFinalization)
             blockchainWriter
               .storeBlockHeader(header.blockHeader)
               .and(blockchainWriter.storeChainWeight(blockHash, header.chainWeight))
@@ -157,7 +166,8 @@ final class CheckpointImporter(
               .and(appStateStorage.snapSyncDone())
               .and(appStateStorage.bytecodeRecoveryDone())
               .and(appStateStorage.storageRecoveryDone())
-              .commit()
+              .and(appStateStorage.endCheckpointImport())
+              .commitSync()
 
             val elapsed = System.currentTimeMillis() - startMs
             log.info(

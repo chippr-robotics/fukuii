@@ -145,8 +145,16 @@ private[snap] class StubPivotRefresherState(
   protected def stopChild(child: ActorRef[Nothing]): Unit = notUsed("stopChild")
 
   // Callee Api traits
-  def recordCriticalFailure(reason: String): Boolean = notUsed("recordCriticalFailure")
-  def enterDormantMode(reason: String): Behavior[Command] = notUsed("enterDormantMode")
+  var criticalFailureLimitReached: Boolean = false
+  val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  def recordCriticalFailure(reason: String): Boolean =
+    criticalFailures += reason
+    criticalFailureLimitReached
+  var dormantBehavior: Behavior[Command] = Behaviors.same
+  val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+  def enterDormantMode(reason: String): Behavior[Command] =
+    dormantReasons += reason
+    dormantBehavior
   val restarts: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   def restartSnapSync(reason: String): Behavior[Command] =
     restarts += reason
@@ -198,7 +206,7 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     val accounts: TestInbox[AccountRangeCoordinator.Command] = TestInbox[AccountRangeCoordinator.Command]()
     val storage: TestInbox[StorageRangeCoordinator.Command] = TestInbox[StorageRangeCoordinator.Command]()
     private val chain = new EphemBlockchainTestSetup with TestSyncConfig {}
-    private var action: () => Unit = () => ()
+    private var action: () => Behavior[Command] = () => Behaviors.same
     private var captured: StubPivotRefresherState & PivotRefresher = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
@@ -206,7 +214,6 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
         captured.syncControllerRef = Some(parent.ref)
         Behaviors.receiveMessage { _ =>
           action()
-          Behaviors.same
         }
       }
     })
@@ -218,6 +225,13 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
 
     /** Run `f` on the module while the kit processes a message. */
     def call(f: StubPivotRefresherState & PivotRefresher => Unit): Unit =
+      action = () =>
+        f(module)
+        Behaviors.same
+      kit.run(PollHandshakedPeers)
+
+    /** Run `f` on the module while the kit processes a message, and make the behaviour it returns the kit's. */
+    def become(f: StubPivotRefresherState & PivotRefresher => Behavior[Command]): Unit =
       action = () => f(module)
       kit.run(PollHandshakedPeers)
 
@@ -300,6 +314,20 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.pivotBlock shouldBe Some(BigInt(400))
     h.accounts.receiveAll() shouldBe Seq(AccountRangeCoordinator.PivotRefreshed(rootA))
     h.storage.receiveAll() shouldBe Seq(StorageRangeCoordinator.StoragePivotRefreshed(rootA))
+  }
+
+  it should "continue in the dormant behaviour when the stateless-pivot budget trips the critical-failure limit (#1515)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.consecutivePivotRefreshes = 9
+    h.module.criticalFailureLimitReached = true
+    // The behaviour enterDormantMode returns must become the actor's: the kit stops when it is returned.
+    h.module.dormantBehavior = Behaviors.stopped
+
+    h.become(m => m.pivotStateUnservableArms(PivotStateUnservable(rootA, "stateless", 3)))
+
+    h.module.criticalFailures should have size 1
+    h.module.dormantReasons should have size 1
+    h.kit.isAlive shouldBe false
   }
 
   it should "re-arm the range coordinators without counting a report inside the debounce window" taggedAs UnitTest in {

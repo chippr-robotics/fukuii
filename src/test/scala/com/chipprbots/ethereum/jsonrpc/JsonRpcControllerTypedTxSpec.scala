@@ -11,6 +11,7 @@ import cats.effect.unsafe.IORuntime
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.*
 import org.json4s.Formats
+import org.json4s.JObject
 import org.json4s.JsonAST.*
 import org.json4s.JsonDSL.*
 import org.scalatest.concurrent.ScalaFutures
@@ -77,7 +78,7 @@ class JsonRpcControllerTypedTxSpec
     personalService.signTransactionFn = req =>
       seen = Some(req)
       IO.pure(Right(SignTransactionResponse(result)))
-    val params = List(
+    val params: List[JObject] = List(
       JObject(
         "from" -> from.toString,
         "to" -> to.toString,
@@ -88,7 +89,8 @@ class JsonRpcControllerTypedTxSpec
         "input" -> "0x"
       )
     )
-    val response = jsonRpcController.handleRequest(newJsonRpcRequest("eth_signTransaction", params)).unsafeRunSync()
+    val response: JsonRpcResponse =
+      jsonRpcController.handleRequest(newJsonRpcRequest("eth_signTransaction", params)).unsafeRunSync()
     response should haveResult(SignTransactionResult.encode(result))
     seen.map(_.passphrase) shouldBe Some(None)
     seen.flatMap(_.tx.maxFeePerGas) shouldBe Some(BigInt(0x684ee180))
@@ -97,7 +99,7 @@ class JsonRpcControllerTypedTxSpec
     )
 
   it should "reject geth-invalid params with -32602" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
-    def call(params: List[JValue]) =
+    def call(params: List[JValue]): JsonRpcResponse =
       jsonRpcController.handleRequest(newJsonRpcRequest("eth_signTransaction", params)).unsafeRunSync()
     call(Nil) should haveError(JsonRpcError.InvalidParams("missing value for required argument 0"))
     call(List[JValue](JObject("from" -> JString(from.toString)), JObject())) should haveError(
@@ -114,9 +116,9 @@ class JsonRpcControllerTypedTxSpec
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
-    val unsigned = SignTransactionResult.unsigned(signed.tx, None)
+    val unsigned: SignTransactionResult = SignTransactionResult.unsigned(signed.tx, None)
     personalService.fillTransactionFn = _ => IO.pure(Right(FillTransactionResponse(unsigned)))
-    val response = jsonRpcController
+    val response: JsonRpcResponse = jsonRpcController
       .handleRequest(
         newJsonRpcRequest("eth_fillTransaction", List(JObject("from" -> from.toString, "to" -> to.toString)))
       )
@@ -131,7 +133,7 @@ class JsonRpcControllerTypedTxSpec
     personalService.signTransactionFn = req =>
       seen = Some(req)
       IO.pure(Right(SignTransactionResponse(result)))
-    val ok = jsonRpcController
+    val ok: JsonRpcResponse = jsonRpcController
       .handleRequest(
         newJsonRpcRequest(
           "personal_signTransaction",
@@ -155,7 +157,7 @@ class JsonRpcControllerTypedTxSpec
     personalService.sendTransactionFn = req =>
       seen = Some(req)
       IO.pure(Right(SendTransactionResponse(signed.hash.value)))
-    val params = List(
+    val params: List[JObject] = List(
       JObject(
         "from" -> from.toString,
         "to" -> to.toString,
@@ -166,11 +168,15 @@ class JsonRpcControllerTypedTxSpec
     )
     jsonRpcController.handleRequest(newJsonRpcRequest("eth_sendTransaction", params)).unsafeRunSync() should
       haveResult(JString(s"0x${Hex.toHexString(signed.hash.value.toArray)}"))
-    seen.map(_.tx.txType) shouldBe Some(Some(TxArgs.AccessListType))
+    // the request's "type" is not read (geth's TransactionArgs has no such field; #1660 item 10): the service infers 0x1
+    // from gasPrice-less accessList defaults, so the decoded args carry no type
+    seen.map(_.tx.txType) shouldBe Some(None)
+    seen.map(_.tx.accessList.isDefined) shouldBe Some(true)
     seen.map(_.tx.callData) shouldBe Some(ByteString(0x12, 0x34))
 
   it should "reject data and input that differ" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
-    val params = List(JObject("from" -> from.toString, "to" -> to.toString, "data" -> "0x01", "input" -> "0x02"))
+    val params: List[JObject] =
+      List(JObject("from" -> from.toString, "to" -> to.toString, "data" -> "0x01", "input" -> "0x02"))
     jsonRpcController.handleRequest(newJsonRpcRequest("eth_sendTransaction", params)).unsafeRunSync() should haveError(
       TxArgsError.DataInputMismatch.toJsonRpcError
     )

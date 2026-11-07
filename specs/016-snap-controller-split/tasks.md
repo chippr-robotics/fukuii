@@ -1,3 +1,5 @@
+> Closed 2026-10-30 as Done; boxes below are as they were at closure.
+
 ---
 description: "Task list for spec 016: split SNAPSyncController and the SNAP coordinators into phase modules (#1401)"
 ---

@@ -20,15 +20,15 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MptVisitors.*
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 
 /** Bytecode recovery actor for Bug 20 hardening.
   *
@@ -155,7 +155,7 @@ object BytecodeRecoveryActor:
                 pivotBlockNumber,
                 ctx.log
               )
-            )(ctx.executionContext)
+            )(using ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
@@ -185,7 +185,7 @@ object BytecodeRecoveryActor:
               coordinatorForTesting match
                 case Some(testRef) => testRef.toTyped[snap.actors.ByteCodeCoordinator.Command]
                 case None =>
-                  val requestTracker = new snap.SNAPRequestTracker()(ctx.system.classicSystem.scheduler)
+                  val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
                   ctx.spawn(
                     Behaviors
                       .supervise(

@@ -95,10 +95,11 @@ private[snap] class StubStateValidationState(
 
   // Callee Api traits
   val healingTriggeredFor: mutable.ArrayBuffer[Seq[ByteString]] = mutable.ArrayBuffer.empty
-  var stateHealingStarts: Int = 0
+  var healingReopens: Int = 0
   def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage = notUsed(s"getOrCreateMptStorage($pivotBlockNumber)")
   def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = healingTriggeredFor += missingNodes
-  def startStateHealing(): Unit = stateHealingStarts += 1
+  def startStateHealing(): Unit = ()
+  def reopenHealing(): Unit = healingReopens += 1
   val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val dormantReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   val restartReasons: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -257,11 +258,11 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
     kit.isAlive shouldBe false
   }
 
-  it should "enter dormant mode when the fourth miss reaches the critical-failure limit (today: keeps the current behaviour and the count)" taggedAs UnitTest in {
+  it should "enter dormant mode when the fourth miss reaches the critical-failure limit and continue in its behaviour (#1515)" taggedAs UnitTest in {
     val (module, kit) = newModule()
     module.validationGeneration = 2L
     module.criticalFailureLimitReached = true
-    // If the arm returned enterDormantMode's behaviour, the kit would stop here.
+    // The behaviour enterDormantMode returns must become the actor's: the kit stops when it is returned.
     module.lifecycleBehavior = Behaviors.stopped
     for _ <- 1 to 3 do missRoot(module, kit)
     timersStarted(kit) should have size 3
@@ -272,13 +273,23 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
     module.dormantReasons.toSeq shouldBe Seq("validation retry exhausted: root node missing after 4 validation retries")
     module.restartReasons shouldBe empty
     timersStarted(kit) shouldBe empty
-    // Today the arm returns Behaviors.same, not enterDormantMode's behaviour, and does not reset the retry count.
-    kit.isAlive shouldBe true
+    kit.isAlive shouldBe false
+  }
+
+  it should "count retries from zero again after entering dormant mode (#1515)" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    module.criticalFailureLimitReached = true
+    for _ <- 1 to 4 do missRoot(module, kit)
+    module.dormantReasons should have size 1
+    timersStarted(kit) should have size 3 // the three retries; the fourth miss armed none
+
+    // Round after the wake-up: the next miss is retry 1 of 3, not retry 5.
     missRoot(module, kit)
-    module.criticalFailures.toSeq shouldBe Seq(
-      "root node missing after 4 validation retries",
-      "root node missing after 5 validation retries"
-    )
+
+    timersStarted(kit) shouldBe Seq(("validation-retry", ValidationRetry(2L), 500.millis))
+    module.dormantReasons should have size 1
+    module.criticalFailures should have size 1
   }
 
   it should "recover through healing on any other account-trie failure, without a retry" taggedAs UnitTest in {
@@ -290,7 +301,19 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
 
     module.validationInProgress shouldBe false
     module.currentPhase shouldBe SyncPhase.StateHealing
-    module.stateHealingStarts shouldBe 1
+    module.healingReopens shouldBe 1
     module.criticalFailures shouldBe empty
     timersStarted(kit) shouldBe empty
+  }
+
+  it should "recover through healing when the storage tries could not be validated" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    module.validationInProgress = true
+
+    kit.run(ValidateStorageTriesResult(2L, Left("storage walk failed"), 10L))
+
+    module.validationInProgress shouldBe false
+    module.currentPhase shouldBe SyncPhase.StateHealing
+    module.healingReopens shouldBe 1
   }

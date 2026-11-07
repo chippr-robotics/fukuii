@@ -339,16 +339,16 @@ object PeerManagerActor:
     private def effectiveMaxOutgoing: Int =
       maxOutgoingPeersOverride.getOrElse(peerConfiguration.maxOutgoingPeers)
 
-    implicit private class ConnectedPeersOps(connectedPeers: ConnectedPeers):
+    extension (connectedPeers: ConnectedPeers)
 
       /** Number of new connections the node should try to open at any given time. Uses effectiveMaxOutgoing so
         * admin_maxPeers overrides take effect.
         */
-      def outgoingConnectionDemand: Int =
+      private def outgoingConnectionDemand: Int =
         if connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers then 0
         else effectiveMaxOutgoing - connectedPeers.outgoingPeersCount
 
-      def canConnectTo(node: Node): Boolean =
+      private def canConnectTo(node: Node): Boolean =
         val socketAddress = node.tcpSocketAddress
         val alreadyConnected =
           connectedPeers.isConnectionHandled(socketAddress) ||
@@ -392,10 +392,10 @@ object PeerManagerActor:
       scheduler.scheduleWithFixedDelay(
         peerConfiguration.updateNodesInitialDelay,
         peerConfiguration.updateNodesInterval
-      )(() => context.self ! RequestDiscoveredNodes)(ec)
+      )(() => context.self ! RequestDiscoveredNodes)(using ec)
 
     private def schedulePeerStatusRefresh(): Unit =
-      scheduler.scheduleWithFixedDelay(10.seconds, 10.seconds)(() => context.self ! RefreshPeerStatuses)(ec)
+      scheduler.scheduleWithFixedDelay(10.seconds, 10.seconds)(() => context.self ! RefreshPeerStatuses)(using ec)
 
     // -----------------------------------------------------------------------
     // State 2: listening (the only stateful behavior — threads ConnectedPeers)
@@ -480,7 +480,7 @@ object PeerManagerActor:
       }
       if pruned > 0 || dialled > 0 then store.save()
       if pending.nonEmpty then
-        scheduler.scheduleOnce(store.config.redialInterval)(context.self ! RedialSnapGoodPeers)(ec)
+        scheduler.scheduleOnce(store.config.redialInterval)(context.self ! RedialSnapGoodPeers)(using ec)
 
     private def maybeConnectToRandomNode(connectedPeers: ConnectedPeers, node: Node): Unit =
       if connectedPeers.outgoingConnectionDemand > 0 then
@@ -900,7 +900,7 @@ object PeerManagerActor:
             uri,
             peerConfiguration.connectRetryDelay
           )
-          scheduler.scheduleOnce(peerConfiguration.connectRetryDelay)(context.self ! ConnectToPeerCmd(uri))(ec)
+          scheduler.scheduleOnce(peerConfiguration.connectRetryDelay)(context.self ! ConnectToPeerCmd(uri))(using ec)
       }
       // Track TCP-level pre-handshake failures for non-maintained outgoing peers.
       // pendingMaintainedConnections already consumed the ref if it was maintained, so any
@@ -958,7 +958,7 @@ object PeerManagerActor:
           if stillConnected then log.debug("Maintained peer {} already connected via winner — skipping reconnect", uri)
           else
             log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
-            scheduler.scheduleOnce(5.seconds)(context.self ! ConnectToPeerCmd(uri))(ec)
+            scheduler.scheduleOnce(5.seconds)(context.self ! ConnectToPeerCmd(uri))(using ec)
         }
       }
       // Try to replace a lost connection with another one.

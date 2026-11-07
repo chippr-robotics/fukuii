@@ -1,33 +1,33 @@
 package com.chipprbots.ethereum.ledger
 
-import scala.annotation.tailrec
-
 import org.apache.pekko.util.ByteString
+
+import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.BlobTransaction
-import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
-import com.chipprbots.ethereum.vm.OutOfGas
-import com.chipprbots.ethereum.vm.RevertOccurs
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.SetCodeAuthorization
 import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
+import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.ProgramError
+import com.chipprbots.ethereum.vm.RevertOccurs
 
 class StxLedger(
     blockchain: BlockchainImpl,

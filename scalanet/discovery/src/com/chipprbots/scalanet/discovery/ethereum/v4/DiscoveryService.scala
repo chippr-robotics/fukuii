@@ -252,7 +252,7 @@ object DiscoveryService:
         enrMap = enrMap - peerId,
         lastPongTimestampMap = lastPongTimestampMap -- peers,
         bondingResultsMap = bondingResultsMap -- peers,
-        kBuckets = peers.foldLeft(kBuckets)(_ remove _),
+        kBuckets = peers.foldLeft(kBuckets)(_ `remove` _),
         kademliaIdToNodeId = kademliaIdToNodeId - Node.kademliaId(peerId)
       )
 

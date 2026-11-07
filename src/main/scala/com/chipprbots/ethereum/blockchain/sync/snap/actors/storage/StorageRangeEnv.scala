@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedRecorder
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -52,4 +53,5 @@ private[actors] trait StorageRangeEnv:
   def snapProgressStorage: Option[SnapSyncProgressStorage]
   def storageScheme: StorageScheme
   def stateIngest: StateIngest
+  def excludedRecorder: ExcludedRecorder
   def flatBatchEntryThreshold: Int

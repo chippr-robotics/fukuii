@@ -131,7 +131,7 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
 
     val timestampIdx: BigInt = BigInt(CancunTs) % BeaconRootHistoryBufferLength
     val rootIdx: BigInt = timestampIdx + BeaconRootHistoryBufferLength
-    val storage = world.getStorage(BeaconRootContractAddress)
+    val storage: InMemoryWorldStateProxyStorage = world.getStorage(BeaconRootContractAddress)
     storage.load(timestampIdx) shouldBe BigInt(CancunTs)
     storage.load(rootIdx) shouldBe UInt256(beaconRoot).toBigInt
 
@@ -153,7 +153,7 @@ class BeaconRootsSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in new TestSetup:
     // A block without parentBeaconBlockRoot (e.g. ETC or pre-Cancun) — the pattern guard fires None.
-    val block = Block(
+    val block: Block = Block(
       header = Fixtures.Blocks.ValidBlock.header.copy(
         unixTimestamp = Timestamp(CancunTs),
         gasLimit = GasAmount(8_000_000),

@@ -31,8 +31,7 @@ package object mining:
     val msg = s"Block generator is of ${blockGenerator.getClass} it should be of $requiredClass"
     throw new IllegalArgumentException(msg)
 
-  implicit final class RichMining(val mining: Mining) extends AnyVal:
-
+  extension (mining: Mining)
     /** There are APIs that expect that the standard Ethash mining is running and so depend on either its configuration
       * or general PoW semantics. This is a method that can handle such cases via a respective if/then/else construct:
       * if we run under [[com.chipprbots.ethereum.consensus.pow.PoWMining EthashConsensus]] then the `_then` function is

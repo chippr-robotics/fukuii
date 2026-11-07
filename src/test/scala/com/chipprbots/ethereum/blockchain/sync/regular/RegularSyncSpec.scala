@@ -29,19 +29,29 @@ import com.chipprbots.ethereum.ResourceFixtures
 import com.chipprbots.ethereum.WordSpecBase
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
+import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InvalidateBlocksFrom
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
+import com.chipprbots.ethereum.mpt.BranchNode
+import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.HexPrefix
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
@@ -60,11 +70,12 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -130,7 +141,7 @@ class RegularSyncSpec
       "fetch headers and bodies concurrently" taggedAs (UnitTest, SyncTest) in sync(new Fixture:
         regularSync ! SyncProtocol.Start
 
-        val sub136 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub136: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub136.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -169,7 +180,7 @@ class RegularSyncSpec
           var blockFetcher: TypedActorRef[PeerEvent] = uninitialized
 
           regularSync ! SyncProtocol.Start
-          val sub168 = peerEventBus.expectMsgType[SubscribeCmd]
+          val sub168: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
           blockFetcher = sub168.subscriber
 
           peersClient.expectMsgEq(blockHeadersChunkRequest(0)).replyTo ! PeersClient.Response(
@@ -252,7 +263,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub249 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub249: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub249.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -441,7 +452,7 @@ class RegularSyncSpec
           )
 
           // The importer must invalidate the fetcher's blocks from lca + 1 (resolver-driven rollback).
-          val invalidate = importerFetcher.fishForSpecificMessage(5.seconds) {
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
           }
           assert(
@@ -473,11 +484,11 @@ class RegularSyncSpec
           (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
-            .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+            .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
           (consensusAdapter
-            .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+            .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((nel, _, _) => fakeEvaluateBatch(nel))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
@@ -519,7 +530,7 @@ class RegularSyncSpec
 
           regularSync ! SyncProtocol.Start
 
-          val sub383 = peerEventBus.expectMsgType[SubscribeCmd]
+          val sub383: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
           sub383.subscriber ! MessageFromPeer(
             NewBlock(
               alternativeBlocks.last,
@@ -542,11 +553,11 @@ class RegularSyncSpec
         (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
-          .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
+          .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((block, _, _) => fakeEvaluateBlock(block))
         (consensusAdapter
-          .evaluateBranch(_: NonEmptyList[Block])(_: IORuntime, _: BlockchainConfig))
+          .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((nel, _, _) => fakeEvaluateBatch(nel))
         override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
@@ -583,7 +594,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub445 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub445: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         val blockFetcher: TypedActorRef[PeerEvent] = sub445.subscriber
         sub445.subscriber ! MessageFromPeer(
           NewBlock(
@@ -682,9 +693,12 @@ class RegularSyncSpec
         SyncTest
       ) in sync(
         new Fixture:
-          // The bulk recovery is requested once per process; this is every miss after it.
+          // The bulk recovery is requested once per process; this is every miss after it, on a node where it is allowed.
           BlockImporter.resetBulkCodeRecoveryForTests()
-          BlockImporter.claimBulkCodeRecovery() shouldBe true
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          (1 to BlockImporter.BulkCodeRecoveryAfterMisses).foreach(i =>
+            BlockImporter.claimBulkCodeRecovery(ByteString(s"spent the claim $i"))
+          )
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -705,16 +719,55 @@ class RegularSyncSpec
           }
       )
 
-      // A node that took its state from SNAP can lack thousands of contracts' code; one fetch per contract is one full
-      // re-execution of the block each. The first miss asks SyncController for a bulk bytecode recovery instead, and
-      // does not fetch that hash on its own.
-      "ask SyncController for a bulk bytecode recovery on the first missing contract code" taggedAs (
+      // #1694: the scan stops regular sync for as long as reading the whole state takes, estimated at hours on Sepolia, and
+      // one missing contract does not earn that. A fetch took 100 ms on Ephemery.
+      "fetch the first missing contract code alone on a SNAP-synced node, with no bulk recovery" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
         new Fixture:
           BlockImporter.resetBulkCodeRecoveryForTests()
           storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          val failingBlock: Block = testBlocksChunked.head.head
+          val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingCodeException(codeHash, ByteString(Array.fill[Byte](20)(0x16)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
+          }
+          BlockImporter.distinctMissingCodesForTests shouldBe 1
+          val toSupervisor: Seq[Object] = supervisor.receiveWhile(1.second) { case m => m }
+          toSupervisor.collect {
+            case com.chipprbots.ethereum.blockchain.sync.SyncController.WrappedSyncProtocol(
+                  r: SyncProtocol.MissingCodeNeedsBulkRecovery
+                ) =>
+              r
+          } shouldBe empty
+      )
+
+      // Several distinct misses show there are many to find, as on a datadir from before healing waited on code, and one
+      // fetch per contract is one full re-execution of the block each. The miss that shows it asks for the bulk recovery
+      // instead, and does not fetch that hash on its own.
+      "ask SyncController for a bulk bytecode recovery once enough distinct contract codes have been missing" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          BlockImporter.resetBulkCodeRecoveryForTests()
+          storagesInstance.storages.appStateStorage.snapSyncDone().commit() // a SNAP-synced node
+          (1 until BlockImporter.BulkCodeRecoveryAfterMisses).foreach(i =>
+            BlockImporter.claimBulkCodeRecovery(ByteString(s"an earlier miss $i")) shouldBe false
+          )
           val failingBlock: Block = testBlocksChunked.head.head
           val codeHash: ByteString = kec256(ByteString("contract code this node never stored"))
           setImportResult(
@@ -736,9 +789,30 @@ class RegularSyncSpec
               true
           }
           // ...and it did NOT also start a single-hash fetch.
-          val seen = peersClient.receiveWhile(1.second) { case m => m }
+          val seen: Seq[Object] = peersClient.receiveWhile(1.second) { case m => m }
           seen.collect { case PeersClient.Request(_: GetByteCodes, _, _, _) => 1 } shouldBe empty
       )
+
+      "count a code met again once, and ask for a bulk recovery at most once a process" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        BlockImporter.resetBulkCodeRecoveryForTests()
+        val same = ByteString("the same code, met again")
+        (1 to BlockImporter.BulkCodeRecoveryAfterMisses * 2).foreach(_ =>
+          BlockImporter.claimBulkCodeRecovery(same) shouldBe false
+        )
+        BlockImporter.distinctMissingCodesForTests shouldBe 1
+        val claims = (1 to BlockImporter.BulkCodeRecoveryAfterMisses * 2).map(i =>
+          BlockImporter.claimBulkCodeRecovery(ByteString(s"miss $i"))
+        )
+        claims.count(identity) shouldBe 1
+        withClue("what it keeps is bounded: ") {
+          BlockImporter.distinctMissingCodesForTests shouldBe BlockImporter.BulkCodeRecoveryAfterMisses
+        }
+        BlockImporter.resetBulkCodeRecoveryForTests()
+        scala.concurrent.Future.successful(succeed)
+      }
 
       "fetch missing contract code alone, without asking for a bulk recovery, on a node that did not SNAP-sync" taggedAs (
         UnitTest,
@@ -764,9 +838,327 @@ class RegularSyncSpec
           peersClient.fishForSpecificMessage(max = 10.seconds) {
             case PeersClient.Request(GetByteCodes(_, hashes, _), _, _, _) if hashes == Seq(codeHash) => true
           }
-          // The bulk-recovery slot was NOT consumed by the refused escalation.
-          BlockImporter.claimBulkCodeRecovery() shouldBe true
+          // The refused escalation counted nothing towards a bulk recovery.
+          BlockImporter.distinctMissingCodesForTests shouldBe 0
       )
+
+      // #1694: a storage hole met writing carries no position. It is found from the parent's root, not guessed as the
+      // storage root, which drew an honest reply of the wrong node and a blacklisting.
+      abstract class LocationlessStorageHoleFixture extends Fixture:
+        val failingBlock: Block = testBlocksChunked.head.head
+        val holder: Address = Address(ByteString(Array.fill[Byte](20)(0x2b)))
+        private val store = storagesInstance.storages.stateStorage.getBackingStorage(0)
+        // 64 slots: a storage root whose children are all referenced by hash.
+        val storageRoot: ByteString =
+          import MerklePatriciaTrie.defaultByteArraySerializable
+          val trie = (0 until 64).foldLeft(MerklePatriciaTrie[Array[Byte], Array[Byte]](store)) { (t, i) =>
+            t.put(kec256(BigInt(i).toByteArray), Array.fill[Byte](32)(i.toByte))
+          }
+          store.persist()
+          ByteString(trie.getRootHash)
+        val (holeSlot, hole) = store.get(storageRoot.toArray) match
+          case branch: BranchNode =>
+            branch.children.zipWithIndex.collectFirst { case (HashNode(h), i) => (i, ByteString(h)) }.get
+          case other => fail(s"the storage root is no branch: $other")
+        val stateRoot: ByteString =
+          val accounts =
+            MerklePatriciaTrie[Address, Account](store).put(holder, Account(storageRoot = TrieRoot(storageRoot)))
+          store.persist()
+          ByteString(accounts.getRootHash)
+        private val parent = failingBlock.header.copy(stateRoot = TrieRoot(stateRoot))
+
+        override lazy val blockchainReader: BlockchainReader = new BlockchainReader(
+          storagesInstance.storages.blockHeadersStorage,
+          storagesInstance.storages.blockBodiesStorage,
+          storagesInstance.storages.blockNumberMappingStorage,
+          storagesInstance.storages.stateStorage,
+          storagesInstance.storages.receiptStorage,
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.chainWeightStorage,
+          storagesInstance.storages.blockAccessListStorage
+        ):
+          override def getBestBlockNumber: BigInt = BigInt(0)
+          override def getSnapSyncPivotBlock: Option[BigInt] = None
+          override def getBlockHeaderByNumber(number: BigInt): Option[BlockHeader] =
+            Some(BlockHelpers.genesis.header)
+          override def getBlockHeaderByHash(hash: com.chipprbots.ethereum.domain.BlockHash): Option[BlockHeader] =
+            if hash == failingBlock.header.parentHash then Some(parent) else super.getBlockHeaderByHash(hash)
+
+        override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
+        // The importer walks the storage trie through this; the fixture's own is a stub that reads nothing.
+        override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+
+        def holeAt(hash: ByteString): Unit =
+          setImportResult(
+            failingBlock,
+            IO.pure(BlockImportFailedDueToMissingNode(new MissingStorageNodeException(hash, holder.bytes, None)))
+          )
+
+      "ask for a storage hole with no position at the position found under the parent's root" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(new LocationlessStorageHoleFixture:
+        holeAt(hole)
+        peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+        regularSync ! SyncProtocol.Start
+
+        val expected: Seq[Seq[ByteString]] =
+          Seq(Seq(kec256(holder.bytes), ByteString(HexPrefix.encode(Array(holeSlot.toByte), isLeaf = false))))
+        peersClient.fishForSpecificMessage(max = 10.seconds) {
+          case PeersClient.Request(GetTrieNodes(_, root, paths, _), _, _, _)
+              if root == stateRoot && paths == expected =>
+            true
+        }
+        // Located, so the fetch is waited on: nothing counts as exhausted at once (forge, #1694).
+        TestProbe().expectNoMessage(500.millis)
+        ImportCounterAccess.survivedExhausts shouldBe 0
+      )
+
+      "ask no peer for a storage hole that cannot be located, and back off as after an exhausted fetch" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(new LocationlessStorageHoleFixture:
+        holeAt(kec256(ByteString("referred to by nothing present")))
+        peersClient.setAutoPilot(
+          new PeersClientAutoPilot:
+            // Left unanswered so a request, if one is sent, stays on the probe: the default answer looks the hash up as
+            // a block's, throws for a node's, and the probe then never records the request.
+            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+              case PeersClient.Request(GetNodeData(_), _, _, _) => None
+            }
+        )
+
+        regularSync ! SyncProtocol.Start
+
+        awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+        val asked: Seq[Object] = peersClient.receiveWhile(2.seconds) { case m => m }
+        asked.collect {
+          case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
+          case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) => r
+        } shouldBe empty
+      )
+
+      // forge, beacon: a retry tick counted as an exhaust made the first real exhaust the third, so a hole no peer served
+      // for about 150 s cost a re-SNAP. The user's decision of 2026-11-02: only exhausts count.
+      "not count its retries towards the re-SNAP, only exhausted fetches" taggedAs (UnitTest, SyncTest) in sync(
+        new MissingStateNodeFixture:
+          BlockImporter.resolvingRetryInterval = 100.millis
+          try
+            peersClient.setAutoPilot(
+              new PeersClientAutoPilot:
+                override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // never answered, so never exhausted here
+                }
+            )
+
+            regularSync ! SyncProtocol.Start
+
+            peersClient.fishForSpecificMessage(max = 10.seconds) {
+              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+            }
+            TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
+            ImportCounterAccess.survivedExhausts shouldBe 0
+          finally BlockImporter.resolvingRetryInterval = 30.seconds
+      )
+
+      // forge, #1694: an exhaust landing while a retry of the blocked import ran was dropped, and the re-import started
+      // the fetch again from its first try. With only exhausts counting, that could hold the re-SNAP off.
+      "count an exhausted fetch that lands while a retry of the import runs" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          // Slow, so the exhaust below lands inside the retry's import rather than between imports.
+          setImportResult(
+            failingBlock,
+            IO.sleep(2.seconds) *>
+              IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
+          )
+          BlockImporter.resolvingRetryInterval = 100.millis
+          try
+            peersClient.setAutoPilot(
+              new PeersClientAutoPilot:
+                override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // the exhaust comes from the test
+                }
+            )
+
+            regularSync ! SyncProtocol.Start
+
+            peersClient.fishForSpecificMessage(max = 10.seconds) {
+              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+            }
+            // The first import has ended; its retry starts 100 ms later and runs for 2 s.
+            TestProbe().expectNoMessage(1.second)
+            ImportCounterAccess.survivedExhausts shouldBe 0
+            system.actorSelection(s"${regularSync.path}/block-importer-*") !
+              BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
+
+            awaitCond(ImportCounterAccess.survivedExhausts == 1, 5.seconds)
+            succeed
+          finally BlockImporter.resolvingRetryInterval = 30.seconds
+      )
+
+      // Only exhausts count now, so the escalation must still come from them alone.
+      "still ask for a SNAP re-sync after three exhausted fetches of one block" taggedAs (UnitTest, SyncTest) in sync(
+        new LocationlessStorageHoleFixture:
+          BlockImporter.exhaustBackoff = 200.millis
+          try
+            holeAt(kec256(ByteString("referred to by nothing present"))) // exhausts at once, each try
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            supervisor.fishForSpecificMessage(max = 15.seconds) {
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+                  if number == failingBlock.number.value =>
+                true
+            }
+            ImportCounterAccess.survivedExhausts shouldBe 0
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // forge, #1694: the counter outlived a block imported, so holes the audit filled days apart added up to a re-SNAP.
+      "clear its exhausts once a block is imported" taggedAs (UnitTest, SyncTest) in sync(
+        new LocationlessStorageHoleFixture:
+          BlockImporter.exhaustBackoff = 1.second
+          try
+            holeAt(kec256(ByteString("referred to by nothing present")))
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+            // The audit fills the hole during the backoff, so the next try imports the block.
+            setImportResult(
+              failingBlock,
+              IO.pure(
+                BlockImportedToTop(
+                  List(BlockData(failingBlock, Nil, ChainWeight.totalDifficultyOnly(failingBlock.number.value)))
+                )
+              )
+            )
+            awaitCond(ImportCounterAccess.survivedExhausts == 0, 10.seconds)
+            supervisor.receiveWhile(500.millis) { case m => m }.collect {
+              case s @ SyncController.WrappedSyncProtocol(_: SyncProtocol.RegularSyncStuck) => s
+            } shouldBe empty
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // spec 022 T062: on Mordor a corrupt account leaf blacklisted the honest provider on every import attempt, and a
+      // fetched node saved later could not clear it under basic pruning's upsert. A stored entry that is not its node now
+      // reads as a missing node; the importer deletes the entry, then fetches, and blames nobody.
+      "delete a stored entry that is not its node before fetching it, and blacklist no peer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          // Archive pruning, which can delete a bad entry; the fixture's own state storage is a stub.
+          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          val corrupt: ByteString = kec256(ByteString("a trie node this node holds junk for"))
+          storagesInstance.storages.nodeStorage.put(corrupt, Array(0x01.toByte))
+          // What execution raises for it: the world state rewraps the corrupt node as a missing account node.
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportFailedDueToMissingNode(
+                new MissingAccountNodeException(corrupt, ByteString(Array.fill[Byte](20)(0x2b)))
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot) // GetTrieNodes is left unanswered
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case b: PeersClient.BlacklistPeer                  => fail(s"a peer was blamed for a local fault: $b")
+            case PeersClient.Request(_: GetTrieNodes, _, _, _) => true
+          }
+          withClue("the entry was deleted before the fetch went out: ") {
+            storagesInstance.storages.nodeStorage.get(corrupt) shouldBe None
+          }
+          peersClient.receiveWhile(1.second) { case m => m }.collect { case b: PeersClient.BlacklistPeer => b } shouldBe
+            empty
+      )
+
+      "leave a good stored node alone when a missing node is met under its hash" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          val node: Array[Byte] = MerklePatriciaTrie.EmptyEncoded
+          val hash: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
+          storagesInstance.storages.nodeStorage.put(hash, node)
+          setImportResult(failingBlock, IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(hash))))
+          peersClient.setAutoPilot(
+            new PeersClientAutoPilot:
+              override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+                case PeersClient.Request(GetNodeData(_), _, _, _) => None
+              }
+          )
+
+          regularSync ! SyncProtocol.Start
+
+          peersClient.fishForSpecificMessage(max = 10.seconds) {
+            case PeersClient.Request(GetNodeData(h :: Nil), _, _, _) if h == hash => true
+          }
+          storagesInstance.storages.nodeStorage.get(hash).map(_.toSeq) shouldBe Some(node.toSeq)
+      )
+
+      // spec 022 T062: a trie error that is not a missing node reached the importer as a string and took the invalid-block
+      // path: the honest provider blacklisted each attempt, evicted at three strikes, fork detection at five, and never
+      // an escalation (1,986 blacklistings in 45 minutes on Mordor). It is this node's fault: no peer is blamed, and it
+      // escalates like exhausted fetches.
+      "treat a trie error that is not a missing node as its own fault: no peer blamed, a re-SNAP at the third" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          BlockImporter.exhaustBackoff = 200.millis
+          try
+            setImportResult(
+              failingBlock,
+              IO.pure(BlockImportFailed(BlockExecutionError.MPTError(new MPTException("Invalid Node")).toString))
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            supervisor.fishForSpecificMessage(max = 15.seconds) {
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+                  if number == failingBlock.number.value =>
+                true
+            }
+            ImportCounterAccess.survivedExhausts shouldBe 0
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
+                b
+              } shouldBe
+                empty
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        val error = BlockExecutionError.MPTError(new MPTException("Invalid Node"))
+        // Pinned: ConsensusImpl passes `error.toString` on as it is when the branch extends the head...
+        error.toString should startWith("MPTError(")
+        Consensus.isLocalStateFault(error.toString) shouldBe true
+        // ...and after the shared prefix when it reorganises (ConsensusImplSpec drives the text ConsensusImpl writes).
+        Consensus.isLocalStateFault(s"${Consensus.ReorganiseFailurePrefix}$error") shouldBe true
+        // A missing node never arrives as text, and nothing else that does is this node's own state.
+        Consensus.isLocalStateFault("test error") shouldBe false
+        Consensus.isLocalStateFault(
+          BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+        ) shouldBe false
+        Consensus.isLocalStateFault(
+          s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.MissingParentError}"
+        ) shouldBe false
+        scala.concurrent.Future.successful(succeed)
+      }
 
       "save fetched node" in sync(new Fixture:
         val failingBlock: Block = testBlocksChunked.head.head
@@ -844,7 +1236,7 @@ class RegularSyncSpec
         val newBlock: Block = testBlocks.last
 
         regularSync ! SyncProtocol.Start
-        val sub576 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub576: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
 
         sub576.subscriber ! MessageFromPeer(
           NewBlock(newBlock, ChainWeight.totalDifficultyOnly(BigInt(1)).totalDifficulty.value),
@@ -854,7 +1246,10 @@ class RegularSyncSpec
         // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
         // Use assertForDuration to continuously verify the mock is never called
         assertForDuration(
-          (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(),
+          (consensusAdapter
+            .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
+            .verify(*, *, *)
+            .never(),
           remainingOrDefault
         )
       )
@@ -869,7 +1264,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub598 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub598: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub598.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -938,7 +1333,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        val sub665 = peerEventBus.expectMsgType[SubscribeCmd]
+        val sub665: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]
         sub665.subscriber ! MessageFromPeer(
           NewBlock(
             testBlocks.last,
@@ -981,7 +1376,7 @@ class RegularSyncSpec
       "broadcast after successful import" in sync(new OnTopFixture:
         goToTop()
 
-        val peersCmd724 = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+        val peersCmd724: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
         peersCmd724.replyTo ! HandshakedPeers(handshakedPeers)
 
         regularSync ! SyncProtocol.MinedBlock(newBlock)

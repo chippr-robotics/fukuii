@@ -4,10 +4,12 @@
 
 **Created**: 2026-10-17
 
-**Status**: **Draft (stub).** Created at the user's request after the LTS toolchain audit of the same day
+**Status**: Active (2026-10-30). PR 3 landed (Scala 3.9.0, sbt 1.13.0, `-source:3.6` with DC-3 sites applied); PR 5's 187-file rewrite is regenerated after spec 022 lands, then PR 6–7.
 (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`, recommendation R-1). To be fleshed out with `/speckit-specify` and
 `/speckit-clarify` once the inventory spike (GT-1) has reported, then `/speckit-plan` and `/speckit-tasks`. The Gates and
 Design constraints sections are binding on that later work.
+
+**In flight**: PR 5 regeneration waits on spec 022 slices 4–6
 
 **Sequence**: spec 016 (SNAP split) → **this spec** → spec 017 (`StateAccess`, witnesses) → spec 018 (storage) → spec
 019 (zkVM guest). The spec number records creation order; the sequence is the user's decision of 2026-10-17: the

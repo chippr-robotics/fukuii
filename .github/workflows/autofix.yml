@@ -4,8 +4,8 @@ name: Autofix (scalafmt)
 # be fixed by hand and never blocks a release. Runs on same-repo PRs (pushes the fix
 # to the PR's source branch) and on pushes to the integration branches (self-heals a
 # squash-merge that landed unformatted code — the exact gap that broke the 0.6.0
-# release prep). `ci.yml` keeps `scalafmtCheckAll` as the backstop for fork PRs, which
-# GITHUB_TOKEN cannot push to.
+# release prep). `ci.yml` keeps `formatCheck` as the backstop for fork PRs, which
+# GITHUB_TOKEN cannot push to, and for scalafix findings, which this job does not rewrite.
 #
 # NOTE: commits pushed with the default GITHUB_TOKEN do NOT re-trigger other workflows
 # (GitHub's loop-prevention). On unprotected integration branches (develop/staging) that
@@ -44,7 +44,7 @@ jobs:
   scalafmt:
     name: Apply scalafmt
     # Skip PRs from forks — GITHUB_TOKEN is read-only on fork branches, so the fix
-    # cannot be pushed back. The ci.yml scalafmtCheckAll gate still catches those.
+    # cannot be pushed back. The ci.yml formatCheck gate still catches those.
     # Bump-commit clause: skip pure auto-version pushes (no [skip ci] in those anymore).
     if: >-
       (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version to'))
@@ -77,17 +77,15 @@ jobs:
             ${{ runner.os }}-sbt-
 
       - name: Set up SBT
-        run: |
-          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          sudo apt-get update
-          sudo apt-get install sbt
+        uses: ./.github/actions/setup-sbt
 
       - name: Apply scalafmt
         # Use sbt's quoted multi-command syntax. The bare `sbt scalafmtAll scalafmtSbt`
         # form is mis-parsed by sbt (it reads the two space-separated tasks as one
         # selector and fails with "Expected '/'"), which had this job red on every PR.
-        run: sbt "scalafmtAll; scalafmtSbt"
+        # The root project does not aggregate the other modules, so a bare scalafmtAll formats
+        # root alone; each module is named here, the same set ci.yml's formatCheck checks.
+        run: sbt "scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
         env:
           FUKUII_DEV: true
 

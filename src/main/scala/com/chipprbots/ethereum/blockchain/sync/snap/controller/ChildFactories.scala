@@ -111,7 +111,8 @@ trait ChildFactories:
       storageScheme: StorageScheme = StorageScheme.Hash,
       stateIngest: StateIngest,
       recordStorageDone: Boolean = false,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[StorageRangeCoordinator.Command] =
     StorageRangeCoordinator(
       stateRoot = stateRoot,
@@ -135,7 +136,8 @@ trait ChildFactories:
       storageScheme = storageScheme,
       stateIngest = stateIngest,
       recordStorageDone = recordStorageDone,
-      intakeBudget = intakeBudget
+      intakeBudget = intakeBudget,
+      recordExcluded = recordExcluded
     )
 
   // TrieNodeHealingCoordinator.apply takes no intakeBudget (the #1501 budget gates storage and bytecode intake only).
@@ -158,15 +160,17 @@ trait ChildFactories:
       frontierHighWater: Int = TrieNodeHealingCoordinator.DefaultFrontierHighWater,
       frontierLowWater: Int = TrieNodeHealingCoordinator.DefaultFrontierLowWater,
       frontierBackpressureMaxWaitMs: Long = TrieNodeHealingCoordinator.FrontierBackpressureMaxWaitMs,
-      scopedHealVerification: Boolean = true,
-      scopedHealMaxPaths: Int = TrieNodeHealingCoordinator.DefaultScopedHealMaxPaths,
-      prunedHealVerification: Boolean = true,
-      frontierPersistenceEnabled: Boolean = false,
       decoupledHealServeRoot: Boolean = false,
       decoupledHealMaxAttemptsNoRefresh: Int = TrieNodeHealingCoordinator.DefaultDecoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal: Boolean = false,
       healedCodeCheck: Boolean = false,
-      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None
+      walkLocalOnly: Option[java.util.concurrent.atomic.AtomicBoolean] = None,
+      heldMemoryLimit: Long = TrieNodeHealingCoordinator.DefaultHeldMemoryLimit,
+      excludedAccounts: Boolean = false,
+      currentRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      cleanWalkRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
+      markerMayStand: Boolean = false
   ): Behavior[TrieNodeHealingCoordinator.Command] =
     TrieNodeHealingCoordinator(
       stateRoot = stateRoot,
@@ -187,15 +191,17 @@ trait ChildFactories:
       frontierHighWater = frontierHighWater,
       frontierLowWater = frontierLowWater,
       frontierBackpressureMaxWaitMs = frontierBackpressureMaxWaitMs,
-      scopedHealVerification = scopedHealVerification,
-      scopedHealMaxPaths = scopedHealMaxPaths,
-      prunedHealVerification = prunedHealVerification,
-      frontierPersistenceEnabled = frontierPersistenceEnabled,
       decoupledHealServeRoot = decoupledHealServeRoot,
       decoupledHealMaxAttemptsNoRefresh = decoupledHealMaxAttemptsNoRefresh,
       movingRootDeltaHeal = movingRootDeltaHeal,
       healedCodeCheck = healedCodeCheck,
-      walkLocalOnly = walkLocalOnly
+      walkLocalOnly = walkLocalOnly,
+      heldMemoryLimit = heldMemoryLimit,
+      excludedAccounts = excludedAccounts,
+      currentRoot = currentRoot,
+      cleanWalkRoot = cleanWalkRoot,
+      decidedRoot = decidedRoot,
+      markerMayStand = markerMayStand
     )
 
   def byteCodeCoordinator(
@@ -207,7 +213,8 @@ trait ChildFactories:
       cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
       backpressureHighWatermark: Int = 50000,
       backpressureLowWatermark: Int = 25000,
-      intakeBudget: Option[SnapIntakeBudget] = None
+      intakeBudget: Option[SnapIntakeBudget] = None,
+      recordExcluded: Boolean = false
   ): Behavior[ByteCodeCoordinator.Command] =
     ByteCodeCoordinator(
       stateIngest = stateIngest,
@@ -218,7 +225,8 @@ trait ChildFactories:
       cooldownConfig = cooldownConfig,
       backpressureHighWatermark = backpressureHighWatermark,
       backpressureLowWatermark = backpressureLowWatermark,
-      intakeBudget = intakeBudget
+      intakeBudget = intakeBudget,
+      recordExcluded = recordExcluded
     )
 
   // scalastyle:off parameter.number

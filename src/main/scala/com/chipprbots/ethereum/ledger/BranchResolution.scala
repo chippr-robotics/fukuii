@@ -155,10 +155,7 @@ class BranchResolution(
       newHeaders: List[BlockHeader]
   ): Boolean =
     messConfig match
-      case Some(config) if oldBlocks.nonEmpty =>
-        val currentHeadNumber = oldBlocks.last.header.number
-        if !config.isActiveAtBlock(currentHeadNumber.value) then return false
-
+      case Some(config) if oldBlocks.nonEmpty && config.isActiveAtBlock(oldBlocks.last.header.number.value) =>
         val commonAncestorTimestamp = blockchainReader
           .getBlockHeaderByHash(oldBlocks.head.header.parentHash)
           .map(_.unixTimestamp)

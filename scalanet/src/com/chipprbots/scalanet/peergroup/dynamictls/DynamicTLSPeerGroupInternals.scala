@@ -93,7 +93,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
       TimeUnit.MILLISECONDS
     )
 
-  implicit class ChannelOps(val channel: io.netty.channel.Channel):
+  extension (channel: io.netty.channel.Channel)
     def sendMessage[M](m: M)(implicit codec: Codec[M]): IO[Unit] =
       for
         enc <- IO.fromTry(codec.encode(m).toTry)
@@ -167,7 +167,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
       executeAsync(messageQueue.offer(event).void)
 
     private def executeAsync(task: IO[Unit]): Unit =
-      task.unsafeRunAndForget()(global)
+      task.unsafeRunAndForget()(using global)
 
   object MessageNotifier:
     val MessageNotifiedHandlerName = "MessageNotifier"
@@ -351,7 +351,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
       )
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
-      serverQueue.offer(event).void.unsafeRunAndForget()(global)
+      serverQueue.offer(event).void.unsafeRunAndForget()(using global)
 
   class DynamicTlsChannel[M](
       localId: BitVector,
@@ -371,7 +371,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
 
     override def sendMessage(message: M): IO[Unit] =
       logger.debug("Sending message to peer {} via {}", nettyChannel.localAddress(), channelType)
-      nettyChannel.sendMessage(message)(codec).handleErrorWith { case e: IOException =>
+      nettyChannel.sendMessage(message)(using codec).handleErrorWith { case e: IOException =>
         logger.debug("Sending message to {} failed due to {}", message, e)
         IO.raiseError(new ChannelBrokenException[PeerInfo](to, e))
       }
@@ -393,7 +393,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals:
       yield ()
 
   private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig) =
-    ChannelAwareQueue[ChannelEvent[M]](limit, channelConfig).unsafeRunSync()(global)
+    ChannelAwareQueue[ChannelEvent[M]](limit, channelConfig).unsafeRunSync()(using global)
 
   sealed abstract class TlsChannelType
   case object ClientChannel extends TlsChannelType:

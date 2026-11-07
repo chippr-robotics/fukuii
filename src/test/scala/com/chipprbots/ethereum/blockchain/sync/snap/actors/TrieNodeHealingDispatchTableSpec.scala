@@ -39,6 +39,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   *   - guard order: each `VerificationBFSComplete` sample runs the arm its guards select (#17 stale root first, then
   *     #18 missing nodes, then #19 clean), read from the arm's own log line.
   *
+  * Spec 022 fix round 4 put a replaced-walk arm before #3, #4 and #17: a walk's end carries the walk's token and only
+  * the walk the incarnation launched last counts. The harness sets that walk, and the samples carry it, so the R4c arms
+  * above are what they select; the last case pins the replaced-walk arms (a foreign token changes nothing).
+  *
   * The coordinator runs in a `BehaviorTestKit`, with an execution context that never runs a task, so the walk and flush
   * Futures some arms launch never start: only the arm itself runs.
   */
@@ -48,6 +52,8 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
   private val OtherRoot = kec256(ByteString("c-h0-dispatch-other-root"))
   private val EmptyPath =
     ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+  // The walk the harness's coordinator launched last (spec 022 fix round 4: a walk's end is taken only from it).
+  private val Walk = 1L
 
   // Drops every task: the BFS walk and flush Futures that arms launch never run.
   private val neverRuns: ExecutionContext = new ExecutionContext:
@@ -67,12 +73,12 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
           timers,
           initialStateRoot = Root,
           networkPeerManager = TestInbox[NetworkPeerManagerActor.Command]().ref,
-          requestTracker = new SNAPRequestTracker()(system.classicSystem.scheduler),
+          requestTracker = new SNAPRequestTracker()(using system.classicSystem.scheduler),
           mptStorage = new TestMptStorage(),
           batchSize = 16,
           snapSyncController = TestInbox[SNAPSyncController.Command]().ref,
           concurrency = 4,
-          stateIngest = HealingTrieFixtures.healingIngest(None),
+          stateIngest = HealingTrieFixtures.healingIngest(),
           healingWriterEcOverride = Some(neverRuns),
           healingReaderEcOverride = Some(neverRuns)
         )
@@ -80,6 +86,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
       }
     }
     val kit = BehaviorTestKit(behavior)
+    captured.currentWalk = Some(Walk)
     Harness(captured, kit)
 
   private val Lifecycle = "healLifecycleArms"
@@ -105,9 +112,9 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
 
   private def rows: Seq[Row] = Seq(
     Row("StartTrieNodeHealing", StartTrieNodeHealing(Root), 1, Some(Lifecycle)),
-    Row("FrontierRebuilt", FrontierRebuilt(Seq.empty), 2, Some(Rebuild)),
-    Row("FrontierRebuildComplete", FrontierRebuildComplete(1L, Root), 3, Some(Rebuild)),
-    Row("FrontierWalkFailed", FrontierWalkFailed, 4, Some(Rebuild)),
+    Row("FrontierRebuilt", FrontierRebuilt(Seq.empty, Root), 2, Some(Rebuild)),
+    Row("FrontierRebuildComplete", FrontierRebuildComplete(1L, Root, Walk), 3, Some(Rebuild)),
+    Row("FrontierWalkFailed", FrontierWalkFailed(Walk), 4, Some(Rebuild)),
     Row("QueueMissingNodes", QueueMissingNodes(Seq.empty), 5, Some(Response)),
     Row("HealingPeerAvailable", HealingPeerAvailable(peer), 6, Some(Dispatch)),
     Row("HealingPeerUnavailable", HealingPeerUnavailable("c-h0-gone"), 7, Some(Dispatch)),
@@ -117,18 +124,37 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
     Row("HealingServeRootRefresh", HealingServeRootRefresh(OtherRoot), 11, Some(Dispatch)),
     Row("HealingResumeDispatch", HealingResumeDispatch, 12, Some(Dispatch)),
     Row("TrieNodesResponseMsg", TrieNodesResponseMsg(SNAP.TrieNodes(BigInt(1), Seq.empty)), 13, Some(Response)),
-    Row("FlushComplete", FlushComplete(0), 14, Some(Persistence)),
+    Row("FlushComplete", FlushComplete(0L, 0), 14, Some(Persistence)),
+    Row("FlushFailed", FlushFailed(0L, new RuntimeException("c-h0 table")), 14, Some(Persistence)),
     Row("HealingTaskComplete", HealingTaskComplete(BigInt(1), Right(1)), 15, Some(Response)),
     Row("HealingCheckCompletion", HealingCheckCompletion, 16, Some(Verification)),
-    Row("VerificationBFSComplete(stale root, missing)", VerificationBFSComplete(OtherRoot, 5L), 17, Some(Verification)),
-    Row("VerificationBFSComplete(stale root, clean)", VerificationBFSComplete(OtherRoot, 0L), 17, Some(Verification)),
-    Row("VerificationBFSComplete(current root, missing)", VerificationBFSComplete(Root, 5L), 18, Some(Verification)),
-    Row("VerificationBFSComplete(current root, clean)", VerificationBFSComplete(Root, 0L), 19, Some(Verification)),
-    Row("WalkStateChanged", WalkStateChanged(false), 20, Some(Verification)),
+    Row(
+      "VerificationBFSComplete(stale root, missing)",
+      VerificationBFSComplete(OtherRoot, 5L, Walk),
+      17,
+      Some(Verification)
+    ),
+    Row(
+      "VerificationBFSComplete(stale root, clean)",
+      VerificationBFSComplete(OtherRoot, 0L, Walk),
+      17,
+      Some(Verification)
+    ),
+    Row(
+      "VerificationBFSComplete(current root, missing)",
+      VerificationBFSComplete(Root, 5L, Walk),
+      18,
+      Some(Verification)
+    ),
+    Row(
+      "VerificationBFSComplete(current root, clean)",
+      VerificationBFSComplete(Root, 0L, Walk),
+      19,
+      Some(Verification)
+    ),
     Row("HealingStagnationCheck", HealingStagnationCheck, 21, Some(Lifecycle)),
     Row("HealingGetProgress", HealingGetProgress(TestInbox[HealingStatistics]().ref), 22, Some(Lifecycle)),
     Row("HealingRequestTimeout", HealingRequestTimeout(BigInt(1)), 23, Some(Dispatch)),
-    Row("RestartResumeVerification", RestartResumeVerification(Root, EmptyPath), 24, Some(Verification)),
     Row("RestartFullRebuild", RestartFullRebuild(Root, EmptyPath), 25, Some(Rebuild)),
     // No arm: falls through every group to the catch-all.
     Row("HealingTaskFailed", HealingTaskFailed(BigInt(1), "c-h0 table"), 26, None)
@@ -173,3 +199,34 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
       }
       observed shouldBe verificationRows.map(r => r.label -> Seq(r.arm))
     }
+
+  it should "take a walk's end only from the walk this incarnation launched last (spec 022 fix round 4, beacon W1-r4)" taggedAs
+    UnitTest in {
+      val ends: Seq[Long => Command] = Seq(
+        walk => FrontierRebuildComplete(0L, Root, walk),
+        walk => FrontierWalkFailed(walk),
+        walk => VerificationBFSComplete(Root, 0L, walk)
+      )
+      ends.foreach { end =>
+        val h = harness()
+        h.impl.verificationBFSRunning = true
+        // A replaced incarnation's walk: nothing changes here, and the completion check decides what runs next.
+        h.kit.run(end(Walk + 1))
+        withClue(end(Walk + 1)) {
+          h.impl.verificationBFSRunning shouldBe true
+          h.impl.verificationPassComplete shouldBe false
+          h.kit.selfInbox().receiveAll() shouldBe Seq(HealingCheckCompletion)
+        }
+        h.kit.run(end(Walk))
+        withClue(end(Walk))(h.impl.verificationBFSRunning shouldBe false)
+      }
+    }
+
+  // spec 022 slice 6b (forge, beacon): nodes found missing outside the coordinator (validation's re-walk) take back a clean
+  // pass, so the gate walks again before it decides instead of completing on that pass once they are healed.
+  it should "forget an earlier clean pass when nodes are queued as missing" taggedAs UnitTest in {
+    val h = harness()
+    h.impl.verificationPassComplete = true
+    h.kit.run(QueueMissingNodes(Seq(Seq(EmptyPath) -> Root)))
+    h.impl.verificationPassComplete shouldBe false
+  }

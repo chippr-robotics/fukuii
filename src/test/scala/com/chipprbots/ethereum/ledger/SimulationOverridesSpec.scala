@@ -27,13 +27,13 @@ class SimulationOverridesSpec extends AnyFlatSpec with Matchers with SimulationO
       // Moved away, 0x01 is an empty account and answers nothing. Block import still finds ecrecover there.
       simulateWithOverrides(chain, ecrecoverTx(chain), preState).vmReturnData shouldBe ByteString.empty
       setup.prep
-        .executeTransaction(ecrecoverTx(chain), senderAddress, chain.header, preState)(chain.config)
+        .executeTransaction(ecrecoverTx(chain), senderAddress, chain.header, preState)(using chain.config)
         .vmReturnData shouldBe RecoveredWord
 
       // Called from a contract: ecrecover answers at MovedEcrecover under the relocation, at 0x01 without it.
       simulateWithOverrides(chain, exerciseTx(chain), preState).vmReturnData shouldBe ExercisedRelocated
       setup.prep
-        .executeTransaction(exerciseTx(chain), senderAddress, chain.header, preState)(chain.config)
+        .executeTransaction(exerciseTx(chain), senderAddress, chain.header, preState)(using chain.config)
         .vmReturnData shouldBe ExercisedPlain
     }
 
@@ -65,7 +65,7 @@ class SimulationOverridesSpec extends AnyFlatSpec with Matchers with SimulationO
     ) in {
       importedTxs(chain).foreach { stx =>
         outcome(simulateWithoutOverrides(chain, stx, preState)) shouldBe
-          outcome(setup.prep.executeTransaction(stx, senderAddress, chain.header, preState)(chain.config))
+          outcome(setup.prep.executeTransaction(stx, senderAddress, chain.header, preState)(using chain.config))
       }
     }
 

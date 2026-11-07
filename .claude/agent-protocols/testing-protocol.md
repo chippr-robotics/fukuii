@@ -13,7 +13,7 @@ Referenced by: `fukuii/CLAUDE.md`, loom.md
 
 | Command | What runs | Time | Baseline |
 |---------|-----------|------|---------|
-| `sbt testEssential` | 3,621 unit tests | ~24 min | 3,621 / 0 failures |
+| `sbt testEssential` | 7,219 root unit tests, plus rlp 46, bytes 11, crypto 80 (their own `test`) | ~24 min | 7,219 / 0 failures |
 | `sbt testStandard` | Unit + integration | ~30 min | — |
 | `sbt testComprehensive` | Full ethereum/tests compliance | <3 h | — |
 
@@ -32,9 +32,10 @@ Never batch multiple file edits before compiling. One file, one compile.
 ### After formatting-only phases
 (Returns removal, Messages.scala type additions, import cleanup)
 ```bash
-sbt scalafmtAll    # formatting check — no tests needed, no logic changed
+sbt formatAll      # formatting + scalafix, every module — no tests needed, no logic changed
 ```
-No tests. These phases change syntax only — compile is the full signal.
+No tests. These phases change syntax only — compile is the full signal. (`sbt scalafmtAll` alone formats the root
+project only; see "Format commands".)
 
 ### After logic-changing phases
 (Main migration, caller updates, behavior changes)
@@ -140,17 +141,35 @@ sbt testVM
 
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `sbt scalafmtAll` | scalafmt across ALL modules | After every commit during migrations |
+| `sbt scalafmtAll` | scalafmt on the **root project only**: its main, `Test` and `IntegrationTest` sources. Not bytes, crypto, rlp, scalanet, scalanetDiscovery (the root has no `aggregate`), and not `src/evmTest`, `src/rpcTest` or `src/benchmark` (verified 2026-11-05 with a misformatted file in each; `formatAll` and `formatCheck` run the same root command, so no alias formats those three) | Root-only edits |
 | `sbt scalafmt` | scalafmt ROOT module only | **Never** — misses submodules |
-| `sbt formatAll` | scalafixAll + scalafmtAll | Pre-PR on clean codebase ONLY |
-| `sbt scalafmtAll` ≠ `sbt formatAll` | formatAll runs scalafix | formatAll aborts on pre-existing violations |
+| `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp, root; scalafmtAll on scalanet and scalanetDiscovery | After editing any module; before a PR. The tree is scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings |
+| `sbt formatCheck` | the read-only form: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | What CI runs in "Test and Build" (from #1721); run it before pushing |
+| `sbt pp` | compile-all, scalafmtAll on bytes, crypto, rlp, root, then `rlp / test`, `testQuick`, `IntegrationTest / test` | Pre-PR gate; it runs no scalafix and skips scalanet, so add `formatCheck` |
+
+**scalafix parse failure on a continuation-line `new X:`.** scalafix 0.14.9 bundles scalameta 4.17.4, which cannot parse
+a fewer-braces template opened on a continuation line, as in `it should "x" in` with `new X:` on the next line. It
+fails on the *next* sibling in the file (`indent` expected, or `;` expected but `:` found), so the error points at a
+test that looks fine, and `formatCheck` goes red. scalafmt 3.8.3 (scalameta 4.9.9) formats such files without complaint,
+so `scalafmtCheckAll` stays green. Write `in (new X:` ... `)`, the shape scalafmt itself emits for a braced operand. Braces
+do not survive: scalafmt's `removeOptionalBraces` rewrites `in new X { ... }` back to `in new X:`. Spec 020 PR 6b-1
+(#1719) rewrote the affected test files.
+
+---
+
+## scalanet and scalanetDiscovery tests
+
+`compile-all` builds neither module's test sources. `scalanet / Test / compile` and `scalanetDiscovery / Test / compile`
+run on their own, and both compile since spec 020 PR 6b-1 (#1719). `scalanetDiscovery / test` is **not** a CI step and
+should not be added: the v4 `DiscoveryNetworkSpec` (`scalanet/discovery/ut`) hangs (a pre-existing fault, noted in
+the description of #1721). `formatCheck` does scalafmt-check both modules but runs scalafix on neither.
 
 ---
 
 ## What "baseline holds" means
 
 The thread-end `testEssential` run must show:
-- Test count: **3,621** (not fewer — a missing test class = silent deletion)
+- Test count: **7,219** root tests, plus rlp 46, bytes 11, crypto 80 (not fewer — a missing test class = silent deletion). Last measured 2026-11-05 on spec 020 PR 6b-1 and 6b-2
 - Failures: **0**
 - If count drops: investigate before closing the thread
 
