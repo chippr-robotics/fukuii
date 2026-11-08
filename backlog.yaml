@@ -1428,3 +1428,16 @@ items:
       spec: .local/docs/planning/1727-s2-design
       branch: fix/1727-simulate-precompile-overrides
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-130
+    title: "1727 PR4: maxUsedGas = peak gas before refund (+ Prague calldata floor); beacon glance"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    refs: [B-006]
+    links:
+      issues: [1727]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-max-used-gas
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
