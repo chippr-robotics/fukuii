@@ -1519,3 +1519,13 @@ items:
     refs: []
     links: {}
     notes: "forge: CallTracer.scala:77,105."
+  - id: B-137
+    title: "Text parity: static-context check before the stack check; address collision reports invalid opcode"
+    priority: P3
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-08
+    refs: []
+    links: {}
+    notes: "forge: OpCode.scala:316 (geth checks the stack first); VM.scala:252 collision runs INVALID where geth says contract address collision. Text only."
