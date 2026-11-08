@@ -109,7 +109,7 @@ items:
       by: fukuii-fc
       agent: herald
       since: 2026-11-08T18:45:27Z
-      heartbeat: 2026-11-08T19:35:44Z
+      heartbeat: 2026-11-08T19:36:59Z
       branch: fix/h4-unknown-parent-blacklist
     notes: "herald. T062 Mordor: 33 peers blacklisted in 24 h; peer count drifted 13 -> ~7."
   - id: B-008
