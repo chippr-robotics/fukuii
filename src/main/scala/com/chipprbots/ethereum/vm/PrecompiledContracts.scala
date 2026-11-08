@@ -646,32 +646,12 @@ object PrecompiledContracts:
   // Uses org.hyperledger.besu:bls12-381 native library (gnark/Constantine backends via JNA).
   // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
 
-  /** Execute a BLS12-381 operation via the Besu native library. Returns Some(result) on success, None on error (invalid
-    * point, wrong input size, etc.)
+  /** Executes a BLS12-381 operation on the Besu native library: `Some(result)` on success, `None` when the library
+    * rejects the input (invalid point, wrong input size, etc.). A library that did not load raises
+    * [[NativeBackends.NativeBackendUnavailable]] instead of failing the call (B-135).
     */
   private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] =
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
-    // DEFER: guard in the BLS12-381 native precompile path (crypto primitive). Keep the
-    // short-circuit; an expression rewrite is byte-level risky for consensus crypto.
-    if !LibEthPairings.ENABLED then return None // scalafix:ok DisableSyntax.return
-    try
-      val resultBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_RESULT_BYTES)
-      val errorBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_ERROR_BYTES)
-      val resultLen = new com.sun.jna.ptr.IntByReference(resultBuf.length)
-      val errorLen = new com.sun.jna.ptr.IntByReference(errorBuf.length)
-
-      val ret = LibEthPairings.eip2537_perform_operation(
-        opByte,
-        inputData.toArray,
-        inputData.length,
-        resultBuf,
-        resultLen,
-        errorBuf,
-        errorLen
-      )
-      if ret == 0 then Some(ByteString(resultBuf.take(resultLen.getValue)))
-      else None
-    catch case _: Exception => None
+    NativeBackends.blsOperation(NativeBackends.LibEthPairingsNative, opByte, inputData)
 
   sealed trait BlsPrecompile extends PrecompiledContract
 
@@ -745,8 +725,7 @@ object PrecompiledContracts:
 
     def exec(inputData: ByteString): Option[ByteString] =
       // DEFER (all returns in this method): EIP-4844 KZG point-evaluation crypto primitive.
-      // These are sequential validation guards feeding a precompile result; the return inside
-      // the try block below (line ~786) also has try/catch-sensitive control flow. Keep the
+      // These are sequential validation guards feeding a precompile result. Keep the
       // short-circuits — expression rewrites are byte-level risky for consensus crypto.
       if inputData.length != 192 then return None // scalafix:ok DisableSyntax.return
 
@@ -769,19 +748,19 @@ object PrecompiledContracts:
       commitmentHash(0) = VERSIONED_HASH_VERSION_KZG
       if ByteString(commitmentHash) != versionedHash then return None // scalafix:ok DisableSyntax.return
 
-      // Verify the KZG proof using c-kzg-4844
-      try
-        val isValid = ethereum.ckzg4844.CKZG4844JNI.verifyKzgProof(
+      // Verify the KZG proof using c-kzg-4844. A proof c-kzg rejects fails the call; a c-kzg without its library or
+      // trusted setup raises NativeBackends.NativeBackendUnavailable instead (B-135).
+      val verified =
+        NativeBackends.kzgProofVerifies(
+          NativeBackends.CkzgNative,
           commitment.toArray,
           z.toArray,
           y.toArray,
           proof.toArray
         )
-        if !isValid then return None // scalafix:ok DisableSyntax.return
-      catch
-        case _: Exception => return None // scalafix:ok DisableSyntax.return
+      if !verified then return None // scalafix:ok DisableSyntax.return
 
-        // Return FIELD_ELEMENTS_PER_BLOB ++ BLS_MODULUS as 32-byte big-endian
+      // Return FIELD_ELEMENTS_PER_BLOB ++ BLS_MODULUS as 32-byte big-endian
       val result = ByteString(
         com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(FIELD_ELEMENTS_PER_BLOB.toByteArray), 32).toArray ++
           com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(BLS_MODULUS.toByteArray), 32).toArray

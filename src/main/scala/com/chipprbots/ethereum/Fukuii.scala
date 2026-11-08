@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.NativeBackends
 
 object Fukuii extends Logger:
   def main(args: Array[String]): Unit =
@@ -60,19 +61,20 @@ object Fukuii extends Logger:
       configErrors.foreach(err => log.error("Configuration error: {}", err))
       System.exit(1)
 
-    if Config.blockchains.blockchainConfig.forkTimestamps.cancunTimestamp.isDefined then
-      log.info("Cancun fork detected — loading KZG trusted setup for EIP-4844 point-evaluation precompile")
+    // The native libraries behind the precompiles of every configured fork (BLS12-381 from ETH Prague or ETC Olympia,
+    // KZG from ETH Cancun or ETC Olympia). A missing one would make this node compute different results from the
+    // network, so it must not start without them (B-135).
+    val nativeBackends = NativeBackends.required(Config.blockchains.blockchainConfig)
+
+    if nativeBackends.contains(NativeBackends.Backend.Kzg) then
+      log.info("A configured fork runs the EIP-4844 point-evaluation precompile — loading the KZG trusted setup")
       // A malformed/wrong-format trusted setup makes the native c-kzg loader over-read and
       // double-free, crashing the JVM with an UNCATCHABLE SIGSEGV (the try/catch below cannot
       // save us). Pre-validate the resource in pure JVM-land — the only place we can guard —
       // and refuse the native call if the layout does not match the c-kzg-4844 v2 (PeerDAS)
-      // format. On failure the node still boots; precompile 0x0A simply reverts every call.
+      // format. On failure the self-check below stops the node.
       if !kzgTrustedSetupIsValid(KzgTrustedSetupResource) then
-        log.error(
-          "KZG trusted setup {} failed format pre-validation — skipping native load. " +
-            "Point-evaluation precompile (0x0A) will revert all calls.",
-          KzgTrustedSetupResource
-        )
+        log.error("KZG trusted setup {} failed format pre-validation — skipping native load", KzgTrustedSetupResource)
       else
         try
           ethereum.ckzg4844.CKZG4844JNI.loadNativeLibrary()
@@ -83,11 +85,15 @@ object Fukuii extends Logger:
           )
           log.info("KZG trusted setup loaded successfully")
         catch
-          case e: Exception =>
-            log.error(
-              "Failed to load KZG trusted setup — point-evaluation precompile (0x0A) will revert all calls: {}",
-              e.getMessage
-            )
+          case e: (Exception | LinkageError) =>
+            log.error("Failed to load the KZG native library or trusted setup: {}", e.toString)
+
+    val nativeBackendErrors = NativeBackends.selfCheck(nativeBackends)
+    if nativeBackendErrors.nonEmpty then
+      nativeBackendErrors.foreach(err => log.error("Native backend check failed: {}", err))
+      System.exit(1)
+    else if nativeBackends.nonEmpty then
+      log.info("Native precompile backends checked: {}", nativeBackends.map(_.library).mkString("; "))
 
     // Take over the terminal only after configuration has been validated: the TUI suppresses console logging, and a
     // configuration error must reach the user's screen.
