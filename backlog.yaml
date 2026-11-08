@@ -423,20 +423,15 @@ items:
   - id: B-038
     title: "Spec 027 slice 1: worms, glyphs, tiers"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: M
     opened: 2026-11-07
+    closed: 2026-11-08
     refs: ["#1490"]
     links:
       prs: [1752]
       spec: specs/027-tui-dashboard
-      branch: feat/027-s1-worms
-    claim:
-      by: fukuii-fc
-      agent: general-purpose
-      since: 2026-11-08T16:10:00Z
-      heartbeat: 2026-11-08T18:38:21Z
       branch: feat/027-s1-worms
     notes: prism; eye.
   - id: B-039
