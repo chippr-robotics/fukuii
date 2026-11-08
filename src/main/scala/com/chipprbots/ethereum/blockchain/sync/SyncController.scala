@@ -111,6 +111,7 @@ object SyncController:
     else
       val doublings = (resnaps - ResnapsBeforeBackoff - 1).min(16)
       (ResnapBackoffBase * (1L << doublings)).min(ResnapBackoffCap)
+
   /** How long a regular-sync start tries the chain insert lock for the operator's chain-weight seeds (#1654). Block
     * commits hold it shared for a block, and the chain-weight pass's final step exclusively for a few blocks.
     */
