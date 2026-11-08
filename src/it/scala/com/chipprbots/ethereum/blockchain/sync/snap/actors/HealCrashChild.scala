@@ -127,7 +127,7 @@ object HealCrashChild:
     else
       val dataSource = new HookedDataSource(rocks, gate)
       val nodeStorage = new NodeStorage(dataSource)
-      val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
+      val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage), () => true)
       val mpt: MptStorage =
         val backing = stateStorage.getBackingStorage(1)
         if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate, oldTrie.nodes.map(_.hash).toSet)

@@ -41,7 +41,9 @@ class GenesisDataLoader(
     stateStorage: StateStorage,
     // Called once the genesis has been stored on a datadir that held none: the one moment it is known nothing else is
     // there (spec 022 D7, `HealInvariant.isEmpty`). Crash before it, and the datadir only counts as not empty: one walk.
-    onFirstStored: () => Unit = () => ()
+    // Its argument is whether every reference count the load wrote is exact (#1692, `GenesisDataLoader.countsExact`):
+    // only then may the datadir be stamped as such. A crash before the callback leaves it unstamped, which is safe.
+    onFirstStored: Boolean => Unit = _ => ()
 ) extends Logger:
 
   private val bloomLength = 512
@@ -129,7 +131,14 @@ class GenesisDataLoader(
           ChainWeight.totalDifficultyOnly(header.difficulty.value),
           saveAsBestBlock = true
         )
-        onFirstStored()
+        val countsExact = GenesisDataLoader.countsExact(genesisData)
+        if !countsExact then
+          log.info(
+            "The genesis has more than one account with storage. The storage tries are built through a buffer that " +
+              "writes each distinct node once, so a subtree two of them share is counted once. This datadir is not " +
+              "stamped as having exact reference counts, and pruning keeps every trie node (#1692)."
+          )
+        onFirstStored(countsExact)
         Success(())
 
   private def getGenesisStateRoot(genesisData: GenesisData, initalRootHash: Array[Byte], storage: MptStorage)(implicit
@@ -273,6 +282,20 @@ class GenesisDataLoader(
     ByteString(Hex.decode(List.fill(length)("0").mkString))
 
 object GenesisDataLoader:
+
+  /** Whether every reference count a genesis load writes is exact (#1692). The tries are built into one buffer that
+    * keeps each distinct node once (see [[AppendOnlyMptStorage]]), and `persist()` writes each at one reference. That
+    * is exact for the account trie, where no two positions hold the same node, and for the storage trie of one account.
+    * Two accounts that both have storage can share a subtree (identical storage, or a shared leaf: EEST
+    * `stEIP2930/variedContext`), and a node two positions use is then counted once. So the datadir may be stamped as
+    * having exact counts only while at most one account has storage. A slot of zero is not stored, and does not count.
+    * The shipped `default-genesis.json` has no storage at all; `custom-genesis-file` is the operator's.
+    */
+  def countsExact(genesisData: GenesisData): Boolean =
+    genesisData.alloc.valuesIterator.count(hasStorage) <= 1
+
+  private def hasStorage(account: GenesisAccount): Boolean =
+    account.storage.exists(_.valuesIterator.exists(_ != UInt256.Zero))
 
   /** Genesis tries are built into ONE shared, content-addressed node buffer (`ReadOnlyNodeStorage`), and every MPT
     * `put` reports the nodes it replaced as removals — which that buffer applies with `buffer -= hash`. Two accounts

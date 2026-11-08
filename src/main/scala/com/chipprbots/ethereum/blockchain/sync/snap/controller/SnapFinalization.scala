@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -308,7 +309,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
           // the clean route alone, so every hand-off still takes the marker here.
           if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
-            stateIngest.appState.isSnapHealInvariantPresent()
+            appState.isSnapHealInvariantPresent()
           then
             ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
             stateIngest.appState.clearSnapHealInvariant().commitSync()
@@ -433,6 +434,22 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         )
         stateIngest.chainWriter.removeBlockBody(pivotHash).commit()
 
+  /** #1692: before the publish writes anything to the hash store, take the "reference counts are exact" stamp away if
+    * this hand-off is not clean. The test is the one `finalizeSnapSync` applies to the invariant marker: a clean
+    * decision or walk on this root, and the marker standing. A lazy hand-off publishes over a path store that has
+    * holes, and a node of a missing position that also sits at a live one is counted once for the two. One synced
+    * write, so a node the publish wrote implies the stamp is gone. See [[RefCountTrust.withdrawAtPathPublish]].
+    */
+  private[snap] def withdrawRefCountStampForPublish(): Unit =
+    val appState = stateIngest.appState
+    val clean = stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
+      appState.hasSnapHealInvariant()
+    if RefCountTrust.withdrawAtPathPublish(appState, clean) then
+      ctx.log.warn(
+        "[PATH-PUBLISH] Handing off with no clean decision on this root, or no marker: the publish counts a node that " +
+          "stands over a hole once for each live position, so pruning keeps every trie node from here (#1692)"
+      )
+
   /** Launch the Path-to-hash publish on the blocking dispatcher. The controller stays in its current behavior
     * (`syncing`): the `completeSnapSync()` call sites discard the Behavior this returns, so a behavior switch would be
     * silently lost. Instead `pathPublish` marks the publish in flight; `syncing` then serves only status/progress and
@@ -441,6 +458,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private def startPathPublish(pivot: BigInt, pivotRoot: ByteString): Unit =
     val pns =
       stateIngest.pathNodes.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
+    withdrawRefCountStampForPublish()
     // Not the cached per-pivot store: the publish is a bulk load of every node of the state, and gets the store that
     // keeps no per-node undo rows for it. Its counts are the same.
     val target = stateIngest.stateTries.getBulkLoadStorage(pivot)

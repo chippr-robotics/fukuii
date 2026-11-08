@@ -59,5 +59,8 @@ object Storages:
           new LruCache[NodeHash, HeapEntry](
             Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
-          )
+          ),
+          // Whether the datadir's counts are proven exact, read at each prune so a SNAP start in this process takes
+          // effect on the next one (#1692). A datadir with no stamp deletes no trie node.
+          () => RefCountTrust.nodesMayBeDeleted(appStateStorage)
         )

@@ -47,7 +47,8 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
   /** Basic pruning: each node in a `[bytes, references, lastUsedBy]` wrapper. */
   private class Basic:
     val nodes: NodeStorage = new NodeStorage(EphemDataSource())
-    val state: ReferenceCountedStateStorage = new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024)
+    val state: ReferenceCountedStateStorage =
+      new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024, nodesMayBeDeleted = () => true)
     def wrap(bytes: Array[Byte]): Array[Byte] = storedNodeToBytes(StoredNode(ByteString(bytes), 1, 1))
 
   private def corruptAt(store: MptStorage, hash: NodeHash): CorruptNodeException =

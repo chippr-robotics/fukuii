@@ -321,6 +321,72 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
     h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
   }
 
+  /** A stamped datadir whose hand-off is at `root`, with the invariant marker standing or not. */
+  private def stampedHandOff(h: Harness, root: ByteString, markerStands: Boolean): Unit =
+    h.module.stateRoot = Some(TrieRoot(root))
+    h.module.appStateStorage.markDatadirCreated(countsExact = true).commitSync()
+    if markerStands then h.module.appStateStorage.stampSnapHealInvariant().commitSync()
+
+  it should "take the reference-count stamp away before a Path publish of a lazy hand-off writes (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(3))
+    stampedHandOff(h, root, markerStands = true)
+    // The marker stands, but no walk and no decision vouches for this root: the path store may have holes.
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    h.module.healingDecidedRoot.get() shouldBe null
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "take the stamp away when the root was decided but the invariant marker is gone (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(4))
+    stampedHandOff(h, root, markerStands = false)
+    h.module.healingDecidedRoot.set(root)
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "keep the stamp for a Path publish of a clean hand-off: a decision on this root and the marker standing (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(5))
+    stampedHandOff(h, root, markerStands = true)
+    h.module.healingDecidedRoot.set(root)
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe true
+  }
+
+  it should "keep it for a clean walk of this root too, and take it for a clean walk of another (#1692)" taggedAs UnitTest in {
+    val walked = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(6))
+    stampedHandOff(walked, root, markerStands = true)
+    walked.module.healingCleanWalkRoot.set(root)
+    walked.call(_.withdrawRefCountStampForPublish())
+    walked.module.appStateStorage.hasRefCountsExact() shouldBe true
+
+    val other = new Harness()
+    stampedHandOff(other, root, markerStands = true)
+    other.module.healingCleanWalkRoot.set(ByteString(Array.fill[Byte](32)(7)))
+    other.call(_.withdrawRefCountStampForPublish())
+    other.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "leave a datadir with no stamp as it is: an old Path datadir keeps every node and writes nothing (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(8))))
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+    h.module.appStateStorage.isDatadirCreatedUnderInvariant() shouldBe false
+  }
+
   it should "record the end of the background backfill, stop the downloader and answer Done" taggedAs UnitTest in {
     val h = new Harness(behaviour = Some(_.completedWithBackfill()))
     val downloader = TestInbox[ChainDownloader.Command]()

@@ -56,6 +56,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -506,10 +507,19 @@ private class SNAPSyncControllerImpl(
     * initial `idle` behavior. Called from `apply()`.
     */
   def start(): Behavior[Command] =
+    // #1692, before anything of this run is written: on the Hash scheme SNAP's writers skip a node that is already
+    // there, so a node one position still uses can end with a count too low, and pruning must stop deleting by count.
+    // The stamp goes in a synced write, so a node on disk from this run implies the stamp is gone.
+    val startAppState = stateIngest.appState
+    if RefCountTrust.withdrawAtSnapStart(startAppState, snapSyncConfig.storageScheme == StorageScheme.Hash) then
+      ctx.log.info(
+        "[PRUNING] SNAP starts on the Hash scheme: pruning keeps every trie node from here, as reference counts " +
+          "are not exact after it (#1692). Death rows and snapshot rows are still pruned."
+      )
     checkStorageSchemeMismatch()
     logHealInvariant(
       HealInvariant.atSnapStart(
-        stateIngest.appState,
+        startAppState,
         stateIngest.pathNodes,
         HealInvariant.canHold(
           snapSyncConfig.storageScheme,

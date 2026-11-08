@@ -232,14 +232,29 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
   override def prune(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
     val _ = pruneReporting(blockNumber, nodeStorage, inMemory)
 
-  /** [[prune]], returning the hashes of the trie nodes it deleted, so a cache of decoded nodes can drop them. */
-  def pruneReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
+  /** [[prune]], returning the hashes of the trie nodes it deleted, so a cache of decoded nodes can drop them.
+    *
+    * With `deleteNodes` false (#1692) it deletes no trie node: the height's death row, snapshot rows and undo records
+    * go as they always did, and the nodes that would have gone stay. A count is the number of positions that emitted a
+    * node, and a store that a de-duplicating writer filled (SNAP heal, the checkpoint importer) has counts that are too
+    * low where a subtree is shared, so a node at zero may be one another position still reads. The nodes it kept are
+    * counted in [[PruningMetrics]]: that is the disk this costs.
+    */
+  def pruneReporting(
+      blockNumber: BigInt,
+      nodeStorage: NodesStorage,
+      inMemory: Boolean,
+      deleteNodes: Boolean = true
+  ): Seq[NodeHash] =
     log.debug(s"Pruning block $blockNumber")
 
     var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       val deathRowKey = drRowKey(blockNumber)
-      val toBeRemoved = getNodesToBeRemovedInPruning(blockNumber, deathRowKey, nodeStorage)
+      val candidates = getNodesToBeRemovedInPruning(blockNumber, deathRowKey, nodeStorage)
+      val toBeRemoved: Seq[NodeHash] = if deleteNodes then candidates.map(_._1) else Nil
+      if !deleteNodes && candidates.nonEmpty then
+        PruningMetrics.recordRetained(candidates.size, candidates.iterator.map(_._2.toLong).sum)
       // A block's snapshot rows go in this write, as they always did. A height written in bulk has one row per node
       // (a datadir an earlier version published at Sepolia's pivot: tens of millions, one per trie node), and holding
       // all those keys at once, twice over, is what ran a 4 GB heap out: they go first, in bounded writes. The count
@@ -283,7 +298,12 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
     * It is only correct for the tip of a chain whose later blocks have been undone first; the import path does not use
     * it (a failed block stages nothing, see [[com.chipprbots.ethereum.db.storage.StagedBlockState]]).
     */
-  def rollbackReporting(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Seq[NodeHash] =
+  def rollbackReporting(
+      blockNumber: BigInt,
+      nodeStorage: NodesStorage,
+      inMemory: Boolean,
+      deleteNodes: Boolean = true
+  ): Seq[NodeHash] =
     var removed: Seq[NodeHash] = Nil
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
       val snapshotKeys = snapshotKeysUpTo(blockNumber, snapshotCount)
@@ -297,7 +317,11 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
       // We need to delete deathrow for rollbacked block
       val deathRowKey = drRowKey(blockNumber)
       // Transform them to db operations: disjoint by construction, one per node
-      val toRemove = earliest.collect { case StoredNodeSnapshot(nodeHash, None) => nodeHash }
+      // With `deleteNodes` false (#1692, see [[pruneReporting]]) the nodes the block created stay too: a position the
+      // block did not count may use them. The upserts below still put the counts of the others back.
+      val toRemove: Seq[NodeHash] =
+        if deleteNodes then earliest.collect { case StoredNodeSnapshot(nodeHash, None) => nodeHash }
+        else Nil
       val toUpsert = earliest.collect { case StoredNodeSnapshot(nodeHash, Some(sn)) =>
         nodeHash -> storedNodeToBytes(sn)
       }
@@ -456,15 +480,15 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger:
       blockNumber: BigInt,
       deadRowKey: ByteString,
       nodeStorage: NodesStorage
-  ): Seq[NodeHash] =
-    var nodesToRemove = List.empty[NodeHash]
+  ): Seq[(NodeHash, Int)] =
+    var nodesToRemove = List.empty[(NodeHash, Int)]
     val deathRow = getDeathRow(deadRowKey, nodeStorage).grouped(nodeKeyLength)
 
     deathRow.foreach { key =>
       for
         node <- nodeStorage.get(key).map(storedNodeFromBytes)
         if node.references == 0 && node.lastUsedByBlock <= blockNumber
-      yield nodesToRemove = key :: nodesToRemove
+      yield nodesToRemove = (key -> node.nodeEncoded.size) :: nodesToRemove
     }
 
     nodesToRemove

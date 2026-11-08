@@ -46,7 +46,8 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
   private class Basic:
     val source: EphemDataSource = EphemDataSource()
     val nodes: NodeStorage = new NodeStorage(source)
-    val state: ReferenceCountedStateStorage = new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024)
+    val state: ReferenceCountedStateStorage =
+      new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024, nodesMayBeDeleted = () => true)
     def stored(hash: NodeHash): StoredNode = storedNodeFromBytes(nodes.get(hash).get)
     def put(hash: NodeHash, bytes: Array[Byte], refs: Int): Unit =
       nodes.put(hash, storedNodeToBytes(StoredNode(ByteString(bytes), refs, 1)))
