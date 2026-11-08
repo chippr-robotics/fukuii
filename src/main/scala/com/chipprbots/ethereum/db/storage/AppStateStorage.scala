@@ -228,7 +228,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     update(
       // #1692: the archive holds each node once, so a node two positions use is counted once. Basic pruning would then
       // delete nodes by a count that is too low, so the stamp goes in the same write as the first of them, on any scheme.
-      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact),
+      // #1654: the importer stores the archive's weight for the checkpoint block, trusted and not derived from
+      // genesis, so the chain-weight marker goes too; `ChainWeightReconcile` checks it once the headers below are in.
+      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact, Keys.ChainWeightInvariant),
       toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
     ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
 
@@ -285,10 +287,46 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * is what the genesis load says (`GenesisDataLoader.countsExact`): a genesis that puts a shared subtree under two
     * accounts counts it once, and its datadir is left unstamped. A crash between the genesis and this write leaves a
     * datadir with no stamp, which only costs it the reclaiming of dead nodes.
+    *
+    * It also sets the chain-weight marker (#1654): the only stored weight is the genesis's own difficulty, and import
+    * derives every later one from its parent. A crash before this write costs one `ChainWeightReconcile` pass.
     */
   def markDatadirCreated(countsExact: Boolean): DataSourceBatchUpdate =
-    if countsExact then markDatadirCreatedUnderInvariant().and(markRefCountsExact())
-    else markDatadirCreatedUnderInvariant()
+    val created = markDatadirCreatedUnderInvariant().and(markChainWeightInvariant())
+    if countsExact then created.and(markRefCountsExact()) else created
+
+  // ========================================
+  // Stored chain weights (#1654)
+  // ========================================
+  //
+  // Fork choice compares stored weights (`ConsensusImpl.importToNewBranch`, `BlockQueue`), so one weight that does not
+  // follow from its parent's is a jump that every fork branching below it is weighed across. The marker says there is
+  // none: every stored weight on the canonical chain is the genesis weight plus the difficulties of the blocks after
+  // genesis up to it, as import writes it (parent + difficulty). It is set by the genesis write, by a SNAP hand-off whose
+  // pivot weight is exact (`SyncController`), and by `ChainWeightReconcile` once it has checked or repaired every
+  // canonical weight. It is taken away by a SNAP start (the pivot carries an estimate until the headers reach it), a
+  // checkpoint import (the archive's weight is trusted, not derived), an operator seed, and any estimate written over a
+  // weight. A datadir an older binary made has no marker, and gets one reconcile pass.
+
+  /** Whether every stored canonical weight is the genesis weight plus the difficulties up to its block. */
+  def hasChainWeightInvariant(): Boolean =
+    get(Keys.ChainWeightInvariant).contains(ChainWeightInvariantVersion)
+
+  def markChainWeightInvariant(): DataSourceBatchUpdate =
+    put(Keys.ChainWeightInvariant, ChainWeightInvariantVersion)
+
+  def clearChainWeightInvariant(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightInvariant)
+
+  /** `ChainWeightReconcile`'s saved place, in its own encoding (`ChainWeightReconcile.Progress`). */
+  def getChainWeightReconcileProgress(): Option[String] =
+    get(Keys.ChainWeightReconcileProgress)
+
+  def putChainWeightReconcileProgress(encoded: String): DataSourceBatchUpdate =
+    put(Keys.ChainWeightReconcileProgress, encoded)
+
+  def removeChainWeightReconcileProgress(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightReconcileProgress)
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -741,6 +779,9 @@ object AppStateStorage:
   /** The value of `state.refcounts.exact` and `snap.heal.auditForcedOnce`: the keys say it by being there. */
   val RefCountsMarkerValue: Value = "1"
 
+  /** The value of `chain.weight.invariant` (#1654). A later rule writes another, and older marks do not stand. */
+  val ChainWeightInvariantVersion: Value = "1"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -780,3 +821,5 @@ object AppStateStorage:
     val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"
     val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
     val RefCountsExact = "state.refcounts.exact"
+    val ChainWeightInvariant = "chain.weight.invariant"
+    val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"

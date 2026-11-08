@@ -11,8 +11,10 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+
 import scala.concurrent.duration.*
-import scala.util.Try
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
@@ -46,10 +48,13 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BranchResolution
+import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -215,7 +220,10 @@ object SyncController:
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
         com.chipprbots.ethereum.transactions.TxGossipGate.alwaysOpen,
-      backgroundAuditEnabled: Boolean = BackgroundAudit.enabledInNodeConfig
+      backgroundAuditEnabled: Boolean = BackgroundAudit.enabledInNodeConfig,
+      // #1654: the one-time chain-weight pass. On in production; unit fixtures that set inconsistent weights on purpose,
+      // and test something else, turn it off so it does not repair them under the test.
+      chainWeightReconcileOn: Boolean = true
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -245,7 +253,8 @@ object SyncController:
           externalSchedulerOpt,
           reorgState,
           txGossipGate,
-          backgroundAuditEnabled
+          backgroundAuditEnabled,
+          chainWeightReconcileOn
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -287,7 +296,8 @@ object SyncController:
       // Closed while SNAP or state recovery runs (no complete state to validate a peer tx against), opened when
       // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate,
-      backgroundAuditEnabled: Boolean
+      backgroundAuditEnabled: Boolean,
+      chainWeightReconcileOn: Boolean
   ):
     // scalastyle:on parameter.number
 
@@ -303,6 +313,14 @@ object SyncController:
     // spawns take this same one, so an import that a stopped importer, or a stopped RegularSync (`ctx.stop` stops
     // neither's running import), left running ends before a new importer reads its start block or imports.
     private val importLock: ImportLock = ImportLock()
+
+    // #1654: the one-time chain-weight pass (ChainWeightReconcile), a fiber off the critical path. `chainWeightEpoch` is
+    // bumped, under the chain insert lock, by everything that supersedes a running pass: a SNAP start, a seed, a
+    // calibration write, a restart of regular sync. The pass's repair runs under the same lock and checks it first, so
+    // it never sets the marker over what superseded it.
+    private val chainWeightEpoch = new java.util.concurrent.atomic.AtomicLong(0L)
+    private var chainWeightReconcileCancel: Option[() => scala.concurrent.Future[Unit]] = None
+    private val chainWeightLog = org.slf4j.LoggerFactory.getLogger(ChainWeightReconcile.LoggerName)
 
     // spec 022 T053: the full-trie walk off the critical path, alive exactly while regular sync is (decision 9).
     private var backgroundAudit: Option[TypedActorRef[BackgroundAudit.Command]] = None
@@ -391,6 +409,7 @@ object SyncController:
     /** Former `postStop`. Attached as a `PostStop` signal handler on every behavior via `withPostStop`. */
     private def onPostStop(): Unit =
       forkChoiceManagerOpt.foreach(_.clearListener())
+      stopChainWeightReconcile()
 
     /** Wrap a behavior with the shared `PostStop` cleanup so listener deregistration runs from every state.
       *
@@ -611,6 +630,7 @@ object SyncController:
               s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
             )
             clearSnapPivotFloor()
+            markChainWeightsAfterSnap(pivot)
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
             abortHealingServeRootRequest("SNAP finalised — leaving snap sync")
             // SNAPSyncController already owns the live ChainDownloader child via its
@@ -933,6 +953,17 @@ object SyncController:
           // jump that every fork branching below it is weighed across (see HeadChainWeight). Before this check, the
           // timed calibration did that on every restart (Mordor: about ±80M per restart).
           blockchainReader.getBestBlockHeader.map(h => h -> HeadChainWeight.classify(blockchainReader, h)) match
+            case _ if appStateStorage.hasChainWeightInvariant() =>
+              // #1654: every stored canonical weight is genesis plus the difficulties (the marker), so there is
+              // nothing to calibrate, even where the plausibility floor cannot tell (a chain that was PoS from genesis).
+              calibrationSucceeded = true
+              lastCalibrationSource = "CHAIN_WEIGHT_INVARIANT"
+              log.info(
+                "TD_CALIBRATION_SKIPPED: reason=CHAIN_WEIGHT_INVARIANT (every stored canonical weight is exact from " +
+                  "genesis); peer data td={} block={} not used",
+                peerTD,
+                peerMaxBlock
+              )
             case Some((head, HeadChainWeight.Status.Exact(stored))) =>
               calibrationSucceeded = true
               lastCalibrationSource = "ALREADY_EXACT"
@@ -945,23 +976,23 @@ object SyncController:
                 peerMaxBlock
               )
             case Some((head, HeadChainWeight.Status.Derivable(stored, exact))) =>
-              blockchainWriter.storeChainWeight(head.hash, exact).commit()
-              calibrationSucceeded = true
-              lastCalibrationSource = "DERIVED_FROM_PARENT"
-              val before = stored.map(_.totalDifficulty.value.toString).getOrElse("none")
-              log.warn(
-                "CHAIN_WEIGHT_REPAIRED: block={} before={} after={} source=DERIVED_FROM_PARENT (parent weight + " +
-                  "difficulty; peer data td={} block={} not used)",
-                head.number,
-                before,
-                exact.totalDifficulty,
-                peerTD,
-                peerMaxBlock
-              )
-              log.info(
-                s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
-                  s"source=DERIVED_FROM_PARENT attempt=$tdCalibrationAttempt"
-              )
+              if writeCalibratedWeight(head, exact) then
+                calibrationSucceeded = true
+                lastCalibrationSource = "DERIVED_FROM_PARENT"
+                val before = stored.map(_.totalDifficulty.value.toString).getOrElse("none")
+                log.warn(
+                  "CHAIN_WEIGHT_REPAIRED: block={} before={} after={} source=DERIVED_FROM_PARENT (parent weight + " +
+                    "difficulty; peer data td={} block={} not used)",
+                  head.number,
+                  before,
+                  exact.totalDifficulty,
+                  peerTD,
+                  peerMaxBlock
+                )
+                log.info(
+                  s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
+                    s"source=DERIVED_FROM_PARENT attempt=$tdCalibrationAttempt"
+                )
             case _ => calibrateChainWeightEstimate(peerTD, peerMaxBlock)
           Behaviors.same
 
@@ -1158,6 +1189,7 @@ object SyncController:
             s"Received SnapSyncFinalized(pivot=$pivot) during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
           )
           clearSnapPivotFloor()
+          markChainWeightsAfterSnap(pivot)
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
@@ -1633,6 +1665,7 @@ object SyncController:
       log.info("Starting SNAP sync mode")
       syncGeneration += 1
       txGossipGate.stateSyncStarted()
+      withdrawChainWeightInvariant("SNAP is starting; the pivot carries an estimate until the headers reach it")
 
       val snapSyncConfig = loadSnapSyncConfig()
 
@@ -1742,34 +1775,12 @@ object SyncController:
       }
       recoveryScanCouldNotRun = false
 
-      // Operator escape hatch: seed exact chain-weight values before RegularSync starts.
-      // Used when a node finished SNAP sync with a proxy TD (e.g. no ETH68 peers at finalize
-      // time) and needs correcting without a full re-sync.
-      // Format: -Dfukuii.seed-chain-weights=HASH1:TD1,HASH2:TD2 (hash hex, TD decimal)
-      // Get canonical values from a trusted local client:
-      //   curl -s localhost:8545 -d '{"method":"eth_getBlockByNumber","params":["latest",false],"id":1}' \
+      // Operator escape hatch: seed a trusted weight for a BASE before RegularSync starts (#1654, see ChainWeightSeed).
+      // Format: -Dfukuii.seed-chain-weights=HASH1:TD1,HASH2:TD2 (hash hex, TD decimal). Get the value from a trusted
+      // client, for the pivot (the lowest block with a weight), not the head:
+      //   curl -s localhost:8545 -d '{"method":"eth_getBlockByNumber","params":["0x<pivot>",false],"id":1}' \
       //     | jq -r '.result | "\(.hash):\(.totalDifficulty | ltrimstr("0x") | tonumber)"'
-      Option(System.getProperty("fukuii.seed-chain-weights")).foreach { seeds =>
-        seeds.split(",").foreach { seed =>
-          seed.trim.split(":") match
-            case Array(hashHex, tdStr) =>
-              // INFO-6: guard against NumberFormatException from a malformed fukuii.seed-chain-weights property.
-              Try(BigInt(tdStr.trim)).toOption match
-                case Some(td) =>
-                  val hash =
-                    com.chipprbots.ethereum.domain.BlockHash(
-                      ByteString(com.chipprbots.ethereum.utils.Hex.decode(hashHex.stripPrefix("0x")))
-                    )
-                  blockchainWriter
-                    .storeChainWeight(hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td))
-                    .commit()
-                  log.warn("seed-chain-weights: wrote TD={} for hash={}...", td, hashHex.take(16))
-                case None =>
-                  log.warn("seed-chain-weights: invalid TD value '{}' in entry '{}' — skipping", tdStr.trim, seed.trim)
-            case _ =>
-              log.warn("seed-chain-weights: invalid entry '{}' (expected HASH:TD)", seed.trim)
-        }
-      }
+      applyChainWeightSeeds()
 
       // Register self as calibration target so NetworkPeerManagerActor can push the correct
       // cumulative TD when it detects a TD-PROXY-GAP at peer handshake (stale genesis-proxy TD
@@ -1830,6 +1841,7 @@ object SyncController:
       regularSync ! SyncProtocol.Start
       ctx.watchWith(regularSync, RegularSyncTerminated(regularSync))
       startBackgroundAudit()
+      startChainWeightReconcile()
       // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
       // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
       // far it got — spawn a standalone ChainDownloader to finish the job alongside regular sync.
@@ -1885,6 +1897,111 @@ object SyncController:
     private def stopBackgroundAudit(): Unit =
       backgroundAudit.foreach(ctx.stop)
       backgroundAudit = None
+
+    // ---- stored chain weights (#1654) --------------------------------------------------------------------------------
+
+    /** Every route into regular sync comes here. A pass of an earlier start is superseded; a new one starts unless the
+      * chain-weight marker stands. It resumes from its saved place, and ends once its repair has set the marker.
+      */
+    private def startChainWeightReconcile(): Unit =
+      stopChainWeightReconcile()
+      if chainWeightReconcileOn && !appStateStorage.hasChainWeightInvariant() then
+        val epoch = chainWeightEpoch.get()
+        val pass = ChainWeightReconcile
+          .run(
+            ChainWeightReconcile.Engine(blockchainReader, blockchainWriter, appStateStorage),
+            importLock,
+            () => chainWeightEpoch.get() == epoch,
+            appStateStorage,
+            chainWeightLog
+          )
+          .handleErrorWith { e =>
+            // Off the critical path: logged, and the next regular-sync start resumes from the saved place.
+            IO(chainWeightLog.error("[CW-RECONCILE] failed; the next regular-sync start resumes it", e))
+              .as(ChainWeightReconcile.Outcome.Superseded)
+          }
+        chainWeightReconcileCancel = Some(pass.unsafeRunCancelable()(using IORuntime.global))
+
+    private def stopChainWeightReconcile(): Unit =
+      chainWeightEpoch.incrementAndGet()
+      chainWeightReconcileCancel.foreach(cancel => cancel())
+      chainWeightReconcileCancel = None
+
+    /** A SNAP start: the pivot carries an estimate until the headers reach it, so the marker goes. Under the chain
+      * insert lock, so a pass repairing under it either finished first (and the marker it set goes now) or sees the
+      * bumped epoch and writes nothing.
+      */
+    private def withdrawChainWeightInvariant(why: String): Unit =
+      val had = ChainInsertLock.exclusive {
+        chainWeightEpoch.incrementAndGet()
+        val stood = appStateStorage.hasChainWeightInvariant()
+        if stood then appStateStorage.clearChainWeightInvariant().commitSync()
+        stood
+      }
+      stopChainWeightReconcile()
+      if had then chainWeightLog.info(s"[CW-RECONCILE] chain-weight marker withdrawn: $why")
+
+    /** A SNAP hand-off. The header download stored every header from genesis with its parent's weight plus its
+      * difficulty, so a pivot whose weight follows from its parent's (REAL_DB_TD or DERIVED_FROM_PARENT at
+      * finalisation) closes an exact chain, and the marker is set. Below an older pivot the same download wrote them;
+      * above it, this download rewrote them. An estimated pivot leaves the marker off, and the pass checks every weight
+      * once the headers are in.
+      */
+    private def markChainWeightsAfterSnap(pivot: BigInt): Unit =
+      blockchainReader.getBlockHeaderByNumber(pivot).map(HeadChainWeight.classify(blockchainReader, _)) match
+        case Some(HeadChainWeight.Status.Exact(weight)) =>
+          appStateStorage.markChainWeightInvariant().commitSync()
+          chainWeightLog.info(
+            s"[CW-RECONCILE] SNAP pivot $pivot has its exact weight ${weight.totalDifficulty}: marker set, no pass needed"
+          )
+        case _ =>
+          chainWeightLog.info(
+            s"[CW-RECONCILE] SNAP pivot $pivot has an estimated weight: a pass checks every weight from genesis once the " +
+              "headers are in"
+          )
+
+    /** A calibration write (#1654), under the chain insert lock. Refused while the marker stands: every weight is exact
+      * then, and there is nothing to calibrate. Otherwise it supersedes a running pass, drops a saved place at or above
+      * this block so the next pass checks the value written here, and restarts the pass.
+      */
+    private def writeCalibratedWeight(header: BlockHeader, weight: ChainWeight): Boolean =
+      val written = ChainInsertLock.exclusive {
+        if appStateStorage.hasChainWeightInvariant() then false
+        else
+          chainWeightEpoch.incrementAndGet()
+          val placeAbove = appStateStorage
+            .getChainWeightReconcileProgress()
+            .flatMap(ChainWeightReconcile.decode)
+            .exists(_.cursor.number >= header.number.value)
+          val write = blockchainWriter.storeChainWeight(header.hash, weight)
+          (if placeAbove then write.and(appStateStorage.removeChainWeightReconcileProgress()) else write).commit()
+          true
+      }
+      if written && chainWeightReconcileCancel.isDefined then startChainWeightReconcile()
+      written
+
+    /** `-Dfukuii.seed-chain-weights` (see [[ChainWeightSeed]]), under the import lock and the chain insert lock in that
+      * order, as every import path takes them.
+      */
+    private def applyChainWeightSeeds(): Unit =
+      Option(System.getProperty(ChainWeightSeed.Property)).filter(_.trim.nonEmpty).foreach { spec =>
+        val outcomes = importLock
+          .guard(IO.blocking(ChainInsertLock.exclusive {
+            chainWeightEpoch.incrementAndGet()
+            ChainWeightSeed(spec, blockchainReader, blockchainWriter, appStateStorage)
+          }))
+          .unsafeRunSync()(using IORuntime.global)
+        outcomes.foreach {
+          case ChainWeightSeed.Outcome.Applied(number, hash, td, descendants) =>
+            log.warn(
+              s"seed-chain-weights: block $number (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash)}) " +
+                s"anchored at TD=$td and $descendants block(s) above it re-derived; the chain-weight pass checks it " +
+                "from genesis once the headers are in"
+            )
+          case ChainWeightSeed.Outcome.Refused(entry, reason) =>
+            log.warn(s"seed-chain-weights: refused '$entry': $reason")
+        }
+      }
 
     /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. Returns
       * `Some(runningRegularSyncWithStandaloneBackfill)` when a resumer is spawned; `None` when SNAP has not completed,
@@ -2543,17 +2660,16 @@ object SyncController:
           val calibratedTD =
             if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
             else peerTD
-          if calibratedTD > genesisWeight * BigInt(1000) then
-            val storedTD: BigInt = blockchainReader
-              .getChainWeightByHash(bestBlock.header.hash)
-              .map(_.totalDifficulty.value)
-              .getOrElse(BigInt(0))
-            blockchainWriter
-              .storeChainWeight(
-                bestBlock.header.hash,
-                com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
-              )
-              .commit()
+          val storedTD: BigInt = blockchainReader
+            .getChainWeightByHash(bestBlock.header.hash)
+            .map(_.totalDifficulty.value)
+            .getOrElse(BigInt(0))
+          if calibratedTD > genesisWeight * BigInt(1000) &&
+            writeCalibratedWeight(
+              bestBlock.header,
+              com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(calibratedTD)
+            )
+          then
             networkBestTD = peerTD
             calibrationSucceeded = true
             lastCalibrationSource =
@@ -2673,20 +2789,20 @@ object SyncController:
                 .getChainWeightByHash(bestHeader.hash)
                 .map(_.totalDifficulty.value)
                 .getOrElse(BigInt(0))
-              blockchainWriter
-                .storeChainWeight(bestHeader.hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td))
-                .commit()
-              log.info(
-                "CHAIN_WEIGHT_CALIBRATED_LOCAL: anchor={} gap={} calibratedTD={} source=LOCAL_CHAIN_ACCUMULATION attempt={}",
-                cur.number,
-                headersAboveAnchor.size,
-                td,
-                tdCalibrationAttempt
-              )
-              val tdRatio = if storedTD > BigInt(0) then (td / storedTD).toString else "∞"
-              log.info(
-                s"TD_CALIBRATION_SUMMARY: block=${bestHeader.number} before=$storedTD after=$td ratio=$tdRatio source=LOCAL_CHAIN attempt=$tdCalibrationAttempt"
-              )
+              // Not written while the chain-weight invariant stands (#1654): then there is nothing to calibrate.
+              if writeCalibratedWeight(bestHeader, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td))
+              then
+                log.info(
+                  "CHAIN_WEIGHT_CALIBRATED_LOCAL: anchor={} gap={} calibratedTD={} source=LOCAL_CHAIN_ACCUMULATION attempt={}",
+                  cur.number,
+                  headersAboveAnchor.size,
+                  td,
+                  tdCalibrationAttempt
+                )
+                val tdRatio = if storedTD > BigInt(0) then (td / storedTD).toString else "∞"
+                log.info(
+                  s"TD_CALIBRATION_SUMMARY: block=${bestHeader.number} before=$storedTD after=$td ratio=$tdRatio source=LOCAL_CHAIN attempt=$tdCalibrationAttempt"
+                )
               true
             else
               log.warn(

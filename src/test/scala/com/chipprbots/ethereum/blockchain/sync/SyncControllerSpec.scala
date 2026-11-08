@@ -1670,7 +1670,9 @@ class SyncControllerSpec
           this,
           externalSchedulerOpt = Some(system.scheduler),
           txGossipGate = txGossipGate,
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
@@ -1703,7 +1705,9 @@ class SyncControllerSpec
           syncConfig,
           this,
           externalSchedulerOpt = Some(system.scheduler),
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
@@ -1798,7 +1802,9 @@ class SyncControllerSpec
           chainConfigBuilder,
           forkChoiceManagerOpt = Some(forkChoiceManager),
           externalSchedulerOpt = Some(system.scheduler),
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
