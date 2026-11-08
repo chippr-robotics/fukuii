@@ -1936,7 +1936,7 @@ object SyncController:
       // #1654: a SNAP hand-off has consumed its pending mark by now; any other way here drops it. Then the operator's
       // -Dfukuii.seed-chain-weights=HASH1:TD1,... (a trusted weight for a BASE; ChainWeightSeed says where the value
       // comes from).
-      if appStateStorage.isChainWeightSnapPending() then appStateStorage.clearChainWeightSnapPending().commit()
+      if appStateStorage.isChainWeightSnapPending() then appStateStorage.clearChainWeightSnapPending().commitSync()
       applyChainWeightSeeds()
 
       // Register self as calibration target so NetworkPeerManagerActor can push the correct
@@ -2067,17 +2067,25 @@ object SyncController:
       if chainWeightReconcileOn && !active && !appStateStorage.hasChainWeightInvariant() then
         val ended = new java.util.concurrent.atomic.AtomicBoolean(false)
         val pass = chainWeightPassLock.lock
-          .surround(IO.defer {
-            val e = chainWeightEpoch.current
-            ChainWeightReconcile.run(
-              ChainWeightReconcile.Engine(blockchainReader, blockchainWriter, appStateStorage),
-              importLock,
-              chainWeightEpoch,
-              e,
-              appStateStorage,
-              chainWeightLog
-            )
-          })
+          .surround {
+            def once: IO[ChainWeightReconcile.Outcome] = IO.defer {
+              val e = chainWeightEpoch.current
+              ChainWeightReconcile.run(
+                ChainWeightReconcile.Engine(blockchainReader, blockchainWriter, appStateStorage),
+                importLock,
+                chainWeightEpoch,
+                e,
+                appStateStorage,
+                chainWeightLog
+              )
+            }
+            // A seeded pass re-derives the blocks above an operator's seed and sets no marker; then the pass from
+            // genesis runs, and waits where the headers below the seed are not in yet.
+            once.flatMap {
+              case ChainWeightReconcile.Outcome.Seeded(_) => once
+              case other                                  => IO.pure(other)
+            }
+          }
           .handleErrorWith { e =>
             // Off the critical path: logged, and the next regular-sync start resumes from the saved place.
             IO(chainWeightLog.error("[CW-RECONCILE] failed; the next regular-sync start resumes it", e))
@@ -2141,9 +2149,10 @@ object SyncController:
 
     /** `-Dfukuii.seed-chain-weights` (see [[ChainWeightSeed]]), before regular sync starts: under the chain insert
       * lock, TRIED for at most a moment so this thread never parks behind a block commit or a pass's final step (a seed
-      * skipped here is tried again at the next start), and atomic against everything a pass writes. An accepted seed
-      * supersedes the running pass, which starts again from genesis. Refused outright on a chain that was PoS from
-      * genesis (terminal TD 0).
+      * skipped here is tried again at the next start), and atomic against everything a pass writes. A seed writes only
+      * the base's weight (vault N2): an accepted one supersedes the running pass, and the pass started next re-derives
+      * the blocks above the base off this thread, then checks from genesis. Refused outright on a chain that was PoS
+      * from genesis (terminal TD 0).
       */
     private def applyChainWeightSeeds(): Unit =
       Option(System.getProperty(ChainWeightSeed.Property)).filter(_.trim.nonEmpty).foreach { spec =>
@@ -2160,11 +2169,11 @@ object SyncController:
             )
           case Some(outcomes) =>
             outcomes.foreach {
-              case ChainWeightSeed.Outcome.Applied(number, hash, td, descendants) =>
+              case ChainWeightSeed.Outcome.Applied(number, hash, td) =>
                 log.warn(
                   s"seed-chain-weights: block $number (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash)}) " +
-                    s"anchored at TD=$td and $descendants block(s) above it re-derived; the chain-weight pass checks it " +
-                    "from genesis once the headers are in"
+                    s"anchored at TD=$td; the chain-weight pass re-derives the blocks above it, then checks every " +
+                    "weight from genesis once the headers are in"
                 )
               case ChainWeightSeed.Outcome.Refused(entry, reason) =>
                 log.warn(s"seed-chain-weights: refused '$entry': $reason")

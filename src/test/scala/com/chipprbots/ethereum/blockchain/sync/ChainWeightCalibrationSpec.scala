@@ -670,17 +670,27 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
     )
 
   "SyncController -Dfukuii.seed-chain-weights" should
-    "re-derive every block above a seed at a base, a block whose parent has no weight" taggedAs (UnitTest, SyncTest) in
+    "anchor a seed at a base (a block whose parent has no weight) and hand the blocks above it to the pass" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in
     (new RegularSyncSetup:
       // A SNAP pivot whose headers below are not in: its parent has no weight, and four blocks inherit its estimate.
       val chain: Vector[BlockHeader] =
         saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorHeadTD / 2, length = 5)
       withSeed(s"${hex(chain.head.hash)}:$MordorHeadTD")(drainRegistration())
 
+      // Only the base, on this thread (vault N2); the pass (off in this fixture; ChainWeightReconcileSpec runs it)
+      // re-derives the four above it from the place the seed left.
       chain.zipWithIndex.foreach { (h, i) =>
         blockchainReader.getChainWeightByHash(h.hash).map(_.totalDifficulty.value) shouldBe
-          Some(MordorHeadTD + MordorDifficulty * i)
+          Some(if i == 0 then MordorHeadTD else MordorHeadTD / 2 + MordorDifficulty * i)
       }
+      storagesInstance.storages.appStateStorage
+        .getChainWeightReconcileProgress()
+        .flatMap(ChainWeightReconcile.decode)
+        .map(p => (p.cursor.number, p.cursor.td, p.seeded)) shouldBe Some((MordorPivot, MordorHeadTD, true))
+      storagesInstance.storages.appStateStorage.hasChainWeightInvariant() shouldBe false
     )
 
   it should "refuse a seed over a parent with a plausible weight, and leave every weight as it was" taggedAs (

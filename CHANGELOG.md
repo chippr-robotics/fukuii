@@ -242,11 +242,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     most 256 that do not fill the block cache, paced at a 50% duty cycle), saving its place every 10,000 blocks so a
     restart resumes. It waits wherever the header backfill has not stored a header yet, and a reorg below its place
     sends it back to the highest place still canonical. Every weight that differs is then rewritten bottom-up in
-    chunks of 10,000, still with no lock (a block's exact weight depends only on its ancestry). Only the last step
-    takes the import lock and then the chain insert lock exclusively: it checks the blocks imported since, and every
-    block mapped above the best block (an Engine API payload not yet promoted), then writes those and the marker in
-    one batch. That hold covers a few blocks, so Engine API `newPayload` calls are not held past a consensus client's
-    timeout. Only one pass runs at a time.
+    chunks of 10,000, paced like the scan and still with no lock (a block's exact weight depends only on its
+    ancestry); a run that breaks under it (the chain moved) goes back to the scan. Blocks imported meanwhile, which
+    inherit the not-yet-repaired head (tens a second during a consensus client's catch-up), are rewritten the same way
+    while 1,000 or more remain. Only the last step takes the import lock and then the chain insert lock exclusively:
+    it checks the blocks imported since, and every block mapped above the best block (an Engine API payload not yet
+    promoted), then writes those and the marker in one batch. That hold covers fewer than 1,000 blocks, so Engine API
+    `newPayload` calls are not held past a consensus client's timeout. Only one pass runs at a time.
     Logs are tagged `[CW-RECONCILE]`, with a progress line every 1,000,000 blocks and a summary. Gauges:
     `chainweight.reconcile.block.gauge`, `.differing.blocks.gauge`, `.repaired.blocks.gauge` and `.state.gauge`. More
     than 10,000 distinct differences stops the pass with an ERROR and leaves the marker off; nothing is lost.
@@ -264,13 +266,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     TD of 0 (Platåberget), an eth/68 peer with a higher TD made the peer-info actor divide by our TD of 0, and it
     stopped for good. Our TD is 0 there after the repair too.
   - **`-Dfukuii.seed-chain-weights` seeds a base, not a head.** A seed is accepted only for a canonical block whose
-    parent has no plausible weight, such as a SNAP pivot whose headers below are not in yet. Every block above it
-    then gets its parent's weight plus its own difficulty. A seed over a parent with a plausible weight is refused
+    parent has no plausible weight, such as a SNAP pivot whose headers below are not in yet. Only that block's weight
+    is written at start-up; the pass then re-derives every block above it in the background, each its parent's weight
+    plus its own difficulty, without setting the marker. A seed over a parent with a plausible weight is refused
     with a WARN: it would leave a jump, and the calibration reverted it 30 s later anyway. On a chain that was PoS
     from genesis every seed is refused, because the pass derives the weights. A seed is trusted, not proven, so the
-    pass checks it from genesis once the headers are in. Seeds are applied by the pass, not on the sync thread. To
-    get the value, ask a client that still reports total difficulty (core-geth; go-ethereum 1.15+ returns none); the
-    recipe is in `ChainWeightSeed`.
+    pass checks it from genesis once the headers are in. To get the value, ask a client that still reports total
+    difficulty (core-geth; go-ethereum dropped it in 1.14.11); after the merge every Sepolia block's TD is
+    17000018015853232. The recipe is in `ChainWeightSeed`.
+  - **Known gap.** A side payload stored only by hash while the pass repairs, and later made canonical by a
+    forkchoiceUpdated reorg, keeps the weight its parent had then. On a PoS chain this affects only the TD it
+    advertises.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
