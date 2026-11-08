@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `server-address` and had no effect, now applies. Inside the containers the RPC and Engine API still bind `0.0.0.0`
   so Docker can forward to them. To reach RPC from another host, use an SSH tunnel or an authenticating TLS proxy.
   The `fukuii-cl-setup` and `fukuii-engine-api-setup` skills now say how to run a CL on another host.
+- **The JSON-RPC WebSocket server accepts browser connections only from allowed origins (`ws.allowed-origins`, default
+  localhost); clients that send no Origin header are unaffected.**
+  The upgrade checks the `Origin` header against `fukuii.network.rpc.ws.allowed-origins` and answers 403, before the
+  connection is accepted, when it is not listed. A client that sends no `Origin` header (a CLI, a library, a consensus
+  client) is not a browser and is upgraded as before.
+  - **Default.** The key is optional and is not in `network.conf`. When it is absent or empty, pages served from this
+    machine are accepted: `localhost`, `127.0.0.1` and `[::1]`, on any port, over http or https. A browser dapp served
+    from another origin needs that origin listed, for example `allowed-origins = ["https://app.example"]` (a list, or
+    one comma-separated string); `allowed-origins = "*"` accepts every origin. A non-empty list replaces the default,
+    so list `http://localhost` as well to keep it.
+  - **Matching** follows go-ethereum's `--ws.origins`. An entry is `scheme://host[:port]` or `host[:port]`; a part it
+    leaves out matches anything, so `https://app.example` accepts any port. Case is ignored and the port is compared as
+    written. An entry that is not a valid origin, or has no host, is ignored with a warning.
 - **The `--tui` dashboard draws the worm-to-brain bars, in emoji or ASCII, at any size from 80×24 (spec 027 slice 1).**
   The progress bars are now the bars the logs already draw (`[====🪱....]🧠 52%`). Regular sync shows one Blocks worm;
   SNAP sync shows five worm rows (Overall, Accounts, Storage, Bytecode, Healing), each with its count and rate once, plus
