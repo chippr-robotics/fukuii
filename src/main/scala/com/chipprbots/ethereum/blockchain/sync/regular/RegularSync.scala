@@ -105,6 +105,8 @@ object RegularSync:
       ],
       configBuilder: BlockchainConfigBuilder,
       supervisor: TypedActorRef[SyncController.Command],
+      // The node's one import lock (SyncController's), handed to every importer this session spawns.
+      importLock: ImportLock,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       // Called whenever progress reaches SyncDone (imported up to the best block peers announced), or a block is mined:
       // go-ethereum's downloader success callback / core-geth's StartMining, both `enableSyncedFeatures()`.
@@ -173,7 +175,8 @@ object RegularSync:
               configBuilder,
               Some(peersClient),
               reorgState,
-              exhausts = exhausts
+              exhausts = exhausts,
+              importLock = importLock
             ),
             s"block-importer-$epoch"
           )
@@ -249,7 +252,9 @@ object RegularSync:
         ranFor.toSeconds,
         waiting
       )
-      // Stopping a child already stopped does nothing; the fetcher's own children stop with it.
+      // Stopping a child already stopped does nothing; the fetcher's own children stop with it. An import the importer
+      // has running is not stopped: it runs on, holding the import lock, which the next importer takes before it reads
+      // the block it starts from.
       ctx.stop(pipeline.fetcher)
       ctx.stop(pipeline.importer)
       timers.startSingleTimer(RestartPipelineKey, SyncProtocol.RestartPipeline(pipeline.epoch), waiting)

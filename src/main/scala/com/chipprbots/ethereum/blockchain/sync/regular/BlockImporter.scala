@@ -17,6 +17,8 @@ import cats.implicits.*
 
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -217,7 +219,8 @@ object BlockImporter:
       configBuilder: BlockchainConfigBuilder,
       peersClient: Option[TypedActorRef[PeersClient.Command]] = None,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
-      exhausts: ExhaustCount
+      exhausts: ExhaustCount,
+      importLock: ImportLock
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -244,12 +247,17 @@ object BlockImporter:
           configBuilder,
           peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler)),
           reorgState,
-          exhausts
+          exhausts,
+          importLock
         )
         // Started as it is spawned: a separate start message was what a re-spawned importer never got (#1705).
-        logic.start(blockchainReader.getBestBlockNumber)
+        logic.starting()
       }
     }
+
+  // Mined blocks an importer keeps while it waits for the import lock to start. More than a few would mean a start held
+  // far longer than any import takes.
+  private[regular] val StartStashCapacity: Int = 16
 
   sealed trait Command
   case class MinedBlock(block: Block) extends Command
@@ -263,6 +271,9 @@ object BlockImporter:
       extends Command
   final private[regular] case class BranchResolverStopped(resolver: TypedActorRef[FastSyncBranchResolverActor.Command])
       extends Command
+  // The best block, read under the import lock as the importer starts; or the failure to read it.
+  final private[regular] case class StartFrom(bestBlock: BigInt) extends Command
+  final private[regular] case class StartFailed(error: Throwable) extends Command
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
@@ -345,7 +356,8 @@ final private class BlockImporterLogic(
     configBuilder: BlockchainConfigBuilder,
     balFetcher: Option[BlockAccessListFetcher],
     reorgState: ReorgStateHandler,
-    exhausts: BlockImporter.ExhaustCount
+    exhausts: BlockImporter.ExhaustCount,
+    importLock: ImportLock
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -580,8 +592,31 @@ final private class BlockImporterLogic(
       case _ => Behaviors.same
     }
 
+  /** The first state. Takes the import lock, so an import that a stopped importer left running has ended, and only then
+    * reads the best block to start from (#1705, beacon): read before, it could be a head that import was still moving.
+    * Until then a mined block is kept, and everything else dropped: no fetcher answers one it has not started.
+    */
+  def starting(): Behavior[Command] =
+    ctx.pipeToSelf(importLock.guard(IO.delay(blockchainReader.getBestBlockNumber)).unsafeToFuture()) {
+      case Success(bestBlock) => StartFrom(bestBlock)
+      case Failure(error)     => StartFailed(error)
+    }
+    Behaviors.withStash(StartStashCapacity) { stash =>
+      Behaviors.receiveMessage {
+        case StartFrom(bestBlock) => stash.unstashAll(start(bestBlock))
+        case StartFailed(error)   =>
+          // Fail loudly: this importer stops, and RegularSync replaces the pipeline.
+          throw error
+        case mined: MinedBlock =>
+          if stash.isFull then log.warning("Mined block {} dropped: the importer is still starting", mined.block.number)
+          else stash.stash(mined)
+          Behaviors.same
+        case _ => Behaviors.same
+      }
+    }
+
   /** Starts the fetcher from `bestBlock`, the block the chain's head was at. */
-  def start(bestBlock: BigInt): Behavior[Command] =
+  private def start(bestBlock: BigInt): Behavior[Command] =
     log.info("Starting Regular Sync, current best block is {}", bestBlock)
     fetcher ! BlockFetcher.Start(selfRef, bestBlock)
     supervisor ! ProgressProtocol.StartingFrom(bestBlock)
@@ -616,8 +651,10 @@ final private class BlockImporterLogic(
   private def importBlocks(blocks: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Behavior[Command] = importWith(
+    // Delayed, not pure: `pure` evaluated the branch resolution at once, on the actor's thread and outside the import
+    // lock, against a head another import might still be moving; and anything it threw failed this actor (#1705).
     IO
-      .pure {
+      .delay {
         log.debug(
           "Attempting to import blocks starting from {} and ending with {}",
           blocks.head.number,
@@ -1095,7 +1132,10 @@ final private class BlockImporterLogic(
       state: ImporterState
   ): Behavior[Command] =
     val ref = selfRef
-    importTask
+    // The whole import, branch resolution included, under the node's import lock: stopping this actor would not stop
+    // it, and the importer that replaced this one must not import, nor resolve a branch, until it ends (#1705).
+    importLock
+      .guard(importTask)
       .map(nb => ref ! ImportDone(nb, blockImportType))
       .handleError { ex =>
         log.error(ex, "Block import failed unexpectedly: {}", ex.getMessage)

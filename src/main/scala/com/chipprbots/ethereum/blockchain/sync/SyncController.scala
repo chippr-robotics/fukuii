@@ -15,6 +15,7 @@ import scala.concurrent.duration.*
 import scala.util.Try
 import scala.util.control.NonFatal
 
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -297,6 +298,11 @@ object SyncController:
     // (context.stop is async — new actors can race with still-stopping ones).
     private var bootstrapGeneration: Long = 0
     private var syncGeneration: Long = 0
+
+    // #1705: regular sync's import lock, ONE for the node's life. Every RegularSync started here and every importer it
+    // spawns take this same one, so an import that a stopped importer, or a stopped RegularSync (`ctx.stop` stops
+    // neither's running import), left running ends before a new importer reads its start block or imports.
+    private val importLock: ImportLock = ImportLock()
 
     // spec 022 T053: the full-trie walk off the critical path, alive exactly while regular sync is (decision 9).
     private var backgroundAudit: Option[TypedActorRef[BackgroundAudit.Command]] = None
@@ -1802,6 +1808,7 @@ object SyncController:
             blockTopic,
             configBuilder,
             ctx.self,
+            importLock,
             reorgState,
             onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced")
           ),

@@ -1,11 +1,19 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 
+import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+
+import scala.concurrent.Await
 import scala.concurrent.Future
+import scala.concurrent.Promise
 import scala.concurrent.duration.*
 
 import org.scalamock.scalatest.AsyncMockFactory
@@ -16,6 +24,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.WordSpecBase
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -24,6 +33,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** #1705: RegularSync owns its fetch-and-import pipeline. When the fetcher, the importer, or a child of the fetcher
   * stops, the whole pipeline is replaced from the best block, after a backoff, for as long as the node runs. Before, a
@@ -57,6 +67,29 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
     /** Stops the child of RegularSync at `path` (wildcards allowed), as a failure inside it would. */
     def stopChild(path: String): Unit =
       system.actorSelection(s"${regularSync.path}/$path") ! PoisonPill
+
+  /** Records how many batch imports ran at once. The first takes long enough to be running when its pipeline goes. */
+  class ConcurrentImportFixture extends PipelineFixture:
+    val imports = new AtomicInteger(0)
+    val inFlight = new AtomicInteger(0)
+    val mostAtOnce = new AtomicInteger(0)
+    val firstImportRunning: Promise[Unit] = Promise()
+
+    override lazy val consensusAdapter: ConsensusAdapter =
+      val adapter = stub[ConsensusAdapter]
+      (adapter
+        .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
+        .when(*, *, *)
+        .onCall { case (_: (NonEmptyList[Block] @unchecked), _, _) =>
+          val takes = if imports.incrementAndGet() == 1 then 5.seconds else 10.millis
+          val result: BlockImportResult = BlockImportedToTop(Nil)
+          IO {
+            val now = inFlight.incrementAndGet()
+            mostAtOnce.updateAndGet(most => most.max(now))
+            firstImportRunning.trySuccess(())
+          } *> IO.sleep(takes) *> IO(inFlight.decrementAndGet()).as(result)
+        }
+      adapter
 
   "The pipeline backoff" should {
     val backoff = RegularSync.PipelineBackoff(initial = 1.second, max = 30.seconds, stableAfter = 60.seconds)
@@ -136,6 +169,21 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitFetcherStart() should not be first
         awaitHeadersRequestFrom(1)
     )
+
+    // T4: stopping an importer does not stop the import it has running. The next importer waits for it (the import
+    // lock) before it reads its start block, so no two imports run at once and none is resolved against a head the
+    // other has not committed (beacon, #1432).
+    "never import alongside an import a stopped importer left running" taggedAs (UnitTest, SyncTest) in sync(
+      new ConcurrentImportFixture:
+        peersClient.setAutoPilot(new PeersClientAutoPilot)
+        regularSync ! SyncProtocol.Start
+        Await.result(firstImportRunning.future, 15.seconds)
+
+        stopChild("block-fetcher-*") // its importer is stopped with it; the import runs on
+
+        awaitCond(imports.get >= 2, 30.seconds)
+        mostAtOnce.get shouldBe 1
+    )
   }
 
   "The importer" should {
@@ -175,7 +223,8 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
             blockchain,
             blacklist,
             this,
-            exhausts = exhausts
+            exhausts = exhausts,
+            importLock = importLock
           ),
           "resolver-stopped-importer"
         )

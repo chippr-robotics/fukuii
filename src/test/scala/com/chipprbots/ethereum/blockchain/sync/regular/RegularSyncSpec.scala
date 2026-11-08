@@ -342,7 +342,8 @@ class RegularSyncSpec
                   blockchain,
                   blacklist,
                   this,
-                  exhausts = exhausts
+                  exhausts = exhausts,
+                  importLock = importLock
                 ),
                 s"test-importer-depth-$depth"
               )
@@ -436,7 +437,8 @@ class RegularSyncSpec
                 this,
                 None,
                 recordingReorgState,
-                exhausts = exhausts
+                exhausts = exhausts,
+                importLock = importLock
               ),
               "test-fork-recovery-importer"
             )
