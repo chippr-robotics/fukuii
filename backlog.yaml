@@ -1520,7 +1520,7 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-08T20:01:05Z
-      heartbeat: 2026-11-08T20:01:09Z
+      heartbeat: 2026-11-08T20:01:19Z
       branch: fix/bls-kzg-native-fail-loudly
     notes: "forge (B-133 analysis): blsNativeOp PrecompiledContracts:656,674 and the KZG catch :782. Must fail loudly (refuse to start / crash), never return a result."
   - id: B-136
