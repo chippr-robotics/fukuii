@@ -1392,20 +1392,21 @@ items:
   - id: B-127
     title: "1727 PR1: simulate result shape (yParity on typed only, INVALID text, empty returnData on error)"
     priority: P1
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-08
     refs: [B-006]
     links:
       issues: [1727]
+      prs: [1754]
       spec: .local/docs/planning/1727-s2-design
       branch: fix/1727-simulate-result-shape
     claim:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-08T19:37:02Z
-      heartbeat: 2026-11-08T19:37:26Z
+      heartbeat: 2026-11-08T19:48:37Z
       branch: fix/1727-simulate-result-shape
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-128
