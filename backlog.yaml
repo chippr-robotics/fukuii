@@ -1550,3 +1550,13 @@ items:
     links:
       issues: [1683]
     notes: B-007 now rewinds without blame, but each false orphan still costs a rewind. Advance on the importer's ack, or compare the announced parentHash with the last handed-over hash.
+  - id: B-140
+    title: "Orphan announce: check the header seal before counting a strike, so an invalid seal is an offence at once"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-08
+    refs: [B-007]
+    links: {}
+    notes: "Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC."
