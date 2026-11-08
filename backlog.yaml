@@ -1560,3 +1560,14 @@ items:
     refs: [B-007]
     links: {}
     notes: "Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC."
+  - id: B-141
+    title: "Validate B-007 on Mordor: no peer blacklisted for a missing parent in a 24 h run"
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-08
+    refs: [B-007]
+    links: {}
+    depends_on: [B-007]
+    notes: "Read regularsync.orphan.blocks.total{source,outcome}: outcome=blacklisted should stay 0 or rare; branch-fetch counts the reorg tips."
