@@ -32,7 +32,8 @@ class ReferenceCountedStateReapplySpec extends AnyFlatSpec with Matchers:
   class Setup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024)
+    val stateStorage =
+      new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024, nodesMayBeDeleted = () => true)
 
     /** Block bn: slot 0 alternates by parity until `idleAfter`, then the contract is idle and its root is stable. */
     def execute(bn: Int, parentRoot: ByteString): ByteString =

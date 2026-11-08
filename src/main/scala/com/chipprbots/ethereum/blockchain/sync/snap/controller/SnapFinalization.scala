@@ -8,6 +8,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
@@ -15,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -126,6 +128,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       if chainDownloader.isEmpty then startChainDownloader()
       chainDownloader.tell(ChainDownloader.UpdateTarget(pivot)) // no-op unless the pivot is above its target
       chainDownloader.tell(ChainDownloader.Resume) // no-op unless paused for a pivot bootstrap that no longer matters
+      boostHeaderDownload()
       lastHeaderHoldWarnMs = now
       holdLastCursor = cursor
       holdLastAdvanceMs = now
@@ -144,6 +147,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       )
       chainDownloader.stop()
       startChainDownloader()
+      boostHeaderDownload() // a respawned downloader starts at the SNAP-era budget
       holdLastAdvanceMs = now
     if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
       lastHeaderHoldWarnMs = now
@@ -158,6 +162,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       headerHold = None
       timers.cancel(SNAPSyncController.HeaderHoldTimerKey)
       ctx.log.info("Header download reached the pivot; finalising SNAP")
+
+  /** During the hold, state is complete and regular sync has not started, so every peer is free: the downloader gets
+    * `chain-download-boosted-concurrent-requests` instead of the SNAP-era budget, and its dispatch tick drops from 2 s
+    * to 200 ms (#1654). Headers still go one range at a time (`ChainDownloader.dispatchRequests`), so the extra slots
+    * re-send a pending range to another peer sooner; they do not fetch ranges in parallel. `finalizeSnapSync` lowers
+    * the budget to `chain-backfill-concurrent-requests` when it hands off.
+    */
+  private def boostHeaderDownload(): Unit =
+    chainDownloader.tell(ChainDownloader.BoostConcurrency(snapSyncConfig.chainDownloadBoostedConcurrentRequests))
 
   private[snap] def finalizeSnapSync(pivot: BigInt, pathPublished: Boolean = false): Behavior[Command] =
     import scala.util.boundary, boundary.break
@@ -237,23 +250,34 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
           applyPivotBodyCheck(pivotHeader)
 
-          // Store a ChainWeight so compareBranch() can evaluate new blocks.
-          // Priority: (1) real cumulative TD from ChainDownloader — only accepted if it exceeds
-          // 1000× genesis TD (rejects genesis-proxy values written by earlier updateBestBlockForPivot
-          // calls). (2) Peer-interpolated TD from a connected ETH68 peer. (3) Block-number proxy as
-          // last resort (no ETH68 peers at all — rare but possible in isolated test environments).
+          // Store a ChainWeight so fork choice can weigh new blocks; every block above the pivot inherits it (#1654).
+          // REAL_DB_TD only when the stored weight is exact (HeadChainWeight.classify): the parent's weight clears the
+          // plausibility floor and the pivot's is the parent's plus its difficulty. The hold above guarantees that: the
+          // downloader stores every header from genesis with its parent's weight plus its difficulty, in the same batch
+          // as the cursor. Without the hold:
+          //   - Derivable (the parent's weight is plausible, the pivot's is absent or not parent + difficulty): write the
+          //     exact value. What was stored is PivotSelector's selection-time estimate.
+          //   - NoExact (the parent has no plausible weight): an ESTIMATE, in this order: the selection-time estimate if
+          //     it exceeds 1000x the genesis TD (which rejects a genesis or block-number proxy), a peer interpolation now,
+          //     the block-number proxy. Before #1654 the first of these was logged as REAL_DB_TD.
           val genesisBlockTD: BigInt = stateIngest.chainReader
             .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
             .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
+          val reader = stateIngest.chainReader
           val (finalTD, tdSource) =
-            stateIngest.chainReader
-              .getChainWeightByHash(pivotHash)
-              .map(_.totalDifficulty.value)
-              .filter(_ > genesisBlockTD * BigInt(1000))
-              .map(td => (td, "REAL_DB_TD"))
-              .orElse(calibratePivotTD(pivot).map(td => (td, "PEER_INTERPOLATED_TD")))
-              .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
+            HeadChainWeight.classify(reader, pivotHeader) match
+              case HeadChainWeight.Status.Exact(stored) => (stored.totalDifficulty.value, "REAL_DB_TD")
+              case HeadChainWeight.Status.Derivable(_, exact) =>
+                (exact.totalDifficulty.value, "DERIVED_FROM_PARENT")
+              case HeadChainWeight.Status.NoExact =>
+                reader
+                  .getChainWeightByHash(pivotHash)
+                  .map(_.totalDifficulty.value)
+                  .filter(_ > genesisBlockTD * BigInt(1000))
+                  .map(td => (td, "PIVOT_SELECTION_ESTIMATE"))
+                  .orElse(calibratePivotTD(pivot).map(td => (td, "PEER_INTERPOLATED_TD")))
+                  .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
           ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
           stateIngest.chainWriter
             .storeChainWeight(
@@ -308,7 +332,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
           // the clean route alone, so every hand-off still takes the marker here.
           if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
-            stateIngest.appState.isSnapHealInvariantPresent()
+            appState.isSnapHealInvariantPresent()
           then
             ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
             stateIngest.appState.clearSnapHealInvariant().commitSync()
@@ -433,6 +457,22 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         )
         stateIngest.chainWriter.removeBlockBody(pivotHash).commit()
 
+  /** #1692: before the publish writes anything to the hash store, take the "reference counts are exact" stamp away if
+    * this hand-off is not clean. The test is the one `finalizeSnapSync` applies to the invariant marker: a clean
+    * decision or walk on this root, and the marker standing. A lazy hand-off publishes over a path store that has
+    * holes, and a node of a missing position that also sits at a live one is counted once for the two. One synced
+    * write, so a node the publish wrote implies the stamp is gone. See [[RefCountTrust.withdrawAtPathPublish]].
+    */
+  private[snap] def withdrawRefCountStampForPublish(): Unit =
+    val appState = stateIngest.appState
+    val clean = stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
+      appState.hasSnapHealInvariant()
+    if RefCountTrust.withdrawAtPathPublish(appState, clean) then
+      ctx.log.warn(
+        "[PATH-PUBLISH] Handing off with no clean decision on this root, or no marker: the publish counts a node that " +
+          "stands over a hole once for each live position, so pruning keeps every trie node from here (#1692)"
+      )
+
   /** Launch the Path-to-hash publish on the blocking dispatcher. The controller stays in its current behavior
     * (`syncing`): the `completeSnapSync()` call sites discard the Behavior this returns, so a behavior switch would be
     * silently lost. Instead `pathPublish` marks the publish in flight; `syncing` then serves only status/progress and
@@ -441,6 +481,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private def startPathPublish(pivot: BigInt, pivotRoot: ByteString): Unit =
     val pns =
       stateIngest.pathNodes.getOrElse(throw new IllegalStateException("startPathPublish without PathNodeStorage"))
+    withdrawRefCountStampForPublish()
     // Not the cached per-pivot store: the publish is a bulk load of every node of the state, and gets the store that
     // keeps no per-node undo rows for it. Its counts are the same.
     val target = stateIngest.stateTries.getBulkLoadStorage(pivot)

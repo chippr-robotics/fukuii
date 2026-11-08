@@ -56,6 +56,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -506,10 +507,19 @@ private class SNAPSyncControllerImpl(
     * initial `idle` behavior. Called from `apply()`.
     */
   def start(): Behavior[Command] =
+    // #1692, before anything of this run is written: on the Hash scheme SNAP's writers skip a node that is already
+    // there, so a node one position still uses can end with a count too low, and pruning must stop deleting by count.
+    // The stamp goes in a synced write, so a node on disk from this run implies the stamp is gone.
+    val startAppState = stateIngest.appState
+    if RefCountTrust.withdrawAtSnapStart(startAppState, snapSyncConfig.storageScheme == StorageScheme.Hash) then
+      ctx.log.info(
+        "[PRUNING] SNAP starts on the Hash scheme: pruning keeps every trie node from here, as reference counts " +
+          "are not exact after it (#1692). Death rows and snapshot rows are still pruned."
+      )
     checkStorageSchemeMismatch()
     logHealInvariant(
       HealInvariant.atSnapStart(
-        stateIngest.appState,
+        startAppState,
         stateIngest.pathNodes,
         HealInvariant.canHold(
           snapSyncConfig.storageScheme,
@@ -1588,8 +1598,12 @@ case class SNAPSyncConfig(
     headerHoldStallTimeout: FiniteDuration = 5.minutes,
     // When true, the chain downloader fetches headers only while SNAP state sync runs: bodies and receipts are held
     // until the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
-    // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
-    // CL-anchored header chain are fetched by PivotHeaderBootstrap, not by the chain downloader, so they are unaffected.
+    // writes for disk IO, and finalisation waits for the headers to reach the pivot, so the pivot's total difficulty is
+    // the exact accumulated one (#1654). The pivot header and the CL-anchored header chain are fetched by
+    // PivotHeaderBootstrap, not by the chain downloader, so they are unaffected. On for every chain in base/sync.conf,
+    // when the key is absent (fromConfig) and in SyncController's fallback when the config cannot be loaded. This
+    // constructor default stays off, as `heapWatchdogEnabled`'s does: suites that drive finalisation through a stub
+    // downloader have no header cursor to wait for, and SNAPDeferredBackfillSpec covers the hold.
     deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
@@ -1780,7 +1794,7 @@ object SNAPSyncConfig:
       deferChainBackfillUntilStateComplete =
         if snapConfig.hasPath("defer-chain-backfill-until-state-complete") then
           snapConfig.getBoolean("defer-chain-backfill-until-state-complete")
-        else false,
+        else true,
       chainDownloadTimeout =
         if snapConfig.hasPath("chain-download-timeout") then
           snapConfig.getDuration("chain-download-timeout").toMillis.millis

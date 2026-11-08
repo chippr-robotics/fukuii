@@ -122,7 +122,12 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
 
   class Chain:
     val dataSource: EphemDataSource = EphemDataSource()
-    val stateStorage = new ReferenceCountedStateStorage(new NodeStorage(dataSource), history, 8L * 1024 * 1024)
+    val stateStorage = new ReferenceCountedStateStorage(
+      new NodeStorage(dataSource),
+      history,
+      8L * 1024 * 1024,
+      nodesMayBeDeleted = () => true
+    )
     def cachedStorage(bn: Int): MptStorage =
       stateStorage.getBackingStorage(bn).asInstanceOf[SerializingMptStorage].cachedForExecution
 
@@ -230,7 +235,12 @@ class StateReadCachesSpec extends AnyFlatSpec with Matchers:
   ) in {
     def world() = InMemoryWorldStateProxy(
       new EvmCodeStorage(EphemDataSource()),
-      new ReferenceCountedStateStorage(new NodeStorage(EphemDataSource()), history, 1024L * 1024).getBackingStorage(0),
+      new ReferenceCountedStateStorage(
+        new NodeStorage(EphemDataSource()),
+        history,
+        1024L * 1024,
+        nodesMayBeDeleted = () => true
+      ).getBackingStorage(0),
       (_: BigInt) => None,
       com.chipprbots.ethereum.domain.UInt256.Zero,
       ByteString(MerklePatriciaTrie.EmptyRootHash),

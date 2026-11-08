@@ -155,6 +155,8 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       .filterNot(_.get(0) == Namespaces.CodeNamespace.head)
       .map(b => org.bouncycastle.util.encoders.Hex.toHexString(b.array()))
 
+    if basicPruning then
+      storagesInstance.storages.appStateStorage.markRefCountsExact().commit() // #1692: stamped, as a fresh datadir is
     new GenesisDataLoader(
       blockchainReader,
       blockchainWriter,

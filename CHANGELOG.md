@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
+  `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
+  Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the
+  header download reached the pivot, so the pivot's total difficulty was a peer interpolation (the block number with
+  eth/69-only peers), and every block imported above it inherited the error. When the backfill later reached the
+  pivot it wrote the exact value there, leaving a jump in the stored weights. Fork choice compares stored weights, so
+  a fork branching at or below the pivot was weighed across that jump.
+  - **What changes on ETC and Mordor.** SNAP finalisation waits until the header download reaches the pivot. Headers
+    are stored from genesis with their parent's weight plus their difficulty, so the pivot's weight is exact. Bodies
+    and receipts are fetched after the state is finalised instead of alongside it, as on the ETH chains, so they no
+    longer compete with state writes for disk IO. Nothing changes on the ETH chains; their configs already set the key.
+    A node whose SNAP config cannot be loaded now falls back to the same value.
+  - **Cost in sync time.** This adds no download work: the headers were already fetched alongside state sync. Only
+    the order changes, and regular sync now starts once both the state and the headers are in. Headers are fetched one
+    1,024-header range at a time. At 0.5 to 1 s per range, ETC mainnet's ~25.7M headers (about 25,100 ranges) take
+    roughly 3.5 to 7 h from the start of SNAP. Regular sync starts later only by the part of that still left when
+    state sync finishes. This estimate is not measured yet; the fresh Mordor sync gate will measure it.
+  - **Not covered.** Setting the key to `false`, or `chain-download-enabled = false`, still finishes with an estimate.
+    The change applies from the next SNAP run, and it does not repair jumps that earlier syncs already wrote; that
+    repair is planned for 0.12.0.
 - **Scala 3.9.0 LTS at `-source:3.9` (spec 020, #1717). Breaking for projects that consume the published modules.** The
   build moves from Scala 3.3.8 (sbt 1.13.0 already shipped in 0.10.0). Node behaviour is unchanged. It was checked by importing
   the same fixed Mordor and Ephemery block ranges with the 0.10.0 build and with this one (every state and receipt root
@@ -113,6 +133,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **Pruning no longer deletes a trie node it cannot prove dead (#1692). Operator note for ETC and Mordor.** A node's
+  reference count is the number of positions that emitted it. SNAP healing and resume, the checkpoint importer and an old
+  fast sync skip a node that is already there, so a subtree two contracts share was counted once. The first block to
+  rewrite a slot of one of them sent the nodes on its path to zero, and pruning deleted them 64 blocks later while the
+  other contract still read them (`MissingNodeException`; import fetched the node back). Block import counts every
+  position, so only datadirs those writers filled were exposed.
+  - **Basic pruning now deletes no trie node unless the datadir's counts are proven exact, on every chain.** One stamp
+    proves it. This version writes it with a datadir's genesis, when the genesis counts every position (at most one
+    account with storage, as the shipped genesis file is), and nothing writes it again. It is taken away for good, before
+    the first write that could count a node short: any Hash-scheme SNAP start (ETC, Mordor), even one that hands off
+    without writing; a checkpoint import, on any scheme; and the publish of a Path-scheme hand-off (ETH, Sepolia) that is
+    not clean, that is a lazy hand-off with a hole in the path store. **A datadir synced by SNAP or a checkpoint keeps
+    every trie node until spec 018's resync, and so does one created by an older version, ETH and Sepolia included (a
+    Path datadir that SNAPped before 0.10.16 counted a shared storage trie once), and one that handed off lazily.** A
+    fresh datadir that hands off cleanly on the Path scheme, or is synced from genesis by block import, prunes as
+    before. A kept datadir still prunes its death rows, snapshot rows, reference-count rows and undo records, so only
+    the dead state of each block stays. The size of it is `db.pruning.retained.nodes` and `db.pruning.retained.bytes`
+    (counters of nodes and their RLP bytes; each stored entry adds its 32-byte key and a few bytes of wrapper).
+  - **`pruning.mode = "inmemory"` is rejected at start**, with a message naming `basic` and `archive`, and so is any
+    unknown mode. No shipped configuration sets it.
+  - **One background audit pass per datadir** runs on the first start of this version (an operator with the audit
+    enabled sees `[HEAL-AUDIT] One more full audit pass is owed`). It looks for nodes already deleted and fetches them
+    back; it runs off the critical path, at a 25% duty cycle, and takes roughly one to three days on ETC mainnet.
+  - Import's on-demand fetch of a missing state node no longer sets the node's count back to one.
+- **SNAP finalisation labels the pivot total difficulty by what it is, and uses the boosted request budget while it
+  waits for the headers (#1654). Both chains.**
+  - **Label and value.** `SNAP finalize pivot TD ... source=REAL_DB_TD` now means the stored weight is the
+    pivot's parent's weight plus the pivot's difficulty, with a plausible parent. Before, any stored weight above
+    1,000 times the genesis TD was kept and labelled `REAL_DB_TD`, including the peer estimate written when the pivot
+    was chosen. A pivot whose parent's weight is exact but whose own is not now gets the exact value
+    (`DERIVED_FROM_PARENT`). An estimate over a parent with no weight is kept as before, now labelled
+    `PIVOT_SELECTION_ESTIMATE`.
+  - **Request budget.** While finalisation holds for the header download, every peer is free. The downloader now gets
+    `chain-download-boosted-concurrent-requests` (16), which nothing read before, and a 200 ms dispatch interval instead
+    of 2 s; a downloader the hold's stall watchdog restarts gets it too. Header ranges still go one at a time, so the
+    extra slots only re-send a slow range to another peer sooner. At hand-off the budget drops to
+    `chain-backfill-concurrent-requests`.
 - **`eth_simulateV1` no longer builds blocks without limit (#1727). Both chains.** A block-number override far past the
   base block was narrowed to 32 bits before the 256-block check, so a gap of 2^32 + 1 counted as one block and the node
   then built 2^32 of them: the RPC thread never returned and block import stalled until a restart. The gap is now

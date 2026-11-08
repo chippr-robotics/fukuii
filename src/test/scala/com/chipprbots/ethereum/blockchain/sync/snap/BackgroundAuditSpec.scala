@@ -309,6 +309,46 @@ class BackgroundAuditSpec
     n.fetches.expectNoMessage(50.millis)
   }
 
+  it should "owe exactly one more pass to a datadir that already holds a clean anchor (#1692)" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    n.head(10, root)
+    n.ended(n.spawn())
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.owes shouldBe false
+    withClue("the record a finished pass leaves, which the forced one must not resume from: ") {
+      n.s.progress.readAuditBadEntries() shouldBe defined
+    }
+
+    // The first start of a binary with the fix: one synced write takes the anchor, the audit's record and its place.
+    n.s.app.forceAuditPassOnce() shouldBe true
+    n.s.app.getSnapAuditCleanAnchor() shouldBe None
+    n.s.progress.readAuditBadEntries() shouldBe None
+    n.s.progress.readAuditCursors() shouldBe None
+    n.owes shouldBe true
+    BackgroundAudit.gate(enabled = true, n.s.state, n.s.app) shouldBe BackgroundAudit.Gate.Run
+
+    // It runs a full pass and ends clean.
+    n.ended(n.spawn())
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.owes shouldBe false
+
+    withClue("and a later start owes nothing more: ") {
+      n.s.app.forceAuditPassOnce() shouldBe false
+      n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+      n.owes shouldBe false
+      BackgroundAudit.gate(enabled = true, n.s.state, n.s.app) shouldBe BackgroundAudit.Gate.NotOwed
+    }
+  }
+
+  it should "not owe a pass to a datadir that never finished SNAP when the key is set" taggedAs UnitTest in {
+    val n = new Node
+    n.s.app.clearSnapSyncDone().commit()
+    n.s.app.forceAuditPassOnce() shouldBe true
+    n.owes shouldBe false
+    n.s.app.forceAuditPassOnce() shouldBe false
+  }
+
   it should "say where it has got to, in the numbers an operator needs" taggedAs UnitTest in {
     val n = new Node
     val root = populate(n)
