@@ -8,19 +8,14 @@ items:
   - id: B-001
     title: "H3: corrupt stored nodes and code read as missing, not as invalid blocks; re-SNAP cap"
     priority: P1
-    status: review
+    status: done
     area: storage
     size: L
     opened: 2026-11-04
+    closed: 2026-11-08
     refs: [H3, CHASE A deleteIfCorrupt, CHASE A BlockchainReader:78]
     links:
       prs: [1747, 1749, 1753]
-      branch: fix/h3-keccak-on-read
-    claim:
-      by: fukuii-fc
-      agent: forge
-      since: 2026-11-08T12:00:00Z
-      heartbeat: 2026-11-08T19:46:03Z
       branch: fix/h3-keccak-on-read
     notes: vault and beacon approved with nits; their fixes are folded in. newPayload keeps ACCEPTED on MPTError (geth parity).
   - id: B-002
