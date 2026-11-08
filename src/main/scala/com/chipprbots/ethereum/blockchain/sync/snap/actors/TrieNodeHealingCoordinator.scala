@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -101,7 +102,10 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     val decidedRoot: Option[java.util.concurrent.atomic.AtomicReference[ByteString]] = None,
     // spec 022 5d: whether the invariant marker can hold here at all (`HealInvariant.canHold`, from the production
     // spawn). False (bare construction, most specs) walks at every completion and never reads the key.
-    val markerMayStand: Boolean = false
+    val markerMayStand: Boolean = false,
+    // S-1 (review beacon W2): the clock the walk-failure give-up reads (`WalkFailureMinSpan`). A seam for tests; the
+    // production spawn leaves it the wall clock.
+    nowMillis: () => Long = () => System.currentTimeMillis()
 ) extends FrontierPersistence
     with FrontierRebuildBfs
     with HealVerification
@@ -215,6 +219,21 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   var currentWalk: Option[Long] = None
   // spec 022 review beacon 2: what the walk that last ran could not follow.
   val walkSkips: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
+  // S-1: corrupt entries the store keeps for good, which no retry changes. Written here, read by the walk's threads: a
+  // later walk counts such an entry as a skip, not as missing, so a dirty pass does not walk again for good over an
+  // entry healing cannot replace. #1739 rejects `inmemory` pruning at start, the store that cannot delete, so what is
+  // left is rare: bytes that pass keccak in a form this store cannot read (the node out of basic pruning's wrapper). A
+  // delete that threw is not one of them (review vault M1): the next walk tries it again, up to
+  // `MaxCorruptDeleteAttempts`. Kept: it fails safe.
+  val unrepairableNodes: java.util.Set[ByteString] = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+  // S-1: deletes of a corrupt entry that threw, by hash, until one goes through or the entry is taken as kept.
+  private val corruptDeleteFailures: mutable.Map[ByteString, Int] = mutable.Map.empty
+  // S-1: corrupt entries this incarnation deleted, so the same hash reached at a second position finds it gone quietly.
+  private val corruptDeleted: mutable.Set[ByteString] = mutable.Set.empty
+  // S-1: Hash-scheme frontier walks in a row that threw, across roots, and when the first of them did. Reset by a walk
+  // that reaches its end, never by a re-peg.
+  private var consecutiveWalkFailures: Int = 0
+  private var firstWalkFailureAtMs: Long = 0L
   // Dead-loop watchdog (Fix BUG-2): consecutive HEAL-PULSE cycles with no walk/pending/active/healed.
   private var consecutiveDeadPulses: Int = 0
 
@@ -439,6 +458,74 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
   private def walkInvalidated: Boolean = invalidatedWalk.isDefined && invalidatedWalk == currentWalk
 
   private def codeStored(codeHash: ByteString): Boolean = stateIngest.bytecode.get(codeHash).isDefined
+
+  /** S-1: what becomes of the corrupt entry a walk found under `hash`. `Cleared`: the store's own `deleteBadNode`
+    * (under its commit lock, from a read of its own, judged by `NodeFault.provablyBad` as the walk judged it) deleted
+    * it, or found it gone or good, and healing may fetch it. Healing cannot write over such an entry: basic pruning's
+    * upsert keeps the bytes stored under a hash, or throws on a wrapper it cannot read. `Kept`: the store keeps it for
+    * good (see `unrepairableNodes`). `Retry`: the delete threw, and the next walk, which finds it again, tries again
+    * (review vault M1), up to `MaxCorruptDeleteAttempts`, after which it is kept. The reference count the entry carried
+    * goes with it; this builds on #1739, under which a prune deletes no trie node from a store whose counts are not
+    * stamped exact, and no store SNAP filled is. A delete and a kept entry log at ERROR, as every corrupt node does: an
+    * operator acts on it.
+    */
+  private def deleteCorruptEntry(hash: ByteString): CorruptDelete =
+    val tries = stateIngest.stateTries
+    val hex = Hex.toHexString(hash.toArray)
+    if !tries.canRepairNodes then
+      log.error(
+        s"[HEAL-CORRUPT] Stored node $hex is not the node its hash names, and this store cannot delete it: left in " +
+          "place and not healed; a later walk counts it as a node it could not follow"
+      )
+      CorruptDelete.Kept
+    else
+      // Under the heal store's monitor, the one-writer lock every healed-node write holds (`FrontierPersistence`, review
+      // vault M2): no flush lands between the delete's read and its delete. A flush takes this monitor and never the
+      // store's commit lock, which `deleteBadNode` takes inside it, so the two cannot wait on each other.
+      val store = mptStorage
+      try
+        store.synchronized(tries.deleteBadNode(hash, () => true)) match
+          case BadEntryDelete.Deleted =>
+            corruptDeleteFailures -= hash
+            corruptDeleted += hash
+            log.error(s"[HEAL-CORRUPT] Deleted stored node $hex: its bytes are not that node. Healing fetches it")
+            CorruptDelete.Cleared
+          case BadEntryDelete.NoLongerBad =>
+            corruptDeleteFailures -= hash
+            if isNodeInStorage(hash, Seq.empty) then
+              log.warn(s"[HEAL-CORRUPT] Stored node $hex reads as that node on a second look. Healing fetches it again")
+            else if corruptDeleted.contains(hash) then
+              log.debug(
+                s"[HEAL-CORRUPT] Stored node $hex is already deleted, met at another position. Healing fetches it"
+              )
+            else log.warn(s"[HEAL-CORRUPT] Stored node $hex is gone on a second look. Healing fetches it")
+            CorruptDelete.Cleared
+          case kept =>
+            corruptDeleteFailures -= hash
+            log.error(
+              s"[HEAL-CORRUPT] Stored node $hex is not the node its hash names, and was left in place ($kept): not " +
+                "healed; a later walk counts it as a node it could not follow"
+            )
+            CorruptDelete.Kept
+      catch
+        case scala.util.control.NonFatal(e) =>
+          val failures = corruptDeleteFailures.getOrElse(hash, 0) + 1
+          if failures >= MaxCorruptDeleteAttempts then
+            corruptDeleteFailures -= hash
+            log.error(
+              s"[HEAL-CORRUPT] Could not delete stored node $hex, which is not the node its hash names, $failures times " +
+                "in a row: left in place and not healed; a later walk counts it as a node it could not follow",
+              e
+            )
+            CorruptDelete.Kept
+          else
+            corruptDeleteFailures(hash) = failures
+            log.warn(
+              s"[HEAL-CORRUPT] Could not delete stored node $hex, which is not the node its hash names " +
+                s"($failures/$MaxCorruptDeleteAttempts): the next walk finds it and tries again",
+              e
+            )
+            CorruptDelete.Retry
 
   /** The node a walk of the current root would read: by hash under Hash, at its own position, hash-checked, under Path.
     * A read that fails throws: the entry stays, and the next pass tries again.
@@ -1335,12 +1422,41 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
+    case FrontierCorruptFound(entries, _) if storageScheme != StorageScheme.Hash =>
+      // Only the Hash walk sends these: under Path a position is read hash-checked, and a mismatch there is missing.
+      log.warn(
+        s"[HEAL-CORRUPT] Dropping ${entries.size} corrupt entries sent under the Path scheme, which never sends any"
+      )
+      Behaviors.same
+
+    case FrontierCorruptFound(entries, walkRoot) =>
+      // S-1: each goes first, through the store's own delete (its lock, its own read, the walk's judgement), and is then
+      // healed as a missing node. A batch of a superseded root is kept, as `FrontierRebuilt` keeps one on Hash. One the
+      // store keeps is not queued: healing could not replace it, and a later walk counts it as a skip. One whose delete
+      // threw is neither: the next walk finds it again.
+      val outcomes = entries.map(e => e -> deleteCorruptEntry(e.hash))
+      val cleared = outcomes.collect { case (e, CorruptDelete.Cleared) => e }
+      val kept = outcomes.collect { case (e, CorruptDelete.Kept) => e }
+      kept.foreach(e => unrepairableNodes.add(e.hash))
+      log.warn(
+        s"[HEAL-CORRUPT] A walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} found ${entries.size} stored " +
+          s"node(s) that are not the node their hash names: ${cleared.size} deleted and queued for healing, " +
+          s"${kept.size} left in place, ${entries.size - cleared.size - kept.size} to try again on the next walk"
+      )
+      if cleared.nonEmpty then
+        queueNodes(cleared.map(e => (e.pathset, e.hash)))
+        lastHealedAtMs = System.currentTimeMillis()
+        tryRedispatchPendingTasks()
+
+      Behaviors.same
+
     case FrontierRebuildComplete(_, walkRoot, walk) if !currentWalk.contains(walk) =>
       ignoreReplacedWalk(walk, s"full-state rebuild of root ${Hex.toHexString(walkRoot.take(4).toArray)}")
       Behaviors.same
 
     case FrontierRebuildComplete(missingEmitted, walkRoot, _) =>
       verificationBFSRunning = false // rebuild walk finished — release the single-flight gate
+      consecutiveWalkFailures = 0
       // spec 006 C2/D2/FR-001/FR-002/FR-003: on a genuinely CLEAN rebuild, declare completion after this
       // single walk instead of waiting for the dead-pulse watchdog to force-start a redundant second
       // (verification) walk over the identical trie (~16-20h on ETC mainnet). The rebuild walk fully
@@ -1387,11 +1503,41 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
       Behaviors.same
 
-    case FrontierWalkFailed(walk) if !currentWalk.contains(walk) =>
+    case FrontierWalkFailed(walk, _) if !currentWalk.contains(walk) =>
       ignoreReplacedWalk(walk, "frontier walk (it failed)")
       Behaviors.same
 
-    case FrontierWalkFailed(_) =>
+    case FrontierWalkFailed(_, Some(cause)) if storageScheme == StorageScheme.Hash =>
+      verificationBFSRunning = false
+      val now = nowMillis()
+      if consecutiveWalkFailures == 0 then firstWalkFailureAtMs = now
+      consecutiveWalkFailures += 1
+      val failingForMs = now - firstWalkFailureAtMs
+      if consecutiveWalkFailures >= MaxConsecutiveWalkFailures && failingForMs >= WalkFailureMinSpan.toMillis then
+        // S-1: the watchdog and every re-peg start the walk again, and nothing else counts its failures, so a walk that
+        // fails the same way each time held healing up for good. Give up loudly: the lazy hand-off, where import's
+        // fetches and the background audit reach what no walk got past. Not before an hour of failing (review beacon
+        // W2): a disk that throws for a few minutes costs a few walks, not the verified hand-off.
+        log.error(
+          s"[HEAL-BFS] $consecutiveWalkFailures frontier walks in a row failed over ${failingForMs / 60000} min, across " +
+            s"re-pegs (last: ${cause.getClass.getSimpleName}: ${cause.getMessage}) — abandoning healing: the lazy " +
+            "hand-off, not a completion"
+        )
+        consecutiveWalkFailures = 0
+        snapSyncController ! SNAPSyncController.StateHealingAbandoned
+      else
+        log.warn(
+          s"[HEAL-BFS] Frontier walk failed ($consecutiveWalkFailures in a row over ${failingForMs / 60000} min; " +
+            s"healing gives up at $MaxConsecutiveWalkFailures over ${WalkFailureMinSpan.toMinutes} min: " +
+            s"${cause.getClass.getSimpleName}: ${cause.getMessage}) — flags reset; verification will be retried by " +
+            "HealingCheckCompletion or the dead-pulse watchdog (no completion marker was set)"
+        )
+
+      Behaviors.same
+
+    case FrontierWalkFailed(_, _) =>
+      // A walk on the Path scheme, or one cancelled as its incarnation ended: as before S-1, nothing is counted. On Path a
+      // give-up would hand off lazily and publish a trie no walk verified (review beacon W1).
       verificationBFSRunning = false
       log.warn(
         "[HEAL-BFS] Frontier walk failed — flags reset; verification will be retried by " +
@@ -1683,6 +1829,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // spec 022 T038c: a re-peg passed under this walk and came back to its root, or a node known missing was dropped
       // while it ran. It proves nothing about now; the same root, so it is no sign of a root that outruns the walk.
       verificationBFSRunning = false
+      consecutiveWalkFailures = 0
       log.info("[HEAL-VERIFY] Discarding a verification walk whose starting point no longer holds — walking again")
       reverifyCurrentRoot()
       Behaviors.same
@@ -1693,6 +1840,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // observability flags, then verify the CURRENT root explicitly (`reverifyCurrentRoot` also clears the stale
       // verdict, so the completion check cannot complete on it).
       verificationBFSRunning = false
+      consecutiveWalkFailures = 0
       consecutiveStaleDiscards += 1
       log.warn(
         s"[HEAL-VERIFY] Discarding stale verification result (#$consecutiveStaleDiscards): walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} " +
@@ -1718,6 +1866,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       // has a hole (the storage-force-complete mosaic) is therefore unverified. Only a pass that finds NOTHING proves
       // completeness (go-ethereum: loop until the sync scheduler has nothing pending, then re-walk).
       verificationBFSRunning = false
+      consecutiveWalkFailures = 0
       log.info(
         s"[HEAL-VERIFY] Verification pass found $missingEmitted missing nodes — not a clean pass; " +
           s"re-verifying once pending=${pendingTasks.size} active=${activeRequests.size} drain"
@@ -1727,6 +1876,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
 
     case VerificationBFSComplete(_, _, _) =>
       verificationBFSRunning = false
+      consecutiveWalkFailures = 0
       consecutiveStaleDiscards = 0
       if isComplete then
         // BFS traversed all locally-held nodes and found zero missing descendants — trie is complete.
@@ -1799,6 +1949,25 @@ object TrieNodeHealingCoordinator:
 
   /** spec 022 review vault V6: commit writes in a row that fail before healing abandons, loudly. */
   val MaxConsecutiveCommitFailures: Int = 10
+
+  /** S-1: Hash-scheme frontier walks in a row that throw before healing abandons, loudly (the lazy hand-off), once the
+    * first of them is [[WalkFailureMinSpan]] old. Counted across roots, since a re-peg starts the next walk and a
+    * mainnet walk takes many re-pegs to finish; only a walk that reaches its end starts the count over. Never on Path,
+    * where a give-up publishes an unverified trie (review beacon W1).
+    */
+  val MaxConsecutiveWalkFailures: Int = 3
+
+  /** S-1 (review beacon W2): how long walks must have kept failing before healing abandons on them. A watchdog restart
+    * comes every few minutes, so the count alone would give up on a disk that throws for a quarter of an hour.
+    */
+  val WalkFailureMinSpan: FiniteDuration = 1.hour
+
+  /** S-1 (review vault M1): deletes of one corrupt entry that may throw, one a walk, before it is taken as kept. */
+  val MaxCorruptDeleteAttempts: Int = 3
+
+  /** S-1: what became of a corrupt entry a walk found (see the coordinator's `deleteCorruptEntry`). */
+  private[actors] enum CorruptDelete:
+    case Cleared, Kept, Retry
 
   /** spec 022 review hunter-r3 N1: 2-minute pulses a read-failure give-up's latch waits for an answer. */
   private[actors] val GiveUpLatchMaxPulses: Int = 8
@@ -1895,8 +2064,15 @@ object TrieNodeHealingCoordinator:
   // completion marker, so the watchdog / HealingCheckCompletion gates can start a fresh walk.
   // Without this, an exception skips onComplete() and verificationBFSRunning stays true forever,
   // permanently blocking every future walk (including the watchdog) until restart. `walk` is the walk's lease token: a
-  // failure of a walk another incarnation launched resets nothing here.
-  private[actors] case class FrontierWalkFailed(walk: Long) extends Command
+  // failure of a walk another incarnation launched resets nothing here. `cause` is what the walk threw, or `None` when it
+  // was cancelled (its incarnation ended): only a walk that threw counts towards `MaxConsecutiveWalkFailures` (S-1).
+  private[actors] case class FrontierWalkFailed(walk: Long, cause: Option[Throwable]) extends Command
+
+  // S-1: stored entries a Hash-scheme walk reached that are provably not the node their hash names (they do not unwrap,
+  // or their bytes fail keccak: `NodeFault.provablyBad`). Healing cannot write over them (basic pruning's upsert keeps
+  // the stored bytes), so the core deletes each first, on its own thread, and then queues it as a missing node. The walk
+  // counts them in its missing nodes and never follows their children. `walkRoot` as in `FrontierRebuilt`.
+  private[actors] case class FrontierCorruptFound(entries: Seq[HealingEntry], walkRoot: ByteString) extends Command
 
   // A restart's rebuild walk, launched by a message to itself as every walk start is on the actor thread.
   private[actors] case class RestartFullRebuild(root: ByteString, rootPath: ByteString) extends Command

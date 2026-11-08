@@ -18,6 +18,7 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.*
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.mpt.*
@@ -50,17 +51,19 @@ class ForceCompletedStorageVerificationSpec
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   implicit private val actorTestKit: org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit = testKit
 
-  /** Blocks the first read of `holdOn` until `release` is counted down; signals `reached` when it gets there. */
+  /** Blocks the walk's first read of `holdOn` until `release` is counted down; signals `reached` when it gets there.
+    * The Hash-scheme walk reads raw entries (`rawNodes`, S-1).
+    */
   final private class HoldingStorage(holdOn: ByteString) extends TestMptStorage:
     val reached = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     @volatile private var held = false
-    override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
-      if !held && hashes.exists(h => ByteString(h) == holdOn) then
+    override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+      if !held && hashes.contains(holdOn) then
         held = true
         reached.countDown()
         release.await(30, TimeUnit.SECONDS)
-      super.multiGetNodes(hashes)
+      super.rawNodes(hashes)
 
   private def branch(slots: (Int, MptNode)*): BranchNode =
     val children = Array.fill[MptNode](16)(NullNode)

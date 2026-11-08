@@ -37,11 +37,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditReader
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditThrottle
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
-import com.chipprbots.ethereum.blockchain.sync.snap.heal.NodeFault
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.NodeFault
 import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage

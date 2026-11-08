@@ -55,19 +55,21 @@ object HealingTrieFixtures:
   /** The healing coordinator's `StateIngest` (spec 016 C-H2, C-H3, C-H5): through it the coordinator reads only
     * `bfsQueue`, the spec's BFS queue (or `None`, the coordinator's in-memory fallback), `pathNodes`, the spec's
     * Path-scheme node store (or `None`, the Hash scheme), and `bytecode`, the spec's code store, read only with the
-    * healed-code check on (`None`: the check is off and the member throws); every other member throws, so a test that
-    * reaches one is a change in what healing reads through the capability.
+    * healed-code check on (`None`: the check is off and the member throws); `stateTries`, the node store a corrupt
+    * entry the walk found is deleted from (S-1), is read only when a walk finds one; every other member throws, so a
+    * test that reaches one is a change in what healing reads through the capability.
     */
   def healingIngest(
       bfsQueueStore: Option[BfsQueueStorage] = None,
       pathNodeStore: Option[PathNodeStorage] = None,
       codeStore: Option[EvmCodeStorage] = None,
       progressStore: Option[SnapSyncProgressStorage] = None,
-      appStateStore: Option[AppStateStorage] = None
+      appStateStore: Option[AppStateStorage] = None,
+      stateTriesStore: Option[StateStorage] = None
   ): StateIngest =
     new StateIngest:
       def appState: AppStateStorage = appStateStore.getOrElse(notReached("appState"))
-      def stateTries: StateStorage = notReached("stateTries")
+      def stateTries: StateStorage = stateTriesStore.getOrElse(notReached("stateTries"))
       def flatSlots: FlatSlotStorage = notReached("flatSlots")
       def pathNodes: Option[PathNodeStorage] = pathNodeStore
       def bytecode: EvmCodeStorage = codeStore.getOrElse(notReached("bytecode"))
