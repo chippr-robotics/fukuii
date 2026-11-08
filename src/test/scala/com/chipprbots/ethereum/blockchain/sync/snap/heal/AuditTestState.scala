@@ -33,7 +33,8 @@ import com.chipprbots.ethereum.mpt.byteStringSerializer
 final class AuditTestState(history: Int = 64):
   val source: EphemDataSource = EphemDataSource()
   val nodes: NodeStorage = new NodeStorage(source)
-  val state: ReferenceCountedStateStorage = new ReferenceCountedStateStorage(nodes, history, 1024L * 1024)
+  val state: ReferenceCountedStateStorage =
+    new ReferenceCountedStateStorage(nodes, history, 1024L * 1024, nodesMayBeDeleted = () => true)
   val code: EvmCodeStorage = new EvmCodeStorage(source)
   val app: AppStateStorage = new AppStateStorage(source)
   val progress: SnapSyncProgressStorage = new SnapSyncProgressStorage(source)

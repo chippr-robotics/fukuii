@@ -90,6 +90,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
         with com.chipprbots.ethereum.TestInstanceConfigProvider
     val ds: KillableDataSource = comp.dataSource
     val bs = comp.storages
+    bs.appStateStorage.markRefCountsExact().commit() // #1692: a fresh datadir, as the genesis load stamps it
     val reader: BlockchainReader = BlockchainReader(bs)
     val writer: BlockchainWriter = BlockchainWriter(bs)
 
@@ -142,7 +143,7 @@ class ImportBatchAtomicitySpec extends AnyFlatSpec with Matchers with MockFactor
 
     class Node(val history: Int = ImportBatchAtomicitySpec.this.history):
       // a fresh process: new in-memory state (prune cursor, caches) over the same database
-      val stateStorage = new ReferenceCountedStateStorage(bs.nodeStorage, history)
+      val stateStorage = new ReferenceCountedStateStorage(bs.nodeStorage, history, nodesMayBeDeleted = () => true)
       val chain: BlockchainImpl = new BlockchainImpl(
         bs.blockHeadersStorage,
         bs.blockBodiesStorage,

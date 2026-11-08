@@ -113,6 +113,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **Pruning no longer deletes a trie node it cannot prove dead (#1692). Operator note for ETC and Mordor.** A node's
+  reference count is the number of positions that emitted it. SNAP healing and resume, the checkpoint importer and an old
+  fast sync skip a node that is already there, so a subtree two contracts share was counted once. The first block to
+  rewrite a slot of one of them sent the nodes on its path to zero, and pruning deleted them 64 blocks later while the
+  other contract still read them (`MissingNodeException`; import fetched the node back). Block import counts every
+  position, so only datadirs those writers filled were exposed.
+  - **Basic pruning now deletes no trie node unless the datadir's counts are proven exact, on every chain.** One stamp
+    proves it. This version writes it with a datadir's genesis, when the genesis counts every position (at most one
+    account with storage, as the shipped genesis file is), and nothing writes it again. It is taken away for good, before
+    the first write that could count a node short: any Hash-scheme SNAP start (ETC, Mordor), even one that hands off
+    without writing; a checkpoint import, on any scheme; and the publish of a Path-scheme hand-off (ETH, Sepolia) that is
+    not clean, that is a lazy hand-off with a hole in the path store. **A datadir synced by SNAP or a checkpoint keeps
+    every trie node until spec 018's resync, and so does one created by an older version, ETH and Sepolia included (a
+    Path datadir that SNAPped before 0.10.16 counted a shared storage trie once), and one that handed off lazily.** A
+    fresh datadir that hands off cleanly on the Path scheme, or is synced from genesis by block import, prunes as
+    before. A kept datadir still prunes its death rows, snapshot rows, reference-count rows and undo records, so only
+    the dead state of each block stays. The size of it is `db.pruning.retained.nodes` and `db.pruning.retained.bytes`
+    (counters of nodes and their RLP bytes; each stored entry adds its 32-byte key and a few bytes of wrapper).
+  - **`pruning.mode = "inmemory"` is rejected at start**, with a message naming `basic` and `archive`, and so is any
+    unknown mode. No shipped configuration sets it.
+  - **One background audit pass per datadir** runs on the first start of this version (an operator with the audit
+    enabled sees `[HEAL-AUDIT] One more full audit pass is owed`). It looks for nodes already deleted and fetches them
+    back; it runs off the critical path, at a 25% duty cycle, and takes roughly one to three days on ETC mainnet.
+  - Import's on-demand fetch of a missing state node no longer sets the node's count back to one.
 - **`eth_simulateV1` no longer builds blocks without limit (#1727). Both chains.** A block-number override far past the
   base block was narrowed to 32 bits before the 256-block check, so a gap of 2^32 + 1 counted as one block and the node
   then built 2^32 of them: the RPC thread never returned and block import stalled until a restart. The gap is now

@@ -14,7 +14,6 @@ import com.typesafe.config.ConfigFactory
 
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
-import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.utils.VmConfig.VmMode
@@ -445,10 +444,23 @@ object PruningConfig:
     val pruningMode: PruningMode = pruningConfig.getString("mode") match
       case "basic"    => BasicPruning(pruningConfig.getInt("history"))
       case "archive"  => ArchivePruning
-      case "inmemory" => InMemoryPruning(pruningConfig.getInt("history"))
+      case "inmemory" => throw new IllegalArgumentException(RetiredInMemoryMessage)
+      case other =>
+        throw new IllegalArgumentException(
+          "Unknown pruning.mode \"" + other + "\": expected \"basic\" or \"archive\"."
+        )
 
     new PruningConfig:
       override val mode: PruningMode = pruningMode
+
+  /** Why `pruning.mode = "inmemory"` stops the node at start. It is retired (spec 018, data-model 4.6): its node cache
+    * holds trie nodes in memory and writes them to disk one by one as it evicts them, so a recovered `snapSyncDone`
+    * does not imply durable state, and on a store a SNAP or checkpoint filled it cannot repair holes (#1692). No
+    * deprecation window: a config that still sets it fails here, before any actor starts.
+    */
+  val RetiredInMemoryMessage: String =
+    "pruning.mode = \"inmemory\" has been retired and is no longer accepted. Set pruning.mode to \"basic\" " +
+      "(the default) or \"archive\", delete the previous database, and start again."
 
 case class VmConfig(mode: VmMode, externalConfig: Option[VmConfig.ExternalConfig])
 

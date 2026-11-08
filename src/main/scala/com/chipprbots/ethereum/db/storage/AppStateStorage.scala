@@ -186,6 +186,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapAuditAnchor(): String =
     getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
 
+  /** #1692: owe this datadir one more full audit pass, once. Before the fix, pruning on a store SNAP or a checkpoint
+    * filled could delete a node another position still used, and a clean pass the audit finished earlier says nothing
+    * of a hole that appeared after it. So the clean anchor goes, with the audit's place and its record of bad entries
+    * (a pass resumed from before the upgrade would skip what it had already walked), and the key that says this was
+    * done goes in the same write: a crash leaves all of it or none, and a start that finds the key owes no more. True
+    * when it forced a pass.
+    */
+  def forceAuditPassOnce(): Boolean =
+    if get(Keys.SnapAuditForcedOnce).isDefined then false
+    else
+      update(
+        toRemove = Seq(Keys.SnapAuditCleanAnchor),
+        toUpsert = Seq(Keys.SnapAuditForcedOnce -> RefCountsMarkerValue)
+      ).and(SnapSyncProgressStorage.forgetAudit(dataSource)).commitSync()
+      true
+
   /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
     * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
     * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
@@ -210,7 +226,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
     update(
-      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor),
+      // #1692: the archive holds each node once, so a node two positions use is counted once. Basic pruning would then
+      // delete nodes by a count that is too low, so the stamp goes in the same write as the first of them, on any scheme.
+      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact),
       toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
     ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
 
@@ -235,6 +253,42 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** The genesis has just been stored for the first time. */
   def markDatadirCreatedUnderInvariant(): DataSourceBatchUpdate =
     put(Keys.SnapHealDatadirCreated, SnapHealDatadirCreatedVersion)
+
+  // ========================================
+  // Whether basic pruning may delete by reference count (#1692)
+  // ========================================
+  //
+  // A node's count is the number of positions that emitted it. Block import emits once per position, so its counts are
+  // exact. A writer that skips a node already present (SNAP heal and resume, the checkpoint importer, an old fast sync)
+  // leaves counts too low, and pruning then deletes a node another position still uses. So prune deletes no trie node
+  // unless this datadir has been exact since it was created, on either scheme. One key says so: the genesis write sets
+  // it, when the genesis counts every position, and nothing sets it again. It is taken away, in a synced write before
+  // the first write that could count a node short: a Hash SNAP start, a checkpoint import, and a Path publish of a
+  // hand-off that is not clean. Counts can go negative, so a stamp set again after a stretch without pruning could meet
+  // a live node at zero in a death row. A datadir an older binary made has no stamp, and keeps every trie node.
+
+  /** Whether the stamp "every count here is exact" stands. Only the genesis write sets it (see [[markDatadirCreated]]).
+    */
+  def hasRefCountsExact(): Boolean =
+    get(Keys.RefCountsExact).contains(RefCountsMarkerValue)
+
+  /** The stamp, for the write that stores the genesis. */
+  def markRefCountsExact(): DataSourceBatchUpdate =
+    put(Keys.RefCountsExact, RefCountsMarkerValue)
+
+  /** Take the stamp away. Commit with `commitSync`, before the first node a de-duplicating writer puts in. */
+  def clearRefCountsExact(): DataSourceBatchUpdate =
+    remove(Keys.RefCountsExact)
+
+  /** The write that follows a datadir's genesis being stored for the first time: who created it, and, when
+    * `countsExact`, that its counts are exact. One write, so a crash cannot leave one without the other. `countsExact`
+    * is what the genesis load says (`GenesisDataLoader.countsExact`): a genesis that puts a shared subtree under two
+    * accounts counts it once, and its datadir is left unstamped. A crash between the genesis and this write leaves a
+    * datadir with no stamp, which only costs it the reclaiming of dead nodes.
+    */
+  def markDatadirCreated(countsExact: Boolean): DataSourceBatchUpdate =
+    if countsExact then markDatadirCreatedUnderInvariant().and(markRefCountsExact())
+    else markDatadirCreatedUnderInvariant()
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -684,6 +738,9 @@ object AppStateStorage:
   /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
   val AuditNoPivot: Value = "no-pivot"
 
+  /** The value of `state.refcounts.exact` and `snap.heal.auditForcedOnce`: the keys say it by being there. */
+  val RefCountsMarkerValue: Value = "1"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -721,3 +778,5 @@ object AppStateStorage:
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
     val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"
+    val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
+    val RefCountsExact = "state.refcounts.exact"

@@ -6,6 +6,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.crypto.kec256
@@ -231,13 +232,44 @@ object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
   private[storage] val commitLock = new Object
   private[storage] def warnDuplicate(msg: String): Unit = log.warn(msg)
+  private[storage] def warnTrustUnreadable(e: Throwable): Unit =
+    log.error("Could not tell whether reference counts can be trusted; this prune keeps every trie node (#1692)", e)
+  private[storage] def sayKeepingNodes(): Unit =
+    log.info(
+      "Pruning keeps every trie node: this datadir's reference counts are not proven exact (SNAP, a checkpoint import, " +
+        "an old fast sync or an older binary filled it), and a node one position still uses could be deleted by a count " +
+        "that is too low (#1692). Death rows, snapshot rows and undo records are still pruned. Dead nodes are kept " +
+        "until the datadir is re-synced; db.pruning.retained.bytes counts them."
+    )
 
+/** @param nodesMayBeDeleted
+  *   asked at each prune whether it may delete trie nodes (#1692, see [[RefCountTrust]]). The default says no: a caller
+  *   that vouches for the counts of its store passes `() => true`. A throw is read as no.
+  */
 class ReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,
     private val pruningHistory: BigInt,
-    decodedNodeCacheBytes: Long = com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes
+    decodedNodeCacheBytes: Long = com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes,
+    nodesMayBeDeleted: () => Boolean = () => false
 ) extends StateStorage:
   override def forcePersist(reason: FlushSituation): Boolean = true
+
+  @volatile private var saidKeepingNodes: Boolean = false
+
+  /** Whether a prune or a rollback may delete trie nodes right now. Read each time, not once: SNAP can start in this
+    * process and take the answer away. A read that fails answers no, and says so.
+    */
+  private def deletionAllowed(): Boolean =
+    val allowed =
+      try nodesMayBeDeleted()
+      catch
+        case NonFatal(e) =>
+          ReferenceCountedStateStorage.warnTrustUnreadable(e)
+          false
+    if !allowed && !saidKeepingNodes then
+      saidKeepingNodes = true
+      ReferenceCountedStateStorage.sayKeepingNodes()
+    allowed
 
   /** Decoded trie nodes for block execution (see [[DecodedNodeCache]]); owned here because this is where nodes are
     * deleted, and the deletions evict from it.
@@ -272,12 +304,15 @@ class ReferenceCountedStateStorage(
       case Some(done) if done < target => done + 1
       case _                           => target
     var blockToPrune = from
+    // Asked once for the whole catch-up, and only when there is a height to prune.
+    lazy val deleteNodes = deletionAllowed()
     while blockToPrune <= target do
       val removed =
         ReferenceCountNodeStorage.pruneReporting(
           blockToPrune,
           nodeStorage,
-          inMemory = blockToPrune > currentBestSavedBlock
+          inMemory = blockToPrune > currentBestSavedBlock,
+          deleteNodes = deleteNodes
         )
       // Evict AFTER the delete. A concurrent reader (Engine API newPayload runs without the regular-sync importer's
       // serialisation) may still re-read a node just before the delete; DecodedNodeCache.putIfCurrent drops such an
@@ -287,7 +322,12 @@ class ReferenceCountedStateStorage(
     if lastPruned.forall(_ < target) then lastPruned = Some(target)
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
-    val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
+    val removed = ReferenceCountNodeStorage.rollbackReporting(
+      bn,
+      nodeStorage,
+      inMemory = bn > currentBestSavedBlock,
+      deleteNodes = deletionAllowed()
+    )
     // As in onBlockSave: evict after the rollback has deleted; racing inserts are dropped by putIfCurrent.
     decodedNodes.foreach(_.evict(removed))
     updateBestBlocksData()
@@ -490,14 +530,20 @@ object StateStorage:
         }
     }
 
+  /** @param nodesMayBeDeleted
+    *   under basic pruning, asked at each prune whether it may delete trie nodes (see [[RefCountTrust]]). The default
+    *   says no.
+    */
   def apply(
       pruningMode: PruningMode,
       nodeStorage: NodeStorage,
-      lruCache: LruCache[NodeHash, HeapEntry]
+      lruCache: LruCache[NodeHash, HeapEntry],
+      nodesMayBeDeleted: () => Boolean = () => false
   ): StateStorage =
     pruningMode match
-      case ArchivePruning                   => new ArchiveStateStorage(nodeStorage)
-      case pruning.BasicPruning(history)    => new ReferenceCountedStateStorage(nodeStorage, history)
+      case ArchivePruning => new ArchiveStateStorage(nodeStorage)
+      case pruning.BasicPruning(history) =>
+        new ReferenceCountedStateStorage(nodeStorage, history, nodesMayBeDeleted = nodesMayBeDeleted)
       case pruning.InMemoryPruning(history) => new CachedReferenceCountedStateStorage(nodeStorage, history, lruCache)
 
   def getReadOnlyStorage(source: EphemDataSource): MptStorage =
@@ -518,7 +564,8 @@ object StateStorage:
     val cachedNodeStorage = new CachedNodeStorage(nodeStorage, MapCache.createTestCache(testCacheSize))
 
     (
-      StateStorage(pruningMode, nodeStorage, new LruCache[NodeHash, HeapEntry](testCacheConfig)),
+      // A test store holds only what the test wrote, by emission: its counts are exact, so it deletes by them.
+      StateStorage(pruningMode, nodeStorage, new LruCache[NodeHash, HeapEntry](testCacheConfig), () => true),
       nodeStorage,
       cachedNodeStorage
     )
