@@ -99,6 +99,8 @@ trait RegularSyncFixtures:
 
     val stateStorage: StateStorage = stub[StateStorage]
     val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
+    // The session's exhaust count, handed to `regularSync` and through it to every importer it spawns.
+    val exhausts: BlockImporter.ExhaustCount = new BlockImporter.ExhaustCount
 
     // testKit.spawn (anonymous): RegularSyncSpec shares one testKit-owned ActorSystem across all
     // fixtures, so a fixed actor name would collide with InvalidActorNameException on the second
@@ -138,7 +140,8 @@ trait RegularSyncFixtures:
             .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
           blockTopic,
           this,
-          supervisor.ref.toTyped[SyncController.Command]
+          supervisor.ref.toTyped[SyncController.Command],
+          exhausts = exhausts
         ),
         org.apache.pekko.actor.typed.Props.empty
           .withDispatcherFromConfig("pekko.actor.default-dispatcher")

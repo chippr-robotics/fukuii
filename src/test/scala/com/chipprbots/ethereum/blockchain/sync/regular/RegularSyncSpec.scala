@@ -341,12 +341,13 @@ class RegularSyncSpec
                   networkPeerManager.ref,
                   blockchain,
                   blacklist,
-                  this
+                  this,
+                  exhausts = exhausts
                 ),
                 s"test-importer-depth-$depth"
               )
 
-            importer ! BlockImporter.Start
+            // Started as it is spawned (#1705).
             importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
             importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
 
@@ -434,12 +435,13 @@ class RegularSyncSpec
                 blacklist,
                 this,
                 None,
-                recordingReorgState
+                recordingReorgState,
+                exhausts = exhausts
               ),
               "test-fork-recovery-importer"
             )
 
-          importer ! BlockImporter.Start
+          // Started as it is spawned (#1705).
           importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
           importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
 
@@ -912,7 +914,7 @@ class RegularSyncSpec
         }
         // Located, so the fetch is waited on: nothing counts as exhausted at once (forge, #1694).
         TestProbe().expectNoMessage(500.millis)
-        ImportCounterAccess.survivedExhausts shouldBe 0
+        exhausts.get shouldBe 0
       )
 
       "ask no peer for a storage hole that cannot be located, and back off as after an exhausted fetch" taggedAs (
@@ -931,7 +933,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+        awaitCond(exhausts.get == 1, 10.seconds)
         val asked: Seq[Object] = peersClient.receiveWhile(2.seconds) { case m => m }
         asked.collect {
           case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
@@ -958,7 +960,7 @@ class RegularSyncSpec
               case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
             }
             TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
           finally BlockImporter.resolvingRetryInterval = 30.seconds
       )
 
@@ -989,11 +991,11 @@ class RegularSyncSpec
             }
             // The first import has ended; its retry starts 100 ms later and runs for 2 s.
             TestProbe().expectNoMessage(1.second)
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
             system.actorSelection(s"${regularSync.path}/block-importer-*") !
               BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
 
-            awaitCond(ImportCounterAccess.survivedExhausts == 1, 5.seconds)
+            awaitCond(exhausts.get == 1, 5.seconds)
             succeed
           finally BlockImporter.resolvingRetryInterval = 30.seconds
       )
@@ -1013,7 +1015,7 @@ class RegularSyncSpec
                   if number == failingBlock.number.value =>
                 true
             }
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
@@ -1027,7 +1029,7 @@ class RegularSyncSpec
 
             regularSync ! SyncProtocol.Start
 
-            awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+            awaitCond(exhausts.get == 1, 10.seconds)
             // The audit fills the hole during the backoff, so the next try imports the block.
             setImportResult(
               failingBlock,
@@ -1037,7 +1039,7 @@ class RegularSyncSpec
                 )
               )
             )
-            awaitCond(ImportCounterAccess.survivedExhausts == 0, 10.seconds)
+            awaitCond(exhausts.get == 0, 10.seconds)
             supervisor.receiveWhile(500.millis) { case m => m }.collect {
               case s @ SyncController.WrappedSyncProtocol(_: SyncProtocol.RegularSyncStuck) => s
             } shouldBe empty
@@ -1129,7 +1131,7 @@ class RegularSyncSpec
                   if number == failingBlock.number.value =>
                 true
             }
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
             withClue("neither blacklisted nor evicted: ") {
               peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
                 b

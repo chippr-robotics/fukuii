@@ -459,12 +459,13 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
         createTestProbe[NetworkPeerManagerActor.Command]().ref,
         blockchain,
         CacheBasedBlacklist.empty(100),
-        this
+        this,
+        exhausts = new BlockImporter.ExhaustCount
       )
     )
 
+    /** The importer starts as it is spawned (#1705): it starts the fetcher from the head. */
     def start(): Unit =
-      importer ! BlockImporter.Start
       fetcher.expectMessageType[BlockFetcher.Start].fromBlock shouldBe head.number.value
 
     /** What an idle SyncRetryTick does. */

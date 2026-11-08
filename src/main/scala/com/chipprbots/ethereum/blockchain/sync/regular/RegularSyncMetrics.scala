@@ -30,6 +30,9 @@ object RegularSyncMetrics extends MetricsContainer:
   final private val ReorgLastDepth = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.reorg.last.depth.gauge", ReorgLastDepth)
 
+  // #1705: fetch-and-import pipelines replaced, tagged with the component whose stop caused it.
+  final private val PipelineRestartsCounter = "regularsync.pipeline.restarts.total"
+
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordDefaultBlockPropagationTimer(nanos: Long): Unit = DefaultBlockPropagationTimer.record(nanos, NANOSECONDS)
@@ -40,3 +43,7 @@ object RegularSyncMetrics extends MetricsContainer:
   def incrementReorgTotal(): Unit = BranchReorgTotalCounter.increment()
   def incrementBranchResolutionRounds(): Unit = BranchResolutionRoundsCounter.increment()
   def setLastReorgDepth(n: Int): Unit = ReorgLastDepth.set(n.toDouble)
+
+  /** `component`: "block-fetcher" or "block-importer". */
+  def incrementPipelineRestarts(component: String): Unit =
+    metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()

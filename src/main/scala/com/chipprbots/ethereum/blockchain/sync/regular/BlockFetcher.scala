@@ -112,6 +112,11 @@ class BlockFetcher(
         // triggers (BRU, response received) were missed or headersToIgnore just drained.
         timers.startTimerWithFixedDelay("tick-fetch", TickFetch, syncConfig.blockFetcherTickInterval)
         BlockFetcherState.initial(importer, blockValidator, fromBlock) |> fetchBlocks
+      case ChildStopped(name) =>
+        // Not started yet, so no fetch was lost, but every one after would go to a dead child: stop, and RegularSync
+        // replaces the pipeline, as below (#1705).
+        log.error("BlockFetcher child actor '{}' terminated before the fetcher started: stopping", name)
+        Behaviors.stopped
       case msg =>
         log.debug("Fetcher subscribe adapter received unhandled message {}", msg)
         Behaviors.unhandled
@@ -502,8 +507,9 @@ class BlockFetcher(
         // Left stopped, every later fetch went to dead letters, and the importer, which escalates on exhausted fetches
         // only (#1694), waited on a missing node for good. So it is spawned again, and the fetch it held is answered as
         // exhausted: it did fail, and a fetcher that dies on every fetch then ends in the importer's re-SNAP, as a hole
-        // no peer serves does. Restarting this whole actor instead goes through RegularSync's re-spawn, which does not
-        // start the new importer (forge, #1694).
+        // no peer serves does. Not escalated like the other children (below): a new pipeline would drop that exhaust
+        // and fetch the node again from its first try, so one that dies on every fetch would never reach the re-SNAP
+        // (forge, #1694, #1705).
         log.error(
           "BlockFetcher child actor 'state-node-fetcher' terminated unexpectedly: spawning it again, its fetch counted as exhausted"
         )
@@ -513,8 +519,14 @@ class BlockFetcher(
         Behaviors.same
 
       case ChildStopped(name) =>
-        log.warn("BlockFetcher child actor '{}' terminated unexpectedly", name)
-        Behaviors.same
+        // A stopped headers or bodies fetcher took its request with it, and the request stayed counted in flight: with
+        // one header slot nothing was dispatched again and fetching stalled for good, a warning its only trace (#1705).
+        // This fetcher stops too, and RegularSync, which watches it, replaces the whole pipeline from the best block.
+        log.error(
+          "BlockFetcher child actor '{}' terminated unexpectedly: stopping, so regular sync starts a new pipeline",
+          name
+        )
+        Behaviors.stopped
 
       case msg =>
         log.debug("Block fetcher received unhandled message {}", msg)

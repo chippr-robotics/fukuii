@@ -14,8 +14,8 @@ object SyncProtocol:
   trait SyncControllerReply
 
   /** All direct subtypes are defined in this file — sealed is now valid (W17 fix). Direct subtypes: Start, GetStatus,
-    * MinedBlock, RegularSyncStuck, BlockFetcherStopped, NewCanonicalHead, FetcherStatusTick, PrintStatusTick,
-    * ProgressProtocol (all in this file).
+    * MinedBlock, RegularSyncStuck, MissingCodeNeedsBulkRecovery, PipelineComponentStopped, RestartPipeline,
+    * NewCanonicalHead, FetcherStatusTick, PrintStatusTick, ProgressProtocol (all in this file).
     */
   sealed trait RegularSyncCommand
 
@@ -59,11 +59,15 @@ object SyncProtocol:
       extends SyncProtocolMsg
       with RegularSyncCommand
 
-  /** Delivered to RegularSync via watchWith when BlockFetcher terminates (RF-2 Option A). RegularSync re-spawns both
-    * BlockFetcher and BlockImporter: BlockImporter holds a captured fetcher ref in its constructor, so it must be
-    * replaced together with BlockFetcher to avoid a dead-letter sink.
+  /** Delivered to RegularSync via watchWith when the BlockFetcher (`component` "block-fetcher") or the BlockImporter
+    * ("block-importer") of its fetch-and-import pipeline `epoch` terminates. RegularSync stops the rest of that
+    * pipeline and starts a new one after a backoff: the importer holds the fetcher's ref and starts it, so the two are
+    * replaced together. One about a pipeline already replaced is ignored (#1705).
     */
-  case object BlockFetcherStopped extends RegularSyncCommand
+  final case class PipelineComponentStopped(epoch: Int, component: String) extends RegularSyncCommand
+
+  /** RegularSync's backoff timer: start a new pipeline in place of the stopped pipeline `epoch` (#1705). */
+  final case class RestartPipeline(epoch: Int) extends RegularSyncCommand
 
   /** Signals that the CL canonical head has advanced (PoS / post-merge chains only).
     *

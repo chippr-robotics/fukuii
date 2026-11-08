@@ -181,7 +181,8 @@ object RegularSyncItSpecUtils:
           etcPeerManager,
           bl,
           blacklist,
-          this
+          this,
+          exhausts = new BlockImporter.ExhaustCount
         ),
         "block-importer"
       )
