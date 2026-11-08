@@ -1405,7 +1405,7 @@ items:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-08T19:37:02Z
-      heartbeat: 2026-11-08T19:37:05Z
+      heartbeat: 2026-11-08T19:37:26Z
       branch: fix/1727-simulate-result-shape
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-128
