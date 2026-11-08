@@ -1730,3 +1730,13 @@ items:
     refs: ["#1764 CI run 42530634470"]
     links: {}
     notes: "CI 2026-11-08: Vector(List(ByteString(16))) was not equal to List(List(ByteString(0))). After answerUntilAsked(root, 2) the next GetTrieNodes can be a child path, not the reseed. Timing race in the hand-answered rig. Constitution: deterministic tests. Passed on #1763 run."
+  - id: B-157
+    title: "TypedTxConformanceSpec send-blob-tx fails locally in WSL: KZG computeCellsAndKzgProofs error (CI passes)"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-08
+    refs: []
+    links: {}
+    notes: Seen 2026-11-08 by conduit on unchanged staging 65303ad0b (84 pass, 1 fail). Likely a native-lib or trusted-setup difference in the WSL env; check against B-135 KZG loading.
