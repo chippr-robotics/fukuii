@@ -17,6 +17,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.WordSpecBase
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.BlacklistReasonType
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.branch.Branch
@@ -86,9 +87,14 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
       fetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
       importer
 
-    /** The importer is idle again: it asks the fetcher for blocks only when no import runs. */
+    /** The importer is idle again: it asks the fetcher for blocks (while it resolves a branch, for the strict pick)
+      * only when no import runs.
+      */
     def awaitIdle(fetcher: TestProbe): Unit =
-      fetcher.fishForSpecificMessage(10.seconds) { case _: BlockFetcher.PickBlocks => () }
+      fetcher.fishForSpecificMessage(10.seconds) {
+        case _: BlockFetcher.PickBlocks       => ()
+        case _: BlockFetcher.StrictPickBlocks => ()
+      }
 
     /** A block whose parent nobody here has: a child of a block that is not in this node's chain. */
     def orphan(): Block = BlockHelpers.generateBlock(BlockHelpers.generateBlock(BlockHelpers.genesis))
@@ -158,21 +164,44 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
       new ImporterFixture:
         val fetcher: TestProbe = TestProbe("strikes-fetcher")
         val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "orphan-strikes-importer")
+        val peer: PeerId = peerId(1)
         val blocks: List[Block] = List.fill(BlockImporter.OrphanAnnounceStrikeThreshold)(orphan())
         blocks.foreach(b => setImportResult(b, IO.pure(UnknownParent)))
 
-        val answers: List[(Block, BlockFetcher.FetchCommand)] =
-          blocks.map(b => b -> announce(importer, fetcher, b, peerId(1)))
+        blocks.init.foreach { b =>
+          asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b)
+          blacklist.isBlacklisted(peer) shouldBe false
+        }
+        val last: Block = blocks.last
+        // The fetcher only goes back: the peer whose strikes were counted is blacklisted here, not whoever the fetcher
+        // recorded for the block's number (forge, B-007).
+        asBackOffWithoutBlame(announce(importer, fetcher, last, peer), last)
+        blacklist.isBlacklisted(peer) shouldBe true
+        blacklist.reasonFor(peer) shouldBe Some(BlacklistReasonType.BlockImportErrorType)
+        fetcher.receiveWhile(500.millis) { case m => m }.collect { case b: BlockFetcher.BlockImportFailed =>
+          b
+        } shouldBe empty
+        testKit.stop(importer)
+    )
 
-        answers.init.foreach { case (b, answer) => asBackOffWithoutBlame(answer, b) }
-        val (last, answer) = answers.last
-        answer shouldBe BlockFetcher.BlockImportFailed(
-          last.number.value,
-          BlacklistReason.BlockImportError(
-            s"announced ${BlockImporter.OrphanAnnounceStrikeThreshold} blocks in a row whose parent never arrived, " +
-              s"the last ${last.header.hashAsHexString}"
-          )
-        )
+    "blacklist the peer whose strikes were counted, and not another that announced a block meanwhile" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("counted-peer-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "orphan-counted-peer-importer")
+        val first: List[Block] = List.fill(BlockImporter.OrphanAnnounceStrikeThreshold - 1)(orphan())
+        val byOther: Block = orphan()
+        val kth: Block = orphan()
+        (kth :: byOther :: first).foreach(b => setImportResult(b, IO.pure(UnknownParent)))
+
+        first.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peerId(1)), b))
+        asBackOffWithoutBlame(announce(importer, fetcher, byOther, peerId(2)), byOther)
+        asBackOffWithoutBlame(announce(importer, fetcher, kth, peerId(1)), kth)
+
+        blacklist.isBlacklisted(peerId(1)) shouldBe true
+        blacklist.isBlacklisted(peerId(2)) shouldBe false
         testKit.stop(importer)
     )
 
@@ -192,6 +221,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitIdle(fetcher)
         // Without the block that imported, the next strike would be the threshold's.
         after.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b))
+        blacklist.isBlacklisted(peer) shouldBe false
         testKit.stop(importer)
     )
 
@@ -206,6 +236,55 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         fromFirst.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peerId(1)), b))
         // One strike short of the threshold for the first peer; the second peer's first strike is its own.
         asBackOffWithoutBlame(announce(importer, fetcher, fromSecond, peerId(2)), fromSecond)
+        blacklist.isBlacklisted(peerId(1)) shouldBe false
+        blacklist.isBlacklisted(peerId(2)) shouldBe false
+        testKit.stop(importer)
+    )
+
+    // forge, B-007 (W1): after an orphan rewind the next expected block is our own best, so a peer could re-announce it,
+    // get a DuplicateBlock, and reset its count for free.
+    "not reset a peer's strikes for a block it announces that this node already has" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("duplicate-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "orphan-duplicate-importer")
+        val peer: PeerId = peerId(1)
+        val before: List[Block] = List.fill(BlockImporter.OrphanAnnounceStrikeThreshold - 1)(orphan())
+        val known: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+        val last: Block = orphan()
+        (last :: before).foreach(b => setImportResult(b, IO.pure(UnknownParent)))
+        setImportResult(known, IO.pure(DuplicateBlock))
+
+        before.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b))
+        importer ! BlockImporter.ImportNewBlock(known, peer)
+        awaitIdle(fetcher)
+        asBackOffWithoutBlame(announce(importer, fetcher, last, peer), last)
+
+        blacklist.isBlacklisted(peer) shouldBe true
+        testKit.stop(importer)
+    )
+
+    // An enqueued block had a header that passed validation, PoW included: it does show the peer announces blocks that
+    // connect, so it clears the count.
+    "reset a peer's strikes for a block of its that is enqueued" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("enqueued-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "orphan-enqueued-importer")
+        val peer: PeerId = peerId(1)
+        val before: List[Block] = List.fill(BlockImporter.OrphanAnnounceStrikeThreshold - 1)(orphan())
+        val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+        val after: Block = orphan()
+        (after :: before).foreach(b => setImportResult(b, IO.pure(UnknownParent)))
+        setImportResult(side, IO.pure(BlockEnqueued))
+
+        before.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b))
+        importer ! BlockImporter.ImportNewBlock(side, peer)
+        awaitIdle(fetcher)
+        asBackOffWithoutBlame(announce(importer, fetcher, after, peer), after)
+
+        blacklist.isBlacklisted(peer) shouldBe false
         testKit.stop(importer)
     )
 
@@ -335,6 +414,88 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitCond(didTryToImportBlock(continuing), 10.seconds)
         testKit.stop(importer)
     )
+
+    // forge, B-007: a batch the fetcher serves from before or at the pivot, which is what it does after a rewind.
+    "import only the blocks above the pivot of a batch that starts at the pivot" taggedAs (UnitTest, SyncTest) in sync(
+      new PivotFixture:
+        val fetcher: TestProbe = TestProbe("at-pivot-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "at-pivot-importer")
+
+        importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.of(pivot, chain(2))))
+
+        awaitCond(didTryToImportBlock(chain(2)), 10.seconds)
+        didTryToImportBlock(pivot) shouldBe false
+        testKit.stop(importer)
+    )
+
+    "import only the blocks above the pivot of a batch that starts below it" taggedAs (UnitTest, SyncTest) in sync(
+      new PivotFixture:
+        val fetcher: TestProbe = TestProbe("below-pivot-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "below-pivot-importer")
+
+        importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.of(chain(0), pivot, chain(2))))
+
+        awaitCond(didTryToImportBlock(chain(2)), 10.seconds)
+        didTryToImportBlock(chain(0)) shouldBe false
+        didTryToImportBlock(pivot) shouldBe false
+        testKit.stop(importer)
+    )
+
+    "fetch from above the pivot, blaming no one, when the whole batch is at or below it" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new PivotFixture:
+        val fetcher: TestProbe = TestProbe("all-below-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "all-below-importer")
+
+        importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.of(chain(0), pivot)))
+
+        val back: BlockFetcher.InvalidateBlocksFrom =
+          fetcher.fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+        back.fromBlock shouldBe pivot.number.value + 1
+        back.toBlacklist shouldBe None
+        didTryToImportBlock(chain(0)) shouldBe false
+        didTryToImportBlock(pivot) shouldBe false
+        testKit.stop(importer)
+    )
+
+    // forge, B-007 (N1): the same block, again and again, is what a pivot that is not on the network's chain looks like.
+    "count the pivot floor sending the fetcher back to the same block, several times in a row" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new PivotFixture:
+        val fetcher: TestProbe = TestProbe("repeat-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "repeat-importer")
+        val before: Double = RegularSyncMetrics.pivotFloorGapRepeatsTotal
+
+        (1 to BlockImporter.PivotFloorGapWarnAfter).foreach { _ =>
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(chain(5))))
+          fetcher.fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+          awaitIdle(fetcher)
+        }
+
+        RegularSyncMetrics.pivotFloorGapRepeatsTotal should be > before
+        testKit.stop(importer)
+    )
+  }
+
+  "BlockImporter.FloorGapRewinds" should {
+
+    "count rewinds to the same block in a row, and start again at another block or after a reset" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
+      val gaps = new BlockImporter.FloorGapRewinds
+      gaps.record(BigInt(10)) shouldBe 1
+      gaps.record(BigInt(10)) shouldBe 2
+      gaps.record(BigInt(11)) shouldBe 1
+      gaps.record(BigInt(11)) shouldBe 2
+      gaps.reset()
+      gaps.record(BigInt(11)) shouldBe 1
+      Future.successful(succeed)
+    }
   }
 
   "BlockImporter.OrphanAnnounceStrikes" should {

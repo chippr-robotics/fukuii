@@ -167,11 +167,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     pivot floor, a batch that does not continue the chain makes the fetcher fetch the blocks between the best block and
     the batch, instead of importing it and walking back one block at a time.
   - **Protection kept, bounded.** A peer that announces 5 blocks in a row whose parent never arrives, with none of its
-    blocks imported in between, is blacklisted for the usual period. A block that fails to import 3 times in a row still
-    evicts its peer, and a block that is invalid is blacklisted at once, as before.
+    blocks imported or queued in between, is blacklisted for the usual period, that peer itself and not whoever the fetcher
+    last recorded for the block's number. A block it announces that this node already has does not reset the count. A
+    block that fails to import 3 times in a row still evicts its peer, and a block that is invalid is blacklisted at
+    once, as before.
   - **To watch.** `regularsync.orphan.blocks.total{source,outcome}` counts them (`announce` or `batch`; `branch-fetch` or
     `blacklisted`). An orphan announce logs at INFO (`Orphan announce: ...`), and an orphan batch at WARN, no longer
-    ERROR.
+    ERROR. If the pivot floor sends the fetcher back to the same block 3 times in a row, the fetched blocks above it do
+    not continue from our best block, which is what a pivot that is not on the network's chain looks like: a WARN
+    (`Pivot floor: ...`, again every 3 more) and `regularsync.pivot.floor.gap.repeats.total`. A re-sync is then needed.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

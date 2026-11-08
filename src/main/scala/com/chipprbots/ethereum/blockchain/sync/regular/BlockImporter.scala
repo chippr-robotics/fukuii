@@ -126,6 +126,27 @@ object BlockImporter:
 
     def size: Int = strikes.size
 
+  // forge, B-007 (N1): how many times in a row the pivot floor may send the fetcher back to the same block, because what
+  // is fetched above the best block never continues from it, before that is warned about and counted.
+  val PivotFloorGapWarnAfter: Int = 3
+
+  /** The block the pivot floor last sent the fetcher back to, and how many times in a row it was that one. */
+  final private[regular] class FloorGapRewinds:
+    private var last: Option[BigInt] = None
+    private var count: Int = 0
+
+    /** One more rewind to `from`: how many in a row have gone to that block. */
+    def record(from: BigInt): Int = synchronized {
+      count = if last.contains(from) then count + 1 else 1
+      last = Some(from)
+      count
+    }
+
+    def reset(): Unit = synchronized {
+      last = None
+      count = 0
+    }
+
   // Distinct missing codes in a process before one bulk bytecode recovery is asked for. A miss is fetched alone first, at a
   // round trip and a re-execution of the block, because the bulk scan stops regular sync for as long as it takes to read the
   // whole state: one missing contract on Sepolia, where that is estimated at hours, would hold the head for all of it, where
@@ -409,6 +430,8 @@ final private class BlockImporterLogic(
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
   // Orphan announcements per peer, in a row (B-007): a peer is blacklisted for them only after a bounded number.
   private val orphanAnnounces = new OrphanAnnounceStrikes
+  // How many times in a row the pivot floor sent the fetcher back to the same block (forge, B-007).
+  private val floorGapRewinds = new FloorGapRewinds
   private val BadBlockEvictionThreshold = 3
   private val ForkDetectThreshold = 5
 
@@ -750,7 +773,9 @@ final private class BlockImporterLogic(
           case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
         // The chain moved, so exhausts counted before were met at a block now behind it, and a hole the audit filled
         // no longer counts towards a re-SNAP (forge, #1694).
-        if importedBlocks.nonEmpty then exhausts.reset()
+        if importedBlocks.nonEmpty then
+          exhausts.reset()
+          floorGapRewinds.reset()
 
         errorOpt match
           case None      => Running
@@ -1188,9 +1213,11 @@ final private class BlockImporterLogic(
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
-        // The announced block's parent was here: what the peer's orphan announcements before it are counted against.
+        // A block that shows the announced block's parent was here clears the peer's orphan strikes. A duplicate shows
+        // nothing: after an orphan rewind the next expected block is our own best, so a peer could re-announce that to
+        // reset its count for free (forge, B-007). A queued block needed a header that passed validation, PoW included.
         .tap {
-          case BlockImportedToTop(_) | ChainReorganised(_, _, _) | BlockEnqueued | DuplicateBlock =>
+          case BlockImportedToTop(_) | ChainReorganised(_, _, _) | BlockEnqueued =>
             announcedBy.foreach(orphanAnnounces.clear)
           case _ => ()
         }
@@ -1223,11 +1250,21 @@ final private class BlockImporterLogic(
         block.number
       )
       RegularSyncMetrics.incrementOrphanBlocks("announce", "blacklisted")
-      fetcher ! BlockFetcher.BlockImportFailed(
-        block.number.value,
+      // The peer whose strikes were counted, directly (forge, B-007). The fetcher's BlockImportFailed blames whoever it
+      // recorded for the block's number, and another peer's announce of the same number can have replaced the one counted
+      // here. (PeerListHelper's exemption of maintained peers does not apply on this path.)
+      blacklist.add(
+        peer,
+        syncConfig.blacklistDuration,
         BlacklistReason.BlockImportError(
           s"announced $strikes blocks in a row whose parent never arrived, the last ${block.header.hashAsHexString}"
         )
+      )
+      // And back to the parent, as below, with no one blamed by the fetcher: the blame is above.
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        block.number.value,
+        "parent of announced block not found",
+        shouldBlacklist = false
       )
     else
       log.info(
@@ -1354,6 +1391,7 @@ final private class BlockImporterLogic(
           val validBlocks = blocks.filter(_.number.value > floor)
           if validBlocks.nonEmpty && parentInChain(validBlocks.head) then
             log.info(s"Branch resolution at SNAP pivot floor ($floor), importing ${validBlocks.size} blocks directly")
+            floorGapRewinds.reset()
             Right(validBlocks)
           else if validBlocks.nonEmpty then
             // The batch starts above the best block: the blocks between are not here (B-007, #1683). Importing it was a
@@ -1366,6 +1404,19 @@ final private class BlockImporterLogic(
                 s"not here), going back to block $from to fetch the blocks between"
             )
             RegularSyncMetrics.incrementOrphanBlocks("batch", "branch-fetch")
+            // The same block again and again: what is fetched above the best block never continues from it, which is how a
+            // pivot that is not on the network's chain looks (forge, B-007). Nothing here can repair that; a re-sync can.
+            val repeats = floorGapRewinds.record(from)
+            if repeats >= PivotFloorGapWarnAfter then
+              RegularSyncMetrics.incrementPivotFloorGapRepeats()
+              if repeats % PivotFloorGapWarnAfter == 0 then
+                log.warning(
+                  "Pivot floor: the fetcher has been sent back to block {} {} times in a row, and what it fetches above still " +
+                    "does not continue from our best block: this node's pivot may not be on the network's chain, and a re-sync " +
+                    "(SNAP) may be needed",
+                  from,
+                  repeats
+                )
             fetcher ! BlockFetcher.InvalidateBlocksFrom(
               from,
               "gap between the best block and the fetched batch",
