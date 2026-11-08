@@ -1353,3 +1353,16 @@ items:
     notes: |-
       TuiConfig.glyphs holds Auto before TuiEnv.applyTo and Emoji/Ascii after; glyphSet reads an unresolved Auto as emoji.
       Split the fukuii.tui choice from the resolved set (slice 2, B-039).
+  - id: B-125
+    title: "Launcher: silence the JDK 25 sun.misc.Unsafe warning that overprints the TUI's first frame"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-08
+    refs: [027 slice 1 PTY gate 2026-11-08]
+    links:
+      spec: specs/027-tui-dashboard
+    notes: |-
+      Scala 3 LazyVals trips JDK 24+'s one-time stderr warning (4 lines) during the first --tui frame; it scrolls the alt screen
+      until the next repaint. In every staging --tui recording since 2026-11-07. Fix: --sun-misc-unsafe-memory-access=allow in the launcher.
