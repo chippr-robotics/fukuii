@@ -91,7 +91,9 @@ object Fukuii extends Logger:
     // configuration error must reach the user's screen.
     if enableConsoleUI then
       val tui = Tui.getInstance(TuiConfig.default)
-      // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path.
+      // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path. `q`
+      // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
+      // first (Tui.shutdown then writes the reset to the process output).
       Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
       if tui.initialize() then
         tui.updateNetwork(Config.blockchains.network)

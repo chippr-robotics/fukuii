@@ -143,7 +143,7 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 
 1. `Fukuii.main` sees `--tui`, validates config (errors are still printed to the console), then initializes the TUI and registers a JVM shutdown hook that restores the terminal.
 2. `StdNode.start()` → `startTuiUpdater()` wires the probe and starts the updater.
-3. `Q` exits the JVM; the node's shutdown hook stops the updater and restores the terminal. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI.
+3. `Q` restores the terminal, then exits the JVM; the node's shutdown hook stops the updater. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI; the restore hook leaves the alternate screen even when JLine's own shutdown hook has closed the terminal first (JVM hooks run in no order), by writing the reset sequence to the process output.
 
 ### Testing
 

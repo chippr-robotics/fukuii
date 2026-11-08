@@ -297,8 +297,11 @@ abstract class BaseNode extends Node:
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
         () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis)
       )(using system.scheduler)
-      // `q` exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(), which stops the updater.
-      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, () => sys.exit(0))
+      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
+      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
+      // first, leaving the user's shell in the alternate screen with the cursor hidden.
+      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
+      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, quit)
       tuiUpdater = Some(updater)
       updater.start()
 
