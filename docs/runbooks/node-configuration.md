@@ -356,12 +356,50 @@ fukuii {
         }
       }
       
-      # Enabled RPC APIs
-      apis = "eth,web3,net,personal,fukuii,debug,qa"
+      # Enabled RPC namespaces for every transport that has no `apis` key of its own (see "RPC namespaces" below).
+      # Not set in the shipped config: HTTP and WebSocket then serve "eth,net,web3,fukuii".
+      apis = "eth,web3,net,fukuii,txpool"
     }
   }
 }
 ```
+
+**RPC namespaces** (`fukuii.network.rpc.http.apis`, `ws.apis`, `ipc.apis`, and the shared `apis`):
+
+Each transport serves the namespaces in its own key if you set one, else those in `fukuii.network.rpc.apis` if you set
+it, else its default. The value is a comma-separated string (`"eth,net,web3"`) or a list; names are not case
+sensitive; an unknown name stops the node at startup. The `rpc` namespace (`rpc_modules`) is always on.
+
+| Transport | Default |
+|-----------|---------|
+| HTTP, WebSocket | `eth`, `net`, `web3`, `fukuii` |
+| IPC | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace` |
+
+These are go-ethereum's defaults: the network-facing transports serve the read-only chain API, and the IPC socket,
+which file permissions protect, serves every production namespace. `qa` (`qa_mineBlocks`, a dev-network tool), `test`
+and `testing` (test-mode tools) and `mcp` are not in the IPC default either.
+
+Opt in per transport, and only on the transport that needs it:
+
+```hocon
+fukuii.network.rpc {
+  http.apis = "eth,net,web3,fukuii,txpool"          # add a read-only namespace
+  ws.apis   = "eth,net,web3,fukuii"                 # WebSocket keeps the default
+  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin"   # narrow IPC
+}
+```
+
+To get the previous behaviour on every transport (not recommended on a network-facing endpoint):
+
+```hocon
+fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"
+```
+
+or, from the command line, `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin`. Enabling `personal`,
+`debug`, `admin`, `qa` or `miner` on an HTTP or WebSocket endpoint that is not bound to loopback logs a warning at
+startup. A key in a block the node does not read (for example a `websocket` block: the block is `ws`) is not an error
+but is not used either: the keys are exactly `network.rpc.apis`, `network.rpc.http.apis`, `network.rpc.ws.apis` and
+`network.rpc.ipc.apis`.
 
 **IPC JSON-RPC**:
 ```hocon

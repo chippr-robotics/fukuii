@@ -932,6 +932,13 @@ trait JSONRpcControllerBuilder:
       classicSystem
     )
 
+  // One controller per transport, each answering only the namespaces enabled for that transport
+  // (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`; each falls back to `network.rpc.apis`). `jsonRpcController` keeps
+  // the shared set and serves the Engine API's eth_, net_ and web3_ pass-through.
+  lazy val jsonRpcHttpController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.httpApis)
+  lazy val jsonRpcWsController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.wsApis)
+  lazy val jsonRpcIpcController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.ipcApis)
+
 trait JSONRpcHealthcheckerBuilder:
   this: NetServiceBuilder & EthBlocksServiceBuilder & JSONRpcConfigBuilder & AsyncConfigBuilder &
     SyncControllerBuilder & ActorSystemBuilder =>
@@ -1068,7 +1075,7 @@ trait JSONRpcHttpServerBuilder:
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
     JsonRpcHttpServer(
-      jsonRpcController,
+      jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
       () => sslContext("fukuii.network.rpc.http"),
@@ -1078,7 +1085,7 @@ trait JSONRpcHttpServerBuilder:
 trait JSONRpcIpcServerBuilder:
   self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder =>
 
-  lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcController, jsonRpcConfig.ipcServerConfig)
+  lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcIpcController, jsonRpcConfig.ipcServerConfig)
 
 trait SubscriptionManagerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & EventTopicsBuilder =>
@@ -1100,7 +1107,7 @@ trait JSONRpcWsServerBuilder:
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
-      jsonRpcController,
+      jsonRpcWsController,
       subscriptionManager,
       jsonRpcConfig.wsServerConfig
     )(using classicSystem)

@@ -45,6 +45,29 @@ Implement multiple layers of security:
 - Disable unused features
 - Regular security audits
 
+### RPC Namespaces
+
+HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` until you enable more, and IPC serves every production
+namespace (`eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace`) because file permissions
+protect the socket. These are go-ethereum's defaults. Each transport has its own key, and each falls back to
+`fukuii.network.rpc.apis`:
+
+```hocon
+fukuii.network.rpc {
+  http.apis = "eth,net,web3,fukuii"
+  ws.apis   = "eth,net,web3,fukuii"
+  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,txpool,trace"
+}
+```
+
+- `personal` (create, import and unlock keys), `debug`, `admin` (peers, chain import and export, log level), `qa` and
+  `miner` (start and stop mining, set the coinbase) change node state or reveal node internals. Enable them only on a
+  transport only trusted programs can reach; the node logs a warning at startup when one is enabled on an HTTP or
+  WebSocket endpoint that is not bound to a loopback address.
+- Keep `interface = "localhost"` (the default) on HTTP and WebSocket unless a reverse proxy or firewall controls who
+  can connect, and list only the namespaces the remote clients need.
+- Run `rpc_modules` against each transport to see what it serves.
+
 ## Network Security
 
 ### Port Strategy

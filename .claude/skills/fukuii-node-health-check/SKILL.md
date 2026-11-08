@@ -14,7 +14,9 @@ description: >-
 # Fukuii node health check
 
 Read `../CONVENTIONS.md` first (locating the node, calling RPC, output contract).
-This skill is **read-only** — no guarded writes.
+This skill is **read-only** — no guarded writes. `admin_peers`/`admin_datadir` and the
+`mcp_*` tools are opt-in over HTTP: check `rpc_modules`, and use `net_peerCount` /
+`net_listPeers` when `admin` is not served.
 
 ## When to use
 - Routine "is everything OK?" checks, dashboards-by-hand, on-call triage.

@@ -30,6 +30,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Matching** follows go-ethereum's `--ws.origins`. An entry is `scheme://host[:port]` or `host[:port]`; a part it
     leaves out matches anything, so `https://app.example` accepts any port. Case is ignored and the port is compared as
     written. An entry that is not a valid origin, or has no host, is ignored with a warning.
+- **JSON-RPC namespaces are chosen per transport, and HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` by
+  default, as go-ethereum does (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`). Breaking for operators who relied on the
+  old default.**
+  One list, `network.rpc.apis`, used to apply to every transport and defaulted to
+  `eth,web3,net,personal,fukuii,debug,qa,admin`. Each transport now has its own key, and the shipped defaults are
+  narrower on the two that face the network.
+  - **Keys.** `fukuii.network.rpc.http.apis`, `fukuii.network.rpc.ws.apis` and `fukuii.network.rpc.ipc.apis`. Each falls
+    back to `fukuii.network.rpc.apis`, which stays the shared key (it also sets the namespaces of the Engine API's
+    `eth_`, `net_` and `web3_` pass-through). A value is a comma-separated string or a list; an unknown name stops the
+    node at startup and names its key. None of the four keys is in `network.conf` any more, so a key an operator sets
+    always wins over a default, and an `rpc.apis` that is set applies to all three transports as before.
+  - **Defaults.** HTTP and WebSocket: `eth,net,web3,fukuii`. IPC: `eth,net,web3,fukuii,personal,debug,admin,txpool,trace`,
+    every production namespace, because file permissions protect the socket. `qa` (a dev-network tool), `test`,
+    `testing` and `mcp` are not in the IPC default either. The `rpc` namespace (`rpc_modules`) is always on and now
+    lists what the transport you call serves.
+  - **Opting back in.** A node that needs `personal`, `debug`, `admin`, `qa`, `txpool`, `trace` or `mcp` over HTTP or
+    WebSocket must list it, for example `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"` (or `ws.apis`).
+    To keep the old behaviour on every transport, set
+    `fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"` (or pass
+    `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin`). A method outside its transport's list is
+    answered with `-32601`, before any service is called.
+  - **Startup warning.** Enabling `personal`, `debug`, `admin`, `qa` or `miner` on an HTTP or WebSocket endpoint that is
+    not bound to a loopback address logs a warning that names the endpoint and the namespaces.
+  - **Also fixed.** An `apis` value written as a list (`["eth","web3"]`) or as numbered keys
+    (`-Dfukuii.network.rpc.apis.0=eth`), as `docs/MCP.md` showed, was not accepted; both are read now. The configurator
+    wrote its `apis` and `websocket` settings where the node does not read them and never enabled WebSocket or IPC; it
+    now writes `http`, `ws` and `ipc` blocks, each with `enabled` and its own `apis`, and marks the opt-in namespaces.
 - **The `--tui` dashboard draws the worm-to-brain bars, in emoji or ASCII, at any size from 80×24 (spec 027 slice 1).**
   The progress bars are now the bars the logs already draw (`[====🪱....]🧠 52%`). Regular sync shows one Blocks worm;
   SNAP sync shows five worm rows (Overall, Accounts, Storage, Bytecode, Healing), each with its count and rate once, plus

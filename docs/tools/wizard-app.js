@@ -221,7 +221,10 @@ const advancedConfigSections = {
       'fukuii.network.rpc.http.interface': { label: 'RPC Interface', type: 'text', default: 'localhost', description: 'Interface to bind RPC server (localhost for security)' },
       'fukuii.network.rpc.http.port': { label: 'RPC Port', type: 'number', default: 8546, description: 'HTTP JSON-RPC port' },
       'fukuii.network.rpc.http.mode': { label: 'RPC Mode', type: 'select', options: ['http', 'https'], default: 'http', description: 'HTTP or HTTPS mode' },
-      'fukuii.network.rpc.apis': { label: 'Enabled APIs', type: 'text', default: 'eth,web3,net,personal,fukuii,debug,qa', description: 'Comma-separated list of enabled RPC APIs' }
+      'fukuii.network.rpc.http.apis': { label: 'HTTP APIs', type: 'text', default: 'eth,net,web3,fukuii', description: 'Comma-separated namespaces served over HTTP. personal, debug, admin, qa and miner are opt-in: add them only for a loopback endpoint (the node warns at startup when one is enabled on another address)' },
+      'fukuii.network.rpc.ws.apis': { label: 'WebSocket APIs', type: 'text', default: 'eth,net,web3,fukuii', description: 'Comma-separated namespaces served over WebSocket (the WebSocket endpoint is off unless fukuii.network.rpc.ws.enabled is true). Same opt-in rules as HTTP' },
+      'fukuii.network.rpc.ipc.apis': { label: 'IPC APIs', type: 'text', default: 'eth,net,web3,fukuii,personal,debug,admin,txpool,trace', description: 'Comma-separated namespaces served over the IPC socket (off unless fukuii.network.rpc.ipc.enabled is true). The socket is protected by file permissions, so IPC serves every production namespace by default' },
+      'fukuii.network.rpc.apis': { label: 'Shared APIs (fallback)', type: 'text', default: 'eth,net,web3,fukuii', description: 'Used by every transport that has no apis key of its own. Setting it applies to HTTP, WebSocket and IPC alike, including the IPC default above' }
     }
   },
   

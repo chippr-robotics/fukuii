@@ -18,7 +18,8 @@ For more information, visit the [Model Context Protocol specification](https://g
 
 ## Enabling MCP Support
 
-MCP methods are exposed through the JSON-RPC API. To enable them, add "mcp" to the enabled APIs in your configuration:
+MCP methods are exposed through the JSON-RPC API. To enable them, add "mcp" to the enabled APIs of the transport you
+use. HTTP and WebSocket serve `eth`, `net`, `web3` and `fukuii` by default, so the list below is the default plus `mcp`:
 
 ### Configuration
 
@@ -26,14 +27,19 @@ Add to your `application.conf` or `fukuii.conf`:
 
 ```hocon
 fukuii.network.rpc {
-  apis = ["eth", "web3", "net", "personal", "mcp"]
+  http.apis = "eth,net,web3,fukuii,mcp"
 }
 ```
 
+(`ws.apis` and `ipc.apis` work the same way; `fukuii.network.rpc.apis` sets one list for every transport. The value
+is a comma-separated string.)
+
 Or via command-line parameter:
 ```bash
-fukuii -Dfukuii.network.rpc.apis.0=eth -Dfukuii.network.rpc.apis.1=web3 -Dfukuii.network.rpc.apis.2=net -Dfukuii.network.rpc.apis.3=mcp
+fukuii -Dfukuii.network.rpc.http.apis=eth,net,web3,fukuii,mcp
 ```
+
+The MCP tools are read-only and answer from the node's own state; they do not need `personal`, `debug` or `admin`.
 
 ## Using the MCP API
 

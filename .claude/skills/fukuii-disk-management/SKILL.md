@@ -11,7 +11,8 @@ description: >-
 
 # Fukuii disk management
 
-Read `../CONVENTIONS.md` first. Inspection is 🟢; deleting/moving `rocksdb/` or
+Read `../CONVENTIONS.md` first. `admin_datadir` needs the `admin` namespace (opt-in
+over HTTP; check `rpc_modules`, or read the datadir from the node's config). Inspection is 🟢; deleting/moving `rocksdb/` or
 relocating the datadir is 🔴 — back up (`fukuii-backup-restore`) and confirm
 first.
 

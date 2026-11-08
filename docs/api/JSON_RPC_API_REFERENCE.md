@@ -32,6 +32,22 @@ Fukuii implements a complete JSON-RPC API compatible with the Ethereum JSON-RPC 
 - **HTTP RPC**: `http://localhost:8546`
 - **WebSocket**: `ws://localhost:8546/ws` (if enabled)
 
+### Enabled Namespaces
+
+A method answers only when its namespace is enabled for the transport the request arrived on; otherwise the reply is
+`-32601 Method not found`. Each transport has its own key, and each falls back to `fukuii.network.rpc.apis`:
+
+| Transport | Key | Default |
+|-----------|-----|---------|
+| HTTP | `fukuii.network.rpc.http.apis` | `eth`, `net`, `web3`, `fukuii` |
+| WebSocket | `fukuii.network.rpc.ws.apis` | `eth`, `net`, `web3`, `fukuii` |
+| IPC | `fukuii.network.rpc.ipc.apis` | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace` |
+
+The value is a comma-separated string (`"eth,net,web3"`). The `rpc` namespace (`rpc_modules`, which lists what the
+transport serves) is always on. Namespaces that are **opt-in** on HTTP and WebSocket: `personal`, `debug`, `admin`,
+`qa`, `txpool`, `trace`, `test`, `testing` and `mcp`. The sections below name the namespace each method needs. See the
+[node configuration runbook](../runbooks/node-configuration.md) for examples.
+
 ### Request Format
 
 All requests follow the JSON-RPC 2.0 specification:
@@ -71,17 +87,21 @@ Or on error:
 ## Endpoint Categories
 
 ### Production-Ready (Core)
-Standard Ethereum methods suitable for production use:
+Standard Ethereum methods suitable for production use, on by default over HTTP and WebSocket:
 - ETH namespace (blocks, transactions, accounts, state)
 - WEB3 namespace (utilities)
 - NET namespace (network info)
 
+### Opt-in (off by default over HTTP and WebSocket)
+Methods that change node state or reveal node internals; enable them only where trusted programs can reach them:
+- PERSONAL namespace (account management)
+- ADMIN namespace (peers, chain import and export, log level)
+- DEBUG namespace (performance impact)
+
 ### Development/Testing Only
 Methods that should be disabled in production:
-- PERSONAL namespace (account management)
 - TEST namespace (chain manipulation)
 - QA namespace (testing utilities)
-- DEBUG namespace (performance impact)
 
 ### ETC-Specific
 Ethereum Classic extensions:
@@ -2334,7 +2354,7 @@ fukuii.network.rpc {
     interface = "127.0.0.1"  # Only localhost
     port = 8546
     
-    # Disable personal namespace
+    # The default is "eth,net,web3,fukuii"; personal, debug, admin and qa stay off unless listed here
     apis = "eth,web3,net"
   }
   

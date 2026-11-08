@@ -11,7 +11,9 @@ description: >-
 
 # Fukuii backup & restore
 
-Read `../CONVENTIONS.md` first. Backups are 🟢; **restore over an existing datadir
+Read `../CONVENTIONS.md` first. The online `admin_exportChain`/`admin_importChain`
+need the `admin` namespace (opt-in over HTTP, on over IPC; check `rpc_modules`);
+the offline `fukuii <network> export|import` commands need no RPC. Backups are 🟢; **restore over an existing datadir
 and `admin_importChain` are 🔴** — explicit confirmation, and verify a backup
 exists before overwriting anything.
 

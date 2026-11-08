@@ -4,11 +4,12 @@ import java.time.Duration
 
 import cats.effect.IO
 
-import scala.collection.immutable.ArraySeq
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
+import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.Config as TypesafeConfig
+import com.typesafe.config.ConfigValueType
 import org.json4s.DefaultFormats
 import org.json4s.JNull
 import org.json4s.native
@@ -113,7 +114,20 @@ trait JsonRpcBaseController:
 object JsonRpcBaseController:
 
   trait JsonRpcConfig:
+    /** The shared set, `network.rpc.apis`: the namespaces of every transport that has no key of its own, and of the
+      * Engine API's eth_, net_ and web3_ pass-through.
+      */
     def apis: Seq[String]
+
+    /** The namespaces served over HTTP(S): `network.rpc.http.apis`, else the shared set. */
+    def httpApis: Seq[String] = apis
+
+    /** The namespaces served over WebSocket: `network.rpc.ws.apis`, else the shared set. */
+    def wsApis: Seq[String] = apis
+
+    /** The namespaces served over the IPC socket: `network.rpc.ipc.apis`, else the shared set. */
+    def ipcApis: Seq[String] = apis
+
     def accountTransactionsMaxBlocks: Int
     def minerActiveTimeout: FiniteDuration
     def httpServerConfig: JsonRpcHttpServerConfig
@@ -122,19 +136,37 @@ object JsonRpcBaseController:
     def healthConfig: JsonRpcHealthConfig
 
   object JsonRpcConfig:
+
+    /** HTTP and WebSocket serve these namespaces until an operator sets `network.rpc.http.apis` / `network.rpc.ws.apis`
+      * or `network.rpc.apis`: the read-only chain API and fukuii's own account-history method. `personal`, `debug`,
+      * `admin`, `qa`, `txpool`, `trace` (and `miner`, `test`, `testing`, `mcp`) are opt-in, as in go-ethereum.
+      */
+    val DefaultHttpWsApis: Seq[String] = Seq("eth", "net", "web3", "fukuii")
+
+    /** IPC serves every production namespace by default, as go-ethereum does: the socket is protected by file
+      * permissions, not by the network. Left out: `qa` (qa_mineBlocks, a dev-network tool), `test` and `testing` (test
+      * mode and test harness tools), `mcp` (an opt-in feature), and `rpc`, which is always on.
+      */
+    val DefaultIpcApis: Seq[String] =
+      Seq("eth", "net", "web3", "fukuii", "personal", "debug", "admin", "txpool", "trace")
+
     def apply(fukuiiConfig: TypesafeConfig, availableApis: List[String]): JsonRpcConfig =
       import scala.concurrent.duration.*
       val rpcConfig = fukuiiConfig.getConfig("network.rpc")
 
+      // A transport uses its own key if the operator set one, else `network.rpc.apis` if the operator set it, else the
+      // transport's default. The shipped config sets none of the four keys, so "set" means "set by the operator".
+      val shared = parseApis(rpcConfig, "apis", availableApis)
+      def forTransport(key: String, default: Seq[String]): Seq[String] =
+        parseApis(rpcConfig, key, availableApis)
+          .orElse(shared)
+          .getOrElse(default.filter(availableApis.contains))
+
       new JsonRpcConfig:
-        override val apis: Seq[String] =
-          val providedApis = rpcConfig.getString("apis").split(",").map(_.trim.toLowerCase)
-          val invalidApis = providedApis.diff(availableApis)
-          require(
-            invalidApis.isEmpty,
-            s"Invalid RPC APIs specified: ${invalidApis.mkString(",")}. Availables are ${availableApis.mkString(",")}"
-          )
-          ArraySeq.unsafeWrapArray(providedApis)
+        override val apis: Seq[String] = shared.getOrElse(DefaultHttpWsApis.filter(availableApis.contains))
+        override val httpApis: Seq[String] = forTransport("http.apis", DefaultHttpWsApis)
+        override val wsApis: Seq[String] = forTransport("ws.apis", DefaultHttpWsApis)
+        override val ipcApis: Seq[String] = forTransport("ipc.apis", DefaultIpcApis)
 
         override def accountTransactionsMaxBlocks: Int = rpcConfig.getInt("account-transactions-max-blocks")
         override def minerActiveTimeout: FiniteDuration = rpcConfig.getDuration("miner-active-timeout").toMillis.millis
@@ -143,3 +175,26 @@ object JsonRpcBaseController:
         override val wsServerConfig: JsonRpcWsServerConfig = JsonRpcWsServerConfig(fukuiiConfig)
         override val ipcServerConfig: JsonRpcIpcServerConfig = JsonRpcIpcServerConfig(fukuiiConfig)
         override val healthConfig: JsonRpcHealthConfig = JsonRpcHealthConfig(rpcConfig)
+
+    /** Reads one `apis` key under `network.rpc`: a comma-separated string or a list, names trimmed and lower-cased.
+      * `None` when the key is absent. An unknown namespace is a startup error that names the key, so a typo is not
+      * silently dropped.
+      */
+    private[server] def parseApis(
+        rpcConfig: TypesafeConfig,
+        path: String,
+        availableApis: List[String]
+    ): Option[Seq[String]] =
+      if !rpcConfig.hasPath(path) then None
+      else
+        val provided: Seq[String] = rpcConfig.getValue(path).valueType match
+          case ConfigValueType.STRING => rpcConfig.getString(path).split(",").toSeq
+          case _                      => rpcConfig.getStringList(path).asScala.toSeq
+        val apis = provided.map(_.trim.toLowerCase).filter(_.nonEmpty).distinct
+        val invalidApis = apis.diff(availableApis)
+        require(
+          invalidApis.isEmpty,
+          s"Invalid RPC APIs specified in network.rpc.$path: ${invalidApis.mkString(",")}. " +
+            s"Availables are ${availableApis.mkString(",")}"
+        )
+        Some(apis)

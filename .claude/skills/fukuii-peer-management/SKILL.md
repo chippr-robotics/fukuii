@@ -12,7 +12,9 @@ description: >-
 # Fukuii peer management
 
 Read `../CONVENTIONS.md` first. `admin_peers`/`admin_nodeInfo` are 🟢; the
-add/remove/trust/maxPeers calls are 🟡 (confirm before executing).
+add/remove/trust/maxPeers calls are 🟡 (confirm before executing). `admin_*` is opt-in
+over HTTP: check `rpc_modules` first (CONVENTIONS §2), and fall back to the `net_*`
+equivalents below if `admin` is not served.
 
 ## When to use
 - Low/zero peer count, node "isolated", sync starved for peers.

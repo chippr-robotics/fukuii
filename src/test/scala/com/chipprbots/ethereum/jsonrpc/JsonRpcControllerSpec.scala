@@ -125,6 +125,100 @@ class JsonRpcControllerSpec
 
     web3Response should haveStringResult(version)
 
+  private def modulesOf(fixture: JsonRpcControllerFixture, controller: JsonRpcController): Set[String] =
+    controller.handleRequest(fixture.newJsonRpcRequest("rpc_modules")).unsafeRunSync().result match
+      case Some(JObject(fields)) => fields.map(_._1).toSet
+      case other                 => fail(s"unexpected rpc_modules result: $other")
+
+  it should "answer MethodNotFound for personal, debug, admin, qa, txpool and trace over HTTP and WebSocket under the shipped defaults" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig()
+
+    val http: JsonRpcController = jsonRpcController.forApis(config.httpApis)
+    val ws: JsonRpcController = jsonRpcController.forApis(config.wsApis)
+
+    val optIn = Seq(
+      "personal_listAccounts",
+      "personal_newAccount",
+      "debug_listPeersInfo",
+      "admin_nodeInfo",
+      "admin_peers",
+      "qa_mineBlocks",
+      "txpool_status",
+      "trace_block",
+      "test_mineBlocks"
+    )
+    for
+      controller <- Seq(http, ws)
+      method <- optIn
+    do
+      withClue(method)(
+        controller.handleRequest(newJsonRpcRequest(method)).unsafeRunSync() should haveError(
+          JsonRpcError.MethodNotFound
+        )
+      )
+
+    for controller <- Seq(http, ws) do
+      controller.handleRequest(newJsonRpcRequest("eth_protocolVersion")).unsafeRunSync().error shouldBe None
+      controller.handleRequest(newJsonRpcRequest("web3_clientVersion")).unsafeRunSync() should haveStringResult(version)
+      modulesOf(this, controller) shouldBe Set("eth", "net", "web3", "fukuii", "rpc")
+
+    // the shared controller (the Engine API's eth_, net_ and web3_ pass-through) serves the same set
+    modulesOf(this, jsonRpcController) shouldBe Set("eth", "net", "web3", "fukuii", "rpc")
+
+  it should "serve every production namespace over IPC under the shipped defaults, but not qa, test or mcp" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig()
+
+    personalService.listAccountsFn = _ => IO.pure(Right(PersonalService.ListAccountsResponse(Nil)))
+
+    val ipc: JsonRpcController = jsonRpcController.forApis(config.ipcApis)
+
+    modulesOf(this, ipc) shouldBe JsonRpcConfig.DefaultIpcApis.toSet + "rpc"
+    ipc.handleRequest(newJsonRpcRequest("personal_listAccounts")).unsafeRunSync().error shouldBe None
+    ipc.handleRequest(newJsonRpcRequest("qa_mineBlocks")).unsafeRunSync() should haveError(JsonRpcError.MethodNotFound)
+    ipc.handleRequest(newJsonRpcRequest("test_mineBlocks")).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+
+  it should "serve a namespace over one transport only when that transport's apis key lists it" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig =
+      ShippedRpcConfig.jsonRpcConfig("""fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,personal"""")
+
+    personalService.listAccountsFn = _ => IO.pure(Right(PersonalService.ListAccountsResponse(Nil)))
+
+    val http: JsonRpcController = jsonRpcController.forApis(config.httpApis)
+    val ws: JsonRpcController = jsonRpcController.forApis(config.wsApis)
+
+    http.handleRequest(newJsonRpcRequest("personal_listAccounts")).unsafeRunSync().error shouldBe None
+    http.handleRequest(newJsonRpcRequest("debug_listPeersInfo")).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+    ws.handleRequest(newJsonRpcRequest("personal_listAccounts")).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+
+  it should "report the namespaces of the transport it was narrowed to in rpc_modules, without changing the original" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig()
+
+    val narrowed: JsonRpcController = jsonRpcController.forApis(Seq("web3", "net"))
+
+    modulesOf(this, narrowed) shouldBe Set("web3", "net", "rpc")
+    narrowed.handleRequest(newJsonRpcRequest("eth_protocolVersion")).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+    modulesOf(this, jsonRpcController) shouldBe Set("eth", "net", "web3", "fukuii", "rpc")
+
   it should "debug_listPeersInfo" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,

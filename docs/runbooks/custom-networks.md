@@ -245,7 +245,8 @@ Before setting up your network, you'll need to generate node keys for each node:
 
 #### Getting Enode URLs
 
-To get the enode URL of a running node, query its admin API:
+To get the enode URL of a running node, query its admin API (the `admin` namespace is off by default over HTTP, so
+add it with `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"`; `net_nodeInfo` needs only `net`):
 ```bash
 curl -X POST --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' http://localhost:8546
 ```

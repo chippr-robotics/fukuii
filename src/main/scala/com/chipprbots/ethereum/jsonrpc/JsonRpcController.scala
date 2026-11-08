@@ -58,7 +58,9 @@ case class JsonRpcController(
     debugTracingService: DebugTracingService,
     traceService: TraceService,
     override val config: JsonRpcConfig,
-    actorSystem: ActorSystem
+    actorSystem: ActorSystem,
+    // The namespaces this instance answers when it serves one transport (see `forApis`); None: `config.apis`.
+    transportApis: Option[Seq[String]] = None
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController:
@@ -99,7 +101,13 @@ case class JsonRpcController(
     Apis.Trace -> handleTraceRequest
   )
 
-  override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
+  override def enabledApis: Seq[String] = transportApis.getOrElse(config.apis) :+ Apis.Rpc // RPC enabled by default
+
+  /** A copy of this controller that answers only the namespaces in `apis`, and reports them in `rpc_modules`. The node
+    * builds one per transport (HTTP, WebSocket, IPC) from `JsonRpcConfig.httpApis`, `wsApis` and `ipcApis`; a method
+    * outside the set is answered with MethodNotFound before any service is called.
+    */
+  def forApis(apis: Seq[String]): JsonRpcController = copy(transportApis = Some(apis))
 
   private def handleWeb3Request: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "web3_sha3", _, _) =>

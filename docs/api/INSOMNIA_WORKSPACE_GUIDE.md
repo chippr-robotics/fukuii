@@ -257,10 +257,12 @@ fukuii --rpc-enabled --rpc-port 8546 --rpc-address 127.0.0.1
 ```
 Error: {"code": -32601, "message": "Method not found"}
 ```
-**Solution:** Check that the API is enabled in your Fukuii configuration:
+**Solution:** Check that the namespace is enabled for the transport you call. HTTP and WebSocket serve `eth`, `net`,
+`web3` and `fukuii` by default, so `personal`, `debug`, `admin` and `qa` requests in this workspace need an opt-in:
 ```
-fukuii --rpc-enabled --rpc-apis "eth,web3,net,personal"
+fukuii -Dfukuii.network.rpc.http.apis=eth,net,web3,fukuii,personal,debug,admin
 ```
+(or set `fukuii.network.rpc.http.apis` in your configuration file; `rpc_modules` lists what the endpoint serves).
 
 ### Invalid Parameters
 ```

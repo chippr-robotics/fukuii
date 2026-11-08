@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
+import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -93,6 +94,7 @@ abstract class BaseNode extends Node:
     // to follow the CL's head before the first peer branch arrives. Also a no-op off a post-merge chain with a live
     // Engine API — see EngineApiBuilder.bindDesignatedHead.
     bindDesignatedHead()
+    warnOnExposedNamespaces()
     // Whichever port the supervisor probes for readiness must bind LAST, so that "that port accepts a connection"
     // implies the other one already does. hive decides per simulator which port it probes (libhive defaults to 8545;
     // the `ethereum/sync` sink node overrides it to 8551), so a fixed order is always wrong for one of them — see
@@ -246,6 +248,21 @@ abstract class BaseNode extends Node:
             )
       case Left(error) if jsonRpcConfig.httpServerConfig.enabled => log.error(error)
       case _                                                     => // Nothing
+  /** Logs a warning for each HTTP or WebSocket endpoint that serves personal, debug, admin, qa or miner while bound to
+    * an address that is not loopback. IPC is not checked: its socket is protected by file permissions.
+    */
+  private def warnOnExposedNamespaces(): Unit =
+    val http = jsonRpcConfig.httpServerConfig
+    val ws = jsonRpcConfig.wsServerConfig
+    RpcExposureCheck
+      .warnings(
+        Seq(
+          RpcExposureCheck.Transport("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
+          RpcExposureCheck.Transport("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
+        )
+      )
+      .foreach(warning => log.warn(warning))
+
   private def startJsonRpcWsServer(): Unit =
     if jsonRpcConfig.wsServerConfig.enabled then jsonRpcWsServer.run()
 
