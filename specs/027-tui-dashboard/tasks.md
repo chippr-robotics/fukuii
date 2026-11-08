@@ -9,12 +9,13 @@ description: "Task list for spec 027 TUI dashboard"
 
 **Prerequisites**: plan.md, spec.md (clarified 2026-11-07), research.md (design record, §0 refresh, §10 decisions)
 
-**Tests**: Required by the spec (SC-001 to SC-012). In every slice the tests are written FIRST and must FAIL (a compile
+**Tests**: Required by the spec (SC-001 to SC-013). In every slice the tests are written FIRST and must FAIL (a compile
 error counts) before the implementation task that makes them pass. ScalaTest `AnyFlatSpec` + `Matchers`, tag
 `UnitTest`; no `Thread.sleep` (blocking stubs wait on latches the test releases; waits use `eventually`).
 
 **Organization**: Setup → one phase per slice (plan.md "Delivery slices"), each one PR → Closure. Slice 1 is the MVP.
-Every slice ends with the same gate and an exit task.
+Every slice ends with the same gate and an exit task. Slice 4a (Phase 4a, T128–T150) was added on 2026-11-07 when D-1
+was answered; it sits before slice 4 and keeps later IDs unchanged.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -278,12 +279,107 @@ alert row.
 
 ---
 
+## Phase 4a: Slice 4a — Peer scoring wired (US4; D-1 answered (a))
+
+**Goal**: construct the existing `PeerScoringManager` once per node, feed it from the peer events (plan.md "Slice 4a",
+event map), and export its scores through `NetworkMetrics`. Observational only: no dial, selection, blacklist or
+disconnect decision reads the scores. Every handshaked peer gets a score.
+
+**Branch**: `feat/027-s4a-peer-scoring` · **Owner**: `herald` · **Reviewers**: `prism`, `eye`
+
+**Numbering**: these tasks are T128–T150 because they were added after T001–T127 were published (PR #1742). IDs are
+stable names, not order; this phase runs before Phase 5.
+
+**Depends on**: staging only (not slices 1–3); it merges before slice 4.
+
+**Independent Test**: the deterministic export test (T131) and the wiring tests (T132–T136) pass; the manual Mordor run
+shows a score for every handshaked peer.
+
+### Pre-flight
+
+- [ ] T128 Dead-code review per `.claude/agent-protocols/dead-code-review.md`: record the "Wire it" verdict in the PR
+      (plan.md "Decisions": added in `bee01af48` with no caller, never wired; tested by `PeerScoreSpec` and
+      `PeerScoreFeedbackSpec`; not superseded by `SnapGoodPeers`). `herald` confirms plan.md's event map before code and
+      picks how the scorer reaches `PeerActor` (a factory parameter or a new internal `PeerEvent`). Correct ADR CON-003,
+      which marks the scorer "Integrated" (`docs/adr/consensus/CON-003-block-sync-improvements.md:243`) and thread-safe
+      (`:78`)
+
+### Tests for slice 4a (write first, must fail)
+
+- [ ] T129 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoringManagerSpec.scala` (new), with a fixed
+      `Clock`: each `record*` call moves the score the expected way; a blacklist event never raises it (fails today:
+      `recordBlacklist` refreshes `lastSeen`); events for one peer from four threads lose none (latches; fails today:
+      get-then-put); the map never exceeds its cap and evicts the oldest `lastSeen`; `getAllScores` covers every recorded
+      peer
+- [ ] T130 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoreSpec.scala` and `PeerScoreFeedbackSpec.scala`:
+      explicit times instead of the wall clock, same expectations, no case deleted
+- [ ] T131 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/NetworkMetricsSpec.scala` (new), the gate's
+      deterministic test: with a fixed clock, publish; record a timeout for peer P; publish again; P's exported score is
+      strictly lower (SC-013). Also: publishing is throttled to once per second of the clock; the aggregate gauges
+      (count, average, high/medium/low) equal `getStatistics`; the registry has no per-peer series
+- [ ] T132 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerManagerSpec.scala`: `PeerHandshakeSuccessful`
+      records a successful handshake under the hex node id; `RefreshPeerStatuses` publishes the snapshot; a
+      `PeerAddress` blacklist records nothing
+- [ ] T133 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/p2p/PeerActorSpec.scala`: a `HandshakeFailure`
+      records a failed handshake under `PeerId(hex(remoteNodeId))`; `DisconnectPeer(BreachOfProtocol)` on a handshaked
+      peer records a protocol violation
+- [ ] T134 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/PeersClientSpec.scala`: `ResponseReceived`
+      records a response with its `timeTaken`; `RequestFailed("request timeout")` records a timeout;
+      `RequestFailed("connection closed")` records nothing
+- [ ] T135 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPRequestTrackerSpec.scala`: a
+      completed request records a response with the elapsed time (injected `nowMs`); the armed timeout records a
+      timeout
+- [ ] T136 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/CacheBasedBlacklistSpec.scala`: the scoring
+      decorator records a blacklist for a `PeerId`, nothing for a `PeerAddress`, and delegates every call unchanged
+- [ ] T137 `sbt "testOnly *PeerScor* *NetworkMetrics* *PeerManagerSpec* *PeerActorSpec* *PeersClientSpec
+      *SNAPRequestTracker* *CacheBasedBlacklist*"` → T129–T136 fail; record which
+
+### Implementation for slice 4a
+
+- [ ] T138 [US4] `network/PeerScore.scala` and `network/PeerScoringManager.scala`: an injected `java.time.Clock` (default
+      `Clock.systemUTC()`) with `now` passed to `PeerScore`; `TrieMap.updateWith` per event; a cap with oldest-`lastSeen`
+      eviction (size set by `herald`); the blacklist formula change `herald` picks; the recency comment (`PeerScore.scala:75`)
+      corrected
+- [ ] T139 [US4] `network/NetworkMetrics.scala`: the score snapshot (published by the scorer, read by anyone) and the
+      aggregate gauges; publishing on update is throttled to once per second of the scorer's clock
+- [ ] T140 [US4] `nodebuilder/NodeBuilder.scala`: `lazy val peerScoringManager` beside `blacklist` (`:269`); wrap
+      `blacklist` in the scoring decorator; pass the scorer to `PeerManagerActor` (`:442`), the `PeerActor` factory,
+      `PeersClient` and `SNAPRequestTracker`'s owner
+- [ ] T141 [US4] `network/PeerManagerActor.scala`: record the handshake in `handlePeerHandshakeSuccessful` (`:969`);
+      publish on `RefreshPeerStatuses` (`:758`)
+- [ ] T142 [US4] `network/PeerActor.scala`: record the failed handshake (`:428`) and the protocol violation on
+      `DisconnectPeer(BreachOfProtocol)`, the way `herald` chose in T128
+- [ ] T143 [US4] `blockchain/sync/PeersClient.scala`: record responses and timeouts in the `PRHResultCmd` handler
+      (`:263-281`)
+- [ ] T144 [US4] `blockchain/sync/snap/SNAPRequestTracker.scala`: record responses at completion (`:59`) and timeouts in
+      the armed timeout (`:141`); additive only; rebase onto spec 022's latest first
+- [ ] T145 [US4] `blockchain/sync/Blacklist.scala`: the scoring decorator over `Blacklist` (records for `PeerId` ids,
+      delegates every call)
+
+### Gate and exit for slice 4a
+
+- [ ] T146 `sbt compile-all`; the T137 command → PASS
+- [ ] T147 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [ ] T148 `scripts/snap-split/verify.sh --branch feat/027-s4a-peer-scoring origin/staging` → OK
+- [ ] T149 [US4] Manual, no sbt running: a Mordor node for 10 minutes; `/metrics` shows the aggregate score gauges; the
+      scored-peer count covers every handshaked peer; dial, blacklist and disconnect volumes in the log are in line with
+      an unwired run (SC-013)
+- [ ] T150 Exit slice 4a: `herald` reviews and signs off the network change; `prism` reviews; `eye` validates; `sbt pp`
+      alone; PR `feat(network): wire PeerScoringManager and export peer scores (spec 027 slice 4a)` with the T128
+      verdict and the CON-003 correction; tick boxes; `**In flight**`; regenerate the index
+
+**Checkpoint**: `NetworkMetrics` holds a live score for every handshaked peer; nothing decides on it.
+
+---
+
 ## Phase 5: Slice 4 — Logs and rich peers (US4)
 
-**Goal**: the log ring and Logs view, Recent strips, client id and best block per peer, the score export, txpool, the
-import duration.
+**Goal**: the log ring and Logs view, Recent strips, client id and best block per peer, the score and trend columns
+(on, read from slice 4a's export), txpool, the import duration.
 
 **Branch**: `feat/027-s4-logs-peers`
+
+**Depends on**: slice 3 and slice 4a, both merged.
 
 **Independent Test**: `TuiLogRingAppenderSpec`, `SanitizeSpec`, `PeersPanelSpec` and the Logs goldens pass.
 
@@ -303,16 +399,16 @@ import duration.
 - [ ] T087 [P] [US4] `console tests/PeersPanelSpec.scala`: client id, best block, direction and age; top 8 at L; a client
       id carrying `ESC[2J` renders without the escape and the frame stays exact (C-16); `Unresponsive` when
       `NetworkPeerManagerActor` does not answer
-- [ ] T088 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/NetworkMetricsSpec.scala`: the score export is an
-      in-process snapshot with no per-peer registry series; the trend is the sign of the change from the previous
-      snapshot; an empty export means no score column, never zeros (Q5, D-1)
+- [ ] T088 [P] [US4] `console tests/PeersPanelSpec.scala` and `root tests/TuiStateSpec.scala`: the Peers view reads
+      scores from slice 4a's `NetworkMetrics` snapshot; the trend is the sign of the change from the previous snapshot,
+      computed in `TuiState`; a peer missing from the snapshot shows `—`, never zero (Q5, D-1)
 - [ ] T089 [P] [US1] `console tests/TuiStatusProbeSpec.scala`: txpool size and blob count from
       `PendingTransactionsResponse`; `Unresponsive` arm
 - [ ] T090 [P] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/`: the last-import duration gauge is set
       around the import in `BlockImporter` (extend the existing importer spec)
 - [ ] T091 [US4] Goldens, 3 tiers × 2 glyph sets: the Logs view, the Peers view with client and best block, the Overview
       with the Recent strip and txpool
-- [ ] T092 `sbt "testOnly *Tui* *NetworkMetrics* *BlockImporter*"` → T083–T091 fail; record which
+- [ ] T092 `sbt "testOnly *Tui* *BlockImporter*"` → T083–T091 fail; record which
 
 ### Implementation for slice 4
 
@@ -324,26 +420,27 @@ import duration.
 - [ ] T096 [US4] Logs view, Recent strips, keys `5`, `l`, `+`, `-`
 - [ ] T097 [US4] `console/TuiStatusProbe.scala` and `nodebuilder/StdNode.scala`: the `GetHandshakedPeersCmd` ask
       (`NetworkPeerManagerActor.scala:51`), the txpool ask (`PendingTransactionsManager.scala:115`), the score snapshot
-      read
-- [ ] T098 [US4] `src/main/scala/com/chipprbots/ethereum/network/NetworkMetrics.scala`: the score export (publish and
-      read a snapshot); no producer until D-1 is answered
+      read from `NetworkMetrics` (slice 4a)
+- [ ] T098 [US4] The score and trend columns on: the Peers view shows the score from tier M and the trend at tier L
+      (research §3.1); `TuiState`'s bounded history keeps the previous snapshot for the trend
 - [ ] T099 `.../blockchain/sync/regular/RegularSyncMetrics.scala` and `BlockImporter.scala`: the last-import duration
       gauge, timed around the import call (not in `consensus/ConsensusImpl.scala`, C-7)
 - [ ] T100 [US4] `console/TuiConfig.scala`, `conf/base/tui.conf`: `log-ring-size = 1000`, `log-level = INFO`
-- [ ] T101 D-1: if the user has answered, implement the chosen producer (option b: publish
-      `SnapGoodPeers.decayedScore` where `SnapGoodPeers` records served responses; option a: stop and write a separate
-      task list with `herald`) and turn the column on; otherwise leave it off and say so in the PR
+- [ ] T101 D-1 answered (a): slice 4 consumes slice 4a's `NetworkMetrics` export and ships with the score column on.
+      Before starting, confirm 4a's PR is on `origin/staging`. No scorer code changes in this slice; a scoring defect
+      found here goes back to `herald` as a `fix/027-*` on 4a's files
 - [ ] T102 Generate the T091 goldens; check them against research §3; commit
 
 ### Gate and exit for slice 4
 
-- [ ] T103 `sbt compile-all`; `sbt "testOnly *Tui* *NetworkMetrics* *BlockImporter*"` → PASS
+- [ ] T103 `sbt compile-all`; `sbt "testOnly *Tui* *BlockImporter*"` → PASS
 - [ ] T104 `sbt scalafmtAll`; `sbt formatCheck` → clean
 - [ ] T105 `scripts/snap-split/verify.sh --branch feat/027-s4-logs-peers origin/staging` → OK
-- [ ] T106 [US4] Manual, no sbt running: the Logs view scrolling at both sizes; the Peers view with live peers; `LANG=C`
-      with emoji in log lines (mapped, no width change)
-- [ ] T107 Exit slice 4: `prism` and `eye` (and `herald` if D-1 = a); `sbt pp` alone; PR `feat(tui): log tail and peer
-      details (spec 027 slice 4)`; tick boxes; `**In flight**`; regenerate the index
+- [ ] T106 [US4] Manual, no sbt running: the Logs view scrolling at both sizes; the Peers view with live peers, every one
+      with a score and, at 160×48, a trend; `LANG=C` with emoji in log lines (mapped, no width change)
+- [ ] T107 Exit slice 4: `prism` and `eye` review slice 4 (`herald` reviewed the network change in slice 4a, T150);
+      `sbt pp` alone; PR `feat(tui): log tail and peer details (spec 027 slice 4)`; tick boxes; `**In flight**`;
+      regenerate the index
 
 **Checkpoint**: an operator can answer "why?" without leaving the TUI.
 
@@ -408,7 +505,7 @@ import duration.
 - [ ] T125 [P] `docs/architecture/console-ui.md`: views, keys (`d` Detach), the alert row, glyph sets, `NO_COLOR`,
       `FUKUII_TUI_*`, `fukuii.tui.*`; trim "Future Enhancements" to what is still future
 - [ ] T126 `./scripts/fukuii-test essential` once, alone, after slice 5 merges; record `VERIFY: ran … — result: …`
-- [ ] T127 Close the spec (`docs/development/spec-lifecycle.md`): `**Status**: Done (<date>)` with the five PR numbers
+- [ ] T127 Close the spec (`docs/development/spec-lifecycle.md`): `**Status**: Done (<date>)` with the six PR numbers
       and release, a Closed block, the `**In flight**` line removed, `> Closed <date> as Done; …` at the top of this file;
       regenerate the index
 
@@ -420,7 +517,9 @@ import duration.
 
 - **Setup (Phase 1)** → **Slice 1 (Phase 2)** → **Slice 2 (Phase 3)** → **Slice 3 (Phase 4)** → **Slice 4 (Phase 5)**
   and **Slice 5 (Phase 6)** → **Closure (Phase 7)**.
-- Slice 5 needs slice 3 (panels, alert row) but not slice 4; if D-1 holds slice 4 up, slice 5 may go first.
+- **Slice 4a (Phase 4a)** needs only staging: `herald` may write it while slices 1–3 are in review (sbt serialized). It
+  must merge before slice 4, which reads its export (T101). D-1 is answered, so nothing holds slice 4 beyond 3 and 4a.
+- Slice 5 needs slice 3 (panels, alert row) but not slice 4a or 4.
 - Each slice merges before the next one's sbt work starts (one JVM). Writing the next slice's tests may overlap a review.
 
 ### User story coverage
@@ -428,12 +527,12 @@ import duration.
 - **US1** (P1): slices 1–2 (worm rows, tiers, motion), 3 (Overview data), 4 (txpool).
 - **US2** (P1): slice 1 (ASCII, monochrome, width property), slice 2 (pacing, diff-skip, reduced motion).
 - **US3** (P1): slice 2 (freshness, `Unresponsive`), slice 3 (alert row), slice 5 (CL and mining alerts).
-- **US4** (P2): slices 3–4.
+- **US4** (P2): slices 3, 4a (peer scores) and 4.
 - **US5** (P3): slice 5.
 
 ### Within each slice
 
-- Tests before implementation; record the failing run (T014, T041, T067, T092, T112).
+- Tests before implementation; record the failing run (T014, T041, T067, T137, T092, T112).
 - Pure types (glyphs, theme, tier, layout, alerts) before the renderer; the renderer before goldens; goldens before
   the gate.
 - The gate runs in order: compile, test, format, verify, manual, reviews, `sbt pp`.
@@ -454,7 +553,8 @@ Written in parallel, compiled and run once, in one sbt process.
 
 1. Setup, then slice 1: the visible MVP. Stop and validate: goldens, width property, the manual 80×24 run.
 2. Slice 2 makes motion safe (never block, deterministic) before more panels arrive.
-3. Slice 3 delivers the alert row and views; slice 4 the log tail and peers; slice 5 the per-chain panels.
+3. Slice 3 delivers the alert row and views; slice 4a wires the peer scorer; slice 4 the log tail and peers; slice 5
+   the per-chain panels.
 4. Closure: docs, one `testEssential`, close the spec.
 
 ## Notes

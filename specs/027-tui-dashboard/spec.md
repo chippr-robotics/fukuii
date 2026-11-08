@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-07
 
-**Status**: Planned (2026-11-07). Plan and 127 tasks written from #1490's design proposal (moved in as research.md and refreshed against staging `f0b4a8627`); the proposal's eight open questions are settled; five slices, one PR each, start with slice 1; D-1 (no live peer scorer) is escalated to the user.
+**Status**: Planned (2026-11-07). Plan and 150 tasks written from #1490's design proposal (moved in as research.md and refreshed against staging `f0b4a8627`); the proposal's eight open questions and D-1 are settled (D-1: wire `PeerScoringManager`, slice 4a); six slices (1, 2, 3, 4a, 4, 5), one PR each, start with slice 1.
 
 **In flight**: `fukuii-fc` (local session), branch `docs/spec-027-tui-dashboard`: spec, plan and tasks
 
@@ -56,8 +56,14 @@ proposed defaults.
 - Q8: Celebrate once per process or once per sync? → A: Once per process, followed later by a quieter one-frame
   "✓ back at head". (user, 2026-11-07)
 
+- Q (D-1): Q5 routes peer scores through `NetworkMetrics`, but nothing produces scores today: `PeerScoringManager` has
+  never been constructed in production (research C-1). Where do the scores come from? → A: (a) Wire `PeerScoringManager`
+  into production: construct the existing scorer, feed it from the peer events (a network change, routed through
+  `herald`), and export the scores through `NetworkMetrics`, the Q5 path, where the TUI reads them. Every peer gets a
+  score, not only SNAP peers. Delivered as slice 4a, before slice 4. (user, 2026-11-07)
+
 Where the proposal stated a default (Q1, Q3, Q4, Q6, Q7, Q8) the answer is that default. Q2 and Q5 named options with
-no default; the answer is the option the user chose.
+no default; the answer is the option the user chose. D-1 arose while writing this spec (plan.md).
 
 ---
 
@@ -79,12 +85,14 @@ no default; the answer is the option the user chose.
   (`EngineApiMetrics`, `PoWMiningMetrics`) and two call sites that write to them (`EngineApiHttpServer`'s auth-failure
   path, `EthashDAGManager`'s progress logs). The per-chain panels (phase 5) **only read metrics**: E1–E3 and M1–M2 add state to metrics
   objects at existing call sites and change no response, status, timing or DAG content.
-- No new actor, no new network message, no new RPC method, no change to `--tui`'s default (off) or to standard logging.
+- No new actor, no new wire-protocol message, no new RPC method, no change to `--tui`'s default (off) or to standard
+  logging.
 - No arrow keys or other escape sequences as input (§2.2).
 - The Sync view's **Fetcher** row (headers, bodies, queue depth) has no metric source today and is deferred (research
   C-7).
-- Wiring or rewriting a peer scorer. Which scorer feeds the score column is D-1 (plan); this spec only provides the
-  `NetworkMetrics` export and the column.
+- Acting on peer scores. Wiring `PeerScoringManager` is in scope (slice 4a, D-1, FR-026), but its scores are
+  observational: no dial, peer-selection, blacklist or disconnect decision reads them, and `getBestPeers`,
+  `getBestPeersExcluding` and `shouldRetry` stay unused. Score-driven peer selection would be its own spec.
 - Windows console hosts beyond what JLine already supports; mouse input; colour themes beyond the four palette tiers of
   §5.1.
 
@@ -170,7 +178,7 @@ fixtures, and the slow-actor loop test (SC-005).
 ### User Story 4 — Drill-down views and the log tail (Priority: P2)
 
 The operator presses `2` for the Sync view (per-phase worms, rates, request counters, phase timeline), `3` for Peers
-(direction, client, best block, age, and score with a trend when a scorer exists), `4` for Chain (fork timeline by block
+(direction, client, best block, age, and score with a trend), `4` for Chain (fork timeline by block
 number on ETC, by timestamp on ETH, with the next fork), `5` or `l` for Logs (the last 1,000 INFO+ lines, scrollable with
 `+`/`-`), and `?` or `h` for Help with the glyph legend. `Tab` cycles views.
 
@@ -186,6 +194,8 @@ number on ETC, by timestamp on ETH, with the next fork), `5` or `l` for Logs (th
    scroll them.
 3. **Given** a peer whose client id contains an escape sequence, **When** the Peers view renders, **Then** the escape
    characters are stripped and the frame geometry holds (research C-16).
+4. **Given** a handshaked peer whose requests start timing out, **When** the next scores are published, **Then** its
+   score in the Peers view drops and its trend shows ↓ (D-1, FR-026).
 
 ---
 
@@ -312,9 +322,9 @@ Each requirement names the research.md section it comes from.
   peers inline (M+); version (L); peers and blocks; RPC, WS, IPC and Engine ports; disk free; txpool size with blob count;
   JVM heap and GC share (M+); discovery known/pending/blacklisted (L) (§3.1–§3.4, §6).
 - **FR-019** The Peers view MUST show id, address, direction and age (`GetPeersCmd`), and client id and best block
-  (`GetHandshakedPeersCmd`). Peer scores and their ↑↓→ trend MUST reach the TUI through a `NetworkMetrics` export, never by
-  handing a scoring manager to the probe (Q5). With no live scorer the score column is omitted, not shown as zero (D-1,
-  C-1) (§6).
+  (`GetHandshakedPeersCmd`). Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never
+  by handing a scoring manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The
+  score column is on; a peer with no published score yet shows `—`, never zero (§6).
 - **FR-020** Every string from outside the node that reaches a frame (peer client ids, log text) MUST be sanitised: ESC,
   C0 and C1 control characters removed, one line, length capped (C-16).
 - **FR-021** The log tail MUST come from a separate ring appender of 1,000 lines (configurable), INFO and above by
@@ -333,7 +343,16 @@ Each requirement names the research.md section it comes from.
   `StdNode.scala` MUST use the loaded `TuiConfig` instead of `TuiConfig.default` (§7.5, C-12).
 - **FR-025** No panel may change node behaviour. Data comes from existing actor messages, `MetricsContainer` objects,
   config and two node-local reads (disk free, the best block header's timestamp). New plumbing is limited to metrics
-  objects, the log appender and the probe (§1.6).
+  objects, the log appender, the probe, and slice 4a's scorer wiring (FR-026) (§1.6).
+
+**Peer scoring (slice 4a, D-1)**
+
+- **FR-026** One `PeerScoringManager` per node MUST be constructed and fed from the peer events its API names:
+  successful and failed handshakes, responses with latency, request timeouts, protocol violations, and blacklisting of a
+  peer id. Every handshaked peer MUST get a score. The scores MUST be exported through `NetworkMetrics` as an in-process
+  snapshot plus aggregate gauges, with no per-peer metric series. The scorer MUST be safe under concurrent events, bound
+  its memory, take an injectable clock, and never raise a score on a blacklist event. No dial, selection, blacklist or
+  disconnect decision may read the scores (non-goals).
 
 ### Key entities
 
@@ -349,6 +368,8 @@ Each requirement names the research.md section it comes from.
 - **WormBar**: the TUI twin of `WormToBrainBar`, budgeted in columns and animated by `tick` (§4.1, §7.3).
 - **TuiLogRingAppender / LogLine**: the bounded, sanitised log tail with level and logger name (§7.4).
 - **ChainFacts**: chain id, family, fork timeline (§6).
+- **PeerScoringManager / PeerScore**: the existing scorer (`network/`), wired in slice 4a; its snapshot in
+  `NetworkMetrics` is what the Peers view reads (FR-026).
 
 ---
 
@@ -377,12 +398,15 @@ Each requirement names the research.md section it comes from.
   the FR-006 formula for ticks 0–11.
 - **SC-009 Log ring.** Attaching and detaching the ring leaves the root logger's appender set identical; after 1,500
   lines the ring holds the newest 1,000; ESC and control characters never reach a frame.
-- **SC-010 No consensus change.** Outside `console/`, the diff of all five slices touches only the files plan.md lists;
+- **SC-010 No consensus change.** Outside `console/`, the diff of all six slices touches only the files plan.md lists;
   beacon and forge report no consensus semantics changed for phase 5; `testEssential` is at baseline at the end.
 - **SC-011 Manual gate.** Each slice's PR carries `tmux capture-pane` transcripts from an 80×24 and a 160×48 pane (and,
   from slice 1, `LANG=C` and `NO_COLOR=1` runs) showing no wrap, no scroll, no stray glyph, and a clean exit on `q`, `d`
   and Ctrl-C.
 - **SC-012 Coverage.** Statement coverage stays at or above 70 % (constitution III).
+- **SC-013 Scorer.** With a fixed clock, a recorded timeout for a peer lowers that peer's exported score, and a
+  blacklist event never raises it; events for one peer from four threads lose no update; the score map never exceeds its
+  cap; on a live Mordor node the number of exported scores covers every handshaked peer.
 
 ## Assumptions
 
@@ -391,7 +415,7 @@ Each requirement names the research.md section it comes from.
   where a UTF-8 locale's font draws emoji badly, `g` is the remedy.
 - The TUI remains opt-in (`--tui`) and runs only on an interactive TTY, as today.
 - Phase 5's ETH and ETC halves may land in one PR or two; either way they are one slice.
-- The user's D-1 answer may arrive after slice 4 starts; slice 4 ships without the score column until it does.
+- Slice 4a lands before slice 4, so slice 4 ships with the score column on.
 
 ## Related specs
 
@@ -401,4 +425,5 @@ Each requirement names the research.md section it comes from.
   accessors there; slices that touch it rebase onto 022's latest before review.
 - **020 Scala 3.9**: new code builds under `-source:3.9` and the DC-4 warning ratchet (#1717): extension methods, not
   implicit classes; no new warnings.
-- **012 remember-good-snap-peers**: `SnapGoodPeers.decayedScore` is one candidate source for D-1.
+- **012 remember-good-snap-peers**: `SnapGoodPeers` keeps its own decayed score for SNAP servers and is unchanged. D-1
+  chose `PeerScoringManager` instead, so every peer is scored; the two scores are independent.

@@ -13,8 +13,10 @@ The `--tui` dashboard becomes a set of views over one pure renderer. The frame k
 emoji and ASCII glyph sets, a monochrome theme, and motion driven only by a frame counter `tick`. Polling moves off the
 frame loop to its own thread with per-source freshness, so a slow actor degrades one panel. The splash becomes a view
 (no `Thread.sleep`). Later slices add the Sync, Peers, Chain, Logs and Help views, a log ring appender, and the per-chain
-consensus-layer and mining panels, which read new state that metrics objects record at existing call sites. Five slices,
-one PR each, in the order of research §9. Nothing changes consensus behaviour.
+consensus-layer and mining panels, which read new state that metrics objects record at existing call sites. Slice 4a
+(D-1, answered (a)) wires the never-used `PeerScoringManager` into the peer events and exports its scores through
+`NetworkMetrics`, so slice 4's Peers view has a score for every peer. Six slices (1, 2, 3, 4a, 4, 5), one PR each, in the
+order of research §9 with 4a inserted before 4. Nothing changes consensus behaviour, and no decision reads the scores.
 
 ## Technical Context
 
@@ -50,10 +52,12 @@ under 0.5 % at 1 fps idle (SC-003). Polling stays at 1 Hz with one bounded 500 m
 `Thread.sleep` in tests or in `console/`; 120-column scalafmt; scalafix clean; **one heavy JVM at a time on this
 machine**, so sbt runs and the manual node runs are serialized (see "Sequencing").
 
-**Scale/Scope**: about 2,250 lines of main code and 950 of tests over five slices (research §9: 350/450/600/450/400 and
+**Scale/Scope**: about 2,250 lines of main code and 950 of tests over the five TUI slices (research §9: 350/450/600/450/400 and
 150/200/250/200/150); roughly 20 new files in `console/`, edits to the seven existing `console/` files, `Fukuii.scala`,
 `StdNode.scala`, five metrics objects, `MilestoneLog.scala`, `EthashDAGManager.scala`, `EngineApiHttpServer.scala`,
-`BlockImporter.scala`, `conf/base/fukuii.conf` and a new `conf/base/tui.conf`.
+`BlockImporter.scala`, `conf/base/fukuii.conf` and a new `conf/base/tui.conf`. Slice 4a adds about 250 lines of main code
+and 300 of tests in `network/` (`PeerScoringManager`, `PeerScore`, `NetworkMetrics`, `PeerManagerActor`, `PeerActor`),
+`blockchain/sync/` (`PeersClient`, `Blacklist`, `snap/SNAPRequestTracker`) and `nodebuilder/NodeBuilder.scala`.
 
 ## Constitution Check
 
@@ -61,14 +65,14 @@ machine**, so sbt runs and the manual node runs are serialized (see "Sequencing"
 
 | Principle | Engaged? | Status / justification |
 | --- | --- | --- |
-| **I. Consensus determinism** | Only by proximity, in slice 5: E1/E3 add state to `EngineApiMetrics` and a counter at `EngineApiHttpServer.scala:100`; M2 adds gauges at `EthashDAGManager.scala:75,98`. | **PASS.** Each is a write to a metrics object at an existing call site; no return value, branch, status, timing or DAG byte changes. `beacon` (ETH half) and `forge` (ETC half) review slice 5 before merge, reporting only. The import-duration gauge is set in `blockchain/sync/regular/BlockImporter.scala`, not in `consensus/ConsensusImpl.scala` (C-7). ETC and ETH code paths are untouched. |
+| **I. Consensus determinism** | Only by proximity, in slice 5: E1/E3 add state to `EngineApiMetrics` and a counter at `EngineApiHttpServer.scala:100`; M2 adds gauges at `EthashDAGManager.scala:75,98`. | **PASS.** Each is a write to a metrics object at an existing call site; no return value, branch, status, timing or DAG byte changes. `beacon` (ETH half) and `forge` (ETC half) review slice 5 before merge, reporting only. The import-duration gauge is set in `blockchain/sync/regular/BlockImporter.scala`, not in `consensus/ConsensusImpl.scala` (C-7). ETC and ETH code paths are untouched. Slice 4a touches `network/` and `blockchain/sync/` only, in one code path for both chains; its scores feed no dial, selection or blacklist decision. |
 | **II. Spec-driven** | Yes | PASS. spec.md (clarified 2026-11-07), research.md (design record), this plan, tasks.md. |
 | **III. Tests & coverage** | Yes | PASS. Tests first in every slice; goldens for 3 tiers × 2 glyph sets from slice 1; a ScalaCheck width property; latches and `eventually`, never `Thread.sleep` (research §8.5); the renderer is pure, so most new code is unit-testable and coverage rises (≥ 70 %). |
 | **IV. Idiomatic Scala 3** | Yes | PASS. `enum` for `TuiView`, `Tier`, `Motion`, `GlyphSet`, `Severity` and `Sourced`; explicit result types; extension methods, not implicit classes (spec 020 P3b); no `return`; `scalafmtAll` before each commit; `formatCheck` per slice. |
 | **V. Quality gates** | Yes | PASS. One PR per slice; the per-slice gate below plus `sbt pp` before opening each PR (run alone); CI green. |
 | **VI. Security & operational safety** | Yes: the TUI writes peer-supplied text to the operator's terminal. | PASS. FR-020 sanitises every external string (peer client ids, log text) before it reaches a frame (C-16), with a test that an escape sequence in a client id is stripped. The TUI opens no port and changes no RPC binding. |
 | **VII. Versioning & decisions** | Yes | PASS. PATCH per merge. Operator-visible changes (footer label, new keys, `fukuii.tui.*`, `FUKUII_TUI_*`) are documented in `docs/architecture/console-ui.md` in the closing task. No ADR: no architectural or consensus decision beyond this spec. |
-| **Module boundaries** | Yes | PASS. `console/` depends on `network/`, `blockchain/sync/`, `transactions/`, `utils/` and the metrics objects; nothing depends on `console/` except `Fukuii` and `StdNode`. No metrics object gains a dependency on `console/`. |
+| **Module boundaries** | Yes | PASS. `console/` depends on `network/`, `blockchain/sync/`, `transactions/`, `utils/` and the metrics objects; nothing depends on `console/` except `Fukuii` and `StdNode`. No metrics object gains a dependency on `console/`. Slice 4a: `blockchain/sync/` gains a dependency on `network/PeerScoringManager`, the same direction as its existing dependencies on `network/`. |
 
 ## Project Structure
 
@@ -79,7 +83,7 @@ specs/027-tui-dashboard/
 ├── spec.md       # clarified 2026-11-07
 ├── research.md   # #1490's design proposal, refreshed (§0), decisions (§10)
 ├── plan.md       # this file
-└── tasks.md      # 127 tasks, one phase per slice
+└── tasks.md      # 150 tasks, one phase per slice (4a's are T128–T150)
 ```
 
 No data-model.md, contracts/ or quickstart.md: the entities are UI state described in research §7.1, there is no
@@ -118,7 +122,14 @@ src/main/scala/com/chipprbots/ethereum/
 ├── MilestoneLog.scala                             # EDIT S3 namedMilestones → private[ethereum]
 ├── blockchain/sync/snap/SNAPSyncMetrics.scala     # EDIT S2 latestProgressAt; S3 counter accessors (additive)
 ├── blockchain/sync/regular/RegularSyncMetrics.scala, BlockImporter.scala   # EDIT S4 last-import duration gauge
-├── network/NetworkMetrics.scala                   # EDIT S4 peer-score snapshot export (in-process)
+├── network/PeerScoringManager.scala, PeerScore.scala   # EDIT S4a injected clock, atomic updates, cap, blacklist rule
+├── network/NetworkMetrics.scala                   # EDIT S4a peer-score snapshot export (in-process) + aggregate gauges
+├── network/PeerManagerActor.scala                 # EDIT S4a handshake success (`:969`); publish on RefreshPeerStatuses (`:758`)
+├── network/PeerActor.scala                        # EDIT S4a handshake failure (`:428`); BreachOfProtocol disconnect
+├── blockchain/sync/PeersClient.scala              # EDIT S4a response and timeout (`:263-281`)
+├── blockchain/sync/Blacklist.scala                # EDIT S4a scoring decorator: PeerId blacklists → recordBlacklist
+├── blockchain/sync/snap/SNAPRequestTracker.scala  # EDIT S4a SNAP response and timeout (top-level snap/ file)
+├── nodebuilder/NodeBuilder.scala                  # EDIT S4a construct the scorer beside `blacklist` (`:269`); pass it
 ├── consensus/engine/EngineApiMetrics.scala        # EDIT S5 E1 last-call times/statuses, E3 auth-failure count
 ├── consensus/engine/EngineApiHttpServer.scala     # EDIT S5 E3 count on the auth-failure path (`:100`)
 ├── consensus/pow/PoWMiningMetrics.scala           # EDIT S5 M2 DAG epoch/progress/loaded gauges
@@ -134,14 +145,19 @@ src/test/scala/com/chipprbots/ethereum/console/
 ├── LayoutSpec, AlertsSpec, ChainFactsSpec, TuiKeysSpec                                                    # S3
 ├── SanitizeSpec, TuiLogRingAppenderSpec, PeersPanelSpec                                                   # S4
 └── ClPanelSpec, MiningPanelSpec                                                                           # S5
+src/test/scala/com/chipprbots/ethereum/network/PeerScoringManagerSpec, NetworkMetricsSpec                  # S4a NEW
+    (S4a edits: network/PeerScoreSpec, PeerScoreFeedbackSpec, PeerManagerSpec, p2p/PeerActorSpec;
+     blockchain/sync/PeersClientSpec, CacheBasedBlacklistSpec, snap/SNAPRequestTrackerSpec.
+     Not NetworkPeerManagerSpec.scala, a spec 016 pin in scripts/snap-split/protected-paths.txt)
     (edits: TuiSpec, TuiUpdaterSpec, TuiStatusProbeSpec in console/; TuiRendererSpec, TuiStateSpec, TuiConfigSpec,
      TuiLogSuppressorSpec in the root test package; SNAPSyncMetricsSpec; MilestoneLogSpec; new EngineApiMetricsSpec,
      PoWMiningMetricsSpec, NetworkMetricsSpec)
 src/test/resources/tui/golden/<view>-<tier>-<state>-<glyphs>.txt
 ```
 
-**Structure Decision**: everything new lives in `console/`. Outside it, edits are additive reads or metric writes at
-existing call sites, plus wiring in `Fukuii` and `StdNode`.
+**Structure Decision**: everything new for the TUI lives in `console/`. Outside it, edits are additive reads or metric
+writes at existing call sites, plus wiring in `Fukuii` and `StdNode`. Slice 4a is the exception: a network-layer change,
+owned by `herald`, that wires the existing scorer where its events happen (see "Slice 4a: peer scoring wired").
 
 ## Architecture (research §7)
 
@@ -181,12 +197,48 @@ working at every intermediate commit.
 | 1 | **Worms, glyphs, tiers** | `TuiGlyphs`, `TuiTheme`, `TuiEnv`, `Tier`, `WormBar` (static), SNAP five worm rows and the regular-sync worm in today's layout, the 8 `SyncProgress` fields, tiered logo, FUKUII wordmark, footer labels (`d Detach`, no new keys), `conf/base/tui.conf` with `glyphs`, `TuiConfig` loaded (C-12). Goldens: 3 tiers × 2 glyph sets. | `feat/027-s1-worms` | prism; eye |
 | 2 | **Tick, motion, non-blocking loop** | `tick`, `Motion`, `TuiProbeThread`, `Sourced`, adaptive pacing (Q1), diff-skip, ripple/spinner/pulse/stall, celebration and "back at head" (Q8), `p`, reduced motion, splash view with tiered and cropped logo (Q2), clock-free `TuiState` (C-3), `SNAPSyncMetrics.latestProgressAt`. | `feat/027-s2-motion` | prism; eye |
 | 3 | **Views, layout, alerts** | `Panel`/`Layout`, Overview/Sync/Peers (`GetPeersCmd` data only)/Chain/Help, keys `1-5 Tab ? h g`, alert row (§2.3 rows that need no slice 5 data), `ChainFacts` (C-4, C-5), `MilestoneLog` visibility, SNAP counter accessors, disk free, JVM heap/GC, discovery counts, head timestamp. | `feat/027-s3-views` | prism; eye |
-| 4 | **Logs, rich peers** | `Sanitize`, `TuiLogRingAppender`, Logs view with `+`/`-`, `l`, Recent strips, `GetHandshakedPeersCmd` (client id, best block), the `NetworkMetrics` score export and column (off until D-1), txpool ask, import-duration gauge, `fukuii.tui.log-level` (Q4). | `feat/027-s4-logs-peers` | prism; eye; herald only if D-1 picks option (a) |
+| 4a | **Peer scoring wired** (new; D-1 = (a)) | Construct one `PeerScoringManager`; fix what wiring exposes (injected clock, atomic updates, a bounded map, blacklist must not raise a score); feed it from the peer events in the table below; export a score snapshot and aggregate gauges through `NetworkMetrics`. Observational only. Needs only staging, not slices 1–3. | `feat/027-s4a-peer-scoring` | **herald** owns it; prism reviews; eye |
+| 4 | **Logs, rich peers** | `Sanitize`, `TuiLogRingAppender`, Logs view with `+`/`-`, `l`, Recent strips, `GetHandshakedPeersCmd` (client id, best block), the score and trend columns **on**, read from 4a's `NetworkMetrics` export, txpool ask, import-duration gauge, `fukuii.tui.log-level` (Q4). Depends on 4a. | `feat/027-s4-logs-peers` | prism; eye |
 | 5 | **Per-chain panels** | ETH: E1 (`EngineApiMetrics`, Q6), E2 (`ForkChoiceManager.getState` to the probe), E3 (auth-failure count), CL panel and its two alerts. ETC: M1 (reads), M2 (DAG gauges), coinbase, mining panel and its alert. | `feat/027-s5-chain-panels` (may split as `feat/027-s5a-eth-cl` and `feat/027-s5b-etc-mining`) | prism; **beacon** (ETH half, E1–E3), **forge** (ETC half, M1–M2), both reporting only; eye |
 
 Rollback per slice: each slice is one revert. Slice 1 also reverts `tui.conf` and its include; slice 2's probe thread
 replaces the in-loop poll in one commit, so the revert restores the old loop; slices 4 and 5 add metrics state that
-nothing else reads.
+nothing else reads. Reverting 4a leaves the scorer unconstructed again, as today; nothing but slice 4's columns reads its
+scores, so slice 4 must be reverted first or its columns show `—`.
+
+### Slice 4a: peer scoring wired (D-1 = (a))
+
+`PeerScoringManager` (`network/PeerScoringManager.scala`) and `PeerScore` (`network/PeerScore.scala`) have existed since
+`bee01af48` and have never been constructed in `src/main`. Its API names the events; this is where each one happens on
+staging `f0b4a8627`, for `herald` to confirm before code:
+
+| Scorer call | Event source | Peer id available? |
+| --- | --- | --- |
+| `recordSuccessfulHandshake` | `PeerManagerActor.handlePeerHandshakeSuccessful` (`PeerManagerActor.scala:969`), fed by `PeerEvent.PeerHandshakeSuccessful` (`PeerEventBusActor.scala:73`) | yes: `handshakedPeer.id`, the hex node id (`PeerActor.scala:603`) |
+| `recordFailedHandshake` | `PeerActor` on `Left(HandshakeFailure(reason))` (`PeerActor.scala:428`); the manager only gets host and reason (`PeerClosedConnectionCmd`, `PeerManagerActor.scala:98`) | yes, inside `PeerActor`: `PeerId(hex(remoteNodeId))`. The scorer must reach `PeerActor` (factory parameter) or a new internal `PeerEvent` carries it; `herald` picks |
+| `recordResponse(bytes, latencyMs)` | ETH requests: `PeersClient` on `PeerRequestHandler.ResponseReceived(…, timeTaken)` (`PeersClient.scala:263-277`, `PeerRequestHandler.scala:32`). SNAP requests: `SNAPRequestTracker` on completion (`SNAPRequestTracker.scala:59`, its clock is injectable, `:29`) | yes: `peer.id` |
+| `recordTimeout` | `PeersClient` on `RequestFailed(…, "request timeout")` (`PeerRequestHandler.scala:129`; not "connection closed", `:141`); `SNAPRequestTracker`'s armed timeout (`:141`) | yes |
+| `recordProtocolViolation` | `PeerActor` told `DisconnectPeer(BreachOfProtocol)` by its connection on a decode error (`RLPxConnectionHandler.scala:503-508`) | yes, inside `PeerActor` |
+| `recordBlacklist` | the node-wide `Blacklist` (`NodeBuilder.scala:269`) wrapped by a decorator that records `add` calls whose id is a `PeerId`. `PeerManagerActor` blacklists by `PeerAddress` (IP) (`:558`, `:837`, `:923`); those cannot be mapped to a peer and are not scored | only for `PeerId` ids |
+| export | the scorer publishes a snapshot to `NetworkMetrics` on update, at most once a second by its clock, and on `PeerManagerActor`'s existing 10 s `RefreshPeerStatuses` tick (`:398`, `:758`) so recency decay shows without events | — |
+
+What wiring exposes in today's scorer, all fixed in 4a (tests first):
+
+1. **Wall clock.** `PeerScore.score` and every `record*` call `Instant.now()` (`PeerScore.scala:74`, `:82-127`), so no test
+   of a score change is deterministic. 4a injects a `java.time.Clock` into the manager and passes `now` to `PeerScore`;
+   `PeerScoreSpec` and `PeerScoreFeedbackSpec` move to explicit times, with no case deleted.
+2. **Lost updates.** `getScore` then `put` (`PeerScoringManager.scala:44-46` and each `record*`) is not atomic. Events
+   arrive from several actors (`PeerManagerActor`, `PeerActor`s, `PeersClient`, `SNAPRequestTracker`), so 4a uses
+   `TrieMap.updateWith`.
+3. **Unbounded map.** Entries are only removed by `removePeer`, which nothing calls. Every failed handshake from a crawler
+   adds a node id. 4a caps the map and evicts the entry with the oldest `lastSeen`.
+4. **Blacklisting raises a score.** `blacklistCount` is not in `score`, and `recordBlacklist`, `recordTimeout` and
+   `recordProtocolViolation` all refresh `lastSeen`, which raises the recency term (10 % of the score). `herald` picks the
+   formula change so a blacklist never raises a score (for example, `blacklistCount` in the compliance term); a test pins
+   it. The recency comment (`PeerScore.scala:75`, "<5min=1.0") is also wrong: the decay is linear from 0 minutes.
+5. **Not used for decisions.** `getBestPeers`, `getBestPeersExcluding` and `shouldRetry` stay unused (spec non-goal).
+   The logger stays at ERROR (`logback.xml:180`), so the debug "score ↑" lines in research §3's mockups will not reach
+   the INFO+ log ring; the Peers view shows the trend instead.
 
 ### Per-slice gate (research §8, §9)
 
@@ -202,6 +254,15 @@ Run in this order, one JVM at a time:
    `LANG=C` and `NO_COLOR=1` runs; from slice 2, `FUKUII_TUI_MOTION=reduced` and a CPU sample (`pidstat -t -p <pid> 1
    60`, SC-003). Transcripts go in the PR (SC-011).
 6. `sbt pp` before opening the PR (constitution V), alone.
+
+**Slice 4a's gate** replaces steps 2 and 5:
+
+- 2a. Targeted tests: `sbt "testOnly *PeerScor* *NetworkMetrics* *PeerManagerSpec* *PeerActorSpec* *PeersClientSpec
+  *SNAPRequestTracker* *CacheBasedBlacklist*"`, which must include the deterministic export test: with a fixed clock, a
+  recorded timeout for a peer lowers that peer's score in the `NetworkMetrics` snapshot (SC-013).
+- 5a. Manual, no sbt running: a Mordor node for 10 minutes; `/metrics` shows the aggregate score gauges, the scored-peer
+  count covers every handshaked peer, and the count of dials, blacklistings and disconnects in the log is in line with
+  an unwired run (the scores change no decision).
 
 At the end of the sprint, after slice 5 merges: `./scripts/fukuii-test essential` once (`CLAUDE.md`).
 
@@ -222,11 +283,17 @@ kinds, `fix/*` and `hotfix/*` (without `snap-016`) are "fix", anything else is "
   `RATCHET_FILES = SNAPSyncController.scala`), so `feat/027-*` edits pass. Keep them additive, never put `# moved:`,
   `# test-files:`, `# capability:` or `#1401` in a 027 commit message, and rebase onto spec 022's latest before review
   (022 is Active there).
+- **Slice 4a: `feat/027-s4a-peer-scoring`** (kind "other"). Its `blockchain/sync/snap/SNAPRequestTracker.scala` edit is
+  also a top-level `snap/` file (not a module file, not in the ratchet set), and its test edit in
+  `src/test/**/sync/snap/SNAPRequestTrackerSpec.scala` passes because no 027 commit carries a spec 016 marker. 4a
+  touches no resource. It must not edit `NetworkPeerManagerSpec.scala`, a spec 016 pin
+  (`scripts/snap-split/protected-paths.txt`).
 
 ## Sequencing
 
-- The slices are serial: 2 needs 1's glyphs and worm, 3 needs 2's snapshot and pacing, 4 and 5 need 3's panels and
-  alert row. Slice 5 does not need slice 4 and may go before it if D-1 holds slice 4 up.
+- The TUI slices are serial: 2 needs 1's glyphs and worm, 3 needs 2's snapshot and pacing, 4 and 5 need 3's panels and
+  alert row. Slice 4 also needs 4a's export. Slice 4a needs only staging, so its code and tests can be written while
+  slices 1–3 are in review (sbt still serialized); it merges before slice 4. Slice 5 does not need 4a or 4.
 - **One heavy JVM at a time.** This machine hangs with two (memory: one heavy JVM). sbt runs for different slices never
   overlap, sbt never runs while a manual node run is up, and another session's sbt job takes precedence. Writing tests
   and code for slice N+1 while slice N is in review is fine; compiling it waits.
@@ -234,15 +301,19 @@ kinds, `fix/*` and `hotfix/*` (without `snap-016`) are "fix", anything else is "
   020's `**In flight**` line before editing `StdNode.scala` or `Fukuii.scala`; if a 020 rewrite still holds them,
   rebase onto it before review.
 
-## Decisions for the user (surfaced, not assumed)
+## Decisions
 
-- **D-1: where peer scores come from.** Q5 fixes the path (`NetworkMetrics` export, no scoring manager in the probe), but
-  nothing produces scores today: `PeerScoringManager` is never constructed in `src/main` (C-1). Options: (a) wire
-  `PeerScoringManager` into the peer event path, a network change for `herald` and a dead-code-review "Wire it"
-  decision; (b) export `SnapGoodPeers.decayedScore` (live, `NodeBuilder.scala:440`), which scores SNAP servers only;
-  (c) no score column. **Recommended: (b)** for this sprint, labelled "snap score", with (a) as its own spec if wanted.
-  Slice 4 ships the export API and the column switched off; the answer only turns it on. The §3.2, §3.4 and §3.10
-  mockups' `score ↑` log lines depend on (a).
+- **D-1: where peer scores come from. Resolved (user, 2026-11-07): (a), wire `PeerScoringManager` into production.**
+  Q5 fixes the path (`NetworkMetrics` export, no scoring manager in the probe), but nothing produced scores:
+  `PeerScoringManager` had never been constructed in `src/main` (C-1). The options were (a) wire it, (b) export
+  `SnapGoodPeers.decayedScore` (SNAP servers only), (c) no score column. The plan recommended (b); the user chose (a), so
+  every peer gets a score. Delivered as slice 4a.
+- **Dead-code review verdict: Wire it** (protocol: `.claude/agent-protocols/dead-code-review.md`). Gap: the scorer is
+  complete and tested (`PeerScoreSpec`, `PeerScoreFeedbackSpec`) but was never constructed. Git history: added in
+  `bee01af48` ("Implement Priority 1-3: Enhanced peer selection, adaptive sync, exponential backoff"); the only later
+  change touching it is `f5768e670` (its logger set to ERROR); no commit ever removed a caller. Supersession: none.
+  `SnapGoodPeers` scores SNAP servers only, for redial, and stays as it is. Value: per-peer reliability for every peer,
+  shown in the Peers view.
 
 Recorded here because they are not in the user's list, and either can be reversed in review:
 
@@ -257,7 +328,8 @@ Recorded here because they are not in the user's list, and either can be reverse
 | End of every slice | `eye` | Runs the gate's sbt steps (one JVM) and reports pass/fail with counts. |
 | Slice 5, ETH half, before merge | `beacon` | Confirms E1–E3 change no Engine API response, status or timing (reporting only). |
 | Slice 5, ETC half, before merge | `forge` | Confirms M1–M2 change no mining, DAG content or timing (reporting only). |
-| Slice 4, if D-1 = (a) | `herald` | Wiring a scorer into peer events is a network change. |
+| Slice 4a, before code and before merge | `herald` (owner) | Confirms the event map above, chooses how the scorer reaches `PeerActor`, implements and reviews the network change. |
+| Slice 4a, before merge | `prism` | 8-lens review: thread safety, the map bound, test determinism. |
 | Any compile failure | `wraith` | Scala 3.9 and DC-4 fallout. |
 
 ## Complexity Tracking

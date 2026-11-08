@@ -80,9 +80,13 @@ the logo rows; `TuiSpec.scala:80`; `TuiRendererSpec.scala:28-36`; `BlockchainCon
 - **C-1. `PeerScoringManager` has no caller.** Nothing in `src/main` constructs or calls it; its only other mention is a
   logback logger pinned at ERROR (`logback.xml:180`), and it was last touched in #1382. So the Peers view's score and
   ↑↓→ trend (§2.1, §3.4) and the `Peer … score ↑ 0.612 → 0.640 after valid range` log lines in the §3.2, §3.4 and §3.10
-  mockups have no live source. Decision 5 (§10) fixes the export path (`NetworkMetrics`); which scorer feeds it is open
-  as plan D-1. `SnapGoodPeers.decayedScore` (`network/SnapGoodPeers.scala:70`, built at `NodeBuilder.scala:440`) is live,
-  but it scores only SNAP servers.
+  mockups have no live source. Decision 5 (§10) fixes the export path (`NetworkMetrics`); which scorer feeds it was plan
+  D-1. `SnapGoodPeers.decayedScore` (`network/SnapGoodPeers.scala:70`, built at `NodeBuilder.scala:440`) is live,
+  but it scores only SNAP servers. **D-1 was answered (a) on 2026-11-07:** wire `PeerScoringManager` into production,
+  feed it from the peer events and export through `NetworkMetrics`, so every peer is scored (plan slice 4a). The scorer
+  was added in `bee01af48` with no caller and never gained one; ADR CON-003 (`docs/adr/consensus/CON-003-block-sync-improvements.md:243`)
+  still marks it "Integrated", which slice 4a corrects. Its debug "score ↑" lines stay below the ring's INFO threshold
+  (its logger is at ERROR, `logback.xml:180`), so the Peers view shows the trend instead of those log lines.
 - **C-2. Peer threshold.** `createPeerStatusLine` turns the count yellow below 50 % (`count < max / 2`,
   `TuiRenderer.scala:267`), not 25 %. This spec keeps the 50 % value colour and puts the 25 % rule on the alert row
   (§2.3), so the two are different on purpose.
@@ -229,7 +233,8 @@ row is the pinned footer. Tiers (§3.1): **S** = anything < 100 cols or < 32 row
 **L** = ≥ 140 cols and ≥ 45 rows (reference 160×48).
 
 The mockups fix layout, column budgets and glyphs. Their data is illustrative (C-10), and the peer-score log lines in
-§3.2, §3.4 and §3.10 have no live source today (C-1). Golden files are generated from fixture states (§8).
+§3.2, §3.4 and §3.10 will not appear: the scorer is wired by slice 4a, but it logs at debug under a logger pinned at ERROR
+(C-1). Golden files are generated from fixture states (§8).
 
 ### 3.1 Tier contents
 
@@ -736,7 +741,7 @@ object (all are `object`s with `AtomicLong`s or gauges, no actor hop);
 | discovery known / pending / blacklisted | Overview (L) | `NetworkMetrics.DiscoveredPeersSize`, `PendingPeersSize`, `BlacklistedPeersSize` (`NetworkMetrics.scala:20-34`) | metrics |
 | per-peer id, address, direction, age | Peers | `PeerManagerActor.GetPeersCmd` (`PeerManagerActor.scala:59`) → `Peers.handshaked: Seq[Peer]` (`:1336-1337`; `Peer.scala:18-26` has `remoteAddress`, `incomingConnection`, `createTimeMillis`) | existing message, more fields |
 | per-peer client id, best block | Peers | `NetworkPeerManagerActor.GetHandshakedPeersCmd` (`NetworkPeerManagerActor.scala:51`) → `HandshakedPeers` (`:1505`) with `PeerInfo.maxBlockNumber` (`:1415-1421`) and `remoteStatus.remoteClientId` (`RemoteStatus`, `:1340-1349`) | actor |
-| per-peer score + trend ↑↓→ | Peers | Decision 5 (§10): scores are exported through `NetworkMetrics` (an in-process snapshot the probe reads), and the scoring manager is not handed to the probe. Trend = sign of delta vs. the previous snapshot, computed in `TuiState`. **No live scorer today (C-1)**: `PeerScoringManager` (`PeerScoringManager.scala:21`, arrows only in its debug log `:105`) is never constructed; which scorer feeds the export is plan D-1 | new, ~10 LOC export + D-1 |
+| per-peer score + trend ↑↓→ | Peers | Decision 5 (§10): scores are exported through `NetworkMetrics` (an in-process snapshot the probe reads), and the scoring manager is not handed to the probe. Trend = sign of delta vs. the previous snapshot, computed in `TuiState`. **No live scorer today (C-1)**: `PeerScoringManager` (`PeerScoringManager.scala:21`, arrows only in its debug log `:105`) is never constructed. D-1 answered (a): slice 4a constructs it and feeds it from the peer events (plan, "Slice 4a") | 4a: ~250 LOC + ~300 test (network/, sync/); 4: reads the export |
 | fork timeline (ETC) | Chain, Overview | `MilestoneLog.namedMilestones` (`MilestoneLog.scala:21-46`, currently `private` → `private[ethereum]`) + `forkBlockNumbers` | config, 1-line visibility change |
 | fork timeline (ETH) | Chain, Overview | `ForkTimestamps` (`BlockchainConfig.scala:30-38`, incl. Amsterdam and BPO1/2, ordered by time, C-5) + current head timestamp (needs best block header: `blockchainReader.getBestBlock` on probe thread) | config + 1 read |
 | **E1** CL connected / last FCU / last newPayload age + status | Overview (ETH), alert | `EngineApiMetrics` has counts and `latestPayloadBlock/Timestamp` (`EngineApiMetrics.scala:14-23`) but **no call timestamps** (decision 6, §10). Add `_lastForkchoiceUpdatedAt`, `_lastNewPayloadAt`, `_lastForkchoiceStatus`, `_lastNewPayloadStatus` set in `recordNewPayload` (`:54-61`) / `recordForkchoiceUpdated` (`:74-79`) | new, ~25 LOC, metrics object only |
@@ -904,7 +909,7 @@ All tests stay deterministic (no `Thread.sleep`; the renderer takes `tick`).
 | **1. Worms, glyphs, tiers** | `TuiGlyphs` + `TuiTheme` (NO_COLOR, ascii, auto-detect), `WormBar` with column budgets replacing `createProgressBar` (`TuiRenderer.scala:222-242`), SNAP 5 worm rows + regular-sync worm in the existing layout, `Tier` with the logo decision table (§3.1), fix the FOOO wordmark, footer with new key names. No new keys yet. Golden tests for 3 tiers × 2 glyph sets. | Yes — pure renderer change | ~350 LOC + ~150 test |
 | **2. Tick, motion, non-blocking loop** | `tick` in state, `TuiProbeThread` + `AtomicReference`, 250 ms frames with diff-skip, ripple/spinner/stall/celebration, `p` key, reduced-motion env, splash as a view (removes `Thread.sleep`), `Sourced[A]` freshness. | Yes | ~450 LOC + ~200 test |
 | **3. Views + layout engine** | `Panel`/`Layout`, views 1–4 and Help, keys `1-5 \t ? g`, Chain view from `MilestoneLog`/`ForkTimestamps`, alert row with the §2.3 table (disk, stall, peers). Peers view limited to `GetPeersCmd` data. | Yes | ~600 LOC + ~250 test |
-| **4. Logs + rich peers** | `TuiLogRingAppender`, Logs view with `+/-` scroll, Recent strips, `GetHandshakedPeersCmd` for client/best, score/trend through the `NetworkMetrics` export (decision 5; the score source is plan D-1, C-1), txpool ask. | Yes | ~450 LOC + ~200 test |
+| **4. Logs + rich peers** | `TuiLogRingAppender`, Logs view with `+/-` scroll, Recent strips, `GetHandshakedPeersCmd` for client/best, score/trend through the `NetworkMetrics` export (decision 5), fed by `PeerScoringManager`, which slice 4a wires first (D-1 answered (a), C-1), txpool ask. | Yes, after 4a | ~450 LOC + ~200 test |
 | **5. Per-chain panels** | ETH: E1–E3 in `EngineApiMetrics`/`EngineApiHttpServer`, CL panel + alerts. ETC: M1–M2 in `PoWMiningMetrics`/`EthashDAGManager`, mining panel, coinbase. `beacon` reviews E*, `forge` reviews M2 (reporting only; no consensus semantics). | Yes, ETH and ETC halves can land separately | ~400 LOC + ~150 test |
 
 Each phase ends with `sbt "testOnly *Tui*"`, `sbt scalafmtAll`, and a manual run
@@ -931,8 +936,10 @@ proposal named options but no default; the decision there is the option the user
 4. **Log level in the ring.** INFO and above. `fukuii.tui.log-level` (default `INFO`) is the override §7.4 names
    (C-13). (Proposal default.)
 5. **Peer scores.** Exported through `NetworkMetrics`; the scoring manager instance is not handed to the probe. (No
-   default stated; option chosen.) Open consequence: today there is no live scorer to export (C-1), so plan D-1 asks
-   which scorer feeds it.
+   default stated; option chosen.) Consequence: there was no live scorer to export (C-1), so plan D-1 asked which scorer
+   feeds it. **D-1 answered (a) (user, 2026-11-07):** wire `PeerScoringManager` into production, feed it from the peer
+   events (a network change through `herald`) and export through `NetworkMetrics`, so every peer is scored. Plan slice
+   4a delivers it before slice 4.
 6. **E1 placement.** "Last call at" timestamps (and last statuses) go in `EngineApiMetrics`; no `ClLiveness` object.
    (Proposal default.)
 7. **`d` naming.** The footer labels `d` "Detach"; the behaviour is unchanged (node keeps running). (Proposal default.)
