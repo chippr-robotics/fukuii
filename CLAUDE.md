@@ -88,7 +88,9 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `worktree-protocol.md` | Sprint vs task worktree patterns, naming (`wt/<id>`), lifecycle, bin scripts, agent rules for worktree context |
 | `snap-sync.md` | SNAP routing: phase/module → files → config keys → metrics → log tags → reviewer; pin-test index; spec 016 split status (current vs target) |
 
-Working documents (public, code patterns only): `.claude/agent-protocols/working-docs/`
+Working documents (local to each host, code patterns only): `.claude/agent-protocols/working-docs/`. The directory is
+gitignored, so another host never sees it. To pass open rows on, write a handoff file under
+`.claude/agent-protocols/handoffs/`.
 - `CHASE-QUEUE.md` — cross-file issues logged during inline sessions, batched into sprint clusters
 
 Best practices library (research-backed patterns, June 2026 sprint): `.local/best-practices/`
