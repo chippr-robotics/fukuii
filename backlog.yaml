@@ -1725,3 +1725,13 @@ items:
     refs: [B-135]
     links: {}
     notes: "beacon re-review of 73e842637 (APPROVE WITH NITS): PrecompiledContracts.scala:183 enables 0x0a from blobGasUsed.isDefined, not config (unreachable today, sturdier on config); FatalErrors doc says one batch but persistState runs per system call and code commits immediately (safe like kill -9); halt under --tui skips TuiRestore."
+  - id: B-156
+    title: "Flaky: HealNoWalkCompletionSpec:404 count-reseeds-per-root on Hash expects a root request, gets a child path"
+    priority: P2
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-08
+    refs: ["#1764 CI run 42530634470"]
+    links: {}
+    notes: "CI 2026-11-08: Vector(List(ByteString(16))) was not equal to List(List(ByteString(0))). After answerUntilAsked(root, 2) the next GetTrieNodes can be a child path, not the reseed. Timing race in the hand-answered rig. Constitution: deterministic tests. Passed on #1763 run."
