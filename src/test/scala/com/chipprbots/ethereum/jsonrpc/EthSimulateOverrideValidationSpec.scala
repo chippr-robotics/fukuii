@@ -66,9 +66,12 @@ class EthSimulateOverrideValidationSpec extends AnyWordSpec with Matchers:
         Left((-32602, s"invalid argument 0: unknown field \"bogusField\" in state override for $Addr"))
     }
 
-    "still accept every schema-defined key" taggedAs UnitTest in {
+    // every field of go-ethereum's override.BlockOverrides and OverrideAccount, with values its types accept: a
+    // prevRandao and a beaconRoot are a common.Hash, so exactly 32 bytes
+    "still accept every key geth's override types define" taggedAs UnitTest in {
+      val hash = "0x" + "00" * 32
       val r = decode(
-        s"""{"blockStateCalls":[{"blockOverrides":{"number":"0x1","time":"0x1","gasLimit":"0x1","feeRecipient":"$Addr","prevRandao":"0x00","baseFeePerGas":"0x1","blobBaseFee":"0x1","withdrawals":[]},"stateOverrides":{"$Addr":{"balance":"0x1","nonce":"0x1","code":"0x00","stateDiff":{},"movePrecompileToAddress":"$From"}},"calls":[$Call]}]}"""
+        s"""{"blockStateCalls":[{"blockOverrides":{"number":"0x1","time":"0x1","gasLimit":"0x1","feeRecipient":"$Addr","prevRandao":"$hash","baseFeePerGas":"0x1","blobBaseFee":"0x1","beaconRoot":"$hash","difficulty":"0x1","withdrawals":[]},"stateOverrides":{"$Addr":{"balance":"0x1","nonce":"0x1","code":"0x00","stateDiff":{},"movePrecompileToAddress":"$From"}},"calls":[$Call]}]}"""
       )
       r.isRight shouldBe true
     }
@@ -99,7 +102,12 @@ class EthSimulateOverrideValidationSpec extends AnyWordSpec with Matchers:
         decode(blockOverride(field, maxOf(256))).isRight shouldBe true
         val r = decode(blockOverride(field, oneOver(256)))
         r.left.map(e => (e.code, e.message)) shouldBe
-          Left((-32602, s"invalid argument 0: invalid $field in block override: hex number > 256 bits"))
+          Left(
+            (
+              -32602,
+              s"invalid argument 0: json: cannot unmarshal hex number > 256 bits into Go struct field BlockOverrides.${field.capitalize} of type *hexutil.Big"
+            )
+          )
       }
 
     for field <- Uint64Fields do
@@ -107,21 +115,36 @@ class EthSimulateOverrideValidationSpec extends AnyWordSpec with Matchers:
         decode(blockOverride(field, maxOf(64))).isRight shouldBe true
         val r = decode(blockOverride(field, oneOver(64)))
         r.left.map(e => (e.code, e.message)) shouldBe
-          Left((-32602, s"invalid argument 0: invalid $field in block override: hex number > 64 bits"))
+          Left(
+            (
+              -32602,
+              s"invalid argument 0: json: cannot unmarshal hex number > 64 bits into Go struct field BlockOverrides.${field.capitalize} of type hexutil.Uint64"
+            )
+          )
       }
 
     "accept a 256-bit state override balance and reject one bit more (-32602)" taggedAs UnitTest in {
       decode(accountOverride("balance", maxOf(256))).isRight shouldBe true
       val r = decode(accountOverride("balance", oneOver(256)))
       r.left.map(e => (e.code, e.message)) shouldBe
-        Left((-32602, s"invalid argument 0: invalid balance in state override for $Addr: hex number > 256 bits"))
+        Left(
+          (
+            -32602,
+            "invalid argument 0: json: cannot unmarshal hex number > 256 bits into Go struct field OverrideAccount.balance of type *hexutil.Big"
+          )
+        )
     }
 
     "accept a 64-bit state override nonce and reject one bit more (-32602)" taggedAs UnitTest in {
       decode(accountOverride("nonce", maxOf(64))).isRight shouldBe true
       val r = decode(accountOverride("nonce", oneOver(64)))
       r.left.map(e => (e.code, e.message)) shouldBe
-        Left((-32602, s"invalid argument 0: invalid nonce in state override for $Addr: hex number > 64 bits"))
+        Left(
+          (
+            -32602,
+            "invalid argument 0: json: cannot unmarshal hex number > 64 bits into Go struct field OverrideAccount.nonce of type hexutil.Uint64"
+          )
+        )
     }
 
     for field <- Seq("index", "validatorIndex", "amount") do
@@ -130,7 +153,9 @@ class EthSimulateOverrideValidationSpec extends AnyWordSpec with Matchers:
         val r = decode(withdrawal(field, oneOver(64)))
         r.left.map(_.code) shouldBe Left(-32602)
         r.left.map(_.message) shouldBe
-          Left(s"invalid argument 0: invalid $field in block override: hex number > 64 bits")
+          Left(
+            s"invalid argument 0: json: cannot unmarshal hex number > 64 bits into Go struct field BlockOverrides.Withdrawals.$field of type hexutil.Uint64"
+          )
       }
 
     for field <- Seq("state", "stateDiff") do
