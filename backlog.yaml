@@ -1656,3 +1656,12 @@ items:
     refs: [B-145]
     links:
       issues: [1756]
+  - id: B-150
+    title: Security hardening follow-ups from the B-145 audit (details held privately, Principle VI)
+    priority: P1
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-08
+    refs: [B-145]
+    links: {}
