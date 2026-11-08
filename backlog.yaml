@@ -1338,3 +1338,18 @@ items:
     refs: [B-003]
     links: {}
     notes: "Found adding beacon carry-forward to B-004 (PR C: write the genesis weight on TTD=0 chains; SyncController:2689, SnapFinalization:277)."
+  - id: B-124
+    title: "Spec 027: give the resolved TuiConfig glyph choice its own type"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-08
+    refs: [prism review of 027 slice 1]
+    links:
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s2-motion
+    depends_on: [B-038]
+    notes: |-
+      TuiConfig.glyphs holds Auto before TuiEnv.applyTo and Emoji/Ascii after; glyphSet reads an unresolved Auto as emoji.
+      Split the fukuii.tui choice from the resolved set (slice 2, B-039).
