@@ -34,7 +34,7 @@ when one is enabled on a non-loopback HTTP/WS endpoint. `admin_blockIP` needs `a
 2. **Block an abusive IP** (🟡) — `admin_blockIP("<ip>")`; verify with
    `admin_listBlockedIPs`; reverse with `admin_unblockIP("<ip>")`. (Equivalent
    `net_addToBlacklist` / `net_removeFromBlacklist` / `net_listBlacklistedPeers`
-   exist if that namespace is enabled.)
+   are served with the same `admin` namespace.)
 3. **Pin / drop peers** (🟡) — `admin_addTrustedPeer` to keep a vetted peer;
    `admin_removePeer` to drop a bad one (→ `fukuii-peer-management`).
 4. **Protect secrets** (🔴) — `node.key` and `keystore/` must be permission-

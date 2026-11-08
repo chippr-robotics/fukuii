@@ -45,22 +45,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every production namespace, because file permissions protect the socket. `qa` (a dev-network tool), `test`,
     `testing` and `mcp` are not in the IPC default either. The `rpc` namespace (`rpc_modules`) is always on and now
     lists what the transport you call serves.
-  - **Opting back in.** A node that needs `personal`, `debug`, `admin`, `qa`, `txpool`, `trace` or `mcp` over HTTP or
-    WebSocket must list it, for example `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"` (or `ws.apis`).
-    To keep the old behaviour on every transport, set
-    `fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"` (or pass
-    `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin`). A method outside its transport's list is
-    answered with `-32601`, before any service is called.
+  - **Opting back in.** A node that needs `personal`, `debug`, `admin`, `miner`, `qa`, `txpool`, `trace` or `mcp` over
+    HTTP or WebSocket must list it, for example `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"` (or
+    `ws.apis`). To keep the old behaviour on every transport, set
+    `fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin,miner"` (or pass
+    `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin,miner`); `admin` and `miner` now carry what
+    `net` and `eth` used to (below). A method outside its transport's list is answered with `-32601`, before any
+    service is called. The GraphQL endpoint (`/graphql` on the HTTP port) is not governed by these keys;
+    `fukuii.network.rpc.graphql.enabled` controls it.
+  - **`net` keeps three methods.** The non-standard peer-management methods that carry a `net_` name
+    (`net_nodeInfo`, `net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`, `net_listBlacklistedPeers`,
+    `net_addToBlacklist`, `net_removeFromBlacklist`) are served with the `admin` namespace, under the same names;
+    `net` serves only `net_version`, `net_listening` and `net_peerCount`, as in go-ethereum. A caller that used one of
+    them over HTTP or WebSocket needs `admin` in that transport's list.
+  - **WebSocket subscriptions need `eth`.** `eth_subscribe` and `eth_unsubscribe` are answered with `-32601` on a
+    WebSocket endpoint whose list has no `eth`; before, they were answered whatever the list said.
+  - **The IPC socket.** The node sets the socket file to owner read/write only (0600) when it binds it, as go-ethereum
+    does, and the node stops with an error if that fails on a POSIX file system. IPC serves more namespaces than HTTP and
+    WebSocket by default, so the file permissions are what protect it.
   - **The `miner` namespace.** `miner_start`, `miner_stop`, `miner_getStatus` and `miner_setEtherbase` are in a new
     `miner` namespace, opt-in on HTTP and WebSocket (and in the IPC default), as in go-ethereum; they were in `eth`.
     `eth_setEtherbase` stays as a deprecated alias of `miner_setEtherbase`, served only where `miner` is enabled, and
-    logs a deprecation warning once. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+    logs a deprecation warning once per node. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
     `eth_submitHashrate` stay in `eth`, so external miners and stratum proxies are not affected. To control mining over
     HTTP, list it: `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner"`. When `test` and `miner` are both
     enabled, `test` answers `miner_setEtherbase` (the retesteth harness uses it) whatever the order of the list; before,
     the namespace listed last won.
-  - **Startup warning.** Enabling `personal`, `debug`, `admin`, `qa` or `miner` on an HTTP or WebSocket endpoint that is
-    not bound to a loopback address logs a warning that names the endpoint and the namespaces.
+  - **Startup warning.** Enabling `personal`, `debug`, `admin`, `qa`, `miner`, `test` or `testing` on an HTTP or
+    WebSocket endpoint that is not bound to a loopback address logs a warning that names the endpoint and the
+    namespaces.
   - **Also fixed.** An `apis` value written as a list (`["eth","web3"]`) or as numbered keys
     (`-Dfukuii.network.rpc.apis.0=eth`), as `docs/MCP.md` showed, was not accepted; both are read now. The configurator
     wrote its `apis` and `websocket` settings where the node does not read them and never enabled WebSocket or IPC; it

@@ -48,7 +48,11 @@ transport serves) is always on. Namespaces that are **opt-in** on HTTP and WebSo
 `miner`, `qa`, `txpool`, `trace`, `test`, `testing` and `mcp`. A method's namespace is the prefix of its name
 (`miner_start` needs `miner`), except `eth_setEtherbase`, a deprecated alias of `miner_setEtherbase` that is served only
 where `miner` is enabled. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
-`eth_submitHashrate` are in `eth`. See the [node configuration runbook](../runbooks/node-configuration.md) for examples.
+`eth_submitHashrate` are in `eth`. `net` serves only `net_version`, `net_listening` and `net_peerCount`: the
+non-standard peer methods named `net_*` (see below) are served with `admin`. On WebSocket, `eth_subscribe` and
+`eth_unsubscribe` need `eth`. The GraphQL endpoint (`/graphql` on the HTTP port) is not governed by these keys
+(`fukuii.network.rpc.graphql.enabled` controls it). See the [node configuration runbook](../runbooks/node-configuration.md)
+for examples.
 
 ### Request Format
 
@@ -1510,9 +1514,18 @@ curl -X POST http://localhost:8546 \
 
 ---
 
+### Peer-management methods named `net_*` (served with the `admin` namespace)
+
+`net_nodeInfo`, `net_listPeers`, `net_disconnectPeer`, `net_connectToPeer`, `net_listBlacklistedPeers`,
+`net_addToBlacklist` and `net_removeFromBlacklist` are not part of the standard `net` namespace (go-ethereum's `net`
+has `net_version`, `net_listening` and `net_peerCount`). They show peers and addresses, dial and drop peers and edit
+the blacklist, so they keep their names and are served with **`admin`**: a transport whose `apis` list has `net` but
+not `admin` answers them with `-32601`. Add `admin` to the transport's list to use them (opt-in over HTTP and
+WebSocket, on over IPC).
+
 ### net_listPeers
 
-Returns detailed information about all connected peers.
+Returns detailed information about all connected peers (needs `admin`).
 
 **Parameters**: None
 

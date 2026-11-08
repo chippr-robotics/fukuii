@@ -1,5 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc.server.controllers
 
+import java.nio.file.Files
+import java.nio.file.Paths
+
+import scala.jdk.CollectionConverters.*
+
+import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -9,8 +15,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** Which JSON-RPC namespaces each transport serves: the defaults that ship in `conf/base/network.conf`, and how the
   * per-transport keys (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`) and the shared `network.rpc.apis` combine. The
-  * defaults are go-ethereum's: HTTP and WebSocket serve only the read-only chain API, IPC serves every production
-  * namespace.
+  * defaults are go-ethereum's: HTTP and WebSocket serve only the standard chain namespaces (eth, net, web3) and fukuii,
+  * IPC serves every production namespace.
   */
 class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
 
@@ -25,6 +31,33 @@ class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
     val shipped = ShippedRpcConfig.config()
     Seq("apis", "http.apis", "ws.apis", "ipc.apis").foreach { key =>
       withClue(s"fukuii.network.rpc.$key: ")(shipped.hasPath(s"fukuii.network.rpc.$key") shouldBe false)
+    }
+  }
+
+  it should "set none of the four apis keys in any other shipped conf file, except the templates that need them" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // faucet.conf serves its own `faucet` namespace, testmode.conf needs `test`, and enterprise-template.conf is a
+    // template an operator copies; every other file must leave the keys to the operator
+    val exceptions = Set("faucet.conf", "testmode.conf", "enterprise-template.conf")
+    val confDir = Paths.get(getClass.getClassLoader.getResource("conf/app.conf").toURI).getParent
+    val files = Files
+      .list(confDir)
+      .iterator
+      .asScala
+      .filter(_.getFileName.toString.endsWith(".conf"))
+      .filterNot(file => exceptions.contains(file.getFileName.toString))
+      .toList
+    files should not be empty
+
+    files.foreach { file =>
+      val parsed = ConfigFactory.parseString(Files.readString(file)) // parsed only: nothing is resolved
+      Seq("apis", "http.apis", "ws.apis", "ipc.apis").foreach { key =>
+        withClue(s"${file.getFileName} fukuii.network.rpc.$key: ")(
+          parsed.hasPath(s"fukuii.network.rpc.$key") shouldBe false
+        )
+      }
     }
   }
 
@@ -63,9 +96,14 @@ class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
     config.ipcApis shouldBe Seq("eth", "net")
   }
 
-  it should "bring back the previous wide default for an operator who wants it" taggedAs (UnitTest, RPCTest) in {
-    val wide = Seq("eth", "web3", "net", "personal", "fukuii", "debug", "qa", "admin")
-    val config = apisOf("""fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"""")
+  it should "bring back the previous wide default, with the namespaces that moved, for an operator who wants it" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // the old default plus `miner` (the mining control methods moved out of eth); `admin` also carries the non-standard
+    // net_ peer methods (net_listPeers, net_connectToPeer, ...)
+    val wide = Seq("eth", "web3", "net", "personal", "fukuii", "debug", "qa", "admin", "miner")
+    val config = apisOf("""fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin,miner"""")
     config.httpApis shouldBe wide
     config.wsApis shouldBe wide
     config.ipcApis shouldBe wide

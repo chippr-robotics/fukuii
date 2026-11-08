@@ -44,11 +44,6 @@ trait JsonRpcBaseController:
 
   def enabledApis: Seq[String]
 
-  /** Namespaces whose handlers win when two enabled namespaces answer the same method. Without it the namespace listed
-    * last in `apis` wins, so what a request meant would depend on the order of the list.
-    */
-  def tieBreakerApis: Set[String] = Set.empty
-
   given formats: DefaultFormats.type = DefaultFormats
 
   given serialization: Serialization.type = native.Serialization
@@ -63,12 +58,9 @@ trait JsonRpcBaseController:
       IO.pure(errorResponse(request, MethodNotFound))
     }
 
-    // The handler of the namespace folded in last is tried first: tie-breakers go last, so they win a shared method.
-    val (tieBreakers, others) = enabledApis.partition(tieBreakerApis.contains)
+    // The handler of the namespace folded in last is tried first
     val handleFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
-      (others ++ tieBreakers).foldLeft(notFoundFn)((fn, api) =>
-        apisHandleFns.getOrElse(api, PartialFunction.empty).orElse(fn)
-      )
+      enabledApis.foldLeft(notFoundFn)((fn, api) => apisHandleFns.getOrElse(api, PartialFunction.empty).orElse(fn))
 
     handleFn(request)
       .flatTap {
@@ -147,8 +139,9 @@ object JsonRpcBaseController:
   object JsonRpcConfig:
 
     /** HTTP and WebSocket serve these namespaces until an operator sets `network.rpc.http.apis` / `network.rpc.ws.apis`
-      * or `network.rpc.apis`: the read-only chain API and fukuii's own account-history method. `personal`, `debug`,
-      * `admin`, `qa`, `txpool`, `trace` (and `miner`, `test`, `testing`, `mcp`) are opt-in, as in go-ethereum.
+      * or `network.rpc.apis`: the standard chain namespaces and fukuii's own account-history method. `personal`,
+      * `debug`, `admin` (which also carries the non-standard `net_` peer methods), `qa`, `txpool`, `trace`, `miner`,
+      * `test`, `testing` and `mcp` are opt-in, as in go-ethereum.
       */
     val DefaultHttpWsApis: Seq[String] = Seq("eth", "net", "web3", "fukuii")
 

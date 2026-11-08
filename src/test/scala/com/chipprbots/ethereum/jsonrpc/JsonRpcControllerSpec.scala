@@ -2,25 +2,40 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JArray
 import org.json4s.JObject
 import org.json4s.JString
+import org.json4s.JValue
 import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
+import com.chipprbots.ethereum.domain.BlockchainImpl
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
@@ -36,7 +51,10 @@ import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 
 class JsonRpcControllerSpec
     extends ScalaTestWithActorTestKit
@@ -153,7 +171,15 @@ class JsonRpcControllerSpec
       "miner_stop",
       "miner_getStatus",
       "miner_setEtherbase",
-      "eth_setEtherbase"
+      "eth_setEtherbase",
+      // the non-standard net_ peer methods are served with admin; net keeps net_version, net_listening, net_peerCount
+      "net_nodeInfo",
+      "net_listPeers",
+      "net_disconnectPeer",
+      "net_connectToPeer",
+      "net_listBlacklistedPeers",
+      "net_addToBlacklist",
+      "net_removeFromBlacklist"
     )
     for
       controller <- Seq(http, ws)
@@ -219,10 +245,9 @@ class JsonRpcControllerSpec
     override def config: JsonRpcConfig =
       ShippedRpcConfig.jsonRpcConfig("""fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner"""")
 
-    JsonRpcController.EtherbaseAliasWarned.set(false)
-
-    val http: JsonRpcController = jsonRpcController.forApis(config.httpApis)
-    val ws: JsonRpcController = jsonRpcController.forApis(config.wsApis)
+    val perTransport: JsonRpcController.PerTransport = jsonRpcController.perTransport
+    val http: JsonRpcController = perTransport.http
+    val ws: JsonRpcController = perTransport.ws
     val first = "0x00000000000000000000000000000000000000aa"
     val second = "0x00000000000000000000000000000000000000bb"
 
@@ -240,22 +265,131 @@ class JsonRpcControllerSpec
       .unsafeRunSync()
       .error shouldBe None
     http.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(first)
-    JsonRpcController.EtherbaseAliasWarned.get shouldBe false
 
-    // the alias works too, and logs its deprecation once
+    // the alias works too
     http
       .handleRequest(newJsonRpcRequest("eth_setEtherbase", JString(second) :: Nil))
       .unsafeRunSync()
       .error shouldBe None
     http.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(second)
-    JsonRpcController.EtherbaseAliasWarned.get shouldBe true
 
-  it should "let the test namespace win a method it shares with another namespace" taggedAs (
+  it should "log the eth_setEtherbase deprecation once, however many calls and transports" taggedAs (
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
-    // `test` also answers miner_setEtherbase (retesteth); see JsonRpcDispatchOrderSpec for the rule itself
-    jsonRpcController.tieBreakerApis shouldBe Set("test")
+    // the shared key reaches all three transports, so every one of them serves miner
+    override def config: JsonRpcConfig =
+      ShippedRpcConfig.jsonRpcConfig("""fukuii.network.rpc.apis = "eth,net,web3,fukuii,miner"""")
+
+    val logger: LogbackLogger = LoggerFactory.getLogger(classOf[JsonRpcController]) match
+      case logback: LogbackLogger => logback
+      case other                  => fail(s"expected a logback logger, got $other")
+    val appender: ListAppender[ILoggingEvent] = new ListAppender[ILoggingEvent]
+    val previousLevel: Level = logger.getLevel
+    appender.start()
+    logger.addAppender(appender)
+    logger.setLevel(Level.INFO)
+    try
+      val perTransport = jsonRpcController.perTransport
+      val alias = newJsonRpcRequest("eth_setEtherbase", JString("0x00000000000000000000000000000000000000aa") :: Nil)
+      Seq(perTransport.http, perTransport.http, perTransport.ws, perTransport.ipc).foreach { controller =>
+        controller.handleRequest(alias).unsafeRunSync().error shouldBe None
+      }
+      val deprecations = appender.list.asScala.filter { event =>
+        event.getLevel == Level.WARN && event.getFormattedMessage.contains("eth_setEtherbase is deprecated")
+      }
+      deprecations should have size 1
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(previousLevel)
+
+  it should "let the test namespace answer miner_setEtherbase when test and miner are both enabled, in any order" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig()
+
+    // A TestService with only what setEtherbase touches (its own etherbase): it never reaches the node's mining.
+    val testService = new TestService(
+      null: BlockchainImpl,
+      null: BlockchainReader,
+      null: BlockchainWriter,
+      null: StateStorage,
+      null: EvmCodeStorage,
+      null: ActorRef[PendingTransactionsManager.Command],
+      miningConfig,
+      null: TestModeComponentsProvider,
+      null: TransactionMappingStorage,
+      null: TestNode,
+      null: Scheduler
+    )(using IORuntime.global)
+
+    val base: JsonRpcController = jsonRpcController.copy(testServiceOpt = Some(testService))
+    val coinbase: JsonRpcController = base.forApis(Seq("eth"))
+    val address = "0x00000000000000000000000000000000000000aa"
+    val setEtherbase: JsonRpcRequest = newJsonRpcRequest("miner_setEtherbase", JString(address) :: Nil)
+    val before: Option[JValue] = coinbase.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync().result
+
+    // when miner answered instead, the node's coinbase would change
+    Seq(Seq("eth", "miner", "test"), Seq("eth", "test", "miner"), Seq("test", "miner"), Seq("miner", "test", "eth"))
+      .foreach { apis =>
+        withClue(apis.mkString(",") + ": ") {
+          base.forApis(apis).handleRequest(setEtherbase).unsafeRunSync().error shouldBe None
+          coinbase.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync().result shouldBe before
+        }
+      }
+
+    // without the test namespace the same request reaches the node's mining
+    base.forApis(Seq("eth", "miner")).handleRequest(setEtherbase).unsafeRunSync().error shouldBe None
+    coinbase.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(address)
+
+  it should "serve the non-standard net_ peer methods with admin, and keep only version, listening and peerCount in net" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    netService.versionFn = _ => IO.pure(Right(VersionResponse("1")))
+    // answers that are errors, so a method that is served is told apart from one that is not
+    netService.nodeInfoFn = _ => IO.pure(Left(JsonRpcError.InternalError))
+    netService.listPeersFn = _ => IO.pure(Left(JsonRpcError.InternalError))
+    netService.listBlacklistedPeersFn = _ => IO.pure(Left(JsonRpcError.InternalError))
+
+    val peerMethods: Seq[String] = Seq(
+      "net_nodeInfo",
+      "net_listPeers",
+      "net_disconnectPeer",
+      "net_connectToPeer",
+      "net_listBlacklistedPeers",
+      "net_addToBlacklist",
+      "net_removeFromBlacklist"
+    )
+    def answer(controller: JsonRpcController, method: String): JsonRpcResponse =
+      controller.handleRequest(newJsonRpcRequest(method)).unsafeRunSync()
+
+    val netOnly: JsonRpcController = jsonRpcController.forApis(Seq("net"))
+    answer(netOnly, "net_version") should haveStringResult("1")
+    peerMethods.foreach(method => withClue(method)(answer(netOnly, method) should haveError(JsonRpcError.MethodNotFound)))
+
+    // with admin they are served, under the same names (a method without its parameters is served, then refused)
+    val adminOnly: JsonRpcController = jsonRpcController.forApis(Seq("admin"))
+    peerMethods.foreach { method =>
+      withClue(method)(answer(adminOnly, method).error should not be Some(JsonRpcError.MethodNotFound))
+    }
+    answer(adminOnly, "net_listPeers") should haveError(JsonRpcError.InternalError)
+    // admin does not bring net_version with it
+    answer(adminOnly, "net_version") should haveError(JsonRpcError.MethodNotFound)
+
+  it should "give each transport a controller with its own enabled namespaces" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig("""
+      fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"
+      fukuii.network.rpc.ws.apis = "eth"
+    """)
+
+    val perTransport: JsonRpcController.PerTransport = jsonRpcController.perTransport
+    perTransport.http.enabledApis shouldBe Seq("eth", "net", "web3", "fukuii", "admin", "rpc")
+    perTransport.ws.enabledApis shouldBe Seq("eth", "rpc")
+    perTransport.ipc.enabledApis shouldBe (JsonRpcConfig.DefaultIpcApis :+ "rpc")
+    // the controller the Engine API's pass-through uses keeps the shared set
+    jsonRpcController.enabledApis shouldBe (JsonRpcConfig.DefaultHttpWsApis :+ "rpc")
 
   it should "report the namespaces of the transport it was narrowed to in rpc_modules, without changing the original" taggedAs (
     UnitTest,

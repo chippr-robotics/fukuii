@@ -97,7 +97,7 @@ fukuii-cli logs fukuii-geth
 **Multi-Client Support:**
 - The CLI automatically detects container types (Fukuii, Geth, Besu)
 - Extracts enodes from logs (primary) or via JSON-RPC fallback:
-  - **Fukuii** nodes expose `net_nodeInfo`, which mirrors the enode payload from geth's `admin_nodeInfo` without requiring the admin namespace.
+  - **Fukuii** nodes expose `net_nodeInfo` (and `admin_nodeInfo`), which mirror geth's `admin_nodeInfo`; both are served with the `admin` namespace, which the Gorgoroth config lists.
   - **Core-Geth** and **Besu** continue to serve `admin_nodeInfo` via their admin APIs.
 - Updates static-nodes.json in the appropriate location for each client:
   - **Fukuii**: `conf/nodeN/static-nodes.json` (host-mounted config)

@@ -937,9 +937,10 @@ trait JSONRpcControllerBuilder:
   // One controller per transport, each answering only the namespaces enabled for that transport
   // (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`; each falls back to `network.rpc.apis`). `jsonRpcController` keeps
   // the shared set and serves the Engine API's eth_, net_ and web3_ pass-through.
-  lazy val jsonRpcHttpController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.httpApis)
-  lazy val jsonRpcWsController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.wsApis)
-  lazy val jsonRpcIpcController: JsonRpcController = jsonRpcController.forApis(jsonRpcConfig.ipcApis)
+  lazy val jsonRpcTransportControllers: JsonRpcController.PerTransport = jsonRpcController.perTransport
+  lazy val jsonRpcHttpController: JsonRpcController = jsonRpcTransportControllers.http
+  lazy val jsonRpcWsController: JsonRpcController = jsonRpcTransportControllers.ws
+  lazy val jsonRpcIpcController: JsonRpcController = jsonRpcTransportControllers.ipc
 
 trait JSONRpcHealthcheckerBuilder:
   this: NetServiceBuilder & EthBlocksServiceBuilder & JSONRpcConfigBuilder & AsyncConfigBuilder &

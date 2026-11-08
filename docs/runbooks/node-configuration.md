@@ -375,9 +375,17 @@ sensitive; an unknown name stops the node at startup. The `rpc` namespace (`rpc_
 | HTTP, WebSocket | `eth`, `net`, `web3`, `fukuii` |
 | IPC | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `miner`, `txpool`, `trace` |
 
-These are go-ethereum's defaults: the network-facing transports serve the read-only chain API, and the IPC socket,
-which file permissions protect, serves every production namespace. `qa` (`qa_mineBlocks`, a dev-network tool), `test`
-and `testing` (test-mode tools) and `mcp` are not in the IPC default either.
+These are go-ethereum's defaults: the network-facing transports serve the standard chain namespaces (`eth`, `net`,
+`web3`) and fukuii's own `fukuii_getAccountTransactions`, and the IPC socket, which file permissions protect (the node
+sets it to owner read/write only when it binds it), serves every production namespace. `qa` (`qa_mineBlocks`, a
+dev-network tool), `test` and `testing` (test-mode tools) and `mcp` are not in the IPC default either.
+
+`eth` includes submitting transactions (`eth_sendRawTransaction`). `net` keeps only `net_version`, `net_listening` and
+`net_peerCount`, as in go-ethereum. The non-standard peer-management methods that carry a `net_` name (`net_nodeInfo`,
+`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`, `net_listBlacklistedPeers`, `net_addToBlacklist`,
+`net_removeFromBlacklist`) are served with `admin`, under the same names. On WebSocket, `eth_subscribe` and
+`eth_unsubscribe` need `eth`. The GraphQL endpoint (`/graphql` on the HTTP port) is not governed by these keys;
+`fukuii.network.rpc.graphql.enabled` controls it.
 
 Mining control is its own namespace, as in go-ethereum: `miner` holds `miner_start`, `miner_stop`, `miner_getStatus`
 and `miner_setEtherbase` (and `eth_setEtherbase`, a deprecated alias of the last one). `eth_mining`, `eth_hashrate`,
@@ -388,7 +396,7 @@ Opt in per transport, and only on the transport that needs it:
 
 ```hocon
 fukuii.network.rpc {
-  http.apis = "eth,net,web3,fukuii,txpool"          # add a read-only namespace
+  http.apis = "eth,net,web3,fukuii,txpool"          # add a namespace
   ws.apis   = "eth,net,web3,fukuii"                 # WebSocket keeps the default
   ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,miner"   # narrow IPC
 }
@@ -397,10 +405,11 @@ fukuii.network.rpc {
 To get the previous behaviour on every transport (not recommended on a network-facing endpoint):
 
 ```hocon
-fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"
+fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin,miner"
 ```
 
-or, from the command line, `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin`. Enabling `personal`,
+or, from the command line, `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin,miner` (`miner` and
+`admin` now carry what `eth` and `net` used to: mining control and the non-standard `net_` peer methods). Enabling `personal`,
 `debug`, `admin`, `qa` or `miner` on an HTTP or WebSocket endpoint that is not bound to loopback logs a warning at
 startup. A key in a block the node does not read (for example a `websocket` block: the block is `ws`) is not an error
 but is not used either: the keys are exactly `network.rpc.apis`, `network.rpc.http.apis`, `network.rpc.ws.apis` and

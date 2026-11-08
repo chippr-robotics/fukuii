@@ -78,7 +78,7 @@ This plan defines a repeatable workflow for validating recent RLPx compression/d
                tee "enode-$port.txt"
          done
          ```
-    2. Push the pairings through the new `net_connectToPeer` endpoint so every node dials every other node (triangle):
+    2. Push the pairings through the new `net_connectToPeer` endpoint (served with the `admin` namespace, which the Gorgoroth config lists) so every node dials every other node (triangle):
          ```bash
          while read -r ENODE; do
             for port in 8545 8547 8549; do

@@ -153,7 +153,8 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"admin_peers","params":[],"id":1}
 
 Note: the `admin` namespace is off by default over HTTP and WebSocket (and on over IPC), so `admin_peers` answers
 `-32601 Method not found` until you opt in: `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"`. Enable it
-only on a loopback endpoint. `net_peerCount` and `net_listPeers` need only `net`.
+only on a loopback endpoint. `net_peerCount` needs only `net`; the other `net_*` peer methods (`net_listPeers`,
+`net_connectToPeer`, `net_nodeInfo`, ...) are served with `admin` too.
 
 ### Monitor Logs for Peer Activity
 
