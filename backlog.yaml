@@ -93,13 +93,19 @@ items:
   - id: B-007
     title: "H4: regular sync blacklists peers for UNKNOWN_PARENT right after SNAP hand-off on a reorging PoW chain"
     priority: P1
-    status: open
+    status: claimed
     area: p2p
     size: M
     opened: 2026-11-04
     refs: [H4, CHASE A3]
     links:
       issues: [1683]
+    claim:
+      by: fukuii-fc
+      agent: herald
+      since: 2026-11-08T18:45:27Z
+      heartbeat: 2026-11-08T18:45:27Z
+      branch: fix/h4-unknown-parent-blacklist
     notes: "herald. T062 Mordor: 33 peers blacklisted in 24 h; peer count drifted 13 -> ~7."
   - id: B-008
     title: "Size RocksDB `max-open-files` against the SST count (T063: 512 open against 4,713 SSTs)"
