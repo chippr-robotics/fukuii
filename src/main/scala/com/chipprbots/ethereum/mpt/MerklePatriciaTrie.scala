@@ -41,9 +41,9 @@ object MerklePatriciaTrie:
     *
     * It extends [[MissingNodeException]] on purpose, as [[MissingCodeException]] does: the node this hash names is not
     * in the store, which says nothing about the block being executed, so every consumer that handles a missing node
-    * (the importer's delete-then-fetch, the Engine API's SYNCING answer, the RPC services' "state unavailable") handles
-    * this the same way. Thrown as a plain decode error it was a block import failure, blamed on the honest peer that
-    * sent the block (spec 022 T062). `detail` says what was wrong with the bytes, and `cause` is what reading them
+    * (the importer's delete-then-fetch, the Engine API's ACCEPTED answer, the RPC services' "state unavailable")
+    * handles this the same way. Thrown as a plain decode error it was a block import failure, blamed on the honest peer
+    * that sent the block (spec 022 T062). `detail` says what was wrong with the bytes, and `cause` is what reading them
     * threw, kept so that a fault taken for corruption still shows where it came from.
     */
   class CorruptNodeException(
@@ -85,7 +85,7 @@ object MerklePatriciaTrie:
     *
     * It extends [[MissingNodeException]] on purpose: missing contract code is the same kind of fact as a missing trie
     * node — the local store is incomplete, which says nothing about the block — and every consumer that already handles
-    * a missing node (the Engine API's SYNCING answer, the importer's fetch-and-retry, the RPC services' "state
+    * a missing node (the Engine API's ACCEPTED answer, the importer's fetch-and-retry, the RPC services' "state
     * unavailable") handles this the same way. `hash` is the codeHash, which is the key to fetch it by (SNAP
     * `GetByteCodes`).
     *
