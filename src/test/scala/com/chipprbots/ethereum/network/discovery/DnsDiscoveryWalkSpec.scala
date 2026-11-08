@@ -270,3 +270,41 @@ class DnsDiscoveryWalkSpec extends AnyFlatSpec with Matchers with Eventually wit
     delivered.size shouldBe 12
     delivered.asScala.map(_.tcpPort).toSet shouldBe Set(30303)
   }
+
+  behavior.of("DnsDiscovery.concatenateTxtStrings")
+
+  /** An entry stored as two TXT strings, the way JNDI renders it: the first 255 bytes, one space, the rest. */
+  private def asJndiRenders(entry: String): String = entry.take(255) + " " + entry.drop(255)
+
+  it should "restore a branch whose child hash was cut by the 255-byte string boundary" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    // 13 children of 26 characters, the shape of an ETC or Mordor branch: 365 bytes, so byte 255 is inside child 8.
+    val hashes = (0 until 13).map(i => f"CHILD$i%02d" + "A" * 19)
+    val branch = hashes.mkString("enrtree-branch:", ",", "")
+    branch.length shouldBe 365
+
+    val joined = asJndiRenders(branch)
+
+    joined should not be branch
+    joined.stripPrefix("enrtree-branch:").split(",") should contain(hashes(8).take(24) + " " + hashes(8).drop(24))
+    DnsDiscovery.concatenateTxtStrings(joined) shouldBe branch
+  }
+
+  it should "restore an ENR cut by the string boundary, which would not even decode before" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val enr = DnsTreeFixture.enr(0)
+    val joined = enr.take(100) + " " + enr.drop(100)
+
+    DnsDiscovery.parseEnrToEnode(joined).isLeft shouldBe true
+    DnsDiscovery.parseEnrToEnode(DnsDiscovery.concatenateTxtStrings(joined)) shouldBe Right(DnsTreeFixture.enode(0))
+  }
+
+  it should "leave the root alone, its fields are separated by spaces" taggedAs (UnitTest, NetworkTest) in {
+    val root = "enrtree-root:v1 e=ROOT l=LINKS seq=1 sig=AAAA"
+
+    DnsDiscovery.concatenateTxtStrings(root) shouldBe root
+  }

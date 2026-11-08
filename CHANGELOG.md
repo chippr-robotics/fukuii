@@ -141,6 +141,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore step or between two of them. From that step on nothing else goes through the terminal, and a screen not yet
   reset gets the reset sequence (leave the alternate screen, show the cursor, reset attributes) straight on the process
   output. The race is logged once at WARN; any other failure is still an ERROR.
+- **EIP-1459 DNS discovery dropped one entry from every long record, and each drop cost 15 s.** JNDI returns a TXT
+  record that is stored as several strings (EIP-1459 splits any entry over 255 bytes; a 13-child branch, the shape on
+  ETC and Mordor, is 365) with the strings joined by a space, and the space fell inside a child hash. The walk asked for a
+  name that does not exist, the resolver never answered, and the query waited out its 15 s timeout (5 s, then 10 s)
+  before the child was dropped. Branch, ENR and link entries have no whitespace in their grammar, so it is now removed;
+  the root, which has spaces between its fields, is left alone. go-ethereum's resolver concatenates the strings with
+  nothing between them.
+  - **Measured** against the live trees, repairing the space: ETC mainnet has 378 queries and 29 records carrying the
+    space (7.7%), Sepolia 335 and 38, Mordor 16 and 1, and no repaired query took over a second. Those are the "about 8%
+    of queries lost, 15 s each" of the 5 min 34 s serial walk seen on one runner (29 x 15 s is 7 min 15 s on today's ETC
+    tree); the resolver was not lossy. `all.mordor.etcdisco.net` went from 13 enodes in 15.4 s with 1 of 17 queries lost
+    to 14 enodes in 0.6 s with none lost; `all.mordor.blockd.info` from 15.5 s to 0.7 s.
 - **EIP-1459 DNS discovery no longer holds up start-up (H9).** The DNS trees were walked on `main` while the config
   loaded, one query at a time, and the Engine API, JSON-RPC, metrics and the TUI did not start until the walk returned.
   On WSL2 `fukuii mordor --tui` drew its first frame at 2 s and then sat frozen (no keys, no refresh) for 32 s.

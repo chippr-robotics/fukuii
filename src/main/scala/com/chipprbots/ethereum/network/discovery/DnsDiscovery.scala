@@ -87,9 +87,24 @@ object DnsDiscovery extends Logger:
     case NotFound
     case Lost(reason: String)
 
-  /** One blocking TXT query. The walk runs these on the blocking pool, never on a compute or actor thread. */
+  /** One blocking TXT query. The walk runs these on the blocking pool, never on a compute or actor thread. A found
+    * record is the whole entry: a TXT record stored as several strings (EIP-1459 splits any entry over 255 bytes) comes
+    * back concatenated with nothing in between, as go-ethereum's `net.Resolver.LookupTXT` returns it.
+    */
   trait TxtLookup:
     def query(name: String): TxtResult
+
+  /** Undo JNDI's rendering of a multi-string TXT record, which is its strings joined by a single space.
+    *
+    * An EIP-1459 branch or ENR entry over 255 bytes is stored as several strings, and ETC and Mordor branches (13
+    * children, 365 bytes) always are, so the space lands in the middle of a child hash: `...,YTGWSYWQNQLKUQTLMTPRORVK
+    * 4Q,...` for `...,YTGWSYWQNQLKUQTLMTPRORVK4Q,...`. The walk then asked for a name that does not exist, the resolver
+    * never answered, and the query cost its full 15 s timeout and dropped that child (measured on Mordor, where the
+    * repaired hash resolves in 44 ms). Branch, ENR and link entries have no whitespace in their grammar, so removing it
+    * restores the entry. The root has spaces between its fields and is returned as it came.
+    */
+  private[discovery] def concatenateTxtStrings(joined: String): String =
+    if joined.startsWith("enrtree-root:") then joined else joined.filterNot(_.isWhitespace)
 
   /** DNS TXT record lookup using JNDI (JDK built-in, no external dependency).
     *
@@ -107,7 +122,7 @@ object DnsDiscovery extends Logger:
             // TXT records may be returned with quotes
             val value = txtAttr.get(0).toString.stripPrefix("\"").stripSuffix("\"")
             // DNS may split long TXT records into multiple strings — concatenate
-            TxtResult.Found(value.replace("\" \"", ""))
+            TxtResult.Found(concatenateTxtStrings(value.replace("\" \"", "")))
           else TxtResult.NotFound
         finally
           try ctx.close()
