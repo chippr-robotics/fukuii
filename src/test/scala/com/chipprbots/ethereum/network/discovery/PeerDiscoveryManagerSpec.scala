@@ -1,6 +1,10 @@
 package com.chipprbots.ethereum.network.discovery
 
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
@@ -53,13 +57,17 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
     lazy val discoveryServiceResource: Resource[IO, DiscoveryService] =
       Resource.pure[IO, DiscoveryService](discoveryService)
 
+    // Never reached unless the config has DNS domains; the tests that give it some replace it with an in-memory tree.
+    lazy val dnsLookup: DnsDiscovery.TxtLookup = DnsDiscovery.JndiTxtLookup
+
     lazy val peerDiscoveryManager: ActorRef[PeerDiscoveryManager.Command] =
       testKit.spawn(
         PeerDiscoveryManager(
           localNodeId = org.apache.pekko.util.ByteString.fromString("test-node"),
           discoveryConfig = discoveryConfig,
           knownNodesStorage = knownNodesStorage,
-          discoveryServiceResource = discoveryServiceResource
+          discoveryServiceResource = discoveryServiceResource,
+          dnsLookup = dnsLookup
         )
       )
 
@@ -313,4 +321,126 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
 
       override def test(): Unit =
         expectNoRandomPeer()
+  }
+
+  // --- EIP-1459 DNS seeding (H9): resolved off the actor, after Start, never ahead of it ---
+
+  private val dnsDomain = "tree.test"
+
+  /** The six enodes of a 2 x 3 in-memory tree, as the manager parses them. */
+  private val dnsTreeNodes: Set[Node] =
+    (0 until 6).map(i => Node.fromUri(new URI(DnsTreeFixture.enode(i)))).toSet
+
+  it should "serve the static nodes without waiting for DNS, then take the DNS nodes as the walk finds them" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
+    new Fixture:
+      // The walk is held on its first leaf until the test opens the gate.
+      val gate = new CountDownLatch(1)
+      val added: java.util.Set[ENode] = ConcurrentHashMap.newKeySet[ENode]()
+
+      override lazy val dnsLookup: DnsDiscovery.TxtLookup = new DnsTreeFixture.Stub(
+        DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3),
+        name => if DnsTreeFixture.isLeaf(name) then gate.await(30, TimeUnit.SECONDS)
+      )
+
+      override lazy val discoveryConfig: DiscoveryConfig =
+        defaultConfig.copy(
+          discoveryEnabled = true,
+          reuseKnownNodes = true,
+          bootstrapNodes = sampleNodes,
+          dnsDomains = Seq(dnsDomain)
+        )
+
+      (() => knownNodesStorage.getKnownNodes).expects().returning(Set.empty[URI]).anyNumberOfTimes()
+      (() => discoveryService.getRandomNodes).expects().returning(IO.pure(Set.empty[ENode])).anyNumberOfTimes()
+      (() => discoveryService.getNodes).expects().returning(IO.pure(Set.empty[ENode])).anyNumberOfTimes()
+      discoveryService.addNode.expects(*).onCall((node: ENode) => IO { added.add(node); () }).anyNumberOfTimes()
+
+      override def test(): Unit =
+        peerDiscoveryManager ! PeerDiscoveryManager.Start
+
+        // Start has been handled and the DNS walk is stuck on its leaves: a manager that waited for DNS could not answer
+        // this at all, and one that answered would have no DNS nodes in it yet.
+        getPeers().nodes shouldBe sampleNodes
+        added.size shouldBe 0
+
+        gate.countDown()
+        eventually {
+          getPeers().nodes shouldBe (sampleNodes ++ dnsTreeNodes)
+          added.size shouldBe dnsTreeNodes.size
+        }
+  }
+
+  it should "enroll the DNS nodes that arrive before the discovery service has started, once it has" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
+    new Fixture:
+      val serviceGate = new CountDownLatch(1)
+      val added: java.util.Set[ENode] = ConcurrentHashMap.newKeySet[ENode]()
+
+      override lazy val dnsLookup: DnsDiscovery.TxtLookup =
+        new DnsTreeFixture.Stub(DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3))
+
+      override lazy val discoveryServiceResource: Resource[IO, DiscoveryService] =
+        Resource.eval(IO.blocking(serviceGate.await(30, TimeUnit.SECONDS)).as(discoveryService))
+
+      override lazy val discoveryConfig: DiscoveryConfig =
+        defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true, dnsDomains = Seq(dnsDomain))
+
+      (() => knownNodesStorage.getKnownNodes).expects().returning(Set.empty[URI]).anyNumberOfTimes()
+      (() => discoveryService.getRandomNodes).expects().returning(IO.pure(Set.empty[ENode])).anyNumberOfTimes()
+      (() => discoveryService.getNodes).expects().returning(IO.pure(Set.empty[ENode])).anyNumberOfTimes()
+      discoveryService.addNode.expects(*).onCall((node: ENode) => IO { added.add(node); () }).anyNumberOfTimes()
+
+      override def test(): Unit =
+        peerDiscoveryManager ! PeerDiscoveryManager.Start
+
+        // The service is still starting, so these are candidates only: nothing can be enrolled yet.
+        eventually {
+          getPeers().nodes shouldBe dnsTreeNodes
+        }
+        added.size shouldBe 0
+
+        serviceGate.countDown()
+        eventually {
+          added.size shouldBe dnsTreeNodes.size
+        }
+  }
+
+  it should "walk DNS even with discovery disabled, and cancel the walk when stopped" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
+    new Fixture:
+      val reachedLeaf = new CountDownLatch(1)
+      val never = new CountDownLatch(1)
+      val interrupted = new AtomicBoolean(false)
+
+      override lazy val dnsLookup: DnsDiscovery.TxtLookup = new DnsTreeFixture.Stub(
+        DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3),
+        name =>
+          if DnsTreeFixture.isLeaf(name) then
+            reachedLeaf.countDown()
+            try never.await()
+            catch
+              case e: InterruptedException =>
+                interrupted.set(true)
+                throw e
+      )
+
+      override lazy val discoveryConfig: DiscoveryConfig =
+        defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, dnsDomains = Seq(dnsDomain))
+
+      override def test(): Unit =
+        peerDiscoveryManager ! PeerDiscoveryManager.Start
+        reachedLeaf.await(30, TimeUnit.SECONDS) shouldBe true
+        interrupted.get shouldBe false
+
+        peerDiscoveryManager ! PeerDiscoveryManager.Stop
+        eventually {
+          interrupted.get shouldBe true
+        }
   }

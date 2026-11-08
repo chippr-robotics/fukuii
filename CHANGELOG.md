@@ -141,6 +141,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore step or between two of them. From that step on nothing else goes through the terminal, and a screen not yet
   reset gets the reset sequence (leave the alternate screen, show the cursor, reset attributes) straight on the process
   output. The race is logged once at WARN; any other failure is still an ERROR.
+- **EIP-1459 DNS discovery dropped one entry from every long record, and each drop cost 15 s.** JNDI returns a TXT
+  record that is stored as several strings (EIP-1459 splits any entry over 255 bytes; a 13-child branch, the shape on
+  ETC and Mordor, is 365) with the strings joined by a space, and the space fell inside a child hash. The walk asked for a
+  name that does not exist, the resolver never answered, and the query waited out its 15 s timeout (5 s, then 10 s)
+  before the child was dropped. Branch, ENR and link entries have no whitespace in their grammar, so it is now removed;
+  the root, which has spaces between its fields, is left alone. go-ethereum's resolver concatenates the strings with
+  nothing between them.
+  - **Measured** against the live trees, repairing the space: ETC mainnet has 378 queries and 29 records carrying the
+    space (7.7%), Sepolia 335 and 38, Mordor 16 and 1, and no repaired query took over a second. Those are the "about 8%
+    of queries lost, 15 s each" of the 5 min 34 s serial walk seen on one runner (29 x 15 s is 7 min 15 s on today's ETC
+    tree); the resolver was not lossy. `all.mordor.etcdisco.net` went from 13 enodes in 15.4 s with 1 of 17 queries lost
+    to 14 enodes in 0.6 s with none lost; `all.mordor.blockd.info` from 15.5 s to 0.7 s.
+- **EIP-1459 DNS discovery no longer holds up start-up (H9).** The DNS trees were walked on `main` while the config
+  loaded, one query at a time, and the Engine API, JSON-RPC, metrics and the TUI did not start until the walk returned.
+  On WSL2 `fukuii mordor --tui` drew its first frame at 2 s and then sat frozen (no keys, no refresh) for 32 s.
+  Config load now keeps only the domain names. `PeerDiscoveryManager` walks the trees after `Start`, off `main` and off
+  the actor, on the discovery runtime's blocking pool, with sibling branches queried in parallel, and adds each peer to
+  discovery as its ENR arrives. The static and bootstrap nodes are used from the first request.
+  - **Measured**, `fukuii mordor --tui`, one WSL2 host, throwaway datadir, seconds after the first log line:
+    "Metrics started" 33.4 to 2.1, "Starting TUI updater" 34.6 to 2.9. The two Mordor trees now walk in parallel in the
+    background, 15.5 s each.
+  - **Bounded.** Each tree has a deadline (`network.discovery.dns-tree-deadline`, default 120 s) and at most
+    `dns-concurrency` (default 8) queries in flight. A tree that fails, loses queries or times out logs one WARN with the
+    resolved, lost and query counts and the elapsed time. It never delays start-up and never throws; the peers found
+    before the deadline are kept. Both are optional keys under `network.discovery`; they are not listed in the shipped
+    `network.conf`, so the defaults apply unless an operator sets them.
+  - **Same code path on every chain**, ETC, Mordor and Sepolia. Nothing about which records are accepted changes: root,
+    branch and ENR parsing and the fork-ID filter are as before. The filter now runs after genesis is loaded rather than
+    at config load. With `use-bootstrap-nodes=false` (enterprise mode) no DNS is walked, as before. The walk runs once
+    per `Start`; nothing re-walks a tree, as before.
 - **Pruning no longer deletes a trie node it cannot prove dead (#1692). Operator note for ETC and Mordor.** A node's
   reference count is the number of positions that emitted it. SNAP healing and resume, the checkpoint importer and an old
   fast sync skip a node that is already there, so a subtree two contracts share was counted once. The first block to
