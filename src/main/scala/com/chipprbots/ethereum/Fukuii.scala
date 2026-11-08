@@ -5,11 +5,13 @@ import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.util.logging.LogManager
 
+import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import org.rocksdb
 
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiEnv
 import com.chipprbots.ethereum.nodebuilder.ChainTool
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
@@ -90,7 +92,17 @@ object Fukuii extends Logger:
     // Take over the terminal only after configuration has been validated: the TUI suppresses console logging, and a
     // configuration error must reach the user's screen.
     if enableConsoleUI then
-      val tui = Tui.getInstance(TuiConfig.default)
+      // `fukuii.tui` with the NO_COLOR / FUKUII_TUI_* overrides. A bad environment value is a warning (the configured
+      // value applies); a bad `fukuii.tui` value stops the node, like any other configuration error.
+      val tuiEnv = TuiEnv.system()
+      tuiEnv.warnings.foreach(warning => log.warn(warning))
+      val tuiConfig =
+        try TuiConfig.load(Config.config, tuiEnv)
+        catch
+          case e: ConfigException =>
+            log.error("Configuration error: {}", e.getMessage)
+            sys.exit(1)
+      val tui = Tui.getInstance(tuiConfig)
       // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path. `q`
       // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
       // first (Tui.shutdown then writes the reset to the process output).

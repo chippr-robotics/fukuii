@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The `--tui` dashboard draws the worm-to-brain bars, in emoji or ASCII, at any size from 80×24 (spec 027 slice 1).**
+  The progress bars are now the bars the logs already draw (`[====🪱....]🧠 52%`). Regular sync shows one Blocks worm;
+  SNAP sync shows five worm rows (Overall, Accounts, Storage, Bytecode, Healing), each with its count and rate once, plus
+  the contract count, the chain download and the time in the current phase. The account count and rate were drawn twice.
+  - **Glyph sets.** `emoji`, or `ascii` (`~o` worm, `@@` brain) with the same column widths. The new
+    `fukuii.tui.glyphs` (`conf/base/tui.conf`, default `auto`) draws ASCII when the locale is not UTF-8 or is unset
+    (Windows hosts included); set `FUKUII_TUI_GLYPHS=emoji` to override (`emoji|ascii|auto`). An invalid `fukuii.tui.glyphs` stops the node with a named error;
+    an invalid `FUKUII_TUI_GLYPHS` logs a warning and is ignored.
+  - **Colour.** `NO_COLOR`, set to a non-empty value (no-color.org), draws without colour (bold and reverse video
+    only), as does a terminal reporting fewer than 8 colours. A 256-colour terminal gets the 256-colour palette.
+  - **Sizes.** Below 100 columns or 32 rows, and from 100×32, the dashboard has no logo; from 140×45 the logo sits in
+    a column on the right. Before, it appeared above the body wherever it fit.
+  - **Smaller fixes.** The startup wordmark spells FUKUII (the old one spelled FOOO). The footer reads
+    `r Redraw  d Detach  q Quit`; the keys are unchanged. The idle SNAP phase no longer carries U+FE0F, which terminals
+    drew wider than the TUI counted. A row cut at the right edge through a two-column glyph is padded back to the
+    terminal's width instead of ending one column short.
 - **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
   `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
   Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the

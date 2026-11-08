@@ -103,7 +103,50 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     frame.split("\r\n", -1).length shouldBe 30
     (frame should not).endWith("\n")
     TuiTestTerminal.visible(frame) should include("MORDOR")
-    TuiTestTerminal.visible(frame) should include("[Q]uit")
+    TuiTestTerminal.visible(frame) should include("q Quit")
+  }
+
+  // Spec 027 FR-009: NO_COLOR (resolved into the config by TuiEnv) puts the monochrome theme on the wire.
+  it should "draw no colour when the config says noColor" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui(TuiTestTerminal.config.copy(noColor = true))
+    try
+      tui.initialize() shouldBe true
+      tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+      tui.render()
+      TuiTestTerminal.colourCodes(tt.lastFrame) shouldBe empty
+      TuiTestTerminal.visible(tt.lastFrame) should include("7 / 50")
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
+  it should "draw colour on a colour terminal by default" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+    tui.render()
+    TuiTestTerminal.colourCodes(tt.lastFrame) should not be empty
+  }
+
+  // Spec 027 FR-008: the glyph set the config resolved is the one drawn.
+  it should "draw the ASCII glyph set when the config selects it" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui(TuiTestTerminal.config.copy(glyphs = GlyphChoice.Ascii))
+    try
+      tui.initialize() shouldBe true
+      tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+      tui.render()
+      val text = TuiTestTerminal.visible(tt.lastFrame)
+      text should include("~o")
+      text should include("@@")
+      all(text.map(_.toInt)) should be < 0x7f
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
+  it should "draw separators the terminal shows as box-drawing lines" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tui.render()
+    TuiTestTerminal.visible(tt.lastFrame).split("\n").exists(row => row.nonEmpty && row.forall(_ == '─')) shouldBe true
   }
 
   it should "never draw a row wider than the terminal" taggedAs (UnitTest) in withTui(width = 40, height = 20) {

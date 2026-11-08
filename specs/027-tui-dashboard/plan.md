@@ -37,8 +37,9 @@ Micrometer through `MetricsContainer` objects (`SNAPSyncMetrics`, `NetworkMetric
 scalatestplus `scalacheck-1-18` for the width property; the in-memory xterm `TuiTestTerminal`
 (`src/test/scala/com/chipprbots/ethereum/console/TuiTestTerminal.scala`); golden files under
 `src/test/resources/tui/golden/`. No `Thread.sleep`: blocking stubs wait on latches the test releases, and waits use
-`eventually(timeout(...))`. Per `CLAUDE.md`: `sbt compile-all` per edit, `sbt "testOnly *Tui*"` per slice,
-`./scripts/fukuii-test essential` once at the end of the sprint.
+`eventually(timeout(...))`. Per `CLAUDE.md`: `sbt compile-all` per edit,
+`sbt "testOnly com.chipprbots.ethereum.console.* *Tui*"` per slice (`*Tui*` alone misses console specs whose names
+lack it, such as `SplashSpec` or `LayoutSpec`), `./scripts/fukuii-test essential` once at the end of the sprint.
 
 **Target Platform**: Linux terminals over a TTY, SSH, `tmux` and `screen` (xterm-256color, screen-256color, linux
 console); the node JVM.
@@ -140,7 +141,7 @@ src/main/resources/conf/base/
 └── fukuii.conf   # S1 EDIT include "tui.conf"
 
 src/test/scala/com/chipprbots/ethereum/console/
-├── TuiGlyphsSpec, TuiThemeSpec, TierSpec, WormBarSpec, TuiEnvSpec, TuiGoldenSpec, TuiWidthPropertySpec   # S1
+├── TuiGlyphsSpec, TuiThemeSpec, TuiTierSpec, TuiWormBarSpec, TuiEnvSpec, TuiGoldenSpec, TuiWidthPropertySpec # S1
 ├── TuiAnimationSpec, TuiProbeThreadSpec, SplashSpec, SourcedSpec                                          # S2
 ├── LayoutSpec, AlertsSpec, ChainFactsSpec, TuiKeysSpec                                                    # S3
 ├── SanitizeSpec, TuiLogRingAppenderSpec, PeersPanelSpec                                                   # S4
@@ -245,7 +246,7 @@ What wiring exposes in today's scorer, all fixed in 4a (tests first):
 Run in this order, one JVM at a time:
 
 1. `sbt compile-all` after each file; 0 errors, no new warnings (DC-4 ratchet).
-2. `sbt "testOnly *Tui*"`, plus the named non-TUI specs the slice touches (`*SNAPSyncMetrics*`, `*MilestoneLog*`,
+2. `sbt "testOnly com.chipprbots.ethereum.console.* *Tui*"` (every console spec, and the root-package `Tui*` specs), plus the named non-TUI specs the slice touches (`*SNAPSyncMetrics*`, `*MilestoneLog*`,
    `*NetworkMetrics*`, `*EngineApiMetrics*`, `*PoWMiningMetrics*`, `*BlockImporter*`). Record the counts in the PR.
 3. `sbt scalafmtAll`, then `sbt formatCheck`.
 4. `scripts/snap-split/verify.sh --branch <branch> origin/staging` (Python, no JVM). Must print `snap-split verify: OK`.

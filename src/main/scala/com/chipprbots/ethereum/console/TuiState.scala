@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.console
 
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 
@@ -9,6 +10,12 @@ import java.time.Instant
   * information, sync progress, and node settings.
   *
   * State is immutable - all updates return a new instance.
+  *
+  * @param glyphs
+  *   the glyph set every row is drawn with
+  * @param clock
+  *   where uptime and sync speed read the time; a fixed clock makes a frame repeatable (spec 027 golden frames). Slice
+  *   2 replaces it with the time each status poll records (research C-3).
   */
 case class TuiState(
     networkName: String = "unknown",
@@ -21,7 +28,9 @@ case class TuiState(
     startTime: Instant = Instant.now(),
     nodeSettings: NodeSettings = NodeSettings(),
     snapSyncState: Option[SnapSyncState] = None,
-    syncBaseline: Option[SyncBaseline] = None
+    syncBaseline: Option[SyncBaseline] = None,
+    glyphs: GlyphSet = GlyphSet.Emoji,
+    clock: Clock = Clock.systemUTC()
 ):
 
   import TuiState.MinUptimeForEstimationSeconds
@@ -42,7 +51,7 @@ case class TuiState(
 
   /** Get uptime in seconds. */
   def uptimeSeconds: Long =
-    Duration.between(startTime, Instant.now()).getSeconds
+    Duration.between(startTime, clock.instant()).getSeconds
 
   /** Estimate sync time based on the observed sync speed. */
   def estimatedSyncTimeSeconds: Option[Long] =
@@ -54,7 +63,7 @@ case class TuiState(
     */
   def syncSpeedBlocksPerSec: Option[Double] =
     syncBaseline.flatMap { baseline =>
-      val elapsed = Duration.between(baseline.observedAt, Instant.now()).getSeconds
+      val elapsed = Duration.between(baseline.observedAt, clock.instant()).getSeconds
       val imported = currentBlock - baseline.block
       if elapsed > MinUptimeForEstimationSeconds && imported > 0 then Some(imported.toDouble / elapsed.toDouble)
       else None
@@ -68,7 +77,7 @@ case class TuiState(
     // Record the first non-zero block as the speed baseline; reset it if the chain moved backwards (rewind/reorg).
     val baseline = syncBaseline match
       case Some(b) if current >= b.block => Some(b)
-      case _ if current > 0              => Some(SyncBaseline(current, Instant.now()))
+      case _ if current > 0              => Some(SyncBaseline(current, clock.instant()))
       case _                             => None
     copy(currentBlock = current, bestBlock = best, syncBaseline = baseline)
   def withSyncStatus(status: String): TuiState = copy(syncStatus = status)
@@ -115,7 +124,20 @@ case class NodeSettings(
     miningEnabled: Boolean = false
 )
 
-/** SNAP sync state displayed in the TUI. */
+/** SNAP sync state displayed in the TUI: the fields of the monitor's `SyncProgress` that the worm rows draw.
+  *
+  * @param overall
+  *   progress over the whole run, 0 to 1: the monitor's `SyncProgress.globalProgress`, the fraction the log's Overall
+  *   worm draws, so the TUI's Overall worm is the same bar in every phase
+  * @param storageContractsCompleted
+  *   contracts whose storage is fully downloaded, of [[storageContractsTotal]]
+  * @param chainHeaders
+  *   headers downloaded alongside the state, towards [[chainTarget]] (bodies and receipts likewise)
+  * @param bytecodeComplete
+  *   every bytecode is downloaded, whatever the estimate says
+  * @param phaseElapsedSeconds
+  *   time in the current phase; [[elapsedSeconds]] is the whole run
+  */
 case class SnapSyncState(
     phase: String = "Idle",
     accountsSynced: Long = 0,
@@ -132,38 +154,48 @@ case class SnapSyncState(
     recentSlotsPerSec: Double = 0,
     recentNodesPerSec: Double = 0,
     phaseProgress: Int = 0,
+    overall: Double = 0,
     estimatedTotalAccounts: Long = 0,
     estimatedTotalBytecodes: Long = 0,
     estimatedTotalSlots: Long = 0,
-    etaSeconds: Option[Long] = None
+    etaSeconds: Option[Long] = None,
+    storageContractsCompleted: Int = 0,
+    storageContractsTotal: Int = 0,
+    chainHeaders: BigInt = BigInt(0),
+    chainBodies: BigInt = BigInt(0),
+    chainReceipts: BigInt = BigInt(0),
+    chainTarget: BigInt = BigInt(0),
+    bytecodeComplete: Boolean = false,
+    phaseElapsedSeconds: Double = 0
 ):
-  /** Calculate overall progress across all phases (rough estimate). */
-  def overallProgress: Double =
-    phase match
-      case "AccountRangeSync" if estimatedTotalAccounts > 0 =>
-        (accountsSynced.toDouble / estimatedTotalAccounts * 25.0) // 25% of total
-      case "ByteCodeAndStorageSync" if estimatedTotalSlots > 0 =>
-        25.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 55.0) // 55% of total
-      case "StateHealing"    => 80.0 // Healing is variable but assume 80-95%
-      case "StateValidation" => 95.0
-      case "Completed"       => 100.0
-      case _                 => 0.0
 
-  /** Get formatted phase description. */
-  def phaseDescription: String = phase match
-    case "AccountRangeSync"       => "📦 Downloading accounts"
-    case "ByteCodeAndStorageSync" => "💾 Downloading bytecodes & storage"
-    case "StateHealing"           => "🔧 Healing trie nodes"
-    case "StateValidation"        => "✓ Validating state"
-    case "Completed"              => "✅ SNAP sync complete"
-    case _                        => "⏸️  Idle"
+  /** Position of the phase in SNAP's order (accounts, bytecodes and storage, healing, validation, chain download,
+    * completed), or -1 when the phase is idle or unknown. A row whose phase comes before this one is finished.
+    */
+  def phaseIndex: Int = SnapSyncState.PhaseOrder.indexOf(phase)
 
-  /** Get primary metric for current phase. */
-  def primaryMetric: (String, Long, Double) = phase match
-    case "AccountRangeSync"       => ("Accounts", accountsSynced, recentAccountsPerSec)
-    case "ByteCodeAndStorageSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
-    case "StateHealing"           => ("Nodes", nodesHealed, recentNodesPerSec)
-    case _                        => ("Items", 0L, 0.0)
+  /** The phase, with its glyph padded to [[TuiGlyphs.PhaseCols]] columns so both glyph sets line up (§5.2). */
+  def phaseDescription(glyphs: TuiGlyphs): String =
+    val (glyph, text) = phase match
+      case "AccountRangeSync"        => (glyphs.accounts, "Downloading accounts")
+      case "ByteCodeAndStorageSync"  => (glyphs.storage, "Downloading bytecodes & storage")
+      case "StateHealing"            => (glyphs.healing, "Healing trie nodes")
+      case "StateValidation"         => (glyphs.validating, "Validating state")
+      case "ChainDownloadCompletion" => (glyphs.validating, "Downloading the remaining chain")
+      case "Completed"               => (glyphs.done, "SNAP sync complete")
+      case _                         => (glyphs.idle, "Idle")
+    glyph.text + " " * (TuiGlyphs.PhaseCols - glyph.cols).max(0) + " " + text
+
+object SnapSyncState:
+  /** SNAP's phases in the order they run (`SNAPSyncController.SyncPhase`, by name). */
+  val PhaseOrder: Seq[String] = Seq(
+    "AccountRangeSync",
+    "ByteCodeAndStorageSync",
+    "StateHealing",
+    "StateValidation",
+    "ChainDownloadCompletion",
+    "Completed"
+  )
 
 object TuiState:
   /** Minimum uptime in seconds before sync estimates are provided. This ensures we have enough data points for accurate

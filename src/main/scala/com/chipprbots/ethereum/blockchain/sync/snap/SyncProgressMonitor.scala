@@ -296,7 +296,10 @@ case class SyncProgress(
     bytecodeComplete: Boolean = false
 ):
 
-  private def globalProgress: Double =
+  /** Progress over the whole SNAP run, 0 to 1: the fraction the Overall worm draws, in the log ([[wormBlock]]) and in
+    * the `--tui` dashboard (spec 027), so the two never disagree.
+    */
+  def globalProgress: Double =
     import SNAPSyncController.*
     import SNAPSyncController.SyncPhase.*
 

@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# TUI golden frames (spec 027): every row is padded to the terminal width, so trailing spaces are content.
+src/test/resources/tui/golden/*.txt -whitespace
+
 # Binary files - Images
 *.png binary
 *.jpg binary

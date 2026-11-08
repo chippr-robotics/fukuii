@@ -108,7 +108,16 @@ object TuiStatusProbe:
       recentSlotsPerSec = p.recentSlotsPerSec,
       recentNodesPerSec = p.recentNodesPerSec,
       phaseProgress = p.phaseProgress,
+      overall = p.globalProgress,
       estimatedTotalAccounts = p.estimatedTotalAccounts,
       estimatedTotalBytecodes = p.estimatedTotalBytecodes,
-      estimatedTotalSlots = p.estimatedTotalSlots
+      estimatedTotalSlots = p.estimatedTotalSlots,
+      storageContractsCompleted = p.storageContractsCompleted,
+      storageContractsTotal = p.storageContractsTotal,
+      chainHeaders = p.chainHeaders,
+      chainBodies = p.chainBodies,
+      chainReceipts = p.chainReceipts,
+      chainTarget = p.chainTarget,
+      bytecodeComplete = p.bytecodeComplete,
+      phaseElapsedSeconds = p.phaseElapsedSeconds
     )

@@ -12,6 +12,7 @@ import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
 import org.jline.terminal.spi.SystemStream
 import org.jline.terminal.spi.TerminalExt
+import org.jline.utils.InfoCmp.Capability
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -38,6 +39,8 @@ enum TuiCommand:
   * Threading: `render`, `initialize` and `shutdown` are serialized on this instance. `checkInput` waits for a key
   * WITHOUT holding the lock, so a pending read never blocks a redraw or a shutdown.
   *
+  * @param config
+  *   the TUI's settings, with the environment already applied ([[TuiConfig.load]])
   * @param terminalFactory
   *   opens the terminal; the default is the process's real TTY (tests pass an in-memory terminal)
   * @param processOutput
@@ -45,7 +48,7 @@ enum TuiCommand:
   *   [[shutdown]] runs; None for a terminal that is not the process's own (tests pass an in-memory stream)
   */
 class Tui(
-    config: TuiConfig = TuiConfig.default,
+    val config: TuiConfig = TuiConfig.default,
     terminalFactory: () => Terminal = Tui.systemTerminal,
     processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf
 ) extends Logger:
@@ -58,7 +61,10 @@ class Tui(
   private var inAltScreen = false
   private var lastSize: (Int, Int) = (0, 0)
   @volatile private var enabled = true
-  @volatile private var state: TuiState = TuiState.initial
+  @volatile private var state: TuiState = TuiState.initial.copy(glyphs = config.glyphSet)
+
+  /** Chosen once the terminal is open, from `NO_COLOR` and the colours it reports (spec 027 FR-009). */
+  @volatile private var theme: TuiTheme = TuiTheme.of(config.noColor, Tui.DefaultMaxColors)
 
   private val renderer: TuiRenderer = TuiRenderer(config)
   private val logSuppressor: TuiLogSuppressor = TuiLogSuppressor()
@@ -82,6 +88,7 @@ class Tui(
           throw new IllegalStateException(s"terminal type '${term.getType}' cannot be driven by the TUI")
 
         terminal = Some(term)
+        theme = TuiTheme.of(config.noColor, Tui.maxColors(term))
         directOutput = processOutput(term)
         savedAttributes = Some(term.enterRawMode())
         // Alternate screen buffer (restored on exit, so the user's scrollback survives) + hidden cursor.
@@ -149,7 +156,7 @@ class Tui(
           val clear = if lastSize != ((width, height)) then Tui.ClearScreen else ""
           lastSize = (width, height)
 
-          val lines = renderer.render(state, width, height)
+          val lines = renderer.render(state, width, height, theme)
           // Home the cursor and overwrite in place. No newline after the last line: a frame is exactly `height` rows,
           // and a trailing newline on the bottom row would scroll the whole screen up by one.
           write(term, clear + Tui.CursorHome + lines.map(_.toAnsi(term)).mkString("\r\n"))
@@ -259,8 +266,8 @@ class Tui(
           log.error(s"$closed, but the screen was not restored: the terminal has no process output to write it to")
 
   private def showStartupBanner(term: Terminal): Unit =
-    val (width, _) = Tui.sizeOf(term)
-    val bannerLines = renderer.renderStartupBanner(width)
+    val (width, height) = Tui.sizeOf(term)
+    val bannerLines = renderer.renderStartupBanner(width, height, theme)
     write(term, Tui.CursorHome + bannerLines.map(_.toAnsi(term)).mkString("\r\n"))
     // Brief pause to show banner
     Thread.sleep(config.bannerDisplayDurationMs)
@@ -284,6 +291,13 @@ object Tui:
 
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)
+
+  /** Colours assumed when the terminal does not report `max_colors`: the 16-colour theme the TUI has always drawn. */
+  private[console] val DefaultMaxColors: Int = 8
+
+  /** The colours the terminal reports (terminfo `max_colors`). */
+  private[console] def maxColors(term: Terminal): Int =
+    Option(term.getNumericCapability(Capability.max_colors)).map(_.intValue).getOrElse(DefaultMaxColors)
 
   /** JLine's message for any use of a closed terminal (`AbstractTerminal.checkClosed`, JLine 3.30). */
   private val ClosedTerminalMessage = "Terminal has been closed"

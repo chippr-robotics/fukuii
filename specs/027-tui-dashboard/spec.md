@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-07
 
-**Status**: Planned (2026-11-07). Plan and 150 tasks written from #1490's design proposal (moved in as research.md and refreshed against staging `f0b4a8627`); the proposal's eight open questions and D-1 are settled (D-1: wire `PeerScoringManager`, slice 4a); six slices (1, 2, 3, 4a, 4, 5), one PR each, start with slice 1.
+**Status**: Active (2026-11-08). Slice 1 (worms, glyphs, tiers) is landing on `feat/027-s1-worms`; slices 2, 3, 4a, 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742.
 
-**In flight**: `fukuii-fc` (local session), branch `docs/spec-027-tui-dashboard`: spec, plan and tasks
+**In flight**: `feat/027-s1-worms` (`fukuii-fc`, local session): slice 1, T001–T026 done; the gate's manual run, reviews and PR (T027–T030) next
 
 **Input**: The design proposal #1490 carried as `docs/architecture/tui-design-proposal.md` ("the worm goes to the
 brain": five phased increments, views, tiers, animation, glyph and colour system, data inventory, architecture, testing,
@@ -61,6 +61,12 @@ proposed defaults.
   into production: construct the existing scorer, feed it from the peer events (a network change, routed through
   `herald`), and export the scores through `NetworkMetrics`, the Q5 path, where the TUI reads them. Every peer gets a
   score, not only SNAP peers. Delivered as slice 4a, before slice 4. (user, 2026-11-07)
+
+### Correction 2026-11-08 (slice 1 review)
+
+- `NO_COLOR` counts only when it is set to a non-empty value, as no-color.org now specifies. FR-009 and T008 said "any
+  value, including empty", following research §5.1, which is corrected too (C-17). (coordinator decision on prism's
+  review of slice 1, 2026-11-08)
 
 Where the proposal stated a default (Q1, Q3, Q4, Q6, Q7, Q8) the answer is that default. Q2 and Q5 named options with
 no default; the answer is the option the user chose. D-1 arose while writing this spec (plan.md).
@@ -277,8 +283,8 @@ Each requirement names the research.md section it comes from.
   (C-15). ASCII MUST be selected by `FUKUII_TUI_GLYPHS=ascii`, by `fukuii.tui.glyphs = ascii`, automatically when the
   locale is not UTF-8 (Q3), or at runtime with `g`. Captured log text MUST pass through the same glyph mapper. No glyph
   may contain U+FE0F; ambiguous-width glyphs are pinned to one column (§3.10, §5.2).
-- **FR-009** Colours MUST come from one theme with the §5.1 roles. `NO_COLOR` set to any value, or fewer than 8 colours,
-  MUST select the monochrome theme (bold and reverse only, no colour attributes). `NO_COLOR` MUST NOT imply reduced
+- **FR-009** Colours MUST come from one theme with the §5.1 roles. `NO_COLOR` set to a non-empty value (no-color.org;
+  an empty value counts as unset), or fewer than 8 colours, MUST select the monochrome theme (bold and reverse only, no colour attributes). `NO_COLOR` MUST NOT imply reduced
   motion (§5.1, §4.5).
 
 **Motion, loop, splash**
