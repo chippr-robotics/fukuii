@@ -256,6 +256,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   256 bits for `number`, `difficulty`, `baseFeePerGas`, `blobBaseFee`, `balance` and a storage key or value, 64 bits for
   `time`, `gasLimit`, `nonce` and a withdrawal's `index`, `validatorIndex` and `amount`. An `Error(string)` revert
   whose length word is wider than 32 bits no longer reads as a shorter string.
+- **`eth_simulateV1` reports a failed call and a legacy transaction as go-ethereum does (#1727). Both chains.** A
+  legacy transaction in a block returned with `returnFullTransactions` no longer carries `yParity`; only the typed
+  transactions do. A call that fails with a VM error other than a revert returns `returnData` `0x`: a creation that
+  returned code and then failed its deposit (a first byte of `0xef`, for one) used to return that code. The error text
+  is go-ethereum's where fukuii printed a placeholder: an invalid opcode is named (`invalid opcode: INVALID`, not
+  `invalid opcode: 0xfffffffe`), a jump to a non-`JUMPDEST` says `invalid jump destination`, a write in a static call
+  `write protection`, and so on. A stack underflow still lacks go-ethereum's `(0 <=> 2)` counts and a precompile failure
+  its reason; both stay under Known issues.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -377,7 +385,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - an override at a precompile's address does not disable the precompile;
   - `movePrecompileToAddress` refuses 0x0a (KZG), and two moves to the same address are both dropped;
   - `maxUsedGas` reports gas after refunds;
-  - a create that fails after returning code returns those bytes as `returnData`;
   - a request system contract whose code is overridden away is skipped instead of failing;
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
     length`).

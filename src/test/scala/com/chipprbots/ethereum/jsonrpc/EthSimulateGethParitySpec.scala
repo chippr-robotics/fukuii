@@ -373,3 +373,71 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
       """"blockOverrides":{"number":"0x21","prevRandao":"0x00","feeRecipient":"0x00000000000000000000000000000000000000aa"}"""
     ).isLeft shouldBe false
   }
+
+  // ── #1727 class A: the shape of a full transaction and of a failed call's result ─────────────────────────
+
+  /** The block's one transaction, as `returnFullTransactions` renders it. */
+  private def fullTransaction(call: String): JValue =
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"}},"calls":[$call]}],
+         |"returnFullTransactions":true}""".stripMargin
+    arr(new Node().blocks(payload)._2.head \ "transactions").head
+
+  // F1: api.go newRPCTransaction sets `yParity` for the typed transactions (access-list, dynamic-fee, blob, set-code)
+  // only; a legacy transaction carries v, r and s alone.
+  it should "omit yParity on a legacy transaction with returnFullTransactions" taggedAs (UnitTest, RPCTest) in {
+    val tx = fullTransaction(s"""{"from":"$From","to":"$To","gasPrice":"0x1"}""")
+    str(tx \ "type") shouldBe "0x0"
+    (tx \ "yParity") shouldBe JNothing
+    str(tx \ "v") shouldBe "0x0"
+    str(tx \ "r") shouldBe "0x0"
+    str(tx \ "s") shouldBe "0x0"
+  }
+
+  it should "keep yParity on a typed transaction" taggedAs (UnitTest, RPCTest) in {
+    val accessList = s""""accessList":[{"address":"$To","storageKeys":[]}]"""
+    val eip1559 = fullTransaction(s"""{"from":"$From","to":"$To"}""")
+    str(eip1559 \ "type") shouldBe "0x2"
+    str(eip1559 \ "yParity") shouldBe "0x0"
+    val eip2930 = fullTransaction(s"""{"from":"$From","to":"$To","gasPrice":"0x1",$accessList}""")
+    str(eip2930 \ "type") shouldBe "0x1"
+    str(eip2930 \ "yParity") shouldBe "0x0"
+  }
+
+  /** The `error` member of the one call's result, for a contract at `To` holding `code`. */
+  private def callError(code: String): JValue =
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"},"$To":{"code":"$code"}},
+         |"calls":[{"from":"$From","to":"$To","gas":"0x30000"}]}]}""".stripMargin
+    arr(new Node().blocks(payload)._2.head \ "calls").head \ "error"
+
+  // F4: simulate.go:471 reports `result.Err.Error()`; core/vm/errors.go and `OpCode.String()` spell it. fukuii printed
+  // the sign-extended byte (0xfffffffe) and the lower-cased case-class name (invalidjump(0x05)).
+  it should "name INVALID for 0xfe, not sign-extended hex" taggedAs (UnitTest, RPCTest) in {
+    val error = callError("0xfe")
+    str(error \ "message") shouldBe "invalid opcode: INVALID"
+    (error \ "code") shouldBe JInt(-32015)
+  }
+
+  it should "name an undefined opcode as geth's OpCode.String() does" taggedAs (UnitTest, RPCTest) in {
+    str(callError("0x0c") \ "message") shouldBe "invalid opcode: opcode 0xc not defined"
+  }
+
+  it should "say \"invalid jump destination\" for a jump to a non-JUMPDEST" taggedAs (UnitTest, RPCTest) in {
+    // PUSH1 5, JUMP
+    str(callError("0x600556") \ "message") shouldBe "invalid jump destination"
+  }
+
+  // F7: simulate.go:463 reads `result.Return()`, which is nil whenever `Err != nil` (state_transition.go:55-60), so
+  // every failed call, a creation that returned code and then failed its deposit included, has returnData 0x.
+  it should "return empty returnData when a create fails after returning code" taggedAs (UnitTest, RPCTest) in {
+    // init code: PUSH1 0xef, PUSH1 0, MSTORE8, PUSH1 1, PUSH1 0, RETURN. It returns the byte 0xef, which EIP-3541
+    // refuses to deploy as the first byte of contract code.
+    val payload =
+      s"""{"blockStateCalls":[{"stateOverrides":{"$From":{"balance":"0x3635c9adc5dea00000"}},
+         |"calls":[{"from":"$From","input":"0x60ef60005360016000f3"}]}]}""".stripMargin
+    val call = arr(new Node().blocks(payload)._2.head \ "calls").head
+    str(call \ "returnData") shouldBe "0x"
+    str(call \ "status") shouldBe "0x0"
+    str((call \ "error") \ "message") shouldBe "invalid code: must not begin with 0xef"
+  }

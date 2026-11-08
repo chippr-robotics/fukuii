@@ -392,6 +392,11 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case _ => Some(com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.chainId.value)
         val sender = senderAddr.bytes
         val effectiveGasPrice = com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx, header.baseFee)
+        // go-ethereum newRPCTransaction (internal/ethapi/api.go) sets `yParity` for the typed transactions only; a
+        // legacy transaction carries v, r and s alone.
+        val yParityField = tx match
+          case _: com.chipprbots.ethereum.domain.LegacyTransaction => Nil
+          case _                                                   => List("yParity" -> encodeAsHex(BigInt(0)))
         val baseFields = List(
           "blockHash" -> encodeAsHex(blockHash),
           "blockNumber" -> encodeAsHex(header.number.value),
@@ -409,9 +414,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           "value" -> encodeAsHex(tx.value),
           "v" -> encodeAsHex(BigInt(0)),
           "r" -> encodeAsHex(BigInt(0)),
-          "s" -> encodeAsHex(BigInt(0)),
-          "yParity" -> encodeAsHex(BigInt(0))
-        )
+          "s" -> encodeAsHex(BigInt(0))
+        ) ::: yParityField
         val chainIdField = chainId.map(c => "chainId" -> encodeAsHex(c)).toList
         val maxFeeFields = tx match
           case t: com.chipprbots.ethereum.domain.BlobTransaction =>

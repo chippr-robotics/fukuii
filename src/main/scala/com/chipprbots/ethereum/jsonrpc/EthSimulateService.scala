@@ -1352,17 +1352,16 @@ class EthSimulateService(
             error = Some(SimulateError(3, msg, Some(returnData)))
           )
         case Some(err) =>
-          // Map VM error names to geth-compatible lowercase messages
-          val baseMsg = err match
-            case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
-            case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
-            case other                                          => other.toString.toLowerCase
+          // simulate.go:471: the error is `result.Err.Error()`, spelled as core/vm/errors.go spells it
+          val baseMsg = CallErrors.vmErrorMessage(err)
           // simulate.go:470-474: a clamped call's VM error (not a revert) says the gas was clamped
           val errMsg =
             if gasCapped then baseMsg + " (gas limit was capped by the RPC server's global gas cap)" else baseMsg
+          // simulate.go:463 reads `result.Return()`, which is nil whenever `Err != nil` (state_transition.go:55-60): a
+          // failed call has no return data, a creation that returned code and then failed its deposit included.
           SimulateCallResult(
             status = BigInt(0),
-            returnData = returnData,
+            returnData = ByteString.empty,
             gasUsed = gasUsed,
             maxUsedGas = gasUsed,
             logs = Seq.empty,
