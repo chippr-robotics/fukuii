@@ -1701,5 +1701,5 @@ items:
       by: fukuii-fc
       agent: beacon
       since: 2026-11-08T21:29:14Z
-      heartbeat: 2026-11-08T21:29:14Z
+      heartbeat: 2026-11-08T21:29:57Z
     notes: "beacon B-151 analysis: eth_pairings is abandoned upstream; any disagreement means live Linux nodes may compute EIP-2537 wrong, escalate. Test-scope only."
