@@ -1490,19 +1490,14 @@ items:
   - id: B-135
     title: "BLS/KZG precompiles turn a missing native library into a precompile FAILURE: consensus split on a misconfigured node"
     priority: P1
-    status: review
+    status: done
     area: evm
     size: S
     opened: 2026-11-08
+    closed: 2026-11-08
     refs: []
     links:
-      prs: [1763]
-    claim:
-      by: fukuii-fc
-      agent: forge
-      since: 2026-11-08T20:01:05Z
-      heartbeat: 2026-11-08T22:33:38Z
-      branch: fix/bls-kzg-native-fail-loudly
+      prs: [1763, 1767]
     notes: "forge (B-133 analysis): blsNativeOp PrecompiledContracts:656,674 and the KZG catch :782. Must fail loudly (refuse to start / crash), never return a result."
   - id: B-136
     title: CallTracer never decodes revert reasons (looks for "execution reverted" in "RevertOccurs")
