@@ -1483,6 +1483,6 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-08T19:14:42Z
-      heartbeat: 2026-11-08T19:14:42Z
+      heartbeat: 2026-11-08T19:14:51Z
       branch: fix/1727-simulate-vm-error-texts
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
