@@ -35,7 +35,7 @@ class TuiGlyphsSpec extends AnyFlatSpec with Matchers:
 
   it should "pin the ambiguous-width glyphs to one column" taggedAs (UnitTest) in {
     val e = TuiGlyphs.Emoji
-    Seq(e.diamond, e.bullet, e.warn, e.arrow, e.separator, e.trackDone, e.dot, e.ellipsis, e.up, e.down, e.steady)
+    Seq(e.diamond, e.bullet, e.warn, e.arrow, e.separator, e.timelineTrack, e.dot, e.ellipsis, e.up, e.down, e.steady)
       .foreach(g => withClue(g.text)(g.cols shouldBe 1))
     e.diamond.text shouldBe "◆"
     e.bullet.text shouldBe "●"
@@ -81,6 +81,15 @@ class TuiGlyphsSpec extends AnyFlatSpec with Matchers:
     TuiGlyphs.of(GlyphSet.Ascii) shouldBe TuiGlyphs.Ascii
     TuiGlyphs.Emoji.set shouldBe GlyphSet.Emoji
     TuiGlyphs.Ascii.set shouldBe GlyphSet.Ascii
+  }
+
+  "GlyphChoice.parse" should "read ASCII and EMOJI under a Turkish default locale" taggedAs (UnitTest) in {
+    TuiFixtures.withDefaultLocale(TuiFixtures.Turkish) {
+      "EMOJI".toLowerCase shouldBe "emojı" // the trap: the default locale lower-cases I to a dotless ı
+      GlyphChoice.parse("ASCII") shouldBe Some(GlyphChoice.Ascii)
+      GlyphChoice.parse("EMOJI") shouldBe Some(GlyphChoice.Emoji)
+      GlyphChoice.parse("AUTO") shouldBe Some(GlyphChoice.Auto)
+    }
   }
 
   "TuiGlyphs.toAscii" should "map the log glyphs to their ASCII forms" taggedAs (UnitTest) in {

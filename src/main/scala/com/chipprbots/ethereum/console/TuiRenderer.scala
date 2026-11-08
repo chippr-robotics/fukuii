@@ -8,6 +8,11 @@ import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStringBuilder
 import org.jline.utils.AttributedStyle
 
+import com.chipprbots.ethereum.console.TuiText.fitToWidth
+import com.chipprbots.ethereum.console.TuiText.formatCount
+import com.chipprbots.ethereum.console.TuiText.formatDuration
+import com.chipprbots.ethereum.console.TuiText.formatNumber
+
 /** Rendering logic for terminal output.
   *
   * This class handles all the visual rendering of the TUI, including formatting of text, progress bars, status
@@ -70,7 +75,7 @@ class TuiRenderer(config: TuiConfig):
 
     // Network & Connection section
     lines += createSectionHeader("NETWORK & CONNECTION", width, g, t)
-    lines += createInfoLine("Network", state.networkName.toUpperCase, width, t)
+    lines += createInfoLine("Network", state.networkName.toUpperCase(Locale.ROOT), width, t)
     lines += createStatusLine("Connection", state.connectionStatus, width, g, t)
     lines += createPeerStatusLine(state.peerCount, state.maxPeers, width, g, t)
     lines += createSeparator(width, g, t)
@@ -111,7 +116,7 @@ class TuiRenderer(config: TuiConfig):
     state.snapSyncState.foreach { snap =>
       lines += createSectionHeader("SNAP SYNC", width, g, t)
       lines += createInfoLine("Phase", snap.phaseDescription(g), width, t)
-      snapRows(snap, g).foreach((label, progress, detail) => lines += worm(label, progress, detail))
+      SnapRows.of(snap, g).foreach(row => lines += worm(row.label, row.progress, row.detail))
       if snap.chainTarget > 0 then
         val dot = g.dot.text
         lines += createInfoLine(
@@ -151,67 +156,6 @@ class TuiRenderer(config: TuiConfig):
 
     lines.toSeq
 
-  /** The five SNAP rows (FR-007), as the log's `SyncProgress.wormBlock` draws them. A part whose phase is over shows
-    * COMPLETE, whatever its estimate says.
-    */
-  private def snapRows(snap: SnapSyncState, g: TuiGlyphs): Seq[(String, WormProgress, String)] =
-    import WormProgress.*
-    val phase = snap.phaseIndex
-    val dot = g.dot.text
-    def rate(perSec: Double): String = s"@ ${formatCount(perSec.toLong)}/s"
-    def count(n: Long, unit: String = ""): String = if n > 0 then s"${formatCount(n)}$unit" else ""
-    def fraction(done: Long, total: Long): Double = done.toDouble / total.toDouble
-
-    val overall =
-      ("Overall", Known(snap.overallProgress / 100.0), snap.etaSeconds.fold("")(s => s"ETA ${formatDuration(s)}"))
-
-    val accounts =
-      val (n, est) = (snap.accountsSynced, snap.estimatedTotalAccounts)
-      if phase > 0 then ("Accounts", Complete, count(n))
-      else if est > 0 then
-        (
-          "Accounts",
-          Known(fraction(n, est)),
-          s"${formatCount(n)} / ~${formatCount(est)} ${rate(snap.recentAccountsPerSec)}"
-        )
-      else if n > 0 then ("Accounts", Active, s"${formatCount(n)} ${rate(snap.recentAccountsPerSec)}")
-      else ("Accounts", Queued, "")
-
-    val storage =
-      val (n, est) = (snap.storageSlotsSynced, snap.estimatedTotalSlots)
-      val contracts =
-        if snap.storageContractsTotal > 0 then
-          s"${formatNumber(snap.storageContractsCompleted.toLong)}/${formatNumber(snap.storageContractsTotal.toLong)} contracts"
-        else ""
-      def joined(parts: String*): String = parts.filter(_.nonEmpty).mkString(s" $dot ")
-      // The rate before the contract count: when the row is cut at 80 columns, the rate says whether it moves.
-      val slots = s"${formatCount(n)} slots"
-      val moving = joined(s"$slots ${rate(snap.recentSlotsPerSec)}", contracts)
-      if phase > 1 then ("Storage", Complete, joined(count(n, " slots"), contracts))
-      else if est > 0 then ("Storage", Known(fraction(n, est)), moving)
-      else if n > 0 then ("Storage", Active, moving)
-      else ("Storage", Queued, "")
-
-    val bytecodes =
-      val (n, est) = (snap.bytecodesDownloaded, snap.estimatedTotalBytecodes)
-      if snap.bytecodeComplete || phase > 1 then ("Bytecode", Complete, count(n))
-      else if n > 0 && est > 0 then
-        (
-          "Bytecode",
-          Known(fraction(n, est)),
-          s"${formatCount(n)} / ~${formatCount(est)} ${rate(snap.recentBytecodesPerSec)}"
-        )
-      else if n > 0 then ("Bytecode", Active, s"${formatCount(n)} ${rate(snap.recentBytecodesPerSec)}")
-      else ("Bytecode", Queued, "")
-
-    val healing =
-      val n = snap.nodesHealed
-      if phase > 2 then ("Healing", Complete, count(n, " nodes"))
-      else if n > 0 then ("Healing", Active, s"${formatCount(n)} nodes ${rate(snap.recentNodesPerSec)}")
-      else ("Healing", Queued, "")
-
-    Seq(overall, accounts, storage, bytecodes, healing)
-
   /** ` Label [===🪱....]🧠 52% detail`: a 12-column label, the bar in `budget` columns, then the detail. Without the
     * progress bar the row keeps its label and says in words what the bar would show.
     */
@@ -230,7 +174,7 @@ class TuiRenderer(config: TuiConfig):
     else
       val words = progress match
         case WormProgress.Known(f) => s"${(f.max(0.0).min(1.0) * 100).toInt}%"
-        case other                 => other.toString.toLowerCase
+        case other                 => other.toString.toLowerCase(Locale.ROOT)
       sb.append(words, t.value)
     if detail.nonEmpty then sb.append(s"  $detail", t.value)
     fitToWidth(sb.toAttributedString, width)
@@ -290,7 +234,7 @@ class TuiRenderer(config: TuiConfig):
     concat(labelPart, valuePart, new AttributedString(padding))
 
   private def createStatusLine(label: String, status: String, width: Int, g: TuiGlyphs, t: TuiTheme): AttributedString =
-    val statusStyle = status.toLowerCase match
+    val statusStyle = status.toLowerCase(Locale.ROOT) match
       case s if s.contains("connected") || s.contains("running")     => t.healthy.bold()
       case s if s.contains("starting") || s.contains("initializing") => t.warn.bold()
       case s if s.contains("error") || s.contains("failed")          => t.error
@@ -327,27 +271,6 @@ class TuiRenderer(config: TuiConfig):
 
   private def createFooter(width: Int, t: TuiTheme): AttributedString =
     new AttributedString(Footer + " " * Math.max(0, width - Footer.length), t.accent)
-
-  private def formatNumber(n: Long): String = String.format(Locale.ROOT, "%,d", n)
-
-  /** 34.1M, 412.0K, 310: the compact counts of the log's SNAP progress line. */
-  private def formatCount(n: Long): String =
-    if n >= 1_000_000 then String.format(Locale.ROOT, "%.1fM", n / 1_000_000.0)
-    else if n >= 1_000 then String.format(Locale.ROOT, "%.1fK", n / 1_000.0)
-    else n.toString
-
-  private def formatCount(n: BigInt): String = formatCount(n.min(BigInt(Long.MaxValue)).toLong)
-
-  private def formatDuration(seconds: Long): String =
-    val days = seconds / 86400
-    val hours = (seconds % 86400) / 3600
-    val minutes = (seconds % 3600) / 60
-    val secs = seconds % 60
-
-    if days > 0 then s"${days}d ${hours}h ${minutes}m"
-    else if hours > 0 then s"${hours}h ${minutes}m ${secs}s"
-    else if minutes > 0 then s"${minutes}m ${secs}s"
-    else s"${secs}s"
 
 object TuiRenderer:
   /** Create a renderer with default configuration. */
@@ -392,17 +315,3 @@ object TuiRenderer:
 
   /** FUKUII, five rows of 42 columns (spec 027 FR-013; the figlet it replaces spelled FOOO, research §3.7). */
   val Wordmark: Seq[String] = "FUKUII".map(WordmarkLetters).transpose.map(_.mkString(" "))
-
-  /** Exactly `width` columns: cut, then padded with spaces. A wide glyph that would straddle the edge is dropped by the
-    * cut, which leaves the line one column short; the padding restores it.
-    */
-  private[console] def fitToWidth(line: AttributedString, width: Int): AttributedString =
-    val cols = width.max(0)
-    val cut = if line.columnLength() > cols then line.columnSubSequence(0, cols) else line
-    val short = cols - cut.columnLength()
-    if short <= 0 then cut
-    else
-      val sb = new AttributedStringBuilder()
-      sb.append(cut)
-      sb.append(" " * short)
-      sb.toAttributedString

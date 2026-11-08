@@ -83,6 +83,15 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
     env().applyTo(TuiConfig.default).noColor shouldBe false
   }
 
+  it should "parse FUKUII_TUI_GLYPHS and the locale the same under a Turkish default locale" taggedAs (UnitTest) in {
+    TuiFixtures.withDefaultLocale(TuiFixtures.Turkish) {
+      env("FUKUII_TUI_GLYPHS" -> "EMOJI").glyphs shouldBe Some(GlyphChoice.Emoji)
+      env("FUKUII_TUI_GLYPHS" -> "ASCII").warnings shouldBe empty
+      resolved(env("LANG" -> "tr_TR.utf8")) shouldBe GlyphSet.Emoji
+      resolved(env("LANG" -> "tr_TR.ISO-8859-9")) shouldBe GlyphSet.Ascii
+    }
+  }
+
   it should "read the process environment and system properties" taggedAs (UnitTest) in {
     noException should be thrownBy TuiEnv.system()
   }

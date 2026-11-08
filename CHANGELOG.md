@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SNAP sync shows five worm rows (Overall, Accounts, Storage, Bytecode, Healing), each with its count and rate once, plus
   the contract count, the chain download and the time in the current phase. The account count and rate were drawn twice.
   - **Glyph sets.** `emoji`, or `ascii` (`~o` worm, `@@` brain) with the same column widths. The new
-    `fukuii.tui.glyphs` (`conf/base/tui.conf`, default `auto`) picks ASCII when the locale is not UTF-8;
-    `FUKUII_TUI_GLYPHS=emoji|ascii|auto` overrides it. An invalid `fukuii.tui.glyphs` stops the node with a named error;
+    `fukuii.tui.glyphs` (`conf/base/tui.conf`, default `auto`) draws ASCII when the locale is not UTF-8 or is unset
+    (Windows hosts included); set `FUKUII_TUI_GLYPHS=emoji` to override (`emoji|ascii|auto`). An invalid `fukuii.tui.glyphs` stops the node with a named error;
     an invalid `FUKUII_TUI_GLYPHS` logs a warning and is ignored.
   - **Colour.** `NO_COLOR`, set to a non-empty value (no-color.org), draws without colour (bold and reverse video
     only), as does a terminal reporting fewer than 8 colours. A 256-colour terminal gets the 256-colour palette.

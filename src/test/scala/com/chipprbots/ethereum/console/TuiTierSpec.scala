@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** [[Tier]]: the size class of a terminal and what each class shows (spec 027 FR-003, research §3.1). */
-class TierSpec extends AnyFlatSpec with Matchers:
+class TuiTierSpec extends AnyFlatSpec with Matchers:
 
   "Tier.of" should "pick S below 100 columns or below 32 rows" taggedAs (UnitTest) in {
     Tier.of(99, 40) shouldBe Tier.S

@@ -14,6 +14,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.network.Peer
@@ -164,6 +165,24 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       10,
       60.0
     ))
+  }
+
+  // Slice 1 review W1: the TUI's own Overall estimate fell to 0 % in ChainDownloadCompletion and disagreed with the log
+  // (45 % against 27 % on the storage fixture). The Overall worm now carries the log's own fraction.
+  it should "draw the Overall worm the log draws, in every SNAP phase" taggedAs (UnitTest) in {
+    val renderer = TuiRenderer(TuiConfig.default)
+    for phase <- SyncPhase.values.toSeq; phaseProgress <- Seq(0, 37, 100, 150) do
+      val p = snapSample.copy(phase = phase, phaseProgress = phaseProgress)
+      val s = TuiStatusProbe.toSnapSyncState(p)
+      withClue(s"$phase at $phaseProgress%: ") {
+        s.overall shouldBe p.globalProgress
+        val frame = renderer.render(TuiState.initial.withSnapSyncState(s), 80, 24).map(_.toString)
+        val overallRow = frame.find(_.startsWith("   Overall")).get
+        overallRow.drop(12).trim shouldBe WormToBrainBar.renderKnown(p.globalProgress)
+      }
+    // Chain download is 4 of 5 stages done, not 0 %.
+    val chainDownload = snapSample.copy(phase = SyncPhase.ChainDownloadCompletion, phaseProgress = 0)
+    TuiStatusProbe.toSnapSyncState(chainDownload).overall shouldBe 0.8 +- 1e-9
   }
 
   it should "say so when syncing has no target yet (no peers to pick a pivot from)" taggedAs (UnitTest) in {

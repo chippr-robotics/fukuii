@@ -64,7 +64,7 @@ object WormBar:
         labelled(budget, s"[COMPLETE ${glyphs.check.text}]", theme.healthy, glyphs, theme)
       case WormProgress.Queued => labelled(budget, "[QUEUED]", theme.muted, glyphs, theme)
       case WormProgress.Active => labelled(budget, "[ACTIVE]", theme.value, glyphs, theme)
-    TuiRenderer.fitToWidth(bar, budget)
+    TuiText.fitToWidth(bar, budget)
 
   private def known(budget: Int, p: Double, g: TuiGlyphs, theme: TuiTheme): AttributedString =
     val percent = s" ${(p * 100).toInt}%"

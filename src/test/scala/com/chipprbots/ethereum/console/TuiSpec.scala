@@ -146,7 +146,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
 
   it should "draw separators the terminal shows as box-drawing lines" taggedAs (UnitTest) in withTui() { (tui, tt) =>
     tui.render()
-    TuiTestTerminal.visible(tt.lastFrame).split("\n").exists(_.forall(_ == '─')) shouldBe true
+    TuiTestTerminal.visible(tt.lastFrame).split("\n").exists(row => row.nonEmpty && row.forall(_ == '─')) shouldBe true
   }
 
   it should "never draw a row wider than the terminal" taggedAs (UnitTest) in withTui(width = 40, height = 20) {

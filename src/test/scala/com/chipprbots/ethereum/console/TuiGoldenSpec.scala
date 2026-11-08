@@ -54,6 +54,19 @@ class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       Using.resource(Source.fromInputStream(in, StandardCharsets.UTF_8.name()))(_.mkString)
     )
 
+  /** Fails naming every row that differs (up to five shown), with the expected and the actual row. */
+  private def compareRows(name: String, expected: Seq[String], actual: Seq[String]): Unit =
+    val differing = (0 until expected.size.max(actual.size)).filter(i => expected.lift(i) != actual.lift(i))
+    if differing.nonEmpty then
+      def show(row: Option[String]) = row.fold("<no row>")(r => s"'$r'")
+      val shown = differing.take(5).map { i =>
+        s"  row $i\n    expected: ${show(expected.lift(i))}\n    actual:   ${show(actual.lift(i))}"
+      }
+      fail(
+        s"$name: ${differing.size} row(s) differ (expected ${expected.size} rows, drew ${actual.size}):\n" +
+          shown.mkString("\n")
+      )
+
   "The golden set" should "cover three tiers, three states and two glyph sets: 18 files" taggedAs (UnitTest) in {
     val names = for (w, h) <- sizes; (s, _) <- states; set <- GlyphSet.values.toSeq yield fileName(w, h, s, set)
     names.distinct should have size 18
@@ -77,7 +90,7 @@ class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
         golden(name) match
           case None =>
             fail(s"missing golden file tui/golden/$name; generate it with -Dtui.golden.update=true (see the scaladoc)")
-          case Some(expected) => frame shouldBe expected.stripSuffix("\n")
+          case Some(expected) => compareRows(name, expected.stripSuffix("\n").split("\n", -1).toSeq, rows.toSeq)
     }
 
     it should s"carry no colour attribute with the monochrome theme ($name)" taggedAs (UnitTest) in {

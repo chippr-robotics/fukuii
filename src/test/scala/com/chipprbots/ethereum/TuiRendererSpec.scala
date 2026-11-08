@@ -345,6 +345,21 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     text should include("phase 1h 8m 0s")
   }
 
+  // Slice 1 review W4: at the tier L minimum the logo column leaves the body 93 columns. The rate survives; the contract
+  // count, last on the row, is what is cut.
+  it should "keep the Storage rate at the tier L minimum, 140×45, and cut the contract count" taggedAs (UnitTest) in {
+    val lines = rows(TuiFixtures.snapStorageMordor(), 140, 45)
+    lines.exists(_.contains("=+#+.")) shouldBe true // the logo column is drawn
+    val storage = lines.find(_.trim.startsWith("Storage")).get
+    storage should include("119.6M slots @ 21.4K/s")
+    (storage should not).include("contracts")
+  }
+
+  it should "draw the network name the same under a Turkish default locale" taggedAs (UnitTest) in {
+    val text = TuiFixtures.withDefaultLocale(TuiFixtures.Turkish)(rows(TuiFixtures.sepoliaNearHead(), 100, 40).mkString)
+    text should include("Network: SEPOLIA")
+  }
+
   it should "keep each SNAP row's rate on an 80-column screen" taggedAs (UnitTest) in {
     val lines = rows(TuiFixtures.snapStorageMordor(), 80, 24)
     lines.find(_.trim.startsWith("Storage")).get should include("119.6M slots @ 21.4K/s")

@@ -44,12 +44,17 @@ class TuiThemeSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     for (role, codes) <- colours(TuiTheme.Mono) do withClue(role)(codes shouldBe empty)
   }
 
-  it should "mark health with bold and errors and the band with reverse video" taggedAs (UnitTest) in {
+  it should "mark health with bold and errors and the band with reverse video, and nothing else" taggedAs (UnitTest) in {
     val m = TuiTheme.Mono
-    m.healthy.toAnsi should include("1")
-    m.value.toAnsi should include("1")
-    m.error.toAnsi should include("7")
-    m.accent.toAnsi should include("7")
+    def wire(style: org.jline.utils.AttributedStyle) = new AttributedString("x", style).toAnsi(tt.terminal)
+    // The SGR parameters of each style, and the exact bytes a monochrome row puts on the wire.
+    (m.healthy.toAnsi, m.warn.toAnsi, m.value.toAnsi) shouldBe (("1", "1", "1"))
+    (m.error.toAnsi, m.accent.toAnsi) shouldBe (("7", "7"))
+    wire(m.healthy) shouldBe "\u001b[1mx\u001b[0m"
+    wire(m.error) shouldBe "\u001b[7mx\u001b[0m"
+    wire(m.accent) shouldBe "\u001b[7mx\u001b[0m"
+    wire(m.label) shouldBe "x"
+    wire(m.muted) shouldBe "x"
   }
 
   "TuiTheme.Ansi16 and Ansi256" should "colour the roles that §5.1 colours" taggedAs (UnitTest) in {

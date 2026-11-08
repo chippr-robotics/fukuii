@@ -126,6 +126,9 @@ case class NodeSettings(
 
 /** SNAP sync state displayed in the TUI: the fields of the monitor's `SyncProgress` that the worm rows draw.
   *
+  * @param overall
+  *   progress over the whole run, 0 to 1: the monitor's `SyncProgress.globalProgress`, the fraction the log's Overall
+  *   worm draws, so the TUI's Overall worm is the same bar in every phase
   * @param storageContractsCompleted
   *   contracts whose storage is fully downloaded, of [[storageContractsTotal]]
   * @param chainHeaders
@@ -151,6 +154,7 @@ case class SnapSyncState(
     recentSlotsPerSec: Double = 0,
     recentNodesPerSec: Double = 0,
     phaseProgress: Int = 0,
+    overall: Double = 0,
     estimatedTotalAccounts: Long = 0,
     estimatedTotalBytecodes: Long = 0,
     estimatedTotalSlots: Long = 0,
@@ -164,17 +168,6 @@ case class SnapSyncState(
     bytecodeComplete: Boolean = false,
     phaseElapsedSeconds: Double = 0
 ):
-  /** Calculate overall progress across all phases (rough estimate). */
-  def overallProgress: Double =
-    phase match
-      case "AccountRangeSync" if estimatedTotalAccounts > 0 =>
-        (accountsSynced.toDouble / estimatedTotalAccounts * 25.0) // 25% of total
-      case "ByteCodeAndStorageSync" if estimatedTotalSlots > 0 =>
-        25.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 55.0) // 55% of total
-      case "StateHealing"    => 80.0 // Healing is variable but assume 80-95%
-      case "StateValidation" => 95.0
-      case "Completed"       => 100.0
-      case _                 => 0.0
 
   /** Position of the phase in SNAP's order (accounts, bytecodes and storage, healing, validation, chain download,
     * completed), or -1 when the phase is idle or unknown. A row whose phase comes before this one is finished.

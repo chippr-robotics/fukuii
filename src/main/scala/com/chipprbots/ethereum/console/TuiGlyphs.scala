@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.console
 
+import java.util.Locale
+
 /** The TUI's two glyph sets (spec 027 FR-008, research §5.2). */
 enum GlyphSet:
   /** Emoji and Unicode symbols: the default under a UTF-8 locale. */
@@ -20,7 +22,7 @@ object GlyphChoice:
   /** The accepted spellings, for error and warning messages. */
   val Accepted: String = "emoji, ascii, auto"
 
-  def parse(value: String): Option[GlyphChoice] = value.trim.toLowerCase match
+  def parse(value: String): Option[GlyphChoice] = value.trim.toLowerCase(Locale.ROOT) match
     case "emoji" => Some(Emoji)
     case "ascii" => Some(Ascii)
     case "auto"  => Some(Auto)
@@ -35,7 +37,8 @@ final case class Glyph(text: String, cols: Int)
   *
   * Widths are equal in both sets except the ellipsis (C-15) and the SNAP phase glyphs, which the renderer pads to
   * [[TuiGlyphs.PhaseCols]] in both sets ([[TuiGlyphs.VariableWidth]]). No glyph carries U+FE0F, and the glyphs whose
-  * East Asian width is ambiguous (`◆ ● ⚠ ▶ ─ …`) are pinned to one column.
+  * East Asian width is ambiguous (`◆ ● ⚠ ▶ ─ …`) are pinned to one column. `timelineTrack` is the fork timeline's track
+  * (§5.2 "track done"); the worm bar always draws `=` and `.`, as the log's bar does.
   */
 final case class TuiGlyphs(
     set: GlyphSet,
@@ -58,7 +61,7 @@ final case class TuiGlyphs(
     error: Glyph,
     separator: Glyph,
     divider: Glyph,
-    trackDone: Glyph,
+    timelineTrack: Glyph,
     arrow: Glyph,
     ellipsis: Glyph,
     up: Glyph,
@@ -98,7 +101,7 @@ object TuiGlyphs:
     error = Glyph("✗", 1),
     separator = Glyph("─", 1),
     divider = Glyph("│", 1),
-    trackDone = Glyph("═", 1),
+    timelineTrack = Glyph("═", 1),
     arrow = Glyph("▶", 1),
     ellipsis = Glyph("…", 1),
     up = Glyph("↑", 1),
@@ -127,7 +130,7 @@ object TuiGlyphs:
     error = Glyph("x", 1),
     separator = Glyph("-", 1),
     divider = Glyph("|", 1),
-    trackDone = Glyph("=", 1),
+    timelineTrack = Glyph("=", 1),
     arrow = Glyph(">", 1),
     ellipsis = Glyph("..", 2),
     up = Glyph("^", 1),

@@ -134,6 +134,8 @@ the logo rows; `TuiSpec.scala:80`; `TuiRendererSpec.scala:28-36`; `BlockchainCon
   Otherwise a peer could write escape sequences to the operator's terminal.
 - **C-17. `NO_COLOR` needs a value (2026-11-08, slice 1 review).** no-color.org specifies `NO_COLOR` as present and not
   empty; §5.1 said "any value". An empty `NO_COLOR` counts as unset (spec FR-009, T008).
+- **C-18. The L-tier worm track (2026-11-08, slice 1 review).** §3.1 gives the Overview's tracks per tier, but at tier L
+  the logo column leaves the body narrower than a tier-M screen. Slice 1 draws the M track there (note under §3.1).
 
 ---
 
@@ -248,6 +250,11 @@ The mockups fix layout, column budgets and glyphs. Their data is illustrative (C
 | Sync view | worm rows (track 20 cells) | track 40 cells + rates + ETA per row | track 60 cells + sparkline of recent rate (ASCII `▁▂▃▅▇`) |
 | Peers view | 1 line per peer, 18 peers max | + client id, best block, score | + direction, age, score trend |
 | Chain view | next fork + last fork | full timeline, 1 row per fork | timeline + per-fork EIP list |
+
+Slice 1 note (C-18): while the Overview draws the logo column at tier L, its body is 93 to 113 columns, so the
+Overview's worm rows use the M track (40 cells), not 60, and keep their rates. At the L minimum, 140×45, the Storage
+row keeps its count and rate and loses the contract count. Track lengths derived from the width come with slice 3's
+layout engine.
 
 ### 3.2 Overview — S tier, 80×24, ETC mainnet, SNAP sync in progress
 

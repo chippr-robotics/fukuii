@@ -7,7 +7,7 @@ import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** [[WormBar]]: the TUI's worm-to-brain bar, budgeted in columns (spec 027 FR-006, research §4.1). */
-class WormBarSpec extends AnyFlatSpec with Matchers:
+class TuiWormBarSpec extends AnyFlatSpec with Matchers:
 
   private val sets = Seq(TuiGlyphs.Emoji, TuiGlyphs.Ascii)
   private val theme = TuiTheme.Ansi16

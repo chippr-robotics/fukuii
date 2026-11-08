@@ -94,6 +94,17 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
     TuiConfig.load(auto, TuiEnv.from(Map("NO_COLOR" -> ""), Map.empty)).noColor shouldBe false
   }
 
+  // Slice 1 review W3: an operator's full-copy config written before tui.conf existed has no `tui` block.
+  it should "fall back to the defaults when the node config has no tui block" taggedAs (UnitTest) in {
+    val fullCopy = ConfigFactory.parseString("datadir = /var/lib/fukuii")
+    val utf8 = TuiEnv.from(Map("LANG" -> "en_US.UTF-8"), Map.empty)
+    TuiConfig.load(fullCopy, utf8) shouldBe utf8.applyTo(TuiConfig.default)
+    TuiConfig
+      .load(fullCopy, TuiEnv.from(Map("FUKUII_TUI_GLYPHS" -> "ascii"), Map.empty))
+      .glyphSet shouldBe GlyphSet.Ascii
+    TuiConfig.load(fullCopy, TuiEnv.from(Map("NO_COLOR" -> "1"), Map.empty)).noColor shouldBe true
+  }
+
   "TuiConfig.glyphSet" should "draw emoji for an unresolved auto, and ASCII only when asked" taggedAs (UnitTest) in {
     TuiConfig.default.glyphSet shouldBe GlyphSet.Emoji
     TuiConfig.default.copy(glyphs = GlyphChoice.Emoji).glyphSet shouldBe GlyphSet.Emoji

@@ -81,7 +81,9 @@ object TuiConfig:
     TuiConfig(glyphs = glyphs)
 
   /** The TUI configuration a node runs with: `fukuii.tui` from the node's config (the `fukuii` block), with the
-    * environment's overrides applied.
+    * environment's overrides applied. A config without the block, such as a full copy written before `tui.conf`
+    * existed, gets the defaults.
     */
   def load(fukuii: TypesafeConfig, env: TuiEnv): TuiConfig =
-    env.applyTo(fromConfig(fukuii.getConfig("tui")))
+    val tui = if fukuii.hasPath("tui") then fromConfig(fukuii.getConfig("tui")) else TuiConfig.default
+    env.applyTo(tui)

@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.console
 
+import java.util.Locale
+
 /** The TUI's environment overrides (spec 027 FR-008, FR-009, FR-024; research §7.5).
   *
   * Parsed from an injected environment map and system properties, so tests never touch the process environment. An
@@ -66,4 +68,4 @@ object TuiEnv:
       .orElse(props.get(EncodingProperty).filter(_.nonEmpty))
       .exists(namesUtf8)
 
-  private def namesUtf8(value: String): Boolean = value.toUpperCase.replace("-", "").contains("UTF8")
+  private def namesUtf8(value: String): Boolean = value.toUpperCase(Locale.ROOT).replace("-", "").contains("UTF8")

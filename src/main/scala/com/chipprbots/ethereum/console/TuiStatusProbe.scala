@@ -108,6 +108,7 @@ object TuiStatusProbe:
       recentSlotsPerSec = p.recentSlotsPerSec,
       recentNodesPerSec = p.recentNodesPerSec,
       phaseProgress = p.phaseProgress,
+      overall = p.globalProgress,
       estimatedTotalAccounts = p.estimatedTotalAccounts,
       estimatedTotalBytecodes = p.estimatedTotalBytecodes,
       estimatedTotalSlots = p.estimatedTotalSlots,

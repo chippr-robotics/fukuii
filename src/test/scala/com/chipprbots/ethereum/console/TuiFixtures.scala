@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.console
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.Locale
 
 /** Named [[TuiState]] fixtures shared by the golden and property tests (spec 027 T004).
   *
@@ -16,6 +17,16 @@ object TuiFixtures:
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 
   val clock: Clock = Clock.fixed(Now, ZoneOffset.UTC)
+
+  /** The locale that breaks default case conversion: there "I".toLowerCase is "ı" and "i".toUpperCase is "İ". */
+  val Turkish: Locale = Locale.forLanguageTag("tr-TR")
+
+  /** Runs `f` with the JVM's default locale set to `locale`, and restores it afterwards. */
+  def withDefaultLocale[A](locale: Locale)(f: => A): A =
+    val previous = Locale.getDefault
+    Locale.setDefault(locale)
+    try f
+    finally Locale.setDefault(previous)
 
   private def settings(network: String, syncMode: String, maxPeers: Int, mining: Boolean): NodeSettings =
     NodeSettings(
@@ -71,6 +82,8 @@ object TuiFixtures:
           recentBytecodesPerSec = 310.0,
           recentSlotsPerSec = 21_400.0,
           phaseProgress = 37,
+          // SyncProgress.globalProgress for this phase and phaseProgress: (1 + 0.37) / 5, the log's Overall worm.
+          overall = 0.274,
           estimatedTotalAccounts = 34_100_000L,
           estimatedTotalBytecodes = 600_000L,
           estimatedTotalSlots = 323_000_000L,
