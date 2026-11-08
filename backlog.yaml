@@ -1676,7 +1676,7 @@ items:
       by: fukuii-fc
       agent: beacon
       since: 2026-11-08T21:11:50Z
-      heartbeat: 2026-11-08T21:11:59Z
+      heartbeat: 2026-11-08T21:22:01Z
     notes: "User 2026-11-08: refuse to start (B-135) AND find a Windows backend now. Candidates: supranational blst Java bindings (Windows builds), pure-Java fallback. Byte-identical with EIP-2537 vectors; beacon analysis first."
   - id: B-152
     title: Security hardening batch from the 2026-11-08 audit (4 items; details private until published)
