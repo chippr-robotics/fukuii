@@ -16,22 +16,29 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.HealingTrieFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierCorruptFound
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierRebuilt
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierWalkFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingEntry
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.InMemoryBfsQueueStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.ReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -41,24 +48,34 @@ import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.mpt.NullNode
+import com.chipprbots.ethereum.mpt.byteStringSerializer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
 
-/** The fixture's trie store, counting its batched hash reads, so a test can tell the Hash-scheme read from the Path
-  * one.
+/** A trie store over `underlying`, counting its batched raw reads, so a test can tell the Hash-scheme read from the
+  * Path one.
   */
-private class CountingMptStorage(underlying: TestMptStorage) extends MptStorage:
-  var multiGets: Int = 0
+private class CountingMptStorage(underlying: MptStorage) extends MptStorage:
+  var rawReads: Int = 0
   def get(nodeId: Array[Byte]): MptNode = underlying.get(nodeId)
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
     underlying.updateNodesInStorage(newRoot, toRemove)
   def persist(): Unit = underlying.persist()
-  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
-    multiGets += 1
-    super.multiGetNodes(hashes)
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    rawReads += 1
+    underlying.rawNodes(hashes)
+
+/** A BFS queue that runs `onEnqueue` after each write: a test cancels the walk holding it from there. */
+private class HookedBfsQueue extends InMemoryBfsQueueStorage:
+  @volatile var onEnqueue: () => Unit = () => ()
+  override def enqueueBatch(entries: Seq[(Array[Byte], Seq[Array[Byte]], Boolean)]): Unit =
+    super.enqueueBatch(entries)
+    onEnqueue()
 
 /** A BFS queue whose writes fail, to drive the walk's failure path. */
 private class FailingBfsQueue extends InMemoryBfsQueueStorage:
@@ -85,6 +102,7 @@ private class StubFrontierRebuildState(
   var verificationBFSRunning: Boolean = false
   var currentWalk: Option[Long] = None
   val walkSkips: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
+  val unrepairableNodes: java.util.Set[ByteString] = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
   val healingWriterEc: ExecutionContext = ExecutionContext.parasitic
   val healingReaderEc: ExecutionContext = ExecutionContext.parasitic
   val HealingVisitedCap: Int = 1000
@@ -167,6 +185,12 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
   private def emitted(s: StubFrontierRebuildState): Seq[Seq[HealingEntry]] =
     s.selfInbox.receiveAll().collect { case FrontierRebuilt(entries, _) => entries }
 
+  /** The walk's one message, when it is a failure that carries what the walk threw: its token and the message. */
+  private def failureOf(s: StubFrontierRebuildState): Option[(Long, String)] =
+    s.selfInbox.receiveAll() match
+      case Seq(FrontierWalkFailed(walk, Some(cause))) => Some(walk -> cause.getMessage)
+      case _                                          => None
+
   "FrontierRebuildBfs" should "emit the missing node behind a shared branch once and hand its count to onComplete" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
     val s = stub(fixture)
@@ -181,7 +205,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     emitted(s) shouldBe Seq(Seq(HealingEntry(Seq(compact(0, 0, 2)), fixture.missingNodeHash)))
     s.drainCalls shouldBe 1
     s.bfsQueue.counter shouldBe 0L
-    s.mptStorage.multiGets should be > 0
+    s.mptStorage.rawReads should be > 0
     s.pathReads shouldBe empty
   }
 
@@ -218,7 +242,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
 
     completed shouldBe None
-    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get))
+    failureOf(s) shouldBe Some(s.currentWalk.get -> "bfs queue write failed")
     s.verificationBFSRunning shouldBe true // left for the core's FrontierWalkFailed arm
   }
 
@@ -336,17 +360,39 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     warnings.count(_.contains("could not follow 1")) shouldBe 1
   }
 
-  it should "count a node it cannot traverse as a skip, and go on" taggedAs UnitTest in {
+  // S-1: the Hash walk reads bytes and judges them keccak first, so a node it cannot follow is bytes that pass their hash
+  // and are no trie node (this replaces a decoded node the store handed out, which a raw read no longer takes).
+  it should "count a node it cannot follow, bytes that pass their hash but are no trie node, as a skip, and go on" taggedAs UnitTest in {
+    val notANode = Array[Byte](0x01)
+    val rootHash = ByteString(kec256(notANode))
+    val storage = new TestMptStorage:
+      override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+        hashes.map(h => if h == rootHash then RawNodeRead.Bytes(notANode) else super.rawNodes(Seq(h)).head)
+    val (s, completed, warnings) = walkOf(storage, rootHash)
+    completed shouldBe Some(0L)
+    s.walkSkips.get() shouldBe 1L
+    warnings.count(_.contains("could not follow 1")) shouldBe 1
+  }
+
+  // review beacon N3: the per-node catch, which a Hash walk no longer reaches through a raw read. Under Path the walk
+  // takes the node the path-verified read decoded.
+  it should "count a node it cannot traverse as a skip, and go on, under Path" taggedAs UnitTest in {
     val rootHash = ByteString(absentNode("s022/beacon-2/untraversable"))
     val storage = new TestMptStorage:
       // An extension with no shared key: following its child throws inside the walk's per-node catch.
       override def get(key: Array[Byte]): MptNode =
         if ByteString(key) == rootHash then ExtensionNode(null, HashNode(absentNode("s022/beacon-2/below")))
         else super.get(key)
-    val (s, completed, warnings) = walkOf(storage, rootHash)
+    val s = stub(
+      HealingTrieFixtures.SharedAncestorFixture(storage, rootHash, ByteString.empty, ByteString.empty),
+      scheme = StorageScheme.Path
+    )
+    var completed: Option[Long] = None
+
+    s.startFrontierBFS(rootHash, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+
     completed shouldBe Some(0L)
     s.walkSkips.get() shouldBe 1L
-    warnings.count(_.contains("could not follow 1")) shouldBe 1
   }
 
   it should "start each walk's count from nothing" taggedAs UnitTest in {
@@ -413,6 +459,19 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.selfInbox.hasMessages shouldBe false
   }
 
+  it should "report a walk cancelled as its incarnation ended as FrontierWalkFailed with no cause, which is not counted (review beacon N3)" taggedAs UnitTest in {
+    val fixture = HealingTrieFixtures.sharedAncestor()
+    val queue = new HookedBfsQueue()
+    val s = stub(fixture, queue = queue)
+    // The walk enqueues its seeds, then checks the lease before its first chunk: cancelled there, it stops.
+    queue.onEnqueue = () => s.currentWalk.foreach(WalkLease.of(queue).cancel)
+
+    s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, _: Long) => fail("onComplete called"))
+
+    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get, None))
+    WalkLease.of(queue).held shouldBe false
+  }
+
   it should "give the queue back when a walk throws, and tag its failure with the walk's token" taggedAs UnitTest in {
     val fixture = HealingTrieFixtures.sharedAncestor()
     val queue = new FailingBfsQueue()
@@ -420,7 +479,7 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
 
     s.startFrontierBFS(fixture.rootHash, emptyPath, isStor = false, (_: Long, _: Long) => fail("onComplete called"))
 
-    s.selfInbox.receiveAll() shouldBe Seq(FrontierWalkFailed(s.currentWalk.get))
+    failureOf(s) shouldBe Some(s.currentWalk.get -> "bfs queue write failed")
     WalkLease.of(queue).held shouldBe false
   }
 
@@ -438,7 +497,108 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
       Seq(HealingEntry(Seq(compact(1, 1, 2)), fixture.missingNodeHash))
     )
     s.drainCalls shouldBe 2 // one per emitted batch (batch size 1)
-    s.mptStorage.multiGets shouldBe 0
+    s.mptStorage.rawReads shouldBe 0
     s.pathReads.head shouldBe (fixture.rootHash -> Seq(emptyPath))
     (s.pathReads.map(_._2) should contain).allOf(Seq(compact(0, 0)), Seq(compact(1, 1)))
+  }
+
+  // ---- S-1: a corrupt stored node fails itself, not the walk --------------------------------------------------------
+
+  /** Basic pruning, the ETC default, over 32 accounts: the state root is a branch over hash children. `child` is the
+    * first of them, at nibble `slot`.
+    */
+  private class BasicPruned:
+    val nodes: NodeStorage = new NodeStorage(EphemDataSource())
+    val state: ReferenceCountedStateStorage = new ReferenceCountedStateStorage(nodes, 64, 0L)
+    val mpt: MptStorage = state.getBackingStorage(0)
+    val root: ByteString = ByteString(
+      (0 until 32)
+        .foldLeft(MerklePatriciaTrie[ByteString, Account](mpt)) { (trie, i) =>
+          trie.put(ByteString(kec256(BigInt(1000 + i).toByteArray)), Account(nonce = UInt256(1L)))
+        }
+        .getRootHash
+    )
+    val (slot, child) = mpt.get(root.toArray) match
+      case branch: BranchNode =>
+        branch.children.zipWithIndex.collectFirst { case (HashNode(h), i) => i -> ByteString(h) }.get
+      case other => fail(s"not a branch: $other")
+    val childBytes: Array[Byte] = mpt.get(child.toArray).encode
+
+    /** The walk from the root, with `unrepairable` the corrupt entries the core could not delete. */
+    def walk(unrepairable: Set[ByteString] = Set.empty): (StubFrontierRebuildState, Option[Long]) =
+      val s = new StubFrontierRebuildState(
+        new CountingMptStorage(mpt),
+        new InMemoryBfsQueueStorage(),
+        StorageScheme.Hash,
+        1000
+      ) with FrontierRebuildBfs
+      unrepairable.foreach(s.unrepairableNodes.add)
+      var completed: Option[Long] = None
+      s.startFrontierBFS(root, emptyPath, isStor = false, (_: Long, n: Long) => completed = Some(n))
+      (s, completed)
+
+  /** A branch the store holds under the wrong hash: two children no store has, which a walk that believed it would
+    * report missing.
+    */
+  private val foreignBranch: Array[Byte] = MptTraversals.encodeNode(
+    branchOver(1 -> absentNode("s1/ghost-1"), 2 -> absentNode("s1/ghost-2"))
+  )
+
+  /** The S-1 classes, each as what goes under the node's key: basic pruning's wrapper around bytes, or junk in place of
+    * the wrapper.
+    */
+  private val corruptClasses: Seq[(String, Array[Byte])] = Seq(
+    "a wrapper that does not unwrap" -> Array[Byte](1, 2, 3),
+    "0x01 (no list: does not decode)" -> StoredNodeTestAccess.wrapped(Array(0x01.toByte), 1),
+    "0xc1 (a list header with nothing behind it)" -> StoredNodeTestAccess.wrapped(Array(0xc1.toByte), 1),
+    "0x80 (decodes, to an empty value)" -> StoredNodeTestAccess.wrapped(Array(0x80.toByte), 1),
+    "a list under the wrong hash" -> StoredNodeTestAccess.wrapped(foreignBranch, 1)
+  )
+
+  it should "finish a walk over each corrupt class, emit the entry as corrupt once, count it missing and follow nothing below it (S-1)" taggedAs UnitTest in {
+    corruptClasses.foreach { case (name, stored) =>
+      withClue(s"$name: ") {
+        val b = new BasicPruned
+        b.nodes.put(b.child, stored)
+        val (s, completed) = b.walk()
+        val messages = s.selfInbox.receiveAll()
+
+        messages.collect { case f: FrontierWalkFailed => f } shouldBe empty
+        completed shouldBe Some(1L)
+        messages.collect { case FrontierCorruptFound(entries, walkRoot) => (entries, walkRoot) } shouldBe Seq(
+          Seq(HealingEntry(Seq(compact(b.slot)), b.child)) -> b.root
+        )
+        withClue("nothing below it is believed, so no child of it is missing: ") {
+          messages.collect { case FrontierRebuilt(entries, _) => entries }.flatten shouldBe empty
+        }
+        s.walkSkips.get() shouldBe 0L
+        s.mptStorage.rawReads should be > 0
+      }
+    }
+  }
+
+  it should "count a corrupt entry the store kept as a skip, not as missing, so the next pass can be clean (S-1)" taggedAs UnitTest in {
+    val b = new BasicPruned
+    b.nodes.put(b.child, Array[Byte](1, 2, 3))
+    val (s, completed) = b.walk(unrepairable = Set(b.child))
+
+    completed shouldBe Some(0L)
+    s.walkSkips.get() shouldBe 1L
+    s.selfInbox.receiveAll().collect { case m @ (_: FrontierCorruptFound | _: FrontierRebuilt) => m } shouldBe empty
+  }
+
+  it should "walk clean once a deleted corrupt entry is healed (S-1)" taggedAs UnitTest in {
+    val b = new BasicPruned
+    b.nodes.put(b.child, StoredNodeTestAccess.wrapped(foreignBranch, 1))
+    withClue("healing could not write over it: the upsert keeps the stored bytes: ") {
+      b.mpt.storeRawNodes(Seq(b.child -> b.childBytes))
+      b.walk()._2 shouldBe Some(1L)
+    }
+    b.state.deleteBadNode(b.child, () => true) shouldBe BadEntryDelete.Deleted
+    b.mpt.storeRawNodes(Seq(b.child -> b.childBytes)) // what healing writes once the node is fetched
+    val (s, completed) = b.walk()
+
+    completed shouldBe Some(0L)
+    s.selfInbox.receiveAll().collect { case m @ (_: FrontierCorruptFound | _: FrontierRebuilt) => m } shouldBe empty
+    s.walkSkips.get() shouldBe 0L
   }
