@@ -1328,3 +1328,13 @@ items:
     links: {}
     depends_on: [B-002]
     notes: "forge, B-002: the shared-lock wrap of storeChainWeightFor is covered only by a simulation in ChainWeightReconcileSpec; pin it at EngineApiService level (beacon)."
+  - id: B-123
+    title: "backlog.py: a note command for unclaimed items (status only takes held states)"
+    priority: P3
+    status: open
+    area: tooling
+    size: S
+    opened: 2026-11-08
+    refs: [B-003]
+    links: {}
+    notes: "Found adding beacon carry-forward to B-004 (PR C: write the genesis weight on TTD=0 chains; SyncController:2689, SnapFinalization:277)."
