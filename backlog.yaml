@@ -1305,3 +1305,14 @@ items:
       heartbeat: 2026-11-08T17:47:30Z
       branch: docs/constitution-enforcement-viii
     notes: "#1748 amended the constitution without the enforcement-map entry; C8 blocks all PRs to staging."
+  - id: B-121
+    title: ChainWeightReconcile waits forever at a height with no number index entry; surface it or walk parent links
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-08
+    refs: ["#1654-B"]
+    links: {}
+    depends_on: [B-002]
+    notes: "forge, B-002 review round: a node with chain download off, or a legacy datadir missing number->hash below the pivot, never gets the marker; the pass polls every 10 min. Add a WARN after N polls and a gauge, or scan by parentHash from the best block."
