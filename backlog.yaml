@@ -1599,3 +1599,13 @@ items:
     refs: [B-007]
     links: {}
     notes: "H4 follow-up: handleOrphanAnnounce adds to the blacklist directly; maintained (static/trusted) peers are otherwise exempt. Plumb peersClient or check the exemption."
+  - id: B-144
+    title: CHANGELOG fragments (one file per PR, assembled at release) so parallel PRs stop conflicting on [Unreleased]
+    priority: P2
+    status: open
+    area: tooling
+    size: S
+    opened: 2026-11-08
+    refs: []
+    links: {}
+    notes: Nearly every open PR conflicts only in CHANGELOG [Unreleased]; with no force-push, each conflict costs a replacement PR. towncrier-style changelog.d/ plus an assemble step in release.yml.
