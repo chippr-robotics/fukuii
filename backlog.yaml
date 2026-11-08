@@ -1715,3 +1715,13 @@ items:
       since: 2026-11-08T22:31:10Z
       heartbeat: 2026-11-08T22:31:10Z
     notes: "User decision 2026-11-08: geth parity. conduit. Lands after #1760/#1761."
+  - id: B-155
+    title: "B-135 follow-ups: gate KZG on config not header shape; FatalErrors doc wording; restore the TUI terminal before halt"
+    priority: P2
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-08
+    refs: [B-135]
+    links: {}
+    notes: "beacon re-review of 73e842637 (APPROVE WITH NITS): PrecompiledContracts.scala:183 enables 0x0a from blobGasUsed.isDefined, not config (unreachable today, sturdier on config); FatalErrors doc says one batch but persistState runs per system call and code commits immediately (safe like kill -9); halt under --tui skips TuiRestore."
