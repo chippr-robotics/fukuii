@@ -1681,10 +1681,15 @@ items:
   - id: B-152
     title: Security hardening batch from the 2026-11-08 audit (4 items; details private until published)
     priority: P0
-    status: open
+    status: claimed
     area: security
     size: M
     opened: 2026-11-08
     refs: []
     links: {}
+    claim:
+      by: fukuii-fc
+      agent: main
+      since: 2026-11-08T21:13:55Z
+      heartbeat: 2026-11-08T21:13:55Z
     notes: Neutral placeholder per Principle VIII. Owner fukuii-fc.
