@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.consensus.engine
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.security.MessageDigest
 import java.time.Instant
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -61,7 +62,7 @@ class JwtAuthenticator(secretHex: String) extends Logger:
         for
           actualSig <- decodeSegment(signature, "Invalid JWT signature encoding")
           _ <- Either.cond(
-            constantTimeEquals(hmacSha256(s"$header.$payload"), actualSig),
+            MessageDigest.isEqual(hmacSha256(s"$header.$payload"), actualSig),
             (),
             "Invalid JWT signature"
           )
@@ -79,10 +80,11 @@ class JwtAuthenticator(secretHex: String) extends Logger:
 
   private def checkIssuedAt(payload: JObject): Either[String, Unit] =
     val issuedAt: Option[BigInt] = field(payload, "iat").collect {
-      case JInt(n)     => n
-      case JLong(n)    => BigInt(n)
-      case JDouble(n)  => BigDecimal(n).toBigInt
-      case JDecimal(n) => n.toBigInt
+      case JInt(n)  => n
+      case JLong(n) => BigInt(n)
+      // json4s reads 1e400 as an infinite double, which BigDecimal refuses; such a value is no usable iat
+      case JDouble(n) if !n.isInfinite && !n.isNaN => BigDecimal(n).toBigInt
+      case JDecimal(n)                             => n.toBigInt
     }
     issuedAt match
       case None => Left("Missing iat claim")
@@ -116,16 +118,6 @@ class JwtAuthenticator(secretHex: String) extends Logger:
     val mac = Mac.getInstance("HmacSHA256")
     mac.init(new SecretKeySpec(secretBytes, "HmacSHA256"))
     mac.doFinal(data.getBytes(StandardCharsets.UTF_8))
-
-  private def constantTimeEquals(a: Array[Byte], b: Array[Byte]): Boolean =
-    if a.length != b.length then false
-    else
-      var result = 0
-      var i = 0
-      while i < a.length do
-        result |= a(i) ^ b(i)
-        i += 1
-      result == 0
 
   private def hexToBytes(hex: String): Array[Byte] =
     val clean = if hex.startsWith("0x") then hex.substring(2) else hex
