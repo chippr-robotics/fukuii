@@ -13,6 +13,8 @@ import scala.util.Success
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.NodeFault
+import com.chipprbots.ethereum.db.storage.NodeFault.check
 import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -21,7 +23,6 @@ import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
-import com.chipprbots.ethereum.mpt.MptTraversals
 
 /** Where a trie node sits: in the account trie, or in the storage trie of `account` (its hash), `nibbles` from that
   * trie's root, one nibble per byte. The audit's coverage goes by position, so a node that changed under the walk is
@@ -62,23 +63,6 @@ object AuditPosition:
   * hash yet, at the start of a pass or read back at a resume, resolved from the current root when it comes up.
   */
 final case class AuditFrame(position: AuditPosition, hash: Option[ByteString])
-
-/** What is wrong with what a store holds under a hash. */
-enum NodeFault:
-  case Absent
-
-  /** The bytes do not hash to their key. */
-  case BadKeccak
-
-  /** The entry or the node in it does not decode. */
-  case Undecodable
-
-  def isBad: Boolean = this != Absent
-
-  def describe: String = this match
-    case Absent      => "is absent"
-    case BadKeccak   => "fails its hash"
-    case Undecodable => "does not decode"
 
 /** The best block as the audit sees it. */
 final case class AuditHead(number: BigInt, stateRoot: ByteString, timestampSeconds: Long)
@@ -227,18 +211,8 @@ object AuditWalk:
   def hexOf(hash: ByteString): String = hash.toArray.map("%02x".format(_)).mkString
 
   // ---- one node ------------------------------------------------------------------------------------------------------
-
-  /** A store's entry for `hash` as a node, keccak first: bad bytes are never decoded, and their children never
-    * believed.
-    */
-  private[heal] def check(hash: ByteString, raw: RawNodeRead): Either[NodeFault, MptNode] = raw match
-    case RawNodeRead.Absent      => Left(NodeFault.Absent)
-    case RawNodeRead.Undecodable => Left(NodeFault.Undecodable)
-    case RawNodeRead.Bytes(encoded) =>
-      if !java.util.Arrays.equals(kec256(encoded), hash.toArray) then Left(NodeFault.BadKeccak)
-      else
-        try Right(MptTraversals.decodeNode(encoded))
-        catch case NonFatal(_) => Left(NodeFault.Undecodable)
+  // A store's entry for a hash is judged by `NodeFault.check`, keccak first, the one judgement the frontier walk and the
+  // stores' deletes use too.
 
   /** What a good node at `position` points at. */
   final case class Expansion(

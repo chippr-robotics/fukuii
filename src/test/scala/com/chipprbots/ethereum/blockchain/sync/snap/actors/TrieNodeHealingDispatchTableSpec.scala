@@ -113,8 +113,10 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
   private def rows: Seq[Row] = Seq(
     Row("StartTrieNodeHealing", StartTrieNodeHealing(Root), 1, Some(Lifecycle)),
     Row("FrontierRebuilt", FrontierRebuilt(Seq.empty, Root), 2, Some(Rebuild)),
+    // S-1: the walk's corrupt entries, arm 2a, beside #2 in the same group (review beacon N2).
+    Row("FrontierCorruptFound (2a)", FrontierCorruptFound(Seq.empty, Root), 2, Some(Rebuild)),
     Row("FrontierRebuildComplete", FrontierRebuildComplete(1L, Root, Walk), 3, Some(Rebuild)),
-    Row("FrontierWalkFailed", FrontierWalkFailed(Walk), 4, Some(Rebuild)),
+    Row("FrontierWalkFailed", FrontierWalkFailed(Walk, Some(new RuntimeException("c-h0 table"))), 4, Some(Rebuild)),
     Row("QueueMissingNodes", QueueMissingNodes(Seq.empty), 5, Some(Response)),
     Row("HealingPeerAvailable", HealingPeerAvailable(peer), 6, Some(Dispatch)),
     Row("HealingPeerUnavailable", HealingPeerUnavailable("c-h0-gone"), 7, Some(Dispatch)),
@@ -204,7 +206,7 @@ class TrieNodeHealingDispatchTableSpec extends ScalaTestWithActorTestKit() with 
     UnitTest in {
       val ends: Seq[Long => Command] = Seq(
         walk => FrontierRebuildComplete(0L, Root, walk),
-        walk => FrontierWalkFailed(walk),
+        walk => FrontierWalkFailed(walk, Some(new RuntimeException("c-h0 table"))),
         walk => VerificationBFSComplete(Root, 0L, walk)
       )
       ends.foreach { end =>

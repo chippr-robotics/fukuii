@@ -9,6 +9,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditTestState.*
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.NodeFault
 import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HexPrefix
