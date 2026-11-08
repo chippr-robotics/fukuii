@@ -60,6 +60,10 @@ class BlockchainWriter(
   def storeChainWeight(blockHash: BlockHash, weight: ChainWeight): DataSourceBatchUpdate =
     chainWeightStorage.put(blockHash.value, weight)
 
+  /** Many weights in one update (`ChainWeightReconcile`, #1654): one storage update, not one `and` per weight. */
+  def storeChainWeights(weights: Seq[(BlockHash, ChainWeight)]): DataSourceBatchUpdate =
+    chainWeightStorage.update(Nil, weights.map { case (hash, weight) => hash.value -> weight })
+
   /** EIP-7928: keeps the access list of an Amsterdam block that validated against it, as its canonical RLP (see
     * [[com.chipprbots.ethereum.db.storage.BlockAccessListStorage]]). Written by every path that accepts an Amsterdam
     * block after executing it; read back through `BlockchainReader.getBlockAccessListByHash`.

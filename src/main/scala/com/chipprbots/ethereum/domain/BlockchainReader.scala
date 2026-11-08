@@ -224,6 +224,24 @@ class BlockchainReader(
     */
   def getChainWeightByHash(blockhash: BlockHash): Option[ChainWeight] = chainWeightStorage.get(blockhash.value)
 
+  /** Whether every stored canonical weight is the genesis weight plus the difficulties up to its block (#1654; see
+    * `AppStateStorage.hasChainWeightInvariant`).
+    */
+  def hasChainWeightInvariant: Boolean = appStateStorage.hasChainWeightInvariant()
+
+  // Batched reads for a walk over the whole chain (`ChainWeightReconcile`, #1654): one `multiGet` per call, one result
+  // per key in order, without filling the block cache, so the walk does not push import's working set out.
+
+  /** The canonical hash at each height, as [[getBlockHeaderByNumber]] reads it. */
+  def getHashesByNumbersNoFill(numbers: Seq[BigInt]): Seq[Option[ByteString]] =
+    blockNumberMappingStorage.getManyNoFill(numbers)
+
+  def getBlockHeadersByHashesNoFill(hashes: Seq[ByteString]): Seq[Option[BlockHeader]] =
+    blockHeadersStorage.getManyNoFill(hashes)
+
+  def getChainWeightsByHashesNoFill(hashes: Seq[ByteString]): Seq[Option[ChainWeight]] =
+    chainWeightStorage.getManyNoFill(hashes)
+
   /** ETH/69 TD resolution for PoW chains (ETC). Returns the best available ChainWeight and a source label.
     *
     * Tier 1 (PoW + PoS): exact hash lookup — succeeds when peer's block is in our ChainWeightStorage. Tier 2 (PoW
