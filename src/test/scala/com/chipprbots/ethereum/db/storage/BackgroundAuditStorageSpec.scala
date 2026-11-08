@@ -260,6 +260,8 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     val hash = hashOf(bytes.toArray)
     val corrupt = ByteString(nodeBytes(2) ++ nodeBytes(2))
     code.put(hash, corrupt).commit()
+    code.getForExecution(hash) shouldBe None // a read refuses it (H3), so it is put in the caches directly
+    code.cacheForExecution(hash, corrupt)
     code.getForExecution(hash) shouldBe Some(corrupt) // the execution caches now remember it
     code.getSizeForExecution(hash) shouldBe Some(corrupt.length)
 
