@@ -1663,3 +1663,13 @@ items:
     opened: 2026-11-08
     refs: [B-145]
     links: {}
+  - id: B-151
+    title: Windows-capable BLS12-381 backend (EIP-2537) so ETH nodes run on Windows; Besu bls12-381 1.0.0 ships no Windows build
+    priority: P1
+    status: open
+    area: evm
+    size: L
+    opened: 2026-11-08
+    refs: [B-135]
+    links: {}
+    notes: "User 2026-11-08: refuse to start (B-135) AND find a Windows backend now. Candidates: supranational blst Java bindings (Windows builds), pure-Java fallback. Byte-identical with EIP-2537 vectors; beacon analysis first."
