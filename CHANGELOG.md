@@ -210,6 +210,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection with the subscription manager before it knew the request was a WebSocket upgrade, and for a request that
   was not one, nothing ever closed it. The connection is now set up only once the upgrade is accepted, and a request
   that is not an upgrade is answered with 400 as before.
+- **The Engine API answers 401 to a malformed JWT instead of a server error, and accepts only HS256.**
+  A token whose signature was not valid base64url made the authenticator throw, so the request got HTTP 500 and a
+  stack trace in the log. Every malformed token now gets 401 with a short reason: wrong number of segments, a header,
+  payload or signature that is not base64url, JSON that does not parse, an `iat` that is missing or out of range. A
+  header whose `alg` is not `HS256` is rejected too, as go-ethereum does. A valid token is accepted as before.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

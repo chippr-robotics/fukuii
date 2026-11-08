@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.consensus.engine
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.time.Instant
@@ -13,11 +14,22 @@ import org.apache.pekko.http.scaladsl.server.Directive1
 import org.apache.pekko.http.scaladsl.server.Directives.*
 
 import scala.reflect.ClassTag
+import scala.util.Try
+
+import org.json4s.JDecimal
+import org.json4s.JDouble
+import org.json4s.JInt
+import org.json4s.JLong
+import org.json4s.JObject
+import org.json4s.JString
+import org.json4s.JValue
+import org.json4s.native.JsonMethods.parse
 
 import com.chipprbots.ethereum.utils.Logger
 
 /** JWT authentication for the Engine API, per EIP-3675 / execution-apis spec. Uses HS256 (HMAC-SHA256) with a shared
-  * secret. Tokens are valid for 60 seconds.
+  * secret. Tokens are valid for 60 seconds. A request whose token is missing or malformed in any way is answered with
+  * 401.
   */
 class JwtAuthenticator(secretHex: String) extends Logger:
 
@@ -38,37 +50,72 @@ class JwtAuthenticator(secretHex: String) extends Logger:
         complete(StatusCodes.Unauthorized, "Missing bearer token")
     }
 
+  /** Validates a token the way go-ethereum's `node/jwt_handler.go` does: three base64url segments, a valid HMAC-SHA256
+    * signature, a header that names HS256, and an `iat` within [[MaxClockSkewSeconds]] of now. A malformed token is a
+    * `Left` with a short reason, never an exception: the caller answers it with 401.
+    */
   private def validateToken(token: String): Either[String, Unit] =
-    val parts = token.split('.')
-    if parts.length != 3 then Left("Invalid JWT format")
-    else
-      val headerPayload = s"${parts(0)}.${parts(1)}"
-      val expectedSig = hmacSha256(headerPayload)
-      val actualSig = parts(2)
+    // limit -1 keeps a trailing empty segment, so `a.b.c.` is four segments, not three
+    token.split("\\.", -1) match
+      case Array(header, payload, signature) =>
+        for
+          actualSig <- decodeSegment(signature, "Invalid JWT signature encoding")
+          _ <- Either.cond(
+            constantTimeEquals(hmacSha256(s"$header.$payload"), actualSig),
+            (),
+            "Invalid JWT signature"
+          )
+          headerJson <- decodeJson(header, "header")
+          _ <- checkAlgorithm(headerJson)
+          payloadJson <- decodeJson(payload, "payload")
+          _ <- checkIssuedAt(payloadJson)
+        yield ()
+      case _ => Left("Invalid JWT format")
 
-      if !constantTimeEquals(base64UrlDecode(expectedSig), base64UrlDecode(actualSig)) then
-        Left("Invalid JWT signature")
-      else
-        // Decode payload and check iat (issued-at) claim
-        val payloadJson = new String(java.util.Base64.getUrlDecoder.decode(parts(1)))
-        val iatPattern = """"iat"\s*:\s*(\d+)""".r
-        iatPattern.findFirstMatchIn(payloadJson) match
-          case Some(m) =>
-            val iat = m.group(1).toLong
-            val now = Instant.now().getEpochSecond
-            if Math.abs(now - iat) > MaxClockSkewSeconds then
-              Left(s"JWT expired: iat=$iat, now=$now, skew=${Math.abs(now - iat)}s")
-            else Right(())
-          case None => Left("Missing iat claim")
+  private def checkAlgorithm(header: JObject): Either[String, Unit] =
+    field(header, "alg") match
+      case Some(JString("HS256")) => Right(())
+      case _                      => Left("Unsupported JWT algorithm")
 
-  private def hmacSha256(data: String): String =
+  private def checkIssuedAt(payload: JObject): Either[String, Unit] =
+    val issuedAt: Option[BigInt] = field(payload, "iat").collect {
+      case JInt(n)     => n
+      case JLong(n)    => BigInt(n)
+      case JDouble(n)  => BigDecimal(n).toBigInt
+      case JDecimal(n) => n.toBigInt
+    }
+    issuedAt match
+      case None => Left("Missing iat claim")
+      case Some(iat) =>
+        val now = BigInt(Instant.now().getEpochSecond)
+        val skew = (now - iat).abs
+        if skew > BigInt(MaxClockSkewSeconds) then Left(s"JWT expired: iat=$iat, now=$now, skew=${skew}s")
+        else Right(())
+
+  /** Decodes a base64url segment (padded or not) holding a JSON object. */
+  private def decodeJson(segment: String, what: String): Either[String, JObject] =
+    for
+      bytes <- decodeSegment(segment, s"Invalid JWT $what encoding")
+      text = new String(bytes, StandardCharsets.UTF_8)
+      json <- Try(parse(text)).toOption.toRight(s"Invalid JWT $what")
+      obj <- asObject(json, s"Invalid JWT $what")
+    yield obj
+
+  private def asObject(json: JValue, error: String): Either[String, JObject] =
+    json match
+      case obj: JObject => Right(obj)
+      case _            => Left(error)
+
+  private def field(obj: JObject, name: String): Option[JValue] =
+    obj.obj.collectFirst { case (`name`, value) => value }
+
+  private def decodeSegment(segment: String, error: String): Either[String, Array[Byte]] =
+    Try(java.util.Base64.getUrlDecoder.decode(segment)).toOption.toRight(error)
+
+  private def hmacSha256(data: String): Array[Byte] =
     val mac = Mac.getInstance("HmacSHA256")
     mac.init(new SecretKeySpec(secretBytes, "HmacSHA256"))
-    val sig = mac.doFinal(data.getBytes("UTF-8"))
-    java.util.Base64.getUrlEncoder.withoutPadding.encodeToString(sig)
-
-  private def base64UrlDecode(s: String): Array[Byte] =
-    java.util.Base64.getUrlDecoder.decode(s)
+    mac.doFinal(data.getBytes(StandardCharsets.UTF_8))
 
   private def constantTimeEquals(a: Array[Byte], b: Array[Byte]): Boolean =
     if a.length != b.length then false
