@@ -186,6 +186,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapAuditAnchor(): String =
     getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
 
+  /** #1692: owe this datadir one more full audit pass, once. Before the fix, pruning on a store SNAP or a checkpoint
+    * filled could delete a node another position still used, and a clean pass the audit finished earlier says nothing
+    * of a hole that appeared after it. So the clean anchor goes, with the audit's place and its record of bad entries
+    * (a pass resumed from before the upgrade would skip what it had already walked), and the key that says this was
+    * done goes in the same write: a crash leaves all of it or none, and a start that finds the key owes no more. True
+    * when it forced a pass.
+    */
+  def forceAuditPassOnce(): Boolean =
+    if get(Keys.SnapAuditForcedOnce).isDefined then false
+    else
+      update(
+        toRemove = Seq(Keys.SnapAuditCleanAnchor),
+        toUpsert = Seq(Keys.SnapAuditForcedOnce -> RefCountsMarkerValue)
+      ).and(SnapSyncProgressStorage.forgetAudit(dataSource)).commitSync()
+      true
+
   /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
     * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
     * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
@@ -722,7 +738,7 @@ object AppStateStorage:
   /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
   val AuditNoPivot: Value = "no-pivot"
 
-  /** The value of `state.refcounts.exact`: the key says it by being there. */
+  /** The value of `state.refcounts.exact` and `snap.heal.auditForcedOnce`: the keys say it by being there. */
   val RefCountsMarkerValue: Value = "1"
 
   object Keys:
@@ -762,4 +778,5 @@ object AppStateStorage:
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
     val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"
+    val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
     val RefCountsExact = "state.refcounts.exact"

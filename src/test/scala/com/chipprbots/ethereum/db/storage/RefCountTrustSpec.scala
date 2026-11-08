@@ -205,3 +205,22 @@ class RefCountTrustSpec extends AnyFlatSpec with Matchers:
     d.app.hasRefCountsExact() shouldBe false
     RefCountTrust.nodesMayBeDeleted(d.app) shouldBe false
   }
+
+  "The forced audit pass" should "take the clean anchor, the audit record and the key in one synced write, once" taggedAs UnitTest in {
+    val d = new Datadir
+    d.app.putSnapAuditCleanAnchor("5").commit()
+    d.source.plain.clear()
+
+    d.app.forceAuditPassOnce() shouldBe true
+    d.app.getSnapAuditCleanAnchor() shouldBe None
+    d.source.synced.size shouldBe 1
+    d.source.plain shouldBe empty
+
+    d.app.putSnapAuditCleanAnchor("5").commit()
+    d.source.synced.clear()
+    withClue("the second start has nothing to force and writes nothing: ") {
+      d.app.forceAuditPassOnce() shouldBe false
+      d.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+      d.source.synced shouldBe empty
+    }
+  }

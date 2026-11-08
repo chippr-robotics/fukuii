@@ -1541,6 +1541,15 @@ object SyncController:
         if HealInvariant.clearDoneOnStart(appStateStorage) then
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
 
+      // #1692: pruning on a store SNAP or a checkpoint filled could delete a trie node another position still used, and
+      // a clean audit pass finished before this version says nothing of a hole that came after it. One more full pass
+      // per datadir, once, before the audit's gate is read. Its repairs pin the count, so they are never pruned.
+      if appStateStorage.forceAuditPassOnce() then
+        log.info(
+          "[HEAL-AUDIT] One more full audit pass is owed on this datadir (#1692): a trie node pruning deleted by a " +
+            "count that was too low is fetched back and repaired. It runs off the critical path."
+        )
+
       // FastSyncDone is a legacy flag; nothing sets it any more, and the recovery paths below still clear it. With SNAP
       // on and not done, it sends the node to regular sync only when SNAP has no stake here (see
       // `fastSyncFinishedWithoutSnapStake`). Starting SNAP never cleared the flag, so a node part-way through SNAP can
