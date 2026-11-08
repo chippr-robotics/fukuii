@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
+  `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
+  Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the
+  header download reached the pivot, so the pivot's total difficulty was a peer interpolation (the block number with
+  eth/69-only peers), and every block imported above it inherited the error. When the backfill later reached the
+  pivot it wrote the exact value there, leaving a jump in the stored weights. Fork choice compares stored weights, so
+  a fork branching at or below the pivot was weighed across that jump.
+  - **What changes on ETC and Mordor.** SNAP finalisation waits until the header download reaches the pivot. Headers
+    are stored from genesis with their parent's weight plus their difficulty, so the pivot's weight is exact. Bodies
+    and receipts are fetched after the state is finalised instead of alongside it, as on the ETH chains, so they no
+    longer compete with state writes for disk IO. Nothing changes on the ETH chains; their configs already set the key.
+    A node whose SNAP config cannot be loaded now falls back to the same value.
+  - **Cost in sync time.** This adds no download work: the headers were already fetched alongside state sync. Only
+    the order changes, and regular sync now starts once both the state and the headers are in. Headers are fetched one
+    1,024-header range at a time. At 0.5 to 1 s per range, ETC mainnet's ~25.7M headers (about 25,100 ranges) take
+    roughly 3.5 to 7 h from the start of SNAP. Regular sync starts later only by the part of that still left when
+    state sync finishes. This estimate is not measured yet; the fresh Mordor sync gate will measure it.
+  - **Not covered.** Setting the key to `false`, or `chain-download-enabled = false`, still finishes with an estimate.
+    The change applies from the next SNAP run, and it does not repair jumps that earlier syncs already wrote; that
+    repair is planned for 0.12.0.
 - **Scala 3.9.0 LTS at `-source:3.9` (spec 020, #1717). Breaking for projects that consume the published modules.** The
   build moves from Scala 3.3.8 (sbt 1.13.0 already shipped in 0.10.0). Node behaviour is unchanged. It was checked by importing
   the same fixed Mordor and Ephemery block ranges with the 0.10.0 build and with this one (every state and receipt root

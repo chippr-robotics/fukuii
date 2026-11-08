@@ -225,13 +225,21 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       ) shouldBe false
     }
 
-  "SNAPSyncConfig.fromConfig" should "read the switch, defaulting to off in the base config" taggedAs UnitTest in {
+  // #1654: on for every chain, one value. Before, only the post-merge ETH configs set it, so an ETC/Mordor SNAP pivot
+  // got an estimated total difficulty that every block above it inherits.
+  "SNAPSyncConfig.fromConfig" should "read the switch, on in the base config, when absent and in every shipped chain config" taggedAs UnitTest in {
     import com.typesafe.config.ConfigFactory
+    import com.typesafe.config.ConfigValueFactory
+    val key = "snap-sync.defer-chain-backfill-until-state-complete"
     val sync = ConfigFactory.load().getConfig("fukuii.sync")
-    SNAPSyncConfig.fromConfig(sync).deferChainBackfillUntilStateComplete shouldBe false
-    val on = sync.withValue(
-      "snap-sync.defer-chain-backfill-until-state-complete",
-      com.typesafe.config.ConfigValueFactory.fromAnyRef(true)
-    )
-    SNAPSyncConfig.fromConfig(on).deferChainBackfillUntilStateComplete shouldBe true
+    SNAPSyncConfig.fromConfig(sync).deferChainBackfillUntilStateComplete shouldBe true
+    SNAPSyncConfig.fromConfig(sync.withoutPath(key)).deferChainBackfillUntilStateComplete shouldBe true
+    val off = sync.withValue(key, ConfigValueFactory.fromAnyRef(false))
+    SNAPSyncConfig.fromConfig(off).deferChainBackfillUntilStateComplete shouldBe false
+
+    for chain <- Seq("etc", "mordor", "eth", "sepolia", "plataberget", "ephemery") do
+      val shipped = ConfigFactory.load(ConfigFactory.parseResources(s"conf/$chain.conf")).getConfig("fukuii.sync")
+      withClue(s"conf/$chain.conf: ") {
+        SNAPSyncConfig.fromConfig(shipped).deferChainBackfillUntilStateComplete shouldBe true
+      }
   }

@@ -1598,8 +1598,12 @@ case class SNAPSyncConfig(
     headerHoldStallTimeout: FiniteDuration = 5.minutes,
     // When true, the chain downloader fetches headers only while SNAP state sync runs: bodies and receipts are held
     // until the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
-    // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
-    // CL-anchored header chain are fetched by PivotHeaderBootstrap, not by the chain downloader, so they are unaffected.
+    // writes for disk IO, and finalisation waits for the headers to reach the pivot, so the pivot's total difficulty is
+    // the exact accumulated one (#1654). The pivot header and the CL-anchored header chain are fetched by
+    // PivotHeaderBootstrap, not by the chain downloader, so they are unaffected. On for every chain in base/sync.conf,
+    // when the key is absent (fromConfig) and in SyncController's fallback when the config cannot be loaded. This
+    // constructor default stays off, as `heapWatchdogEnabled`'s does: suites that drive finalisation through a stub
+    // downloader have no header cursor to wait for, and SNAPDeferredBackfillSpec covers the hold.
     deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
@@ -1790,7 +1794,7 @@ object SNAPSyncConfig:
       deferChainBackfillUntilStateComplete =
         if snapConfig.hasPath("defer-chain-backfill-until-state-complete") then
           snapConfig.getBoolean("defer-chain-backfill-until-state-complete")
-        else false,
+        else true,
       chainDownloadTimeout =
         if snapConfig.hasPath("chain-download-timeout") then
           snapConfig.getDuration("chain-download-timeout").toMillis.millis
