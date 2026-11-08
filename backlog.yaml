@@ -1539,3 +1539,14 @@ items:
     refs: []
     links: {}
     notes: "forge: without strictEquality, x == Obj still compiles against a case-class companion and is always false. Add to scala3-style.md or consensus-change-protocol.md."
+  - id: B-139
+    title: Fetcher advances lastBlock at an announce the importer may drop, so the next announce reads as an orphan
+    priority: P2
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-08
+    refs: [B-007]
+    links:
+      issues: [1683]
+    notes: B-007 now rewinds without blame, but each false orphan still costs a rewind. Advance on the importer's ack, or compare the announced parentHash with the last handed-over hash.
