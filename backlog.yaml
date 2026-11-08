@@ -1740,3 +1740,13 @@ items:
     refs: []
     links: {}
     notes: Seen 2026-11-08 by conduit on unchanged staging 65303ad0b (84 pass, 1 fail). Likely a native-lib or trusted-setup difference in the WSL env; check against B-135 KZG loading.
+  - id: B-158
+    title: "eth_simulateV1 payload: case-insensitive top-level keys; non-boolean validation is -32602; TxArgs Go type names"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    refs: [B-128]
+    links: {}
+    notes: "From #1727 PR 2 (conduit): decodePayload matches blockStateCalls/validation/traceTransfers/returnFullTransactions exact-case (BlockStateCalls answers empty input); extractOpt[Boolean] turns a non-boolean validation into false where geth gives -32602; TxArgsJson/TxArgsSpec:118-119 name hexutil.Big/U256 where geth says *hexutil.Big / *uint256.Int."
