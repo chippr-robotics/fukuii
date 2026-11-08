@@ -46,18 +46,19 @@ items:
   - id: B-003
     title: "Shared backlog tracker: backlog.py, the Tracker docs page, publish workflows, constitution Principle VIII"
     priority: P1
-    status: in-progress
+    status: review
     area: tooling
     size: M
     opened: 2026-11-08
     refs: []
     links:
+      prs: [1748]
       branch: chore/backlog-tracker
     claim:
       by: fukuii-fc
       agent: main
       since: 2026-11-08T14:00:00Z
-      heartbeat: 2026-11-08T15:46:00Z
+      heartbeat: 2026-11-08T16:09:57Z
       branch: chore/backlog-tracker
     notes: The page goes live once the tooling reaches main (gh-pages deploys from main).
   - id: B-004
