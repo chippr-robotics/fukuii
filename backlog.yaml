@@ -1294,19 +1294,14 @@ items:
   - id: B-120
     title: "Constitution enforcement map: add Principle VIII rows (Gate Integrity C8 fails every PR until merged)"
     priority: P0
-    status: review
+    status: done
     area: ci
     size: S
     opened: 2026-11-08
+    closed: 2026-11-08
     refs: [B-003]
     links:
       prs: [1750]
-      branch: docs/constitution-enforcement-viii
-    claim:
-      by: fukuii-fc
-      agent: main
-      since: 2026-11-08T17:47:27Z
-      heartbeat: 2026-11-08T17:47:30Z
       branch: docs/constitution-enforcement-viii
     notes: "#1748 amended the constitution without the enforcement-map entry; C8 blocks all PRs to staging."
   - id: B-121
