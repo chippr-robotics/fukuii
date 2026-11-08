@@ -224,6 +224,11 @@ class BlockchainReader(
     */
   def getChainWeightByHash(blockhash: BlockHash): Option[ChainWeight] = chainWeightStorage.get(blockhash.value)
 
+  /** Whether every stored canonical weight is the genesis weight plus the difficulties up to its block (#1654; see
+    * `AppStateStorage.hasChainWeightInvariant`).
+    */
+  def hasChainWeightInvariant: Boolean = appStateStorage.hasChainWeightInvariant()
+
   // Batched reads for a walk over the whole chain (`ChainWeightReconcile`, #1654): one `multiGet` per call, one result
   // per key in order, without filling the block cache, so the walk does not push import's working set out.
 

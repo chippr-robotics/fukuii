@@ -111,6 +111,10 @@ object SyncController:
     else
       val doublings = (resnaps - ResnapsBeforeBackoff - 1).min(16)
       (ResnapBackoffBase * (1L << doublings)).min(ResnapBackoffCap)
+  /** How long a regular-sync start tries the chain insert lock for the operator's chain-weight seeds (#1654). Block
+    * commits hold it shared for a block, and the chain-weight pass's final step exclusively for a few blocks.
+    */
+  val SeedLockWait: FiniteDuration = 2.seconds
 
   /** Whether a missing contract code at import may escalate to a bulk bytecode recovery.
     *
@@ -346,11 +350,17 @@ object SyncController:
     private val importLock: ImportLock = ImportLock()
 
     // #1654: the one-time chain-weight pass (ChainWeightReconcile), a fiber off the critical path. `chainWeightEpoch` is
-    // bumped, under the chain insert lock, by everything that supersedes a running pass: a SNAP start, a seed, a
-    // calibration write, a restart of regular sync. The pass's repair runs under the same lock and checks it first, so
-    // it never sets the marker over what superseded it.
-    private val chainWeightEpoch = new java.util.concurrent.atomic.AtomicLong(0L)
-    private var chainWeightReconcileCancel: Option[() => scala.concurrent.Future[Unit]] = None
+    // superseded by everything that must win over a running pass (a SNAP start, a seed, a calibration write, this
+    // actor's stop), through a monitor the pass also takes for its saves and its final batch, so it never sets the
+    // marker or saves a place over what superseded it. That monitor is held for one small commit at a time: nothing on
+    // this thread waits behind a repair.
+    private val chainWeightEpoch = new ChainWeightReconcile.Epoch
+    // One pass at a time (a new pass waits for a superseded one to end), and the running one with its "ended" flag.
+    private val chainWeightPassLock: cats.effect.std.Mutex[IO] =
+      cats.effect.std.Mutex.in[cats.effect.SyncIO, IO].unsafeRunSync()
+    private var chainWeightPass
+        : Option[(() => scala.concurrent.Future[Unit], java.util.concurrent.atomic.AtomicBoolean)] =
+      None
     private val chainWeightLog = org.slf4j.LoggerFactory.getLogger(ChainWeightReconcile.LoggerName)
 
     // spec 022 T053: the full-trie walk off the critical path, alive exactly while regular sync is (decision 9).
@@ -1923,11 +1933,10 @@ object SyncController:
       }
       recoveryScanCouldNotRun = false
 
-      // Operator escape hatch: seed a trusted weight for a BASE before RegularSync starts (#1654, see ChainWeightSeed).
-      // Format: -Dfukuii.seed-chain-weights=HASH1:TD1,HASH2:TD2 (hash hex, TD decimal). Get the value from a trusted
-      // client, for the pivot (the lowest block with a weight), not the head:
-      //   curl -s localhost:8545 -d '{"method":"eth_getBlockByNumber","params":["0x<pivot>",false],"id":1}' \
-      //     | jq -r '.result | "\(.hash):\(.totalDifficulty | ltrimstr("0x") | tonumber)"'
+      // #1654: a SNAP hand-off has consumed its pending mark by now; any other way here drops it. Then the operator's
+      // -Dfukuii.seed-chain-weights=HASH1:TD1,... (a trusted weight for a BASE; ChainWeightSeed says where the value
+      // comes from).
+      if appStateStorage.isChainWeightSnapPending() then appStateStorage.clearChainWeightSnapPending().commit()
       applyChainWeightSeeds()
 
       // Register self as calibration target so NetworkPeerManagerActor can push the correct
@@ -2048,75 +2057,75 @@ object SyncController:
 
     // ---- stored chain weights (#1654) --------------------------------------------------------------------------------
 
-    /** Every route into regular sync comes here. A pass of an earlier start is superseded; a new one starts unless the
-      * chain-weight marker stands. It resumes from its saved place, and ends once its repair has set the marker.
+    /** Every route into regular sync comes here. One pass at a time: a pass still running is left alone, and a new one
+      * waits on [[chainWeightPassLock]] for a superseded one to end at its next step. A pass runs unless the
+      * chain-weight marker stands, and resumes from its saved place. Nothing of it runs on this actor's thread but the
+      * start.
       */
     private def startChainWeightReconcile(): Unit =
-      stopChainWeightReconcile()
-      if chainWeightReconcileOn && !appStateStorage.hasChainWeightInvariant() then
-        val epoch = chainWeightEpoch.get()
-        val pass = ChainWeightReconcile
-          .run(
-            ChainWeightReconcile.Engine(blockchainReader, blockchainWriter, appStateStorage),
-            importLock,
-            () => chainWeightEpoch.get() == epoch,
-            appStateStorage,
-            chainWeightLog
-          )
+      val active = chainWeightPass.exists { case (_, ended) => !ended.get() }
+      if chainWeightReconcileOn && !active && !appStateStorage.hasChainWeightInvariant() then
+        val ended = new java.util.concurrent.atomic.AtomicBoolean(false)
+        val pass = chainWeightPassLock.lock
+          .surround(IO.defer {
+            val e = chainWeightEpoch.current
+            ChainWeightReconcile.run(
+              ChainWeightReconcile.Engine(blockchainReader, blockchainWriter, appStateStorage),
+              importLock,
+              chainWeightEpoch,
+              e,
+              appStateStorage,
+              chainWeightLog
+            )
+          })
           .handleErrorWith { e =>
             // Off the critical path: logged, and the next regular-sync start resumes from the saved place.
             IO(chainWeightLog.error("[CW-RECONCILE] failed; the next regular-sync start resumes it", e))
               .as(ChainWeightReconcile.Outcome.Superseded)
           }
-        chainWeightReconcileCancel = Some(pass.unsafeRunCancelable()(using IORuntime.global))
+          .guarantee(IO(ended.set(true)))
+        chainWeightPass = Some((pass.unsafeRunCancelable()(using IORuntime.global), ended))
 
+    /** Supersede the running pass: it writes nothing more, and ends at its next step. */
     private def stopChainWeightReconcile(): Unit =
-      chainWeightEpoch.incrementAndGet()
-      chainWeightReconcileCancel.foreach(cancel => cancel())
-      chainWeightReconcileCancel = None
+      chainWeightEpoch.supersede(())
+      chainWeightPass.foreach { case (cancel, _) => cancel() }
+      chainWeightPass = None
 
-    /** A SNAP start: the pivot carries an estimate until the headers reach it, so the marker goes. Under the chain
-      * insert lock, so a pass repairing under it either finished first (and the marker it set goes now) or sees the
-      * bumped epoch and writes nothing.
+    /** A SNAP start: the marker goes, and whether the hand-off may set it again is recorded with it
+      * ([[ChainWeightReconcile.atSnapStart]]). Atomic against a pass's final batch, with no lock on this thread.
       */
     private def withdrawChainWeightInvariant(why: String): Unit =
-      val had = ChainInsertLock.exclusive {
-        chainWeightEpoch.incrementAndGet()
-        val stood = appStateStorage.hasChainWeightInvariant()
-        if stood then appStateStorage.clearChainWeightInvariant().commitSync()
-        stood
-      }
+      val stood = appStateStorage.hasChainWeightInvariant()
+      val handOffMaySet =
+        chainWeightEpoch.supersede(ChainWeightReconcile.atSnapStart(blockchainReader, appStateStorage))
       stopChainWeightReconcile()
-      if had then chainWeightLog.info(s"[CW-RECONCILE] chain-weight marker withdrawn: $why")
+      if stood then
+        chainWeightLog.info(
+          s"[CW-RECONCILE] chain-weight marker withdrawn: $why; an exact hand-off sets it again (pending=$handOffMaySet)"
+        )
 
-    /** A SNAP hand-off. The header download stored every header from genesis with its parent's weight plus its
-      * difficulty, so a pivot whose weight follows from its parent's (REAL_DB_TD or DERIVED_FROM_PARENT at
-      * finalisation) closes an exact chain, and the marker is set. Below an older pivot the same download wrote them;
-      * above it, this download rewrote them. An estimated pivot leaves the marker off, and the pass checks every weight
-      * once the headers are in.
+    /** A SNAP hand-off: the marker is set again only if this SNAP began on an exact chain and its pivot weight follows
+      * from its parent's ([[ChainWeightReconcile.atSnapHandOff]]). Otherwise the pass checks every weight from genesis.
       */
     private def markChainWeightsAfterSnap(pivot: BigInt): Unit =
-      blockchainReader.getBlockHeaderByNumber(pivot).map(HeadChainWeight.classify(blockchainReader, _)) match
-        case Some(HeadChainWeight.Status.Exact(weight)) =>
-          appStateStorage.markChainWeightInvariant().commitSync()
-          chainWeightLog.info(
-            s"[CW-RECONCILE] SNAP pivot $pivot has its exact weight ${weight.totalDifficulty}: marker set, no pass needed"
-          )
-        case _ =>
-          chainWeightLog.info(
-            s"[CW-RECONCILE] SNAP pivot $pivot has an estimated weight: a pass checks every weight from genesis once the " +
-              "headers are in"
-          )
+      if chainWeightEpoch.supersede(ChainWeightReconcile.atSnapHandOff(blockchainReader, appStateStorage, pivot)) then
+        chainWeightLog.info(s"[CW-RECONCILE] SNAP pivot $pivot closes an exact chain: marker set, no pass needed")
+      else
+        chainWeightLog.info(
+          s"[CW-RECONCILE] SNAP pivot $pivot: marker not set (estimated pivot weight, or the chain below was not known " +
+            "exact when this SNAP began); a pass checks every weight from genesis once the headers are in"
+        )
 
-    /** A calibration write (#1654), under the chain insert lock. Refused while the marker stands: every weight is exact
-      * then, and there is nothing to calibrate. Otherwise it supersedes a running pass, drops a saved place at or above
-      * this block so the next pass checks the value written here, and restarts the pass.
+    /** A calibration write (#1654), on this thread with no lock: atomic against a pass's saves and final batch through
+      * the epoch's monitor, which is held only for one small commit. Refused while the marker stands (every weight is
+      * exact then). Otherwise it supersedes a running pass, drops a saved place at or above this block so the next pass
+      * checks the value written here, and starts the pass again.
       */
     private def writeCalibratedWeight(header: BlockHeader, weight: ChainWeight): Boolean =
-      val written = ChainInsertLock.exclusive {
+      val written = chainWeightEpoch.supersede {
         if appStateStorage.hasChainWeightInvariant() then false
         else
-          chainWeightEpoch.incrementAndGet()
           val placeAbove = appStateStorage
             .getChainWeightReconcileProgress()
             .flatMap(ChainWeightReconcile.decode)
@@ -2125,30 +2134,42 @@ object SyncController:
           (if placeAbove then write.and(appStateStorage.removeChainWeightReconcileProgress()) else write).commit()
           true
       }
-      if written && chainWeightReconcileCancel.isDefined then startChainWeightReconcile()
+      if written && chainWeightPass.isDefined then
+        stopChainWeightReconcile()
+        startChainWeightReconcile()
       written
 
-    /** `-Dfukuii.seed-chain-weights` (see [[ChainWeightSeed]]), under the import lock and the chain insert lock in that
-      * order, as every import path takes them.
+    /** `-Dfukuii.seed-chain-weights` (see [[ChainWeightSeed]]), before regular sync starts: under the chain insert
+      * lock, TRIED for at most a moment so this thread never parks behind a block commit or a pass's final step (a seed
+      * skipped here is tried again at the next start), and atomic against everything a pass writes. An accepted seed
+      * supersedes the running pass, which starts again from genesis. Refused outright on a chain that was PoS from
+      * genesis (terminal TD 0).
       */
     private def applyChainWeightSeeds(): Unit =
       Option(System.getProperty(ChainWeightSeed.Property)).filter(_.trim.nonEmpty).foreach { spec =>
-        val outcomes = importLock
-          .guard(IO.blocking(ChainInsertLock.exclusive {
-            chainWeightEpoch.incrementAndGet()
-            ChainWeightSeed(spec, blockchainReader, blockchainWriter, appStateStorage)
-          }))
-          .unsafeRunSync()(using IORuntime.global)
-        outcomes.foreach {
-          case ChainWeightSeed.Outcome.Applied(number, hash, td, descendants) =>
+        val posFromGenesis = configBuilder.blockchainConfig.terminalTotalDifficulty.contains(BigInt(0))
+        ChainInsertLock.tryExclusive(SyncController.SeedLockWait) {
+          chainWeightEpoch.supersede(
+            ChainWeightSeed(spec, blockchainReader, blockchainWriter, appStateStorage, posFromGenesis)
+          )
+        } match
+          case None =>
             log.warn(
-              s"seed-chain-weights: block $number (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash)}) " +
-                s"anchored at TD=$td and $descendants block(s) above it re-derived; the chain-weight pass checks it " +
-                "from genesis once the headers are in"
+              s"seed-chain-weights: not applied: the chain insert lock stayed busy for ${SyncController.SeedLockWait}; " +
+                "tried again at the next regular-sync start"
             )
-          case ChainWeightSeed.Outcome.Refused(entry, reason) =>
-            log.warn(s"seed-chain-weights: refused '$entry': $reason")
-        }
+          case Some(outcomes) =>
+            outcomes.foreach {
+              case ChainWeightSeed.Outcome.Applied(number, hash, td, descendants) =>
+                log.warn(
+                  s"seed-chain-weights: block $number (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash)}) " +
+                    s"anchored at TD=$td and $descendants block(s) above it re-derived; the chain-weight pass checks it " +
+                    "from genesis once the headers are in"
+                )
+              case ChainWeightSeed.Outcome.Refused(entry, reason) =>
+                log.warn(s"seed-chain-weights: refused '$entry': $reason")
+            }
+            if outcomes.exists(_.isInstanceOf[ChainWeightSeed.Outcome.Applied]) then stopChainWeightReconcile()
       }
 
     /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. Returns

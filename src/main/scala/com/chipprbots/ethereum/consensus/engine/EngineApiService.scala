@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.Withdrawal.*
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
@@ -284,14 +285,18 @@ class EngineApiService(
     * a fabricated weight would be a worse answer than an absent one on a chain where the number still means something.
     */
   private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
-    parentHeader.flatMap(p => blockchainReader.getChainWeightByHash(p.hash)) match
-      case Some(parentWeight) =>
-        blockchainWriter.storeChainWeight(block.header.hash, parentWeight.increase(block.header)).commit()
-      case None =>
-        log.debug(
-          "[ENGINE-API] no stored ChainWeight for the parent of block {} — not writing one for the child either",
-          block.number
-        )
+    // #1654: the parent's weight is read and the child's written under the chain insert lock (shared), so the
+    // chain-weight repair's final step, which holds it exclusively, never sets its marker between the two.
+    ChainInsertLock.shared {
+      parentHeader.flatMap(p => blockchainReader.getChainWeightByHash(p.hash)) match
+        case Some(parentWeight) =>
+          blockchainWriter.storeChainWeight(block.header.hash, parentWeight.increase(block.header)).commit()
+        case None =>
+          log.debug(
+            "[ENGINE-API] no stored ChainWeight for the parent of block {} — not writing one for the child either",
+            block.number
+          )
+    }
 
   /** The one-way entry point the p2p import path uses to put a block into `invalidBlocks`.
     *

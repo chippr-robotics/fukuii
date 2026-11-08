@@ -302,8 +302,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   // Fork choice compares stored weights (`ConsensusImpl.importToNewBranch`, `BlockQueue`), so one weight that does not
   // follow from its parent's is a jump that every fork branching below it is weighed across. The marker says there is
   // none: every stored weight on the canonical chain is the genesis weight plus the difficulties of the blocks after
-  // genesis up to it, as import writes it (parent + difficulty). It is set by the genesis write, by a SNAP hand-off whose
-  // pivot weight is exact (`SyncController`), and by `ChainWeightReconcile` once it has checked or repaired every
+  // genesis up to it, as import writes it (parent + difficulty). It is set by the genesis write, by a SNAP hand-off that
+  // began on an exact chain and ends on an exact pivot weight (`ChainWeightReconcile.atSnapHandOff`), and by
+  // `ChainWeightReconcile` once it has checked or repaired every
   // canonical weight. It is taken away by a SNAP start (the pivot carries an estimate until the headers reach it), a
   // checkpoint import (the archive's weight is trusted, not derived), an operator seed, and any estimate written over a
   // weight. A datadir an older binary made has no marker, and gets one reconcile pass.
@@ -317,6 +318,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def clearChainWeightInvariant(): DataSourceBatchUpdate =
     remove(Keys.ChainWeightInvariant)
+
+  /** Set at a SNAP start that found the marker standing (or a datadir with no header above genesis), and kept across
+    * restarts of that SNAP: only then may its hand-off set the marker again (`ChainWeightReconcile.atSnapHandOff`).
+    * Removed at the hand-off and at any regular-sync start.
+    */
+  def isChainWeightSnapPending(): Boolean =
+    get(Keys.ChainWeightSnapPending).contains(ChainWeightInvariantVersion)
+
+  def markChainWeightSnapPending(): DataSourceBatchUpdate =
+    put(Keys.ChainWeightSnapPending, ChainWeightInvariantVersion)
+
+  def clearChainWeightSnapPending(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightSnapPending)
 
   /** `ChainWeightReconcile`'s saved place, in its own encoding (`ChainWeightReconcile.Progress`). */
   def getChainWeightReconcileProgress(): Option[String] =
@@ -845,3 +859,4 @@ object AppStateStorage:
     val RefCountsExact = "state.refcounts.exact"
     val ChainWeightInvariant = "chain.weight.invariant"
     val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"
+    val ChainWeightSnapPending = "chain.weight.snapPending"

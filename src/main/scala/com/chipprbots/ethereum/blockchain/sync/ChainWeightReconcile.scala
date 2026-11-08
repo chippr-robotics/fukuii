@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import java.util.concurrent.atomic.AtomicLong
+
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
@@ -12,6 +14,8 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditThrottle
+import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -32,20 +36,22 @@ import com.chipprbots.ethereum.utils.Hex
   * one: `HeaderChain.WriteHeaders` writes parent TD + difficulty for every header from genesis and refuses a header
   * whose parent has none.
   *
-  * '''Phase 1''', without any lock: a forward scan from genesis, a batch of heights at a time (number to hash, header,
-  * stored weight, each one `multiGet` that does not fill the block cache). It carries the exact weight forward and
-  * records where the stored one differs, as [[Run]]s of equal difference, so a jump costs one entry however many blocks
-  * sit above it. Every `persistEvery` blocks its place is saved, so a stop resumes there. A height with no header (the
-  * backfill has not reached it) or whose header does not link to the one below waits and retries. A reorg that moves
-  * the canonical chain below the place goes back to the highest earlier place still canonical.
+  * '''Scan''', without any lock: forward from genesis, a batch of heights at a time (number to hash, header, stored
+  * weight; each one `multiGet` that does not fill the block cache). Batches are at most [[AuditWalk.MaxBatch]] and
+  * sized and spaced by [[AuditThrottle]]: each holds the data source's read lock, and a queued writer waits behind it.
+  * The scan carries the exact weight forward and records where the stored one differs, as [[Run]]s of equal difference,
+  * so a jump costs one entry however many blocks sit above it. Its place is saved every `persistEvery` blocks. A height
+  * with no header waits and retries; a reorg below the place goes back to the highest earlier place still canonical.
   *
-  * '''Phase 2''', under the import lock and then the chain insert lock held exclusively (the lock order every import
-  * path keeps: [[ImportLock]] outermost, see its doc): scan the blocks imported since, re-derive every weight in the
-  * runs from its run's base and the headers, and write each one that differs. Every write and the marker go in ONE
-  * batch up to `writeChunk` weights; more go in chunks of that size, all under the same hold of both locks, so no
-  * import or block commit sees part of the repair. A crash between chunks leaves no marker, and the next pass
-  * re-derives the same values (it writes only a weight that differs). Nothing else waits on this pass: import goes on
-  * during phase 1.
+  * '''Repair''', without any lock: each run is re-derived from its base and the headers, bottom-up, and written in
+  * chunks. A block's exact weight depends only on its ancestry, so the value written is right whether or not the block
+  * stays canonical, and writing it twice is harmless; a crash between chunks costs only a re-run. Import goes on.
+  *
+  * '''Finish''', under the import lock and then the chain insert lock held exclusively (the order every import path
+  * keeps: [[ImportLock]] outermost): check the blocks imported since the scan ended, and every block mapped above the
+  * best block (an Engine API payload is mapped before the consensus layer promotes it), then write those that differ
+  * and the marker in ONE batch. That batch is also atomic against everything that supersedes a pass ([[Epoch]]). The
+  * hold covers only the tail, so it is short.
   */
 object ChainWeightReconcile:
 
@@ -53,6 +59,9 @@ object ChainWeightReconcile:
     * `BackgroundAudit.LoggerName`).
     */
   val LoggerName: String = "com.chipprbots.ethereum.blockchain.sync.SyncController.ChainWeightReconcile"
+
+  /** What the import lock reports while the finish holds it (`ImportLock.heldBy`). */
+  val LockHolder: String = "the chain-weight repair's final step (#1654)"
 
   /** A canonical block with its exact weight. */
   final case class Position(number: BigInt, hash: ByteString, td: BigInt)
@@ -69,15 +78,15 @@ object ChainWeightReconcile:
   final case class Run(from: BigInt, to: BigInt, base: Position, delta: Option[BigInt]):
     def blocks: BigInt = to - from + 1
 
-  /** A scan's place: `cursor` is the last block checked, `runs` what it found up to there, `recent` earlier places to
-    * go back to after a reorg (oldest first), `scanned` the blocks checked so far.
+  /** A scan's place: `cursor` is the last block checked, `runs` what it found up to there and has not repaired yet,
+    * `recent` earlier places to go back to after a reorg (oldest first), `scanned` the blocks checked so far.
     */
   final case class Progress(cursor: Position, runs: Vector[Run], recent: Vector[Position], scanned: BigInt):
     def diffBlocks: BigInt = runs.map(_.blocks).sum
 
   val Start: Progress = Progress(BeforeGenesis, Vector.empty, Vector.empty, BigInt(0))
 
-  /** What one phase-1 step did. */
+  /** What one scan step did. */
   enum Step:
     case Advanced(progress: Progress)
     case AtHead(progress: Progress)
@@ -89,14 +98,18 @@ object ChainWeightReconcile:
     /** The block at `lost` is no longer canonical: back to the highest earlier place that is. */
     case Rewound(progress: Progress, lost: BigInt)
 
-  /** What phase 2 did. */
-  enum Applied:
-    /** The marker is set. `written` weights were rewritten. */
+  /** What the repair did. `progress` has no runs left; `repaired` are the runs it wrote. */
+  enum Repaired:
+    case Done(progress: Progress, written: Long, repaired: Vector[Run])
+    case Superseded
+
+  /** What the finish did. */
+  enum Finished:
+    /** The marker is set. `written` weights of the tail were rewritten in the same batch. */
     case Done(progress: Progress, written: Long)
-    case Waiting(progress: Progress, at: BigInt, reason: String)
     case Rewound(progress: Progress, lost: BigInt)
 
-    /** A SNAP start, a seed or a calibration write came first: this pass writes nothing more and ends. */
+    /** A SNAP start, a seed or a calibration write came first: the batch was not written. */
     case Superseded
 
   enum Outcome:
@@ -105,17 +118,51 @@ object ChainWeightReconcile:
     case Done(scanned: BigInt, written: Long, runs: Int, rewinds: Int, elapsedMs: Long)
     case Superseded
 
+    /** More distinct differences than `maxRuns`: not a shape an earlier release could write. Nothing is lost; the
+      * marker stays off and an ERROR asks for a look.
+      */
+    case TooManyRuns(at: BigInt, runs: Int)
+
   final case class Settings(
-      batchSize: Int = 1000,
+      batchSize: Int = AuditWalk.MaxBatch,
+      // Duty cycle of the scan: sleep this many times what a batch took (1 is 50%; AuditThrottle.delayAfter).
+      readFactor: Int = 1,
       persistEvery: Long = 10_000L,
       logEvery: Long = 1_000_000L,
       keepRecent: Int = 16,
-      writeChunk: Int = 100_000,
+      writeChunk: Int = 10_000,
+      maxRuns: Int = 10_000,
       waitRetry: FiniteDuration = 10.minutes,
-      // Test seams: run just before the import lock is requested, and inside both locks before any write.
+      // Test seams: just before the import lock is requested; inside both locks, before the tail is checked; after
+      // each repair chunk is committed.
       beforeLock: IO[Unit] = IO.unit,
-      insideLock: () => Unit = () => ()
+      insideLock: () => Unit = () => (),
+      afterChunk: () => Unit = () => ()
   )
+
+  /** What supersedes a pass, and the monitor that makes a pass's saves and its final batch atomic against it. A SNAP
+    * start, a seed and a calibration write run under [[supersede]]; a pass writes only through [[ifCurrent]] with the
+    * value it started with. So a pass never sets the marker, nor saves a place, over what superseded it, and nothing
+    * that supersedes waits behind a repair: the monitor is held only for one small commit at a time.
+    */
+  final class Epoch:
+    private val value = new AtomicLong(0L)
+
+    def current: Long = value.get()
+
+    def isCurrent(e: Long): Boolean = value.get() == e
+
+    def supersede[A](andThen: => A): A = synchronized {
+      value.incrementAndGet()
+      andThen
+    }
+
+    def ifCurrent(e: Long)(write: => Unit): Boolean = synchronized {
+      if value.get() == e then
+        write
+        true
+      else false
+    }
 
   // ---------------------------------------------------------------------------------------------- encoding of Progress
 
@@ -157,9 +204,37 @@ object ChainWeightReconcile:
         case _ => throw new IllegalArgumentException("unknown progress version")
     }.toOption
 
+  // ------------------------------------------------------------------------------------------- the marker around SNAP
+
+  /** A SNAP start, inside [[Epoch.supersede]]. The pivot carries an estimate until the headers reach it, so the marker
+    * goes. Whether the hand-off may set it again is remembered here, in the same write, across restarts mid-SNAP: only
+    * when the marker stood now (or stood at an earlier start of this SNAP), or the datadir has no header above genesis.
+    * Otherwise a datadir written by an older release could hold stale weights the SNAP download does not rewrite, and a
+    * pivot that follows from a stale parent would set the marker over them (vault M2). Returns whether it may.
+    */
+  def atSnapStart(reader: BlockchainReader, appState: AppStateStorage): Boolean =
+    val stood = appState.hasChainWeightInvariant()
+    val fresh = reader.getBestBlockNumber == 0 && reader.getBlockHeaderByNumber(1).isEmpty
+    if stood || fresh then appState.clearChainWeightInvariant().and(appState.markChainWeightSnapPending()).commitSync()
+    appState.isChainWeightSnapPending()
+
+  /** A SNAP hand-off. The marker is set only if this SNAP began on an exact chain ([[atSnapStart]]) and the pivot's
+    * weight follows from its parent's (REAL_DB_TD or DERIVED_FROM_PARENT at finalisation): the header download stored
+    * every header from the old exact top with its parent's weight plus its difficulty. Returns whether it set the
+    * marker.
+    */
+  def atSnapHandOff(reader: BlockchainReader, appState: AppStateStorage, pivot: BigInt): Boolean =
+    val exact = reader.getBlockHeaderByNumber(pivot).map(HeadChainWeight.classify(reader, _)) match
+      case Some(HeadChainWeight.Status.Exact(_)) => true
+      case _                                     => false
+    val set = exact && appState.isChainWeightSnapPending()
+    val clear = appState.clearChainWeightSnapPending()
+    (if set then clear.and(appState.markChainWeightInvariant()) else clear).commitSync()
+    set
+
   // --------------------------------------------------------------------------------------------------------- the engine
 
-  /** The two phases over storage, synchronous. [[run]] drives them. */
+  /** The scan, the repair and the finish over storage, synchronous. [[run]] drives them. */
   final class Engine(
       reader: BlockchainReader,
       writer: BlockchainWriter,
@@ -181,15 +256,20 @@ object ChainWeightReconcile:
         p.runs.filter(_.from <= back.number).map(r => if r.to > back.number then r.copy(to = back.number) else r)
       Progress(back, runs, p.recent.filter(_.number <= back.number), p.scanned)
 
-    /** One batch of phase 1: up to `batchSize` heights above the cursor, never past the best block. */
-    def step(p: Progress): Step =
+    /** One scan batch: up to `batch` heights above the cursor, never past the best block. */
+    def step(p: Progress, batch: Int = settings.batchSize): Step =
       if !canonical(p.cursor) then Step.Rewound(rewind(p), p.cursor.number)
       else
         val best = reader.getBestBlockNumber
         if p.cursor.number >= best then Step.AtHead(p)
-        else check(p, p.cursor.number + 1, (p.cursor.number + settings.batchSize).min(best))
+        else
+          val (next, stop) = check(p, p.cursor.number + 1, (p.cursor.number + batch.max(1)).min(best))
+          stop match
+            case Some((at, reason)) => Step.Waiting(next, at, reason)
+            case None => Step.Advanced(next.copy(recent = (next.recent :+ next.cursor).takeRight(settings.keepRecent)))
 
-    private def check(p: Progress, from: BigInt, to: BigInt): Step =
+    /** Check heights `from..to`: where it stopped, and why, if before `to`. */
+    private def check(p: Progress, from: BigInt, to: BigInt): (Progress, Option[(BigInt, String)]) =
       val numbers = (from to to).toVector
       val hashes = reader.getHashesByNumbersNoFill(numbers).takeWhile(_.isDefined).flatten
       val headers = reader.getBlockHeadersByHashesNoFill(hashes)
@@ -197,172 +277,219 @@ object ChainWeightReconcile:
       var prev = p.cursor
       var runs = p.runs
       var i = 0
-      var waiting: Option[(BigInt, String)] = None
-      while waiting.isEmpty && i < hashes.size do
+      var stop: Option[(BigInt, String)] = None
+      while stop.isEmpty && i < hashes.size do
         val n = numbers(i)
         headers(i) match
-          case None => waiting = Some(n -> "no header stored for the canonical hash")
+          case None => stop = Some(n -> "no header stored for the canonical hash")
           case Some(h) if n > 0 && h.parentHash.value != prev.hash =>
-            waiting = Some(n -> "its header does not link to the canonical block below")
+            stop = Some(n -> "its header does not link to the canonical block below")
           case Some(h) =>
             val td = prev.td + h.difficulty.value
             val stored = weights(i).map(_.totalDifficulty.value)
             if !stored.contains(td) then runs = extend(runs, n, prev, stored.map(td - _))
             prev = Position(n, hashes(i), td)
             i += 1
-      if waiting.isEmpty && hashes.size < numbers.size then
-        waiting = Some(numbers(hashes.size) -> "no canonical hash stored at this height")
-      val next = p.copy(cursor = prev, runs = runs, scanned = p.scanned + i)
-      waiting match
-        case Some((at, reason)) => Step.Waiting(next, at, reason)
-        case None => Step.Advanced(next.copy(recent = (next.recent :+ prev).takeRight(settings.keepRecent)))
+      if stop.isEmpty && hashes.size < numbers.size then
+        stop = Some(numbers(hashes.size) -> "no canonical hash stored at this height")
+      (p.copy(cursor = prev, runs = runs, scanned = p.scanned + i), stop)
 
     private def extend(runs: Vector[Run], n: BigInt, base: Position, delta: Option[BigInt]): Vector[Run] =
       runs.lastOption match
         case Some(last) if last.to == n - 1 && last.delta == delta => runs.init :+ last.copy(to = n)
         case _                                                     => runs :+ Run(n, n, base, delta)
 
-    /** Phase 2. The caller holds the import lock and the chain insert lock exclusively. `isCurrent` is false once a
-      * SNAP start, a seed or a calibration write has superseded this pass (they bump it under the chain insert lock, so
-      * it cannot change while this runs).
+    /** The repair, with no lock: every run re-derived from its base along the parent links, bottom-up, in chunks of
+      * `writeChunk`. A height whose header does not link to the one below ends its run there (the index moved under
+      * it); the finish's re-check, or the next pass, finds what is left. Stops between chunks once superseded.
       */
-    def applyLocked(start: Progress, isCurrent: () => Boolean): Applied =
-      if !isCurrent() then Applied.Superseded
-      else
-        var p = start
-        var result: Option[Applied] = None
-        while result.isEmpty do
-          step(p) match
-            case Step.Advanced(next)            => p = next
-            case Step.AtHead(atHead)            => result = Some(write(atHead))
-            case Step.Waiting(next, at, reason) => result = Some(Applied.Waiting(next, at, reason))
-            case Step.Rewound(next, lost)       => result = Some(Applied.Rewound(next, lost))
-        result.getOrElse(Applied.Superseded)
+    def repair(p: Progress, isCurrent: () => Boolean): Repaired =
+      var pending = Vector.empty[(BlockHash, ChainWeight)]
+      var written = 0L
+      var superseded = false
+      def flush(): Unit =
+        if pending.nonEmpty then
+          writer.storeChainWeights(pending).commit()
+          written += pending.size
+          pending = Vector.empty
+          settings.afterChunk()
+          superseded = !isCurrent()
+      val runs = p.runs.iterator
+      while !superseded && runs.hasNext do
+        val run = runs.next()
+        var prev = run.base
+        var n = run.from
+        var linked = true
+        while !superseded && linked && n <= run.to do
+          val numbers = (n to (n + settings.batchSize - 1).min(run.to)).toVector
+          val hashes = reader.getHashesByNumbersNoFill(numbers).takeWhile(_.isDefined).flatten
+          val headers = reader.getBlockHeadersByHashesNoFill(hashes)
+          val weights = reader.getChainWeightsByHashesNoFill(hashes)
+          var i = 0
+          while !superseded && linked && i < hashes.size do
+            headers(i) match
+              case Some(h) if numbers(i) == 0 || h.parentHash.value == prev.hash =>
+                val td = prev.td + h.difficulty.value
+                if !weights(i).map(_.totalDifficulty.value).contains(td) then
+                  pending :+= BlockHash(hashes(i)) -> ChainWeight.totalDifficultyOnly(td)
+                  if pending.size >= settings.writeChunk then flush()
+                prev = Position(numbers(i), hashes(i), td)
+                i += 1
+              case _ => linked = false
+          if hashes.size < numbers.size then linked = false
+          n = numbers.last + 1
+      if !superseded then flush()
+      if superseded then Repaired.Superseded else Repaired.Done(p.copy(runs = Vector.empty), written, p.runs)
 
-    private def write(p: Progress): Applied =
-      p.runs.find(r => !canonical(r.base)) match
-        case Some(r) => Applied.Rewound(rewind(p), r.base.number)
-        case None =>
-          var pending = Vector.empty[(BlockHash, ChainWeight)]
-          var written = 0L
-          var failure: Option[Applied] = None
-          val runs = p.runs.iterator
-          while failure.isEmpty && runs.hasNext do
-            val run = runs.next()
-            var prev = run.base
-            var n = run.from
-            while failure.isEmpty && n <= run.to do
-              val numbers = (n to (n + settings.batchSize - 1).min(run.to)).toVector
-              val hashes = reader.getHashesByNumbersNoFill(numbers)
-              if hashes.exists(_.isEmpty) then failure = Some(Applied.Rewound(rewind(p), n))
-              else
-                val hs = hashes.flatten
-                val headers = reader.getBlockHeadersByHashesNoFill(hs)
-                val weights = reader.getChainWeightsByHashesNoFill(hs)
-                var i = 0
-                while failure.isEmpty && i < hs.size do
-                  headers(i) match
-                    case Some(h) if numbers(i) == 0 || h.parentHash.value == prev.hash =>
-                      val td = prev.td + h.difficulty.value
-                      if !weights(i).map(_.totalDifficulty.value).contains(td) then
-                        pending :+= BlockHash(hs(i)) -> ChainWeight.totalDifficultyOnly(td)
-                      prev = Position(numbers(i), hs(i), td)
-                      i += 1
-                    case _ => failure = Some(Applied.Rewound(rewind(p), numbers(i)))
-                if pending.size >= settings.writeChunk then
-                  writer.storeChainWeights(pending).commit()
-                  written += pending.size
-                  pending = Vector.empty
-                n = numbers.last + 1
-          failure.getOrElse {
-            writer
-              .storeChainWeights(pending)
-              .and(appState.markChainWeightInvariant())
-              .and(appState.removeChainWeightReconcileProgress())
-              .commitSync()
-            Applied.Done(p, written + pending.size)
-          }
+    /** The finish. The caller holds the import lock and the chain insert lock exclusively. Checks every block from the
+      * cursor up the contiguous, linked, mapped heights (past the best block: a payload the consensus layer has not
+      * promoted yet is mapped already), then writes those that differ, the marker and the end of the saved place in one
+      * batch, only while `e` is current.
+      */
+    def finishLocked(p: Progress, epoch: Epoch, e: Long): Finished =
+      if !canonical(p.cursor) then Finished.Rewound(rewind(p), p.cursor.number)
+      else
+        var prev = p.cursor
+        var tail = Vector.empty[(BlockHash, ChainWeight)]
+        var more = true
+        while more do
+          val numbers = (prev.number + 1 to prev.number + settings.batchSize).toVector
+          val hashes = reader.getHashesByNumbersNoFill(numbers).takeWhile(_.isDefined).flatten
+          val headers = reader.getBlockHeadersByHashesNoFill(hashes)
+          val weights = reader.getChainWeightsByHashesNoFill(hashes)
+          var i = 0
+          while more && i < hashes.size do
+            headers(i) match
+              case Some(h) if numbers(i) == 0 || h.parentHash.value == prev.hash =>
+                val td = prev.td + h.difficulty.value
+                if !weights(i).map(_.totalDifficulty.value).contains(td) then
+                  tail :+= BlockHash(hashes(i)) -> ChainWeight.totalDifficultyOnly(td)
+                prev = Position(numbers(i), hashes(i), td)
+                i += 1
+              case _ => more = false
+          if hashes.size < numbers.size then more = false
+        val written = epoch.ifCurrent(e) {
+          writer
+            .storeChainWeights(tail)
+            .and(appState.markChainWeightInvariant())
+            .and(appState.removeChainWeightReconcileProgress())
+            .commitSync()
+        }
+        if written then Finished.Done(p.copy(cursor = prev), tail.size.toLong) else Finished.Superseded
 
   // --------------------------------------------------------------------------------------------------------- the runner
 
-  /** The pass, start to end: nothing when the marker stands, else phase 1 from the saved place and phase 2 under both
-    * locks. Waits (`waitRetry`) where a height cannot be checked yet. Ends `Superseded` once `isCurrent` turns false.
+  /** The pass, start to end: nothing when the marker stands, else the scan from the saved place, the repair, and the
+    * finish under both locks. Waits (`waitRetry`) where a height cannot be checked yet. Ends `Superseded` once `e` is
+    * no longer current. Every step is short (one batch or one chunk), so a cancel takes effect at the next one.
     */
   def run(
       engine: Engine,
       importLock: ImportLock,
-      isCurrent: () => Boolean,
+      epoch: Epoch,
+      e: Long,
       appState: AppStateStorage,
       log: Logger = LoggerFactory.getLogger(LoggerName),
       nowMs: () => Long = () => System.currentTimeMillis()
   ): IO[Outcome] =
     val s = engine.settings
     val started = nowMs()
+    def isCurrent: Boolean = epoch.isCurrent(e)
 
-    def save(p: Progress): IO[Unit] = IO.blocking(if isCurrent() then engine.save(p))
+    def save(p: Progress): IO[Unit] = IO.blocking(epoch.ifCurrent(e)(engine.save(p))).void
 
-    def locked(p: Progress): IO[Applied] =
-      s.beforeLock >> importLock.guard(
-        IO.blocking(ChainInsertLock.exclusive {
-          s.insideLock()
-          engine.applyLocked(p, isCurrent)
-        })
-      )
+    final case class Totals(written: Long, runs: Int, rewinds: Int)
 
-    def loop(p: Progress, sinceSave: Long, nextLog: BigInt, rewinds: Int, waitingAt: Option[BigInt]): IO[Outcome] =
-      if !isCurrent() then IO.pure(Outcome.Superseded)
+    def loop(
+        p: Progress,
+        batch: Int,
+        unsaved: Long,
+        nextLog: BigInt,
+        t: Totals,
+        waitingAt: Option[BigInt]
+    ): IO[Outcome] =
+      if !isCurrent then IO.pure(Outcome.Superseded)
       else
-        IO.blocking(engine.step(p)).flatMap {
-          case Step.Advanced(next) =>
-            val unsaved = sinceSave + (next.scanned - p.scanned).toLong
-            Metrics.scanning(next)
-            val logged =
-              if next.cursor.number >= nextLog then
-                val secs = ((nowMs() - started) / 1000L).max(1L)
-                log.info(
-                  s"[CW-RECONCILE] progress: block=${next.cursor.number} scanned=${next.scanned} " +
-                    s"differing=${next.diffBlocks} runs=${next.runs.size} rate=${next.scanned / BigInt(secs)}/s " +
-                    s"elapsed=${secs}s"
-                )
-                next.cursor.number + s.logEvery
-              else nextLog
-            (if unsaved >= s.persistEvery then save(next).as(0L) else IO.pure(unsaved))
-              .flatMap(left => IO.cede >> loop(next, left, logged, rewinds, None))
-
-          case Step.AtHead(atHead) =>
-            Metrics.applying(atHead)
-            save(atHead) >> locked(atHead).flatMap {
-              case Applied.Done(done, written) =>
-                val elapsed = nowMs() - started
-                Metrics.done(written)
-                log.info(
-                  s"[CW-RECONCILE] done: block=${done.cursor.number} scanned=${done.scanned} " +
-                    s"differing=${done.diffBlocks} runs=${done.runs.size} rewritten=$written rewinds=$rewinds " +
-                    s"elapsed=${elapsed / 1000L}s; every stored canonical weight is now the genesis weight plus the " +
-                    "difficulties up to its block"
-                )
-                done.runs.take(20).foreach { r =>
-                  val was = r.delta.fold("absent")(d => s"off by ${-d}")
-                  log.info(s"[CW-RECONCILE] repaired blocks ${r.from}..${r.to}: the stored weight was $was")
-                }
-                IO.pure(Outcome.Done(done.scanned, written, done.runs.size, rewinds, elapsed))
-              case Applied.Waiting(next, at, reason) => waitAt(next, at, reason, rewinds, waitingAt)
-              case Applied.Rewound(next, lost)       => rewound(next, lost, nextLog, rewinds)
-              case Applied.Superseded                => IO.pure(Outcome.Superseded)
-            }
-
-          case Step.Waiting(next, at, reason) => waitAt(next, at, reason, rewinds, waitingAt)
-          case Step.Rewound(next, lost)       => rewound(next, lost, nextLog, rewinds)
+        IO.blocking {
+          val t0 = System.nanoTime()
+          val step = engine.step(p, batch)
+          (step, System.nanoTime() - t0)
+        }.flatMap {
+          case (Step.Advanced(next), nanos) =>
+            if next.runs.size > s.maxRuns then tooMany(next)
+            else
+              Metrics.scanning(next)
+              val logged = progressLine(next, nextLog)
+              val left = unsaved + (next.scanned - p.scanned).toLong
+              val saved = if left >= s.persistEvery then save(next).as(0L) else IO.pure(left)
+              val nextBatch = AuditThrottle.nextBatchSize(batch, nanos).min(s.batchSize)
+              saved.flatMap(l =>
+                IO.sleep(AuditThrottle.delayAfter(nanos, s.readFactor)) >> loop(next, nextBatch, l, logged, t, None)
+              )
+          case (Step.AtHead(atHead), _)            => repairAndFinish(atHead, batch, nextLog, t)
+          case (Step.Waiting(next, at, reason), _) => waitAt(next, batch, at, reason, t, waitingAt)
+          case (Step.Rewound(next, lost), _)       => rewound(next, batch, lost, nextLog, t)
         }
 
-    def rewound(p: Progress, lost: BigInt, nextLog: BigInt, rewinds: Int): IO[Outcome] =
+    def progressLine(p: Progress, nextLog: BigInt): BigInt =
+      if p.cursor.number >= nextLog then
+        val secs = ((nowMs() - started) / 1000L).max(1L)
+        log.info(
+          s"[CW-RECONCILE] progress: block=${p.cursor.number} scanned=${p.scanned} differing=${p.diffBlocks} " +
+            s"runs=${p.runs.size} rate=${p.scanned / BigInt(secs)}/s elapsed=${secs}s"
+        )
+        p.cursor.number + s.logEvery
+      else nextLog
+
+    def tooMany(p: Progress): IO[Outcome] =
+      save(p) >> IO {
+        log.error(
+          s"[CW-RECONCILE] stopped at block ${p.cursor.number}: ${p.runs.size} distinct weight differences, over " +
+            s"${s.maxRuns}. No earlier release writes that shape, so nothing is repaired and the chain-weight marker stays " +
+            "off; fork choice keeps the weights as they are. Please report this with the node's logs."
+        )
+        Outcome.TooManyRuns(p.cursor.number, p.runs.size)
+      }
+
+    def repairAndFinish(p: Progress, batch: Int, nextLog: BigInt, t: Totals): IO[Outcome] =
+      Metrics.repairing(p)
+      IO.blocking(engine.repair(p, () => isCurrent)).flatMap {
+        case Repaired.Superseded => IO.pure(Outcome.Superseded)
+        case Repaired.Done(repaired, written, runs) =>
+          val totals = t.copy(written = t.written + written, runs = t.runs + runs.size)
+          runs.take(20).foreach { r =>
+            val was = r.delta.fold("absent")(d => s"off by ${-d}")
+            log.info(s"[CW-RECONCILE] repaired blocks ${r.from}..${r.to}: the stored weight was $was")
+          }
+          save(repaired) >> s.beforeLock >> importLock
+            .guardAs(LockHolder)(IO.blocking(ChainInsertLock.exclusive {
+              s.insideLock()
+              engine.finishLocked(repaired, epoch, e)
+            }))
+            .flatMap {
+              case Finished.Done(done, tailWritten) =>
+                val elapsed = nowMs() - started
+                val all = totals.written + tailWritten
+                Metrics.done(all)
+                log.info(
+                  s"[CW-RECONCILE] done: block=${done.cursor.number} scanned=${done.scanned} runs=${totals.runs} " +
+                    s"rewritten=$all (tail $tailWritten) rewinds=${totals.rewinds} elapsed=${elapsed / 1000L}s; every " +
+                    "stored canonical weight is now the genesis weight plus the difficulties up to its block"
+                )
+                IO.pure(Outcome.Done(done.scanned, all, totals.runs, totals.rewinds, elapsed))
+              case Finished.Rewound(next, lost) => rewound(next, batch, lost, nextLog, totals)
+              case Finished.Superseded          => IO.pure(Outcome.Superseded)
+            }
+      }
+
+    def rewound(p: Progress, batch: Int, lost: BigInt, nextLog: BigInt, t: Totals): IO[Outcome] =
       IO(
         log.warn(
           s"[CW-RECONCILE] block $lost left the canonical chain (a reorg); resuming at block ${p.cursor.number + 1}"
         )
-      ) >> loop(p, 0L, nextLog, rewinds + 1, None)
+      ) >> loop(p, batch, 0L, nextLog, t.copy(rewinds = t.rewinds + 1), None)
 
-    def waitAt(p: Progress, at: BigInt, reason: String, rewinds: Int, waitingAt: Option[BigInt]): IO[Outcome] =
+    def waitAt(p: Progress, batch: Int, at: BigInt, reason: String, t: Totals, waitingAt: Option[BigInt]): IO[Outcome] =
       Metrics.waiting(p)
       val say =
         if waitingAt.contains(at) then IO.unit
@@ -373,7 +500,7 @@ object ChainWeightReconcile:
                 "backfill fills this)"
             )
           )
-      save(p) >> say >> IO.sleep(s.waitRetry) >> loop(p, 0L, p.cursor.number + s.logEvery, rewinds, Some(at))
+      save(p) >> say >> IO.sleep(s.waitRetry) >> loop(p, batch, 0L, p.cursor.number + s.logEvery, t, Some(at))
 
     IO.blocking(appState.hasChainWeightInvariant())
       .flatMap { marked =>
@@ -383,10 +510,11 @@ object ChainWeightReconcile:
             val how = if p.cursor == BeforeGenesis then "from genesis" else "resumed"
             IO(
               log.info(
-                s"[CW-RECONCILE] starting at block ${p.cursor.number + 1} ($how): checking every stored canonical weight " +
-                  "against genesis plus the difficulties, in the background; import is held only for the final repair"
+                s"[CW-RECONCILE] starting at block ${p.cursor.number + 1} ($how): checking every stored canonical " +
+                  "weight against genesis plus the difficulties, in the background; import is held only for the final " +
+                  "tail check"
               )
-            ) >> loop(p, 0L, p.cursor.number + s.logEvery, 0, None)
+            ) >> loop(p, AuditThrottle.MinBatch.max(1), 0L, p.cursor.number + s.logEvery, Totals(0L, 0, 0), None)
           }
       }
       .guarantee(IO(Metrics.idle()))
@@ -396,7 +524,7 @@ object ChainWeightReconcile:
     private val Block = new AtomicDouble(0d)
     private val Differing = new AtomicDouble(0d)
     private val Repaired = new AtomicDouble(0d)
-    // 0 idle or done, 1 scanning, 2 waiting for headers, 3 repairing under the locks.
+    // 0 idle or done, 1 scanning, 2 waiting for headers, 3 repairing and finishing.
     private val State = new AtomicDouble(0d)
     metrics.registry.gauge("chainweight.reconcile.block.gauge", Block)
     metrics.registry.gauge("chainweight.reconcile.differing.blocks.gauge", Differing)
@@ -410,6 +538,6 @@ object ChainWeightReconcile:
 
     def scanning(p: Progress): Unit = at(p, 1d)
     def waiting(p: Progress): Unit = at(p, 2d)
-    def applying(p: Progress): Unit = at(p, 3d)
+    def repairing(p: Progress): Unit = at(p, 3d)
     def done(written: Long): Unit = Repaired.set(written.toDouble)
     def idle(): Unit = State.set(0d)
