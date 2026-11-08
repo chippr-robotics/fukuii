@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
@@ -22,6 +23,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPart
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
@@ -118,6 +120,14 @@ class ConsensusAdapter(
               IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])
             else doBlockPreValidation(block)
           validated.flatMap {
+            // A block whose parent this node does not have is an orphan, not a failed import (B-007, #1683): nothing is
+            // wrong with it, the gap is ours, and the peer that sent it is not to blame. It was `UnknownParent` before
+            // ETCM-1058 replaced block import by consensus; as a `BlockImportFailed` it blacklisted an honest peer that
+            // announced a competing tip, and on a reorging chain that was a good peer lost each time. core-geth drops such
+            // a block with a debug line (`eth/fetcher/block_fetcher.go`, importBlocks: "Unknown parent of propagated block").
+            case Left(ValidationBeforeExecError(HeaderParentNotFoundError)) =>
+              log.debug("Block {} has no parent here: an orphan, not a failed import", block.idTag)
+              IO.pure(UnknownParent)
             case Left(error) =>
               IO.pure(BlockImportFailed(error.describe))
             case Right(BlockExecutionSuccess) =>
@@ -148,7 +158,7 @@ class ConsensusAdapter(
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block],
       accessLists: Map[ByteString, BlockAccessList] = Map.empty
-  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig) =
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
     (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
      else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
       .map {
@@ -176,7 +186,9 @@ class ConsensusAdapter(
           new BlockImportFailedAt(error, failingBlockHash)
         case ConsensusError(blocksToEnqueue, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
-          BlockImportFailed(error)
+          // A branch hanging from a block this node does not have is an orphan too (see evaluateBranchBlock), whichever
+          // way it arrived: right after SNAP hand-off a fetched batch can start above the best block (#1683).
+          if Consensus.isUnknownParent(error) then UnknownParent else BlockImportFailed(error)
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           BlockImportFailedDueToMissingNode(reason, imported)

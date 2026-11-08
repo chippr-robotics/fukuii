@@ -217,7 +217,7 @@ class ConsensusImpl(
       case None =>
         ConsensusError(
           branch.toList,
-          s"Could not get weight for parent block ${Hex.toHexString(parentHash.toArray)} (number ${branch.head.number - 1})"
+          s"$UnknownParentErrorPrefix${Hex.toHexString(parentHash.toArray)} (number ${branch.head.number - 1})"
         )
 
   private def followsConsensusLayer: Boolean = designatedHead.exists(_.headBlockHash.isDefined)

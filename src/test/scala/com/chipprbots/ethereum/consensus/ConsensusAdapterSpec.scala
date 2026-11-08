@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.consensus
 
 import org.apache.pekko.util.ByteString
 
+import cats.data.NonEmptyList
+
 import scala.concurrent.duration.*
 import scala.language.postfixOps
 
@@ -20,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.mining.*
 import com.chipprbots.ethereum.consensus.validators.*
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
@@ -310,9 +313,25 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .expects(newBlock.header, *, *)
       .returning(Left(HeaderParentNotFoundError))
 
-    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(
-      _ shouldEqual BlockImportFailed("UNKNOWN_PARENT: parent header not found")
-    )
+    // Not a failed import (B-007): the block is not wrong, this node lacks its parent, and the peer is not to blame.
+    // This is what the importer reads to fetch the branch instead of blacklisting the peer that announced it.
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(_ shouldEqual UnknownParent)
+
+  it should "report a branch whose parent has no stored weight as an orphan, not as a failed import" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain:
+    // What ConsensusImpl answers when the branch does not extend the best block and its parent is not in the database:
+    // right after SNAP hand-off, a batch that starts above the best block (#1683).
+    val best: Block = getBlock(bestNum)
+    blockchainWriter.save(best, Nil, ChainWeight.totalDifficultyOnly(best.header.difficulty.value + 999), true)
+    val orphan: Block = getBlock(bestNum + 3) // a random parent: nobody here has it
+
+    val adapter: ConsensusAdapter = blockImportWithMockedBlockExecution(mock[BlockExecution])
+    whenReady(adapter.evaluateBranch(NonEmptyList.one(orphan)).unsafeToFuture())(_ shouldEqual UnknownParent)
+
+    // Kept in the queue, as a branch that cannot be rooted always was.
+    blockQueue.isQueued(orphan.hash) shouldBe true
 
   it should "validate blocks prior to import" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl:
     override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:

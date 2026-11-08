@@ -33,6 +33,9 @@ object RegularSyncMetrics extends MetricsContainer:
   // #1705: fetch-and-import pipelines replaced, tagged with the component whose stop caused it.
   final private val PipelineRestartsCounter = "regularsync.pipeline.restarts.total"
 
+  // B-007 (#1683): blocks, announced or fetched in a batch, whose parent this node lacks, and what came of them.
+  final private val OrphanBlocksCounter = "regularsync.orphan.blocks.total"
+
   // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
   final private val ImportLockWaitSeconds = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.import.lock.wait.seconds.gauge", ImportLockWaitSeconds)
@@ -51,6 +54,12 @@ object RegularSyncMetrics extends MetricsContainer:
   /** `component`: "block-fetcher" or "block-importer". */
   def incrementPipelineRestarts(component: String): Unit =
     metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()
+
+  /** `source`: "announce" (a NewBlock) or "batch" (fetched). `outcome`: "branch-fetch" (the fetcher goes back for the
+    * parent, no one blamed) or "blacklisted" (the peer kept announcing blocks whose parent never arrived).
+    */
+  def incrementOrphanBlocks(source: String, outcome: String): Unit =
+    metrics.registry.counter(OrphanBlocksCounter, "source", source, "outcome", outcome).increment()
 
   def setImportLockWaitSeconds(seconds: Double): Unit = ImportLockWaitSeconds.set(seconds)
   private[regular] def importLockWaitSeconds: Double = ImportLockWaitSeconds.get

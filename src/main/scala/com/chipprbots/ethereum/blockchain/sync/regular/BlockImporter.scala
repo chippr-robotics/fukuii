@@ -103,6 +103,29 @@ object BlockImporter:
     def increment(): Int = count.incrementAndGet()
     def reset(): Unit = count.set(0)
 
+  // B-007 (#1683): how many blocks in a row a peer may announce (NewBlock) whose parent never arrives, before it is
+  // blacklisted for it. Below this, a block whose parent this node lacks is a gap of ours and nobody is blamed.
+  val OrphanAnnounceStrikeThreshold: Int = 5
+
+  // Peers whose orphan announcements are counted at once. Past it the count starts over (see OrphanAnnounceStrikes).
+  private val MaxTrackedAnnouncers: Int = 256
+
+  /** Orphan announcements counted per peer, since the last block of that peer that imported. Bounded: past `capacity`
+    * peers it starts over, so identities made up to fill it cost a strike count and nothing more. Thread-safe: an
+    * import clears it off the actor's thread.
+    */
+  final private[regular] class OrphanAnnounceStrikes(capacity: Int = MaxTrackedAnnouncers):
+    private val strikes = new java.util.concurrent.ConcurrentHashMap[PeerId, Int]()
+
+    /** One more orphan announcement by `peer`: how many it has made in a row. */
+    def strike(peer: PeerId): Int =
+      if strikes.size >= capacity && !strikes.containsKey(peer) then strikes.clear()
+      strikes.merge(peer, 1, (a: Int, b: Int) => a + b)
+
+    def clear(peer: PeerId): Unit = strikes.remove(peer): Unit
+
+    def size: Int = strikes.size
+
   // Distinct missing codes in a process before one bulk bytecode recovery is asked for. A miss is fetched alone first, at a
   // round trip and a re-execution of the block, because the bulk scan stops regular sync for as long as it takes to read the
   // whole state: one missing contract on Sepolia, where that is estimated at hours, would hold the head for all of it, where
@@ -384,6 +407,8 @@ final private class BlockImporterLogic(
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
+  // Orphan announcements per peer, in a row (B-007): a peer is blacklisted for them only after a bounded number.
+  private val orphanAnnounces = new OrphanAnnounceStrikes
   private val BadBlockEvictionThreshold = 3
   private val ForkDetectThreshold = 5
 
@@ -431,6 +456,7 @@ final private class BlockImporterLogic(
           new MinedBlockImportMessages(block),
           MinedBlockImport,
           informFetcherOnFail = false,
+          announcedBy = None,
           internally = true
         )(state)
 
@@ -442,6 +468,7 @@ final private class BlockImporterLogic(
           new NewBlockImportMessages(block, peerId),
           NewBlockImport,
           informFetcherOnFail = true,
+          announcedBy = Some(peerId),
           internally = false
         )(state)
 
@@ -726,9 +753,11 @@ final private class BlockImporterLogic(
         if importedBlocks.nonEmpty then exhausts.reset()
 
         errorOpt match
-          case None => Running
+          case None      => Running
           case Some(err) =>
-            log.error("Block import error {}", err)
+            // An orphan batch is expected on a reorging chain and right after SNAP hand-off: a warning, not an error.
+            if err == UnknownParent then log.warning("Block import: the batch hangs from a block this node lacks")
+            else log.error("Block import error {}", err)
             val notImportedBlocks = blocks.drop(importedBlocks.size)
 
             err match
@@ -950,6 +979,19 @@ final private class BlockImporterLogic(
                     val invalidBlockNr = failedBlock.number.value
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
                     RunningAfterFetcherRewind
+              case UnknownParent =>
+                // The batch hangs from a block this node does not have (B-007, #1683): a gap on our side, found out while
+                // importing. The fetcher goes back to the batch's first block and fetches the branch below it, and the peer
+                // that served the batch is not blamed: it was asked for these blocks and gave them. A block that keeps
+                // failing so is still evicted, with its peer, after BadBlockEvictionThreshold strikes (tryImportBlocks).
+                val failedBlock = notImportedBlocks.head
+                RegularSyncMetrics.incrementOrphanBlocks("batch", "branch-fetch")
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  failedBlock.number.value,
+                  "parent of fetched block not found",
+                  shouldBlacklist = false
+                )
+                RunningAfterFetcherRewind
               case BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
                 // This node's trie is bad, and no fetch can name what to fetch. So this is an exhausted fetch at once:
                 // the fetcher is rewound without blacklisting the honest provider, the block waits out the exhaust
@@ -1024,7 +1066,10 @@ final private class BlockImporterLogic(
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             val failedBlock = nel.head
-            log.error(
+            // An orphan batch is a gap of ours, to be fetched: a warning, not an error (B-007).
+            val level = if err == UnknownParent then Logging.WarningLevel else Logging.ErrorLevel
+            log.log(
+              level,
               "Block {} batch import failed, hash {} parent {}",
               failedBlock.number,
               failedBlock.header.hashAsHexString,
@@ -1108,6 +1153,7 @@ final private class BlockImporterLogic(
       importMessages: ImportMessages,
       blockImportType: BlockImportType,
       informFetcherOnFail: Boolean,
+      announcedBy: Option[PeerId],
       internally: Boolean
   )(state: ImporterState): Behavior[Command] =
     def doLog(entry: ImportMessages.LogEntry): Unit = log.log(entry._1, entry._2)
@@ -1139,11 +1185,64 @@ final private class BlockImporterLogic(
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
-          case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
+          case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
+          case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
+        }
+        // The announced block's parent was here: what the peer's orphan announcements before it are counted against.
+        .tap {
+          case BlockImportedToTop(_) | ChainReorganised(_, _, _) | BlockEnqueued | DuplicateBlock =>
+            announcedBy.foreach(orphanAnnounces.clear)
+          case _ => ()
         }
         .map(_ => Running),
       blockImportType
     )(state)
+
+  /** A block a peer announced (NewBlock) whose parent this node does not have (B-007, #1683).
+    *
+    * That is a gap on OUR side, not an offence of the peer. On a reorging PoW chain an honest peer announces a child of
+    * a block of a competing branch that this node never saw; right after SNAP hand-off, or after an announce the
+    * importer was too busy to take, the fetcher's idea of the head can be ahead of the chain's. core-geth drops such a
+    * block with a debug line and drops a peer only for a header that fails verification
+    * (`eth/fetcher/block_fetcher.go`, importBlocks). Blacklisting here cost a good peer each time (T062, Mordor, 24 h:
+    * 33 peers blacklisted, 5 reorgs resolved normally), and the only peer outright on a net with one.
+    *
+    * So the fetcher goes back to the block's parent and fetches the branch, as it does when a fetched batch's branch is
+    * unknown, and nobody is blamed. Protection stays, bounded: a peer that announces [[OrphanAnnounceStrikeThreshold]]
+    * such blocks in a row, with none of its blocks imported in between, is blacklisted as a peer that does not deliver
+    * the parent.
+    */
+  private def handleOrphanAnnounce(block: Block, peer: PeerId): Unit =
+    val strikes = orphanAnnounces.strike(peer)
+    if strikes >= OrphanAnnounceStrikeThreshold then
+      orphanAnnounces.clear(peer)
+      log.warning(
+        "Orphan announces: peer {} announced {} blocks in a row whose parent never arrived, the last is block {}: blacklisting it",
+        peer,
+        strikes,
+        block.number
+      )
+      RegularSyncMetrics.incrementOrphanBlocks("announce", "blacklisted")
+      fetcher ! BlockFetcher.BlockImportFailed(
+        block.number.value,
+        BlacklistReason.BlockImportError(
+          s"announced $strikes blocks in a row whose parent never arrived, the last ${block.header.hashAsHexString}"
+        )
+      )
+    else
+      log.info(
+        "Orphan announce: block {} from peer {} has a parent this node lacks (strike {}/{}): fetching its branch, no one blamed",
+        block.number,
+        peer,
+        strikes,
+        OrphanAnnounceStrikeThreshold
+      )
+      RegularSyncMetrics.incrementOrphanBlocks("announce", "branch-fetch")
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        block.number.value,
+        "parent of announced block not found",
+        shouldBlacklist = false
+      )
 
   /** The validated prefix of a branch whose later block hit a missing node is adopted exactly as if the shorter branch
     * had imported: announced to peers, taken out of the tx pool, published, and reported as progress.
@@ -1253,9 +1352,26 @@ final private class BlockImporterLogic(
           // find a known parent below the pivot. The blocks ARE valid (they continue from
           // the SNAP-validated pivot). Filter blocks to only those at or above the pivot.
           val validBlocks = blocks.filter(_.number.value > floor)
-          if validBlocks.nonEmpty then
+          if validBlocks.nonEmpty && parentInChain(validBlocks.head) then
             log.info(s"Branch resolution at SNAP pivot floor ($floor), importing ${validBlocks.size} blocks directly")
             Right(validBlocks)
+          else if validBlocks.nonEmpty then
+            // The batch starts above the best block: the blocks between are not here (B-007, #1683). Importing it was a
+            // failed import and a blacklisting, then a walk back one block at a time (17292670 to 17292665 on Mordor).
+            // Fetch the blocks between the best block and the batch instead, and blame no one.
+            val from = bestKnownBlockNumber + 1
+            log.info(
+              s"Branch resolution at SNAP pivot floor ($floor): batch ${validBlocks.head.number}-${validBlocks.last.number} " +
+                s"does not continue the chain (parent ${ByteStringUtils.hash2string(validBlocks.head.header.parentHash.value).take(10)} is " +
+                s"not here), going back to block $from to fetch the blocks between"
+            )
+            RegularSyncMetrics.incrementOrphanBlocks("batch", "branch-fetch")
+            fetcher ! BlockFetcher.InvalidateBlocksFrom(
+              from,
+              "gap between the best block and the fetched batch",
+              shouldBlacklist = false
+            )
+            Left(from)
           else
             log.warning(s"Branch resolution hit floor at block $floor, no importable blocks in batch")
             fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "branch resolution floor", shouldBlacklist = false)
@@ -1272,6 +1388,14 @@ final private class BlockImporterLogic(
         log.warning(msg)
         fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg)
         Right(Nil)
+
+  /** Is `block`'s parent in this node's chain, so that `block` can be imported as the next block on it. */
+  private def parentInChain(block: Block): Boolean =
+    val parent = block.header.parentHash
+    // The best block itself counts, even where the canonical index does not name it: right after SNAP hand-off it is the
+    // pivot, whose header is the only one stored.
+    blockchainReader.getBestBlockHeader.exists(_.hash == parent) ||
+    blockchainReader.isInChain(blockchainReader.getBestBranch, parent)
 
   /** How many leading blocks of `blocks` are already our canonical chain: at or below the best block, and the very
     * block the canonical index names at that height. Stops at the first block that is not, so nothing after it is ever
