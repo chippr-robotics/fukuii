@@ -80,89 +80,112 @@ Client Request (HTTPS)
 
 ## Certificate Generation
 
-### Quick Start: Generate Self-Signed Certificate
+Fukuii does not ship a certificate or keystore. Every deployment generates its own key pair
+and keystore password, and none of them belongs in version control.
 
-Fukuii provides a certificate generation script in the `tls/` directory:
+### Quick Start: Generate a Server Certificate
+
+The `tls/gen-cert.sh` script generates a self-signed server certificate for one deployment.
+List every host name and address that clients use to reach the node with `--san`:
 
 ```bash
-cd tls/
-./gen-cert.sh
+# Defaults: DNS:localhost,IP:127.0.0.1, 365 days, files written next to the script (tls/)
+tls/gen-cert.sh
+
+# A node that clients reach as rpc.example.org and 10.0.0.5
+tls/gen-cert.sh --san DNS:rpc.example.org,IP:10.0.0.5
+
+# Somewhere else, with its own file names
+tls/gen-cert.sh --out-dir /opt/fukuii/tls --name node1 --san DNS:node1.internal
 ```
 
-This script:
-1. Generates a random password using `pwgen`
-2. Stores the password in `tls/password`
-3. Creates a PKCS12 keystore at `tls/fukuiiCA.p12`
-4. Generates a 4096-bit RSA certificate
-5. Sets validity for 9999 days (~27 years)
-6. Configures certificate for localhost (127.0.0.1)
+The script:
+1. Generates a 4096-bit RSA key and a self-signed **server** certificate: `basicConstraints`
+   `CA:FALSE`, `keyUsage` `digitalSignature, keyEncipherment`, `extendedKeyUsage` `serverAuth`,
+   and the `subjectAltName` entries from `--san`
+2. Generates a random keystore password for this run
+3. Writes, in the output directory (`tls/` by default):
+   - `fukuii-rpc.p12` — the PKCS#12 keystore with the key and certificate, mode 600
+   - `fukuii-rpc.password` — the keystore password, mode 600
+   - `fukuii-rpc.crt` — the certificate in PEM, for clients to trust, mode 644
+4. Refuses to overwrite existing files unless you pass `--force`
+5. Prints the certificate's subject, expiry and SHA-256 fingerprint, and the `certificate`
+   block to put in the node configuration
 
-**Prerequisites**: The script requires `pwgen` to be installed:
-```bash
-# Debian/Ubuntu
-sudo apt-get install pwgen
+Options: `--san`, `--cn` (subject CN; default the first SAN value), `--days` (default 365),
+`--out-dir`, `--name` (file name stem; default `fukuii-rpc`), `--force`. Run
+`tls/gen-cert.sh --help` for details.
 
-# macOS
-brew install pwgen
+**Prerequisites**: `openssl`.
 
-# Or use manual password generation (see below)
-```
+> **Upgrading:** releases before this change shipped a sample keystore, `tls/fukuiiCA.p12`, with
+> its password in `tls/password`. Both are gone. If a configuration points at them, generate a
+> keystore with `tls/gen-cert.sh` and point `keystore-path` and `password-file` at the new files.
 
 ### Manual Certificate Generation
 
-If you prefer to generate certificates manually or need custom settings:
+If you prefer to generate the keystore yourself, keep the same properties: a server
+certificate (not a CA), `serverAuth`, SANs for every name clients use, and a random password.
 
-#### Option 1: Manual keytool command
+#### Option 1: keytool
 
 ```bash
 cd tls/
+umask 077
 
-# Generate a random password or use your own
-# Using 24 bytes provides approximately 192 bits of entropy for strong security
-export PW=$(openssl rand -base64 24)
-echo "$PW" > ./password
+# A random password, ~192 bits
+openssl rand -hex 24 > fukuii-rpc.password
+export PW="$(cat fukuii-rpc.password)"
 
-# Generate certificate
 keytool -genkeypair \
-  -keystore fukuiiCA.p12 \
+  -alias fukuii-rpc \
+  -keystore fukuii-rpc.p12 \
   -storetype PKCS12 \
   -dname "CN=your-hostname.example.com" \
-  -ext "san=dns:your-hostname.example.com,ip:YOUR_IP_ADDRESS" \
   -keypass:env PW \
   -storepass:env PW \
   -keyalg RSA \
   -keysize 4096 \
   -validity 365 \
-  -ext KeyUsage:critical="keyCertSign" \
-  -ext BasicConstraints:critical="ca:true"
+  -ext BasicConstraints:critical=ca:false \
+  -ext KeyUsage:critical=digitalSignature,keyEncipherment \
+  -ext ExtendedKeyUsage=serverAuth \
+  -ext "SAN=dns:your-hostname.example.com,ip:YOUR_IP_ADDRESS"
+unset PW
 ```
 
 **Important**: Replace `your-hostname.example.com` and `YOUR_IP_ADDRESS` with your actual values.
 
-#### Option 2: OpenSSL (for more control)
+#### Option 2: OpenSSL
 
 ```bash
 cd tls/
+umask 077
 
-# Generate private key
-openssl genrsa -out server.key 4096
+openssl rand -hex 24 > fukuii-rpc.password
+cp fukuii-rpc.password key.password
 
-# Generate certificate signing request (CSR)
-openssl req -new -key server.key -out server.csr \
-  -subj "/CN=your-hostname.example.com"
+# Key and self-signed server certificate (OpenSSL 1.1.1 or later)
+openssl req -x509 -newkey rsa:4096 -sha256 -days 365 \
+  -subj "/CN=your-hostname.example.com" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth" \
+  -addext "subjectAltName=DNS:your-hostname.example.com,IP:YOUR_IP_ADDRESS" \
+  -keyout server.key -passout file:key.password \
+  -out fukuii-rpc.crt
 
-# Generate self-signed certificate
-openssl x509 -req -days 365 -in server.csr \
-  -signkey server.key -out server.crt
+# Package as PKCS#12, protected by the keystore password
+openssl pkcs12 -export -name fukuii-rpc \
+  -inkey server.key -passin file:key.password \
+  -in fukuii-rpc.crt \
+  -out fukuii-rpc.p12 -passout file:fukuii-rpc.password
 
-# Convert to PKCS12 format
-openssl pkcs12 -export -out fukuiiCA.p12 \
-  -inkey server.key -in server.crt \
-  -passout pass:your-password
-
-# Save password
-echo "your-password" > password
+rm -f server.key key.password
 ```
+
+Two password files, because OpenSSL reads the second line of a file when `-passin` and
+`-passout` name the same one.
 
 ### Using CA-Signed Certificates
 
@@ -171,9 +194,10 @@ For production environments, use certificates from a trusted Certificate Authori
 #### Step 1: Generate CSR
 
 ```bash
-keytool -certreq -alias mykey \
-  -keystore fukuiiCA.p12 \
-  -storepass "$(cat password)" \
+keytool -certreq -alias fukuii-rpc \
+  -keystore fukuii-rpc.p12 \
+  -storepass "$(cat fukuii-rpc.password)" \
+  -ext "SAN=dns:your-hostname.example.com" \
   -file fukuii.csr
 ```
 
@@ -187,14 +211,14 @@ Submit `fukuii.csr` to your Certificate Authority (Let's Encrypt, DigiCert, etc.
 # Import CA root certificate
 keytool -import -trustcacerts -alias root \
   -file ca-root.crt \
-  -keystore fukuiiCA.p12 \
-  -storepass "$(cat password)"
+  -keystore fukuii-rpc.p12 \
+  -storepass "$(cat fukuii-rpc.password)"
 
 # Import signed certificate
-keytool -import -alias mykey \
+keytool -import -alias fukuii-rpc \
   -file signed-certificate.crt \
-  -keystore fukuiiCA.p12 \
-  -storepass "$(cat password)"
+  -keystore fukuii-rpc.p12 \
+  -storepass "$(cat fukuii-rpc.password)"
 ```
 
 ### Certificate Verification
@@ -204,24 +228,22 @@ Verify your certificate is correctly generated:
 ```bash
 cd tls/
 
-# List keystore contents
-keytool -list -v -keystore fukuiiCA.p12 \
-  -storepass "$(cat password)"
+# Certificate details: subject, validity, extensions
+openssl x509 -in fukuii-rpc.crt -noout -text
 
-# Check certificate details
-keytool -list -v -keystore fukuiiCA.p12 \
-  -storepass "$(cat password)" | grep -A 10 "Certificate\[1\]"
+# Keystore contents (reads the keystore with its password)
+keytool -list -v -keystore fukuii-rpc.p12 \
+  -storepass "$(cat fukuii-rpc.password)"
 ```
 
 **Expected output should show:**
-- Alias name: mykey (default) or custom name you specified
+- Alias name: `fukuii-rpc` (the `--name` given to `gen-cert.sh`)
 - Entry type: PrivateKeyEntry
-- Certificate chain length: 1
+- Certificate chain length: 1 (self-signed) or more (CA-signed)
 - Valid from/to dates
 - 4096-bit RSA key
+- Basic Constraints `CA:FALSE`, Extended Key Usage `serverAuth`
 - Subject Alternative Names (SAN) matching your domain/IP
-
-**Note**: The default alias generated by keytool is "mykey". If you need to reference the certificate later (for rotation, export, etc.), use this alias or discover it with `keytool -list -keystore fukuiiCA.p12`.
 
 ## Configuration
 
@@ -256,13 +278,13 @@ fukuii {
         # Uncomment and configure certificate section
         certificate {
           # Path to the keystore storing the certificates
-          keystore-path = "tls/fukuiiCA.p12"
+          keystore-path = "tls/fukuii-rpc.p12"
           
           # Type of certificate keystore
           keystore-type = "pkcs12"
           
           # File with the password for the keystore
-          password-file = "tls/password"
+          password-file = "tls/fukuii-rpc.password"
         }
         
         # CORS settings (adjust as needed)
@@ -288,8 +310,9 @@ Ensure certificate files are in the correct location:
 # From Fukuii distribution directory
 ls -l tls/
 # Should show:
-# - fukuiiCA.p12 (keystore file)
-# - password (password file)
+# - fukuii-rpc.p12 (keystore file, mode 600)
+# - fukuii-rpc.password (password file, mode 600)
+# - fukuii-rpc.crt (certificate, for clients)
 # - gen-cert.sh (generation script)
 ```
 
@@ -317,8 +340,8 @@ You can override configuration using environment variables:
 export FUKUII_NETWORK_RPC_HTTP_MODE="https"
 
 # Set certificate path
-export FUKUII_NETWORK_RPC_HTTP_CERTIFICATE_KEYSTORE_PATH="tls/fukuiiCA.p12"
-export FUKUII_NETWORK_RPC_HTTP_CERTIFICATE_PASSWORD_FILE="tls/password"
+export FUKUII_NETWORK_RPC_HTTP_CERTIFICATE_KEYSTORE_PATH="tls/fukuii-rpc.p12"
+export FUKUII_NETWORK_RPC_HTTP_CERTIFICATE_PASSWORD_FILE="tls/fukuii-rpc.password"
 ```
 
 ### Alternative: Command-Line Config
@@ -330,9 +353,9 @@ cat > conf/tls-override.conf <<EOF
 fukuii.network.rpc.http {
   mode = "https"
   certificate {
-    keystore-path = "tls/fukuiiCA.p12"
+    keystore-path = "tls/fukuii-rpc.p12"
     keystore-type = "pkcs12"
-    password-file = "tls/password"
+    password-file = "tls/fukuii-rpc.password"
   }
 }
 EOF
@@ -373,8 +396,8 @@ ERROR - Invalid Certificate keystore
 #### Using curl
 
 ```bash
-# Self-signed certificate (skip verification for testing)
-curl -k https://localhost:8546 \
+# Self-signed certificate: trust the certificate gen-cert.sh wrote
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546 \
   -X POST \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
@@ -397,17 +420,18 @@ curl https://your-domain.com:8546 \
 
 #### Using openssl s_client
 
-Test TLS handshake:
+Test TLS handshake, trusting the certificate `gen-cert.sh` wrote:
 ```bash
-openssl s_client -connect localhost:8546 -showcerts
+openssl s_client -connect localhost:8546 -CAfile tls/fukuii-rpc.crt -verify_hostname localhost
 ```
 
 **Expected output:**
 ```
 CONNECTED(00000003)
-depth=0 CN = 127.0.0.1
-verify error:num=18:self signed certificate
+depth=0 CN = localhost
 verify return:1
+...
+    Verify return code: 0 (ok)
 ...
 SSL-Session:
     Protocol  : TLSv1.3
@@ -497,13 +521,13 @@ Test health endpoints over HTTPS:
 
 ```bash
 # Health check
-curl -k https://localhost:8546/health
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546/health
 
 # Readiness check
-curl -k https://localhost:8546/readiness
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546/readiness
 
 # Full healthcheck
-curl -k https://localhost:8546/healthcheck
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546/healthcheck
 ```
 
 ## Certificate Management
@@ -515,18 +539,20 @@ Regularly rotate certificates to maintain security:
 #### Step 1: Generate New Certificate
 
 ```bash
-cd tls/
-# Backup old certificate
-mv fukuiiCA.p12 fukuiiCA.p12.old
-mv password password.old
+# Keep the old files until the new certificate is verified
+cp -p tls/fukuii-rpc.p12 tls/fukuii-rpc.p12.old
+cp -p tls/fukuii-rpc.password tls/fukuii-rpc.password.old
 
-# Generate new certificate
-./gen-cert.sh
+# New key, certificate and password in place; pass the same --san as before
+tls/gen-cert.sh --force --san DNS:localhost,IP:127.0.0.1
 ```
+
+Clients that trust the old certificate need the new `tls/fukuii-rpc.crt`.
 
 #### Step 2: Update Configuration (if needed)
 
-If paths or passwords changed, update `conf/base.conf`.
+If the file paths changed, update `conf/base.conf`. The password file is rewritten in place,
+so a configuration that points at it needs no change.
 
 #### Step 3: Restart Fukuii
 
@@ -539,7 +565,7 @@ kill -TERM $(pgrep -f fukuii)
 #### Step 4: Verify New Certificate
 
 ```bash
-curl -k https://localhost:8546/health
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546/health
 ```
 
 ### Certificate Expiration Monitoring
@@ -550,19 +576,13 @@ Set up monitoring for certificate expiration:
 #!/bin/bash
 # check-cert-expiry.sh
 
-KEYSTORE="tls/fukuiiCA.p12"
-PASSWORD=$(cat tls/password)
+KEYSTORE="tls/fukuii-rpc.p12"
+PASSWORD_FILE="tls/fukuii-rpc.password"
 WARN_DAYS=30
 
-# Extract certificate (use 'mykey' as default alias, or discover with: keytool -list -keystore "$KEYSTORE")
-ALIAS=$(keytool -list -keystore "$KEYSTORE" -storepass "$PASSWORD" 2>/dev/null | grep PrivateKeyEntry | head -1 | awk '{print $1}' | tr -d ',')
-keytool -exportcert -alias "${ALIAS:-mykey}" \
-  -keystore "$KEYSTORE" \
-  -storepass "$PASSWORD" \
-  -rfc -file /tmp/cert.pem
-
-# Check expiration
-EXPIRY=$(openssl x509 -enddate -noout -in /tmp/cert.pem | cut -d= -f2)
+# The server certificate's expiry, read from the keystore
+EXPIRY=$(openssl pkcs12 -in "$KEYSTORE" -passin "file:$PASSWORD_FILE" -nokeys -clcerts \
+  | openssl x509 -enddate -noout | cut -d= -f2)
 EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
 NOW_EPOCH=$(date +%s)
 DAYS_LEFT=$(( ($EXPIRY_EPOCH - $NOW_EPOCH) / 86400 ))
@@ -573,8 +593,6 @@ if [ $DAYS_LEFT -lt $WARN_DAYS ]; then
   echo "WARNING: Certificate expires in less than $WARN_DAYS days!"
   exit 1
 fi
-
-rm /tmp/cert.pem
 ```
 
 Add to cron:
@@ -592,8 +610,8 @@ Add to cron:
 mkdir -p backups/tls/$(date +%Y%m%d)
 
 # Backup certificate and password
-cp tls/fukuiiCA.p12 backups/tls/$(date +%Y%m%d)/
-cp tls/password backups/tls/$(date +%Y%m%d)/
+cp tls/fukuii-rpc.p12 backups/tls/$(date +%Y%m%d)/
+cp tls/fukuii-rpc.password backups/tls/$(date +%Y%m%d)/
 
 # Create encrypted archive
 tar czf backups/tls-$(date +%Y%m%d).tar.gz \
@@ -607,8 +625,8 @@ tar czf backups/tls-$(date +%Y%m%d).tar.gz \
 tar xzf backups/tls-20251106.tar.gz
 
 # Copy to TLS directory
-cp backups/tls/20251106/fukuiiCA.p12 tls/
-cp backups/tls/20251106/password tls/
+cp -p backups/tls/20251106/fukuii-rpc.p12 tls/
+cp -p backups/tls/20251106/fukuii-rpc.password tls/
 
 # Restart node
 kill -TERM $(pgrep -f fukuii)
@@ -623,8 +641,8 @@ kill -TERM $(pgrep -f fukuii)
 2. **Strong Passwords**: Use long, random passwords for keystores
 3. **File Permissions**: Restrict access to certificate files
    ```bash
-   chmod 600 tls/fukuiiCA.p12 tls/password
-   chown fukuii:fukuii tls/fukuiiCA.p12 tls/password
+   chmod 600 tls/fukuii-rpc.p12 tls/fukuii-rpc.password
+   chown fukuii:fukuii tls/fukuii-rpc.p12 tls/fukuii-rpc.password
    ```
 4. **Certificate Pinning**: Implement certificate pinning in clients
 5. **HSTS Headers**: Use HTTP Strict Transport Security
@@ -782,7 +800,7 @@ TLS adds computational overhead. Optimize for production:
 **Solution**:
 ```bash
 # Check if file exists
-ls -l tls/fukuiiCA.p12
+ls -l tls/fukuii-rpc.p12
 
 # Verify configuration path is correct
 grep "keystore-path" conf/base.conf
@@ -797,16 +815,16 @@ pwd
 
 **Solution**:
 ```bash
-# Verify password is correct
-cat tls/password
+# Check that the password file opens the keystore
+openssl pkcs12 -in tls/fukuii-rpc.p12 -passin file:tls/fukuii-rpc.password -noout \
+  && echo "password OK"
 
 # Try to list keystore contents
-keytool -list -v -keystore tls/fukuiiCA.p12 \
-  -storepass "$(cat tls/password)"
+keytool -list -v -keystore tls/fukuii-rpc.p12 \
+  -storepass "$(cat tls/fukuii-rpc.password)"
 
-# If corrupted, regenerate certificate
-cd tls/
-./gen-cert.sh
+# If corrupted, regenerate the keystore (same --san as before)
+tls/gen-cert.sh --force --san DNS:localhost,IP:127.0.0.1
 ```
 
 #### Issue: "Certificate keystore invalid type set: X"
@@ -816,7 +834,7 @@ cd tls/
 **Solution**:
 ```bash
 # Verify keystore type
-keytool -list -keystore tls/fukuiiCA.p12 -storepass "$(cat tls/password)"
+keytool -list -keystore tls/fukuii-rpc.p12 -storepass "$(cat tls/fukuii-rpc.password)"
 
 # Should show: Keystore type: PKCS12
 # Update config to match:
@@ -837,8 +855,12 @@ openssl s_client -connect localhost:8546 -showcerts
 # - "no shared cipher": Cipher mismatch
 # - "protocol version": TLS version mismatch
 
-# For self-signed certificates, clients must skip validation
-curl -k https://localhost:8546/health  # -k skips verification
+# For self-signed certificates, clients must trust the certificate
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546/health
+
+# "hostname mismatch": the name or address the client used is not in the
+# certificate's subjectAltName; regenerate with gen-cert.sh --san
+openssl x509 -in tls/fukuii-rpc.crt -noout -text | grep -A1 "Subject Alternative Name"
 ```
 
 #### Issue: "Connection Refused"
@@ -893,8 +915,8 @@ When using self-signed certificates, clients must explicitly trust them or skip 
 # Skip validation (testing only)
 curl -k https://localhost:8546
 
-# Trust specific certificate
-curl --cacert tls/fukuiiCA.p12 https://localhost:8546
+# Trust specific certificate (the PEM file gen-cert.sh wrote)
+curl --cacert tls/fukuii-rpc.crt https://localhost:8546
 ```
 
 **Python**:
@@ -903,7 +925,7 @@ curl --cacert tls/fukuiiCA.p12 https://localhost:8546
 requests.post(url, verify=False)
 
 # Trust specific certificate
-requests.post(url, verify='/path/to/cert.pem')
+requests.post(url, verify='tls/fukuii-rpc.crt')
 ```
 
 **Node.js**:
@@ -915,7 +937,7 @@ const options = {
 
 // Trust specific certificate
 const options = {
-  ca: fs.readFileSync('/path/to/cert.pem')
+  ca: fs.readFileSync('tls/fukuii-rpc.crt')
 };
 ```
 
@@ -967,8 +989,9 @@ grep "TLS handshake" ~/.fukuii/etc/logs/fukuii.log
 1. **Strong Passwords**: Minimum 20 characters, random generation
 2. **Secure Storage**: Store passwords in encrypted vaults (HashiCorp Vault, AWS Secrets Manager)
 3. **Access Control**: Limit access to password files
-4. **Rotation**: Change keystore passwords during certificate rotation
-5. **Never Commit**: Add `tls/password` to `.gitignore`
+4. **Rotation**: Change keystore passwords during certificate rotation (`gen-cert.sh` generates a new one every run)
+5. **Never Commit**: Keystores, keys and password files are per deployment. The repository ignores everything
+   under `tls/` except `gen-cert.sh`, and CI rejects a committed keystore or private key
 
 ### TLS Configuration
 
@@ -1032,5 +1055,5 @@ For issues or questions:
 
 ---
 
-**Last Updated**: 2025-11-06  
+**Last Updated**: 2026-11-08  
 **Verified**: TLS implementation tested and confirmed functional after repository migration

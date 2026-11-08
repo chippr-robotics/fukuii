@@ -103,6 +103,9 @@ local/
 credentials.json
 service-account.json
 secrets/
+# tls/gen-cert.sh writes each deployment's keystore, password and certificate here
+/tls/*
+!/tls/gen-cert.sh
 
 # Blockchain & crypto
 keystore/
