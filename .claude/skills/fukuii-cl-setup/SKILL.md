@@ -58,12 +58,23 @@ cause.
    ```hocon
    network.engine-api {
      enabled         = true
-     interface       = "localhost"   # "0.0.0.0" for Docker / cross-host CL
+     interface       = "localhost"   # CL on the same host; see "Where the CL runs"
      port            = 8551
      jwt-secret-path = "/path/to/jwt.hex"
    }
    ```
    Full key reference and defaults: `fukuii-engine-api-setup`.
+
+   **Where the CL runs.** Prefer the same host, or the same Docker network:
+   - **Same host** — `interface = "localhost"`; the CL dials `http://localhost:8551`.
+   - **Docker Compose** — `interface = "0.0.0.0"` *inside the container*, and do
+     **not** publish 8551 on the host. The CL joins the same compose network and
+     dials the service name, e.g. `http://fukuii-sepolia:8551` (see
+     `ops/barad-dur/sepolia/docker-compose.yml`).
+   - **CL on another host** — only over a private network or VPN, behind a
+     firewall that admits the CL's address alone, or through a TLS-terminating
+     proxy. The JWT authenticates each call but does not encrypt it, so never
+     bind 8551 to a public interface or publish it as plain `0.0.0.0`.
 
 3. **Start Fukuii first** and wait for the Engine API to bind on 8551
    (`fukuii sepolia`). The authrpc port must be listening **before** the CL
@@ -80,6 +91,7 @@ cause.
    | Nimbus | `--web3-url=http://localhost:8551 --jwt-secret=/path/to/jwt.hex` |
    | Lodestar | `--execution.urls=http://localhost:8551 --jwt-secret=/path/to/jwt.hex` |
 
+   In Docker Compose, replace `localhost` with the EL's service name.
    On Sepolia, point the CL at a checkpoint-sync URL so it reaches the head fast
    (e.g. `https://sepolia.checkpoint.ethpandaops.io`) — see `fukuii-sepolia-sync`.
 
@@ -90,7 +102,9 @@ cause.
    **`401` means the Engine API is up and correctly requiring JWT auth — this is
    the expected, healthy result, not an error.** A bare `curl` carries no JWT, so
    the server rejects it with 401. `000`/connection-refused = not bound (EL not
-   started, wrong port, or `enabled = false`).
+   started, wrong port, or `enabled = false`). In Docker Compose 8551 is not
+   published, so run the check from the CL's container:
+   `docker compose exec lighthouse curl -s -o /dev/null -w "%{http_code}" http://fukuii-sepolia:8551/`.
 
 6. **Confirm the handshake** (🟢) — within seconds of the CL starting, Fukuii
    logs should show `engine_forkchoiceUpdated*` (CL driving head selection).
@@ -109,7 +123,7 @@ common transient bring-up error — see the decision guide.
 | :-- | :-- | :-- |
 | CL logs "execution layer not available" | EL not bound yet, wrong port, or `enabled=false` | Confirm EL started, authrpc on 8551, `curl … 8551 → 401` |
 | `curl … :8551` → 401 | Healthy — JWT auth required | None; proceed to handshake check |
-| `curl … :8551` → connection refused | Engine API not bound | Start Fukuii / fix port / set `enabled=true` |
+| `curl … :8551` → connection refused | Engine API not bound (or, in Docker, not published — by design) | Start Fukuii / fix port / set `enabled=true`; in Docker, curl from the CL container |
 | Engine API up, but `engine_*` auth fails | JWT mismatch or clock skew | `fukuii-engine-api-debug` (case 1) |
 | Handshake OK but `eth_syncing` stuck | CL itself not synced | Sync the CL (checkpoint sync); `fukuii-sepolia-sync` |
 

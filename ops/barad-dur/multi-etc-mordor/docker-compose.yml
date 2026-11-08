@@ -22,12 +22,12 @@ services:
     restart: unless-stopped
     ports:
       # ETC mainnet
-      - "8545:8545"          # JSON-RPC HTTP
+      - "127.0.0.1:8545:8545"  # JSON-RPC HTTP (host loopback only)
       - "30303:30303/tcp"    # P2P TCP
       - "30303:30303/udp"    # P2P Discovery
       - "9095:9095"          # Metrics
       # Mordor testnet
-      - "8547:8547"          # JSON-RPC HTTP
+      - "127.0.0.1:8547:8547"  # JSON-RPC HTTP (host loopback only)
       - "30304:30304/tcp"    # P2P TCP
       - "30304:30304/udp"    # P2P Discovery
       - "9096:9096"          # Metrics

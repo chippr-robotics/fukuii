@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Ops templates publish JSON-RPC on localhost only, keep the Engine API on the internal Docker network, and enable
+  only the eth, web3, net and fukuii namespaces.** In every `ops/` compose stack (barad-dur ETC, Sepolia, ETH mainnet,
+  multi-network, cirith-ungol, gorgoroth) the JSON-RPC HTTP and WebSocket ports, and the Kong Admin API, are published
+  as `127.0.0.1:<port>`. The Sepolia and mainnet stacks no longer publish the Engine API (8561/8562); Lighthouse reaches
+  it by service name on the compose network. The fukuii configs drop `personal`, `debug` and `qa` from
+  `network.rpc.apis`; gorgoroth keeps `admin` for its static-peering workflow, and its `apis` setting, which sat under
+  `server-address` and had no effect, now applies. Inside the containers the RPC and Engine API still bind `0.0.0.0`
+  so Docker can forward to them. To reach RPC from another host, use an SSH tunnel or an authenticating TLS proxy.
+  The `fukuii-cl-setup` and `fukuii-engine-api-setup` skills now say how to run a CL on another host.
 - **The `--tui` dashboard draws the worm-to-brain bars, in emoji or ASCII, at any size from 80×24 (spec 027 slice 1).**
   The progress bars are now the bars the logs already draw (`[====🪱....]🧠 52%`). Regular sync shows one Blocks worm;
   SNAP sync shows five worm rows (Overall, Accounts, Storage, Bytecode, Healing), each with its count and rate once, plus
