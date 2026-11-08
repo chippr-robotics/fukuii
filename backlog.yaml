@@ -1626,3 +1626,13 @@ items:
     links:
       issues: [1756]
     notes: Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
+  - id: B-147
+    title: "TLS docs: fix the TLS skill and runbook errors, docs/MCP.md, and enterprise-deployment's mTLS claim"
+    priority: P2
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-08
+    refs: [B-145]
+    links:
+      issues: [1756]
