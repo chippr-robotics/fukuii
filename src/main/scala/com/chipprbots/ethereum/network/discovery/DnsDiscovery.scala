@@ -2,14 +2,20 @@ package com.chipprbots.ethereum.network.discovery
 
 import java.net.InetAddress
 import java.util.Hashtable
+import java.util.concurrent.atomic.AtomicInteger
 import javax.naming.Context
 import javax.naming.directory.InitialDirContext
 
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.SyncIO
+import cats.effect.std.Semaphore
+import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel.*
 
 import scala.collection.mutable
+import scala.concurrent.duration.*
 import scala.util.Try
 
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -50,63 +56,261 @@ object DnsDiscovery extends Logger:
   /** DNS lookup timeout in milliseconds. */
   private val DnsTimeoutMs = "5000"
 
-  /** Resolve enode URLs from a DNS discovery domain.
+  /** How a tree walk is scheduled. None of it changes what is accepted, only when and how fast.
     *
-    * @param domain
-    *   DNS domain hosting the ENR tree (e.g., "all.mordor.blockd.info")
+    * @param treeDeadline
+    *   wall-clock budget for one tree. When it runs out the walk is cancelled, the enodes found so far stay delivered,
+    *   and the tree is reported as timed out. A query still on the wire is interrupted, but JNDI does not abandon a
+    *   datagram wait on interrupt: it returns when the attempt in progress times out and skips its retries, so a lost
+    *   query holds the walk for at most one attempt timeout (5 s) past the deadline instead of its full 15 s (measured
+    *   on JDK 25: 15.06 s uninterrupted, 5.04 s interrupted at 1 s).
+    * @param concurrency
+    *   most TXT queries in flight at once, per tree. This is also the DNS request rate limit: a walk can never ask the
+    *   resolver for more than this many answers at a time.
+    */
+  final case class WalkSettings(treeDeadline: FiniteDuration, concurrency: Int):
+    require(treeDeadline > Duration.Zero, s"DNS tree deadline must be positive, got $treeDeadline")
+    require(concurrency > 0, s"DNS walk concurrency must be positive, got $concurrency")
+
+  object WalkSettings:
+    /** ETC mainnet's tree is about 300 queries. At 8 in flight that is seconds on a healthy resolver; the deadline only
+      * matters when queries are being lost (a lost JNDI query costs 15 s), where 120 s still lets a 300-query walk
+      * finish with several percent of them lost.
+      */
+    val Default: WalkSettings = WalkSettings(treeDeadline = 120.seconds, concurrency = 8)
+
+  /** The answer to one TXT query. A lost query is not the same as a missing one: a missing name is a definite answer
+    * (NXDOMAIN, no TXT), a lost query is the resolver failing to answer at all (timeout, SERVFAIL, socket error).
+    */
+  enum TxtResult:
+    case Found(record: String)
+    case NotFound
+    case Lost(reason: String)
+
+  /** One blocking TXT query. The walk runs these on the blocking pool, never on a compute or actor thread. */
+  trait TxtLookup:
+    def query(name: String): TxtResult
+
+  /** DNS TXT record lookup using JNDI (JDK built-in, no external dependency).
+    *
+    * A fresh context per query: a JNDI context is not safe for concurrent use, and an interrupted query (the tree
+    * deadline) must not leave a shared UDP socket closed under the next one.
+    */
+  object JndiTxtLookup extends TxtLookup:
+    override def query(name: String): TxtResult =
+      try
+        val ctx = createDnsContext()
+        try
+          val attrs = ctx.getAttributes(name, Array("TXT"))
+          val txtAttr = attrs.get("TXT")
+          if txtAttr != null && txtAttr.size > 0 then
+            // TXT records may be returned with quotes
+            val value = txtAttr.get(0).toString.stripPrefix("\"").stripSuffix("\"")
+            // DNS may split long TXT records into multiple strings — concatenate
+            TxtResult.Found(value.replace("\" \"", ""))
+          else TxtResult.NotFound
+        finally
+          try ctx.close()
+          catch case _: javax.naming.NamingException => () // the answer is already in hand
+      catch
+        case _: javax.naming.NameNotFoundException => TxtResult.NotFound
+        case ex: javax.naming.NamingException =>
+          log.debug("DNS_DISCOVERY: DNS lookup failed for {}: {}", name, ex.getMessage)
+          TxtResult.Lost(Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName))
+
+  /** How a tree walk ended. */
+  enum WalkOutcome:
+    case Completed
+    case TimedOut
+    case Failed(reason: String)
+
+  /** What a tree walk did, whatever way it ended. `queries` counts answered or lost queries, not ones cancelled in
+    * flight by the deadline. A lost branch query drops its whole subtree, so `lost > 0` means the tree may be short.
+    */
+  final case class WalkSummary(
+      domain: String,
+      outcome: WalkOutcome,
+      resolved: Int,
+      skipped: Int,
+      queries: Int,
+      lost: Int,
+      elapsed: FiniteDuration
+  )
+
+  /** Walk one EIP-1459 tree and hand each enode to `onEnode` as soon as its ENR leaf is parsed.
+    *
+    * This is the scheduling, not the trust: records are parsed and filtered exactly as before ([[parseRoot]],
+    * [[parseEnrToEnode]], `forkIdFilter`), only the order queries are issued in and the time they may take are new.
+    * Queries run on the blocking pool, up to `settings.concurrency` at once; sibling branches are walked in parallel.
+    * `onEnode` may be called concurrently and more than once for the same tree, never twice for the same enode.
+    *
+    * Never fails and never blocks the caller: whatever goes wrong ends the walk with a [[WalkSummary]] (and a WARN),
+    * after the enodes already delivered.
+    *
     * @param forkIdFilter
     *   Optional EIP-2124 fork ID filter. When provided, ENR entries carrying an `eth` key with an incompatible fork ID
     *   are skipped (no outbound dial attempted). ENRs without an `eth` key are accepted optimistically — the
     *   wire-protocol STATUS handshake makes the authoritative check. Mirrors the logic in [[ForkIdTag]] used by discv4
     *   routing.
-    * @return
-    *   set of enode:// URL strings, empty on any failure
+    */
+  def walkTree(
+      domain: String,
+      lookup: TxtLookup,
+      settings: WalkSettings,
+      forkIdFilter: Option[EnrForkIdFilter],
+      onEnode: String => IO[Unit]
+  ): IO[WalkSummary] =
+    for
+      startedAt <- IO.monotonic
+      permits <- Semaphore[IO](settings.concurrency.toLong)
+      walk = new TreeWalk(domain, lookup, permits, forkIdFilter, onEnode)
+      outcome <- walk.run
+        .timeoutTo(settings.treeDeadline, IO.pure(WalkOutcome.TimedOut))
+        .handleError(ex => WalkOutcome.Failed(s"unexpected error: $ex"))
+      elapsed <- IO.monotonic.map(_ - startedAt)
+      summary = walk.summary(outcome, elapsed)
+      _ <- IO(logSummary(summary, settings))
+    yield summary
+
+  /** Walk every domain in parallel (they are independent trees), turning each enode found into a [[Node]] for
+    * `onNodes`. Completes once every tree has ended; the summaries are in `domains` order.
+    */
+  def seed(
+      domains: Seq[String],
+      lookup: TxtLookup,
+      settings: WalkSettings,
+      forkIdFilter: Option[EnrForkIdFilter],
+      onNodes: Set[Node] => IO[Unit]
+  ): IO[List[WalkSummary]] =
+    domains.toList.parTraverse { domain =>
+      walkTree(
+        domain,
+        lookup,
+        settings,
+        forkIdFilter,
+        enode =>
+          IO(NodeParser.parseNodes(Set(enode))).flatMap(nodes => if nodes.isEmpty then IO.unit else onNodes(nodes))
+      )
+    }
+
+  /** Blocking convenience over [[walkTree]] for tests and tools: the enode URLs of one tree, empty on any failure.
+    * Never call this from node start-up, a tree walk takes as long as DNS takes.
     */
   def resolveEnodes(
       domain: String,
-      forkIdFilter: Option[EnrForkIdFilter] = None
+      forkIdFilter: Option[EnrForkIdFilter] = None,
+      lookup: TxtLookup = JndiTxtLookup,
+      settings: WalkSettings = WalkSettings.Default
   ): Set[String] =
-    log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)
+    val found = mutable.Set.empty[String]
+    val _ = walkTree(domain, lookup, settings, forkIdFilter, enode => IO(found.synchronized(found += enode)).void)
+      .unsafeRunSync()(using IORuntime.global)
+    found.synchronized(found.toSet)
 
-    try
-      val ctx = createDnsContext()
-      try
-        val root = lookupTxt(ctx, domain)
-        root match
-          case Some(rootRecord) if rootRecord.startsWith("enrtree-root:") =>
-            val parsed = parseRoot(rootRecord)
-            parsed match
-              case Some((enrRoot, _, _)) =>
-                val visited = mutable.Set.empty[String]
-                val enodes = mutable.Set.empty[String]
-                val skipped = mutable.Set.empty[String] // tracking for log only
-                resolveTree(ctx, domain, enrRoot, visited, enodes, skipped, forkIdFilter, depth = 0)
-                if skipped.nonEmpty then
-                  log.info(
-                    "DNS_DISCOVERY: Resolved {} enode(s) from {} (skipped {} on fork-ID mismatch)",
-                    enodes.size,
-                    domain,
-                    skipped.size
+  private def logSummary(summary: WalkSummary, settings: WalkSettings): Unit =
+    val WalkSummary(domain, outcome, resolved, skipped, queries, lost, elapsed) = summary
+    val skippedNote = if skipped > 0 then s", skipped $skipped on fork-ID mismatch" else ""
+    val counts = s"resolved $resolved enode(s)$skippedNote, lost $lost of $queries queries, ${elapsed.toMillis} ms"
+    outcome match
+      case WalkOutcome.Completed if lost == 0 =>
+        log.info(
+          s"DNS_DISCOVERY: Resolved $resolved enode(s) from $domain$skippedNote ($queries queries, ${elapsed.toMillis} ms)"
+        )
+      case WalkOutcome.Completed =>
+        log.warn(s"DNS_DISCOVERY: Tree $domain is incomplete, a lost branch query drops its subtree: $counts")
+      case WalkOutcome.TimedOut =>
+        log.warn(s"DNS_DISCOVERY: Tree $domain hit its ${settings.treeDeadline} deadline and was abandoned: $counts")
+      case WalkOutcome.Failed(reason) =>
+        log.warn(s"DNS_DISCOVERY: Failed to resolve DNS tree from $domain ($reason): $counts")
+
+  /** One tree walk's state. The sets are touched by many fibers at once, so every access goes through `synchronized`.
+    */
+  final private class TreeWalk(
+      domain: String,
+      lookup: TxtLookup,
+      permits: Semaphore[IO],
+      forkIdFilter: Option[EnrForkIdFilter],
+      onEnode: String => IO[Unit]
+  ):
+    private val visited = mutable.Set.empty[String]
+    private val enodes = mutable.Set.empty[String]
+    private val skipped = mutable.Set.empty[String] // tracking for log only
+    private val queries = new AtomicInteger(0)
+    private val lost = new AtomicInteger(0)
+
+    def run: IO[WalkOutcome] =
+      IO(log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)) *> query(domain).flatMap {
+        case TxtResult.Found(rootRecord) if rootRecord.startsWith("enrtree-root:") =>
+          parseRoot(rootRecord) match
+            case Some((enrRoot, _, _)) => walk(enrRoot, depth = 0).as(WalkOutcome.Completed)
+            case None                  => IO.pure(WalkOutcome.Failed(s"cannot parse root record: $rootRecord"))
+        case TxtResult.Found(record) => IO.pure(WalkOutcome.Failed(s"unexpected root record: $record"))
+        case TxtResult.NotFound      => IO.pure(WalkOutcome.Failed("no TXT record found"))
+        case TxtResult.Lost(reason)  => IO.pure(WalkOutcome.Failed(s"root query lost: $reason"))
+      }
+
+    def summary(outcome: WalkOutcome, elapsed: FiniteDuration): WalkSummary =
+      synchronized(WalkSummary(domain, outcome, enodes.size, skipped.size, queries.get, lost.get, elapsed))
+
+    /** One query, holding a permit only while it is on the wire, so a branch never holds one while it waits for its
+      * children (that would deadlock a small `concurrency`).
+      */
+    private def query(name: String): IO[TxtResult] =
+      permits.permit
+        .surround(IO.interruptible(lookup.query(name)))
+        .handleError(ex => TxtResult.Lost(ex.toString))
+        .flatTap { result =>
+          IO {
+            queries.incrementAndGet()
+            if result.isInstanceOf[TxtResult.Lost] then lost.incrementAndGet()
+          }
+        }
+
+    /** True the first time `hash` is seen, so a hash reachable twice (or in a cycle) is walked once. */
+    private def firstVisit(hash: String): Boolean = synchronized(visited.add(hash))
+
+    /** True if `enode` is new and the tree's record cap still has room. */
+    private def accept(enode: String): Boolean = synchronized(enodes.size < MaxRecords && enodes.add(enode))
+
+    private def atCap: Boolean = synchronized(enodes.size >= MaxRecords)
+
+    private def skip(subdomain: String): Unit = synchronized { val _ = skipped.add(subdomain) }
+
+    /** Resolve one tree node, siblings in parallel. */
+    private def walk(hash: String, depth: Int): IO[Unit] =
+      if depth <= MaxDepth && !atCap && firstVisit(hash) then
+        val subdomain = s"$hash.$domain"
+        query(subdomain).flatMap {
+          case TxtResult.Found(record) if record.startsWith("enrtree-branch:") =>
+            val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
+            children.toList.parTraverse_(child => walk(child, depth + 1))
+
+          case TxtResult.Found(record) if record.startsWith("enr:") =>
+            parseEnrToEnode(record, forkIdFilter) match
+              case Right(enode) =>
+                // A sink that fails must not take the rest of the tree down with it.
+                if accept(enode) then
+                  onEnode(enode).handleErrorWith(ex =>
+                    IO(log.warn("DNS_DISCOVERY: Could not hand over {}: {}", enode, ex.toString))
                   )
-                else log.info("DNS_DISCOVERY: Resolved {} enode(s) from {}", enodes.size, domain)
-                enodes.toSet
+                else IO.unit
+              case Left(reason) if reason.startsWith("fork-id mismatch") => IO(skip(subdomain))
+              case Left(_) => IO(log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain))
 
-              case None =>
-                log.warn("DNS_DISCOVERY: Failed to parse root record from {}: {}", domain, rootRecord)
-                Set.empty
+          case TxtResult.Found(record) if record.startsWith("enrtree://") =>
+            // Link to another tree — skip for now (could recurse into other domains)
+            IO(log.debug("DNS_DISCOVERY: Skipping link record at {}: {}", subdomain, record))
 
-          case Some(record) =>
-            log.warn("DNS_DISCOVERY: Unexpected root record from {}: {}", domain, record)
-            Set.empty
+          case TxtResult.Found(record) =>
+            IO(log.debug("DNS_DISCOVERY: Unknown record type at {}: {}", subdomain, record.take(50)))
 
-          case None =>
-            log.warn("DNS_DISCOVERY: No TXT record found for {}", domain)
-            Set.empty
-      finally ctx.close()
-    catch
-      case ex: Exception =>
-        log.warn("DNS_DISCOVERY: Failed to resolve DNS tree from {}: {}", domain, ex.getMessage)
-        Set.empty
+          case TxtResult.NotFound =>
+            IO(log.debug("DNS_DISCOVERY: No TXT record at {}", subdomain))
+
+          case TxtResult.Lost(reason) =>
+            IO(log.debug("DNS_DISCOVERY: DNS query lost at {}: {}", subdomain, reason))
+        }
+      else IO.unit
 
   /** Parse root record: `enrtree-root:v1 e=<hash> l=<hash> seq=<n> sig=<sig>` */
   private def parseRoot(record: String): Option[(String, String, Long)] =
@@ -125,46 +329,6 @@ object DnsDiscovery extends Logger:
     }
 
     enrRoot.map(e => (e, linkRoot.getOrElse(""), seq))
-
-  /** Recursively resolve a DNS tree node. */
-  private def resolveTree(
-      ctx: InitialDirContext,
-      domain: String,
-      hash: String,
-      visited: mutable.Set[String],
-      enodes: mutable.Set[String],
-      skipped: mutable.Set[String],
-      forkIdFilter: Option[EnrForkIdFilter],
-      depth: Int
-  ): Unit =
-    if depth <= MaxDepth && enodes.size < MaxRecords && !visited.contains(hash) then
-      visited += hash
-
-      val subdomain = s"$hash.$domain"
-      lookupTxt(ctx, subdomain) match
-        case Some(record) if record.startsWith("enrtree-branch:") =>
-          val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
-          children.foreach { child =>
-            resolveTree(ctx, domain, child, visited, enodes, skipped, forkIdFilter, depth + 1)
-          }
-
-        case Some(record) if record.startsWith("enr:") =>
-          parseEnrToEnode(record, forkIdFilter) match
-            case Right(enode) => enodes += enode
-            case Left(reason) if reason.startsWith("fork-id mismatch") =>
-              skipped += subdomain
-            case Left(_) =>
-              log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
-
-        case Some(record) if record.startsWith("enrtree://") =>
-          // Link to another tree — skip for now (could recurse into other domains)
-          log.debug("DNS_DISCOVERY: Skipping link record at {}: {}", subdomain, record)
-
-        case Some(record) =>
-          log.debug("DNS_DISCOVERY: Unknown record type at {}: {}", subdomain, record.take(50))
-
-        case None =>
-          log.debug("DNS_DISCOVERY: No TXT record at {}", subdomain)
 
   /** Parse an ENR record into an enode:// URL.
     *
@@ -298,23 +462,6 @@ object DnsDiscovery extends Logger:
       val standard = padded.replace('-', '+').replace('_', '/')
       java.util.Base64.getDecoder.decode(standard)
     catch case _: Exception => Array.empty
-
-  /** DNS TXT record lookup using JNDI (JDK built-in, no external dependency). */
-  private def lookupTxt(ctx: InitialDirContext, domain: String): Option[String] =
-    try
-      val attrs = ctx.getAttributes(domain, Array("TXT"))
-      val txtAttr = attrs.get("TXT")
-      if txtAttr != null && txtAttr.size > 0 then
-        // TXT records may be returned with quotes
-        val value = txtAttr.get(0).toString.stripPrefix("\"").stripSuffix("\"")
-        // DNS may split long TXT records into multiple strings — concatenate
-        Some(value.replace("\" \"", ""))
-      else None
-    catch
-      case _: javax.naming.NameNotFoundException => None
-      case ex: javax.naming.NamingException =>
-        log.debug("DNS_DISCOVERY: DNS lookup failed for {}: {}", domain, ex.getMessage)
-        None
 
   /** ENR fork-ID filter used during DNS discovery to skip nodes on incompatible chains. Mirrors the logic in
     * [[ForkIdTag]] used by discv4 routing-table filtering, but applies at DNS-resolution time so the rejected ENRs

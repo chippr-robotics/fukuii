@@ -156,13 +156,18 @@ trait StorageBuilder:
 
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder:
   self: InstanceConfigProvider & ActorSystemBuilder =>
-  // Built lazily so blockchain storage is initialized before genesisHeader is read.
-  // The filter rejects ENRs with `eth` key fork IDs that don't match the local chain —
-  // stops cross-network peers (BSC, mainnet, etc.) from burning outbound dial slots when
-  // shared DNS trees include mis-tagged entries. See PR #1249. Mirrors ForkIdTag (discv4).
+  // Config load does no DNS (H9): it keeps the EIP-1459 domain names, and PeerDiscoveryManager walks them in the
+  // background once the node is up.
   lazy val discoveryConfig: DiscoveryConfig =
+    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+
+  // Rejects ENRs with `eth` key fork IDs that don't match the local chain — stops cross-network peers (BSC, mainnet,
+  // etc.) from burning outbound dial slots when shared DNS trees include mis-tagged entries. See PR #1249. Mirrors
+  // ForkIdTag (discv4). It reads genesis and the head lazily, per ENR, so the DNS walk (which starts after genesis is
+  // loaded) filters against the real chain.
+  lazy val dnsEnrForkIdFilter: com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter =
     val reader = com.chipprbots.ethereum.domain.BlockchainReader(storagesInstance.storages)
-    val enrFilter = new com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter(
+    new com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter(
       genesisHash = () => reader.genesisHeader.hash.value,
       genesisTimestamp = () => reader.genesisHeader.unixTimestamp.toLong,
       blockchainConfig = blockchainConfig,
@@ -173,12 +178,6 @@ trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder
           .getBlockHeaderByNumber(reader.getBestBlockNumber)
           .map(_.unixTimestamp.toLong)
           .getOrElse(reader.genesisHeader.unixTimestamp.toLong)
-    )
-    DiscoveryConfig(
-      instanceConfig.config,
-      blockchainConfig.bootstrapNodes,
-      blockchainConfig.dnsDiscoveryDomains,
-      enrForkIdFilter = Some(enrFilter)
     )
 
 trait KnownNodesManagerBuilder:
@@ -257,7 +256,8 @@ trait PeerDiscoveryManagerBuilder:
                 )
               )
             )(using discoveryIoRuntime),
-            randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
+            randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers,
+            dnsForkIdFilter = Some(dnsEnrForkIdFilter)
           )(using discoveryIoRuntime)
         )
         .onFailure[Throwable](SupervisorStrategy.restart),

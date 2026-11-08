@@ -269,7 +269,9 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       kademliaAlpha = 3,
       channelCapacity = 100,
       maxServerChannels = 2048,
-      computeThreads = 1
+      computeThreads = 1,
+      dnsDomains = Seq.empty,
+      dnsWalk = com.chipprbots.ethereum.network.discovery.DnsDiscovery.WalkSettings.Default
     )
 
     // Override the portForwarding to use a mock implementation

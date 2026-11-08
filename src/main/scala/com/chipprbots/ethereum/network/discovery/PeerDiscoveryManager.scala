@@ -9,14 +9,18 @@ import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.std.Queue
 import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel.*
 
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Success
 
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
 import com.chipprbots.scalanet.discovery.ethereum.Node as ENode
 import com.chipprbots.scalanet.discovery.ethereum.v4
 import org.bouncycastle.util.encoders.Hex
+import scodec.bits.BitVector
 
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 
@@ -31,6 +35,7 @@ object PeerDiscoveryManager:
   case object Stop extends Command
   final private case class StartAttempt(result: Either[Throwable, (Discovery, IO[Unit])]) extends Command
   final private case class StopAttempt(result: Either[Throwable, Unit]) extends Command
+  final private case class DnsNodesFound(nodes: Set[Node]) extends Command
   final case class GetDiscoveredNodesInfoReq(replyTo: ActorRef[DiscoveredNodesInfo]) extends Command
   final case class GetRandomNodeInfoReq(replyTo: ActorRef[RandomNodeInfo]) extends Command
 
@@ -54,13 +59,16 @@ object PeerDiscoveryManager:
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage,
       discoveryServiceResource: Resource[IO, v4.DiscoveryService],
-      randomNodeBufferSize: Int = 0
+      randomNodeBufferSize: Int = 0,
+      dnsLookup: DnsDiscovery.TxtLookup = DnsDiscovery.JndiTxtLookup,
+      dnsForkIdFilter: Option[DnsDiscovery.EnrForkIdFilter] = None
   )(using runtime: IORuntime): Behavior[Command] =
     Behaviors.setup { ctx =>
       // Capture ctx.log on the actor thread once; use this `log` val (plain SLF4J) in
       // IO/Future callbacks that run on CE worker threads — ctx.log itself enforces
       // checkCurrentActorThread() and will throw if called off-thread.
       val log = ctx.log
+      val self = ctx.self
 
       val alreadyDiscoveredNodes: Vector[Node] =
         if !discoveryConfig.reuseKnownNodes then Vector.empty
@@ -85,6 +93,58 @@ object PeerDiscoveryManager:
           .background
       yield (service, randomNodes)
 
+      // EIP-1459 candidates found so far by the background DNS walk, and how to cancel that walk. Actor-confined plain
+      // vars (P10): the walk's threads only send DnsNodesFound, they never touch these.
+      var dnsNodes: Set[Node] = Set.empty
+      var cancelDnsWalk: Option[() => Future[Unit]] = None
+
+      /** Walk the configured DNS trees off the actor and off `main`, on the discovery runtime's blocking pool. Config
+        * load no longer waits for DNS (H9): the static and bootstrap nodes are served from the first request, and these
+        * join them as the walk finds them.
+        */
+      def startDnsWalk(): Unit =
+        if cancelDnsWalk.isEmpty && discoveryConfig.dnsDomains.nonEmpty then
+          given IORuntime = runtime
+          log.info("Resolving {} DNS discovery domain(s) in the background", discoveryConfig.dnsDomains.size)
+          val (_, cancel) = DnsDiscovery
+            .seed(
+              discoveryConfig.dnsDomains,
+              dnsLookup,
+              discoveryConfig.dnsWalk,
+              dnsForkIdFilter,
+              nodes => IO(self ! DnsNodesFound(nodes))
+            )
+            .unsafeToFutureCancelable()
+          cancelDnsWalk = Some(cancel)
+
+      def stopDnsWalk(): Unit =
+        cancelDnsWalk.foreach(cancel => cancel())
+        cancelDnsWalk = None
+
+      /** Remember `nodes` as candidates; returns the ones not seen before. */
+      def acceptDnsNodes(nodes: Set[Node]): Set[Node] =
+        val fresh = nodes.filterNot(n => n.id == localNodeId || dnsNodes.contains(n))
+        dnsNodes = dnsNodes ++ fresh
+        fresh
+
+      /** Hand DNS-found nodes to the running discovery service, as enrollment hands it the bootstrap nodes: bond with
+        * each and fetch its ENR so it can join the routing table. Unbounded like enrollment; the walk delivers nodes
+        * over seconds, not all at once.
+        */
+      def enrollDnsNodes(service: v4.DiscoveryService, nodes: Set[Node]): Unit =
+        if nodes.nonEmpty then
+          given IORuntime = runtime
+          nodes.toList
+            .parTraverse(node => service.addNode(toENode(node)).attempt)
+            .unsafeToFuture()
+            .onComplete {
+              case Success(results) =>
+                val failed = results.count(_.isLeft)
+                if failed > 0 then
+                  log.debug("{} of {} DNS node(s) could not be added to discovery", failed, results.size)
+              case Failure(ex) => log.warn("Failed to add DNS nodes to discovery: {}", ex.getMessage)
+            }(using runtime.compute)
+
       def startDiscoveryService(): Unit =
         given IORuntime = runtime
         discoveryResources.allocated
@@ -108,12 +168,15 @@ object PeerDiscoveryManager:
           replyTo: ActorRef[DiscoveredNodesInfo]
       ): Unit =
         given IORuntime = runtime
+        // Snapshot on the actor thread: the IO below runs later, on another one. DNS nodes are bootstrap-like, so
+        // they are served exactly when the bootstrap nodes are.
+        val dnsCandidates: Set[Node] = if discoveryConfig.reuseKnownNodes then dnsNodes else Set.empty
         val task: IO[DiscoveredNodesInfo] =
           val base: IO[Set[Node]] = maybeService.fold(IO.pure(Set.empty[Node])) {
             _.getNodes.map(_.map(toNode))
           }
           base
-            .map(_ ++ alreadyDiscoveredNodes)
+            .map(_ ++ alreadyDiscoveredNodes ++ dnsCandidates)
             .map(_.filterNot(n => n.id == localNodeId))
             .flatTap(nodes => IO(log.debug("Discovered nodes snapshot ({} total) sent", nodes.size.toString)))
             .map(DiscoveredNodesInfo(_))
@@ -159,6 +222,8 @@ object PeerDiscoveryManager:
           Behaviors.same
 
         case Start =>
+          // DNS seeding is a candidate source in its own right, so it runs even with discv4 itself disabled.
+          startDnsWalk()
           if discoveryConfig.discoveryEnabled then
             ctx.log.info("Starting peer discovery...")
             startDiscoveryService()
@@ -167,7 +232,15 @@ object PeerDiscoveryManager:
             ctx.log.info("Peer discovery is disabled.")
             Behaviors.same
 
-        case Stop | _: StartAttempt | _: StopAttempt =>
+        case DnsNodesFound(nodes) =>
+          acceptDnsNodes(nodes)
+          Behaviors.same
+
+        case Stop =>
+          stopDnsWalk()
+          Behaviors.same
+
+        case _: StartAttempt | _: StopAttempt =>
           Behaviors.same
       }
 
@@ -183,12 +256,19 @@ object PeerDiscoveryManager:
         case Start =>
           Behaviors.same
 
+        case DnsNodesFound(nodes) =>
+          acceptDnsNodes(nodes)
+          Behaviors.same
+
         case Stop =>
           ctx.log.info("Stopping peer discovery...")
+          stopDnsWalk()
           stopping()
 
         case StartAttempt(Right((discovery, release))) =>
           ctx.log.info("Peer discovery started.")
+          // DNS nodes that beat the service to it are enrolled now.
+          enrollDnsNodes(discovery._1, dnsNodes)
           started(discovery, release)
 
         case StartAttempt(Left(ex)) =>
@@ -215,8 +295,13 @@ object PeerDiscoveryManager:
         case Start =>
           Behaviors.same
 
+        case DnsNodesFound(nodes) =>
+          enrollDnsNodes(discovery._1, acceptDnsNodes(nodes))
+          Behaviors.same
+
         case Stop =>
           ctx.log.info("Stopping peer discovery...")
+          stopDnsWalk()
           stopDiscoveryService(release)
           stopping()
 
@@ -234,6 +319,10 @@ object PeerDiscoveryManager:
           Behaviors.same
 
         case Start | Stop =>
+          Behaviors.same
+
+        case DnsNodesFound(nodes) =>
+          acceptDnsNodes(nodes)
           Behaviors.same
 
         case StartAttempt(Right((_, release))) =>
@@ -267,6 +356,12 @@ object PeerDiscoveryManager:
       addr = enode.address.ip,
       tcpPort = enode.address.tcpPort,
       udpPort = enode.address.udpPort
+    )
+
+  private def toENode(node: Node): ENode =
+    ENode(
+      id = PublicKey(BitVector(node.id.toArray[Byte])),
+      address = ENode.Address(ip = node.addr, udpPort = node.udpPort, tcpPort = node.tcpPort)
     )
 
   private def formatNodeForLogs(node: Node): String =
