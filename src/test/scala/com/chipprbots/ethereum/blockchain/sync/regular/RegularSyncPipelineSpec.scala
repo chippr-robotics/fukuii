@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.PoisonPill
@@ -8,6 +10,7 @@ import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 
 import cats.data.NonEmptyList
+import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
@@ -67,6 +70,35 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
     /** Stops the child of RegularSync at `path` (wildcards allowed), as a failure inside it would. */
     def stopChild(path: String): Unit =
       system.actorSelection(s"${regularSync.path}/$path") ! PoisonPill
+
+    /** An importer of its own, outside `regularSync`, driving `fetcher`, on this fixture's import lock. */
+    def spawnImporter(fetcher: TestProbe, name: String): TypedActorRef[BlockImporter.Command] =
+      testKit.spawn(
+        BlockImporter.apply(
+          fetcher.ref.toTyped[BlockFetcher.FetchCommand],
+          consensusAdapter,
+          blockchainReader,
+          blockchainWriter,
+          stateStorage,
+          evmCodeStorage,
+          branchResolution,
+          syncConfig,
+          ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+          TestProbe().ref,
+          pendingTransactionsManager.ref
+            .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+          blockTopic,
+          TestProbe().ref,
+          peerEventBus.ref,
+          networkPeerManager.ref,
+          blockchain,
+          blacklist,
+          this,
+          exhausts = exhausts,
+          importLock = importLock
+        ),
+        name
+      )
 
   /** Records how many batch imports ran at once. The first takes long enough to be running when its pipeline goes. */
   class ConcurrentImportFixture extends PipelineFixture:
@@ -202,32 +234,7 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
         override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
 
         val importerFetcher: TestProbe = TestProbe("resolverImporterFetcher")
-        val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
-          BlockImporter.apply(
-            importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
-            consensusAdapter,
-            blockchainReader,
-            blockchainWriter,
-            stateStorage,
-            evmCodeStorage,
-            branchResolution,
-            syncConfig,
-            ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
-            TestProbe().ref,
-            pendingTransactionsManager.ref
-              .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
-            blockTopic,
-            TestProbe().ref,
-            peerEventBus.ref,
-            networkPeerManager.ref,
-            blockchain,
-            blacklist,
-            this,
-            exhausts = exhausts,
-            importLock = importLock
-          ),
-          "resolver-stopped-importer"
-        )
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(importerFetcher, "resolver-stopped-importer")
         importerFetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
 
         importer ! BlockImporter.StartForkRecovery(BigInt(15))
@@ -242,5 +249,30 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
           .fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
           .fromBlock shouldBe 1
         testKit.stop(importer)
+    )
+
+    // W1 (beacon): an import that never ends holds every later importer at the lock, with no limit, as go-ethereum's
+    // `cancelWg.Wait()` has none. The wait is shown instead: a WARN each interval, and the gauge.
+    "show that it waits for the import lock, and start once the lock is free" taggedAs (UnitTest, SyncTest) in sync(
+      new PipelineFixture:
+        BlockImporter.lockWaitWarnInterval = 50.millis
+        try
+          // A stopped importer's import, still running.
+          val held = new CountDownLatch(1)
+          val release = Deferred.unsafe[IO, Unit]
+          importLock.guard(IO(held.countDown()) *> release.get).unsafeRunAndForget()(using ioRuntime)
+          held.await(10, TimeUnit.SECONDS) shouldBe true
+
+          val importerFetcher: TestProbe = TestProbe("lockWaitingImporterFetcher")
+          val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(importerFetcher, "lock-waiting-importer")
+
+          awaitCond(RegularSyncMetrics.importLockWaitSeconds > 0, 10.seconds)
+          importerFetcher.expectNoMessage(200.millis) // not started: it has not read its start block
+
+          release.complete(()).unsafeRunSync()(using ioRuntime)
+          importerFetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
+          RegularSyncMetrics.importLockWaitSeconds shouldBe 0.0
+          testKit.stop(importer)
+        finally BlockImporter.lockWaitWarnInterval = 30.seconds
     )
   }

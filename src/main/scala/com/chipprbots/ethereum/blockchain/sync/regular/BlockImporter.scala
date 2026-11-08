@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.PostStop
 import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -79,6 +80,12 @@ object BlockImporter:
 
   // How long a block waits after an exhausted fetch before it is tried again. A variable only so a spec can shorten it.
   private[regular] var exhaustBackoff: FiniteDuration = 5.minutes
+
+  // How often an importer still waiting for the import lock to start says so (beacon, #1705). A variable only so a spec
+  // can shorten it.
+  private[regular] var lockWaitWarnInterval: FiniteDuration = 30.seconds
+  private[regular] case object LockWaitTick extends Command
+  private[regular] val LockWaitKey = "BlockImporterLockWait"
 
   // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
   // 128 blocks provides enough depth to cover common shallow forks without resyncing the
@@ -597,22 +604,46 @@ final private class BlockImporterLogic(
     * Until then a mined block is kept, and everything else dropped: no fetcher answers one it has not started.
     */
   def starting(): Behavior[Command] =
+    val waitingSince = System.nanoTime()
     ctx.pipeToSelf(importLock.guard(IO.delay(blockchainReader.getBestBlockNumber)).unsafeToFuture()) {
       case Success(bestBlock) => StartFrom(bestBlock)
       case Failure(error)     => StartFailed(error)
     }
+    // The wait has no limit, as go-ethereum's `cancelWg.Wait()` has none: starting without the lock would bring #1432
+    // back. An import that never ends would hold every later pipeline here while RegularSync reads as running, so the
+    // wait is made visible instead: a WARN each interval, and the gauge (beacon, #1705).
+    timers.startTimerWithFixedDelay(LockWaitKey, LockWaitTick, lockWaitWarnInterval)
     Behaviors.withStash(StartStashCapacity) { stash =>
-      Behaviors.receiveMessage {
-        case StartFrom(bestBlock) => stash.unstashAll(start(bestBlock))
-        case StartFailed(error)   =>
-          // Fail loudly: this importer stops, and RegularSync replaces the pipeline.
-          throw error
-        case mined: MinedBlock =>
-          if stash.isFull then log.warning("Mined block {} dropped: the importer is still starting", mined.block.number)
-          else stash.stash(mined)
+      Behaviors
+        .receiveMessage[Command] {
+          case StartFrom(bestBlock) =>
+            timers.cancel(LockWaitKey)
+            RegularSyncMetrics.setImportLockWaitSeconds(0)
+            stash.unstashAll(start(bestBlock))
+          case StartFailed(error) =>
+            // Fail loudly: this importer stops, and RegularSync replaces the pipeline.
+            throw error
+          case LockWaitTick =>
+            val waited = (System.nanoTime() - waitingSince).nanos
+            RegularSyncMetrics.setImportLockWaitSeconds(waited.toMillis / 1000.0)
+            log.warning(
+              "Waiting {}s for the import lock, held by an import a stopped importer left running: regular sync starts " +
+                "once it ends",
+              waited.toSeconds
+            )
+            Behaviors.same
+          case mined: MinedBlock =>
+            if stash.isFull then
+              log.warning("Mined block {} dropped: the importer is still starting", mined.block.number)
+            else stash.stash(mined)
+            Behaviors.same
+          case _ => Behaviors.same
+        }
+        .receiveSignal { case (_, PostStop) =>
+          // Stopped while it waited: no longer waiting, whatever the gauge last said.
+          RegularSyncMetrics.setImportLockWaitSeconds(0)
           Behaviors.same
-        case _ => Behaviors.same
-      }
+        }
     }
 
   /** Starts the fetcher from `bestBlock`, the block the chain's head was at. */
