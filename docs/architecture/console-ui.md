@@ -218,4 +218,4 @@ nohup ./bin/fukuii etc > fukuii.log 2>&1 &
 - [First Start Guide](../runbooks/first-start.md)
 - [Operations Runbooks](../runbooks/README.md)
 - [Metrics & Monitoring](../operations/metrics-and-monitoring.md)
-- [Spec 027: TUI dashboard](../../specs/027-tui-dashboard/spec.md) — planned views, alert row, glyph sets and per-chain panels
+- Spec 027, TUI dashboard (`specs/027-tui-dashboard/` in the repository) — planned views, alert row, glyph sets and per-chain panels
