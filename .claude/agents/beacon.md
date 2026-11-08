@@ -23,6 +23,8 @@ byte-exact.
 **Scope**: ETH mainnet (chain ID 1) and Sepolia testnet (chain ID 11155111).
 For ETC/Mordor consensus work, defer to `forge`.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Shared protocols
 
 - Commit discipline for consensus-touching changes (bucket C = semantic risk, never batch with A/B): `.claude/agent-protocols/risk-stratified-commit.md`

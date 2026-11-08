@@ -1,6 +1,37 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.1.2 → 1.2.0 (MINOR)
+Rationale: several hosts (fukuii-fc, dev-node) and cloud agent sessions now work on fukuii at the same time, and the
+backlog lived in gitignored working files and handoff notes that only one host could read. Work was duplicated,
+dropped, or invisible to the other hosts. The user asked (2026-11-08) for a persistent shared backlog with locks on
+its items and a tracker page with a burn-down, and for every agent to follow it. A new principle is a MINOR bump.
+
+Changes:
+  - Added Principle VIII, "One Shared Backlog, Claimed Before Work": the shared backlog (`backlog.yaml` on the
+    `tracker` branch, rendered under Development → Tracker), a claim before work, the status at each transition, a
+    daily heartbeat, follow-ups recorded before a task ends, and no undisclosed security issue in it.
+  - Development Workflow: new step 0 (claim the backlog item); step 5 links the item (`Backlog: B-0xx`).
+  - Governance, Runtime guidance: names the tracker protocol, `.claude/agent-protocols/backlog-tracker.md`.
+  - Version bumped to 1.2.0; Last Amended updated.
+
+Templates & artifacts reviewed for alignment:
+  ✅ .specify/templates/plan-template.md  (no change required: its Constitution Check gates are drawn from this file)
+  ✅ .specify/templates/spec-template.md  (no change required)
+  ✅ .specify/templates/tasks-template.md (updated: a Notes line maps each slice to a backlog item, claimed first)
+  ✅ .specify/templates/checklist-template.md (no change required)
+  ✅ CLAUDE.md (updated: a protocols-table row, a Working discipline bullet, a Shared backlog section)
+  ✅ .claude/agents/*.md (updated: one line per specialist: claim first, keep the status current)
+
+Follow-up TODOs: none for this amendment. Development Workflow step 7 and Governance still name `.github/agents/`
+for agent files that now live in `.claude/agents/`; that wording fix is backlog item B-118.
+
+Last Amended: 2026-11-08
+-->
+
+<!--
+SYNC IMPACT REPORT
+==================
 Version change: 1.1.1 → 1.1.2 (PATCH)
 Rationale: spec 020 PR 6b-3 (#1721) makes `sbt formatCheck` the format gate in CI's required "Test and Build" job, in
 place of `scalafmtCheckAll`, which checks the root project only (the root has no `aggregate`). `formatCheck` runs
@@ -273,6 +304,31 @@ Rules:
 Rationale: Operators run this software against real value; they must be able to
 trust that a version number and changelog accurately describe what changed.
 
+### VIII. One Shared Backlog, Claimed Before Work
+
+All engineering work is recorded in one shared backlog, and nobody starts an item
+they do not hold.
+
+Rules:
+- All engineering work (bugs, review follow-ups, spec slices, operational runs)
+  MUST be recorded in the shared backlog: `backlog.yaml` on the `tracker` branch,
+  rendered on the documentation site under Development → Tracker. Session notes
+  and continuation files MAY hold detail; the backlog is the record of what
+  exists, who holds it, and its state.
+- An agent or contributor MUST claim an item (`scripts/backlog/backlog.py claim`)
+  before starting it, and MUST NOT work on an item another holder has claimed
+  unless that claim has expired or been released.
+- Status MUST be kept current at each transition: in progress; review, with its
+  PR; done; released or blocked, with a reason. A held claim is refreshed at
+  least daily.
+- Work discovered during a task MUST be added to the backlog before the task ends.
+- An undisclosed security issue MUST NOT be described in the backlog (Principle
+  VI); use a neutral placeholder or keep it off.
+
+Rationale: Several hosts and agent sessions work concurrently. Without one
+claimed record, work is duplicated, dropped, or left in files only one host can
+read.
+
 ## Technology & Architecture Constraints
 
 - **Language/Runtime**: Scala 3.x LTS (the 3.9 line from 0.11.0) on JDK 25
@@ -293,6 +349,8 @@ trust that a version number and changelog accurately describe what changed.
 
 ## Development Workflow & Quality Gates
 
+0. Claim the backlog item before starting (Principle VIII); add it first if it is
+   missing.
 1. Branch from the appropriate base using a descriptive name
    (`feature/...`, `fix/...`); never commit directly to protected branches.
 2. Drive the work through the Spec Kit flow (Principle II); keep spec artifacts
@@ -302,7 +360,8 @@ trust that a version number and changelog accurately describe what changed.
 4. Run `sbt pp` locally; pre-commit hooks may be used to enforce
    format/scalafix on staged files.
 5. Open a PR with a clear title (< 70 chars), a what/why description, the testing
-   approach, and any breaking-change callouts; link the spec/ADR.
+   approach, and any breaking-change callouts; link the spec/ADR and the backlog
+   item (`Backlog: B-0xx`).
 6. CI gates (Principle V) and at least one review MUST pass; all conversations
    resolved before merge.
 7. Consensus-critical work follows the chain-appropriate specialist agent before
@@ -328,7 +387,8 @@ provide operational detail.
   point; unavoidable deviations MUST be justified in Complexity Tracking and
   approved, not hidden.
 - **Runtime guidance**: Agents and contributors read `CLAUDE.md` and the current
-  plan for execution context; this file defines the standards those plans must
-  satisfy.
+  plan for execution context, and follow the backlog tracker protocol
+  (`.claude/agent-protocols/backlog-tracker.md`) for claims and status; this file
+  defines the standards those plans must satisfy.
 
-**Version**: 1.1.2 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-11-05
+**Version**: 1.2.0 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-11-08

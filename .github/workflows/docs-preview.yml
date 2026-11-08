@@ -15,6 +15,7 @@ on:
       - 'requirements-docs.txt'
       - 'scripts/convert_insomnia_to_openapi.py'
       - 'scripts/validate_openapi.py'
+      - 'scripts/backlog/**'
       - 'insomnia_workspace.json'
       - '.github/workflows/docs-preview.yml'
     types:
@@ -61,6 +62,17 @@ jobs:
       - name: Validate OpenAPI spec
         if: github.event.action != 'closed'
         run: python3 scripts/validate_openapi.py
+
+      - name: Render the Tracker page from the tracker branch
+        # Same render as gh-pages.yml, so a preview shows the page as the site will (placeholder if it fails).
+        if: github.event.action != 'closed'
+        run: |
+          if git ls-remote --exit-code --heads origin tracker >/dev/null; then
+            python3 -I scripts/backlog/backlog.py render --out docs/development/tracker \
+              || echo "::warning title=Tracker::render failed; the Tracker page keeps its placeholder"
+          else
+            echo "::notice title=Tracker::origin has no tracker branch; the Tracker page keeps its placeholder"
+          fi
 
       - name: Build documentation
         if: github.event.action != 'closed'

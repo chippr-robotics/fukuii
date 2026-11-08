@@ -26,6 +26,8 @@ and network/sync actors (`network/`, `blockchain/sync/`) per the migration plan 
 The sacred modules (`consensus/`, `vm/`, `crypto/`, `domain/`) are out of scope — if you
 touch them, stop and invoke `forge` (ETC) or `beacon` (ETH) before proceeding.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Reference repos
 
 Pull fast-forward updates at session start:
