@@ -141,6 +141,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restore step or between two of them. From that step on nothing else goes through the terminal, and a screen not yet
   reset gets the reset sequence (leave the alternate screen, show the cursor, reset attributes) straight on the process
   output. The race is logged once at WARN; any other failure is still an ERROR.
+- **EIP-1459 DNS trees are verified, as the spec requires.** The node used whatever TXT records a tree's name returned:
+  it did not check the root's signature, that an entry matched the hash it was fetched under, or an ENR's own signature.
+  It now checks what go-ethereum's `p2p/dnsdisc` checks (`tree.go`, `client.go`):
+  - **Root.** `sig` in `enrtree-root:v1 e=… l=… seq=… sig=…` is a 65-byte secp256k1 signature over keccak256 of the record
+    without it, and must verify against the key in the tree's `enrtree://<key>@<domain>` URL. A root that does not parse
+    or verify rejects the whole tree: one WARN, no nodes from it, and nothing under it is fetched.
+  - **Entries.** A branch, ENR or link entry must hash to the label it was fetched under (keccak256, first 16 bytes,
+    base32). One that does not is dropped with its subtree and counted in the walk's WARN as failed verification.
+  - **ENRs.** Each ENR's own EIP-778 `v4` signature is checked. An ENR with a bad signature, another identity scheme or
+    none is dropped. An ENR in the `l=` subtree or a link in the `e=` subtree is dropped too.
+  - **Links are followed.** Link entries in a tree's `l=` subtree lead to further trees, each verified against the key in
+    its link. The walk goes at most 3 links from the tree asked for and covers at most 16 trees, each once, under the same
+    deadline, concurrency and 500-record cap. The shipped trees link to nothing today.
+  - **Keys.** An entry of `dns-discovery-domains` is an `enrtree://<key>@<domain>` URL, or one of the five shipped
+    domains, whose keys are in code as go-ethereum's are (`params/bootnodes.go:72`; core-geth `params/bootnodes_classic.go:28`):
+    the Ethereum Classic key for the `all.classic.*` and `all.mordor.*` trees, the Ethereum Foundation's for
+    `all.sepolia.ethdisco.net`. **A bare domain with no key is no longer walked** (one WARN naming it and the form to use).
+    Custom chain configs that list one must switch to the URL form.
+  - **Log.** A clean walk logs `verified` with the root's `seq`; a WARN carries the count that failed verification.
+  - **Measured** against the live trees, with no verification failures: `all.classic.etcdisco.net` 350 enodes (382 queries),
+    `all.sepolia.ethdisco.net` 301 (330), `all.mordor.etcdisco.net` and `all.mordor.blockd.info` 14 each (18).
+    The tests include a snapshot of the real Mordor tree: its root signature, its 17 entry hashes and its 14 ENR signatures.
 - **EIP-1459 DNS discovery dropped one entry from every long record, and each drop cost 15 s.** JNDI returns a TXT
   record that is stored as several strings (EIP-1459 splits any entry over 255 bytes; a 13-child branch, the shape on
   ETC and Mordor, is 365) with the strings joined by a space, and the space fell inside a child hash. The walk asked for a
