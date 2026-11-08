@@ -807,7 +807,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-08T15:46:00Z
+      heartbeat: 2026-11-08T20:49:20Z
   - id: B-072
     title: "Re-validate #1727's eth_simulateV1 fixes against geth on Ephemery (the simulate-165 harness)"
     priority: P2
@@ -823,7 +823,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-08T15:46:00Z
+      heartbeat: 2026-11-08T20:49:20Z
     notes: Ask on the PR and dev-node runs its jar; SIM_DANGEROUS=1 gates two cases that wedge an unfixed node.
   - id: B-073
     title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for 0.12.0 ETC changes"
@@ -838,7 +838,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-08T15:46:00Z
+      heartbeat: 2026-11-08T20:49:20Z
     notes: Spec 018 moving ETC onto the unified layout will need these runs.
   - id: B-074
     title: SnapFinalization misses an excluded entry inserted between the set read and the flags commit
