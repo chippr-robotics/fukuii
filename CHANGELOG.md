@@ -149,6 +149,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **A block whose parent this node lacks no longer gets the peer that sent it blacklisted (B-007, #1683).** Regular sync
+  read such a block as a bad block, and blacklisted the peer for 60 s. The gap is the node's, not the peer's. T062 (Mordor,
+  24 h) blacklisted 33 peers for `Block import error: UNKNOWN_PARENT: parent header not found` in a run with only five
+  reorgs, and the peer count drifted from 13 to about 7. #1683 saw it right after SNAP hand-off (`Could not get weight for
+  parent`), where the only peer was blacklisted and sync waited for it to expire. No block is imported that was not
+  before: a block is still not imported until its parent is here.
+  - **Why.** A block a peer announces (`NewBlock`) can hang from a block this node does not have: a competing tip on a
+    reorging chain, or a fetcher whose head is ahead of the chain's after an announce the importer was too busy to take.
+    Block import used to answer that `UnknownParent`, which the importer takes as no one's fault; ETCM-1058 (consensus
+    replacing block import) turned it into a failed import, and the failed import blacklists the announcing peer. Right
+    after hand-off the pivot floor made the same mistake for a fetched batch: it imported a batch without checking that
+    it continues the chain, and failed on its first block.
+  - **Now.** The block is an orphan (`UnknownParent` again), the fetcher goes back to its parent and fetches the branch,
+    and no one is blamed. core-geth does the same: `eth/fetcher/block_fetcher.go` (`importBlocks`) logs `Unknown parent
+    of propagated block` at debug and drops the block, and drops a peer only for a header that fails verification. At the
+    pivot floor, a batch that does not continue the chain makes the fetcher fetch the blocks between the best block and
+    the batch, instead of importing it and walking back one block at a time.
+  - **Protection kept, bounded.** A peer that announces 5 blocks in a row whose parent never arrives, with none of its
+    blocks imported or queued in between, is blacklisted for the usual period, that peer itself and not whoever the fetcher
+    last recorded for the block's number. A block it announces that this node already has does not reset the count. A
+    block that fails to import 3 times in a row still evicts its peer, and a block that is invalid is blacklisted at
+    once, as before.
+  - **To watch.** `regularsync.orphan.blocks.total{source,outcome}` counts them (`announce` or `batch`; `branch-fetch` or
+    `blacklisted`). An orphan announce logs at INFO (`Orphan announce: ...`), and an orphan batch at WARN, no longer
+    ERROR. If the pivot floor sends the fetcher back to the same block 3 times in a row, the fetched blocks above it do
+    not continue from our best block, which is what a pivot that is not on the network's chain looks like: a WARN
+    (`Pivot floor: ...`, again every 3 more) and `regularsync.pivot.floor.gap.repeats.total`. A re-sync is then needed.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

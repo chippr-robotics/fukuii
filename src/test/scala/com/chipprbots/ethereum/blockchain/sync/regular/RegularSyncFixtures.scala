@@ -474,6 +474,10 @@ trait RegularSyncFixtures:
 
     val newBlock: Block = BlockHelpers.generateBlock(testBlocks.last)
 
+    /** What the node answers to the announced `newBlock`: imported to the top, unless a test says otherwise. */
+    def newBlockResult: BlockImportResult =
+      BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight.totalDifficultyOnly(newBlock.number.value))))
+
     override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
 
     var blockFetcher: TypedActorRef[PeerEvent] = uninitialized
@@ -490,9 +494,7 @@ trait RegularSyncFixtures:
       .onCall { (block, _, _) =>
         if block == newBlock then
           importedNewBlock = true
-          IO.pure(
-            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight.totalDifficultyOnly(newBlock.number.value))))
-          )
+          IO.pure(newBlockResult)
         else
           if block == testBlocks.last then importedLastTestBlock = true
           IO.pure(BlockImportedToTop(Nil))
