@@ -1698,3 +1698,13 @@ items:
       since: 2026-11-08T21:29:14Z
       heartbeat: 2026-11-08T22:13:33Z
     notes: "beacon B-151 analysis: eth_pairings is abandoned upstream; any disagreement means live Linux nodes may compute EIP-2537 wrong, escalate. Test-scope only."
+  - id: B-154
+    title: "Per-transport RPC namespaces: HTTP/WS default eth,net,web3,fukuii; IPC all; miner_* to an opt-in miner namespace"
+    priority: P1
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-08
+    refs: []
+    links: {}
+    notes: "User decision 2026-11-08: geth parity. conduit. Lands after #1760/#1761."
