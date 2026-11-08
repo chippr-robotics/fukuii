@@ -327,6 +327,46 @@ def m_stale_status(root: Path) -> None:
                                                        "Stale Heading", 1), encoding="utf-8")
 
 
+def m_committed_keystore(root: Path) -> None:
+    """C15 — a PKCS#12 keystore in the tree."""
+    (root / "tls").mkdir(exist_ok=True)
+    (root / "tls/server.p12").write_bytes(b"\x30\x82\x01\x00")
+
+
+def m_pem_private_key(root: Path) -> None:
+    """C15 — a PEM private-key block pasted into a text file.
+
+    The marker is assembled at run time so that this file never holds one itself.
+    """
+    marker = "-----BEGIN " + "EC PRIVATE KEY-----"
+    (root / "docs/example-key.md").write_text(f"```\n{marker}\nMHcCAQEEIA==\n```\n", encoding="utf-8")
+
+
+def m_env_file(root: Path) -> None:
+    """C15 — a populated `.env` next to the templates."""
+    (root / "ops").mkdir(exist_ok=True)
+    (root / "ops/.env").write_text("RPC_PASSWORD=changeme\n", encoding="utf-8")
+
+
+def m_env_template(root: Path) -> None:
+    """C15 — an `.env.*.example` template is allowed."""
+    (root / "ops").mkdir(exist_ok=True)
+    (root / "ops/.env.sepolia.example").write_text("RPC_PASSWORD=\n", encoding="utf-8")
+
+
+def m_keystore_in_git_index(root: Path) -> None:
+    """C15 — in a checkout the git index is read, not the directory.
+
+    The keystore is staged and then deleted from the working tree, so only `git ls-files` can
+    see it; a directory walk would pass.
+    """
+    (root / "conf").mkdir(exist_ok=True)
+    (root / "conf/node.jks").write_bytes(b"\xfe\xed\xfe\xed")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    (root / "conf/node.jks").unlink()
+
+
 def main() -> int:
     print("Gate Integrity self-test\n")
 
@@ -355,6 +395,13 @@ def main() -> int:
     case("C11 dead badge fails", True, "C11", m_dead_badge)
     case("C12 over-claiming doc fails", True, "C12", m_overclaiming_doc)
     case("C13 stale status doc fails", True, "C13", m_stale_status)
+
+    print(" committed key material")
+    case("C15 committed keystore fails", True, "C15", m_committed_keystore)
+    case("C15 PEM private-key block fails", True, "C15", m_pem_private_key)
+    case("C15 committed .env fails", True, "C15", m_env_file)
+    case("C15 .env example template passes", False, None, m_env_template)
+    case("C15 keystore in the git index fails", True, "C15", m_keystore_in_git_index)
 
     print(" time travel")
     case("waivers still valid today", False, None, None, today="2026-09-20")

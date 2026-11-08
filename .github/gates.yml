@@ -127,7 +127,8 @@ gates:
     covers: >-
       This matrix itself — undeclared checks, required-but-unfailable gates,
       expired/incomplete waivers, unmapped constitution principles, stale
-      generated status doc, dead badges, and over-claiming documentation.
+      generated status doc, dead badges, and over-claiming documentation —
+      plus committed keystores, private keys and `.env` files (C15).
       FR-029: the meta-check is itself required, or it guarantees nothing.
 
   # --- Hive suites ----------------------------------------------------------
