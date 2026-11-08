@@ -39,7 +39,7 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-08T12:00:00Z
-      heartbeat: 2026-11-08T18:26:25Z
+      heartbeat: 2026-11-08T18:45:13Z
       branch: fix/1654b-chain-weight-reconcile
     notes: |-
       Reviewers forge, vault, beacon. Lock order ImportLock -> ChainInsertLock.
