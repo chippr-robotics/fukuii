@@ -1589,3 +1589,13 @@ items:
     refs: [B-007]
     links: {}
     notes: Touches ConsensusImpl, so forge reviews it; no behaviour change.
+  - id: B-143
+    title: Orphan-strike blacklist should respect PeerListHelper maintained-peer exemption
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-08
+    refs: [B-007]
+    links: {}
+    notes: "H4 follow-up: handleOrphanAnnounce adds to the blacklist directly; maintained (static/trusted) peers are otherwise exempt. Plumb peersClient or check the exemption."
