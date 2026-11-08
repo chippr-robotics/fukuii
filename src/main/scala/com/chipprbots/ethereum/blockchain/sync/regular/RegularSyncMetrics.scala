@@ -36,6 +36,10 @@ object RegularSyncMetrics extends MetricsContainer:
   // B-007 (#1683): blocks, announced or fetched in a batch, whose parent this node lacks, and what came of them.
   final private val OrphanBlocksCounter = "regularsync.orphan.blocks.total"
 
+  // B-007 (forge, N1): the pivot floor sent the fetcher back to the same block several times in a row.
+  final private val PivotFloorGapRepeatsCounter =
+    metrics.registry.counter("regularsync.pivot.floor.gap.repeats.total")
+
   // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
   final private val ImportLockWaitSeconds = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.import.lock.wait.seconds.gauge", ImportLockWaitSeconds)
@@ -60,6 +64,9 @@ object RegularSyncMetrics extends MetricsContainer:
     */
   def incrementOrphanBlocks(source: String, outcome: String): Unit =
     metrics.registry.counter(OrphanBlocksCounter, "source", source, "outcome", outcome).increment()
+
+  def incrementPivotFloorGapRepeats(): Unit = PivotFloorGapRepeatsCounter.increment()
+  private[regular] def pivotFloorGapRepeatsTotal: Double = PivotFloorGapRepeatsCounter.count()
 
   def setImportLockWaitSeconds(seconds: Double): Unit = ImportLockWaitSeconds.set(seconds)
   private[regular] def importLockWaitSeconds: Double = ImportLockWaitSeconds.get
