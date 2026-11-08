@@ -471,7 +471,10 @@ object SyncController:
         catch
           case e: Exception =>
             log.warn(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
-            SNAPSyncConfig()
+            // The constructor's default for the header hold is off (for stub-driven test suites). The shipped
+            // default is on for every chain (#1654): a node on this fallback must not end SNAP with an estimated
+            // pivot total difficulty.
+            SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
       val networkType = configBuilder.blockchainConfig.networkType
       val expectedScheme = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
       require(
