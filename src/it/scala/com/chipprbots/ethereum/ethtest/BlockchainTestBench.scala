@@ -36,6 +36,11 @@ import com.chipprbots.ethereum.utils.Config
   * `cpu_seconds` is the CPU time of the thread that ran the case (JIT and GC threads excluded). On a shared machine it
   * moves much less with the load than wall time does, so compare it, not `seconds`, between two builds measured at
   * different times.
+  *
+  * `alloc_bytes` is the heap the same thread allocated while the case ran
+  * (`com.sun.management.ThreadMXBean.getCurrentThreadAllocatedBytes`), or -1 on a JVM without that counter. Spec 021's
+  * GT-4 divides it by the case's opcode count for bytes per opcode (quickstart §5.1). Like `cpu_seconds` it counts the
+  * case's own thread only, and unlike time it does not move with the machine's load.
   */
 object BlockchainTestBench:
 
@@ -55,6 +60,14 @@ object BlockchainTestBench:
 
     val baseConfig = Config.blockchains.blockchainConfig
     val threads = ManagementFactory.getThreadMXBean
+    // HotSpot's extension of the bean carries the per-thread allocation counter. It is on by default; enable it
+    // explicitly where it is supported but off.
+    val allocation: Option[com.sun.management.ThreadMXBean] = threads match
+      case bean: com.sun.management.ThreadMXBean if bean.isThreadAllocatedMemorySupported =>
+        if !bean.isThreadAllocatedMemoryEnabled then bean.setThreadAllocatedMemoryEnabled(true)
+        Some(bean)
+      case _ => None
+    def allocatedBytes(): Long = allocation.fold(-1L)(_.getCurrentThreadAllocatedBytes)
     var failures = 0
     var cases = 0
     var unreadable = 0
@@ -72,11 +85,13 @@ object BlockchainTestBench:
             cases += 1
             val gas = test.blocks.map(b => hexToBigInt(b.blockHeader.gasUsed)).sum
             val cpu0 = threads.getCurrentThreadCpuTime
+            val alloc0 = allocatedBytes()
             val t0 = System.nanoTime()
             val result =
               try EthereumTestExecutor.executeTest(test, baseConfig)
               catch case NonFatal(e) => Left(s"threw ${e.getClass.getName}: ${e.getMessage}")
             val seconds = (System.nanoTime() - t0) / 1e9
+            val allocBytes = if alloc0 < 0 then -1L else allocatedBytes() - alloc0
             val cpuSeconds = (threads.getCurrentThreadCpuTime - cpu0) / 1e9
             val verdict = result match
               case Right(_) => "PASS"
@@ -86,7 +101,7 @@ object BlockchainTestBench:
             println(
               f"BENCH round=$round%d${fileLabel(file)}%s case=$name%s gas=$gas%s seconds=$seconds%.2f " +
                 f"cpu_seconds=$cpuSeconds%.2f mgas_per_s=${gas.toDouble / 1e6 / seconds}%.2f " +
-                f"mgas_per_cpu_s=${gas.toDouble / 1e6 / cpuSeconds}%.2f $verdict%s"
+                f"mgas_per_cpu_s=${gas.toDouble / 1e6 / cpuSeconds}%.2f alloc_bytes=$allocBytes%d $verdict%s"
             )
 
     if cases == 0 then
