@@ -93,7 +93,7 @@ items:
   - id: B-007
     title: "H4: regular sync blacklists peers for UNKNOWN_PARENT right after SNAP hand-off on a reorging PoW chain"
     priority: P1
-    status: claimed
+    status: in-progress
     area: p2p
     size: M
     opened: 2026-11-04
@@ -104,7 +104,7 @@ items:
       by: fukuii-fc
       agent: herald
       since: 2026-11-08T18:45:27Z
-      heartbeat: 2026-11-08T18:45:27Z
+      heartbeat: 2026-11-08T18:45:30Z
       branch: fix/h4-unknown-parent-blacklist
     notes: "herald. T062 Mordor: 33 peers blacklisted in 24 h; peer count drifted 13 -> ~7."
   - id: B-008
