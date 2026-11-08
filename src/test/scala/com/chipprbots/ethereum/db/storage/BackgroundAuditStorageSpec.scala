@@ -124,6 +124,22 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     b.stored(hashOf(good)).lastUsedByBlock shouldBe BigInt(1)
   }
 
+  it should "keep the count of a node a late on-demand fetch writes again, where saveNode sets it back to one (#1692)" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), good, 2)
+    // What the importer's on-demand fetch writes when the fetched node is already there: repairNode finds it valid.
+    b.state.repairNode(hashOf(good), good, 77) shouldBe RepairOutcome.AlreadyValid
+    b.stored(hashOf(good)).references shouldBe 2
+
+    // The blind upsert the importer used to make: one reference, whatever the node had. At two positions that is one
+    // short, and the first block to drop one of them sends the node to a death row while the other still uses it.
+    b.state.saveNode(hashOf(good), good, 77)
+    withClue("this is why BlockImporter no longer calls it: ") {
+      b.stored(hashOf(good)).references shouldBe 1
+    }
+  }
+
   it should "overwrite bytes that fail their hash, and never lower the count they had" taggedAs UnitTest in {
     val b = new Basic
     val good = nodeBytes(1)

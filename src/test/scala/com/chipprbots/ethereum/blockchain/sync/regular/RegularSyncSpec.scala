@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
@@ -1191,7 +1192,7 @@ class RegularSyncSpec
               blockExecutionScheduler: IORuntime,
               blockchainConfig: BlockchainConfig
           ): IO[BlockImportResult] =
-            if saveNodeWasCalled then
+            if repairNodeWasCalled then
               reimportedAfterSave = true
               IO.pure(BlockImportedToTop(Nil))
             else IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
@@ -1203,7 +1204,8 @@ class RegularSyncSpec
         peersClient.setAutoPilot(new PeersClientAutoPilot)
 
         @volatile var reimportedAfterSave: Boolean = false
-        var saveNodeWasCalled: Boolean = false
+        @volatile var repairNodeWasCalled: Boolean = false
+        @volatile var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
 
         override val stateStorage: StateStorage = new StateStorage:
@@ -1211,18 +1213,24 @@ class RegularSyncSpec
           override def getReadOnlyStorage: com.chipprbots.ethereum.db.storage.MptStorage = ???
           override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
           override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
+          // #1692: the importer repairs the node (never lowering a count it finds); a blind saveNode is the old path.
           override def saveNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): Unit =
+            saveNodeWasCalled = true
+          override def canRepairNodes: Boolean = true
+          override def repairNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): RepairOutcome =
             val expectedNode = nodeData.head
             nodeHash should be(kec256(expectedNode))
             nodeEncoded should be(expectedNode.toArray)
             bn should be(failingBlock.number)
-            saveNodeWasCalled = true
+            repairNodeWasCalled = true
+            RepairOutcome.Written
           override def getNode(nodeHash: ByteString): Option[com.chipprbots.ethereum.mpt.MptNode] = None
           override def forcePersist(reason: StateStorage.FlushSituation): Boolean = true
 
         regularSync ! SyncProtocol.Start
 
-        awaitCond(saveNodeWasCalled)
+        awaitCond(repairNodeWasCalled)
+        saveNodeWasCalled shouldBe false
         // The importer must resume the import as soon as the node arrives, not wait out the 30 s ResolvingMissingNode
         // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
         awaitCond(reimportedAfterSave, 10.seconds)
