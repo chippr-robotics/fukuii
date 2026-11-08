@@ -1366,3 +1366,14 @@ items:
     notes: |-
       Scala 3 LazyVals trips JDK 24+'s one-time stderr warning (4 lines) during the first --tui frame; it scrolls the alt screen
       until the next repaint. In every staging --tui recording since 2026-11-07. Fix: --sun-misc-unsafe-memory-access=allow in the launcher.
+  - id: B-126
+    title: "Chain weights: re-derive a block weight when a forkchoiceUpdated reorg promotes a side payload stored by hash during a repair"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-08
+    refs: [B-002]
+    links: {}
+    depends_on: [B-002]
+    notes: "forge, B-002 round 3 (beacon nit): a side payload stored by hash only while ChainWeightReconcile repairs keeps its stale-parent weight when an FCU reorg later makes it canonical. Advertised TD only on PoS; re-derive parent+difficulty at promotion (ForkChoiceManager)."
