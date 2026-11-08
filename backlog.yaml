@@ -93,7 +93,7 @@ items:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-08T18:45:32Z
-      heartbeat: 2026-11-08T18:45:36Z
+      heartbeat: 2026-11-08T18:46:16Z
     notes: conduit; the precompile-reason fix (vm/) and the ECIP-1017 reward fix need forge and beacon.
   - id: B-007
     title: "H4: regular sync blacklists peers for UNKNOWN_PARENT right after SNAP hand-off on a reorging PoW chain"
