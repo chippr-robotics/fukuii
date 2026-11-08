@@ -1467,3 +1467,16 @@ items:
       spec: .local/docs/planning/1727-s2-design
       branch: fix/1727-simulate-etc-reward
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-133
+    title: "1727 PR7: VM error-text parity (precompile reasons, stack counts, EIP-7823 OutOfGas); vm/, forge+beacon"
+    priority: P2
+    status: open
+    area: evm
+    size: L
+    opened: 2026-11-08
+    refs: [B-006]
+    links:
+      issues: [1727]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-vm-error-texts
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
