@@ -13,9 +13,12 @@ import com.chipprbots.ethereum.vm.*
 object CallErrors:
 
   /** A VM error as go-ethereum's `core/vm/errors.go` spells it: eth_call's -32000 message, eth_estimateGas's for a
-    * non-gas failure at the ceiling, and the `error` member of eth_createAccessList.
+    * non-gas failure at the ceiling, the `error` member of eth_createAccessList, and the `error.message` of an
+    * eth_simulateV1 call (#1727; it printed a sign-extended opcode byte and the lower-cased case-class name before).
     *
-    * Not used by eth_simulateV1, which keeps its own wording (its output is an rpc-compat oracle; S4).
+    * Two errors are still not go-ethereum's, because the error value does not carry what the text needs: a stack
+    * underflow has no `(have <=> want)` counts and a precompile failure has no reason (`invalid input length`, ...).
+    * Both wait on a `vm/` change (#1727, class G); `InvalidCall` falls to the case-class name too.
     */
   def vmErrorMessage(error: ProgramError): String = error match
     case RevertOccurs => "execution reverted"
