@@ -34,7 +34,7 @@ class RpcExposureCheckSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     RPCTest
   ) in {
-    Seq("personal", "debug", "admin", "qa", "miner").foreach { namespace =>
+    Seq("personal", "debug", "admin", "qa", "miner", "test", "testing").foreach { namespace =>
       val warnings = RpcExposureCheck.warnings(Seq(http("0.0.0.0", ChainApis :+ namespace)))
       withClue(namespace) {
         warnings should have size 1
@@ -56,6 +56,16 @@ class RpcExposureCheckSpec extends AnyFlatSpec with Matchers:
     warnings.head should include("personal, debug, admin")
     warnings.head should include("fukuii.network.rpc.ws.apis")
     (warnings.head should not).include("txpool")
+  }
+
+  it should "name the test namespaces among the sensitive ones, and nothing else of the default" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    RpcExposureCheck.SensitiveNamespaces shouldBe Seq("personal", "debug", "admin", "qa", "miner", "test", "testing")
+    val warnings = RpcExposureCheck.warnings(Seq(http("0.0.0.0", ChainApis ++ Seq("testing", "test"))))
+    warnings should have size 1
+    warnings.head should include("test, testing")
   }
 
   it should "warn for HTTP and WebSocket separately" taggedAs (UnitTest, RPCTest) in {
