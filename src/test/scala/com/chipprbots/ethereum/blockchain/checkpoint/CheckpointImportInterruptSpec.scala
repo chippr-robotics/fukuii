@@ -179,6 +179,9 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
         // #1692: the archive holds each node once, so counts are too low where a subtree is shared. Pruning stops
         // deleting by count, in the write that precedes the first node.
         Op(AppNs, delete = true, key(Keys.RefCountsExact)),
+        // #1654: the importer stores the archive's weight for the checkpoint block, trusted and not derived from
+        // genesis, so the chain-weight marker goes in the same write.
+        Op(AppNs, delete = true, key(Keys.ChainWeightInvariant)),
         Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditCursors")),
         Op(Namespaces.SnapSyncProgressNamespace, delete = true, key("snap.heal.auditBadEntries"))
       )

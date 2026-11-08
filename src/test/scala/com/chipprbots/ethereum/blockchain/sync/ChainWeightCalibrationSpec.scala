@@ -649,6 +649,61 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
         SepoliaFrozenTD * PoSPivot / peerMaxBlock
     )
 
+  // ─── #1654: the chain-weight marker, and the seed as a base anchor (H6(2)) ─
+
+  it should "write nothing while the chain-weight marker stands, even over a head with no exact weight" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      setupBestBlock(blockNum = BigInt(24720000))
+      // The marker as stored: key `chain.weight.invariant`, value "1".
+      storagesInstance.storages.appStateStorage.put("chain.weight.invariant", "1").commit()
+      drainRegistration()
+
+      val head: BlockHash = blockchainReader.getBestBlockHeader.get.hash
+      val before: Option[ChainWeight] = blockchainReader.getChainWeightByHash(head)
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt("24000000000000000000000"), BigInt(25000000))
+      )
+      blockchainReader.getChainWeightByHash(head) shouldBe before
+    )
+
+  "SyncController -Dfukuii.seed-chain-weights" should
+    "re-derive every block above a seed at a base, a block whose parent has no weight" taggedAs (UnitTest, SyncTest) in
+    (new RegularSyncSetup:
+      // A SNAP pivot whose headers below are not in: its parent has no weight, and four blocks inherit its estimate.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorHeadTD / 2, length = 5)
+      withSeed(s"${hex(chain.head.hash)}:$MordorHeadTD")(drainRegistration())
+
+      chain.zipWithIndex.foreach { (h, i) =>
+        blockchainReader.getChainWeightByHash(h.hash).map(_.totalDifficulty.value) shouldBe
+          Some(MordorHeadTD + MordorDifficulty * i)
+      }
+    )
+
+  it should "refuse a seed over a parent with a plausible weight, and leave every weight as it was" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), MordorPivot, MordorHeadTD, length = 3)
+      val before: Vector[Option[ChainWeight]] = chain.map(h => blockchainReader.getChainWeightByHash(h.hash))
+      // A head seed: the head's parent has a weight derived from the chain below, so a seed here is a jump.
+      withSeed(s"${hex(chain.last.hash)}:${MordorHeadTD * 2}")(drainRegistration())
+
+      chain.map(h => blockchainReader.getChainWeightByHash(h.hash)) shouldBe before
+    )
+
+  private def withSeed[A](spec: String)(body: => A): A =
+    System.setProperty("fukuii.seed-chain-weights", spec)
+    try body
+    finally System.clearProperty("fukuii.seed-chain-weights")
+
+  private def hex(hash: BlockHash): String = com.chipprbots.ethereum.utils.Hex.toHexString(hash.value.toArray)
+
   // ─── Base test setup ──────────────────────────────────────────────────────
 
   // Sepolia: the TD frozen at the merge, and a post-merge SNAP pivot height.
@@ -723,7 +778,9 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
           blacklist,
           syncConfig,
           this,
-          externalSchedulerOpt = Some(system.scheduler)
+          externalSchedulerOpt = Some(system.scheduler),
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
