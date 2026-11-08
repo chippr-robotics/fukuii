@@ -1686,17 +1686,18 @@ items:
   - id: B-153
     title: "BLS12-381 differential: eth_pairings (current) vs gnark vs blst over EIP-2537 vectors and edge corpus"
     priority: P1
-    status: claimed
+    status: review
     area: evm
     size: M
     opened: 2026-11-08
     refs: [B-151]
-    links: {}
+    links:
+      prs: [1764]
     claim:
       by: fukuii-fc
       agent: beacon
       since: 2026-11-08T21:29:14Z
-      heartbeat: 2026-11-08T22:13:33Z
+      heartbeat: 2026-11-08T22:33:35Z
     notes: "beacon B-151 analysis: eth_pairings is abandoned upstream; any disagreement means live Linux nodes may compute EIP-2537 wrong, escalate. Test-scope only."
   - id: B-154
     title: "Per-transport RPC namespaces: HTTP/WS default eth,net,web3,fukuii; IPC all; miner_* to an opt-in miner namespace"
