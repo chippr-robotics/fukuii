@@ -98,6 +98,20 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
     }
     subscriptions.expectNoMessage(100.millis)
 
+  it should "register no connection for a request that is not an upgrade" taggedAs (UnitTest, RPCTest) in new Fixture(
+    Seq.empty
+  ):
+    // a plain GET, with no Origin header and with an allowed one, on both paths: answered 400, nothing registered
+    for
+      path <- Seq("/", "/ws")
+      request <- Seq(Get(path), Get(path).addHeader(originHeader("http://localhost:3000")))
+    do
+      request ~> route ~> check {
+        withClue(s"$path ${request.headers}: ")(status shouldEqual StatusCodes.BadRequest)
+      }
+    // a connection that was registered and never closed would show up here
+    subscriptions.expectNoMessage(100.millis)
+
   it should "upgrade a request from a localhost origin by default" taggedAs (UnitTest, RPCTest) in new Fixture(
     Seq.empty
   ):

@@ -162,6 +162,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **A plain HTTP request to the JSON-RPC WebSocket port no longer registers a connection.** The server set up a
+  connection with the subscription manager before it knew the request was a WebSocket upgrade, and for a request that
+  was not one, nothing ever closed it. The connection is now set up only once the upgrade is accepted, and a request
+  that is not an upgrade is answered with 400 as before.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
