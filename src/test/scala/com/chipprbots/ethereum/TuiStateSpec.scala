@@ -173,6 +173,23 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     state.estimatedSyncTimeSeconds shouldBe None
   }
 
+  // Spec 027 T013: golden frames need the same uptime and speed on every run, so time comes from the state's clock.
+  it should "read uptime, speed and the speed baseline from its clock" taggedAs (UnitTest) in {
+    val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+    val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
+    val state = TuiState(startTime = now.minusSeconds(3_725), clock = clock)
+    state.uptimeSeconds shouldBe 3_725L
+    state.withBlockInfo(10, 100).syncBaseline shouldBe Some(SyncBaseline(10, now))
+    val syncing =
+      state.copy(syncBaseline = Some(SyncBaseline(1_000, now.minusSeconds(100)))).withBlockInfo(2_000, 3_000)
+    syncing.syncSpeedBlocksPerSec shouldBe Some(10.0)
+    syncing.estimatedSyncTimeSeconds shouldBe Some(100L)
+  }
+
+  it should "start in the emoji glyph set" taggedAs (UnitTest) in {
+    TuiState.initial.glyphs shouldBe GlyphSet.Emoji
+  }
+
   it should "apply a node status snapshot" taggedAs (UnitTest) in {
     val state = TuiState.initial.withStatus(NodeStatusSnapshot("Connected", 4, 25, 10, 20, "Syncing"))
     (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 25))

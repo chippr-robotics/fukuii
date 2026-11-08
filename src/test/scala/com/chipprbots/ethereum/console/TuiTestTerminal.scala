@@ -71,5 +71,58 @@ object TuiTestTerminal:
   /** Config for tests: no banner pause, and the test logger's console appender left alone. */
   val config: TuiConfig = TuiConfig(bannerDisplayDurationMs = 0, suppressConsoleLogs = false, updateIntervalMs = 20)
 
-  /** Strip ANSI escape sequences (CSI and charset designation) and carriage returns, leaving the visible text. */
-  def visible(s: String): String = s.replaceAll("\u001b\\[[0-9;?]*[A-Za-z]|\u001b[()][0-9A-Za-z]|\r", "")
+  /** Strip ANSI escape sequences (CSI and charset designation) and carriage returns, leaving the visible text.
+    *
+    * JLine draws box-drawing characters (`─`, `│`, corners) through the DEC special graphics set when the terminal has
+    * one: `ESC ( 0`, then `q` for `─`, `x` for `│`, …, then `ESC ( B`. Those letters are decoded back to the characters
+    * the terminal shows.
+    */
+  def visible(s: String): String =
+    val out = new StringBuilder
+    var lineDrawing = false
+    var i = 0
+    while i < s.length do
+      val c = s.charAt(i)
+      val next = if i + 1 < s.length then s.charAt(i + 1) else '\u0000'
+      if c == '\u001b' && (next == '(' || next == ')') then
+        // Charset designation: ESC ( 0 puts line drawing in G0, ESC ( B puts ASCII back.
+        if next == '(' && i + 2 < s.length then lineDrawing = s.charAt(i + 2) == '0'
+        i += 3
+      else if c == '\u001b' && next == '[' then
+        var j = i + 2
+        while j < s.length && (s.charAt(j).isDigit || s.charAt(j) == ';' || s.charAt(j) == '?') do j += 1
+        i = j + 1 // past the final byte
+      else
+        if c != '\r' then out += (if lineDrawing then DecSpecialGraphics.getOrElse(c, c) else c)
+        i += 1
+    out.toString
+
+  /** DEC special graphics letters and the box-drawing characters JLine maps to them. */
+  private val DecSpecialGraphics: Map[Char, Char] = Map(
+    'j' -> '┘',
+    'k' -> '┐',
+    'l' -> '┌',
+    'm' -> '└',
+    'n' -> '┼',
+    'q' -> '─',
+    't' -> '├',
+    'u' -> '┤',
+    'v' -> '┴',
+    'w' -> '┬',
+    'x' -> '│'
+  )
+
+  private val Sgr = "\u001b\\[([0-9;]*)m".r
+
+  /** The colour parameters (foreground, background; 16, 256 or RGB) in the SGR sequences of `ansi`. Bold, reverse and
+    * the resets carry no colour and are not returned.
+    */
+  def colourCodes(ansi: String): Seq[String] =
+    Sgr
+      .findAllMatchIn(ansi)
+      .flatMap(_.group(1).split(';').filter(_.nonEmpty))
+      .filter { p =>
+        val n = p.toInt
+        (30 to 38).contains(n) || (40 to 48).contains(n) || (90 to 97).contains(n) || (100 to 107).contains(n)
+      }
+      .toSeq

@@ -135,6 +135,37 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     s.snapSync shouldBe None
   }
 
+  // Spec 027 FR-007: the five SNAP worm rows need the fields toSnapSyncState used to drop.
+  it should "carry the eight SyncProgress fields the SNAP worm rows need" taggedAs (UnitTest) in {
+    val sample = snapSample.copy(
+      phase = SyncPhase.ByteCodeAndStorageSync,
+      phaseElapsedSeconds = 4080,
+      storageContractsCompleted = 2114,
+      storageContractsTotal = 5702,
+      chainHeaders = BigInt(4_210_000),
+      chainBodies = BigInt(3_900_000),
+      chainReceipts = BigInt(3_800_000),
+      chainTarget = BigInt(9_118_000),
+      bytecodeComplete = true
+    )
+    val s = TuiStatusProbe.toSnapSyncState(sample)
+    s.storageContractsCompleted shouldBe 2114
+    s.storageContractsTotal shouldBe 5702
+    s.chainHeaders shouldBe BigInt(4_210_000)
+    s.chainBodies shouldBe BigInt(3_900_000)
+    s.chainReceipts shouldBe BigInt(3_800_000)
+    s.chainTarget shouldBe BigInt(9_118_000)
+    s.bytecodeComplete shouldBe true
+    s.phaseElapsedSeconds shouldBe 4080.0
+    // ... and still the fields it carried before.
+    (s.phase, s.accountsSynced, s.phaseProgress, s.elapsedSeconds) shouldBe ((
+      "ByteCodeAndStorageSync",
+      1000L,
+      10,
+      60.0
+    ))
+  }
+
   it should "say so when syncing has no target yet (no peers to pick a pivot from)" taggedAs (UnitTest) in {
     val status = SyncProtocol.Status.Syncing(0, Progress(0, 0), None)
     val s = probe(peerManager(), syncController(status), best = 0)()

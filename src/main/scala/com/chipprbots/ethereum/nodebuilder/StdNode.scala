@@ -20,7 +20,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.Tui
-import com.chipprbots.ethereum.console.TuiConfig
 import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
@@ -301,7 +300,8 @@ abstract class BaseNode extends Node:
       // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
       // first, leaving the user's shell in the alternate screen with the cursor hidden.
       val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
-      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, quit)
+      // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
+      val updater = TuiUpdater(tui, tui.config, probe, Config.blockchains.network, quit)
       tuiUpdater = Some(updater)
       updater.start()
 

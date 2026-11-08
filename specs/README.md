@@ -6,7 +6,7 @@
 Lifecycle, vocabulary and closure procedure: [docs/development/spec-lifecycle.md](../docs/development/spec-lifecycle.md). Directories are never moved or renumbered; the Spec Kit
 scripts allocate the next number from the highest `NNN-` prefix present here.
 
-**27 specs**: Draft 2, Planned 6, Active 5, Done 7, Superseded 5, Parked 2.
+**27 specs**: Draft 2, Planned 5, Active 6, Done 7, Superseded 5, Parked 2.
 
 ## Open
 
@@ -26,7 +26,7 @@ Tasks are `done / open` boxes in `tasks.md`; a closed spec keeps its boxes as th
 | [024](./024-chain-registry/spec.md) | Chain Registry (ChainSpec) — A Chain Is Data | Planned | 2026-11-03 | — | 0 / 72 | — | Clarified 2026-10-31; plan, JSON Schema, contracts, quickstart and 72 tasks written; D-1 (GT-1 vs DC-2 mess block) and D-2 (gorgoroth `protocol = "ethash"`) escalated to the user; slices 1–3 can start now. |
 | [025](./025-change-record-export/spec.md) | Change-Record Export Contract (Kafka) | Planned | 2026-11-03 | — | 0 / 91 | — | Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C. |
 | [026](./026-follower-roles/spec.md) | Follower Roles — `replica` and `archive` | Planned | 2026-11-03 | — | 0 / 84 | — | Clarified 2026-10-31; plan, `StateReplay` and follower-RPC contracts, 84 tasks. Phase C on today's layout after 025's file sink; archive (GT-2) in phase D; blocked on 013 §11 rows 2/6/8 for the production seed. |
-| [027](./027-tui-dashboard/spec.md) | TUI Dashboard — "the worm goes to the brain" | Planned | 2026-11-07 | — | 0 / 150 | `fukuii-fc` (local session), branch `docs/spec-027-tui-dashboard`: spec, plan and tasks | Plan and 150 tasks written from #1490's design proposal (moved in as research.md and refreshed against staging `f0b4a8627`); the proposal's eight open questions and D-1 are settled (D-1: wire `PeerScoringManager`, slice 4a); six slices (1, 2, 3, 4a, 4, 5), one PR each, start with slice 1. |
+| [027](./027-tui-dashboard/spec.md) | TUI Dashboard — "the worm goes to the brain" | Active | 2026-11-08 | — | 0 / 150 | `feat/027-s1-worms` (`fukuii-fc`, local session): slice 1, T001–T026 done; the gate's manual run, reviews and PR (T027–T030) next | Slice 1 (worms, glyphs, tiers) is landing on `feat/027-s1-worms`; slices 2, 3, 4a, 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. |
 
 ## Closed
 
