@@ -17,6 +17,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -108,8 +109,10 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
             .unsafeRunSync()(using IORuntime.global)
         )
       }
-      val failures = results.collect { case (block, BlockImportFailed(err)) =>
-        s"block ${block.number} ${block.header.hashAsHexString}: $err"
+      val failures = results.collect {
+        case (block, BlockImportFailed(err)) => s"block ${block.number} ${block.header.hashAsHexString}: $err"
+        // An orphan is not a `BlockImportFailed` any more (B-007), but a vector block whose parent is missing is a failure.
+        case (block, UnknownParent) => s"block ${block.number} ${block.header.hashAsHexString}: parent not found"
       }
       val reorgs = results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
 

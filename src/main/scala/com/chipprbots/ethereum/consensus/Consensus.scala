@@ -84,6 +84,18 @@ object Consensus:
   def isLocalStateFault(error: String): Boolean =
     error.startsWith(MptErrorText) || error.startsWith(ReorganiseFailurePrefix + MptErrorText)
 
+  /** What a [[ConsensusError]] starts with when the branch hangs from a block whose weight is not stored, that is, a
+    * block this node does not have (B-007, #1683). One constant for the text written
+    * (`ConsensusImpl.importToNewBranch`) and the text read ([[isUnknownParent]]), as [[ReorganiseFailurePrefix]] is, so
+    * that a reworded copy cannot put the blame for it back on a peer.
+    */
+  val UnknownParentErrorPrefix: String = "Could not get weight for parent block "
+
+  /** True when a branch failed for want of its parent: a gap on this node's side. Nothing is wrong with the blocks, nor
+    * with the peer that sent them, and the branch is to be fetched, not penalised.
+    */
+  def isUnknownParent(error: String): Boolean = error.startsWith(UnknownParentErrorPrefix)
+
   /** An error external the the blocks in the branch occured, which prevents the branch from being executed. Usually
     * this is due to an inconsistency in the database.
     */

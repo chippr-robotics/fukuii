@@ -37,6 +37,8 @@ object RegularSyncMetrics extends MetricsContainer:
   final private val ConsecutiveResnaps = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.resnap.consecutive.gauge", ConsecutiveResnaps)
   final private val ResnapBackoffsCounter = metrics.registry.counter("regularsync.resnap.backoff.total")
+  // B-007 (#1683): blocks, announced or fetched in a batch, whose parent this node lacks, and what came of them.
+  final private val OrphanBlocksCounter = "regularsync.orphan.blocks.total"
 
   // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
   final private val ImportLockWaitSeconds = new AtomicDouble(0d)
@@ -56,6 +58,12 @@ object RegularSyncMetrics extends MetricsContainer:
   /** `component`: "block-fetcher" or "block-importer". */
   def incrementPipelineRestarts(component: String): Unit =
     metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()
+
+  /** `source`: "announce" (a NewBlock) or "batch" (fetched). `outcome`: "branch-fetch" (the fetcher goes back for the
+    * parent, no one blamed) or "blacklisted" (the peer kept announcing blocks whose parent never arrived).
+    */
+  def incrementOrphanBlocks(source: String, outcome: String): Unit =
+    metrics.registry.counter(OrphanBlocksCounter, "source", source, "outcome", outcome).increment()
 
   def setImportLockWaitSeconds(seconds: Double): Unit = ImportLockWaitSeconds.set(seconds)
 

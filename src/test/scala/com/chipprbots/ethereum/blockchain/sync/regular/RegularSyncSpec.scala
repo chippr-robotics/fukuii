@@ -892,6 +892,12 @@ class RegularSyncSpec
         override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
         // The importer walks the storage trie through this; the fixture's own is a stub that reads nothing.
         override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+        // These tests are about a storage hole, not about branch resolution. The reader above answers the genesis hash
+        // with the parent header below, which no real chain does, so real resolution reads the first batch as an unknown
+        // branch; what imported it was the pivot floor's direct import, which now takes only a batch that continues the
+        // chain (B-007). Resolution is settled here instead: the batch extends the head.
+        override lazy val branchResolution: BranchResolution = stub[BranchResolution]
+        branchResolution.resolveBranch.when(*).returns(NewBetterBranch(Nil))
 
         def holeAt(hash: ByteString): Unit =
           setImportResult(
