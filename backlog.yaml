@@ -1672,17 +1672,14 @@ items:
   - id: B-152
     title: Security hardening batch from the 2026-11-08 audit (4 items; details private until published)
     priority: P0
-    status: in-progress
+    status: done
     area: security
     size: M
     opened: 2026-11-08
+    closed: 2026-11-08
     refs: []
-    links: {}
-    claim:
-      by: fukuii-fc
-      agent: main
-      since: 2026-11-08T21:13:55Z
-      heartbeat: 2026-11-08T21:13:58Z
+    links:
+      prs: [1765]
     notes: Neutral placeholder per Principle VIII. Owner fukuii-fc.
   - id: B-153
     title: "BLS12-381 differential: eth_pairings (current) vs gnark vs blst over EIP-2537 vectors and edge corpus"
