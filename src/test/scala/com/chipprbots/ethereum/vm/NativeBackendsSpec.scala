@@ -173,6 +173,12 @@ class NativeBackendsSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "pass the real c-kzg library once the trusted setup is loaded" taggedAs (UnitTest, VMTest) in {
-    KzgTestSetup.ensureLoaded()
+    // Cancelled, not failed, where c-kzg has no native build or the setup does not load, as the BLS case above.
+    val loaded =
+      try
+        KzgTestSetup.ensureLoaded()
+        true
+      catch case _: (Exception | LinkageError) => false
+    assume(loaded, "c-kzg-4844 native library or KZG trusted setup not loaded")
     NativeBackends.probeBackend(Backend.Kzg) shouldBe Right(())
   }

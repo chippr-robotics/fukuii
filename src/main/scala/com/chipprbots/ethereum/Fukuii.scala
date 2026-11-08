@@ -24,6 +24,9 @@ object Fukuii extends Logger:
   def main(args: Array[String]): Unit =
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
+    // A thread that dies of a missing precompile backend halts the node; any other VirtualMachineError is logged (B-135).
+    FatalErrors.installUncaughtHandler()
+
     // Redirect all JVM temp files to the configured tmpdir (defaults to <datadir>/tmp).
     // Prevents root SSD from filling up during SNAP sync — RocksDB JNI .so extraction,
     // contract account temp files, and JFR profiles all land on the same volume as the database.
@@ -94,6 +97,9 @@ object Fukuii extends Logger:
       System.exit(1)
     else if nativeBackends.nonEmpty then
       log.info("Native precompile backends checked: {}", nativeBackends.map(_.library).mkString("; "))
+    // From here on, a precompile that finds its backend missing halts the node where it finds it. Installed after the
+    // self-check, whose probes report a missing backend instead of halting.
+    FatalErrors.installCallTimeHalt()
 
     // Take over the terminal only after configuration has been validated: the TUI suppresses console logging, and a
     // configuration error must reach the user's screen.
