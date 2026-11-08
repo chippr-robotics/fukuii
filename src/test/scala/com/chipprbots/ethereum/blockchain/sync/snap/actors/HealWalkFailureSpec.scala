@@ -6,6 +6,7 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
@@ -33,6 +34,8 @@ import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.byteStringSerializer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testing.TestMptStorage
 
@@ -78,7 +81,8 @@ class HealWalkFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       impl: TrieNodeHealingCoordinatorImpl,
       kit: BehaviorTestKit[Command],
       controller: TestInbox[SNAPSyncController.Command],
-      clock: AtomicLong
+      clock: AtomicLong,
+      npm: TestInbox[NetworkPeerManagerActor.Command]
   )
 
   private def harness(
@@ -90,6 +94,7 @@ class HealWalkFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
   ): Harness =
     val controller = TestInbox[SNAPSyncController.Command]()
     val clock = new AtomicLong(0L)
+    val npm = TestInbox[NetworkPeerManagerActor.Command]()
     var captured: TrieNodeHealingCoordinatorImpl = null
     val behavior = Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
@@ -97,7 +102,7 @@ class HealWalkFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
           ctx,
           timers,
           initialStateRoot = root,
-          networkPeerManager = TestInbox[NetworkPeerManagerActor.Command]().ref,
+          networkPeerManager = npm.ref,
           requestTracker = new SNAPRequestTracker()(using system.classicSystem.scheduler),
           mptStorage = mpt,
           batchSize = 16,
@@ -113,7 +118,7 @@ class HealWalkFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
       }
     }
     val kit = BehaviorTestKit(behavior) // runs the setup, which builds `captured`
-    Harness(captured, kit, controller, clock)
+    Harness(captured, kit, controller, clock, npm)
 
   /** Walk `walk` of this incarnation, as the launcher sets it up, ends with `cause`, `atMinute` minutes in. */
   private def walkFails(h: Harness, walk: Long, atMinute: Long, cause: Option[Throwable] = Some(boom)): Unit =
@@ -310,6 +315,31 @@ class HealWalkFailureSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     b.state.heldLockAtDelete shouldBe None
     b.stored shouldBe defined
     h.impl.healRequests.contains(b.child) shouldBe false
+  }
+
+  // H3: a node healing fetched has its hash children looked up in the store. That read was `multiGetNodes`, which threw
+  // for the whole batch on a wrapper that does not unwrap: the served node went back to the queue, came back, and failed
+  // the same way for good. Read raw and judged keccak first, the corrupt child is deleted and fetched, a missing node.
+  it should "delete a corrupt child of a node healing fetched, and fetch the child, instead of failing the read (H3)" taggedAs UnitTest in {
+    val b = new BasicPruned
+    val rootBytes = ByteString(b.mpt.get(b.root.toArray).encode)
+    b.nodes.remove(b.root): Unit // the root is what healing fetches
+    b.nodes.put(b.child, Array[Byte](1, 2, 3)): Unit // a wrapper that does not unwrap
+    val h = b.coordinator()
+    val peer =
+      PeerTestHelpers.createTestPeer("s1-h3-heal-peer", testKit.createTestProbe[Any]().ref.toClassic)
+
+    h.kit.run(QueueMissingNodes(Seq(Seq(EmptyPath) -> b.root)))
+    h.kit.run(HealingPeerAvailable(peer))
+    val request = h.npm
+      .receiveAll()
+      .collect { case send: NetworkPeerManagerActor.SendMessageCmd => send.message.underlyingMsg }
+      .collectFirst { case get: SNAP.GetTrieNodes => get }
+      .getOrElse(fail("no GetTrieNodes went out for the root"))
+    h.kit.run(TrieNodesResponseMsg(SNAP.TrieNodes(request.requestId, Seq(rootBytes))))
+
+    withClue("its corrupt entry is gone: ")(b.stored shouldBe None)
+    withClue("and the child is fetched, as a missing node: ")(h.impl.healRequests.contains(b.child) shouldBe true)
   }
 
   it should "take a corrupt entry from a walk's find, through its delete and heal, to a clean pass (S-1)" taggedAs UnitTest in {
