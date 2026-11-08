@@ -2696,6 +2696,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#peer-management-methods-named-net_-served-with-the-admin-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer-management methods named net_* (served with the admin namespace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#net_listpeers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6596,6 +6607,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#peer-management-methods-named-net_-served-with-the-admin-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer-management methods named net_* (served with the admin namespace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#net_listpeers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7129,7 +7151,11 @@ transport serves) is always on. Namespaces that are <strong>opt-in</strong> on H
 <code>miner</code>, <code>qa</code>, <code>txpool</code>, <code>trace</code>, <code>test</code>, <code>testing</code> and <code>mcp</code>. A method's namespace is the prefix of its name
 (<code>miner_start</code> needs <code>miner</code>), except <code>eth_setEtherbase</code>, a deprecated alias of <code>miner_setEtherbase</code> that is served only
 where <code>miner</code> is enabled. <code>eth_mining</code>, <code>eth_hashrate</code>, <code>eth_coinbase</code>, <code>eth_getWork</code>, <code>eth_submitWork</code> and
-<code>eth_submitHashrate</code> are in <code>eth</code>. See the <a href="../../runbooks/node-configuration/">node configuration runbook</a> for examples.</p>
+<code>eth_submitHashrate</code> are in <code>eth</code>. <code>net</code> serves only <code>net_version</code>, <code>net_listening</code> and <code>net_peerCount</code>: the
+non-standard peer methods named <code>net_*</code> (see below) are served with <code>admin</code>. On WebSocket, <code>eth_subscribe</code> and
+<code>eth_unsubscribe</code> need <code>eth</code>. The GraphQL endpoint (<code>/graphql</code> on the HTTP port) is not governed by these keys
+(<code>fukuii.network.rpc.graphql.enabled</code> controls it). See the <a href="../../runbooks/node-configuration/">node configuration runbook</a>
+for examples.</p>
 <h3 id="request-format">Request Format<a class="headerlink" href="#request-format" title="Permanent link">&para;</a></h3>
 <p>All requests follow the JSON-RPC 2.0 specification:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
@@ -8147,8 +8173,15 @@ does. Transactions from other senders are not listed; <code>txpool_content</code
 </span></code></pre></div></p>
 <p><strong>MCP Context</strong>: Health indicator for node connectivity.</p>
 <hr />
+<h3 id="peer-management-methods-named-net_-served-with-the-admin-namespace">Peer-management methods named <code>net_*</code> (served with the <code>admin</code> namespace)<a class="headerlink" href="#peer-management-methods-named-net_-served-with-the-admin-namespace" title="Permanent link">&para;</a></h3>
+<p><code>net_nodeInfo</code>, <code>net_listPeers</code>, <code>net_disconnectPeer</code>, <code>net_connectToPeer</code>, <code>net_listBlacklistedPeers</code>,
+<code>net_addToBlacklist</code> and <code>net_removeFromBlacklist</code> are not part of the standard <code>net</code> namespace (go-ethereum's <code>net</code>
+has <code>net_version</code>, <code>net_listening</code> and <code>net_peerCount</code>). They show peers and addresses, dial and drop peers and edit
+the blacklist, so they keep their names and are served with <strong><code>admin</code></strong>: a transport whose <code>apis</code> list has <code>net</code> but
+not <code>admin</code> answers them with <code>-32601</code>. Add <code>admin</code> to the transport's list to use them (opt-in over HTTP and
+WebSocket, on over IPC).</p>
 <h3 id="net_listpeers">net_listPeers<a class="headerlink" href="#net_listpeers" title="Permanent link">&para;</a></h3>
-<p>Returns detailed information about all connected peers.</p>
+<p>Returns detailed information about all connected peers (needs <code>admin</code>).</p>
 <p><strong>Parameters</strong>: None</p>
 <p><strong>Returns</strong>: <code>Array</code> - Array of peer objects with the following fields:
 - <code>id</code>: <code>String</code> - Unique peer identifier

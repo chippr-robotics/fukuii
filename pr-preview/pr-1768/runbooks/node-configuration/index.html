@@ -6863,24 +6863,32 @@ sensitive; an unknown name stops the node at startup. The <code>rpc</code> names
 </tr>
 </tbody>
 </table>
-<p>These are go-ethereum's defaults: the network-facing transports serve the read-only chain API, and the IPC socket,
-which file permissions protect, serves every production namespace. <code>qa</code> (<code>qa_mineBlocks</code>, a dev-network tool), <code>test</code>
-and <code>testing</code> (test-mode tools) and <code>mcp</code> are not in the IPC default either.</p>
+<p>These are go-ethereum's defaults: the network-facing transports serve the standard chain namespaces (<code>eth</code>, <code>net</code>,
+<code>web3</code>) and fukuii's own <code>fukuii_getAccountTransactions</code>, and the IPC socket, which file permissions protect (the node
+sets it to owner read/write only when it binds it), serves every production namespace. <code>qa</code> (<code>qa_mineBlocks</code>, a
+dev-network tool), <code>test</code> and <code>testing</code> (test-mode tools) and <code>mcp</code> are not in the IPC default either.</p>
+<p><code>eth</code> includes submitting transactions (<code>eth_sendRawTransaction</code>). <code>net</code> keeps only <code>net_version</code>, <code>net_listening</code> and
+<code>net_peerCount</code>, as in go-ethereum. The non-standard peer-management methods that carry a <code>net_</code> name (<code>net_nodeInfo</code>,
+<code>net_listPeers</code>, <code>net_connectToPeer</code>, <code>net_disconnectPeer</code>, <code>net_listBlacklistedPeers</code>, <code>net_addToBlacklist</code>,
+<code>net_removeFromBlacklist</code>) are served with <code>admin</code>, under the same names. On WebSocket, <code>eth_subscribe</code> and
+<code>eth_unsubscribe</code> need <code>eth</code>. The GraphQL endpoint (<code>/graphql</code> on the HTTP port) is not governed by these keys;
+<code>fukuii.network.rpc.graphql.enabled</code> controls it.</p>
 <p>Mining control is its own namespace, as in go-ethereum: <code>miner</code> holds <code>miner_start</code>, <code>miner_stop</code>, <code>miner_getStatus</code>
 and <code>miner_setEtherbase</code> (and <code>eth_setEtherbase</code>, a deprecated alias of the last one). <code>eth_mining</code>, <code>eth_hashrate</code>,
 <code>eth_coinbase</code>, <code>eth_getWork</code>, <code>eth_submitWork</code> and <code>eth_submitHashrate</code> stay in <code>eth</code>, so mining pools and stratum
 proxies work with the defaults. To start and stop mining over HTTP, add <code>miner</code> to <code>http.apis</code>.</p>
 <p>Opt in per transport, and only on the transport that needs it:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>fukuii.network.rpc {
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>  http.apis = "eth,net,web3,fukuii,txpool"          # add a read-only namespace
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>  http.apis = "eth,net,web3,fukuii,txpool"          # add a namespace
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  ws.apis   = "eth,net,web3,fukuii"                 # WebSocket keeps the default
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,miner"   # narrow IPC
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>}
 </span></code></pre></div>
 <p>To get the previous behaviour on every transport (not recommended on a network-facing endpoint):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin,miner"
 </span></code></pre></div>
-<p>or, from the command line, <code>-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin</code>. Enabling <code>personal</code>,
+<p>or, from the command line, <code>-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin,miner</code> (<code>miner</code> and
+<code>admin</code> now carry what <code>eth</code> and <code>net</code> used to: mining control and the non-standard <code>net_</code> peer methods). Enabling <code>personal</code>,
 <code>debug</code>, <code>admin</code>, <code>qa</code> or <code>miner</code> on an HTTP or WebSocket endpoint that is not bound to loopback logs a warning at
 startup. A key in a block the node does not read (for example a <code>websocket</code> block: the block is <code>ws</code>) is not an error
 but is not used either: the keys are exactly <code>network.rpc.apis</code>, <code>network.rpc.http.apis</code>, <code>network.rpc.ws.apis</code> and

@@ -6586,7 +6586,8 @@
 </span></code></pre></div>
 <p>Note: the <code>admin</code> namespace is off by default over HTTP and WebSocket (and on over IPC), so <code>admin_peers</code> answers
 <code>-32601 Method not found</code> until you opt in: <code>fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"</code>. Enable it
-only on a loopback endpoint. <code>net_peerCount</code> and <code>net_listPeers</code> need only <code>net</code>.</p>
+only on a loopback endpoint. <code>net_peerCount</code> needs only <code>net</code>; the other <code>net_*</code> peer methods (<code>net_listPeers</code>,
+<code>net_connectToPeer</code>, <code>net_nodeInfo</code>, ...) are served with <code>admin</code> too.</p>
 <h3 id="monitor-logs-for-peer-activity">Monitor Logs for Peer Activity<a class="headerlink" href="#monitor-logs-for-peer-activity" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>tail<span class="w"> </span>-f<span class="w"> </span>~/.fukuii/etc/logs/fukuii.log<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>peer
 </span></code></pre></div>

@@ -6165,7 +6165,7 @@
 - Ensure proper permissions: <code>chmod 600 node.key</code> to protect the private key</p>
 <h4 id="getting-enode-urls">Getting Enode URLs<a class="headerlink" href="#getting-enode-urls" title="Permanent link">&para;</a></h4>
 <p>To get the enode URL of a running node, query its admin API (the <code>admin</code> namespace is off by default over HTTP, so
-add it with <code>fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"</code>; <code>net_nodeInfo</code> needs only <code>net</code>):
+add it with <code>fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"</code>; <code>net_nodeInfo</code> is served with <code>admin</code> too):
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>--data<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}'</span><span class="w"> </span>http://localhost:8546
 </span></code></pre></div></p>
 <p>The response will include the full enode URL in the format:
