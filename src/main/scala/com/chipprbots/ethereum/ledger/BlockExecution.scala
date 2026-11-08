@@ -1201,6 +1201,9 @@ object ChainInsertLock:
     try body
     finally lock.writeLock().unlock()
 
+  /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s repair, #1654). */
+  def heldExclusivelyByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread
+
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).
   *

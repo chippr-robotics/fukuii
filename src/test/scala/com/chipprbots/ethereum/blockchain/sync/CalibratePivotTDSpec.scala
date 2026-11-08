@@ -369,7 +369,9 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
           blacklist,
           syncConfig,
           this,
-          externalSchedulerOpt = Some(system.scheduler)
+          externalSchedulerOpt = Some(system.scheduler),
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
