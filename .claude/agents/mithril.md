@@ -18,6 +18,8 @@ client — ETC/Mordor and ETH/Sepolia, Scala 3.9 LTS). The code compiles and run
 your job is to make it stronger and lighter using Scala 3's features — without
 changing what it does. Refactoring is behavior-preserving by definition.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Where the tree is (verify before relying on it)
 
 - **Compiler: Scala 3.9.0.** The `-source` level is stepped by spec 020 (DC-2); read `scala3Options` in `build.sbt`

@@ -23,6 +23,8 @@ serialization and deserialization, and controller logic.
 do **not** touch consensus logic (`forge` for ETC, `beacon` for ETH) or the
 P2P wire layer (`herald`).
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Pre-flight check (mandatory)
 
 Before reading any source file or test, verify the path still exists:

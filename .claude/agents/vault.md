@@ -24,6 +24,8 @@ You do **not** own what is stored in the DB (block, state, trie semantics are
 `forge`/`beacon`) — you own how it is stored: ordering, flushing, caching,
 recovery, and iteration.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Shared protocols
 
 - Storage patterns, column families, iterator safety, EphemDataSource rules: `.claude/agent-protocols/storage-rocksdb.md`
