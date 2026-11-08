@@ -92,7 +92,7 @@ matrix schedules the promotions; this file records what is true today.
 
 | # | Rule | Status | Enforced by / substitute |
 |---|---|---|---|
-| VI.1 | No secrets, keys, keystores, `.env` committed | `aspirational` | GitHub secret scanning + `.gitignore`. **Deferred mechanisation:** add a pre-merge secret-scan gate; owner realcodywburns, target 2027-03-31. |
+| VI.1 | No secrets, keys, keystores, `.env` committed | `enforced` | `gate:gate-integrity` — check C15 fails on a tracked keystore or key file (`.p12`, `.pfx`, `.jks`, `.jceks`, `.bks`, `.keystore`, `.key`), a Web3 `UTC--` account keystore, a PEM private-key block in any file, or a `.env` file other than an `*.example` template. Known-public test fixtures are listed by exact path in the check. **Scope caveat:** other credentials (API tokens, passwords in text) are left to GitHub secret scanning and `.gitignore`, which do not gate a merge. |
 | VI.2 | JSON-RPC defaults to private/localhost binding | `aspirational` | Human: review of `src/main/resources/conf/**`. Mechanisable as a config assertion spec; not yet written. |
 | VI.3 | Dependency/CVE updates applied promptly; SBOM + signed artifacts | `aspirational` | `dependency-check.yml` runs with `continue-on-error: true` — it reports, it does not gate. Release signing is in `release.yml`. |
 | VI.4 | Crypto / key / network-surface changes get explicit security consideration | `aspirational` | Human: review + `/security-review`. |
@@ -131,7 +131,6 @@ with an owner and a date, so "aspirational" cannot quietly become "forever" (FR-
 | IV.2, IV.3, IV.5 | `scalafixAll --check` on `scalanet` and `scalanetDiscovery` (logged follow-up; the other four modules are in the CI path) | realcodywburns | not set |
 | IV.4 | grep gate on `io.iohk` / `mantis` package and config references | realcodywburns | 2027-03-31 |
 | V.6 | promotion of the `first_required_slice` gates to `required` | realcodywburns | 2026-12-31 |
-| VI.1 | pre-merge secret-scan gate | realcodywburns | 2027-03-31 |
 | VI.2 | config assertion spec for RPC default binding | realcodywburns | 2027-03-31 |
 | VI.3 | `dependency-check.yml` without `continue-on-error` | realcodywburns | 2027-03-31 |
 | VIII.1 | promotion of `backlog-link.yml` from warn-only to a required check on PRs that are not bots or version bumps | realcodywburns | not set |

@@ -587,12 +587,16 @@ fukuii.network.rpc.http {
   port = 8546
   
   certificate {
-    keystore-path = "tls/fukuiiCA.p12"
+    keystore-path = "tls/fukuii-rpc.p12"
     keystore-type = "pkcs12"
-    password-file = "tls/password"
+    password-file = "tls/fukuii-rpc.password"
   }
 }
 ```
+
+Fukuii ships no certificate. Generate the keystore and its password per deployment with
+`tls/gen-cert.sh --san DNS:<host>,IP:<address>`, which writes the files named above, or use a
+CA-issued certificate.
 
 For complete TLS setup instructions including certificate generation, testing, and production considerations, see the **[TLS Operations Runbook](tls-operations.md)**.
 

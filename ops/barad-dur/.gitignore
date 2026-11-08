@@ -8,6 +8,7 @@ ssl/
 *.pem
 *.p12
 *.pfx
+*.password
 
 # Secrets
 secrets/

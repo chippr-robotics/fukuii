@@ -1025,7 +1025,7 @@
             },
             certificateKeyStorePath: {
                 title: 'Certificate Keystore',
-                description: 'Path to keystore containing TLS certificate and private key. Format: PKCS12 or JKS. Secure file permissions (600). Backup securely. Rotate regularly per security policy.'
+                description: 'Path to keystore containing TLS certificate and private key. Format: PKCS12 or JKS. Fukuii ships no certificate: generate one per deployment with <code>tls/gen-cert.sh --san DNS:&lt;host&gt;,IP:&lt;address&gt;</code> (writes <code>tls/fukuii-rpc.p12</code> and its password file <code>tls/fukuii-rpc.password</code>) or use a CA-issued certificate. Secure file permissions (600). Backup securely. Rotate regularly per security policy.'
             },
             vmTraceEnabled: {
                 title: 'EVM Tracing',
@@ -1716,7 +1716,7 @@
                                             <label>Certificate KeyStore Path</label>
                                             <input type="text" value="${config.certificateKeyStorePath}" 
                                                 onchange="updateConfig('certificateKeyStorePath', this.value)"
-                                                placeholder="/path/to/keystore.p12">
+                                                placeholder="tls/fukuii-rpc.p12">
                                         </div>
                                         <div class="form-group">
                                             <label>KeyStore Type</label>
@@ -1729,7 +1729,7 @@
                                             <label>Certificate Password File</label>
                                             <input type="text" value="${config.certificatePasswordFile}" 
                                                 onchange="updateConfig('certificatePasswordFile', this.value)"
-                                                placeholder="/path/to/password.txt">
+                                                placeholder="tls/fukuii-rpc.password">
                                         </div>
                                     </div>
                                 ` : ''}

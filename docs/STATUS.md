@@ -42,7 +42,7 @@ nothing else.
 |---|---|---|
 | `ci-test-build` | compile-all, formatCheck (scalafmt on every module; scalafix on root, bytes, crypto, rlp), Tier-1 testEssential, Tier-2 testStandard with coverage (develop + PRs into main), KPI baselines, ethereum/tests integration job, assembly build. | realcodywburns |
 | `docker-build` | Container images build and push for mainnet/mordor/bootnode variants. | realcodywburns |
-| `gate-integrity` | This matrix itself — undeclared checks, required-but-unfailable gates, expired/incomplete waivers, unmapped constitution principles, stale generated status doc, dead badges, and over-claiming documentation. FR-029: the meta-check is itself required, or it guarantees nothing. | realcodywburns |
+| `gate-integrity` | This matrix itself — undeclared checks, required-but-unfailable gates, expired/incomplete waivers, unmapped constitution principles, stale generated status doc, dead badges, and over-claiming documentation — plus committed keystores, private keys and `.env` files (C15). FR-029: the meta-check is itself required, or it guarantees nothing. | realcodywburns |
 
 ## Informational — runs, reports, does not block
 

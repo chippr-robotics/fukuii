@@ -132,6 +132,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls, committed in the withdrawals root, returned in the body). Results change wherever the default coinbase, gas
   clamping or withdrawals matter. A second comparison, against geth v1.17.9, found more differences; they are listed
   under Known issues (#1727).
+- **The sample TLS keystore is no longer shipped; generate a per-deployment server certificate with
+  `tls/gen-cert.sh` (now a proper server certificate with SANs).** `tls/fukuiiCA.p12` and `tls/password` are gone.
+  The script writes `tls/fukuii-rpc.p12`, a random `tls/fukuii-rpc.password` (both mode 600) and the PEM certificate
+  `tls/fukuii-rpc.crt` for clients to trust; `--san` lists the names and addresses clients use (default
+  `DNS:localhost,IP:127.0.0.1`), and the certificate is `CA:FALSE` with `serverAuth`. It needs `openssl`, no longer
+  `pwgen` or `keytool`. HTTPS stays off by default (`certificate = null`); a config that points at the old files must
+  point at the generated ones. The Gate Integrity check (C15) now rejects committed keystores, private keys and
+  `.env` files.
 
 ### Added
 - **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a

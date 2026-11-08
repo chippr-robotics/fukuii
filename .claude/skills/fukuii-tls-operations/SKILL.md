@@ -29,22 +29,26 @@ network.rpc.http {
   interface = "localhost"   # bind address
   port = 8546               # default RPC port
   certificate {
-    keystore-path = "tls/fukuiiCA.p12"   # PKCS#12/JKS keystore
-    keystore-type = "pkcs12"             # keystore type
-    password-file = "tls/password"       # file holding the keystore password
+    keystore-path = "tls/fukuii-rpc.p12"        # PKCS#12/JKS keystore
+    keystore-type = "pkcs12"                    # keystore type
+    password-file = "tls/fukuii-rpc.password"   # file holding the keystore password
   }
 }
 ```
 
-> Note: these are **nested** keys under `certificate`. The flat
-> `certificate-keystore-path` / `certificate-password-file` form is the separate
-> **faucet** config (`conf/faucet.conf`), not the node RPC — don't mix them up.
+> Note: these are **nested** keys under `certificate`, not the flat
+> `certificate-keystore-path` / `certificate-password-file` names that older
+> docs use. The faucet's RPC client has its own `faucet.rpc-client.certificate`
+> block (`conf/faucet.conf`) — don't mix them up.
 
 ## Procedure
 1. **Obtain a certificate** — a CA-issued cert for public endpoints, or a
-   self-signed keystore for internal use. Store the keystore + password file
-   under a permission-restricted path (treat like keys — see
-   `fukuii-key-management`).
+   self-signed one generated for this deployment with
+   `tls/gen-cert.sh --san DNS:<host>,IP:<address>` (🔴: it creates a private key;
+   writes `fukuii-rpc.p12`, `fukuii-rpc.password` and the client-trust PEM
+   `fukuii-rpc.crt`, keystore and password mode 600). Fukuii ships no
+   certificate; never reuse or commit one. Keep the files under a
+   permission-restricted path (treat like keys — see `fukuii-key-management`).
 2. **Configure** (🔴) — set `mode = "https"` and populate the nested
    `certificate { keystore-path, keystore-type, password-file }` block in
    `fukuii.conf` (replacing `certificate = null`). Keep `interface` as restrictive
@@ -52,8 +56,9 @@ network.rpc.http {
 3. **Restart & verify** (🔴) — restart the node, then verify the endpoint speaks
    TLS (`curl -v https://<host>:<port>` → handshake succeeds; a known RPC call
    returns). Confirm http is no longer served on that port if that was intended.
-4. **Rotate** (🔴) — replace the keystore, update the password file if changed,
-   restart. Plan a brief RPC outage; coordinate with dependents.
+4. **Rotate** (🔴) — `tls/gen-cert.sh --force` with the same `--san` (new key,
+   certificate and password in place), restart, and hand clients the new `.crt`.
+   Plan a brief RPC outage; coordinate with dependents.
 
 ## Security notes
 - TLS encrypts transport; it is **not** authentication. Combine with network
