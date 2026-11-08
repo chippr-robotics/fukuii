@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.vm
 
+import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
@@ -77,6 +78,43 @@ class OpCodeContractSpec extends AnyFunSuite with Matchers with ScalaCheckProper
       config.amsterdamEnabled shouldBe false
       forAll(getProgramStateGen(stackGen = stackGen, evmConfig = config)) { state =>
         for op <- allOpCodes do withClue(s"$op: ")(op.stateGasDelta(state) shouldBe BigInt(0))
+      }
+  }
+
+  // Spec 021 F07 (forge C14, C16). SSTORE's path and the EIP-2929 access costs dispatch on the HEADER's block number,
+  // which the builders above leave at 0..300 of a fixture config. So the contract is also checked on the ETC chain as
+  // shipped, at one block in each era (EtcForkMatrix), with the config `forBlock` selects there and a header at that
+  // block, and with full-range words as well as small ones. It proves the EIP-8037 checkpoint (spec 021 S3) is never
+  // taken on ETC.
+  private val fullRangeWords: Gen[UInt256] = Gen.oneOf(
+    getUInt256Gen(max = UInt256(64)),
+    Gen.oneOf(
+      UInt256.Zero,
+      UInt256.One,
+      UInt256(BigInt(2).pow(63)),
+      UInt256(BigInt(2).pow(64) + 5),
+      UInt256(BigInt(2).pow(160) + 1),
+      UInt256(BigInt(2).pow(255)),
+      UInt256.MaxValue
+    ),
+    getUInt256Gen()
+  )
+
+  test("before Amsterdam every instruction's state-gas delta is zero on ETC, in every era (F07)", UnitTest, VMTest) {
+    for era <- EtcForkMatrix.eras do
+      withClue(s"$era: ") {
+        era.evmConfig.amsterdamEnabled shouldBe false
+        for words <- Seq(getUInt256Gen(max = UInt256(64)), fullRangeWords) do
+          val stateGen = getProgramStateGen(
+            stackGen = getStackGen(minElems = 7, maxElems = 10, valueGen = words),
+            evmConfig = era.evmConfig,
+            blockNumberGen = Gen.const(UInt256(era.block)),
+            isTopHeader = true
+          )
+          forAll(stateGen) { state =>
+            state.env.blockHeader.number.value shouldBe era.block
+            for op <- allOpCodes do withClue(s"$op: ")(op.stateGasDelta(state) shouldBe BigInt(0))
+          }
       }
   }
 

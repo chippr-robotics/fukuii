@@ -94,12 +94,12 @@ description: "Task list for spec 021: the fixed-width UInt256, the in-place word
 trace output) before any representation changes, and take the GT-4 baseline.
 
 **Before code**:
-- [ ] T010 **BEFORE CODE (RP-1)** [forge] [beacon]: sign the S0 list in D/data-model.md §9 (the codec goldens, O01–O15, F01–F07); record the sign-off in D/plan.md Gates
+- [x] T010 **BEFORE CODE (RP-1)** [forge] [beacon]: sign the S0 list in D/data-model.md §9 (the codec goldens, O01–O15, F01–F07); record the sign-off in D/plan.md Gates
 
 ### Pin tests (the whole slice; green on `staging`)
 
-- [ ] T011 [P] [US1] Create the ETC (config, block) matrix fixture in T/vm/EtcForkMatrix.scala: the `etc-chain.conf` forks with one block per era (below 1.15M; 1.15M–2.5M; 2.5M–8.772M; Atlantis; Agharta; Phoenix; Magneto; Mystique; Spiral; Olympia at a test block)
-- [ ] T012 [P] [US1] Codec goldens and P07–P09 in T/domain/UInt256GoldenBytesSpec.scala. Bytes are literals captured from the pre-swap tree:
+- [x] T011 [P] [US1] Create the ETC (config, block) matrix fixture in T/vm/EtcForkMatrix.scala: the `etc-chain.conf` forks with one block per era (below 1.15M; 1.15M–2.5M; 2.5M–8.772M; Atlantis; Agharta; Phoenix; Magneto; Mystique; Spiral; Olympia at a test block)
+- [x] T012 [P] [US1] Codec goldens and P07–P09 in T/domain/UInt256GoldenBytesSpec.scala. Bytes are literals captured from the pre-swap tree:
   - Account RLP at nonce and balance ∈ {0x7f, 0x80, 0xff, 0x100, 2²⁵⁵, 2²⁵⁶−1};
   - the CREATE address at nonce ∈ {1, 0x7f, 0x80, 0x100, 2⁶⁴−2};
   - access-list key bytes → tx hash;
@@ -107,19 +107,23 @@ trace output) before any representation changes, and take the GT-4 baseline.
   - JSON quantities {0, 0xf, 2²⁵⁵, 2²⁵⁶−1};
   - `toHexString`/`toString` strings;
   - the `InvalidJump` string.
-- [ ] T013 [P] [US1] O01–O15 and FR-010's truncation invariants (JUMP `isValidInt`, BLOBHASH bounds, `sliceBytes` min-before-truncate, CALL's requested gas, RETURNDATACOPY saturation) in T/vm/OpCodeEdgeRowsSpec.scala
-- [ ] T014 [US1] F01 (`calcMemCost` vectors at exact values, including the `BigInt` sentinel 2²⁵⁵−1) and F02 (`wordsForBytes` at 0, 1, 32, 33, 2⁶³−1, 2⁶³, 2⁶⁴−1, 2⁶⁴, 2²⁵⁶−1) in T/vm/OpCodeEdgeRowsSpec.scala (after T013: same file)
-- [ ] T015 [US1] F03, F04 and F05 in T/vm/EtcOpCodeEdgeRowsSpec.scala (uses T011):
+- [x] T013 [P] [US1] O01–O15 and FR-010's truncation invariants (JUMP `isValidInt`, BLOBHASH bounds, `sliceBytes` min-before-truncate, CALL's requested gas, RETURNDATACOPY saturation) in T/vm/OpCodeEdgeRowsSpec.scala
+- [x] T014 [US1] F01 (`calcMemCost` vectors at exact values, including the `BigInt` sentinel 2²⁵⁵−1) and F02 (`wordsForBytes` at 0, 1, 32, 33, 2⁶³−1, 2⁶³, 2⁶⁴−1, 2⁶⁴, 2²⁵⁶−1) in T/vm/OpCodeEdgeRowsSpec.scala (after T013: same file)
+- [x] T015 [US1] F03, F04 and F05 in T/vm/EtcOpCodeEdgeRowsSpec.scala (uses T011):
   - F03: SSTORE below Phoenix, at Phoenix and at Magneto; keys and values {0, 1, 2²⁵⁵, 2²⁵⁶−1}; gas, refund and storage root;
   - F04: pre-EIP-150 CALL, CALLCODE and DELEGATECALL requests of 2⁶⁴+5 and MaxValue on an ETC Homestead block: OOG in `calcGas`, stack unchanged, the full request charged;
   - F05: the Olympia opcodes MCOPY, CLZ, BASEFEE, TLOAD and TSTORE on the ETC table.
-- [ ] T016 [P] [US1] F06, the opcode-table golden: (byte, name, delta, alpha, constant gas) for each ETC fork (`forBlock` at each boundary block, Olympia at a test block) and each ETH fork, in T/vm/OpCodeTableGoldenSpec.scala and src/test/resources/spec021/opcode-tables.golden
-- [ ] T017 [US1] F07: extend "before Amsterdam every instruction's state-gas delta is zero" to T011's ETC matrix in T/vm/OpCodeContractSpec.scala (uses T011)
-- [ ] T018 [P] [US2] Trace goldens in T/vm/TraceGoldenSpec.scala and src/test/resources/trace-goldens/:
+- [x] T016 [P] [US1] F06, the opcode-table golden: (byte, name, delta, alpha, constant gas) for each ETC fork (`forBlock` at each boundary block, Olympia at a test block) and each ETH fork, in T/vm/OpCodeTableGoldenSpec.scala and src/test/resources/spec021/opcode-tables.golden
+- [x] T017 [US1] F07: extend "before Amsterdam every instruction's state-gas delta is zero" to T011's ETC matrix in T/vm/OpCodeContractSpec.scala (uses T011)
+- [x] T018 [P] [US2] Trace goldens in T/vm/TraceGoldenSpec.scala and src/test/resources/trace-goldens/:
   - formats: structLog with memory capture off **and** on, callTracer, prestateTracer, and `trace_*` vmTrace;
   - over a frozen fixture set with these error steps: OOG, InvalidJump, underflow, RETURNDATACOPY overflow, CREATE's initcode limit and preflight OOG, the EIP-8037 shortfall on a CALL, a CALL failing without revert, and a reverting CALL.
-- [ ] T019 [P] [US2] Add an allocated-bytes column (`ThreadMXBean.getCurrentThreadAllocatedBytes` around each case run) to IT/ethtest/BlockchainTestBench.scala
+- [x] T019 [P] [US2] Add an allocated-bytes column (`ThreadMXBean.getCurrentThreadAllocatedBytes` around each case run) to IT/ethtest/BlockchainTestBench.scala
 - [ ] T020 [US2] Freeze the GT-4 bench fixtures with their opcode counts: `loopMul_d2g0v0_Cancun`, plus one arithmetic-dense, one memory-dense and one DIV/MULMOD/EXP-dense GeneralStateTest. Record the S0 baseline (jar A) of D/research.md §B rows 4–8, 7c, 11, 12 and 15 per D/quickstart.md §5 (depends on T019; row 7b comes from T006)
+  - **BLOCKED (2026-11-07).**
+    - The fixtures are not on the S0 host. `loopMul_d2g0v0_Cancun` comes from hive's Cancun-era fixtures, and the local ethereum/tests checkout stops at Berlin/Istanbul. No substitute has been chosen.
+    - The jar-A baseline needs the measurement host with every node stopped (D/quickstart.md §0).
+    - T019's `alloc_bytes` column is ready for it.
 
 ### Exit gate
 
@@ -128,6 +132,12 @@ trace output) before any representation changes, and take the GT-4 baseline.
   - `testEssential` once;
   - the PR merged with forge and beacon approval;
   - recorded in D/research.md §B, column S0.
+  - **Status (2026-11-07, branch `feat/021-s0`):** done on the branch:
+    - `compile-all`;
+    - the testOnly above plus `*UInt256Spec* *OpCode* *Stack*`: 18 suites, 466 tests, all green;
+    - `scalafmtAll`.
+
+    Open: `testEssential`, the PR, and the §B record (T020 is blocked).
 
 **Checkpoint**: every output the later slices must preserve is pinned.
 
