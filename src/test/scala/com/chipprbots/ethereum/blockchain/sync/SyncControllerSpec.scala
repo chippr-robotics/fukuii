@@ -579,6 +579,204 @@ class SyncControllerSpec
     }
   }
 
+  // H3: a stored node no fetch repairs sent regular sync to SNAP, and the next SNAP back to the same node, with no cap.
+  // The first two re-SNAPs in a row with no block imported between them go at once, as before. From the third, regular
+  // sync keeps running (on ETC a stopped node imports nothing while it waits) and the re-SNAP is scheduled an hour on,
+  // doubling each time; an import meanwhile drops it.
+
+  /** The regular-sync child running now: the latest generation (a stopped one can still be listed a moment). */
+  private def regularSyncChild(testSetup: TestSetup): String =
+    eventually {
+      testSetup.someTimePasses()
+      testSetup.syncController.children
+        .map(_.path.name)
+        .filter(_.startsWith("regular-sync-"))
+        .maxBy(_.stripPrefix("regular-sync-").toIntOption.getOrElse(-1))
+    }
+
+  private def snapChildren(testSetup: TestSetup): Set[String] =
+    testSetup.syncController.children.map(_.path.name).filter(_.startsWith("snap-sync")).toSet
+
+  private def stuckReport(testSetup: TestSetup): List[String] =
+    syncControllerErrorsDuring {
+      testSetup.syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef")
+      )
+    }
+
+  it should "re-SNAP at once twice in a row, then keep regular sync running and re-SNAP an hour later (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    /** Regular sync reports itself stuck, the re-SNAP starts at once, and SNAP hands back to regular sync. */
+    def stuckAndResnapped(): List[String] =
+      regularSyncChild(testSetup)
+      val before = snapChildren(testSetup)
+      val errors = stuckReport(testSetup)
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- before).nonEmpty)
+      }
+      appState.snapSyncDone().commit() // what a finalisation has written by the time it says so
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      errors
+
+    val atOnce = stuckAndResnapped() ++ stuckAndResnapped()
+    val running = regularSyncChild(testSetup)
+    val snapsBefore = snapChildren(testSetup)
+    val third = stuckReport(testSetup)
+
+    withClue("the first two re-SNAPs go at once: ")(atOnce.filter(_.contains("[SYNC-STUCK]")) shouldBe empty)
+    third.count(_.contains("[SYNC-STUCK]")) shouldBe 1
+    third.filter(_.contains("[SYNC-STUCK]")).head should (include("60 min").and(include("Regular sync keeps running")))
+    appState.regularSyncStuckResnaps() shouldBe 3
+    appState.resnapBaseline() shouldBe Some(appState.getBestBlockNumber())
+    withClue("regular sync keeps running, and no SNAP starts yet: ") {
+      timePasses(59.minutes)
+      syncController.children.map(_.path.name) should contain(running)
+      snapChildren(testSetup) shouldBe snapsBefore
+    }
+
+    timePasses(2.minutes)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- snapsBefore).nonEmpty)
+    }
+    withClue("the SNAP's pivot is no import: the next regular sync sets the baseline: ") {
+      appState.resnapBaseline() shouldBe None
+    }
+  }
+
+  it should "count re-SNAPs from what is stored, so a restart forgets no count, and say so on the gauge (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(appState.getBestBlockNumber()))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+
+    val errors = stuckReport(testSetup)
+
+    appState.regularSyncStuckResnaps() shouldBe 3
+    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.consecutiveResnaps shouldBe 3d
+    errors.count(_.contains("[SYNC-STUCK]")) shouldBe 1
+    syncController.children.map(_.path.name) should contain(running)
+    snapChildren(testSetup) shouldBe empty
+  }
+
+  // review vault 2: imports are measured from a stored baseline, not from where regular sync last started, which each of
+  // its many restarts moved, so a healthy node that restarted could still climb to the backoff.
+  it should "start the re-SNAP count over after a block is imported, across a restart of regular sync (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val best = appState.getBestBlockNumber()
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(best))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val first = regularSyncChild(testSetup)
+    appState.putBestBlockNumber(best + 5).commit() // regular sync imported blocks
+    system.stop(syncController.children.find(_.path.name == first).get) // and then restarted
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(c => c.path.name.startsWith("regular-sync") && c.path.name != first))
+    }
+
+    val errors = stuckReport(testSetup)
+
+    appState.regularSyncStuckResnaps() shouldBe 1
+    errors.filter(_.contains("[SYNC-STUCK]")) shouldBe empty
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+  }
+
+  it should "drop a scheduled re-SNAP and zero the gauge once a block is imported while it waits (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val best = appState.getBestBlockNumber()
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(best))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1
+
+    appState.putBestBlockNumber(best + 1).commit() // regular sync imported a block
+    timePasses(SyncController.ResnapCheckInterval + 1.second)
+
+    appState.regularSyncStuckResnaps() shouldBe 0
+    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.consecutiveResnaps shouldBe 0d
+    timePasses(2.hours)
+    snapChildren(testSetup) shouldBe empty
+  }
+
+  // review: a re-SNAP whose wait ended while a bulk code recovery ran had its ResnapDue dropped there, and the wait
+  // state stayed: every later stuck was taken for a repeat of a re-SNAP still waiting, with no timer left to start it.
+  it should "schedule a re-SNAP again when the last one's wait ended mid-recovery (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val sc = new BulkScenario(testSetup)
+    networkPeerManager.setAutoPilot(
+      new AutoPilot: // no peers: the recovery waits for one, and gives up only after 10 min with none
+        override def run(sender: ActorRef, msg: Any): AutoPilot =
+          msg.asMatchable match
+            case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) => replyTo ! HandshakedPeers(Map.empty)
+            case _                                                      => ()
+          this
+    )
+    sc.appState.putRegularSyncStuck(2, Some(sc.appState.getBestBlockNumber())).commit()
+    sc.startRegularSync()
+    stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1 // the third in a row: the re-SNAP waits
+
+    timePasses(57.minutes) // regular sync runs most of the wait
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.MissingCodeNeedsBulkRecovery(500, sc.codeHashes.head)
+    )
+    val recovery = eventually {
+      someTimePasses()
+      syncController.children.map(_.path.name).find(_.startsWith("bytecode-recovery")).get
+    }
+    timePasses(4.minutes) // the wait ends during the recovery, which drops the re-SNAP's message
+    withClue("the recovery still runs, and no SNAP started: ") {
+      syncController.children.map(_.path.name) should contain(recovery)
+      snapChildren(testSetup) shouldBe empty
+    }
+
+    system.stop(syncController.children.find(_.path.name == recovery).get) // the recovery ends
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+
+    withClue("the next stuck schedules a re-SNAP, the fourth in a row: ") {
+      stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1
+      sc.appState.regularSyncStuckResnaps() shouldBe 4
+    }
+  }
+
+  it should "let two re-SNAPs in a row go at once, then wait an hour, doubling, up to a day (resnapBackoff, H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import scala.concurrent.duration.*
+    (1 to 10).map(SyncController.resnapBackoff) shouldBe
+      Seq(Duration.Zero, Duration.Zero, 1.hour, 2.hours, 4.hours, 8.hours, 16.hours, 24.hours, 24.hours, 24.hours)
+    SyncController.resnapBackoff(10000) shouldBe 24.hours
+  }
+
   // ── Startup sync mode, and databases from before fast sync was removed ───────────────────────────────────────
   // start() picks SNAP when do-snap-sync is set and SNAP is not done, and regular sync otherwise, with one exception:
   // a node where fast sync finished (legacy FastSyncDone) and SNAP has no stake (accounts not complete, saved pivot not
@@ -1723,6 +1921,9 @@ class SyncControllerSpec
 
     def someTimePasses(): Unit =
       testScheduler.timePasses(3000.millis)
+
+    def timePasses(duration: FiniteDuration): Unit =
+      testScheduler.timePasses(duration)
 
     /** Answer every peer poll SyncController's children make with `peers`. */
     def answerPeerPollsWith(peers: Map[Peer, PeerInfo]): Unit =
