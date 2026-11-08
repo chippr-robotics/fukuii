@@ -20,8 +20,19 @@ import cats.effect.std.Mutex
   */
 final class ImportLock private (mutex: Mutex[IO]):
 
+  @volatile private var holder: Option[String] = None
+
   /** `io`, run holding the lock, which is released however `io` ends. */
   def guard[A](io: IO[A]): IO[A] = mutex.lock.surround(io)
+
+  /** [[guard]] for a holder that is not an import (the chain-weight repair, #1654): while it holds the lock, [[heldBy]]
+    * names it, so an importer waiting for the lock says what it waits for.
+    */
+  def guardAs[A](who: String)(io: IO[A]): IO[A] =
+    mutex.lock.surround(IO { holder = Some(who) } >> io.guarantee(IO { holder = None }))
+
+  /** Who holds the lock, when it is held by [[guardAs]]; `None` for an import. */
+  def heldBy: Option[String] = holder
 
 object ImportLock:
   def apply(): ImportLock = new ImportLock(Mutex.in[SyncIO, IO].unsafeRunSync())

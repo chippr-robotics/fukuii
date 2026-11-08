@@ -23,7 +23,8 @@ import com.chipprbots.ethereum.utils.Hex
   *
   * An accepted seed takes the chain-weight marker away and drops `ChainWeightReconcile`'s saved place: the value is
   * trusted, not proven, so the next pass checks every weight from genesis once the headers are in, the seeded one
-  * included.
+  * included. On a chain that was PoS from genesis (terminal TD 0) every seed is refused: the true weight is the genesis
+  * weight at every height, the pass derives it, and only a wrong seed could pass the checks here.
   */
 object ChainWeightSeed:
 
@@ -49,17 +50,37 @@ object ChainWeightSeed:
         case _ => Left(Outcome.Refused(entry, "expected HASH:TD"))
     }
 
-  /** Every entry of `spec`, in order. The caller holds the import lock and the chain insert lock exclusively. */
+  /** Every entry of `spec`, in order. The caller holds the import lock and the chain insert lock exclusively, and runs
+    * it inside `ChainWeightReconcile.Epoch.supersede`.
+    *
+    * Where the value comes from: a client that still reports total difficulty, for the base block (the lowest block
+    * with a weight, usually the SNAP pivot), not the head. core-geth does; go-ethereum since 1.15 returns no
+    * `totalDifficulty`. For example:
+    * {{{
+    * curl -s localhost:8545 -H 'Content-Type: application/json' \
+    *   -d '{"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":["0x<pivot hex>",false]}' \
+    *   | python3 -c 'import json,sys; b=json.load(sys.stdin)["result"]; print(b["hash"]+":"+str(int(b["totalDifficulty"],16)))'
+    * }}}
+    */
   def apply(
       spec: String,
       reader: BlockchainReader,
       writer: BlockchainWriter,
       appState: AppStateStorage,
-      batchSize: Int = 1000
+      posFromGenesis: Boolean,
+      batchSize: Int = 256
   ): Seq[Outcome] =
     parse(spec).map {
-      case Left(refused)     => refused
+      // A chain PoS from genesis (terminal TD 0): every weight is the genesis weight, which the plausibility floor
+      // cannot accept above height 0, and a seed has nothing to add to it (beacon W4).
+      case Right((hash, td)) if posFromGenesis =>
+        Outcome.Refused(
+          s"${Hex.toHexString(hash.toArray)}:$td",
+          "this chain is PoS from genesis (terminal total difficulty 0): every block's weight is the genesis weight, " +
+            "and the chain-weight pass derives it"
+        )
       case Right((hash, td)) => seed(hash, td, reader, writer, appState, batchSize)
+      case Left(refused)     => refused
     }
 
   private def seed(
