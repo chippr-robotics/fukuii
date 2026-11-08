@@ -139,7 +139,14 @@ object Dependencies {
     "org.bouncycastle" % "bcprov-jdk18on" % "1.84",
     "org.bouncycastle" % "bcpkix-jdk18on" % "1.84",
     "io.consensys.protocols" % "jc-kzg-4844" % "2.0.0", // EIP-4844/7594 KZG ops (c-kzg-4844 JNI bindings, PeerDAS cell proofs)
-    "org.hyperledger.besu" % "bls12-381" % "1.0.0" // EIP-2537 BLS12-381 precompiles (gnark/Constantine backends)
+    "org.hyperledger.besu" % "bls12-381" % "1.0.0" // EIP-2537 BLS12-381 precompiles (Matter Labs eth_pairings via JNA)
+  )
+
+  // TEST scope only (B-153): the EIP-2537 oracle Eip2537DifferentialSpec runs the production precompiles against.
+  // besu-native gnark is what Besu executes; it ships Linux and macOS binaries only (jfrog resolver, not Central).
+  // Root module only: Dependencies.testing would put it on every submodule's test classpath.
+  val blsDifferentialOracles: Seq[ModuleID] = Seq(
+    "org.hyperledger.besu" % "gnark" % "2.1.0" % "test"
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
