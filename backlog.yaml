@@ -82,7 +82,7 @@ items:
   - id: B-006
     title: "#1727 section 2+: eth_simulateV1 parity with geth v1.17.9 (190 of 815 cases differ), PRs by class"
     priority: P1
-    status: claimed
+    status: in-progress
     area: rpc
     size: L
     opened: 2026-11-07
@@ -93,7 +93,7 @@ items:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-08T18:45:32Z
-      heartbeat: 2026-11-08T18:45:32Z
+      heartbeat: 2026-11-08T18:45:36Z
     notes: conduit; the precompile-reason fix (vm/) and the ECIP-1017 reward fix need forge and beacon.
   - id: B-007
     title: "H4: regular sync blacklists peers for UNKNOWN_PARENT right after SNAP hand-off on a reorging PoW chain"
