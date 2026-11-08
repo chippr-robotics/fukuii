@@ -21,20 +21,15 @@ items:
   - id: B-002
     title: "#1654 PR B: ChainWeightReconcile, a one-time recompute of stored TD from genesis behind a marker"
     priority: P1
-    status: review
+    status: done
     area: sync
     size: L
     opened: 2026-11-07
+    closed: 2026-11-08
     refs: ["#1654-B", "#1654 b3", H6(2)]
     links:
       issues: [1654]
-      prs: [1751, 1762]
-      branch: fix/1654b-chain-weight-reconcile
-    claim:
-      by: fukuii-fc
-      agent: forge
-      since: 2026-11-08T12:00:00Z
-      heartbeat: 2026-11-08T22:33:27Z
+      prs: [1751, 1762, 1769]
       branch: fix/1654b-chain-weight-reconcile
     notes: |-
       Reviewers forge, vault, beacon. Lock order ImportLock -> ChainInsertLock.
