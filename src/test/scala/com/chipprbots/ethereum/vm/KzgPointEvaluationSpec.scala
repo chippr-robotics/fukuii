@@ -12,8 +12,9 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** Tests for the KZGPointEvaluation precompile (EIP-4844, address 0x0A).
   *
-  * Loads the mainnet KZG trusted setup so that CKZG4844JNI.verifyKzgProof actually runs. Without this setup the JNI
-  * call throws IllegalStateException, which must NOT be swallowed — the precompile must revert (return None).
+  * Loads the mainnet KZG trusted setup so that CKZG4844JNI.verifyKzgProof actually runs. Without the setup c-kzg throws
+  * `RuntimeException: Trusted Setup is not loaded.`, which raises NativeBackendUnavailable instead of failing the call
+  * (B-135, NativeBackendsSpec).
   *
   * Test vectors from go-ethereum: core/vm/testdata/precompiles/pointEvaluation.json
   */
