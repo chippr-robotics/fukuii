@@ -119,9 +119,8 @@ case class JsonRpcController(
     */
   def forApis(apis: Seq[String]): JsonRpcController = copy(transportApis = Some(apis))
 
-  /** One controller per transport, each answering the namespaces of that transport's key
-    * (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each
-    * server its own.
+  /** One controller per transport, each answering the namespaces of that transport's key (`network.rpc.http.apis`,
+    * `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each server its own.
     */
   def perTransport: JsonRpcController.PerTransport =
     JsonRpcController.PerTransport(

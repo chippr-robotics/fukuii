@@ -6,11 +6,11 @@ import scala.util.Try
 
 /** The startup check behind the "namespace on a non-loopback endpoint" warning.
   *
-  * `personal` (key management), `debug`, `admin` (peers, addresses, the blacklist, chain import and export, log
-  * level), `qa`, `miner` (mining control), `test` and `testing` (test-mode and test-harness tools that can rewrite the
-  * chain) change node state or reveal node internals. They are off by default on HTTP and WebSocket. An operator may
-  * enable them, and on a loopback endpoint only local programs can reach them; on any other address every client that
-  * can reach the port can, so the node says so at startup.
+  * `personal` (key management), `debug`, `admin` (peers, addresses, the blacklist, chain import and export, log level),
+  * `qa`, `miner` (mining control), `test` and `testing` (test-mode and test-harness tools that can rewrite the chain)
+  * change node state or reveal node internals. They are off by default on HTTP and WebSocket. An operator may enable
+  * them, and on a loopback endpoint only local programs can reach them; on any other address every client that can
+  * reach the port can, so the node says so at startup.
   *
   * IPC is not checked: its socket is protected by file permissions, not by the network (the node sets the socket to
   * owner read/write only when it binds it).

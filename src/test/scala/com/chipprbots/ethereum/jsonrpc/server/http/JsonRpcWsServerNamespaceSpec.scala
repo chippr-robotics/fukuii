@@ -19,13 +19,14 @@ import org.json4s.native.JsonMethods.parse
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** `eth_subscribe` and `eth_unsubscribe` belong to the `eth` namespace, as in go-ethereum. The WebSocket server
-  * answers them from the SubscriptionManager before the controller runs, so it checks the controller's enabled
-  * namespaces itself: without `eth` the reply is -32601 and nothing reaches the SubscriptionManager.
+/** `eth_subscribe` and `eth_unsubscribe` belong to the `eth` namespace, as in go-ethereum. The WebSocket server answers
+  * them from the SubscriptionManager before the controller runs, so it checks the controller's enabled namespaces
+  * itself: without `eth` the reply is -32601 and nothing reaches the SubscriptionManager.
   */
 class JsonRpcWsServerNamespaceSpec extends AnyFlatSpec with Matchers with ScalatestRouteTest:
 
@@ -72,7 +73,7 @@ class JsonRpcWsServerNamespaceSpec extends AnyFlatSpec with Matchers with Scalat
   ) in new Fixture(Seq("net", "web3", "rpc")):
     val reply: JValue = await(send(subscribe))
     reply \ "error" \ "code" shouldBe JInt(-32601)
-    reply \ "error" \ "message" shouldBe JString("Method not found")
+    reply \ "error" \ "message" shouldBe JString(JsonRpcError.MethodNotFound.message)
     reply \ "id" shouldBe JInt(1)
     // the reply is already here, so a Subscribe that was sent would be too
     subscriptions.expectNoMessage(100.millis)

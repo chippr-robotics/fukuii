@@ -43,7 +43,7 @@ class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
     val exceptions = Set("faucet.conf", "testmode.conf", "enterprise-template.conf")
     val confDir = Paths.get(getClass.getClassLoader.getResource("conf/app.conf").toURI).getParent
     val files = Files
-      .list(confDir)
+      .walk(confDir)
       .iterator
       .asScala
       .filter(_.getFileName.toString.endsWith(".conf"))
@@ -52,7 +52,11 @@ class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
     files should not be empty
 
     files.foreach { file =>
-      val parsed = ConfigFactory.parseString(Files.readString(file)) // parsed only: nothing is resolved
+      // Each file's own text, with its include directives dropped (also the inline `etc {include required(...)}`):
+      // `include classpath("application.conf")` would pull in whatever application.conf is on this test's classpath,
+      // which sets the keys for the controller specs.
+      val own = Files.readString(file).replaceAll("""(?m)\binclude\s+[^\n}]*""", "")
+      val parsed = ConfigFactory.parseString(own) // parsed only: nothing is resolved
       Seq("apis", "http.apis", "ws.apis", "ipc.apis").foreach { key =>
         withClue(s"${file.getFileName} fukuii.network.rpc.$key: ")(
           parsed.hasPath(s"fukuii.network.rpc.$key") shouldBe false

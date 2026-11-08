@@ -367,7 +367,9 @@ class JsonRpcControllerSpec
 
     val netOnly: JsonRpcController = jsonRpcController.forApis(Seq("net"))
     answer(netOnly, "net_version") should haveStringResult("1")
-    peerMethods.foreach(method => withClue(method)(answer(netOnly, method) should haveError(JsonRpcError.MethodNotFound)))
+    peerMethods.foreach(method =>
+      withClue(method)(answer(netOnly, method) should haveError(JsonRpcError.MethodNotFound))
+    )
 
     // with admin they are served, under the same names (a method without its parameters is served, then refused)
     val adminOnly: JsonRpcController = jsonRpcController.forApis(Seq("admin"))
@@ -378,7 +380,10 @@ class JsonRpcControllerSpec
     // admin does not bring net_version with it
     answer(adminOnly, "net_version") should haveError(JsonRpcError.MethodNotFound)
 
-  it should "give each transport a controller with its own enabled namespaces" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
+  it should "give each transport a controller with its own enabled namespaces" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
     override def config: JsonRpcConfig = ShippedRpcConfig.jsonRpcConfig("""
       fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"
       fukuii.network.rpc.ws.apis = "eth"
