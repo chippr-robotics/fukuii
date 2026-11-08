@@ -24,9 +24,10 @@ case class DiscoveryConfig(
     maxServerChannels: Int,
     // Size of the dedicated discovery compute pool, i.e. the most cores discovery may occupy (task #52).
     computeThreads: Int,
-    // EIP-1459 trees to seed peers from. Only the names live here: PeerDiscoveryManager walks them in the background
-    // once the node is up, so config load never waits on DNS (H9). Empty when bootstrap nodes are disabled.
-    dnsDomains: Seq[String],
+    // EIP-1459 trees to seed peers from, each with the public key its root must be signed with. Only the names and keys
+    // live here: PeerDiscoveryManager walks them in the background once the node is up, so config load never waits on
+    // DNS (H9). Empty when bootstrap nodes are disabled.
+    dnsTrees: Seq[Eip1459.DnsTree],
     // How that walk is scheduled (per-tree deadline, queries in flight).
     dnsWalk: DnsDiscovery.WalkSettings
 )
@@ -56,20 +57,33 @@ object DiscoveryConfig extends Logger:
     val staticNodes: Set[String] =
       com.chipprbots.ethereum.network.StaticNodesLoader.load(datadir).map(_.toString).toSet
 
+    // An entry of `dns-discovery-domains` is an `enrtree://<key>@<domain>` URL or one of the shipped domains; any other
+    // has no key to verify its tree with, so it is not walked (EIP-1459: a tree is trusted through its root signature).
+    val dnsTrees: Seq[Eip1459.DnsTree] =
+      if useBootstrapNodes then
+        dnsDiscoveryDomains.flatMap { entry =>
+          DnsTrustAnchors.resolve(entry) match
+            case Right(tree) => Some(tree)
+            case Left(reason) =>
+              log.warn(s"DNS discovery: not walking '$entry': $reason")
+              None
+        }
+      else Seq.empty
+
     // Combine nodes based on configuration
     val allBootstrapNodes = if useBootstrapNodes then
       // Public/default mode: merge bootstrap nodes and static nodes. DNS-discovered nodes join later, as the
-      // background walk of `dnsDomains` finds them; nothing is resolved here.
+      // background walk of `dnsTrees` finds them; nothing is resolved here.
       val combined = bootstrapNodes ++ staticNodes
       val sources = Seq(
         if bootstrapNodes.nonEmpty then Some(s"${bootstrapNodes.size} config") else None,
         if staticNodes.nonEmpty then Some(s"${staticNodes.size} static") else None
       ).flatten
       if sources.nonEmpty then log.info(s"Bootstrap nodes: ${combined.size} total (${sources.mkString(", ")})")
-      if dnsDiscoveryDomains.nonEmpty then
+      if dnsTrees.nonEmpty then
         log.info(
-          s"DNS discovery: ${dnsDiscoveryDomains.size} domain(s) will be resolved in the background: " +
-            dnsDiscoveryDomains.mkString(", ")
+          s"DNS discovery: ${dnsTrees.size} tree(s) will be resolved and verified in the background: " +
+            dnsTrees.map(_.domain).mkString(", ")
         )
       combined
     else
@@ -79,7 +93,6 @@ object DiscoveryConfig extends Logger:
       else log.warn("Bootstrap nodes disabled but no static-nodes.json found - node may not connect to any peers")
       staticNodes
 
-    val dnsDomains: Seq[String] = if useBootstrapNodes then dnsDiscoveryDomains else Seq.empty
     val defaultWalk = DnsDiscovery.WalkSettings.Default
 
     DiscoveryConfig(
@@ -102,7 +115,7 @@ object DiscoveryConfig extends Logger:
       computeThreads =
         if discoveryConfig.hasPath("compute-threads") then discoveryConfig.getInt("compute-threads")
         else DefaultComputeThreads,
-      dnsDomains = dnsDomains,
+      dnsTrees = dnsTrees,
       dnsWalk = DnsDiscovery.WalkSettings(
         treeDeadline =
           if discoveryConfig.hasPath("dns-tree-deadline") then

@@ -3,38 +3,81 @@ package com.chipprbots.ethereum.network.discovery
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
+import org.apache.pekko.util.ByteString
+
+import scala.collection.concurrent.TrieMap
+import scala.util.Using
+
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.crypto.params.ECPublicKeyParameters
+
+import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.network.discovery.DnsDiscovery.TxtLookup
 import com.chipprbots.ethereum.network.discovery.DnsDiscovery.TxtResult
+import com.chipprbots.ethereum.network.discovery.Eip1459.DnsTree
 import com.chipprbots.ethereum.rlp.*
 
-/** An in-memory EIP-1459 tree for tests: no DNS, no network. The hashes are plain labels (`ROOT`, `B0`, `L0_3`) because
-  * the walk does not check them, and the ENRs are unsigned for the same reason; only their `ip`, `tcp` and `secp256k1`
-  * fields matter. Every leaf has its own IP, so every leaf is a distinct enode.
+/** An in-memory, properly signed EIP-1459 tree for tests: no DNS, no network. Everything a client verifies is real:
+  * every entry is published under the label that is the hash of its text, every ENR carries a valid EIP-778 `v4`
+  * signature of its own node key, and the root is signed by the tree's key. Keys are derived from small integer seeds,
+  * so a run is reproducible.
   *
-  * Layout: `<domain>` is the root record, `ROOT` is a branch of `B0..B{branches-1}`, each `B<b>` is a branch of its
-  * `L<b>_<l>` leaves, and each leaf is an ENR.
+  * Layout: `<domain>` is the root record, `e=` is a branch of `branches` branches that each hold `leavesPerBranch`
+  * ENRs, and `l=` is a branch of the tree's links (empty when there are none).
   */
 object DnsTreeFixture:
 
-  // secp256k1 generator point G, compressed. A canonical valid point, so no key generation is needed.
-  private val compressedKey: Array[Byte] = Array(
-    0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b,
-    0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98
-  ).map(_.toByte)
+  def keyPair(seed: Int): AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(BigInt(seed))
 
-  /** An ENR record for the `i`-th test node: 10.<i / 256>.<i % 256>.1, TCP 30303. */
-  def enr(i: Int): String =
-    val fields: Seq[RLPEncodeable] = Seq(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("ip".getBytes("UTF-8")),
-      RLPValue(Array(10, (i >> 8) & 0xff, i & 0xff, 1).map(_.toByte)),
-      RLPValue("tcp".getBytes("UTF-8")),
-      RLPValue(Array(0x76.toByte, 0x5f.toByte)),
-      RLPValue("secp256k1".getBytes("UTF-8")),
-      RLPValue(compressedKey)
+  def compressedKey(keyPair: AsymmetricCipherKeyPair): Array[Byte] =
+    keyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(true)
+
+  private def fixed32(n: BigInt): Array[Byte] =
+    val raw = n.toByteArray.dropWhile(_ == 0)
+    Array.fill(32 - raw.length)(0.toByte) ++ raw
+
+  private def utf8(s: String): RLPValue = RLPValue(s.getBytes("UTF-8"))
+
+  private def ipv4(i: Int): Array[Byte] = Array(10, (i >> 8) & 0xff, i & 0xff, 1).map(_.toByte)
+
+  private def sign(hash: Array[Byte], keyPair: AsymmetricCipherKeyPair): ECDSASignature =
+    ECDSASignature.sign(hash, keyPair)
+
+  private def base64Url(bytes: Array[Byte]): String = Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
+
+  /** The RLP content an ENR signature covers: `[seq, k1, v1, ...]`, keys in EIP-778's sorted order. */
+  private def enrContent(i: Int, withScheme: Boolean): Seq[RLPEncodeable] =
+    val scheme: Seq[RLPEncodeable] = if withScheme then Seq(utf8("id"), utf8("v4")) else Seq.empty
+    Seq(RLPValue(Array(1.toByte))) ++ scheme ++ Seq(
+      utf8("ip"),
+      RLPValue(ipv4(i)),
+      utf8("secp256k1"),
+      RLPValue(compressedKey(keyPair(1000 + i))),
+      utf8("tcp"),
+      RLPValue(Array(0x76.toByte, 0x5f.toByte)) // 30303
     )
-    "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(encode(RLPList(fields*)))
+
+  private def enrText(signature: Array[Byte], content: Seq[RLPEncodeable]): String =
+    "enr:" + base64Url(encode(RLPList((RLPValue(signature) +: content)*)))
+
+  private val enrCache = TrieMap.empty[Int, String]
+
+  /** A valid ENR for the `i`-th test node: 10.<i / 256>.<i % 256>.1, TCP 30303, signed by node key `1000 + i`. */
+  def enr(i: Int): String = enrCache.getOrElseUpdate(i, signedEnr(i, withScheme = true, corrupt = false))
+
+  /** An ENR for the `i`-th node that fails verification: a signature with one bit flipped. */
+  def enrWithBadSignature(i: Int): String = signedEnr(i, withScheme = true, corrupt = true)
+
+  /** An ENR for the `i`-th node that carries a valid signature but names no identity scheme. */
+  def enrWithoutScheme(i: Int): String = signedEnr(i, withScheme = false, corrupt = false)
+
+  private def signedEnr(i: Int, withScheme: Boolean, corrupt: Boolean): String =
+    val content = enrContent(i, withScheme)
+    val signature = sign(crypto.kec256(encode(RLPList(content*))), keyPair(1000 + i))
+    val rs = fixed32(signature.r) ++ fixed32(signature.s)
+    if corrupt then rs(5) = (rs(5) ^ 0x01).toByte
+    enrText(rs, content)
 
   /** The enode URL [[enr]] resolves to. */
   def enode(i: Int): String =
@@ -42,28 +85,85 @@ object DnsTreeFixture:
       .parseEnrToEnode(enr(i))
       .fold(reason => throw new IllegalStateException(s"fixture ENR $i does not parse: $reason"), identity)
 
-  def leafName(domain: String, branch: Int, leaf: Int): String = s"L${branch}_$leaf.$domain"
+  /** A root record for the given subtree labels, signed by `keyPair` (the recovery id is appended as go-ethereum does).
+    */
+  def signedRoot(eroot: String, lroot: String, seq: Long, keyPair: AsymmetricCipherKeyPair): String =
+    val text = s"${Eip1459.RootPrefix} e=$eroot l=$lroot seq=$seq"
+    val signature = sign(crypto.kec256(text.getBytes("UTF-8")), keyPair)
+    val recoveryId = (signature.v.toInt - ECDSASignature.negativePointSign).toByte
+    s"$text sig=${base64Url(fixed32(signature.r) ++ fixed32(signature.s) :+ recoveryId)}"
 
-  def branchName(domain: String, branch: Int): String = s"B$branch.$domain"
+  private def labelled(domain: String, text: String): (String, TxtResult) =
+    s"${Eip1459.entryLabel(text)}.$domain" -> TxtResult.Found(text)
 
-  def isLeaf(name: String): Boolean = name.startsWith("L")
+  /** The URL of the tree [[Tree]] would build for `domain` and `keySeed`, without building it (to link trees in a
+    * ring).
+    */
+  def urlOf(domain: String, keySeed: Int): DnsTree =
+    DnsTree(domain, ByteString(compressedKey(keyPair(keySeed))))
 
-  /** TXT records for a tree with `branches * leavesPerBranch` nodes, numbered from `firstNode`. */
-  def records(domain: String, branches: Int, leavesPerBranch: Int, firstNode: Int = 0): Map[String, TxtResult] =
-    def found(record: String): TxtResult = TxtResult.Found(record)
-    val branchRecords = (0 until branches).map { b =>
-      branchName(domain, b) -> found(
-        (0 until leavesPerBranch).map(l => s"L${b}_$l").mkString("enrtree-branch:", ",", "")
-      )
+  /** A tree of `branches * leavesPerBranch` nodes numbered from `firstNode`, signed by key `keySeed` at sequence `seq`,
+    * linking to `links`. `enrOverrides` replaces the ENR text of a node (by number) before the tree is hashed, so the
+    * tree is consistent and only that ENR is off.
+    */
+  final class Tree(
+      val domain: String,
+      val branches: Int,
+      val leavesPerBranch: Int,
+      val firstNode: Int = 0,
+      val seq: Long = 1L,
+      val keySeed: Int = 1,
+      val links: Seq[DnsTree] = Nil,
+      enrOverrides: Map[Int, String] = Map.empty
+  ):
+    val key: AsymmetricCipherKeyPair = keyPair(keySeed)
+    val url: DnsTree = DnsTree(domain, ByteString(compressedKey(key)))
+
+    private val leafTexts: Vector[Vector[String]] = Vector.tabulate(branches, leavesPerBranch) { (b, l) =>
+      val node = firstNode + b * leavesPerBranch + l
+      enrOverrides.getOrElse(node, enr(node))
     }
-    val leafRecords = for
-      b <- 0 until branches
-      l <- 0 until leavesPerBranch
-    yield leafName(domain, b, l) -> found(enr(firstNode + b * leavesPerBranch + l))
-    Map(
-      domain -> found("enrtree-root:v1 e=ROOT l=LINKS seq=1 sig=AAAA"),
-      s"ROOT.$domain" -> found((0 until branches).map(b => s"B$b").mkString("enrtree-branch:", ",", ""))
-    ) ++ branchRecords ++ leafRecords
+    private val leafLabels: Vector[Vector[String]] = leafTexts.map(_.map(Eip1459.entryLabel))
+    private val branchTexts: Vector[String] = leafLabels.map(_.mkString(Eip1459.BranchPrefix, ",", ""))
+
+    /** Text of the `e=` subtree root: a branch of the per-group branches. */
+    val eRootText: String = branchTexts.map(Eip1459.entryLabel).mkString(Eip1459.BranchPrefix, ",", "")
+
+    /** Text of the `l=` subtree root: a branch of the link entries, empty without links. */
+    val lRootText: String = links.map(link => Eip1459.entryLabel(link.url)).mkString(Eip1459.BranchPrefix, ",", "")
+
+    private val entries: Seq[String] = leafTexts.flatten ++ branchTexts ++ Seq(eRootText, lRootText) ++ links.map(_.url)
+
+    /** Every TXT record of the tree, root included. */
+    val records: Map[String, TxtResult] =
+      entries.map(labelled(domain, _)).toMap +
+        (domain -> TxtResult.Found(
+          signedRoot(Eip1459.entryLabel(eRootText), Eip1459.entryLabel(lRootText), seq, key)
+        ))
+
+    def rootRecord: String = records(domain) match
+      case TxtResult.Found(record) => record
+      case other                   => throw new IllegalStateException(s"no root: $other")
+
+    def leafName(branch: Int, leaf: Int): String = s"${leafLabels(branch)(leaf)}.$domain"
+
+    def branchName(branch: Int): String = labelled(domain, branchTexts(branch))._1
+
+    def eRootName: String = labelled(domain, eRootText)._1
+
+    def lRootName: String = labelled(domain, lRootText)._1
+
+    private val leafNames: Set[String] =
+      (for b <- 0 until branches; l <- 0 until leavesPerBranch yield leafName(b, l)).toSet
+
+    def isLeaf(name: String): Boolean = leafNames.contains(name)
+
+    /** The tree's records with different `e=` and `l=` subtree roots, the root re-signed (with the tree's key) over
+      * them. `more` entries are added under their labels. For trees that are valid but not the shape [[Tree]] builds.
+      */
+    def withRoots(eText: String, lText: String = lRootText, more: Seq[String] = Nil): Map[String, TxtResult] =
+      records ++ (Seq(eText, lText) ++ more).map(labelled(domain, _)) +
+        (domain -> TxtResult.Found(signedRoot(Eip1459.entryLabel(eText), Eip1459.entryLabel(lText), seq, key)))
 
   /** A lookup over `records`. `beforeAnswer` runs on the querying thread first and may block, throw, or record. */
   final class Stub(
@@ -76,3 +176,20 @@ object DnsTreeFixture:
       val _ = asked.incrementAndGet()
       beforeAnswer(name)
       records.getOrElse(name, TxtResult.NotFound)
+
+  /** Several trees answered by one lookup, as DNS answers for many domains. */
+  def stubOf(trees: Tree*): Stub = new Stub(trees.flatMap(_.records).toMap)
+
+  /** The records of a tree captured from the live DNS, as `name<TAB>record` lines (see `src/test/resources/dns`). */
+  def snapshot(resource: String): Map[String, TxtResult] =
+    Using.resource(getClass.getResourceAsStream(resource))(in =>
+      scala.io.Source
+        .fromInputStream(in, "UTF-8")
+        .getLines()
+        .filter(_.nonEmpty)
+        .map(_.split("\t", 2) match
+          case Array(name, record) => name -> (TxtResult.Found(record): TxtResult)
+          case other               => throw new IllegalStateException(s"bad snapshot line: ${other.mkString("|")}")
+        )
+        .toMap
+    )

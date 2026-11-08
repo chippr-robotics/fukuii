@@ -327,6 +327,9 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
 
   private val dnsDomain = "tree.test"
 
+  /** A signed 2 x 3 tree; its six enodes are numbered 0 to 5. */
+  private val dnsTree = new DnsTreeFixture.Tree(dnsDomain, branches = 2, leavesPerBranch = 3)
+
   /** The six enodes of a 2 x 3 in-memory tree, as the manager parses them. */
   private val dnsTreeNodes: Set[Node] =
     (0 until 6).map(i => Node.fromUri(new URI(DnsTreeFixture.enode(i)))).toSet
@@ -341,8 +344,8 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
       val added: java.util.Set[ENode] = ConcurrentHashMap.newKeySet[ENode]()
 
       override lazy val dnsLookup: DnsDiscovery.TxtLookup = new DnsTreeFixture.Stub(
-        DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3),
-        name => if DnsTreeFixture.isLeaf(name) then gate.await(30, TimeUnit.SECONDS)
+        dnsTree.records,
+        name => if dnsTree.isLeaf(name) then gate.await(30, TimeUnit.SECONDS)
       )
 
       override lazy val discoveryConfig: DiscoveryConfig =
@@ -350,7 +353,7 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
           discoveryEnabled = true,
           reuseKnownNodes = true,
           bootstrapNodes = sampleNodes,
-          dnsDomains = Seq(dnsDomain)
+          dnsTrees = Seq(dnsTree.url)
         )
 
       (() => knownNodesStorage.getKnownNodes).expects().returning(Set.empty[URI]).anyNumberOfTimes()
@@ -382,13 +385,13 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
       val added: java.util.Set[ENode] = ConcurrentHashMap.newKeySet[ENode]()
 
       override lazy val dnsLookup: DnsDiscovery.TxtLookup =
-        new DnsTreeFixture.Stub(DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3))
+        new DnsTreeFixture.Stub(dnsTree.records)
 
       override lazy val discoveryServiceResource: Resource[IO, DiscoveryService] =
         Resource.eval(IO.blocking(serviceGate.await(30, TimeUnit.SECONDS)).as(discoveryService))
 
       override lazy val discoveryConfig: DiscoveryConfig =
-        defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true, dnsDomains = Seq(dnsDomain))
+        defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true, dnsTrees = Seq(dnsTree.url))
 
       (() => knownNodesStorage.getKnownNodes).expects().returning(Set.empty[URI]).anyNumberOfTimes()
       (() => discoveryService.getRandomNodes).expects().returning(IO.pure(Set.empty[ENode])).anyNumberOfTimes()
@@ -420,9 +423,9 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
       val interrupted = new AtomicBoolean(false)
 
       override lazy val dnsLookup: DnsDiscovery.TxtLookup = new DnsTreeFixture.Stub(
-        DnsTreeFixture.records(dnsDomain, branches = 2, leavesPerBranch = 3),
+        dnsTree.records,
         name =>
-          if DnsTreeFixture.isLeaf(name) then
+          if dnsTree.isLeaf(name) then
             reachedLeaf.countDown()
             try never.await()
             catch
@@ -432,7 +435,7 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
       )
 
       override lazy val discoveryConfig: DiscoveryConfig =
-        defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, dnsDomains = Seq(dnsDomain))
+        defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, dnsTrees = Seq(dnsTree.url))
 
       override def test(): Unit =
         peerDiscoveryManager ! PeerDiscoveryManager.Start

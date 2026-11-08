@@ -35,7 +35,8 @@ import com.chipprbots.ethereum.utils.Logger
 /** EIP-1459: DNS-based peer discovery.
   *
   * Resolves Ethereum Node Records (ENR) from a DNS tree, converting them to enode:// URLs. This is the same mechanism
-  * core-geth uses to find Mordor peers via `all.mordor.blockd.info`.
+  * core-geth uses to find Mordor peers via `all.mordor.blockd.info`. Only a verified tree is used: the root is signed
+  * by the key in the tree's `enrtree://<key>@<domain>` URL and every other record hashes to its name, see [[Eip1459]].
   *
   * DNS tree format:
   *   - Root: `enrtree-root:v1 e=<hash> l=<hash> seq=<n> sig=<base64>`
@@ -45,8 +46,8 @@ import com.chipprbots.ethereum.utils.Logger
   */
 object DnsDiscovery extends Logger:
 
-  /** Maximum number of ENR records to resolve from a single DNS tree. Prevents runaway resolution if the tree is very
-    * large.
+  /** Maximum number of ENR records to resolve in one walk (the asked-for tree and the trees it links to). Prevents
+    * runaway resolution if a tree is very large.
     */
   private val MaxRecords = 500
 
@@ -141,6 +142,12 @@ object DnsDiscovery extends Logger:
 
   /** What a tree walk did, whatever way it ended. `queries` counts answered or lost queries, not ones cancelled in
     * flight by the deadline. A lost branch query drops its whole subtree, so `lost > 0` means the tree may be short.
+    *
+    * `rejected` counts the records that failed verification (a root that does not parse or verify, an entry that does
+    * not hash to its label, an ENR whose own signature is bad, an entry of the wrong kind for its subtree). Each is
+    * dropped with its subtree, so `rejected > 0` also means the tree may be short. `seq` is the sequence number of the
+    * verified root of the tree that was asked for, and `trees` how many trees the walk covered: that one plus the
+    * linked trees it followed.
     */
   final case class WalkSummary(
       domain: String,
@@ -149,13 +156,21 @@ object DnsDiscovery extends Logger:
       skipped: Int,
       queries: Int,
       lost: Int,
+      rejected: Int,
+      seq: Option[Long],
+      trees: Int,
       elapsed: FiniteDuration
   )
 
-  /** Walk one EIP-1459 tree and hand each enode to `onEnode` as soon as its ENR leaf is parsed.
+  /** Walk one EIP-1459 tree and hand each enode to `onEnode` as soon as its ENR leaf is verified and parsed.
     *
-    * This is the scheduling, not the trust: records are parsed and filtered exactly as before ([[parseRoot]],
-    * [[parseEnrToEnode]], `forkIdFilter`), only the order queries are issued in and the time they may take are new.
+    * The tree is trusted only as far as EIP-1459 allows (see [[Eip1459]]): its root must be signed by `tree.publicKey`,
+    * and every branch, ENR and link entry must hash to the label it was fetched under, or it is dropped with its
+    * subtree and counted in [[WalkSummary.rejected]]. A root that fails stops the walk with no enode delivered. Every
+    * ENR's own signature is checked too. Link entries in the tree's link subtree are followed, each linked tree
+    * verified against the key in its link, to at most [[MaxLinkDepth]] links deep and [[MaxTrees]] trees, once each;
+    * linked trees share the walk's deadline, concurrency and record cap.
+    *
     * Queries run on the blocking pool, up to `settings.concurrency` at once; sibling branches are walked in parallel.
     * `onEnode` may be called concurrently and more than once for the same tree, never twice for the same enode.
     *
@@ -169,7 +184,7 @@ object DnsDiscovery extends Logger:
     *   routing.
     */
   def walkTree(
-      domain: String,
+      tree: Eip1459.DnsTree,
       lookup: TxtLookup,
       settings: WalkSettings,
       forkIdFilter: Option[EnrForkIdFilter],
@@ -178,7 +193,7 @@ object DnsDiscovery extends Logger:
     for
       startedAt <- IO.monotonic
       permits <- Semaphore[IO](settings.concurrency.toLong)
-      walk = new TreeWalk(domain, lookup, permits, forkIdFilter, onEnode)
+      walk = new TreeWalk(tree, lookup, permits, forkIdFilter, onEnode)
       outcome <- walk.run
         .timeoutTo(settings.treeDeadline, IO.pure(WalkOutcome.TimedOut))
         .handleError(ex => WalkOutcome.Failed(s"unexpected error: $ex"))
@@ -187,19 +202,19 @@ object DnsDiscovery extends Logger:
       _ <- IO(logSummary(summary, settings))
     yield summary
 
-  /** Walk every domain in parallel (they are independent trees), turning each enode found into a [[Node]] for
-    * `onNodes`. Completes once every tree has ended; the summaries are in `domains` order.
+  /** Walk every tree in parallel (they are independent), turning each enode found into a [[Node]] for `onNodes`.
+    * Completes once every tree has ended; the summaries are in `trees` order.
     */
   def seed(
-      domains: Seq[String],
+      trees: Seq[Eip1459.DnsTree],
       lookup: TxtLookup,
       settings: WalkSettings,
       forkIdFilter: Option[EnrForkIdFilter],
       onNodes: Set[Node] => IO[Unit]
   ): IO[List[WalkSummary]] =
-    domains.toList.parTraverse { domain =>
+    trees.toList.parTraverse { tree =>
       walkTree(
-        domain,
+        tree,
         lookup,
         settings,
         forkIdFilter,
@@ -209,63 +224,160 @@ object DnsDiscovery extends Logger:
     }
 
   /** Blocking convenience over [[walkTree]] for tests and tools: the enode URLs of one tree, empty on any failure.
-    * Never call this from node start-up, a tree walk takes as long as DNS takes.
+    * `entry` is an `enrtree://<key>@<domain>` URL, or one of the shipped domains ([[DnsTrustAnchors]]); a domain with
+    * no key to verify it with resolves to nothing. Never call this from node start-up, a tree walk takes as long as DNS
+    * takes.
     */
   def resolveEnodes(
-      domain: String,
+      entry: String,
       forkIdFilter: Option[EnrForkIdFilter] = None,
       lookup: TxtLookup = JndiTxtLookup,
       settings: WalkSettings = WalkSettings.Default
   ): Set[String] =
-    val found = mutable.Set.empty[String]
-    val _ = walkTree(domain, lookup, settings, forkIdFilter, enode => IO(found.synchronized(found += enode)).void)
-      .unsafeRunSync()(using IORuntime.global)
-    found.synchronized(found.toSet)
+    DnsTrustAnchors.resolve(entry) match
+      case Left(reason) =>
+        log.warn(s"DNS_DISCOVERY: Not resolving '$entry': $reason")
+        Set.empty
+      case Right(tree) =>
+        val found = mutable.Set.empty[String]
+        val _ = walkTree(tree, lookup, settings, forkIdFilter, enode => IO(found.synchronized(found += enode)).void)
+          .unsafeRunSync()(using IORuntime.global)
+        found.synchronized(found.toSet)
 
   private def logSummary(summary: WalkSummary, settings: WalkSettings): Unit =
-    val WalkSummary(domain, outcome, resolved, skipped, queries, lost, elapsed) = summary
+    val WalkSummary(domain, outcome, resolved, skipped, queries, lost, rejected, seq, trees, elapsed) = summary
     val skippedNote = if skipped > 0 then s", skipped $skipped on fork-ID mismatch" else ""
-    val counts = s"resolved $resolved enode(s)$skippedNote, lost $lost of $queries queries, ${elapsed.toMillis} ms"
+    val seqNote = seq.fold("")(n => s"seq=$n, ")
+    val treesNote = if trees > 1 then s"$trees trees, " else ""
+    val detail = (seqNote + treesNote).stripSuffix(", ")
+    val counts =
+      s"resolved $resolved enode(s)$skippedNote, $rejected failed verification, lost $lost of $queries queries, " +
+        s"${elapsed.toMillis} ms"
     outcome match
-      case WalkOutcome.Completed if lost == 0 =>
+      case WalkOutcome.Completed if lost == 0 && rejected == 0 =>
         log.info(
-          s"DNS_DISCOVERY: Resolved $resolved enode(s) from $domain$skippedNote ($queries queries, ${elapsed.toMillis} ms)"
+          s"DNS_DISCOVERY: Resolved $resolved enode(s) from $domain$skippedNote " +
+            s"(verified, $seqNote${treesNote}$queries queries, ${elapsed.toMillis} ms)"
         )
       case WalkOutcome.Completed =>
-        log.warn(s"DNS_DISCOVERY: Tree $domain is incomplete, a lost branch query drops its subtree: $counts")
+        log.warn(
+          s"DNS_DISCOVERY: Tree $domain ($detail) is incomplete, a lost or rejected record drops its subtree: $counts"
+        )
       case WalkOutcome.TimedOut =>
         log.warn(s"DNS_DISCOVERY: Tree $domain hit its ${settings.treeDeadline} deadline and was abandoned: $counts")
       case WalkOutcome.Failed(reason) =>
         log.warn(s"DNS_DISCOVERY: Failed to resolve DNS tree from $domain ($reason): $counts")
 
-  /** One tree walk's state. The sets are touched by many fibers at once, so every access goes through `synchronized`.
+  /** Links followed from the asked-for tree: a link in it is depth 1, a link in a linked tree depth 2, and so on. */
+  private val MaxLinkDepth = 3
+
+  /** Most trees one walk covers, the asked-for one included. */
+  private val MaxTrees = 16
+
+  /** Which subtree of a tree an entry belongs to. The root's `e=` subtree holds ENRs, its `l=` subtree holds links, and
+    * an entry of the other kind in either is invalid (go-ethereum `sync.go:265-278`, `errENRInLinkTree` and
+    * `errLinkInENRTree`).
+    */
+  private enum Subtree:
+    case Enrs, Links
+
+  /** One walk's state: the asked-for tree and the linked trees it leads to. The sets are touched by many fibers at
+    * once, so every access goes through `synchronized`.
     */
   final private class TreeWalk(
-      domain: String,
+      tree: Eip1459.DnsTree,
       lookup: TxtLookup,
       permits: Semaphore[IO],
       forkIdFilter: Option[EnrForkIdFilter],
       onEnode: String => IO[Unit]
   ):
-    private val visited = mutable.Set.empty[String]
+    private val domain = tree.domain
+    private val visited = mutable.Set.empty[(String, String)] // (tree domain, label)
+    private val walked = mutable.Set(treeKey(tree))
     private val enodes = mutable.Set.empty[String]
     private val skipped = mutable.Set.empty[String] // tracking for log only
     private val queries = new AtomicInteger(0)
     private val lost = new AtomicInteger(0)
+    private val rejected = new AtomicInteger(0)
+    private var rootSeq: Option[Long] = None
 
     def run: IO[WalkOutcome] =
-      IO(log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)) *> query(domain).flatMap {
-        case TxtResult.Found(rootRecord) if rootRecord.startsWith("enrtree-root:") =>
-          parseRoot(rootRecord) match
-            case Some((enrRoot, _, _)) => walk(enrRoot, depth = 0).as(WalkOutcome.Completed)
-            case None                  => IO.pure(WalkOutcome.Failed(s"cannot parse root record: $rootRecord"))
-        case TxtResult.Found(record) => IO.pure(WalkOutcome.Failed(s"unexpected root record: $record"))
-        case TxtResult.NotFound      => IO.pure(WalkOutcome.Failed("no TXT record found"))
-        case TxtResult.Lost(reason)  => IO.pure(WalkOutcome.Failed(s"root query lost: $reason"))
-      }
+      IO(log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)) *>
+        fetchAndWalk(tree, linkDepth = 0).map {
+          case None         => WalkOutcome.Completed
+          case Some(reason) => WalkOutcome.Failed(reason)
+        }
 
     def summary(outcome: WalkOutcome, elapsed: FiniteDuration): WalkSummary =
-      synchronized(WalkSummary(domain, outcome, enodes.size, skipped.size, queries.get, lost.get, elapsed))
+      synchronized(
+        WalkSummary(
+          domain,
+          outcome,
+          enodes.size,
+          skipped.size,
+          queries.get,
+          lost.get,
+          rejected.get,
+          rootSeq,
+          walked.size,
+          elapsed
+        )
+      )
+
+    private def treeKey(t: Eip1459.DnsTree): (String, ByteString) = (t.domain.toLowerCase, t.publicKey)
+
+    /** Fetch, verify and walk one tree. `None` when the tree was walked, otherwise why its root was not usable. A root
+      * that does not parse or verify rejects the whole tree: nothing under it is fetched.
+      */
+    private def fetchAndWalk(t: Eip1459.DnsTree, linkDepth: Int): IO[Option[String]] =
+      query(t.domain).flatMap {
+        case TxtResult.Found(rootRecord) if rootRecord.startsWith(Eip1459.RootPrefix) =>
+          Eip1459.parseRoot(rootRecord) match
+            case Left(why) =>
+              reject(t.domain, s"root record is invalid: $why").as(Some(s"root record is invalid: $why"))
+            case Right(root) if !Eip1459.verifyRoot(root, t.publicKey) =>
+              val why = s"root signature does not verify against the tree's public key (seq=${root.seq})"
+              reject(t.domain, why).as(Some(why))
+            case Right(root) =>
+              if linkDepth == 0 then synchronized { rootSeq = Some(root.seq) }
+              List(
+                walk(t, root.eroot, Subtree.Enrs, treeDepth = 0, linkDepth),
+                walk(t, root.lroot, Subtree.Links, treeDepth = 0, linkDepth)
+              ).parSequence_.as(None)
+        case TxtResult.Found(record) => IO.pure(Some(s"unexpected root record: ${record.take(50)}"))
+        case TxtResult.NotFound      => IO.pure(Some("no TXT record found"))
+        case TxtResult.Lost(reason)  => IO.pure(Some(s"root query lost: $reason"))
+      }
+
+    /** Follow a link found in a verified link subtree, unless it is too deep, a tree too many, or already walked. */
+    private def followLink(link: Eip1459.DnsTree, linkDepth: Int): IO[Unit] =
+      if linkDepth > MaxLinkDepth then
+        IO(log.debug("DNS_DISCOVERY: Not following link to {}: more than {} links deep", link.domain, MaxLinkDepth))
+      else if !claim(link) then
+        IO(
+          log.debug(
+            "DNS_DISCOVERY: Not following link to {}: already walked, or {} trees reached",
+            link.domain,
+            MaxTrees
+          )
+        )
+      else
+        IO(log.info("DNS_DISCOVERY: Following link from {} to {}", domain, link.domain)) *>
+          fetchAndWalk(link, linkDepth).flatMap {
+            case None => IO.unit
+            case Some(why) =>
+              IO(log.warn("DNS_DISCOVERY: Linked tree {} from {} not used: {}", link.domain, domain, why))
+          }
+
+    private def claim(link: Eip1459.DnsTree): Boolean =
+      synchronized(walked.size < MaxTrees && walked.add(treeKey(link)))
+
+    /** Count a record that failed verification. It is dropped, and so is everything below it. */
+    private def reject(where: String, why: String): IO[Unit] =
+      IO {
+        rejected.incrementAndGet()
+        log.debug("DNS_DISCOVERY: Rejected {}: {}", where, why)
+      }
 
     /** One query, holding a permit only while it is on the wire, so a branch never holds one while it waits for its
       * children (that would deadlock a small `concurrency`).
@@ -281,40 +393,56 @@ object DnsDiscovery extends Logger:
           }
         }
 
-    /** True the first time `hash` is seen, so a hash reachable twice (or in a cycle) is walked once. */
-    private def firstVisit(hash: String): Boolean = synchronized(visited.add(hash))
+    /** True the first time `label` is seen under `t`, so a hash reachable twice (or in a cycle) is walked once. */
+    private def firstVisit(t: Eip1459.DnsTree, label: String): Boolean =
+      synchronized(visited.add((t.domain.toLowerCase, label)))
 
-    /** True if `enode` is new and the tree's record cap still has room. */
+    /** True if `enode` is new and the walk's record cap still has room. */
     private def accept(enode: String): Boolean = synchronized(enodes.size < MaxRecords && enodes.add(enode))
 
     private def atCap: Boolean = synchronized(enodes.size >= MaxRecords)
 
     private def skip(subdomain: String): Unit = synchronized { val _ = skipped.add(subdomain) }
 
-    /** Resolve one tree node, siblings in parallel. */
-    private def walk(hash: String, depth: Int): IO[Unit] =
-      if depth <= MaxDepth && !atCap && firstVisit(hash) then
-        val subdomain = s"$hash.$domain"
+    /** Resolve one entry of `t` and everything under it, siblings in parallel. The entry is fetched under `label` and
+      * is dropped, with its subtree, unless it hashes to that label (`client.go:207`).
+      */
+    private def walk(t: Eip1459.DnsTree, label: String, subtree: Subtree, treeDepth: Int, linkDepth: Int): IO[Unit] =
+      if treeDepth <= MaxDepth && !atCap && firstVisit(t, label) then
+        val subdomain = s"$label.${t.domain}"
         query(subdomain).flatMap {
-          case TxtResult.Found(record) if record.startsWith("enrtree-branch:") =>
-            val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
-            children.toList.parTraverse_(child => walk(child, depth + 1))
+          case TxtResult.Found(record) if !Eip1459.labelMatches(label, record) =>
+            reject(subdomain, "the entry does not hash to its label")
 
-          case TxtResult.Found(record) if record.startsWith("enr:") =>
-            parseEnrToEnode(record, forkIdFilter) match
-              case Right(enode) =>
-                // A sink that fails must not take the rest of the tree down with it.
-                if accept(enode) then
-                  onEnode(enode).handleErrorWith(ex =>
-                    IO(log.warn("DNS_DISCOVERY: Could not hand over {}: {}", enode, ex.toString))
-                  )
-                else IO.unit
-              case Left(reason) if reason.startsWith("fork-id mismatch") => IO(skip(subdomain))
-              case Left(_) => IO(log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain))
+          case TxtResult.Found(record) if record.startsWith(Eip1459.BranchPrefix) =>
+            Eip1459.parseBranch(record) match
+              case Left(why) => reject(subdomain, s"branch: $why")
+              case Right(children) =>
+                children.parTraverse_(child => walk(t, child, subtree, treeDepth + 1, linkDepth))
 
-          case TxtResult.Found(record) if record.startsWith("enrtree://") =>
-            // Link to another tree — skip for now (could recurse into other domains)
-            IO(log.debug("DNS_DISCOVERY: Skipping link record at {}: {}", subdomain, record))
+          case TxtResult.Found(record) if record.startsWith(Eip1459.EnrPrefix) =>
+            if subtree == Subtree.Links then reject(subdomain, "an ENR in the link subtree")
+            else
+              Eip1459.verifyEnr(record) match
+                case Left(why) => reject(subdomain, s"ENR: $why")
+                case Right(()) =>
+                  parseEnrToEnode(record, forkIdFilter) match
+                    case Right(enode) =>
+                      // A sink that fails must not take the rest of the tree down with it.
+                      if accept(enode) then
+                        onEnode(enode).handleErrorWith(ex =>
+                          IO(log.warn("DNS_DISCOVERY: Could not hand over {}: {}", enode, ex.toString))
+                        )
+                      else IO.unit
+                    case Left(reason) if reason.startsWith("fork-id mismatch") => IO(skip(subdomain))
+                    case Left(_) => IO(log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain))
+
+          case TxtResult.Found(record) if record.startsWith(Eip1459.LinkPrefix) =>
+            if subtree == Subtree.Enrs then reject(subdomain, "a link in the ENR subtree")
+            else
+              Eip1459.DnsTree.parse(record) match
+                case Left(why)   => reject(subdomain, s"link: $why")
+                case Right(link) => followLink(link, linkDepth + 1)
 
           case TxtResult.Found(record) =>
             IO(log.debug("DNS_DISCOVERY: Unknown record type at {}: {}", subdomain, record.take(50)))
@@ -326,24 +454,6 @@ object DnsDiscovery extends Logger:
             IO(log.debug("DNS_DISCOVERY: DNS query lost at {}: {}", subdomain, reason))
         }
       else IO.unit
-
-  /** Parse root record: `enrtree-root:v1 e=<hash> l=<hash> seq=<n> sig=<sig>` */
-  private def parseRoot(record: String): Option[(String, String, Long)] =
-    // Remove prefix
-    val content = record.stripPrefix("enrtree-root:")
-    val parts = content.split("\\s+").map(_.trim).filter(_.nonEmpty)
-
-    var enrRoot: Option[String] = None
-    var linkRoot: Option[String] = None
-    var seq: Long = 0
-
-    parts.foreach { part =>
-      if part.startsWith("e=") then enrRoot = Some(part.stripPrefix("e="))
-      else if part.startsWith("l=") then linkRoot = Some(part.stripPrefix("l="))
-      else if part.startsWith("seq=") then seq = Try(part.stripPrefix("seq=").toLong).getOrElse(0L)
-    }
-
-    enrRoot.map(e => (e, linkRoot.getOrElse(""), seq))
 
   /** Parse an ENR record into an enode:// URL.
     *
