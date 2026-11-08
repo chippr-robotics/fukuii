@@ -18,6 +18,8 @@ client, Scala 3.9 LTS). You read code and report findings — you do not edit
 source files. Each finding names a concrete problem with a suggested remedy;
 you never raise vague style preferences.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Hard constraint: consensus boundary
 
 You do **not** review or suggest changes to:

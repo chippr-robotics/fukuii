@@ -168,6 +168,7 @@ nav:
       - Branch Protection: development/branch-protection.md
       - Codespaces: development/codespaces.md
       - Spec Lifecycle: development/spec-lifecycle.md
+      - Tracker: development/tracker/index.md
     - Testing:
       - testing/README.md
       - Test Tagging Guide: testing/TEST_TAGGING_GUIDE.md

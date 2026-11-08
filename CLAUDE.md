@@ -87,6 +87,7 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `dead-code-review.md` | Three verdicts before any deletion: Wire it / Delete it / Defer — assess gap, git history, and supersession before `git rm` |
 | `worktree-protocol.md` | Sprint vs task worktree patterns, naming (`wt/<id>`), lifecycle, bin scripts, agent rules for worktree context |
 | `snap-sync.md` | SNAP routing: phase/module → files → config keys → metrics → log tags → reviewer; pin-test index; spec 016 split status (current vs target) |
+| `backlog-tracker.md` | The shared backlog (constitution Principle VIII): claim before work, the status at each transition, a daily heartbeat, follow-ups added before a task ends; CLI `scripts/backlog/backlog.py` |
 
 Working documents (local to each host, code patterns only): `.claude/agent-protocols/working-docs/`. The directory is
 gitignored, so another host never sees it. To pass open rows on, write a handoff file under
@@ -100,6 +101,14 @@ Best practices library (research-backed patterns, June 2026 sprint): `.local/bes
 - `evm-clients/` — snap/2 protocol patterns, anti-patterns, p2p, error recovery
 - `typelevel/patterns.md` — IO/Resource/Fiber idiomatic patterns
 - `codebase-audit.md` — 52 known violations across 9 categories (11 critical, 27 medium, 14 low) with file:line
+
+## Shared backlog
+
+All work is tracked in one shared backlog, `backlog.yaml` on the `tracker` branch (constitution Principle VIII),
+shown on the docs site under Development → Tracker (<https://docs.fukuii.com/development/tracker/>) with claims and
+a burn-down. Set `FUKUII_NODE` once per host and use `python3 -I scripts/backlog/backlog.py` (`list`, `claim`,
+`status`, `heartbeat`, `done`, `add`). A PR body carries a `Backlog: B-0xx` line. Protocol:
+`.claude/agent-protocols/backlog-tracker.md`.
 
 ## Specialist subagents
 
@@ -143,6 +152,9 @@ formatting (use `herald`).
 
 ## Working discipline (applies to every task)
 
+- **Claim the backlog item first** (constitution Principle VIII). Before starting work, claim its item in the shared
+  backlog (`backlog.py claim`), adding it if it is missing; keep its status current, and add follow-ups before the
+  task ends.
 - **Sequential thinking before action.** State what you understand, what you
   don't, your theory, and your plan. "I don't know" is a valid output.
 - **Failure is information.** When something fails, your next move is *words*:

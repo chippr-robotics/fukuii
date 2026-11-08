@@ -19,6 +19,8 @@ encode/decode, Snappy compression, handshake/ForkId, and reference-client
 interop. You do **not** touch consensus logic (that's `forge` for ETC or
 `beacon` for ETH) or large migrations (that's the main session).
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Path pre-check (mandatory)
 
 Before reading any source file, reference client, or spec listed below:
