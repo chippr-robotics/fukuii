@@ -132,6 +132,8 @@ the logo rows; `TuiSpec.scala:80`; `TuiRendererSpec.scala:28-36`; `BlockchainCon
   message. Every string that originates outside the node, the client id and any log text (which can quote peer data),
   goes through the same sanitiser before it reaches a frame: ESC, C0 and C1 control characters removed, length capped.
   Otherwise a peer could write escape sequences to the operator's terminal.
+- **C-17. `NO_COLOR` needs a value (2026-11-08, slice 1 review).** no-color.org specifies `NO_COLOR` as present and not
+  empty; §5.1 said "any value". An empty `NO_COLOR` counts as unset (spec FR-009, T008).
 
 ---
 
@@ -678,8 +680,8 @@ position still tracks progress. `NO_COLOR` does not imply reduced motion.
 
 Selection: JLine reports colour depth via `terminal.getNumericCapability(
 Capability.max_colors)`; `AttributedStyle` already resolves to the right escape
-sequences in `toAnsi(term)` (`Tui.scala:135`). `NO_COLOR` set (any value, per
-no-color.org) or `max_colors < 8` → monochrome: `AttributedStyle.DEFAULT` plus
+sequences in `toAnsi(term)` (`Tui.scala:135`). `NO_COLOR` set to a non-empty value (per
+no-color.org; C-17) or `max_colors < 8` → monochrome: `AttributedStyle.DEFAULT` plus
 bold/reverse only. The palette lives in one `TuiTheme` value passed to the
 renderer, so tests can render with the monochrome theme and assert zero colour
 attributes.

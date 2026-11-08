@@ -90,7 +90,8 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
     val auto = ConfigFactory.parseString("tui { glyphs = auto }")
     TuiConfig.load(auto, TuiEnv.from(Map("LANG" -> "C"), Map.empty)).glyphSet shouldBe GlyphSet.Ascii
     TuiConfig.load(auto, TuiEnv.from(Map("LANG" -> "en_US.UTF-8"), Map.empty)).glyphSet shouldBe GlyphSet.Emoji
-    TuiConfig.load(auto, TuiEnv.from(Map("NO_COLOR" -> ""), Map.empty)).noColor shouldBe true
+    TuiConfig.load(auto, TuiEnv.from(Map("NO_COLOR" -> "1"), Map.empty)).noColor shouldBe true
+    TuiConfig.load(auto, TuiEnv.from(Map("NO_COLOR" -> ""), Map.empty)).noColor shouldBe false
   }
 
   "TuiConfig.glyphSet" should "draw emoji for an unresolved auto, and ASCII only when asked" taggedAs (UnitTest) in {

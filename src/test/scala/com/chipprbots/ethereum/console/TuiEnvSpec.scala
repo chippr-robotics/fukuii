@@ -71,12 +71,15 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
     resolved(e, TuiConfig.default.copy(glyphs = GlyphChoice.Ascii)) shouldBe GlyphSet.Ascii
   }
 
-  it should "take NO_COLOR set to any value, including empty, as no colour" taggedAs (UnitTest) in {
+  // no-color.org: NO_COLOR counts when it is present and not empty, whatever the value.
+  it should "take NO_COLOR set to a non-empty value as no colour, and an empty one as unset" taggedAs (UnitTest) in {
     env("NO_COLOR" -> "1").noColor shouldBe true
-    env("NO_COLOR" -> "").noColor shouldBe true
     env("NO_COLOR" -> "false").noColor shouldBe true
+    env("NO_COLOR" -> " ").noColor shouldBe true
+    env("NO_COLOR" -> "").noColor shouldBe false
     env().noColor shouldBe false
-    env("NO_COLOR" -> "").applyTo(TuiConfig.default).noColor shouldBe true
+    env("NO_COLOR" -> "1").applyTo(TuiConfig.default).noColor shouldBe true
+    env("NO_COLOR" -> "").applyTo(TuiConfig.default).noColor shouldBe false
     env().applyTo(TuiConfig.default).noColor shouldBe false
   }
 

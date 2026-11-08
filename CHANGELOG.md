@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `fukuii.tui.glyphs` (`conf/base/tui.conf`, default `auto`) picks ASCII when the locale is not UTF-8;
     `FUKUII_TUI_GLYPHS=emoji|ascii|auto` overrides it. An invalid `fukuii.tui.glyphs` stops the node with a named error;
     an invalid `FUKUII_TUI_GLYPHS` logs a warning and is ignored.
-  - **Colour.** `NO_COLOR`, set to any value, draws without colour (bold and reverse video only), as does a terminal
-    reporting fewer than 8 colours. A 256-colour terminal gets the 256-colour palette.
+  - **Colour.** `NO_COLOR`, set to a non-empty value (no-color.org), draws without colour (bold and reverse video
+    only), as does a terminal reporting fewer than 8 colours. A 256-colour terminal gets the 256-colour palette.
   - **Sizes.** Below 100 columns or 32 rows, and from 100×32, the dashboard has no logo; from 140×45 the logo sits in
     a column on the right. Before, it appeared above the body wherever it fit.
   - **Smaller fixes.** The startup wordmark spells FUKUII (the old one spelled FOOO). The footer reads

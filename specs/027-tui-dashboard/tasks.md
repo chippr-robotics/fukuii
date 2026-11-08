@@ -65,9 +65,9 @@ with `LANG=C` and `NO_COLOR=1` is clean.
       fixed widths in both sets; progress below 0 or above 1 is clamped; ASCII uses `~o` and `@@`
 - [x] T007 [P] [US2] `console tests/TierSpec.scala`: 99×40 → S, 100×31 → S, 100×32 → M, 139×48 → M, 140×44 → M,
       140×45 → L; the logo cell of each tier follows research §3.1
-- [x] T008 [P] [US2] `console tests/TuiThemeSpec.scala`: `NO_COLOR` set to any value, including empty, selects
-      monochrome; `max_colors < 8` selects monochrome; monochrome styles carry no foreground or background colour;
-      `NO_COLOR` does not change motion
+- [x] T008 [P] [US2] `console tests/TuiThemeSpec.scala`: `NO_COLOR` set to any non-empty value selects monochrome (an
+      empty value counts as unset, no-color.org; C-17); `max_colors < 8` selects monochrome; monochrome styles carry no
+      foreground or background colour; `NO_COLOR` does not change motion
 - [x] T009 [P] [US2] `console tests/TuiEnvSpec.scala` and `root tests/TuiConfigSpec.scala`: `FUKUII_TUI_GLYPHS` =
       `ascii` / `emoji` / `auto`; `auto` picks ASCII when the locale (`LC_ALL`, then `LC_CTYPE`, then `LANG`, then
       `sun.jnu.encoding`) is not UTF-8 (Q3); an invalid environment value yields a warning naming the variable and the

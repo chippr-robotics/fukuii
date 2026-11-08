@@ -62,6 +62,12 @@ proposed defaults.
   `herald`), and export the scores through `NetworkMetrics`, the Q5 path, where the TUI reads them. Every peer gets a
   score, not only SNAP peers. Delivered as slice 4a, before slice 4. (user, 2026-11-07)
 
+### Correction 2026-11-08 (slice 1 review)
+
+- `NO_COLOR` counts only when it is set to a non-empty value, as no-color.org now specifies. FR-009 and T008 said "any
+  value, including empty", following research §5.1, which is corrected too (C-17). (coordinator decision on prism's
+  review of slice 1, 2026-11-08)
+
 Where the proposal stated a default (Q1, Q3, Q4, Q6, Q7, Q8) the answer is that default. Q2 and Q5 named options with
 no default; the answer is the option the user chose. D-1 arose while writing this spec (plan.md).
 
@@ -277,8 +283,8 @@ Each requirement names the research.md section it comes from.
   (C-15). ASCII MUST be selected by `FUKUII_TUI_GLYPHS=ascii`, by `fukuii.tui.glyphs = ascii`, automatically when the
   locale is not UTF-8 (Q3), or at runtime with `g`. Captured log text MUST pass through the same glyph mapper. No glyph
   may contain U+FE0F; ambiguous-width glyphs are pinned to one column (§3.10, §5.2).
-- **FR-009** Colours MUST come from one theme with the §5.1 roles. `NO_COLOR` set to any value, or fewer than 8 colours,
-  MUST select the monochrome theme (bold and reverse only, no colour attributes). `NO_COLOR` MUST NOT imply reduced
+- **FR-009** Colours MUST come from one theme with the §5.1 roles. `NO_COLOR` set to a non-empty value (no-color.org;
+  an empty value counts as unset), or fewer than 8 colours, MUST select the monochrome theme (bold and reverse only, no colour attributes). `NO_COLOR` MUST NOT imply reduced
   motion (§5.1, §4.5).
 
 **Motion, loop, splash**
