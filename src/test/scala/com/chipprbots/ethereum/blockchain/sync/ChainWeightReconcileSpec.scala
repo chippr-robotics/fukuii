@@ -105,7 +105,7 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
   ) in new Chain:
     val chain: Vector[BlockHeader] = jumped()
     pass() match
-      case Outcome.Done(scanned, written, runs, rewinds, _) =>
+      case Outcome.Done(scanned, written, runs, rewinds, _, _) =>
         scanned shouldBe 401
         written shouldBe 200
         runs shouldBe 2
@@ -138,7 +138,7 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     val chain: Vector[BlockHeader] = Genesis +: headers(Genesis, 120)
     put(chain, exact(chain).zipWithIndex.map((w, n) => if n >= 40 && n < 60 then None else Some(w)))
     pass() match
-      case Outcome.Done(_, written, runs, _, _) =>
+      case Outcome.Done(_, written, runs, _, _, _) =>
         written shouldBe 20
         runs shouldBe 1
       case other => fail(s"expected Done, got $other")
@@ -190,7 +190,7 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     val uninterrupted: Outcome = reference.pass()
 
     (resumed, uninterrupted) match
-      case (Outcome.Done(s1, w1, r1, _, _), Outcome.Done(s2, w2, r2, _, _)) =>
+      case (Outcome.Done(s1, w1, r1, _, _, _), Outcome.Done(s2, w2, r2, _, _, _)) =>
         (s1, w1, r1) shouldBe ((s2, w2, r2))
       case other => fail(s"expected two Done, got $other")
     stored(chain) shouldBe reference.stored(referenceChain)
@@ -298,6 +298,62 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     stored(all) shouldBe exact(all).map(Some(_))
     appState.hasChainWeightInvariant() shouldBe true
 
+  it should "rewrite a long tail imported during the repair without the locks, so the locked tail stays short" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val chain: Vector[BlockHeader] = jumped()
+    val imported = new AtomicReference[Vector[BlockHeader]](Vector.empty)
+    // A consensus client's catch-up during the repair: 1,500 blocks imported on the unrepaired head, each its
+    // parent's stored weight plus its difficulty, as import writes it.
+    val settings: Settings = Small.copy(
+      writeChunk = 30,
+      tailLockLimit = 100,
+      afterChunk = () =>
+        if imported.get.isEmpty then
+          val more = headers(chain.last, 1500)
+          var weight = blockchainReader.getChainWeightByHash(chain.last.hash).get
+          more.foreach { h =>
+            weight = weight.increase(h)
+            blockchainWriter.storeBlockHeader(h).commit()
+            blockchainWriter.storeChainWeight(h.hash, weight).commit()
+          }
+          appState.putBestBlockInfo(BlockInfo(more.last.hash.value, more.last.number.value)).commit()
+          imported.set(more)
+    )
+    pass(settings) match
+      case Outcome.Done(_, _, _, _, _, lockedTail) => lockedTail should be < 100L
+      case other                                   => fail(s"expected Done, got $other")
+    imported.get.size shouldBe 1500
+    val all: Vector[BlockHeader] = chain ++ imported.get
+    stored(all) shouldBe exact(all).map(Some(_))
+    appState.hasChainWeightInvariant() shouldBe true
+
+  // A reorg that flips the index and returns it under the repair breaks a run.
+  it should "go back to the scan when a run breaks mid-repair, never taking the rest of it as done" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val chain: Vector[BlockHeader] = jumped()
+    // Another block at 350 on the same parent: the index flips to it after the first chunk and back after the next.
+    val flipped: BlockHeader =
+      chain(350).copy(difficulty = Difficulty(BigInt(999999)), extraData = ByteString(0x7f.toByte))
+    val calls = new AtomicInteger(0)
+    val settings: Settings = Small.copy(
+      writeChunk = 100,
+      afterChunk = () =>
+        calls.incrementAndGet() match
+          case 1 => blockchainWriter.storeBlockHeader(flipped).commit()
+          case 2 => blockchainWriter.storeBlockHeader(chain(350)).commit()
+          case _ => ()
+    )
+    pass(settings) match
+      case Outcome.Done(_, _, _, rewinds, _, _) => rewinds should be >= 1
+      case other                                => fail(s"expected Done, got $other")
+    calls.get should be >= 2
+    stored(chain) shouldBe exact(chain).map(Some(_))
+    appState.hasChainWeightInvariant() shouldBe true
+
   it should "go back to the highest place still canonical after a reorg below its cursor, and check the new branch" taggedAs (
     UnitTest,
     SyncTest
@@ -319,8 +375,8 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     put(b.drop(151), exact(b).drop(151).map(w => Some(w + 99)))
 
     pass() match
-      case Outcome.Done(_, _, _, rewinds, _) => rewinds should be >= 1
-      case other                             => fail(s"expected Done, got $other")
+      case Outcome.Done(_, _, _, rewinds, _, _) => rewinds should be >= 1
+      case other                                => fail(s"expected Done, got $other")
     stored(b) shouldBe exact(b).map(Some(_))
     appState.hasChainWeightInvariant() shouldBe true
 
@@ -389,6 +445,9 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     )
     decode(encode(p)) shouldBe Some(p)
     decode(encode(Start)) shouldBe Some(Start)
+    decode(encode(p.copy(seeded = true))) shouldBe Some(p.copy(seeded = true))
+    // What dd0b3e419 saved (version 1, no `seeded`) still reads.
+    decode(encode(p).replaceFirst("^2\\|", "1|").stripSuffix("|false")) shouldBe Some(p)
     decode("2|something else") shouldBe None
   }
 
@@ -444,7 +503,30 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     put(Vector(Genesis), Vector(Some(Genesis.difficulty.value)))
     atSnapStart(blockchainReader, appState) shouldBe true
 
-  "ChainWeightSeed" should "refuse every seed on a chain that was PoS from genesis (terminal TD 0)" taggedAs (
+  "ChainWeightSeed" should "anchor only the base; the pass then re-derives every block above it, and sets no marker" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    // A SNAP pivot at 500 whose headers below are not in: genesis, a gap, then 500..520 on an estimate.
+    val chain: Vector[BlockHeader] = Genesis +: headers(Genesis, 520)
+    val ex: Vector[BigInt] = exact(chain)
+    put(Vector(Genesis), Vector(Some(Genesis.difficulty.value)))
+    put(chain.drop(500), ex.drop(500).map(w => Some(w + SnapEstimateOffset)))
+    val spec: String = s"${com.chipprbots.ethereum.utils.Hex.toHexString(chain(500).hash.value.toArray)}:${ex(500)}"
+
+    ChainWeightSeed(spec, blockchainReader, blockchainWriter, appState, posFromGenesis = false) shouldBe
+      Seq(ChainWeightSeed.Outcome.Applied(BigInt(500), chain(500).hash.value, ex(500)))
+    stored(chain.drop(500)).head shouldBe Some(ex(500))
+    stored(chain.drop(501)) shouldBe ex.drop(501).map(w => Some(w + SnapEstimateOffset)) // not re-derived here
+    appState.getChainWeightReconcileProgress().flatMap(decode).map(p => (p.cursor.number, p.seeded)) shouldBe
+      Some((BigInt(500), true))
+
+    pass() shouldBe a[Outcome.Seeded]
+    stored(chain.drop(500)) shouldBe ex.drop(500).map(Some(_))
+    appState.hasChainWeightInvariant() shouldBe false
+    appState.getChainWeightReconcileProgress() shouldBe None
+
+  it should "refuse every seed on a chain that was PoS from genesis (terminal TD 0)" taggedAs (
     UnitTest,
     SyncTest
   ) in new Chain:
