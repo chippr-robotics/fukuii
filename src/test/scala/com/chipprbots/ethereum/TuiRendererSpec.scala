@@ -351,6 +351,17 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     lines.find(_.trim.startsWith("Bytecode")).get should include("@ 310/s")
   }
 
+  // Live run 2026-11-08: a restarted node's counters start at zero, and a finished storage row read "0 slots".
+  it should "show no zero count on a finished SNAP row" taggedAs (UnitTest) in {
+    val validating = SnapSyncState(phase = "StateValidation", bytecodesDownloaded = 1, nodesHealed = 25_400)
+    val lines = rows(TuiState.initial.withSnapSyncState(validating), 120, 40)
+    def row(label: String) = lines.find(_.trim.startsWith(label)).get
+    row("Storage") should include("🪱[COMPLETE ✓]🧠")
+    (row("Storage") should not).include("0 slots")
+    row("Accounts").trim shouldBe "Accounts 🪱[COMPLETE ✓]🧠"
+    row("Healing") should include("25.4K nodes")
+  }
+
   it should "mark a finished bytecode download complete" taggedAs (UnitTest) in {
     val base = TuiFixtures.snapStorageMordor()
     val done = base.copy(snapSyncState = base.snapSyncState.map(_.copy(bytecodeComplete = true)))

@@ -181,12 +181,13 @@ class TuiRenderer(config: TuiConfig):
       val (n, est) = (snap.storageSlotsSynced, snap.estimatedTotalSlots)
       val contracts =
         if snap.storageContractsTotal > 0 then
-          s" $dot ${formatNumber(snap.storageContractsCompleted.toLong)}/${formatNumber(snap.storageContractsTotal.toLong)} contracts"
+          s"${formatNumber(snap.storageContractsCompleted.toLong)}/${formatNumber(snap.storageContractsTotal.toLong)} contracts"
         else ""
+      def joined(parts: String*): String = parts.filter(_.nonEmpty).mkString(s" $dot ")
       // The rate before the contract count: when the row is cut at 80 columns, the rate says whether it moves.
       val slots = s"${formatCount(n)} slots"
-      val moving = s"$slots ${rate(snap.recentSlotsPerSec)}$contracts"
-      if phase > 1 then ("Storage", Complete, s"$slots$contracts")
+      val moving = joined(s"$slots ${rate(snap.recentSlotsPerSec)}", contracts)
+      if phase > 1 then ("Storage", Complete, joined(count(n, " slots"), contracts))
       else if est > 0 then ("Storage", Known(fraction(n, est)), moving)
       else if n > 0 then ("Storage", Active, moving)
       else ("Storage", Queued, "")
