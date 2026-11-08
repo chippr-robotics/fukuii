@@ -231,6 +231,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     gas as before, and with the libraries present every result is unchanged.
   - **Breaking on Windows for ETH mainnet and Sepolia:** these nodes now refuse to start there, because the BLS12-381
     library has no Windows build. Before, they ran and diverged on any block that calls a BLS12-381 precompile.
+- **Stored total difficulty is repaired once, in the background, and kept exact (#1654). ETC/Mordor; ETH too.**
+  Fork choice compares stored chain weights. Earlier releases left jumps in them: a SNAP pivot finished with a peer
+  estimate, whose exact value the header backfill later wrote under every block that had inherited the estimate, and
+  the restart calibration of 0.7.0 to 0.10.x, which rewrote the head. A fork branching below a jump was weighed
+  across it. A new datadir marker, `chain.weight.invariant`, says every stored canonical weight is the genesis weight
+  plus the difficulties up to its block, the value import writes.
+  - **The one-time pass.** On a datadir without the marker (every datadir an older release made), regular sync starts
+    a background pass: a forward scan from genesis (heights, headers and weights, batched, without filling the block
+    cache), saving its place every 10,000 blocks so a restart resumes. It waits wherever the header backfill has not
+    stored a header yet. A reorg below its place sends it back to the highest place still canonical. At the head it
+    takes the import lock and then the chain insert lock exclusively, re-derives every weight that differs, writes
+    them in one batch (chunks of 100,000 under the same hold, if there are more) and sets the marker. Import is held
+    only for that last step. Logs are tagged `[CW-RECONCILE]`, with a progress line every 1,000,000 blocks and a
+    summary of what was repaired. Gauges: `chainweight.reconcile.block.gauge`, `.differing.blocks.gauge`,
+    `.repaired.blocks.gauge` and `.state.gauge`.
+  - **Operator note: duration.** ETC mainnet has about 25.7M blocks, read as roughly 77M batched point reads.
+    That is about 0.5 to 1.5 h on an SSD and several hours on a spinning disk; this estimate is not yet measured.
+    The pass runs once per datadir. The repair under the locks touches only the blocks above the first jump, usually
+    those since the SNAP pivot: seconds, or a few minutes for millions of blocks.
+  - **The marker.** It is set by the write that follows a new datadir's genesis, by a SNAP hand-off whose pivot weight
+    is exact (`REAL_DB_TD` or `DERIVED_FROM_PARENT`; with the header hold of #1740 that is every hand-off), and by the
+    pass. It is taken away by a SNAP start, a checkpoint import, an accepted seed and any calibration write. While it
+    stands, the timed TD calibration writes nothing. Before, a chain that was PoS from genesis (Ephemery, Hoodi), whose
+    total difficulty never clears the plausibility floor, got a peer estimate written over its head at every restart.
+  - **`-Dfukuii.seed-chain-weights` seeds a base, not a head.** A seed is accepted only for a canonical block whose
+    parent has no plausible weight, such as a SNAP pivot whose headers below are not in yet. Every block above it
+    then gets its parent's weight plus its own difficulty. A seed over a parent with a plausible weight is refused
+    with a WARN: it would leave a jump, and the calibration reverted it 30 s later anyway. A seed is trusted, not
+    proven, so the pass checks it from genesis once the headers are in.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
