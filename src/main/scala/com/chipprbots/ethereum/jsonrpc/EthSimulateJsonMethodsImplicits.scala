@@ -127,17 +127,22 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
       // The override fields are decoded as strictly as go-ethereum's JSON unmarshalling of BlockOverrides and
       // OverrideAccount: a value that is not the field's type is -32602 (invalid argument 0), never a silently absent
       // override. (#1660 item 13: the same rule TxArgsJson applies to the calls.)
+      //
+      // The quantities are bounded as go-ethereum's hexutil types are (#1727): hexutil.Big holds at most 256 bits
+      // (Number, Difficulty, BaseFeePerGas, BlobBaseFee, Balance), hexutil.Uint64 at most 64 (Time, GasLimit, Nonce, a
+      // withdrawal's fields). A value past its bound is -32602, so no number wider than the field it is read as reaches
+      // the simulation to wrap or to size a loop.
       private def decodeBlockOverrides(obj: JObject): Either[JsonRpcError, BlockOverrides] =
         val what = "block override"
         for
-          number <- optQty(obj, "number", what)
-          time <- optQty(obj, "time", what)
-          gasLimit <- optQty(obj, "gasLimit", what)
+          number <- optQty(obj, "number", what, BigBits)
+          time <- optQty(obj, "time", what, Uint64Bits)
+          gasLimit <- optQty(obj, "gasLimit", what, Uint64Bits)
           feeRecipient <- optAddress(obj, "feeRecipient", what)
           prevRandao <- optBytes(obj, "prevRandao", what)
-          baseFeePerGas <- optQty(obj, "baseFeePerGas", what)
-          blobBaseFee <- optQty(obj, "blobBaseFee", what)
-          difficulty <- optQty(obj, "difficulty", what)
+          baseFeePerGas <- optQty(obj, "baseFeePerGas", what, BigBits)
+          blobBaseFee <- optQty(obj, "blobBaseFee", what, BigBits)
+          difficulty <- optQty(obj, "difficulty", what, BigBits)
           withdrawals <- optWithdrawals(obj, "withdrawals", what)
         yield BlockOverrides(
           number = number,
@@ -154,8 +159,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
       private def decodeStateOverride(obj: JObject, addrHex: String): Either[JsonRpcError, StateOverride] =
         val what = s"state override for $addrHex"
         for
-          balance <- optQty(obj, "balance", what)
-          nonce <- optQty(obj, "nonce", what)
+          balance <- optQty(obj, "balance", what, BigBits)
+          nonce <- optQty(obj, "nonce", what, Uint64Bits)
           code <- optBytes(obj, "code", what)
           state <- decodeStorageMap(obj, "state", what)
           stateDiff <- decodeStorageMap(obj, "stateDiff", what)
@@ -184,11 +189,27 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           org.bouncycastle.util.encoders.Hex.decode(clean)
         )
 
-      // A quantity: the digits are any length (an odd count is padded), as the decoder always accepted
-      private def hexToBigInt(hex: String): Option[BigInt] =
+      private val BigBits = 256 // hexutil.Big, and a common.Hash
+      private val Uint64Bits = 64 // hexutil.Uint64
+
+      /** Why a quantity was refused: `None` for not being hex at all, `Some(reason)` for being too wide. */
+      private type Fault = Option[String]
+
+      // A quantity of at most `maxBits` bits: the digits are any length (an odd count is padded), as the decoder always
+      // accepted. The width is judged on the significant digits, before BigInt reads them: BigInt parses in quadratic
+      // time, so a multi-megabyte digit string must be refused without being turned into a number. A number of n
+      // significant hex digits is below 2^(4n) and at least 2^(4n - 4), so `n <= maxBits / 4` is exactly `fits`.
+      private def hexToBigInt(hex: String, maxBits: Int): Either[Fault, BigInt] =
         val clean = hex.stripPrefix("0x").stripPrefix("0X")
-        if clean.isEmpty then Some(BigInt(0))
-        else Option.when(isHexDigits(clean))(BigInt(clean, 16))
+        if !isHexDigits(clean) then Left(None)
+        else if clean.dropWhile(_ == '0').length > maxBits / 4 then Left(Some(s"hex number > $maxBits bits"))
+        else Right(if clean.isEmpty then BigInt(0) else BigInt(clean, 16))
+
+      // A quantity too wide is reported without echoing it back: the value can be as large as the request
+      private def refused(field: String, what: String, value: JValue, fault: Fault): JsonRpcError =
+        fault.fold(invalid(field, what, value))(reason =>
+          InvalidParams(s"invalid argument 0: invalid $field in $what: $reason")
+        )
 
       private def decodeStorageMap(
           obj: JObject,
@@ -199,9 +220,11 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case JObject(fields) =>
             val entries = fields.map {
               case (keyHex, v @ JString(valueHex)) =>
-                (hexToBigInt(keyHex), hexToBigInt(valueHex)) match
-                  case (Some(k), Some(x)) => Right((k, x))
-                  case _                  => Left(invalid(field, what, JObject(keyHex -> v)))
+                // a storage key and value are common.Hash: 256 bits at most (the exact 32-byte length is not enforced)
+                (hexToBigInt(keyHex, BigBits), hexToBigInt(valueHex, BigBits)) match
+                  case (Right(k), Right(x)) => Right((k, x))
+                  case (Left(fault), _)     => Left(refused(field, what, JObject(keyHex -> v), fault))
+                  case (_, Left(fault))     => Left(refused(field, what, JObject(keyHex -> v), fault))
               case (keyHex, v) => Left(invalid(field, what, JObject(keyHex -> v)))
             }
             entries.collectFirst { case Left(e) => e } match
@@ -210,13 +233,18 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case JNothing | JNull => Right(None)
           case other            => Left(invalid(field, what, other))
 
-      private def optQty(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[BigInt]] =
+      private def optQty(
+          obj: JObject,
+          field: String,
+          what: String,
+          maxBits: Int
+      ): Either[JsonRpcError, Option[BigInt]] =
         (obj \ field) match
           case JNothing | JNull => Right(None)
           case v @ JString(s) =>
-            hexToBigInt(s) match
-              case Some(n) => Right(Some(n))
-              case None    => Left(invalid(field, what, v))
+            hexToBigInt(s, maxBits) match
+              case Right(n)    => Right(Some(n))
+              case Left(fault) => Left(refused(field, what, v, fault))
           case other => Left(invalid(field, what, other))
 
       private def optBytes(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[ByteString]] =
@@ -252,11 +280,13 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
             val decoded = items.map {
               case w: JObject =>
                 for
-                  index <- optQty(w, "index", what).flatMap(_.toRight(invalid("withdrawals.index", what, w)))
-                  validatorIndex <- optQty(w, "validatorIndex", what)
+                  index <- optQty(w, "index", what, Uint64Bits)
+                    .flatMap(_.toRight(invalid("withdrawals.index", what, w)))
+                  validatorIndex <- optQty(w, "validatorIndex", what, Uint64Bits)
                     .flatMap(_.toRight(invalid("withdrawals.validatorIndex", what, w)))
                   address <- optAddress(w, "address", what).flatMap(_.toRight(invalid("withdrawals.address", what, w)))
-                  amount <- optQty(w, "amount", what).flatMap(_.toRight(invalid("withdrawals.amount", what, w)))
+                  amount <- optQty(w, "amount", what, Uint64Bits)
+                    .flatMap(_.toRight(invalid("withdrawals.amount", what, w)))
                 yield Withdrawal(index, validatorIndex, address, amount)
               case other => Left(invalid(field, what, other))
             }

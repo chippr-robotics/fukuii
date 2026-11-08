@@ -113,7 +113,17 @@ object EthSimulateService:
   val TransferEventTopic: ByteString = ByteString(kec256("Transfer(address,address,uint256)".getBytes))
   val EthTransferAddress: Address = Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 
+  // The request limits of go-ethereum v1.17.9 (internal/ethapi/simulate.go:48-58). Each is refused with -38026
+  // `clientLimitExceededError`, before any block is built.
+
+  /** `maxSimulateBlocks`: the blocks one request simulates, the gap blocks between block overrides included. */
   val MaxBlockStateCalls = 256
+
+  /** `maxSimulateCallsPerBlock`. */
+  val MaxCallsPerBlock = 5000
+
+  /** `maxSimulateTotalCalls`: the calls of all the request's blocks. */
+  val MaxTotalCalls = 10000
 
   /** EIP-2681: the largest account nonce, 2^64 - 1. */
   val MaxNonce: BigInt = BigInt("18446744073709551615")
@@ -328,15 +338,23 @@ class EthSimulateService(
     // geth's nil slice is.)
     if req.blockStateCalls.isEmpty then break(Left(JsonRpcError.InvalidParams("empty input")))
 
-    // Validate blockStateCalls count
+    // The request limits, checked before anything is resolved or built (api.go:888-899): -38026, geth's wording.
     if req.blockStateCalls.size > MaxBlockStateCalls then
-      break(
-        Left(
-          JsonRpcError.SimulateClientLimitExceeded(
-            s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+      break(Left(JsonRpcError.SimulateClientLimitExceeded("too many blocks")))
+    var totalCalls = 0
+    for bsc <- req.blockStateCalls do
+      val callCount = bsc.calls.fold(0)(_.size)
+      if callCount > MaxCallsPerBlock then
+        break(
+          Left(
+            JsonRpcError.SimulateClientLimitExceeded(s"too many calls in block: $callCount > $MaxCallsPerBlock")
           )
         )
-      )
+      totalCalls += callCount // at most 256 blocks of at most 5000 calls: no overflow
+      if totalCalls > MaxTotalCalls then
+        break(
+          Left(JsonRpcError.SimulateClientLimitExceeded(s"too many calls: $totalCalls > $MaxTotalCalls"))
+        )
 
     // Resolve base block
     val baseBlock = resolveBlock(req.blockTag) match
@@ -376,28 +394,24 @@ class EthSimulateService(
     // (including auto-generated gap blocks).
     var inheritedFeeRecipient: Option[Address] = None
 
-    // Pre-compute total blocks including gap-filling to validate against limit
-    var totalBlocks = 0
-    var prevNum = baseBlock.header.number.value
-    for bsc <- req.blockStateCalls do
-      val targetNum = bsc.blockOverrides.flatMap(_.number).getOrElse(prevNum + 1)
-      totalBlocks += (targetNum - prevNum).toInt
-      prevNum = targetNum
-    if totalBlocks > MaxBlockStateCalls then
-      break(
-        Left(
-          JsonRpcError.SimulateClientLimitExceeded(
-            s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
-          )
-        )
-      )
-
     for (blockStateCall, _) <- req.blockStateCalls.zipWithIndex do
       val targetNumber = blockStateCall.blockOverrides.flatMap(_.number).getOrElse((parentHeader.number + 1).value)
 
       // Generate gap-filling empty blocks if the target number is ahead.
       // Gap blocks inherit the persistent feeRecipient if one was set earlier.
+      // validateBlockOrdering has refused every target more than MaxBlockStateCalls past the base block (as big
+      // integers), so this loop builds at most MaxBlockStateCalls - 1 blocks over the whole request. The guard makes
+      // that a fact of this loop rather than of a check elsewhere: a loop that builds blocks without bound is a denial
+      // of service (#1727), and a violation fails the request loudly instead of wedging the node.
       while (parentHeader.number + 1).value < targetNumber do
+        if blockResults.size >= MaxBlockStateCalls then
+          log.error(
+            "eth_simulateV1 gap loop refused: built={} limit={} target={}",
+            blockResults.size,
+            MaxBlockStateCalls,
+            targetNumber
+          )
+          break(Left(JsonRpcError.InternalError))
         val gapOverrides = inheritedFeeRecipient.map(fr => BlockOverrides(feeRecipient = Some(fr)))
         val gapResult = buildAndFinalizeBlock(
           parentHeader,
@@ -667,7 +681,8 @@ class EthSimulateService(
       blockStateCalls: Seq[BlockStateCall],
       baseHeader: BlockHeader
   ): Either[JsonRpcError, Unit] = boundary {
-    var prevNumber = baseHeader.number.value
+    val baseNumber = baseHeader.number.value
+    var prevNumber = baseNumber
     // uint64 bit pattern -> unsigned BigInt (not BigInt(...toLong), which sign-extends timestamps
     // >= 2^63 into negative values and corrupts every ordering/gap comparison below).
     var prevTimestamp = baseHeader.unixTimestamp.toUnsignedBigInt
@@ -685,6 +700,14 @@ class EthSimulateService(
             )
           )
         )
+
+      // simulate.go:592-594 (sanitizeChain), after the order check and before the timestamp's: `Number - base.Number`
+      // over 256 is -38026 "too many blocks". The numbers are strictly increasing here, so this is the request's whole
+      // block count, the gap blocks included. A BigInt on purpose (#1727): the override is up to 256 bits wide, and a
+      // narrowing to Int before this comparison let a gap of 2^32 + 1 count as 1 block and then build 2^32 of them. This
+      // runs before the gap blocks are built, so it is the bound on that loop.
+      if targetNumber - baseNumber > MaxBlockStateCalls then
+        break(Left(JsonRpcError.SimulateClientLimitExceeded("too many blocks")))
 
       // Compute the minimum timestamp for the target block number
       // Gap blocks each take 12 seconds, so the minimum is prevTimestamp + gapBlocks * 12
@@ -742,6 +765,9 @@ class EthSimulateService(
 
     // Determine the fork era for the header based on the block's timestamp
     // This handles both pre-merge blocks and fork boundary crossings
+    // `Timestamp` is a uint64 held in a Long, so this narrowing is the representation, not a loss: an override is a
+    // hexutil.Uint64 (decoded to at most 2^64 - 1), and the default is the parent's time + 12, which wraps at 2^64 as
+    // go-ethereum's `prevTimestamp + timestampIncrement` does.
     val ts = Timestamp(timestamp.toLong)
     // EIP-4844: simulated block's excessBlobGas derives from parent per spec.
     val simulatedExcessBlobGas =
@@ -1478,6 +1504,9 @@ class EthSimulateService(
       val payload = bytes.drop(4)
       val offset = BigInt(1, payload.slice(0, 32))
       if offset != 32 then break(None)
-      val length = BigInt(1, payload.slice(32, 64)).toInt
-      if length < 0 || 64 + length > payload.length then break(None)
-      scala.util.Try(new String(payload.slice(64, 64 + length), "UTF-8")).toOption
+      // The length is a uint256 the contract chose: compared as a BigInt, so 2^32 + 5 is not 5 and 2^31 - 32 does not
+      // overflow `64 + length`. Only a length inside the payload is narrowed (#1727).
+      val length = BigInt(1, payload.slice(32, 64))
+      if length + 64 > payload.length then break(None)
+      val end = 64 + length.toInt
+      scala.util.Try(new String(payload.slice(64, end), "UTF-8")).toOption
