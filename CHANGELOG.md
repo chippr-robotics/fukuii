@@ -215,6 +215,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stack trace in the log. Every malformed token now gets 401 with a short reason: wrong number of segments, a header,
   payload or signature that is not base64url, JSON that does not parse, an `iat` that is missing or out of range. A
   header whose `alg` is not `HS256` is rejected too, as go-ethereum does. A valid token is accepted as before.
+- **A missing BLS12-381 or KZG native library no longer forks the node off the network (B-135).** The BLS12-381
+  precompiles (0x0b-0x11) and the KZG point-evaluation precompile (0x0a) run on native libraries. When one was missing,
+  the precompile counted it as an ordinary failure: the call consumed all its gas and returned nothing, where every
+  other client returned the result. The node then computed a different state root from the network and logged nothing.
+  Besu ships no Windows build of the BLS12-381 library, and the KZG trusted setup was loaded only when a Cancun
+  timestamp was configured, so never for ETC Olympia.
+  - **At startup** the node loads and probes each native library the configured forks need: BLS12-381 from ETH Prague,
+    KZG from ETH Cancun, and both from ETC Olympia once it is scheduled. If one is missing, the node logs which library
+    and exits with status 1. ETC and Mordor need neither while Olympia is unscheduled.
+  - **At call time** a missing library raises a fatal error instead of failing the call. An input the library rejects
+    still fails the call with the same gas as before, and with the libraries present every result is unchanged.
+  - **Breaking on Windows for ETH mainnet and Sepolia:** these nodes now refuse to start there, because the BLS12-381
+    library has no Windows build. Before, they ran and diverged on any block that calls a BLS12-381 precompile.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
