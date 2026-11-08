@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.PostStop
 import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -17,6 +18,8 @@ import cats.implicits.*
 
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -78,15 +81,27 @@ object BlockImporter:
   // How long a block waits after an exhausted fetch before it is tried again. A variable only so a spec can shorten it.
   private[regular] var exhaustBackoff: FiniteDuration = 5.minutes
 
+  // How often an importer still waiting for the import lock to start says so (beacon, #1705). A variable only so a spec
+  // can shorten it.
+  private[regular] var lockWaitWarnInterval: FiniteDuration = 30.seconds
+  private[regular] case object LockWaitTick extends Command
+  private[regular] val LockWaitKey = "BlockImporterLockWait"
+
   // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
   // 128 blocks provides enough depth to cover common shallow forks without resyncing the
   // entire chain; deeper forks fall back to SNAP re-sync via RegularSyncStuck.
   val MaxForkAncestryDepth: Int = 128
 
-  // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
-  // the progress toward StuckEscapeThreshold. Zeroed in apply() (fresh regular-sync session), by a node delivered, and
-  // by a block imported.
-  private[regular] var survivedExhausts: Int = 0
+  /** Consecutive exhausted state-node fetches, towards [[StuckEscapeThreshold]]. One per regular-sync session:
+    * RegularSync creates it and hands it to every importer it spawns, so a pipeline started again in place of a stopped
+    * one keeps the count (#1705: it was a global zeroed by every importer's setup, a replacement's included). Zeroed by
+    * a node delivered, a block imported, and the escalation itself. Atomic: an import resets it off the actor's thread.
+    */
+  final class ExhaustCount:
+    private val count = new java.util.concurrent.atomic.AtomicInteger(0)
+    def get: Int = count.get
+    def increment(): Int = count.incrementAndGet()
+    def reset(): Unit = count.set(0)
 
   // Distinct missing codes in a process before one bulk bytecode recovery is asked for. A miss is fetched alone first, at a
   // round trip and a re-execution of the block, because the bulk scan stops regular sync for as long as it takes to read the
@@ -210,11 +225,12 @@ object BlockImporter:
       blacklist: Blacklist,
       configBuilder: BlockchainConfigBuilder,
       peersClient: Option[TypedActorRef[PeersClient.Command]] = None,
-      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+      reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+      exhausts: ExhaustCount,
+      importLock: ImportLock
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
-        BlockImporter.survivedExhausts = 0
         val logic = new BlockImporterLogic(
           ctx,
           timers,
@@ -237,15 +253,20 @@ object BlockImporter:
           blacklist,
           configBuilder,
           peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler)),
-          reorgState
+          reorgState,
+          exhausts,
+          importLock
         )
-        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
-        logic.idle
+        // Started as it is spawned: a separate start message was what a re-spawned importer never got (#1705).
+        logic.starting()
       }
     }
 
+  // Mined blocks an importer keeps while it waits for the import lock to start. More than a few would mean a start held
+  // far longer than any import takes.
+  private[regular] val StartStashCapacity: Int = 16
+
   sealed trait Command
-  case object Start extends Command
   case class MinedBlock(block: Block) extends Command
   case class ImportNewBlock(block: Block, peerId: PeerId) extends Command
   case class ImportDone(newBehavior: NewBehavior, blockImportType: BlockImportType) extends Command
@@ -255,6 +276,11 @@ object BlockImporter:
   final private[regular] case class FetcherResponse(r: BlockFetcher.FetchResponse) extends Command
   final private[regular] case class BranchResolverMsg(r: FastSyncBranchResolverActor.BranchResolverResponse)
       extends Command
+  final private[regular] case class BranchResolverStopped(resolver: TypedActorRef[FastSyncBranchResolverActor.Command])
+      extends Command
+  // The best block, read under the import lock as the importer starts; or the failure to read it.
+  final private[regular] case class StartFrom(bestBlock: BigInt) extends Command
+  final private[regular] case class StartFailed(error: Throwable) extends Command
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
@@ -336,7 +362,9 @@ final private class BlockImporterLogic(
     blacklist: Blacklist,
     configBuilder: BlockchainConfigBuilder,
     balFetcher: Option[BlockAccessListFetcher],
-    reorgState: ReorgStateHandler
+    reorgState: ReorgStateHandler,
+    exhausts: BlockImporter.ExhaustCount,
+    importLock: ImportLock
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -358,12 +386,6 @@ final private class BlockImporterLogic(
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
   private val BadBlockEvictionThreshold = 3
   private val ForkDetectThreshold = 5
-
-  def idle: Behavior[Command] =
-    Behaviors.receiveMessage {
-      case Start => start()
-      case _     => Behaviors.same
-    }
 
   def running(state: ImporterState): Behavior[Command] =
     Behaviors.receiveMessage {
@@ -503,10 +525,10 @@ final private class BlockImporterLogic(
         // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
         // on every connected peer).
         val blockNum = blocksToRetry.head.number.value
-        BlockImporter.survivedExhausts += 1
+        val consecutiveExhausts = exhausts.increment()
         val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
 
-        if BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold then
+        if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then
           // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
           // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
           // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
@@ -516,10 +538,10 @@ final private class BlockImporterLogic(
           log.error(
             "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
             blockNum,
-            BlockImporter.survivedExhausts,
+            consecutiveExhausts,
             missingHashStr
           )
-          BlockImporter.survivedExhausts = 0
+          exhausts.reset()
           pendingStateNodeHash = None
           supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
           // Don't transition further — SyncController will PoisonPill regular sync.
@@ -528,7 +550,7 @@ final private class BlockImporterLogic(
           log.error(
             "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
             blockNum,
-            BlockImporter.survivedExhausts,
+            consecutiveExhausts,
             BlockImporter.StuckEscapeThreshold,
             BlockImporter.exhaustBackoff.toSeconds
           )
@@ -557,7 +579,7 @@ final private class BlockImporterLogic(
           case _: Exception => ()
           // Successful state-node delivery — reset stuck-counter so a later transient failure on a
           // different block doesn't escalate to SNAP re-sync prematurely.
-        BlockImporter.survivedExhausts = 0
+        exhausts.reset()
         pendingStateNodeHash = None
         importBlocks(blocksToRetry, blockImportType)(state)
 
@@ -577,10 +599,59 @@ final private class BlockImporterLogic(
       case _ => Behaviors.same
     }
 
-  private def start(): Behavior[Command] =
-    log.info("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
-    fetcher ! BlockFetcher.Start(selfRef, bestKnownBlockNumber)
-    supervisor ! ProgressProtocol.StartingFrom(bestKnownBlockNumber)
+  /** The first state. Takes the import lock, so an import that a stopped importer left running has ended, and only then
+    * reads the best block to start from (#1705, beacon): read before, it could be a head that import was still moving.
+    * Until then a mined block is kept, and everything else dropped: no fetcher answers one it has not started.
+    */
+  def starting(): Behavior[Command] =
+    val waitingSince = System.nanoTime()
+    ctx.pipeToSelf(importLock.guard(IO.delay(blockchainReader.getBestBlockNumber)).unsafeToFuture()) {
+      case Success(bestBlock) => StartFrom(bestBlock)
+      case Failure(error)     => StartFailed(error)
+    }
+    // The wait has no limit, as go-ethereum's `cancelWg.Wait()` has none: starting without the lock would bring #1432
+    // back. An import that never ends would hold every later pipeline here while RegularSync reads as running, so the
+    // wait is made visible instead: a WARN each interval, and the gauge (beacon, #1705).
+    timers.startTimerWithFixedDelay(LockWaitKey, LockWaitTick, lockWaitWarnInterval)
+    Behaviors.withStash(StartStashCapacity) { stash =>
+      Behaviors
+        .receiveMessage[Command] {
+          case StartFrom(bestBlock) =>
+            timers.cancel(LockWaitKey)
+            RegularSyncMetrics.setImportLockWaitSeconds(0)
+            stash.unstashAll(start(bestBlock))
+          case StartFailed(error) =>
+            // Fail loudly: this importer stops, and RegularSync replaces the pipeline.
+            throw error
+          case LockWaitTick =>
+            val waited = (System.nanoTime() - waitingSince).nanos
+            RegularSyncMetrics.setImportLockWaitSeconds(waited.toMillis / 1000.0)
+            log.warning(
+              "Waiting {}s for the import lock, held by an import a stopped importer left running: regular sync starts " +
+                "once it ends",
+              waited.toSeconds
+            )
+            Behaviors.same
+          case mined: MinedBlock =>
+            if stash.isFull then
+              log.warning("Mined block {} dropped: the importer is still starting", mined.block.number)
+            else stash.stash(mined)
+            Behaviors.same
+          case _ => Behaviors.same
+        }
+        .receiveSignal { case (_, PostStop) =>
+          // Stopped while it waited: no longer waiting, whatever the gauge last said.
+          RegularSyncMetrics.setImportLockWaitSeconds(0)
+          Behaviors.same
+        }
+    }
+
+  /** Starts the fetcher from `bestBlock`, the block the chain's head was at. */
+  private def start(bestBlock: BigInt): Behavior[Command] =
+    log.info("Starting Regular Sync, current best block is {}", bestBlock)
+    fetcher ! BlockFetcher.Start(selfRef, bestBlock)
+    supervisor ! ProgressProtocol.StartingFrom(bestBlock)
+    timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
     running(ImporterState.initial)
 
   private def nextBehavior(
@@ -611,8 +682,10 @@ final private class BlockImporterLogic(
   private def importBlocks(blocks: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Behavior[Command] = importWith(
+    // Delayed, not pure: `pure` evaluated the branch resolution at once, on the actor's thread and outside the import
+    // lock, against a head another import might still be moving; and anything it threw failed this actor (#1705).
     IO
-      .pure {
+      .delay {
         log.debug(
           "Attempting to import blocks starting from {} and ending with {}",
           blocks.head.number,
@@ -645,7 +718,7 @@ final private class BlockImporterLogic(
           case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
         // The chain moved, so exhausts counted before were met at a block now behind it, and a hole the audit filled
         // no longer counts towards a re-SNAP (forge, #1694).
-        if importedBlocks.nonEmpty then BlockImporter.survivedExhausts = 0
+        if importedBlocks.nonEmpty then exhausts.reset()
 
         errorOpt match
           case None => Running
@@ -1090,7 +1163,10 @@ final private class BlockImporterLogic(
       state: ImporterState
   ): Behavior[Command] =
     val ref = selfRef
-    importTask
+    // The whole import, branch resolution included, under the node's import lock: stopping this actor would not stop
+    // it, and the importer that replaced this one must not import, nor resolve a branch, until it ends (#1705).
+    importLock
+      .guard(importTask)
       .map(nb => ref ! ImportDone(nb, blockImportType))
       .handleError { ex =>
         log.error(ex, "Block import failed unexpectedly: {}", ex.getMessage)
@@ -1262,10 +1338,18 @@ final private class BlockImporterLogic(
         syncConfig = syncConfig
       )
     )
+    // Watched: one that stopped without an answer left this importer in `resolvingFork` for good, where nothing else
+    // moves it on (#1705). It answers before it stops, and the stop is delivered after that answer.
+    ctx.watchWith(resolverRef, BranchResolverStopped(resolverRef))
     resolverRef ! FastSyncBranchResolverActor.StartBranchResolver
-    resolvingFork(capturedBest, snapPivot, state)
+    resolvingFork(capturedBest, snapPivot, state, resolverRef)
 
-  private def resolvingFork(capturedBest: BigInt, snapPivot: BigInt, state: ImporterState): Behavior[Command] =
+  private def resolvingFork(
+      capturedBest: BigInt,
+      snapPivot: BigInt,
+      state: ImporterState,
+      resolver: TypedActorRef[FastSyncBranchResolverActor.Command]
+  ): Behavior[Command] =
     Behaviors.receiveMessage {
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
         blockchainReader.getBlockHeaderByNumber(lca) match
@@ -1293,6 +1377,12 @@ final private class BlockImporterLogic(
         blindRewind(capturedBest, snapPivot)
         running(state.withoutDeferredBatches())
 
+      case BranchResolverStopped(stopped) if stopped == resolver =>
+        // Stopped without an answer (a failure inside it): what a failed resolution does.
+        log.warning("SYNC-FORK: branch resolver stopped without an answer — falling back to 128-block blind rewind")
+        blindRewind(capturedBest, snapPivot)
+        running(state.withoutDeferredBatches())
+
       case ImportDone(_, _) =>
         // The import that raised StartForkRecovery sent it from inside its own IO (tryImportBlocks, FORK-DETECT), so
         // its ImportDone always arrives AFTER that, i.e. here. It used to fall into the catch-all below and be
@@ -1304,7 +1394,12 @@ final private class BlockImporterLogic(
         // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
         // there as usual.
         exhaustedDuringImport = false
-        resolvingFork(capturedBest, snapPivot, state.notImportingBlocks().branchResolved().withoutDeferredBatches())
+        resolvingFork(
+          capturedBest,
+          snapPivot,
+          state.notImportingBlocks().branchResolved().withoutDeferredBatches(),
+          resolver
+        )
 
       case _ => Behaviors.same
     }

@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.BroadcastBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
@@ -181,10 +182,15 @@ object RegularSyncItSpecUtils:
           etcPeerManager,
           bl,
           blacklist,
-          this
+          this,
+          exhausts = new BlockImporter.ExhaustCount,
+          importLock = importLock
         ),
         "block-importer"
       )
+
+    // This peer's node's one import lock, as SyncController's (#1705).
+    lazy val importLock: ImportLock = ImportLock()
 
     lazy val regularSync: ActorRef = system
       .spawnAnonymous(
@@ -206,7 +212,8 @@ object RegularSyncItSpecUtils:
           pendingTransactionsManager,
           blockTopic,
           this,
-          system.toTyped.ignoreRef[com.chipprbots.ethereum.blockchain.sync.SyncController.Command]
+          system.toTyped.ignoreRef[com.chipprbots.ethereum.blockchain.sync.SyncController.Command],
+          importLock
         )
       )
       .toClassic

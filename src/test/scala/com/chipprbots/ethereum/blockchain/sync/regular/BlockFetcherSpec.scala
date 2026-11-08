@@ -399,32 +399,23 @@ class BlockFetcherSpec
       }
       testKit.stop(blockFetcher)
 
-    // P9: context.watchWith — ChildStopped is delivered as a typed FetchCommand instead of Terminated
-    "should continue processing after receiving ChildStopped from a watched child" taggedAs (
-      UnitTest,
-      SyncTest
-    ) in new TestSetup:
-      startFetcher()
+    // #1705. The test this replaces sent a made-up ChildStopped while the real child lived, and asserted that fetching
+    // went on: it held the bug in place. A child that really stops takes its request with it, still counted in flight,
+    // so nothing was dispatched again. The fetcher stops instead, and RegularSync replaces the pipeline
+    // (RegularSyncPipelineSpec).
+    for child <- Seq("headers-fetcher", "bodies-fetcher") do
+      s"should stop when its $child stops, so regular sync replaces the pipeline (#1705)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup:
+        startFetcher()
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, _) if msg.block == Left(1) => ()
+        }
+        testKit.system.classicSystem.actorSelection(blockFetcher.path / child) ! org.apache.pekko.actor.PoisonPill
 
-      // Drain the initial in-flight GetBlockHeaders request and reply with empty headers so
-      // inFlightHeaders returns to 0 (the slot must be free before TickFetch can dispatch again).
-      val initReplyTo: ActorRef[PeersClient.ResponseMessage] = peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, replyTo) if msg.block == Left(1) =>
-          replyTo
-      }
-      initReplyTo ! PeersClient.Response(fakePeer, ETHPackets.BlockHeaders(BigInt(0), List.empty))
-
-      // Inject ChildStopped directly — simulates watchWith delivery when a child terminates.
-      // The fetcher must absorb the message without crashing (Behaviors.same).
-      blockFetcher ! BlockFetcher.ChildStopped("headers-fetcher")
-
-      // Fetcher must remain alive and responsive: TickFetch re-evaluates dispatch and sends
-      // another GetBlockHeaders when the slot is available.
-      blockFetcher ! BlockFetcher.TickFetch
-      peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, _) if msg.block == Left(1) => ()
-      }
-      testKit.stop(blockFetcher)
+        // Watching an actor that has already stopped still delivers Terminated
+        createTestProbe[BlockFetcher.FetchCommand]().expectTerminated(blockFetcher, 5.seconds)
   }
 
   trait TestSetup extends TestSyncConfig:

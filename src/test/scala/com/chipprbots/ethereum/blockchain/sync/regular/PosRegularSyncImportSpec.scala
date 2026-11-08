@@ -268,13 +268,16 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       stop()
     )
 
-  it should "still resolve a batch that arrives mid-import on arrival — serialisation is gated off here" taggedAs (
+  it should "resolve a batch that arrives mid-import only once that import has ended: the import lock (#1705)" taggedAs (
     UnitTest,
     SyncTest,
     ConsensusTest
   ) in new ImporterFixture(postMerge = false):
-    // Pinned, not endorsed: the pre-existing ETC behaviour, left exactly as it was because ETC must not move. Lifting
-    // the gate on BlockImporter's deferral is a separate change that needs a forge review.
+    // Until #1705 this pinned, without endorsing it, the second batch resolved on arrival against head N, whose child
+    // N+51's parent was not stored yet: UnknownBranch, and the fetcher rewound to N - 64. The deferral gate is still off
+    // on PoW, but every import now holds the node's import lock, branch resolution included (forge, beacon), so the
+    // second waits for the first to commit and then extends it, as core-geth's insertChain does under its chain mutex.
+    // The same blocks are imported on the same weights: fork choice does not move.
     start()
     requestPick()
     requestPick()
@@ -286,10 +289,12 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
       started.await(10, TimeUnit.SECONDS) shouldBe true
       second.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.slice(50, 52)))
-      fetcher
-        .expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout)
-        .fromBlock shouldBe head.number.value - 64
+      // Before: InvalidateBlocksFrom(N - 64) arrived right here.
+      fetcher.expectNoMessage(2.seconds)
     finally release.countDown()
+
+    fetcher.awaitAssert(blockchainReader.getBestBlockNumber shouldBe head.number.value + 52, importTimeout, 10.millis)
+    executedNumbers shouldBe ahead.take(52).map(_.number.value)
     stop()
 
   it should "pick again after a fork recovery raised mid-import — the stale importing flag is cleared here too" taggedAs (
@@ -459,12 +464,14 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
         createTestProbe[NetworkPeerManagerActor.Command]().ref,
         blockchain,
         CacheBasedBlacklist.empty(100),
-        this
+        this,
+        exhausts = new BlockImporter.ExhaustCount,
+        importLock = ImportLock()
       )
     )
 
+    /** The importer starts as it is spawned (#1705): it starts the fetcher from the head. */
     def start(): Unit =
-      importer ! BlockImporter.Start
       fetcher.expectMessageType[BlockFetcher.Start].fromBlock shouldBe head.number.value
 
     /** What an idle SyncRetryTick does. */

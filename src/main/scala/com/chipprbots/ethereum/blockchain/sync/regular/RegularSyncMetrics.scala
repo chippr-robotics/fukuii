@@ -30,6 +30,13 @@ object RegularSyncMetrics extends MetricsContainer:
   final private val ReorgLastDepth = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.reorg.last.depth.gauge", ReorgLastDepth)
 
+  // #1705: fetch-and-import pipelines replaced, tagged with the component whose stop caused it.
+  final private val PipelineRestartsCounter = "regularsync.pipeline.restarts.total"
+
+  // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
+  final private val ImportLockWaitSeconds = new AtomicDouble(0d)
+  metrics.registry.gauge("regularsync.import.lock.wait.seconds.gauge", ImportLockWaitSeconds)
+
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordDefaultBlockPropagationTimer(nanos: Long): Unit = DefaultBlockPropagationTimer.record(nanos, NANOSECONDS)
@@ -40,3 +47,10 @@ object RegularSyncMetrics extends MetricsContainer:
   def incrementReorgTotal(): Unit = BranchReorgTotalCounter.increment()
   def incrementBranchResolutionRounds(): Unit = BranchResolutionRoundsCounter.increment()
   def setLastReorgDepth(n: Int): Unit = ReorgLastDepth.set(n.toDouble)
+
+  /** `component`: "block-fetcher" or "block-importer". */
+  def incrementPipelineRestarts(component: String): Unit =
+    metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()
+
+  def setImportLockWaitSeconds(seconds: Double): Unit = ImportLockWaitSeconds.set(seconds)
+  private[regular] def importLockWaitSeconds: Double = ImportLockWaitSeconds.get

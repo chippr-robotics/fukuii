@@ -30,7 +30,6 @@ import com.chipprbots.ethereum.blockchain.sync.BackgroundAudit
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
-import com.chipprbots.ethereum.blockchain.sync.regular.ImportCounterAccess
 import com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditBadEntries
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCounters
@@ -238,7 +237,6 @@ class BackgroundAuditSpec
     val bytes = unwrappedBytes(n, hash)
     n.s.delete(hash)
     n.head(10, root)
-    val exhaustsBefore = ImportCounterAccess.survivedExhausts
 
     val (audit, found) = logsOf {
       val audit = n.spawn(fetcher = wire.fetcher)
@@ -282,7 +280,7 @@ class BackgroundAuditSpec
     val stored = n.s.nodes.get(hash).get
     StoredNodeTestAccess.references(stored) shouldBe RepairedNodeReferences
     unwrappedBytes(n, hash).toSeq shouldBe bytes.toSeq
-    ImportCounterAccess.survivedExhausts shouldBe exhaustsBefore
+    // Import's exhaust count is out of the audit's reach: it belongs to a regular-sync session, not a global (#1705).
 
     withClue("a pass that repaired is not clean, and another comes after the backoff: ") {
       n.s.app.getSnapAuditCleanAnchor() shouldBe None
@@ -640,7 +638,6 @@ class BackgroundAuditSpec
     val (_, hash) = deepStorageNode(n, root)
     n.s.delete(hash)
     n.head(10, root)
-    val exhaustsBefore = ImportCounterAccess.survivedExhausts
 
     val requests = createTestProbe[PeersClient.Request[?]]()
     val client = testKit.spawn(Behaviors.receiveMessage[PeersClient.Command] {
@@ -666,7 +663,8 @@ class BackgroundAuditSpec
 
     val st = n.awaitBackoff(audit)
     st.counters.unresolved shouldBe 1
-    ImportCounterAccess.survivedExhausts shouldBe exhaustsBefore
+    // Not the counter: import's exhaust count belongs to a regular-sync session, which the audit holds no reference to
+    // (#1705). Nor import's fetcher: the audit's fetch went to its own.
   }
 
   // Import's blacklist is a CacheBasedBlacklist, and every one of those sets a shared gauge and bumps shared counters. So
