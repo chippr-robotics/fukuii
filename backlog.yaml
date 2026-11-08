@@ -1529,3 +1529,13 @@ items:
     refs: []
     links: {}
     notes: "forge: OpCode.scala:316 (geth checks the stack first); VM.scala:252 collision runs INVALID where geth says contract address collision. Text only."
+  - id: B-138
+    title: "Protocol: case objects compared with == must stay case objects (Scala 3 equality footgun)"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-08
+    refs: []
+    links: {}
+    notes: "forge: without strictEquality, x == Obj still compiles against a case-class companion and is always false. Add to scala3-style.md or consensus-change-protocol.md."
