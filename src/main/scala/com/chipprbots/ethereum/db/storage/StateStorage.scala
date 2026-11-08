@@ -8,7 +8,6 @@ import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
 
-import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.cache.MapCache
@@ -138,7 +137,15 @@ trait StateStorage:
   def onBlocksReadopted(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
   def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit
-  def getNode(nodeHash: NodeHash): Option[MptNode]
+
+  /** The node stored under `nodeHash`, read as every other trie read is (`SerializingMptStorage.get`: keccak first,
+    * through this mode's own format): `None` when it is absent, or when what is stored is not that node, which is
+    * logged once as a corrupt node. For the chain reader's `getMptNodeByHash` and the GetNodeData server: one decoded
+    * the bytes itself, with no hash check (H3, CHASE row 45), and the other could serve another node's bytes to a peer.
+    */
+  def getNode(nodeHash: NodeHash): Option[MptNode] =
+    try Some(getReadOnlyStorage.get(nodeHash.toArray))
+    catch case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException => None
   def forcePersist(reason: FlushSituation): Boolean
 
   /** Whether [[repairNode]] works on this storage (spec 022 T053). */
@@ -201,9 +208,6 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     nodeStorage.put(nodeHash, nodeEncoded)
-
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    nodeStorage.get(nodeHash).map(_.toMptNode)
 
   override def canRepairNodes: Boolean = true
 
@@ -403,9 +407,6 @@ class ReferenceCountedStateStorage(
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     new FastSyncNodeStorage(nodeStorage, bn).update(Nil, Seq(nodeHash -> nodeEncoded))
 
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    new FastSyncNodeStorage(nodeStorage, 0).get(nodeHash).map(_.toMptNode)
-
   override def canRepairNodes: Boolean = true
 
   /** Under [[ReferenceCountedStateStorage.commitLock]], so no block commit changes a count between this re-check and
@@ -487,16 +488,6 @@ class CachedReferenceCountedStateStorage(
 
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     nodeStorage.put(nodeHash, HeapEntry.toBytes(HeapEntry(nodeEncoded, 1, bn)))
-
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    lruCache
-      .get(nodeHash)
-      .map(_.nodeEncoded.toMptNode)
-      .orElse(
-        nodeStorage
-          .get(nodeHash)
-          .map(enc => HeapEntry.fromBytes(enc).nodeEncoded.toMptNode)
-      )
 
 object StateStorage:
 

@@ -183,11 +183,20 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     b.stored(hashOf(good)).references shouldBe 3
   }
 
+  /** A bad node in the execution cache, as a read before H3 left one there: the store's read now refuses bytes that
+    * fail their hash, so none can be read in, and the eviction is pinned on one put there directly.
+    */
+  private def cacheBadNode(backing: SerializingMptStorage, hash: ByteString, bytes: Array[Byte]): Unit =
+    val cache = backing.executionCache.get
+    cache.putIfCurrent(hash, MptStorage.decodeNode(bytes, hash.toArray), cache.generation)
+
   it should "evict the decoded node, so execution stops reading what it replaced" taggedAs UnitTest in {
     val b = new Basic
     val good = nodeBytes(1)
-    val execution = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+    val backing = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage]
+    val execution = backing.cachedForExecution
     b.put(hashOf(good), nodeBytes(2), 1)
+    cacheBadNode(backing, hashOf(good), nodeBytes(2))
     execution.get(hashOf(good).toArray).encode.toSeq shouldBe nodeBytes(2).toSeq // the bad node, cached
 
     b.state.repairNode(hashOf(good), good, 77) shouldBe RepairOutcome.Written
@@ -406,9 +415,11 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
   it should "evict the decoded node, so execution finds it absent and not bad" taggedAs UnitTest in {
     val b = new Basic
     val failing = hashOf(nodeBytes(1))
-    val execution = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+    val backing = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage]
+    val execution = backing.cachedForExecution
     b.put(failing, nodeBytes(2), 9)
-    execution.get(failing.toArray)
+    cacheBadNode(backing, failing, nodeBytes(2))
+    execution.get(failing.toArray).encode.toSeq shouldBe nodeBytes(2).toSeq // the bad node, cached
 
     b.state.deleteBadNode(failing, reachedByRoot) shouldBe BadEntryDelete.Deleted
 

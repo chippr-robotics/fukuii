@@ -97,9 +97,12 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
     UnitTest,
     StateTest
   ) in {
+    // Keccak first (H3): bytes that fail their hash are never decoded, so what keeps a cause is bytes that pass it.
+    val outOfBounds = Array(0xc1.toByte)
+    val outOfBoundsKey = ByteString(kec256(outOfBounds))
     val arc = new Archive
-    arc.nodes.put(leafHash, Array(0xc1.toByte))
-    val thrown = corruptAt(arc.store, leafHash)
+    arc.nodes.put(outOfBoundsKey, outOfBounds)
+    val thrown = corruptAt(arc.store, outOfBoundsKey)
     thrown.getCause should not be null
     thrown.getCause.isInstanceOf[CorruptNodeException] shouldBe false
     (thrown.withLocation(ByteString(Array[Byte](0))).getCause should be).theSameInstanceAs(thrown.getCause)
@@ -193,6 +196,85 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
     corruptAt(reader, leafHash)
     cache.entries shouldBe 0
     reader.nodesLoaded shouldBe 0L
+  }
+
+  // ---- H3: keccak on every read that reaches the store -------------------------------------------------------------
+
+  /** Another leaf's bytes: a valid node, which decodes, under the leaf's key. */
+  private val otherLeaf: Array[Byte] =
+    MptTraversals.encodeNode(LeafNode(ByteString(Array.fill[Byte](4)(5)), ByteString(Array.fill[Byte](40)(6))))
+
+  "SerializingMptStorage.get (H3)" should "read a list stored under the wrong hash as a corrupt node, through every store" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val arc = new Archive
+    arc.nodes.put(leafHash, otherLeaf)
+    corruptAt(arc.store, leafHash)
+    val b = new Basic
+    b.nodes.put(leafHash, b.wrap(otherLeaf))
+    val backing = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage]
+    Seq(backing, backing.cachedForExecution, b.state.getReadOnlyStorage, b.state.stageBlock(1).storage)
+      .foreach(corruptAt(_, leafHash))
+    withClue("the decoded-node cache keeps nothing from it: ") {
+      backing.executionCache.get.get(leafHash) shouldBe null
+    }
+  }
+
+  "SerializingMptStorage.multiGetNodes (H3)" should "read a list stored under the wrong hash as a corrupt node, naming its key" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val arc = new Archive
+    arc.nodes.put(leafHash, otherLeaf)
+    intercept[CorruptNodeException](arc.store.multiGetNodes(Seq(leafHash.toArray))).hash shouldBe leafHash
+  }
+
+  it should "name the entry whose wrapper does not unwrap, and still read good and absent entries" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val goodHash = ByteString(kec256(otherLeaf))
+    val absent = ByteString(kec256(Array[Byte](7, 7, 7)))
+    val b = new Basic
+    b.nodes.put(goodHash, b.wrap(otherLeaf))
+    b.nodes.put(leafHash, Array[Byte](1, 2, 3))
+    val backing = b.state.getBackingStorage(0)
+    intercept[CorruptNodeException](
+      backing.multiGetNodes(Seq(goodHash.toArray, leafHash.toArray, absent.toArray))
+    ).hash shouldBe leafHash
+    backing.multiGetNodes(Seq(goodHash.toArray, absent.toArray)).map(_.map(n => ByteString(n.hash))) shouldBe
+      Seq(Some(goodHash), None)
+  }
+
+  // CHASE row 45: `getNode`, which the chain reader's `getMptNodeByHash` and the GetNodeData server read, decoded the
+  // stored bytes itself: no hash check, and a raw decode error for bytes that do not decode.
+  "StateStorage.getNode (H3)" should "read through the store's check: a corrupt entry is no node, a good one is" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val corruptRaw: Seq[(String, Array[Byte])] = classes :+ ("another node's bytes" -> otherLeaf)
+    corruptRaw.foreach { case (name, bytes) =>
+      withClue(s"$name, archive: ") {
+        val arc = new Archive
+        arc.nodes.put(leafHash, bytes)
+        new ArchiveStateStorage(arc.nodes).getNode(leafHash) shouldBe None
+      }
+      withClue(s"$name, basic pruning: ") {
+        val b = new Basic
+        b.nodes.put(leafHash, b.wrap(bytes))
+        b.state.getNode(leafHash) shouldBe None
+      }
+    }
+    withClue("a wrapper that does not unwrap: ") {
+      val b = new Basic
+      b.nodes.put(leafHash, Array[Byte](1, 2, 3))
+      b.state.getNode(leafHash) shouldBe None
+    }
+    val arc = new Archive
+    arc.nodes.put(leafHash, leaf)
+    new ArchiveStateStorage(arc.nodes).getNode(leafHash).map(n => ByteString(n.hash)) shouldBe Some(leafHash)
+    new ArchiveStateStorage(arc.nodes).getNode(ByteString(kec256(Array[Byte](7, 7, 7)))) shouldBe None
   }
 
   // spec 022 T062, vault: a node is written by counting a reference to what is stored under its hash. A wrapper there
