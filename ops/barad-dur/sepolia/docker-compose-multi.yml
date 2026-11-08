@@ -15,15 +15,16 @@ services:
     image: chipprbots/fukuii:latest
     container_name: fukuii-multi
     restart: unless-stopped
+    # JSON-RPC is published on the host's loopback only. The Sepolia Engine API (8551) is not
+    # published: lighthouse reaches it as fukuii-multi:8551 on sepolia-network.
     ports:
       # Sepolia ports
-      - "8555:8545"       # Sepolia JSON-RPC
-      - "8561:8551"       # Sepolia Engine API
+      - "127.0.0.1:8555:8545"  # Sepolia JSON-RPC
       - "30306:30306/tcp" # Sepolia P2P
       - "30306:30306/udp" # Sepolia Discovery
       - "9097:9095"       # Sepolia Metrics
       # Mordor ports
-      - "8547:8547"       # Mordor JSON-RPC
+      - "127.0.0.1:8547:8547"  # Mordor JSON-RPC
       - "30304:30304/tcp" # Mordor P2P
       - "30304:30304/udp" # Mordor Discovery
       - "9096:9096"       # Mordor Metrics

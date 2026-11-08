@@ -94,8 +94,8 @@ services:
     ports:
       - "${KONG_PROXY_HTTP_PORT:-8000}:8000"   # Kong proxy HTTP
       - "${KONG_PROXY_HTTPS_PORT:-8443}:8443" # Kong proxy HTTPS
-      - "${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP
-      - "${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS
+      - "127.0.0.1:${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP (host loopback only)
+      - "127.0.0.1:${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS (host loopback only)
     volumes:
       - ./kong.yml:/etc/kong/kong.yml:ro
     networks:
@@ -132,8 +132,9 @@ services:
     mem_limit: ${FUKUII_MEM_LIMIT_PRIMARY:-10g}
     memswap_limit: ${FUKUII_MEM_LIMIT_PRIMARY:-10g}
     ports:
-      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
-      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
+      # JSON-RPC on the host's loopback only; Kong (8000/8443) is the public entry.
+      - "127.0.0.1:${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP
+      - "127.0.0.1:${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket
       # P2P/TCP and Discovery/UDP both on 30303 — must match server-address.port in
       # etc.conf because the ENR advertises what the container binds to.
       - "${FUKUII_PRIMARY_P2P_PORT:-30303}:30303/tcp"
@@ -190,7 +191,7 @@ services:
     ports:
       # Secondary's mordor.conf binds HTTP RPC on container:8546 (not 8545
       # like the primary), so the host->container map skips 8545 entirely.
-      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8546"
+      - "127.0.0.1:${FUKUII_SECONDARY_RPC_PORT:-8547}:8546"
       - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30304/tcp"
       - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30304/udp"
       - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
