@@ -1571,3 +1571,13 @@ items:
     links: {}
     depends_on: [B-007]
     notes: "Read regularsync.orphan.blocks.total{source,outcome}: outcome=blacklisted should stay 0 or rare; branch-fetch counts the reorg tips."
+  - id: B-142
+    title: Make the unknown-parent branch failure a typed ConsensusResult instead of an error-text prefix
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-08
+    refs: [B-007]
+    links: {}
+    notes: Touches ConsensusImpl, so forge reviews it; no behaviour change.
