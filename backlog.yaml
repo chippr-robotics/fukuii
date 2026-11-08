@@ -1615,3 +1615,14 @@ items:
       since: 2026-11-08T20:49:30Z
       heartbeat: 2026-11-08T20:49:34Z
     notes: Audit by conduit on dev-node (v0.11.0 code + live host); gaps become implementation items for fukuii-fc.
+  - id: B-146
+    title: "Spec: zero-trust TLS and mTLS on every service listener (RPC, WS, Engine API, metrics) plus outbound TLS"
+    priority: P1
+    status: open
+    area: ops
+    size: L
+    opened: 2026-11-08
+    refs: [B-145]
+    links:
+      issues: [1756]
+    notes: Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
