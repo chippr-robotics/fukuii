@@ -643,7 +643,7 @@ object PrecompiledContracts:
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
 
   // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
-  // Uses org.hyperledger.besu:bls12-381 native library (gnark/Constantine backends via JNA).
+  // Uses org.hyperledger.besu:bls12-381 native library: Matter Labs' eth_pairings via JNA (not gnark or Constantine).
   // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
 
   /** Execute a BLS12-381 operation via the Besu native library. Returns Some(result) on success, None on error (invalid

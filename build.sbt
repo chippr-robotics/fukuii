@@ -305,7 +305,8 @@ lazy val node = {
       Dependencies.sangria,
       Dependencies.scaffeine,
       Dependencies.scopt,
-      Dependencies.testing
+      Dependencies.testing,
+      Dependencies.blsDifferentialOracles
     ).flatten ++ malletDeps
 
   (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
