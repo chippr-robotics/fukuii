@@ -270,7 +270,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       channelCapacity = 100,
       maxServerChannels = 2048,
       computeThreads = 1,
-      dnsDomains = Seq.empty,
+      dnsTrees = Seq.empty,
       dnsWalk = com.chipprbots.ethereum.network.discovery.DnsDiscovery.WalkSettings.Default
     )
 

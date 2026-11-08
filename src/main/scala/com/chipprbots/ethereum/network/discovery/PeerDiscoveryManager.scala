@@ -103,12 +103,12 @@ object PeerDiscoveryManager:
         * join them as the walk finds them.
         */
       def startDnsWalk(): Unit =
-        if cancelDnsWalk.isEmpty && discoveryConfig.dnsDomains.nonEmpty then
+        if cancelDnsWalk.isEmpty && discoveryConfig.dnsTrees.nonEmpty then
           given IORuntime = runtime
-          log.info("Resolving {} DNS discovery domain(s) in the background", discoveryConfig.dnsDomains.size)
+          log.info("Resolving {} DNS discovery tree(s) in the background", discoveryConfig.dnsTrees.size)
           val (_, cancel) = DnsDiscovery
             .seed(
-              discoveryConfig.dnsDomains,
+              discoveryConfig.dnsTrees,
               dnsLookup,
               discoveryConfig.dnsWalk,
               dnsForkIdFilter,
