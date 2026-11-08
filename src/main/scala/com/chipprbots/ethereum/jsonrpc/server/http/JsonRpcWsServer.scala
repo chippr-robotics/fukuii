@@ -78,13 +78,17 @@ class JsonRpcWsServer(
 
   /** The upgrade is refused with 403 when the request carries an `Origin` header that is not on the allow-list; the
     * connection is not registered with the SubscriptionManager. A request with no `Origin` header is not from a browser
-    * and goes through. See [[WsOriginPolicy]].
+    * and goes through. See [[WsOriginPolicy]]. A request that is not a WebSocket upgrade is answered with 400 and
+    * registers nothing: [[buildWsFlow]] registers the connection, so it runs only once the upgrade is in hand.
     */
   val route: Route =
     (pathEndOrSingleSlash | path("ws")) {
       extractRequest { request =>
         val origins = request.headers.filter(_.is("origin")).map(_.value)
-        if originPolicy.permits(origins) then handleWebSocketMessages(buildWsFlow())
+        if originPolicy.permits(origins) then
+          extractWebSocketUpgrade { upgrade =>
+            complete(upgrade.handleMessages(buildWsFlow()))
+          }
         else
           log.warn(
             s"Rejected WebSocket connection: origin not allowed: ${origins.map(WsOriginPolicy.sanitize).mkString(", ")}"

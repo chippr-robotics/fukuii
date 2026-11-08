@@ -206,6 +206,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ERROR. If the pivot floor sends the fetcher back to the same block 3 times in a row, the fetched blocks above it do
     not continue from our best block, which is what a pivot that is not on the network's chain looks like: a WARN
     (`Pivot floor: ...`, again every 3 more) and `regularsync.pivot.floor.gap.repeats.total`. A re-sync is then needed.
+- **A plain HTTP request to the JSON-RPC WebSocket port no longer registers a connection.** The server set up a
+  connection with the subscription manager before it knew the request was a WebSocket upgrade, and for a request that
+  was not one, nothing ever closed it. The connection is now set up only once the upgrade is accepted, and a request
+  that is not an upgrade is answered with 400 as before.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
