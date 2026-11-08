@@ -256,12 +256,38 @@ def m_overdue_promotion(root: Path) -> None:
          "    covers: Client starts from a hive-supplied genesis and reports a chain head.")
 
 
+_ROMAN = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+
+def _to_roman(n: int) -> str:
+    out = ""
+    for value, numeral in _ROMAN:
+        while n >= value:
+            out += numeral
+            n -= value
+    return out
+
+
+def _from_roman(numeral: str) -> int:
+    values = {"I": 1, "V": 5, "X": 10}
+    total = 0
+    for i, c in enumerate(numeral):
+        v = values[c]
+        total += -v if i + 1 < len(numeral) and values[numeral[i + 1]] > v else v
+    return total
+
+
 def m_unmapped_principle(root: Path) -> None:
-    """C8 — a constitution principle with no enforcement-map row."""
+    """C8 — a constitution principle with no enforcement-map row.
+
+    The new principle is numbered one past the last real one, so the mutation stays unmapped when the constitution
+    gains a principle (it once hardcoded VIII, which Principle VIII then mapped).
+    """
     p = root / ".specify/memory/constitution.md"
     s = p.read_text(encoding="utf-8")
+    last = max(_from_roman(n) for n in re.findall(r"^### ([IVX]+)\. ", s, re.MULTILINE))
     s = s.replace("## Technology & Architecture Constraints",
-                  "### VIII. Brand New Principle\n\nSomething MUST hold.\n\n"
+                  f"### {_to_roman(last + 1)}. Brand New Principle\n\nSomething MUST hold.\n\n"
                   "## Technology & Architecture Constraints", 1)
     p.write_text(s, encoding="utf-8")
 
