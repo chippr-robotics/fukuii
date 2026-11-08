@@ -17,6 +17,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -80,6 +81,32 @@ object SyncController:
     */
   val MaxBulkBytecodeRecoveryFailures: Int = 3
 
+  /** H3: SNAP re-syncs regular sync asks for in a row (no block imported in between) that start at once. From the next
+    * one on SNAP waits first ([[resnapBackoff]]).
+    */
+  val ResnapsBeforeBackoff: Int = 2
+
+  /** H3: the first re-SNAP that waits waits this long; each one after it twice as long, up to [[ResnapBackoffCap]]. */
+  val ResnapBackoffBase: FiniteDuration = 1.hour
+
+  val ResnapBackoffCap: FiniteDuration = 24.hours
+
+  /** H3: how often, while a re-SNAP count stands, regular sync's progress is looked at for a block imported. */
+  val ResnapCheckInterval: FiniteDuration = 1.minute
+
+  private val ResnapDueKey = "ResnapDue"
+  private val ResnapCheckKey = "ResnapCheck"
+
+  /** How long the `resnaps`-th SNAP re-sync in a row, with no block imported in between, waits before SNAP starts:
+    * nothing for the first [[ResnapsBeforeBackoff]], then [[ResnapBackoffBase]], doubling each time, up to
+    * [[ResnapBackoffCap]].
+    */
+  def resnapBackoff(resnaps: Int): FiniteDuration =
+    if resnaps <= ResnapsBeforeBackoff then Duration.Zero
+    else
+      val doublings = (resnaps - ResnapsBeforeBackoff - 1).min(16)
+      (ResnapBackoffBase * (1L << doublings)).min(ResnapBackoffCap)
+
   /** Whether a missing contract code at import may escalate to a bulk bytecode recovery.
     *
     *   - Only a node whose state came from SNAP: on a node that synced by executing blocks (ETC, Mordor), missing code
@@ -124,6 +151,10 @@ object SyncController:
   // isInternalMarker (which silently drops SnapSyncTerminated).
   private case object SnapSyncCriticalFailure extends Command
   private case class RegularSyncTerminated(ref: TypedActorRef[RegularSync.Command]) extends Command
+  // H3: a re-SNAP's wait is over (regular sync ran meanwhile); and the check, while the count stands, for a block
+  // imported since, which drops the count and any re-SNAP waiting.
+  private case class ResnapDue(blockNumber: BigInt) extends Command
+  private case object ResnapCheck extends Command
   private case class ResumerTerminated(ref: TypedActorRef[ChainDownloader.Command]) extends Command
   private case class BytecodeRecoveryTerminated(ref: TypedActorRef[BytecodeRecoveryActor.Command]) extends Command
   private case class StorageRecoveryTerminated(ref: TypedActorRef[StorageRecoveryActor.Command]) extends Command
@@ -313,6 +344,9 @@ object SyncController:
     // PivotHeaderBootstrap (inline in `runningRecovery` — no transition into the deadlock-prone bootstrap
     // state) and reply with StorageRecoveryActor.RecentRoot. Only one request is serviced at a time.
     private var recentRootRequester: Option[TypedActorRef[StorageRecoveryActor.Command]] = None
+
+    // H3: the block a re-SNAP waiting out its backoff starts from, while regular sync keeps running.
+    private var pendingResnap: Option[BigInt] = None
 
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
@@ -910,23 +944,77 @@ object SyncController:
           appStateStorage.clearBytecodeRecoveryDone().and(appStateStorage.clearRecoveryProgress()).commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
           startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
+          // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
+          log.info(
+            "Regular sync still stuck on block {} (missing {}); the re-SNAP from block {} is still scheduled",
+            blockNumber,
+            missingHash,
+            pendingResnap.getOrElse(blockNumber)
+          )
+          Behaviors.same
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
-          // window, so trie-node fetches keep returning empty. Only viable recovery is to re-run
-          // SNAP from a recent pivot. Kill regular sync, clear both SnapSyncDone AND the legacy
-          // FastSyncDone (so a subsequent restart re-evaluates start() and enters SNAP rather than
-          // going straight back to regular sync), then start SNAP directly.
-          log.error(
-            "Regular sync stuck on block {} (missing {}). Re-triggering SNAP sync from a recent pivot.",
-            blockNumber,
-            missingHash
-          )
-          ctx.stop(regularSync)
-          stopBackgroundAudit()
-          appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
-          appStateStorage.clearFastSyncDone().commit()
-          startSnapSync(minPivotBlock = Some(blockNumber))
+          // window, so trie-node fetches keep returning empty. The recovery is to re-run SNAP from a
+          // recent pivot (resnapNow).
+          //
+          // H3: a stored node no fetch repairs sent regular sync here, and the SNAP that followed back to the same
+          // node, with nothing to stop it. Count the re-SNAPs with no block imported in between (persisted with the
+          // block imports are measured from, so a restart forgets neither). The first two go at once. From the third,
+          // regular sync keeps running (on ETC, a node that stops would import nothing for hours) and the re-SNAP waits,
+          // an hour doubling up to a day; a block imported meanwhile drops it. Not a stop: a peer-starved chain can be
+          // stuck for reasons a later SNAP gets past.
+          val best = blockchainReader.getBestBlockNumber
+          val resnaps = nextResnapCount(best)
+          val wait = SyncController.resnapBackoff(resnaps)
+          RegularSyncMetrics.setConsecutiveResnaps(resnaps)
+          if wait == Duration.Zero then
+            log.error(
+              "Regular sync stuck on block {} (missing {}). Re-triggering SNAP sync from a recent pivot.",
+              blockNumber,
+              missingHash
+            )
+            // The baseline goes until the first regular sync after this SNAP sets it: SNAP's pivot is no import.
+            appStateStorage.putRegularSyncStuck(resnaps, baseline = None).commit()
+            resnapNow(regularSync, blockNumber)
+          else
+            appStateStorage.putRegularSyncStuck(resnaps, baseline = Some(best)).commit()
+            RegularSyncMetrics.incrementResnapBackoffs()
+            pendingResnap = Some(blockNumber)
+            timers.startSingleTimer(ResnapDueKey, ResnapDue(blockNumber), wait)
+            timers.startTimerWithFixedDelay(ResnapCheckKey, ResnapCheck, SyncController.ResnapCheckInterval)
+            log.error(
+              "[SYNC-STUCK] Regular sync stuck on block {} (missing {}): SNAP re-sync {} in a row with no block imported " +
+                "in between, so the same state keeps failing. Regular sync keeps running, and the re-SNAP is scheduled in " +
+                "{} min (at {}); it is dropped if a block is imported first, and each one in a row waits twice as long, " +
+                "up to {} h. A restart resumes regular sync and keeps this count; to re-run SNAP now, restart with " +
+                "-Dfukuii.snap.clearDoneOnStart=true (a SNAP repair pass). regularsync.resnap.consecutive.gauge says how many.",
+              blockNumber,
+              missingHash,
+              resnaps,
+              wait.toMinutes,
+              java.time.Instant.now().plusMillis(wait.toMillis).truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
+              SyncController.ResnapBackoffCap.toHours
+            )
+            Behaviors.same
+        case ResnapCheck =>
+          // While the count stands: a block imported since starts it over, and drops a re-SNAP that waits.
+          if appStateStorage.regularSyncStuckResnaps() == 0 then timers.cancel(ResnapCheckKey)
+          else resnapRecovered(): Unit
+          Behaviors.same
+        case ResnapDue(blockNumber) if pendingResnap.contains(blockNumber) =>
+          pendingResnap = None
+          if resnapRecovered() then Behaviors.same
+          else
+            log.error(
+              "[SYNC-STUCK] No block imported in the wait: re-triggering SNAP sync from a recent pivot (block {})",
+              blockNumber
+            )
+            appStateStorage.putRegularSyncStuck(appStateStorage.regularSyncStuckResnaps(), baseline = None).commit()
+            resnapNow(regularSync, blockNumber)
+        case ResnapDue(_) =>
+          Behaviors.same
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
           // #1654: first ask whether the best block's stored weight is already exact, or can be derived exactly from
           // its parent's. Fork choice compares stored weights, so rewriting an exact head with an estimate leaves a
@@ -1049,9 +1137,56 @@ object SyncController:
       * delegating.
       */
     private def isRestartTrigger(msg: Any): Boolean = msg match // Any: Classic msg from adapter
-      case _: SyncProtocol.RegularSyncStuck             => true
+      // H3: only a stuck that re-SNAPs now, or a re-SNAP whose wait ended with nothing imported; one that waits keeps
+      // regular sync, and its backfill, running.
+      case _: SyncProtocol.RegularSyncStuck =>
+        pendingResnap.isEmpty &&
+        SyncController.resnapBackoff(nextResnapCount(blockchainReader.getBestBlockNumber)) == Duration.Zero
+      case ResnapDue(blockNumber) =>
+        pendingResnap.contains(blockNumber) && !importedSinceBaseline(blockchainReader.getBestBlockNumber)
       case _: SyncProtocol.MissingCodeNeedsBulkRecovery => true
       case _                                            => false
+
+    /** H3: whether a block was imported since the re-SNAP count's baseline. No baseline (a re-SNAP runs) is no import.
+      */
+    private def importedSinceBaseline(best: BigInt): Boolean = appStateStorage.resnapBaseline().exists(best > _)
+
+    /** H3: what the count becomes at a `RegularSyncStuck` now: one more, or one again after a block was imported. */
+    private def nextResnapCount(best: BigInt): Int =
+      (if importedSinceBaseline(best) then 0 else appStateStorage.regularSyncStuckResnaps()) + 1
+
+    /** H3: a block was imported since the baseline: the count starts over, a re-SNAP that waits is dropped, and the
+      * gauge goes to 0, so an alert on it stops. Returns whether it did.
+      */
+    private def resnapRecovered(): Boolean =
+      val best = blockchainReader.getBestBlockNumber
+      if appStateStorage.regularSyncStuckResnaps() > 0 && importedSinceBaseline(best) then
+        appStateStorage.putRegularSyncStuck(0, baseline = Some(best)).commit()
+        RegularSyncMetrics.setConsecutiveResnaps(0)
+        timers.cancel(ResnapCheckKey)
+        timers.cancel(ResnapDueKey)
+        log.warn(
+          "[SYNC-STUCK] A block was imported (best {}): the re-SNAP count starts over{}",
+          best,
+          pendingResnap.fold("")(b => s", and the re-SNAP scheduled from block $b is dropped")
+        )
+        pendingResnap = None
+        true
+      else false
+
+    /** Re-run SNAP from a recent pivot above `blockNumber`: stop regular sync, clear both SnapSyncDone AND the legacy
+      * FastSyncDone (so a restart re-evaluates start() and enters SNAP rather than going straight back to regular
+      * sync), then start SNAP.
+      */
+    private def resnapNow(regularSync: TypedActorRef[RegularSync.Command], blockNumber: BigInt): Behavior[Command] =
+      pendingResnap = None
+      timers.cancel(ResnapDueKey)
+      timers.cancel(ResnapCheckKey)
+      ctx.stop(regularSync)
+      stopBackgroundAudit()
+      appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
+      appStateStorage.clearFastSyncDone().commit()
+      startSnapSync(minPivotBlock = Some(blockNumber))
 
     /** Internal `Behavior[Command]` self / death-watch markers that must NEVER be forwarded to a Classic child. A
       * watched child can terminate after the parent has already transitioned to a state that does not handle its marker
@@ -1069,6 +1204,8 @@ object SyncController:
       case PollRecoveryPeers             => true
       case _: RecentRootTimeout          => true
       case _: HealingServeRootTimeout    => true
+      case _: ResnapDue                  => true
+      case ResnapCheck                   => true
       case _                             => false
 
     def runningPivotHeaderBootstrap(
@@ -1694,6 +1831,17 @@ object SyncController:
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
       syncGeneration += 1
       txGossipGate.stateSyncFinished()
+      // H3: while a re-SNAP count stands, imports are measured from a baseline. The first regular sync after a re-SNAP
+      // sets it where it starts (SNAP's pivot is no import); any other start keeps it, so a restart forgets no import.
+      // A re-SNAP whose wait ended in another state (a bulk code recovery) had its ResnapDue dropped there: forget it,
+      // as a node restart does, so the next stuck schedules one again rather than being taken for a repeat.
+      if pendingResnap.isDefined && !timers.isTimerActive(ResnapDueKey) then pendingResnap = None
+      val resnaps = appStateStorage.regularSyncStuckResnaps()
+      RegularSyncMetrics.setConsecutiveResnaps(resnaps)
+      if resnaps > 0 then
+        if appStateStorage.resnapBaseline().isEmpty then
+          appStateStorage.putRegularSyncStuck(resnaps, Some(blockchainReader.getBestBlockNumber)).commit()
+        timers.startTimerWithFixedDelay(ResnapCheckKey, ResnapCheck, SyncController.ResnapCheckInterval)
 
       // spec 022 D7 (review hunter): regular sync fetches a missing node on demand and stores it alone, present over
       // children that may be absent. A clean hand-off has written SnapSyncDone by now, with the walk behind it. Every other

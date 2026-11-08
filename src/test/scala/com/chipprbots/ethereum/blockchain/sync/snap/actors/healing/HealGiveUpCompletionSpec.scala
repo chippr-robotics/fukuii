@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.PathHealPresenceFixtu
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -40,6 +41,10 @@ final private class NodeReadFailingMptStorage(hash: ByteString) extends TestMptS
     if failing && hashes.exists(h => ByteString(h) == hash) then
       throw new RuntimeException("injected node read failure")
     super.multiGetNodes(hashes)
+  // The child lookup reads raw (H3).
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    if failing && hashes.contains(hash) then throw new RuntimeException("injected node read failure")
+    super.rawNodes(hashes)
 
 /** The Path-scheme counterpart: reads of `key` in `namespace` throw while `failing` is set. */
 final private class KeyReadFailingDataSource(namespace: IndexedSeq[Byte], key: ByteString)

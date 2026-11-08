@@ -111,6 +111,7 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     with HealVerification
     with HealDispatch
     with HealResponseProcessing
+    with CorruptEntryApi
     with TrieNodeHealingEnv
     with FrontierPersistenceState
     with FrontierRebuildBfsState
@@ -469,7 +470,13 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
     * stamped exact, and no store SNAP filled is. A delete and a kept entry log at ERROR, as every corrupt node does: an
     * operator acts on it.
     */
-  private def deleteCorruptEntry(hash: ByteString): CorruptDelete =
+  def deleteCorruptEntry(hash: ByteString): CorruptDelete =
+    val outcome = deleteCorruptEntryOnce(hash)
+    // H3: a kept entry is kept for every caller, the walk's find and a healed node's child lookup alike.
+    if outcome == CorruptDelete.Kept then unrepairableNodes.add(hash): Unit
+    outcome
+
+  private def deleteCorruptEntryOnce(hash: ByteString): CorruptDelete =
     val tries = stateIngest.stateTries
     val hex = Hex.toHexString(hash.toArray)
     if !tries.canRepairNodes then
@@ -1437,7 +1444,6 @@ private[actors] class TrieNodeHealingCoordinatorImpl(
       val outcomes = entries.map(e => e -> deleteCorruptEntry(e.hash))
       val cleared = outcomes.collect { case (e, CorruptDelete.Cleared) => e }
       val kept = outcomes.collect { case (e, CorruptDelete.Kept) => e }
-      kept.foreach(e => unrepairableNodes.add(e.hash))
       log.warn(
         s"[HEAL-CORRUPT] A walk of root ${Hex.toHexString(walkRoot.take(4).toArray)} found ${entries.size} stored " +
           s"node(s) that are not the node their hash names: ${cleared.size} deleted and queued for healing, " +

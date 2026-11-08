@@ -37,13 +37,18 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.ExcludedTaskFile
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.ExcludedAccount
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.ReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.testing.TestMptStorage
@@ -378,6 +383,8 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val mpt = new TestMptStorage:
       override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
         throw new UnsupportedOperationException("the Path scheme read mptStorage")
+      override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+        throw new UnsupportedOperationException("the Path scheme read mptStorage")
     val h = new Harness(
       scheme = StorageScheme.Path,
       mpt = mpt,
@@ -390,6 +397,29 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       SNAPSyncController.IncrementalContractData(
         Seq.empty,
         Seq(StorageTask.createStorageTask(h32(2), h32(0x22)), StorageTask.createStorageTask(h32(3), h32(0x33))),
+        replayed = true
+      )
+    )
+    h.module.replayDone shouldBe true
+  }
+
+  // H3, review vault: the Hash scheme's root-presence check read multiGetNodes, which throws for the whole batch on a
+  // root stored under the wrong hash: the coordinator failed, and each restart failed the same way. It reads raw now,
+  // and a root that is not its node counts as absent: the task replays, and the heal walk deletes the bad entry.
+  it should "replay, without a throw, a carried task whose root is under the wrong hash (H3)" taggedAs UnitTest in {
+    val nodes = new NodeStorage(EphemDataSource())
+    val mpt = new ReferenceCountedStateStorage(nodes, 64, 0L).getBackingStorage(0)
+    val otherLeaf =
+      MptTraversals.encodeNode(LeafNode(ByteString(Array.fill[Byte](4)(5)), ByteString(Array.fill[Byte](40)(6))))
+    nodes.put(h32(0x33), StoredNodeTestAccess.wrapped(otherLeaf, 1)): Unit // a valid node, not the root 0x33..
+    val h = new Harness(mpt = mpt, carriedStorage = Seq(h32(3) -> h32(0x33)))
+
+    h.call(_.replayCarriedChunk())
+
+    h.controller.receiveAll() shouldBe Seq(
+      SNAPSyncController.IncrementalContractData(
+        Seq.empty,
+        Seq(StorageTask.createStorageTask(h32(3), h32(0x33))),
         replayed = true
       )
     )

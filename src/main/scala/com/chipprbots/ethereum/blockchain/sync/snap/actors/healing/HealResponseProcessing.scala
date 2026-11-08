@@ -18,6 +18,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealRequestBook
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HealTaskQueue
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.HeldNodeSet
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.PathPresence
+import com.chipprbots.ethereum.db.storage.NodeFault
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
@@ -61,6 +63,12 @@ private[actors] trait HealResponseProcessingState:
 private[actors] trait HealCompletionApi:
   def isComplete: Boolean
 
+/** What `HealResponseProcessing` calls when a hash child it looks up is a corrupt entry (H3): the core's
+  * `deleteCorruptEntry`, the one delete of a corrupt entry, which a walk's find goes through too (S-1).
+  */
+private[actors] trait CorruptEntryApi:
+  def deleteCorruptEntry(hash: ByteString): TrieNodeHealingCoordinator.CorruptDelete
+
 /** TrieNodeHealingCoordinator's heal response processing (spec 016 C-H5, coordinator-characterization.md §3.4): a
   * served `TrieNodes` response matched to its request by node hash (never by position), each node accepted only when
   * its keccak256 equals a requested task hash (the spec 004 consensus-safety invariant), buffered for the Hash-scheme
@@ -73,7 +81,7 @@ private[actors] trait HealCompletionApi:
   */
 private[actors] trait HealResponseProcessing extends HealCompletionApi:
   this: HealResponseProcessingState & TrieNodeHealingEnv & FrontierGaugesApi & FrontierWriteApi & HealDispatchApi &
-    PathVerifiedRlpApi & PathPresenceApi =>
+    PathVerifiedRlpApi & PathPresenceApi & CorruptEntryApi =>
 
   // codeHashes of account leaves healed in the response being processed whose bytecode is not in `stateIngest.bytecode`.
   // Filled by discoverMissingChildren, drained and sent to the controller once per response.
@@ -543,8 +551,9 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
     * read so that stale bytes there are deleted (review item 6). Under Hash a child in the flush buffer is present: it
     * was committed with its whole subtree, only not flushed yet.
     *
-    * B3 FIX: under Hash, a branch's other children are checked with a single multiGetNodes call instead of up to 16
-    * serial isNodeInStorage calls on the actor thread. The extension child uses the same pattern for consistency.
+    * B3 FIX: under Hash, a branch's other children are checked with a single batched read instead of up to 16 serial
+    * isNodeInStorage calls on the actor thread. The extension child uses the same pattern for consistency. The read
+    * judges each child keccak first (`storedChildren`, H3).
     *
     * Presence is scheme-dependent. Hash scheme: content-addressed lookup by the child's hash (unchanged). Path scheme:
     * `PathNodeStorage` is keyed by PATH, so each child is looked up at ITS OWN path (the same path it would be queued
@@ -621,7 +630,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                 branch.children.zipWithIndex.collect { case (hn: HashNode, i) => (i, ByteString(hn.hashNode)) }.toSeq
               storageScheme match
                 case StorageScheme.Hash =>
-                  // Hash scheme: one batched content-addressed multiGetNodes call for the children not already live,
+                  // Hash scheme: one batched content-addressed read (`storedChildren`) for the children not already live,
                   // held (missing: an edge to them) or buffered for the flush (present: their subtree is committed).
                   val toCheck = hashed.filterNot { case (_, h) => knownLocally(h).isDefined }
                   val present: Map[Int, Boolean] =
@@ -629,7 +638,7 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
                     else
                       toCheck
                         .map(_._1)
-                        .zip(mptStorage.multiGetNodes(toCheck.map(_._2.toArray)).map(_.isDefined))
+                        .zip(storedChildren(toCheck.map(_._2)))
                         .toMap
                   hashed.foreach { case (i, childHash) =>
                     if !knownLocally(childHash).getOrElse(present.getOrElse(i, false)) then
@@ -730,7 +739,27 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   /** Hash scheme: whether the child `hash` is present (its subtree complete): buffered for the flush, or in the store.
     */
   private def hashChildPresent(hash: ByteString): Boolean =
-    knownLocally(hash).getOrElse(mptStorage.multiGetNodes(Seq(hash.toArray)).headOption.flatten.isDefined)
+    knownLocally(hash).getOrElse(storedChildren(Seq(hash)).head)
+
+  /** Hash scheme: whether each of `hashes` is stored, read raw in one batch and judged keccak first (`NodeFault`, H3),
+    * as the walk judges it. It was `multiGetNodes`, which threw for the whole batch on a wrapper that does not unwrap
+    * (the served node went back to the queue, came back and failed the same way, for good) and took a list stored under
+    * the wrong hash for its child.
+    *
+    * A corrupt entry, one that does not unwrap or whose bytes fail keccak, is deleted (`deleteCorruptEntry`) and is
+    * missing: the parent gets an edge to it, and it is fetched. Healing's write could not replace it where it is: basic
+    * pruning's upsert keeps the bytes stored under a hash. One the store keeps, or whose delete threw, counts as
+    * stored: no fetch would replace it, and the walk counts it as a node it could not follow (S-1). Bytes that pass
+    * keccak are stored, decoded or not. A read that fails throws, as before, and the served node goes back to the
+    * queue.
+    */
+  private def storedChildren(hashes: Seq[ByteString]): Seq[Boolean] =
+    hashes.zip(mptStorage.rawNodes(hashes)).map { case (hash, raw) =>
+      raw match
+        case RawNodeRead.Absent                     => false
+        case _ if !NodeFault.provablyBad(hash, raw) => true
+        case _ => deleteCorruptEntry(hash) != TrieNodeHealingCoordinator.CorruptDelete.Cleared
+    }
 
   /** Presence check that gates healing queue/skip decisions.
     *

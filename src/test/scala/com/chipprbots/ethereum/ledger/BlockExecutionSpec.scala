@@ -24,8 +24,10 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockValid
 import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockRewardCalculatorOps.*
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
 import com.chipprbots.ethereum.utils.Hex
@@ -393,6 +395,63 @@ class BlockExecutionSpec
         val blockExecResult = blockExecution.executeAndValidateBlock(block)
         assert(blockExecResult.isRight)
       }
+
+    // H3 case (c): a stored node that decodes under the wrong hash was read as it was. A corrupt account leaf gave a
+    // wrong balance, an honest block then failed its state root, and the importer blamed its peer (InvalidateBlocksFrom;
+    // over the Engine API, INVALID). Read keccak first, the leaf is a missing node: the import deletes it and fetches it.
+    "fail a block that reads a corrupt stored account leaf as a missing node, not a state-root mismatch (H3)" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new BlockchainSetup:
+      override lazy val vm: VMImpl = new MockVM(c =>
+        createResult(
+          context = c,
+          gasUsed = UInt256(defaultGasLimit),
+          gasLimit = UInt256(defaultGasLimit),
+          gasRefund = UInt256.Zero
+        )
+      )
+
+      val blockReward: BigInt =
+        mining.blockPreparator.blockRewardCalculator.calculateMiningReward(validBlockHeader.number.value, 0)
+      // The state root the honest block carries, worked out before anything is corrupted.
+      val expectedStateRoot: ByteString =
+        applyChanges(validBlockParentHeader.stateRoot.value, Seq(minerAddress -> UpdateBalance(UInt256(blockReward))))
+      val block: Block = Block(validBlockHeader.copy(stateRoot = TrieRoot(expectedStateRoot)), validBlockBodyWithNoTxs)
+
+      // The miner's account leaf under the parent's root, found by its balance (the only account holding it).
+      val trie: MptStorage = blockchain.getBackingMptStorage(-1)
+      def leaves(hash: ByteString): Seq[(ByteString, com.chipprbots.ethereum.mpt.LeafNode)] =
+        trie.get(hash.toArray) match
+          case leaf: com.chipprbots.ethereum.mpt.LeafNode => Seq(hash -> leaf)
+          case branch: com.chipprbots.ethereum.mpt.BranchNode =>
+            branch.children.toSeq
+              .collect { case h: com.chipprbots.ethereum.mpt.HashNode => ByteString(h.hashNode) }
+              .flatMap(leaves)
+          case ext: com.chipprbots.ethereum.mpt.ExtensionNode =>
+            ext.next match
+              case h: com.chipprbots.ethereum.mpt.HashNode => leaves(ByteString(h.hashNode))
+              case _                                       => Nil
+          case _ => Nil
+      val (leafHash, minerLeaf) = leaves(validBlockParentHeader.stateRoot.value)
+        .find { case (_, leaf) => Account(leaf.value).toOption.exists(_.balance == initialMinerBalance) }
+        .getOrElse(fail("no account leaf holds the miner's balance"))
+
+      // Stored again with one more wei: a valid leaf, under the wrong hash (archive pruning keeps the bytes raw).
+      val minerAccount: Account = Account(minerLeaf.value).get
+      val corruptLeaf: LeafNode = LeafNode(
+        minerLeaf.key,
+        ByteString(Account.accountSerializer.toBytes(minerAccount.copy(balance = minerAccount.balance + 1)))
+      )
+      storagesInstance.storages.nodeStorage
+        .put(leafHash, com.chipprbots.ethereum.mpt.MptTraversals.encodeNode(corruptLeaf)): Unit
+
+      blockExecution.executeAndValidateBlock(block) match
+        case Left(
+              BlockExecutionError.MPTError(missing: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException)
+            ) =>
+          missing.hash shouldBe leafHash
+        case other => fail(s"expected the corrupt leaf as a missing node, got $other")
 
     "fail to run executeBlock if a block is invalid before executing it" taggedAs (
       UnitTest,

@@ -337,6 +337,26 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBulkBytecodeRecoveryFailures(count: Int): DataSourceBatchUpdate =
     put(Keys.BulkBytecodeRecoveryFailures, count.toString)
 
+  /** H3: SNAP re-syncs regular sync has asked for in a row, with no block imported in between. Read by SyncController's
+    * `RegularSyncStuck` handler, which waits before a re-SNAP from the third on.
+    */
+  def regularSyncStuckResnaps(): Int =
+    get(Keys.RegularSyncStuckResnaps).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
+
+  /** H3: the best block an import is measured from: the best block at the last `RegularSyncStuck` that did not re-SNAP
+    * at once, or where the first regular sync after a re-SNAP started. `None` while a re-SNAP runs (its pivot is not an
+    * import), and when nothing was ever stuck.
+    */
+  def resnapBaseline(): Option[BigInt] =
+    get(Keys.RegularSyncStuckBaseline).flatMap(v => scala.util.Try(BigInt(v)).toOption)
+
+  /** The count and its baseline, in one batch, so a restart never finds one without the other. */
+  def putRegularSyncStuck(count: Int, baseline: Option[BigInt]): DataSourceBatchUpdate =
+    val counted = put(Keys.RegularSyncStuckResnaps, count.toString)
+    baseline.fold(counted.and(remove(Keys.RegularSyncStuckBaseline)))(b =>
+      counted.and(put(Keys.RegularSyncStuckBaseline, b.toString))
+    )
+
   /** Check if storage recovery scan has completed (Bug 20 hardening) */
   def isStorageRecoveryDone(): Boolean =
     get(Keys.StorageRecoveryDone).exists(_.toBoolean)
@@ -758,6 +778,8 @@ object AppStateStorage:
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val BulkBytecodeRecoveryFailures = "BulkBytecodeRecoveryFailures"
+    val RegularSyncStuckResnaps = "RegularSyncStuckResnaps"
+    val RegularSyncStuckBaseline = "RegularSyncStuckBaseline"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"

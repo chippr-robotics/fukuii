@@ -33,6 +33,15 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     "get fast sync done false when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures:
       assert(!newAppStateStorage().isFastSyncDone())
 
+    // H3: the re-SNAP count survives a restart.
+    "keep the count of re-SNAPs in a row with its baseline" taggedAs (UnitTest, DatabaseTest) in new Fixtures:
+      val storage: AppStateStorage = newAppStateStorage()
+      assert(storage.regularSyncStuckResnaps() == 0 && storage.resnapBaseline().isEmpty)
+      storage.putRegularSyncStuck(3, Some(BigInt(42))).commit()
+      assert(storage.regularSyncStuckResnaps() == 3 && storage.resnapBaseline().contains(BigInt(42)))
+      storage.putRegularSyncStuck(3, None).commit()
+      assert(storage.regularSyncStuckResnaps() == 3 && storage.resnapBaseline().isEmpty)
+
     // Bug 30 escape valve: regular sync stuck on missing state nodes triggers a re-pivot via SNAP.
     // SyncController clears both *SyncDone flags so start() re-evaluates and enters SNAP rather
     // than landing in the `fast sync already completed` → regular sync branch.
