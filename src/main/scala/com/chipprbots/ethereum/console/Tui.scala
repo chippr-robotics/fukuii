@@ -1,10 +1,17 @@
 package com.chipprbots.ethereum.console
 
+import java.io.FileDescriptor
+import java.io.FileOutputStream
+import java.io.OutputStream
+import java.nio.charset.StandardCharsets
+
 import scala.util.control.NonFatal
 
 import org.jline.terminal.Attributes
 import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
+import org.jline.terminal.spi.SystemStream
+import org.jline.terminal.spi.TerminalExt
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -33,11 +40,22 @@ enum TuiCommand:
   *
   * @param terminalFactory
   *   opens the terminal; the default is the process's real TTY (tests pass an in-memory terminal)
+  * @param processOutput
+  *   the process stream behind a terminal, used to restore the screen when JLine has closed the terminal before
+  *   [[shutdown]] runs; None for a terminal that is not the process's own (tests pass an in-memory stream)
   */
-class Tui(config: TuiConfig = TuiConfig.default, terminalFactory: () => Terminal = Tui.systemTerminal) extends Logger:
+class Tui(
+    config: TuiConfig = TuiConfig.default,
+    terminalFactory: () => Terminal = Tui.systemTerminal,
+    processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf
+) extends Logger:
 
   private var terminal: Option[Terminal] = None
   private var savedAttributes: Option[Attributes] = None
+  private var directOutput: Option[OutputStream] = None
+
+  /** The user's screen is in the alternate buffer with the cursor hidden, and has not been restored yet. */
+  private var inAltScreen = false
   private var lastSize: (Int, Int) = (0, 0)
   @volatile private var enabled = true
   @volatile private var state: TuiState = TuiState.initial
@@ -64,9 +82,11 @@ class Tui(config: TuiConfig = TuiConfig.default, terminalFactory: () => Terminal
           throw new IllegalStateException(s"terminal type '${term.getType}' cannot be driven by the TUI")
 
         terminal = Some(term)
+        directOutput = processOutput(term)
         savedAttributes = Some(term.enterRawMode())
         // Alternate screen buffer (restored on exit, so the user's scrollback survives) + hidden cursor.
         write(term, Tui.EnterAltScreen + Tui.HideCursor + Tui.ClearScreen)
+        inAltScreen = true
 
         // Suppress console logs if configured
         if config.suppressConsoleLogs then
@@ -172,7 +192,12 @@ class Tui(config: TuiConfig = TuiConfig.default, terminalFactory: () => Terminal
     case _ =>
       TuiCommand.Continue
 
-  /** Shutdown and cleanup the TUI. Idempotent. */
+  /** Shutdown and cleanup the TUI: the screen, the cursor and the terminal mode. Idempotent; a second call writes
+    * nothing.
+    *
+    * `q` calls this before the JVM exits ([[TuiUpdater.restoreThenQuit]]). On Ctrl-C or SIGTERM it runs from a shutdown
+    * hook, after JLine's own hook may already have closed the terminal; see [[releaseTerminal]].
+    */
   def shutdown(): Unit = synchronized {
     val wasActive = terminal.isDefined
     if logSuppressor.isConsoleSuppressed && !logSuppressor.restoreConsoleLogs() then
@@ -182,19 +207,56 @@ class Tui(config: TuiConfig = TuiConfig.default, terminalFactory: () => Terminal
     if wasActive then log.info("TUI shutdown complete")
   }
 
-  /** Restore the terminal to the state the user had before the TUI took it over. */
+  /** Restore the terminal to the state the user had before the TUI took it over.
+    *
+    * JVM shutdown hooks run concurrently and in no order, and JLine registers one that closes the system terminal. It
+    * can close the terminal before any step here, or between two of them. JLine's close restores the terminal mode but
+    * not the screen, so from the step that finds the terminal closed on, nothing else goes through it: the remaining
+    * steps are skipped, and a screen not yet reset is reset through the process stream behind the terminal instead.
+    */
   private def releaseTerminal(): Unit =
-    // Each step runs regardless of the others: a failed write must not leave the terminal in raw mode.
+    // Each step runs regardless of the others (a failed write must not leave the terminal in raw mode), except after
+    // one finds the terminal closed.
     terminal.foreach { term =>
-      def attempt(step: String)(f: => Unit): Unit =
-        try f
-        catch case NonFatal(e) => log.error(s"Error shutting down TUI ($step): ${e.getMessage}")
-      attempt("reset screen")(write(term, Tui.ResetColors + Tui.ShowCursor + Tui.ExitAltScreen))
-      attempt("restore terminal mode")(savedAttributes.foreach(term.setAttributes))
-      attempt("close terminal")(term.close())
+      var closedAt: Option[String] = None
+      def step(name: String)(f: => Unit): Unit =
+        if closedAt.isEmpty then
+          try f
+          catch
+            case e: IllegalStateException if Tui.isClosedTerminal(e) => closedAt = Some(name)
+            case NonFatal(e) => log.error(s"Error shutting down TUI ($name): ${e.getMessage}")
+      step("reset screen") {
+        write(term, Tui.RestoreScreen)
+        inAltScreen = false
+      }
+      step("restore terminal mode")(savedAttributes.foreach(term.setAttributes))
+      step("close terminal")(term.close())
+      closedAt.foreach(closedByJLine)
     }
     terminal = None
     savedAttributes = None
+    directOutput = None
+    inAltScreen = false
+
+  /** [[releaseTerminal]] found the terminal closed at `step`: JLine's shutdown hook ran first and restored the terminal
+    * mode. Reset the screen through the process stream if that had not happened yet. An expected race, so WARN, once; a
+    * screen that cannot be reset is an ERROR.
+    */
+  private def closedByJLine(step: String): Unit =
+    val closed = s"TUI terminal already closed by JLine's shutdown hook (at $step); it restored the terminal mode"
+    if !inAltScreen then log.warn(closed)
+    else
+      directOutput match
+        case Some(out) =>
+          try
+            out.write(Tui.RestoreScreen.getBytes(StandardCharsets.US_ASCII))
+            out.flush()
+            log.warn(s"$closed; the screen and cursor were restored through the process output")
+          catch
+            case NonFatal(e) =>
+              log.error(s"$closed, but restoring the screen through the process output failed: ${e.getMessage}")
+        case None =>
+          log.error(s"$closed, but the screen was not restored: the terminal has no process output to write it to")
 
   private def showStartupBanner(term: Terminal): Unit =
     val (width, _) = Tui.sizeOf(term)
@@ -217,12 +279,32 @@ object Tui:
   private[console] val ClearScreen = "\u001b[2J\u001b[H"
   private[console] val CursorHome = "\u001b[H"
 
+  /** Leaves the TUI's screen: attributes reset, cursor shown, back to the normal buffer and the user's scrollback. */
+  private[console] val RestoreScreen = ResetColors + ShowCursor + ExitAltScreen
+
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)
+
+  /** JLine's message for any use of a closed terminal (`AbstractTerminal.checkClosed`, JLine 3.30). */
+  private val ClosedTerminalMessage = "Terminal has been closed"
 
   /** The process's real terminal. Throws (rather than degrading to a dumb terminal) when there is none. */
   def systemTerminal(): Terminal =
     TerminalBuilder.builder().system(true).dumb(false).build()
+
+  /** The process stream a system terminal writes to: stdout, or stderr when JLine chose it because stdout is not a
+    * terminal. None for any other terminal. The stream is never closed; that would close the process's descriptor.
+    */
+  private[console] def processOutputOf(term: Terminal): Option[OutputStream] =
+    term match
+      case ext: TerminalExt =>
+        Option(ext.getSystemStream).collect {
+          case SystemStream.Output => new FileOutputStream(FileDescriptor.out)
+          case SystemStream.Error  => new FileOutputStream(FileDescriptor.err)
+        }
+      case _ => None
+
+  private[console] def isClosedTerminal(e: IllegalStateException): Boolean = e.getMessage == ClosedTerminalMessage
 
   private[console] def isDumb(term: Terminal): Boolean =
     Option(term.getType).forall(t => t.startsWith(Terminal.TYPE_DUMB))

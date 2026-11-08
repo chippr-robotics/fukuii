@@ -29,7 +29,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers:
       onQuit: () => Unit = () => ()
   )(test: (TuiUpdater, Tui, TuiTestTerminal) => Unit): Unit =
     val tt = new TuiTestTerminal()
-    val tui = new Tui(TuiTestTerminal.config, () => tt.terminal)
+    val tui = tt.tui()
     tui.initialize() shouldBe true
     val updater = new TuiUpdater(tui, TuiTestTerminal.config, statusSource, "mordor", onQuit)
     try test(updater, tui, tt)
@@ -68,6 +68,30 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers:
       tickThread should not be null
       Await.result(quitThread.future, 5.seconds) should not be tickThread
     }
+  }
+
+  // Regression: `q` left the restore to the TuiRestore shutdown hook, which lost the race with JLine's own hook and
+  // left the user's shell in the alternate screen with the cursor hidden.
+  it should "restore the terminal on 'q' before the quit hook exits" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui()
+    tui.initialize() shouldBe true
+    // What the exit finds when it runs: the screen it would leave behind, and whether the TUI is still up.
+    val atExit = Promise[(String, Boolean)]()
+    val quit = TuiUpdater.restoreThenQuit(tui, () => atExit.success((tt.output, tui.isEnabled)))
+    val updater = new TuiUpdater(tui, TuiTestTerminal.config, () => snapshot, "mordor", quit)
+    try
+      tt.press("q")
+      tickWithin(updater) shouldBe false
+      val (screen, enabled) = Await.result(atExit.future, 5.seconds)
+      screen should include(Tui.ExitAltScreen)
+      screen should include(Tui.ShowCursor)
+      enabled shouldBe false
+      tt.processText shouldBe empty // restored through the open terminal, not around it
+    finally
+      updater.stop()
+      tui.shutdown()
+      tt.close()
   }
 
   it should "stop looping on 'd' without quitting the node" taggedAs (UnitTest) in {

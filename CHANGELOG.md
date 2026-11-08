@@ -133,6 +133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
+  hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
+  concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the
+  screen), so the reset could not be written (`Error shutting down TUI (reset screen): Terminal has been closed`). `Q`
+  now restores the terminal before it exits. On Ctrl-C or SIGTERM, JLine's hook can still close the terminal before any
+  restore step or between two of them. From that step on nothing else goes through the terminal, and a screen not yet
+  reset gets the reset sequence (leave the alternate screen, show the cursor, reset attributes) straight on the process
+  output. The race is logged once at WARN; any other failure is still an ERROR.
 - **Pruning no longer deletes a trie node it cannot prove dead (#1692). Operator note for ETC and Mordor.** A node's
   reference count is the number of positions that emitted it. SNAP healing and resume, the checkpoint importer and an old
   fast sync skip a node that is already there, so a subtree two contracts share was counted once. The first block to

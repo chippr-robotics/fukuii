@@ -14,7 +14,8 @@ import com.chipprbots.ethereum.utils.Logger
   *   polls the running node; may block briefly (it runs on the updater thread, never on an actor thread) and may throw
   * @param onQuit
   *   invoked once, on a fresh thread, when the user presses `q`. It must stop the node (e.g. `sys.exit`), and it may
-  *   call [[stop]] — it does not run on the updater thread, so stopping cannot join itself.
+  *   call [[stop]] — it does not run on the updater thread, so stopping cannot join itself. An exit should restore the
+  *   terminal first: wrap it in [[TuiUpdater.restoreThenQuit]].
   */
 class TuiUpdater(
     tui: Tui,
@@ -100,7 +101,19 @@ class TuiUpdater(
         log.debug(s"TUI status poll failed: ${e.getMessage}")
         tui.updateConnectionStatus(s"Error: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
 
-object TuiUpdater:
+object TuiUpdater extends Logger:
+
+  /** The `q` action: restore the terminal, then `exit`.
+    *
+    * The restore runs here, before the exit, and is not left to a shutdown hook: JVM shutdown hooks run concurrently
+    * and in no order, and JLine's own hook can close the terminal before [[Tui.shutdown]] gets to leave the alternate
+    * screen. The later shutdown-hook call then finds the TUI already shut down and does nothing.
+    */
+  def restoreThenQuit(tui: Tui, exit: () => Unit): () => Unit = () =>
+    try tui.shutdown()
+    catch case NonFatal(e) => log.error(s"Error restoring the terminal before quitting: ${e.getMessage}", e)
+    exit()
+
   /** Create a TUI updater with default configuration. */
   def apply(
       tui: Tui,

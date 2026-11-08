@@ -1,13 +1,21 @@
 package com.chipprbots.ethereum.console
 
+import java.util.regex.Pattern
+
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.jline.terminal.Attributes.LocalFlag
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.testing.Tags.*
 
@@ -16,13 +24,32 @@ class TuiSpec extends AnyFlatSpec with Matchers:
 
   private def withTui(width: Int = 100, height: Int = 40)(test: (Tui, TuiTestTerminal) => Unit): Unit =
     val tt = new TuiTestTerminal(width, height)
-    val tui = new Tui(TuiTestTerminal.config, () => tt.terminal)
+    val tui = tt.tui()
     try
       tui.initialize() shouldBe true
       test(tui, tt)
     finally
       tui.shutdown()
       tt.close()
+
+  /** Runs `f` and returns the WARN and ERROR events [[Tui]] logged on this thread meanwhile. The test logback config
+    * silences everything below ERROR, so Tui's logger is opened to WARN for the duration.
+    */
+  private def tuiLogDuring(f: => Unit): List[(Level, String)] =
+    val logger = LoggerFactory.getLogger(classOf[Tui]).asInstanceOf[LogbackLogger]
+    val appender = new ListAppender[ILoggingEvent]
+    val previousLevel = logger.getLevel
+    val thread = Thread.currentThread().getName
+    appender.start()
+    logger.addAppender(appender)
+    logger.setLevel(Level.WARN)
+    try f
+    finally
+      logger.setLevel(previousLevel)
+      logger.detachAppender(appender)
+    appender.list.asScala.toList.filter(_.getThreadName == thread).map(e => (e.getLevel, e.getFormattedMessage))
+
+  private def occurrences(text: String, of: String): Int = text.split(Pattern.quote(of), -1).length - 1
 
   "Tui" should "take over the terminal: raw mode, alternate screen, hidden cursor" taggedAs (UnitTest) in withTui() {
     (tui, tt) =>
@@ -43,11 +70,13 @@ class TuiSpec extends AnyFlatSpec with Matchers:
 
   it should "refuse a dumb terminal instead of painting escape codes into a log stream" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal(termType = "dumb")
-    val tui = new Tui(TuiTestTerminal.config, () => tt.terminal)
+    val tui = tt.tui()
     try
       tui.initialize() shouldBe false
       tui.isEnabled shouldBe false
       (tt.output should not).include(Tui.EnterAltScreen)
+      tui.shutdown()
+      tt.processText shouldBe empty
     finally tt.close()
   }
 
@@ -120,12 +149,69 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     tt.output should include(Tui.ExitAltScreen)
     tt.output should include(Tui.ShowCursor)
     tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(true)
+    tt.processText shouldBe empty // the terminal was open: nothing goes around it
   }
 
-  it should "shut down idempotently" taggedAs (UnitTest) in withTui() { (tui, _) =>
+  it should "shut down idempotently: a second call writes nothing" taggedAs (UnitTest) in withTui() { (tui, tt) =>
     tui.shutdown()
+    tt.output should include(Tui.ExitAltScreen)
+    val written = tt.output.length
     noException should be thrownBy tui.shutdown()
     tui.isEnabled shouldBe false
+    tt.output.length shouldBe written
+    tt.processText shouldBe empty
+  }
+
+  // Regression: on exit, JLine's own shutdown hook closed the terminal before the TuiRestore hook ran, so the reset
+  // could not be written and the user's shell was left in the alternate screen with the cursor hidden.
+  it should "write the reset sequence to the process output when the terminal was already closed" taggedAs (UnitTest) in
+    withTui() { (tui, tt) =>
+      tt.terminal.close() // JLine's hook: closes the terminal and restores its mode, but leaves the screen as it is
+      val events = tuiLogDuring(tui.shutdown())
+      tui.isEnabled shouldBe false
+      tt.processText should include(Tui.ExitAltScreen)
+      tt.processText should include(Tui.ShowCursor)
+      tt.processText should include(Tui.ResetColors)
+      // JLine's close already restored the mode; the saved attributes are not pushed at a closed terminal.
+      tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(false)
+      // An expected race: one WARN, no ERROR.
+      events.map(_._1) shouldBe List(Level.WARN)
+      events.head._2 should include("already closed by JLine's shutdown hook (at reset screen)")
+
+      val written = tt.processText.length
+      tui.shutdown()
+      tt.processText.length shouldBe written
+    }
+
+  // Regression (live SIGTERM run): the reset went through, then JLine's hook closed the terminal before the mode was
+  // restored, and `Error shutting down TUI (restore terminal mode): Terminal has been closed` was logged at ERROR.
+  it should "take the terminal closing between the reset and the mode restore as the expected race" taggedAs (UnitTest) in
+    withTui() { (tui, tt) =>
+      tt.closeOnSetAttributes = true
+      val events = tuiLogDuring(tui.shutdown())
+      tui.isEnabled shouldBe false
+      events.map(_._1) shouldBe List(Level.WARN)
+      events.head._2 should include("already closed by JLine's shutdown hook (at restore terminal mode)")
+      // The screen was left exactly once, through the terminal, and nothing was written around it.
+      occurrences(tt.output, Tui.ExitAltScreen) shouldBe 1
+      occurrences(tt.output, Tui.ShowCursor) shouldBe 1
+      tt.processText shouldBe empty
+
+      tuiLogDuring(tui.shutdown()) shouldBe empty
+      occurrences(tt.output, Tui.ExitAltScreen) shouldBe 1
+    }
+
+  it should "not write the reset sequence around a closed terminal it never switched screens on" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui()
+    try
+      // initialize() fails in enterRawMode, before the alternate screen, and releases a closed terminal.
+      tt.terminal.close()
+      tui.initialize() shouldBe false
+      tui.shutdown()
+      (tt.output should not).include(Tui.EnterAltScreen)
+      tt.processText shouldBe empty
+    finally tt.close()
   }
 
   it should "leave raw mode even when writing the reset sequence fails" taggedAs (UnitTest) in withTui() { (tui, tt) =>
