@@ -185,6 +185,10 @@ class JwtAuthenticatorSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     expectUnauthorized(signed(HeaderJson, """{"iat":true}"""), "Missing iat claim")
     // only a top-level claim counts
     expectUnauthorized(signed(HeaderJson, s"""{"nested":{"iat":$now}}"""), "Missing iat claim")
+    // a number too large for a double is read as an infinite one (1e30 above is finite); it is no usable iat
+    expectUnauthorized(signed(HeaderJson, """{"iat":1e400}"""), "Missing iat claim")
+    expectUnauthorized(signed(HeaderJson, """{"iat":-1e400}"""), "Missing iat claim")
+    expectUnauthorized(signed(HeaderJson, """{"iat":1E400}"""), "Missing iat claim")
 
     def expired(payload: String): Unit =
       escaped.clear()
@@ -206,6 +210,7 @@ class JwtAuthenticatorSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     expired("""{"iat":9223372036854775807}""")
     expired("""{"iat":-9223372036854775808}""")
     expired("""{"iat":1e30}""")
+    expired("""{"iat":1e-400}""")
   }
 
   it should "answer 401 when the Authorization header is missing or is not a bearer token" taggedAs (
