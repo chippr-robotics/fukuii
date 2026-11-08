@@ -190,8 +190,10 @@ object MiningRpcResource:
       |    {"method": "eth_submitHashrate", "description": "Submit external hashrate for monitoring", "params": ["hashrate", "id"]},
       |    {"method": "miner_start", "description": "Start mining", "params": ["threadCount (optional)"]},
       |    {"method": "miner_stop", "description": "Stop mining", "params": []},
-      |    {"method": "miner_getStatus", "description": "Get mining status", "params": []}
-      |  ]
+      |    {"method": "miner_getStatus", "description": "Get mining status", "params": []},
+      |    {"method": "miner_setEtherbase", "description": "Set the coinbase (etherbase) address", "params": ["address"]}
+      |  ],
+      |  "note": "miner_* methods need the miner namespace to be enabled for the endpoint (not served over HTTP and WebSocket by default)"
       |}""".stripMargin)
 
 object LatestBlockResource:

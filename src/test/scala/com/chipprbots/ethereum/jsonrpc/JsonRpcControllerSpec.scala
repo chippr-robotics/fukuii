@@ -139,7 +139,7 @@ class JsonRpcControllerSpec
     val http: JsonRpcController = jsonRpcController.forApis(config.httpApis)
     val ws: JsonRpcController = jsonRpcController.forApis(config.wsApis)
 
-    val optIn = Seq(
+    val optIn: Seq[String] = Seq(
       "personal_listAccounts",
       "personal_newAccount",
       "debug_listPeersInfo",
@@ -148,7 +148,12 @@ class JsonRpcControllerSpec
       "qa_mineBlocks",
       "txpool_status",
       "trace_block",
-      "test_mineBlocks"
+      "test_mineBlocks",
+      "miner_start",
+      "miner_stop",
+      "miner_getStatus",
+      "miner_setEtherbase",
+      "eth_setEtherbase"
     )
     for
       controller <- Seq(http, ws)
@@ -161,6 +166,8 @@ class JsonRpcControllerSpec
       )
 
     for controller <- Seq(http, ws) do
+      // the mining queries stay in eth; only the control methods moved to miner
+      controller.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync().error shouldBe None
       controller.handleRequest(newJsonRpcRequest("eth_protocolVersion")).unsafeRunSync().error shouldBe None
       controller.handleRequest(newJsonRpcRequest("web3_clientVersion")).unsafeRunSync() should haveStringResult(version)
       modulesOf(this, controller) shouldBe Set("eth", "net", "web3", "fukuii", "rpc")
@@ -204,6 +211,51 @@ class JsonRpcControllerSpec
     ws.handleRequest(newJsonRpcRequest("personal_listAccounts")).unsafeRunSync() should haveError(
       JsonRpcError.MethodNotFound
     )
+
+  it should "serve miner_setEtherbase and the deprecated eth_setEtherbase alias only where miner is enabled" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    override def config: JsonRpcConfig =
+      ShippedRpcConfig.jsonRpcConfig("""fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner"""")
+
+    JsonRpcController.EtherbaseAliasWarned.set(false)
+
+    val http: JsonRpcController = jsonRpcController.forApis(config.httpApis)
+    val ws: JsonRpcController = jsonRpcController.forApis(config.wsApis)
+    val first = "0x00000000000000000000000000000000000000aa"
+    val second = "0x00000000000000000000000000000000000000bb"
+
+    // WebSocket keeps the default list: no miner, so neither name is served
+    ws.handleRequest(newJsonRpcRequest("miner_setEtherbase", JString(first) :: Nil)).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+    ws.handleRequest(newJsonRpcRequest("eth_setEtherbase", JString(first) :: Nil)).unsafeRunSync() should haveError(
+      JsonRpcError.MethodNotFound
+    )
+
+    // HTTP lists miner: the new name works, and eth_coinbase (still in eth) reports the change
+    http
+      .handleRequest(newJsonRpcRequest("miner_setEtherbase", JString(first) :: Nil))
+      .unsafeRunSync()
+      .error shouldBe None
+    http.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(first)
+    JsonRpcController.EtherbaseAliasWarned.get shouldBe false
+
+    // the alias works too, and logs its deprecation once
+    http
+      .handleRequest(newJsonRpcRequest("eth_setEtherbase", JString(second) :: Nil))
+      .unsafeRunSync()
+      .error shouldBe None
+    http.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(second)
+    JsonRpcController.EtherbaseAliasWarned.get shouldBe true
+
+  it should "let the test namespace win a method it shares with another namespace" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    // `test` also answers miner_setEtherbase (retesteth); see JsonRpcDispatchOrderSpec for the rule itself
+    jsonRpcController.tieBreakerApis shouldBe Set("test")
 
   it should "report the namespaces of the transport it was narrowed to in rpc_modules, without changing the original" taggedAs (
     UnitTest,

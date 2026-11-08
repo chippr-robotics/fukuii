@@ -44,6 +44,11 @@ trait JsonRpcBaseController:
 
   def enabledApis: Seq[String]
 
+  /** Namespaces whose handlers win when two enabled namespaces answer the same method. Without it the namespace listed
+    * last in `apis` wins, so what a request meant would depend on the order of the list.
+    */
+  def tieBreakerApis: Set[String] = Set.empty
+
   given formats: DefaultFormats.type = DefaultFormats
 
   given serialization: Serialization.type = native.Serialization
@@ -58,8 +63,12 @@ trait JsonRpcBaseController:
       IO.pure(errorResponse(request, MethodNotFound))
     }
 
+    // The handler of the namespace folded in last is tried first: tie-breakers go last, so they win a shared method.
+    val (tieBreakers, others) = enabledApis.partition(tieBreakerApis.contains)
     val handleFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
-      enabledApis.foldLeft(notFoundFn)((fn, api) => apisHandleFns.getOrElse(api, PartialFunction.empty).orElse(fn))
+      (others ++ tieBreakers).foldLeft(notFoundFn)((fn, api) =>
+        apisHandleFns.getOrElse(api, PartialFunction.empty).orElse(fn)
+      )
 
     handleFn(request)
       .flatTap {
@@ -148,7 +157,7 @@ object JsonRpcBaseController:
       * mode and test harness tools), `mcp` (an opt-in feature), and `rpc`, which is always on.
       */
     val DefaultIpcApis: Seq[String] =
-      Seq("eth", "net", "web3", "fukuii", "personal", "debug", "admin", "txpool", "trace")
+      Seq("eth", "net", "web3", "fukuii", "personal", "debug", "admin", "miner", "txpool", "trace")
 
     def apply(fukuiiConfig: TypesafeConfig, availableApis: List[String]): JsonRpcConfig =
       import scala.concurrent.duration.*

@@ -41,12 +41,14 @@ A method answers only when its namespace is enabled for the transport the reques
 |-----------|-----|---------|
 | HTTP | `fukuii.network.rpc.http.apis` | `eth`, `net`, `web3`, `fukuii` |
 | WebSocket | `fukuii.network.rpc.ws.apis` | `eth`, `net`, `web3`, `fukuii` |
-| IPC | `fukuii.network.rpc.ipc.apis` | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace` |
+| IPC | `fukuii.network.rpc.ipc.apis` | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `miner`, `txpool`, `trace` |
 
 The value is a comma-separated string (`"eth,net,web3"`). The `rpc` namespace (`rpc_modules`, which lists what the
 transport serves) is always on. Namespaces that are **opt-in** on HTTP and WebSocket: `personal`, `debug`, `admin`,
-`qa`, `txpool`, `trace`, `test`, `testing` and `mcp`. The sections below name the namespace each method needs. See the
-[node configuration runbook](../runbooks/node-configuration.md) for examples.
+`miner`, `qa`, `txpool`, `trace`, `test`, `testing` and `mcp`. A method's namespace is the prefix of its name
+(`miner_start` needs `miner`), except `eth_setEtherbase`, a deprecated alias of `miner_setEtherbase` that is served only
+where `miner` is enabled. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+`eth_submitHashrate` are in `eth`. See the [node configuration runbook](../runbooks/node-configuration.md) for examples.
 
 ### Request Format
 
@@ -96,6 +98,7 @@ Standard Ethereum methods suitable for production use, on by default over HTTP a
 Methods that change node state or reveal node internals; enable them only where trusted programs can reach them:
 - PERSONAL namespace (account management)
 - ADMIN namespace (peers, chain import and export, log level)
+- MINER namespace (start and stop mining, set the coinbase)
 - DEBUG namespace (performance impact)
 
 ### Development/Testing Only
@@ -1117,9 +1120,13 @@ curl -X POST http://localhost:8546 \
 
 ---
 
-### Enhanced Mining Control (Fukuii Extension)
+### Mining Control: the MINER Namespace (Fukuii Extension)
 
 Since Ethereum mainnet no longer supports mining, Fukuii has enhanced the mining RPC API to provide better control for Ethereum Classic mining operations.
+
+**Namespace:** `miner`, opt-in as in go-ethereum: HTTP and WebSocket do not serve it unless `miner` is listed in
+`fukuii.network.rpc.http.apis` (or `ws.apis`); IPC serves it by default. Without it these methods answer
+`-32601 Method not found`.
 
 #### miner_start
 
@@ -2216,7 +2223,9 @@ curl -X POST http://localhost:8546 \
 
 #### miner_setEtherbase
 
-Sets the etherbase (coinbase) address for mining rewards.
+Sets the etherbase (coinbase) address for mining rewards. Needs the `miner` namespace. `eth_setEtherbase` is a
+deprecated alias of this method, served only where `miner` is enabled; it logs a deprecation warning once. In test mode
+(the `test` namespace, used by retesteth) this method belongs to the test harness instead.
 
 **Parameters**:
 1. `DATA`, 20 Bytes - Address to receive mining rewards

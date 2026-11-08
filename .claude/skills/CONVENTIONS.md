@@ -31,10 +31,13 @@ The relevant namespace must be enabled **for the transport you call**. Each
 transport has its own key (`network.rpc.http.apis`, `network.rpc.ws.apis`,
 `network.rpc.ipc.apis`), and each falls back to `network.rpc.apis` when you set
 it. The shipped defaults are go-ethereum's: **HTTP and WebSocket serve only
-`eth,net,web3,fukuii`**; IPC serves `eth,net,web3,fukuii,personal,debug,admin,txpool,trace`.
+`eth,net,web3,fukuii`**; IPC serves `eth,net,web3,fukuii,personal,debug,admin,miner,txpool,trace`.
 So over HTTP, `admin_*`, `personal_*`, `debug_*`, `qa_*`, `txpool_*`, `trace_*`
-and (when present) `miner_*` are **opt-in**, and **`mcp` is NOT enabled by
-default** either: the in-process MCP tools need `mcp` in the list.
+and `miner_*` (including `miner_setEtherbase`; `eth_setEtherbase` is its
+deprecated alias) are **opt-in**, and **`mcp` is NOT enabled by default**
+either: the in-process MCP tools need `mcp` in the list. `eth_mining`,
+`eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+`eth_submitHashrate` stay in `eth`.
 
 **Preflight:** before a skill calls anything outside `eth`/`net`/`web3`/`fukuii`,
 call `rpc_modules` on the same endpoint. It lists the namespaces that transport

@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `eth_`, `net_` and `web3_` pass-through). A value is a comma-separated string or a list; an unknown name stops the
     node at startup and names its key. None of the four keys is in `network.conf` any more, so a key an operator sets
     always wins over a default, and an `rpc.apis` that is set applies to all three transports as before.
-  - **Defaults.** HTTP and WebSocket: `eth,net,web3,fukuii`. IPC: `eth,net,web3,fukuii,personal,debug,admin,txpool,trace`,
+  - **Defaults.** HTTP and WebSocket: `eth,net,web3,fukuii`. IPC: `eth,net,web3,fukuii,personal,debug,admin,miner,txpool,trace`,
     every production namespace, because file permissions protect the socket. `qa` (a dev-network tool), `test`,
     `testing` and `mcp` are not in the IPC default either. The `rpc` namespace (`rpc_modules`) is always on and now
     lists what the transport you call serves.
@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `fukuii.network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"` (or pass
     `-Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,admin`). A method outside its transport's list is
     answered with `-32601`, before any service is called.
+  - **The `miner` namespace.** `miner_start`, `miner_stop`, `miner_getStatus` and `miner_setEtherbase` are in a new
+    `miner` namespace, opt-in on HTTP and WebSocket (and in the IPC default), as in go-ethereum; they were in `eth`.
+    `eth_setEtherbase` stays as a deprecated alias of `miner_setEtherbase`, served only where `miner` is enabled, and
+    logs a deprecation warning once. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+    `eth_submitHashrate` stay in `eth`, so external miners and stratum proxies are not affected. To control mining over
+    HTTP, list it: `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner"`. When `test` and `miner` are both
+    enabled, `test` answers `miner_setEtherbase` (the retesteth harness uses it) whatever the order of the list; before,
+    the namespace listed last won.
   - **Startup warning.** Enabling `personal`, `debug`, `admin`, `qa` or `miner` on an HTTP or WebSocket endpoint that is
     not bound to a loopback address logs a warning that names the endpoint and the namespaces.
   - **Also fixed.** An `apis` value written as a list (`["eth","web3"]`) or as numbered keys

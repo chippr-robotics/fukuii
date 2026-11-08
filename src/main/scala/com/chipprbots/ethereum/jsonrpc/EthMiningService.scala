@@ -250,7 +250,7 @@ class EthMiningService(
   def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] =
     ifEthash(req) { request =>
       coinbaseProvider.update(request.address)
-      log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
+      log.info("Updated miner coinbase to {}", request.address)
       SetEtherbaseResponse(success = true)
     }
 

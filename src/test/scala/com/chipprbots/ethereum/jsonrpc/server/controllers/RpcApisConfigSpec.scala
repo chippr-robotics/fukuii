@@ -48,7 +48,7 @@ class RpcApisConfigSpec extends AnyFlatSpec with Matchers:
     RPCTest
   ) in {
     val ipc = apisOf().ipcApis
-    ipc shouldBe Seq("eth", "net", "web3", "fukuii", "personal", "debug", "admin", "txpool", "trace")
+    ipc shouldBe Seq("eth", "net", "web3", "fukuii", "personal", "debug", "admin", "miner", "txpool", "trace")
     ipc shouldBe JsonRpcConfig.DefaultIpcApis
     Seq("qa", "test", "testing", "mcp", "rpc").foreach(namespace =>
       withClue(s"$namespace: ")(ipc should not contain namespace)

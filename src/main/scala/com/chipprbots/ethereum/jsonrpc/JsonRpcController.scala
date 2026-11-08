@@ -86,6 +86,7 @@ case class JsonRpcController(
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
+    Apis.Miner -> handleMinerRequest,
     Apis.Web3 -> handleWeb3Request,
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
@@ -108,6 +109,37 @@ case class JsonRpcController(
     * outside the set is answered with MethodNotFound before any service is called.
     */
   def forApis(apis: Seq[String]): JsonRpcController = copy(transportApis = Some(apis))
+
+  // The `test` namespace (retesteth) also answers `miner_setEtherbase`, which `miner` answers for the node's own
+  // mining. When `test` is enabled, test mode owns it whatever the order of the `apis` list, so a request means the
+  // same thing every time.
+  override def tieBreakerApis: Set[String] = Set(Apis.Test)
+
+  /** The `miner` namespace: mining control, opt-in as in go-ethereum (HTTP and WebSocket do not serve it unless `miner`
+    * is listed). `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and `eth_submitHashrate`
+    * stay in `eth`. `eth_setEtherbase`, which `eth` used to serve, is a deprecated alias of `miner_setEtherbase` and is
+    * served only when `miner` is enabled.
+    */
+  private def handleMinerRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
+      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
+    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
+      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
+    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
+      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
+    case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
+    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
+      if JsonRpcController.EtherbaseAliasWarned.compareAndSet(false, true) then
+        log.warn("eth_setEtherbase is deprecated and will be removed; use miner_setEtherbase")
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
+  }
 
   private def handleWeb3Request: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "web3_sha3", _, _) =>
@@ -191,17 +223,6 @@ case class JsonRpcController(
       handle[GetWorkRequest, GetWorkResponse](ethMiningService.getWork, req)
     case req @ JsonRpcRequest(_, "eth_submitWork", _, _) =>
       handle[SubmitWorkRequest, SubmitWorkResponse](ethMiningService.submitWork, req)
-    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
-      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
-    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
-      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
-    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
-      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
-    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
-      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
-        ethMiningService.setEtherbase,
-        req
-      )
     case req @ JsonRpcRequest(_, "eth_blockNumber", _, _) =>
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>
@@ -638,3 +659,10 @@ case class JsonRpcController(
       val result = enabledApis.map(_ -> "1.0").toMap
       IO(JsonRpcResponse("2.0", Some(result), None, req.id))
   }
+
+object JsonRpcController:
+
+  /** Set when the deprecated `eth_setEtherbase` alias has logged its warning: one warning per process, however many
+    * controllers (the node builds one per transport) and calls there are.
+    */
+  private[jsonrpc] val EtherbaseAliasWarned = new java.util.concurrent.atomic.AtomicBoolean(false)

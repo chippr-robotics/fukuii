@@ -48,15 +48,15 @@ Implement multiple layers of security:
 ### RPC Namespaces
 
 HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` until you enable more, and IPC serves every production
-namespace (`eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace`) because file permissions
-protect the socket. These are go-ethereum's defaults. Each transport has its own key, and each falls back to
+namespace (`eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `miner`, `txpool`, `trace`) because file
+permissions protect the socket. These are go-ethereum's defaults. Each transport has its own key, and each falls back to
 `fukuii.network.rpc.apis`:
 
 ```hocon
 fukuii.network.rpc {
   http.apis = "eth,net,web3,fukuii"
   ws.apis   = "eth,net,web3,fukuii"
-  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,txpool,trace"
+  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,miner,txpool,trace"
 }
 ```
 

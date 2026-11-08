@@ -373,11 +373,16 @@ sensitive; an unknown name stops the node at startup. The `rpc` namespace (`rpc_
 | Transport | Default |
 |-----------|---------|
 | HTTP, WebSocket | `eth`, `net`, `web3`, `fukuii` |
-| IPC | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `txpool`, `trace` |
+| IPC | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `miner`, `txpool`, `trace` |
 
 These are go-ethereum's defaults: the network-facing transports serve the read-only chain API, and the IPC socket,
 which file permissions protect, serves every production namespace. `qa` (`qa_mineBlocks`, a dev-network tool), `test`
 and `testing` (test-mode tools) and `mcp` are not in the IPC default either.
+
+Mining control is its own namespace, as in go-ethereum: `miner` holds `miner_start`, `miner_stop`, `miner_getStatus`
+and `miner_setEtherbase` (and `eth_setEtherbase`, a deprecated alias of the last one). `eth_mining`, `eth_hashrate`,
+`eth_coinbase`, `eth_getWork`, `eth_submitWork` and `eth_submitHashrate` stay in `eth`, so mining pools and stratum
+proxies work with the defaults. To start and stop mining over HTTP, add `miner` to `http.apis`.
 
 Opt in per transport, and only on the transport that needs it:
 
@@ -385,7 +390,7 @@ Opt in per transport, and only on the transport that needs it:
 fukuii.network.rpc {
   http.apis = "eth,net,web3,fukuii,txpool"          # add a read-only namespace
   ws.apis   = "eth,net,web3,fukuii"                 # WebSocket keeps the default
-  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin"   # narrow IPC
+  ipc.apis  = "eth,net,web3,fukuii,personal,debug,admin,miner"   # narrow IPC
 }
 ```
 

@@ -72,7 +72,7 @@ object MiningOperationsPrompt:
     val text = """Use the verified mining RPC endpoints on Node1 (http://127.0.0.1:8545):
       |• Read status via eth_mining, eth_hashrate, miner_getStatus
       |• Fetch work with eth_getWork and note the latest pow header hash 0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107
-      |• Control mining via miner_start and miner_stop (be sure to restore miner_start afterward)
+      |• Control mining via miner_start and miner_stop (be sure to restore miner_start afterward); the miner_* methods need the `miner` namespace to be enabled for this endpoint
       |• Report coinbase 0x1000000000000000000000000000000000000001 and hashrate submissions (hashRate 0x1, minerId 0x1234…)
       |
       |Confirm each endpoint responds successfully and summarize any anomalies.""".stripMargin

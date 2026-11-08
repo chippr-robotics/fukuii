@@ -768,7 +768,7 @@
             // RPC IPC Configuration
             enableRpcIpc: false,
             rpcIpcSocketFile: '~/.fukuii/fukuii.ipc',
-            rpcIpcAPIs: ['eth', 'net', 'web3', 'fukuii', 'personal', 'debug', 'admin', 'txpool', 'trace'],
+            rpcIpcAPIs: ['eth', 'net', 'web3', 'fukuii', 'personal', 'debug', 'admin', 'miner', 'txpool', 'trace'],
             
             // Mining Configuration
             enableMining: false,
@@ -929,7 +929,7 @@
             },
             rpcHttpAPIs: {
                 title: 'Enabled RPC APIs (HTTP)',
-                description: '<strong>Security:</strong> Only enable needed APIs. Default: eth, net, web3, fukuii. <strong>Opt-in</strong> (they change node state or reveal node internals): personal, admin, debug, qa. Enable them only on a loopback endpoint; the node logs a warning at startup when one is enabled on another address.'
+                description: '<strong>Security:</strong> Only enable needed APIs. Default: eth, net, web3, fukuii. <strong>Opt-in</strong> (they change node state or reveal node internals): personal, admin, debug, miner (mining control), qa. Enable them only on a loopback endpoint; the node logs a warning at startup when one is enabled on another address.'
             },
             rpcWsAPIs: {
                 title: 'Enabled RPC APIs (WebSocket)',
@@ -937,7 +937,7 @@
             },
             rpcIpcAPIs: {
                 title: 'Enabled RPC APIs (IPC)',
-                description: 'The socket is protected by file permissions, so IPC serves every production namespace by default (eth, net, web3, fukuii, personal, debug, admin, txpool, trace). Untick what local programs do not need.'
+                description: 'The socket is protected by file permissions, so IPC serves every production namespace by default (eth, net, web3, fukuii, personal, debug, admin, miner, txpool, trace). Untick what local programs do not need.'
             },
             rpcHttpCORSAllowedOrigins: {
                 title: 'CORS Allowed Origins',
@@ -1102,9 +1102,9 @@
         }
 
         // Namespaces the node can serve over a transport. `rpc` (rpc_modules) is always on and is not a valid entry.
-        const RPC_NAMESPACES = ['eth', 'net', 'web3', 'fukuii', 'txpool', 'trace', 'personal', 'admin', 'debug', 'qa'];
+        const RPC_NAMESPACES = ['eth', 'net', 'web3', 'fukuii', 'txpool', 'trace', 'personal', 'admin', 'debug', 'miner', 'qa'];
         // Off by default on HTTP and WebSocket: they change node state or reveal node internals.
-        const SENSITIVE_RPC_NAMESPACES = ['personal', 'admin', 'debug', 'qa'];
+        const SENSITIVE_RPC_NAMESPACES = ['personal', 'admin', 'debug', 'miner', 'qa'];
 
         function isLoopbackInterface(iface) {
             const host = String(iface).trim().replace(/^\[|\]$/g, '').toLowerCase();

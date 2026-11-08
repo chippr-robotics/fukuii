@@ -798,6 +798,8 @@ trait KeyStoreBuilder:
 trait ApisBuilder extends ApisBase:
   object Apis:
     val Eth = "eth"
+    // Mining control (miner_start, miner_stop, miner_getStatus, miner_setEtherbase): opt-in, as in go-ethereum.
+    val Miner = "miner"
     val Web3 = "web3"
     val Net = "net"
     val Personal = "personal"
@@ -819,7 +821,7 @@ trait ApisBuilder extends ApisBase:
 
   import Apis.*
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Miner, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &

@@ -41,7 +41,7 @@ This plan defines a repeatable workflow for validating recent RLPx compression/d
 
 ## Configuration Checklist
 
-1. **Mining Controls** – Leave `fukuii.mining.mining-enabled` at repo defaults; Phase 2 relies on `miner_start` / `miner_stop` RPCs to toggle roles at runtime without editing configs.
+1. **Mining Controls** – Leave `fukuii.mining.mining-enabled` at repo defaults; Phase 2 relies on `miner_start` / `miner_stop` RPCs to toggle roles at runtime without editing configs. These need the `miner` namespace, which HTTP does not serve by default: add `miner` to the Gorgoroth nodes' `fukuii.network.rpc.apis` (the shipped Gorgoroth override lists `eth,web3,net,fukuii,admin`).
 2. **Clean Volumes (Optional)** – If prior state is undesirable:
    ```bash
    cd ops/gorgoroth
