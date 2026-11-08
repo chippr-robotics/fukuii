@@ -183,28 +183,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across it. A new datadir marker, `chain.weight.invariant`, says every stored canonical weight is the genesis weight
   plus the difficulties up to its block, the value import writes.
   - **The one-time pass.** On a datadir without the marker (every datadir an older release made), regular sync starts
-    a background pass: a forward scan from genesis (heights, headers and weights, batched, without filling the block
-    cache), saving its place every 10,000 blocks so a restart resumes. It waits wherever the header backfill has not
-    stored a header yet. A reorg below its place sends it back to the highest place still canonical. At the head it
-    takes the import lock and then the chain insert lock exclusively, re-derives every weight that differs, writes
-    them in one batch (chunks of 100,000 under the same hold, if there are more) and sets the marker. Import is held
-    only for that last step. Logs are tagged `[CW-RECONCILE]`, with a progress line every 1,000,000 blocks and a
-    summary of what was repaired. Gauges: `chainweight.reconcile.block.gauge`, `.differing.blocks.gauge`,
-    `.repaired.blocks.gauge` and `.state.gauge`.
-  - **Operator note: duration.** ETC mainnet has about 25.7M blocks, read as roughly 77M batched point reads.
-    That is about 0.5 to 1.5 h on an SSD and several hours on a spinning disk; this estimate is not yet measured.
-    The pass runs once per datadir. The repair under the locks touches only the blocks above the first jump, usually
-    those since the SNAP pivot: seconds, or a few minutes for millions of blocks.
-  - **The marker.** It is set by the write that follows a new datadir's genesis, by a SNAP hand-off whose pivot weight
-    is exact (`REAL_DB_TD` or `DERIVED_FROM_PARENT`; with the header hold of #1740 that is every hand-off), and by the
+    a background pass with no lock held. It scans forward from genesis (heights, headers and weights, in batches of at
+    most 256 that do not fill the block cache, paced at a 50% duty cycle), saving its place every 10,000 blocks so a
+    restart resumes. It waits wherever the header backfill has not stored a header yet, and a reorg below its place
+    sends it back to the highest place still canonical. Every weight that differs is then rewritten bottom-up in
+    chunks of 10,000, still with no lock (a block's exact weight depends only on its ancestry). Only the last step
+    takes the import lock and then the chain insert lock exclusively: it checks the blocks imported since, and every
+    block mapped above the best block (an Engine API payload not yet promoted), then writes those and the marker in
+    one batch. That hold covers a few blocks, so Engine API `newPayload` calls are not held past a consensus client's
+    timeout. Only one pass runs at a time.
+    Logs are tagged `[CW-RECONCILE]`, with a progress line every 1,000,000 blocks and a summary. Gauges:
+    `chainweight.reconcile.block.gauge`, `.differing.blocks.gauge`, `.repaired.blocks.gauge` and `.state.gauge`. More
+    than 10,000 distinct differences stops the pass with an ERROR and leaves the marker off; nothing is lost.
+  - **Operator note: duration.** ETC mainnet has about 25.7M blocks, read as roughly 77M batched point reads at a 50%
+    duty cycle. That is about 0.5 to 3 h on an SSD and more on a spinning disk; this estimate is not yet measured.
+    The pass runs once per datadir, and import goes on throughout.
+  - **The marker.** It is set by the write that follows a new datadir's genesis and by the pass. A SNAP hand-off sets
+    it only if the marker stood when that SNAP began (or the datadir held nothing above genesis) and the pivot's weight
+    is exact (`REAL_DB_TD` or `DERIVED_FROM_PARENT`). A re-SNAP over a datadir an older release wrote leaves it to the
     pass. It is taken away by a SNAP start, a checkpoint import, an accepted seed and any calibration write. While it
-    stands, the timed TD calibration writes nothing. Before, a chain that was PoS from genesis (Ephemery, Hoodi), whose
-    total difficulty never clears the plausibility floor, got a peer estimate written over its head at every restart.
+    stands, the timed TD calibration writes nothing, and a peer's higher TD no longer gets it disconnected. Before, a
+    chain that was PoS from genesis (Ephemery, Hoodi), whose TD never clears the plausibility floor, got a peer
+    estimate written over its head at every restart, and evicted eth/68 peers on every reconnect.
+  - **The peer manager no longer stops on a chain whose TD is 0.** On a chain that was PoS from genesis with a terminal
+    TD of 0 (Platåberget), an eth/68 peer with a higher TD made the peer-info actor divide by our TD of 0, and it
+    stopped for good. Our TD is 0 there after the repair too.
   - **`-Dfukuii.seed-chain-weights` seeds a base, not a head.** A seed is accepted only for a canonical block whose
     parent has no plausible weight, such as a SNAP pivot whose headers below are not in yet. Every block above it
     then gets its parent's weight plus its own difficulty. A seed over a parent with a plausible weight is refused
-    with a WARN: it would leave a jump, and the calibration reverted it 30 s later anyway. A seed is trusted, not
-    proven, so the pass checks it from genesis once the headers are in.
+    with a WARN: it would leave a jump, and the calibration reverted it 30 s later anyway. On a chain that was PoS
+    from genesis every seed is refused, because the pass derives the weights. A seed is trusted, not proven, so the
+    pass checks it from genesis once the headers are in. Seeds are applied by the pass, not on the sync thread. To
+    get the value, ask a client that still reports total difficulty (core-geth; go-ethereum 1.15+ returns none); the
+    recipe is in `ChainWeightSeed`.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

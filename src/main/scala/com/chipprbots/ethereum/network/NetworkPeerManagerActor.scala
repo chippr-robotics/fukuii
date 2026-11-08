@@ -788,7 +788,10 @@ object NetworkPeerManagerActor:
           reader.getBestBlock.foreach { ourBest =>
             reader.getChainWeightByHash(ourBest.header.hash).foreach { ourWeight =>
               if peerTD > ourWeight.totalDifficulty.value then
-                val ratio = peerTD / ourWeight.totalDifficulty.value
+                // #1654: our weight is 0 on a chain that was PoS from genesis with a terminal TD of 0 (Platåberget);
+                // dividing by it threw and stopped this unsupervised actor. Any positive peer TD is "above" 0.
+                val ratio =
+                  if ourWeight.totalDifficulty.value > 0 then peerTD / ourWeight.totalDifficulty.value else peerTD
                 // FRESH-NODE EXEMPTION (#1367, restored 2026-06-30 — dropped during the Scala-3
                 // refactors #1373/#1378/#1384). TD-PROXY-GAP must NOT fire when our best block is at
                 // genesis (number == 0). On a freshly-wiped node the genesis TD is the real chain
@@ -798,11 +801,15 @@ object NetworkPeerManagerActor:
                 // pivot=0 forever. TD-PROXY-GAP is only meaningful past genesis (post-SNAP genesis-
                 // proxy TD on a high best block). `number.value > 0` is the minimal, unambiguous guard.
                 val tdProxyGap = ratio > BigInt(10_000) && ourBest.header.number.value > 0
-                // Read only when the gap fires: three chain-weight lookups.
+                // Read only when the gap fires: three chain-weight lookups. The chain-weight marker (#1654) says every
+                // stored canonical weight is exact from genesis, which the plausibility floor behind `classify` cannot
+                // tell on a chain that was PoS from genesis (TD 1 or 0 is under it at every height).
                 lazy val headWeightExact =
-                  com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.classify(reader, ourBest.header) match
-                    case _: com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact => true
-                    case _                                                                       => false
+                  reader.hasChainWeightInvariant ||
+                    (com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.classify(reader, ourBest.header) match
+                      case _: com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact => true
+                      case _                                                                       => false
+                    )
                 if tdProxyGap && headWeightExact then
                   // #1654: our head's stored weight is exact (parent weight + difficulty), so the calibration this
                   // branch would trigger leaves it unchanged, and evicting the peer "until calibration" would repeat on
