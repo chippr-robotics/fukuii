@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.util.ByteString
 
 import scala.util.control.NonFatal
@@ -26,7 +28,7 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
   *   - at startup, [[selfCheck]] probes every backend a configured fork needs ([[required]]), and `Fukuii.main` exits
   *     with the operator message when one is not usable;
   *   - at call time, a backend that is missing or broken raises [[NativeBackendUnavailable]], never a precompile
-  *     failure.
+  *     failure, and in the node halts the JVM where it is raised ([[onUnavailable]], `FatalErrors`).
   *
   * An input the library itself rejects is still an ordinary precompile failure. With the libraries present, every
   * precompile output and gas charge is the same as before.
@@ -49,8 +51,11 @@ object NativeBackends:
   /** A precompile's native backend is missing or broken, so this node cannot compute the network's result.
     *
     * A [[LinkageError]] on purpose: a missing native library is one, and `scala.util.control.NonFatal` treats linkage
-    * errors as fatal. The `case NonFatal(e)` handlers on the import and RPC paths let it through, and Pekko
-    * (`jvm-exit-on-fatal-error`) and Cats Effect stop instead of carrying on with a wrong result.
+    * errors as fatal, so no `case NonFatal(e)` handler turns it into a failed call or an invalid block. Being fatal
+    * does not stop the node, though. Block import and the RPC servers run the VM in Cats Effect, which shuts its
+    * runtimes down and leaves the JVM running, with the import stuck and nothing in the log. So the node does not rely
+    * on the throw: [[onUnavailable]] runs before it, and `Fukuii.main` installs a hook there that logs the error and
+    * halts the JVM (`FatalErrors`).
     */
   final class NativeBackendUnavailable(val backend: Backend, val detail: String, cause: Option[Throwable])
       extends LinkageError(
@@ -58,6 +63,19 @@ object NativeBackends:
           "would compute different results from the network, so it stops instead of answering"
       ):
     cause.foreach(initCause)
+
+  private val unavailableHook = new AtomicReference[NativeBackendUnavailable => Unit](_ => ())
+
+  /** Installs the hook every [[NativeBackendUnavailable]] is passed to before it is thrown. `Fukuii.main` installs
+    * `FatalErrors.installCallTimeHalt` once the startup self-check has passed. The default does nothing, so tests and
+    * tools see the error thrown.
+    */
+  def onUnavailable(hook: NativeBackendUnavailable => Unit): Unit = unavailableHook.set(hook)
+
+  private def unavailable(backend: Backend, detail: String, cause: Option[Throwable]): NativeBackendUnavailable =
+    val error = NativeBackendUnavailable(backend, detail, cause)
+    unavailableHook.get()(error)
+    error
 
   // ── Which backends the configured forks need ───────────────────────────────────────────────────────────────────
 
@@ -160,7 +178,7 @@ object NativeBackends:
     */
   private[vm] def blsOperation(native: BlsNative, operation: Byte, input: ByteString): Option[ByteString] =
     if !native.enabled then
-      throw NativeBackendUnavailable(
+      throw unavailable(
         Backend.Bls12381,
         "the native library did not load (LibEthPairings.ENABLED is false)",
         None
@@ -168,8 +186,8 @@ object NativeBackends:
     val output =
       try native.perform(operation, input.toArray)
       catch
-        case NonFatal(e)     => throw NativeBackendUnavailable(Backend.Bls12381, "the native call failed", Some(e))
-        case e: LinkageError => throw NativeBackendUnavailable(Backend.Bls12381, "the native call failed", Some(e))
+        case NonFatal(e)     => throw unavailable(Backend.Bls12381, "the native call failed", Some(e))
+        case e: LinkageError => throw unavailable(Backend.Bls12381, "the native call failed", Some(e))
     output.map(ByteString(_))
 
   // ── KZG ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -199,5 +217,5 @@ object NativeBackends:
     try native.verifyKzgProof(commitment, z, y, proof)
     catch
       case _: CKZGException => false
-      case NonFatal(e)      => throw NativeBackendUnavailable(Backend.Kzg, "c-kzg could not run", Some(e))
-      case e: LinkageError  => throw NativeBackendUnavailable(Backend.Kzg, "c-kzg could not run", Some(e))
+      case NonFatal(e)      => throw unavailable(Backend.Kzg, "c-kzg could not run", Some(e))
+      case e: LinkageError  => throw unavailable(Backend.Kzg, "c-kzg could not run", Some(e))

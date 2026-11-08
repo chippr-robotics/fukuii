@@ -185,8 +185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **At startup** the node loads and probes each native library the configured forks need: BLS12-381 from ETH Prague,
     KZG from ETH Cancun, and both from ETC Olympia once it is scheduled. If one is missing, the node logs which library
     and exits with status 1. ETC and Mordor need neither while Olympia is unscheduled.
-  - **At call time** a missing library raises a fatal error instead of failing the call. An input the library rejects
-    still fails the call with the same gas as before, and with the libraries present every result is unchanged.
+  - **At call time** a missing library halts the node with status 1, naming the library in the log, instead of
+    failing the call. The halt happens where the library is found missing: a fatal error thrown inside Cats Effect, on
+    the block import and RPC paths, left the JVM running with the import stuck. A thread that dies of any other
+    `VirtualMachineError` is now also logged at ERROR. An input the library rejects still fails the call with the same
+    gas as before, and with the libraries present every result is unchanged.
   - **Breaking on Windows for ETH mainnet and Sepolia:** these nodes now refuse to start there, because the BLS12-381
     library has no Windows build. Before, they ran and diverged on any block that calls a BLS12-381 precompile.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
