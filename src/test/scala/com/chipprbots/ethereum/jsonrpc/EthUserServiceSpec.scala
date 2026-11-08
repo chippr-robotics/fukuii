@@ -34,7 +34,11 @@ class EthUserServiceSpec
 
   it should "handle getCode request" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
-    storagesInstance.storages.evmCodeStorage.put(ByteString("code hash"), ByteString("code code code")).commit()
+    // Code is stored under its own keccak hash, as every real writer stores it: since H3 a stored code entry that
+    // does not hash to its key reads as missing code.
+    val code: ByteString = ByteString("code code code")
+    val codeHash: ByteString = ByteString(crypto.kec256(code.toArray[Byte]))
+    storagesInstance.storages.evmCodeStorage.put(codeHash, code).commit()
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
@@ -42,7 +46,7 @@ class EthUserServiceSpec
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(
           crypto.kec256(address.bytes.toArray[Byte]),
-          Account(0, UInt256(0), TrieRoot(ByteString("")), CodeHash(ByteString("code hash")))
+          Account(0, UInt256(0), TrieRoot(ByteString("")), CodeHash(codeHash))
         )
 
     val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = TrieRoot(ByteString(mpt.getRootHash)))
@@ -52,7 +56,7 @@ class EthUserServiceSpec
 
     val response: ServiceResponse[GetCodeResponse] = ethUserService.getCode(GetCodeRequest(address, BlockParam.Latest))
 
-    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
+    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(code))
 
   it should "handle getBalance request" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
