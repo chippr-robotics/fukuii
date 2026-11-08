@@ -14,13 +14,13 @@ items:
     opened: 2026-11-04
     refs: [H3, CHASE A deleteIfCorrupt, CHASE A BlockchainReader:78]
     links:
-      prs: [1747]
+      prs: [1747, 1749]
       branch: fix/h3-keccak-on-read
     claim:
       by: fukuii-fc
       agent: forge
       since: 2026-11-08T12:00:00Z
-      heartbeat: 2026-11-08T15:46:00Z
+      heartbeat: 2026-11-08T16:12:36Z
       branch: fix/h3-keccak-on-read
     notes: vault and beacon approved with nits; their fixes are folded in. newPayload keeps ACCEPTED on MPTError (geth parity).
   - id: B-002
