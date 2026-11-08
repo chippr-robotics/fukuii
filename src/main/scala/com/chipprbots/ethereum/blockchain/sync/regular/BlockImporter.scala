@@ -632,9 +632,9 @@ final private class BlockImporterLogic(
             val waited = (System.nanoTime() - waitingSince).nanos
             RegularSyncMetrics.setImportLockWaitSeconds(waited.toMillis / 1000.0)
             log.warning(
-              "Waiting {}s for the import lock, held by an import a stopped importer left running: regular sync starts " +
-                "once it ends",
-              waited.toSeconds
+              "Waiting {}s for the import lock, held by {}: regular sync starts once it ends",
+              waited.toSeconds,
+              importLock.heldBy.getOrElse("an import a stopped importer left running")
             )
             Behaviors.same
           case mined: MinedBlock =>

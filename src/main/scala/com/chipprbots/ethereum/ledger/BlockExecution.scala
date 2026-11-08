@@ -1201,7 +1201,16 @@ object ChainInsertLock:
     try body
     finally lock.writeLock().unlock()
 
-  /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s repair, #1654). */
+  /** [[exclusive]], if the lock can be had within `wait`; `None` otherwise. For a caller that must not park (an actor's
+    * thread: the operator's chain-weight seeds, #1654).
+    */
+  def tryExclusive[A](wait: scala.concurrent.duration.FiniteDuration)(body: => A): Option[A] =
+    if lock.writeLock().tryLock(wait.toNanos, java.util.concurrent.TimeUnit.NANOSECONDS) then
+      try Some(body)
+      finally lock.writeLock().unlock()
+    else None
+
+  /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s finish, #1654). */
   def heldExclusivelyByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread
 
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
