@@ -157,6 +157,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     enabled sees `[HEAL-AUDIT] One more full audit pass is owed`). It looks for nodes already deleted and fetches them
     back; it runs off the critical path, at a 25% duty cycle, and takes roughly one to three days on ETC mainnet.
   - Import's on-demand fetch of a missing state node no longer sets the node's count back to one.
+- **SNAP finalisation labels the pivot total difficulty by what it is, and uses the boosted request budget while it
+  waits for the headers (#1654). Both chains.**
+  - **Label and value.** `SNAP finalize pivot TD ... source=REAL_DB_TD` now means the stored weight is the
+    pivot's parent's weight plus the pivot's difficulty, with a plausible parent. Before, any stored weight above
+    1,000 times the genesis TD was kept and labelled `REAL_DB_TD`, including the peer estimate written when the pivot
+    was chosen. A pivot whose parent's weight is exact but whose own is not now gets the exact value
+    (`DERIVED_FROM_PARENT`). An estimate over a parent with no weight is kept as before, now labelled
+    `PIVOT_SELECTION_ESTIMATE`.
+  - **Request budget.** While finalisation holds for the header download, every peer is free. The downloader now gets
+    `chain-download-boosted-concurrent-requests` (16), which nothing read before, and a 200 ms dispatch interval instead
+    of 2 s; a downloader the hold's stall watchdog restarts gets it too. Header ranges still go one at a time, so the
+    extra slots only re-send a slow range to another peer sooner. At hand-off the budget drops to
+    `chain-backfill-concurrent-requests`.
 - **`eth_simulateV1` no longer builds blocks without limit (#1727). Both chains.** A block-number override far past the
   base block was narrowed to 32 bits before the 256-block check, so a gap of 2^32 + 1 counted as one block and the node
   then built 2^32 of them: the RPC thread never returned and block import stalled until a restart. The gap is now

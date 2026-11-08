@@ -9,6 +9,8 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe as TypedTestProbe
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestActor.AutoPilot
 import org.apache.pekko.testkit.TestProbe
@@ -26,15 +28,20 @@ import org.scalatest.time.Seconds
 import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
+import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger.AncestorBlockHashes
@@ -43,10 +50,13 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** With `defer-chain-backfill-until-state-complete` on, the chain downloader (bodies and receipts) must not run while
   * SNAP state sync does, must start once the state is finalised, and must survive a restart (its target is persisted in
-  * the same commit as SnapSyncDone). With it off, behaviour is unchanged.
+  * the same commit as SnapSyncDone). Finalisation holds until the header download reaches the pivot, with the boosted
+  * request budget, and the pivot's total difficulty is labelled REAL_DB_TD only when it is exact (#1654). With the
+  * switch off, finalisation does not wait.
   */
 class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
 
@@ -76,6 +86,70 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val parent: TypedTestProbe[SyncProtocol.SyncControllerReply] =
       testKit.createTestProbe[SyncProtocol.SyncControllerReply]()
     private val progressProbe = testKit.createTestProbe[SyncProgress]()
+
+    // A copy of every command any chain-downloader incarnation receives (Behaviors.monitor); the real downloader runs.
+    val chainMessages: TypedTestProbe[ChainDownloader.Command] = testKit.createTestProbe[ChainDownloader.Command]()
+    private val monitoredChildren: ChildFactories = new ChildFactories:
+      override def chainDownloader(
+          blockchainReader: BlockchainReader,
+          blockchainWriter: BlockchainWriter,
+          appStateStorage: AppStateStorage,
+          networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
+          peerEventBus: TypedActorRef[PeerEventBusActor.Command],
+          syncConfig: SyncConfig,
+          replyTo: TypedActorRef[ChainDownloader.Done.type],
+          maxConcurrentRequests: Int,
+          requestTimeout: FiniteDuration,
+          snapServerPeerNodeIds: Set[ByteString],
+          blacklist: Blacklist,
+          cursorScanCap: Long,
+          deferBodiesAndReceipts: Boolean,
+          emptyHeaderBackoff: Option[FiniteDuration],
+          nowMs: () => Long
+      ): Behavior[ChainDownloader.Command] =
+        Behaviors.monitor(
+          chainMessages.ref,
+          super.chainDownloader(
+            blockchainReader,
+            blockchainWriter,
+            appStateStorage,
+            networkPeerManager,
+            peerEventBus,
+            syncConfig,
+            replyTo,
+            maxConcurrentRequests,
+            requestTimeout,
+            snapServerPeerNodeIds,
+            blacklist,
+            cursorScanCap,
+            deferBodiesAndReceipts,
+            emptyHeaderBackoff,
+            nowMs
+          )
+        )
+
+    def fishChain(max: FiniteDuration)(pf: PartialFunction[ChainDownloader.Command, Unit]): Unit =
+      chainMessages.fishForMessage(max) { msg =>
+        if pf.isDefinedAt(msg) then FishingOutcomes.complete else FishingOutcomes.continueAndIgnore
+      }
+      ()
+
+    // The pivot's weight as the header download stores it: the parent's weight plus the pivot's difficulty.
+    def storeExactPivotWeight(pivotHeader: BlockHeader, pivotTd: BigInt): Unit =
+      blockchainWriter
+        .storeChainWeight(
+          pivotHeader.parentHash,
+          ChainWeight.totalDifficultyOnly(pivotTd - pivotHeader.difficulty.value)
+        )
+        .and(blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(pivotTd)))
+        .commit()
+
+    def awaitFinalized(): Unit =
+      parent.fishForMessage(15.seconds) {
+        case SNAPSyncController.SnapSyncFinalized(p) if p == pivot => FishingOutcomes.complete
+        case _                                                     => FishingOutcomes.continueAndIgnore
+      }
+      ()
 
     val pivot: BigInt = BigInt(10_000)
     val root: ByteString = ByteString(Array.fill(32)(0x11.toByte))
@@ -123,7 +197,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           cfg,
           system.classicSystem.scheduler,
           CacheBasedBlacklist.empty(100),
-          parent.ref
+          parent.ref,
+          childFactories = monitoredChildren
         )
       )
       eventually(pollsAnswered.get() should be >= 1)
@@ -134,6 +209,11 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       snap ! SNAPSyncController.GetProgress(progressProbe.ref)
       progressProbe.receiveMessage(5.seconds)
       ()
+
+  private def withSnapLogs[A](body: SnapLogCapture => A): A =
+    val logs = new SnapLogCapture
+    try body(logs)
+    finally logs.close()
 
   private def cfg(defer: Boolean) =
     SNAPSyncConfig(
@@ -159,10 +239,11 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       parent.expectNoMessage(0.millis) // still holding: nothing finalised, nothing aborted
       appStateStorage.isSnapSyncDone() shouldBe false
 
-      // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored.
+      // The header download reaches the pivot: the cursor advances and the real accumulated TD is stored (the parent's
+      // weight plus the pivot's difficulty, as the downloader stores every header).
       val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
       val realTd: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
-      blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(realTd)).commit()
+      storeExactPivotWeight(pivotHeader, realTd)
       appStateStorage.putBackfillBestHeader(pivot).commit()
       snap ! SNAPSyncController.HeaderHoldTick
 
@@ -201,6 +282,91 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     }
     parent.expectNoMessage(0.millis) // never finalised without the headers
     appStateStorage.isSnapSyncDone() shouldBe false
+
+  // #1654: the hold is the window where state is complete and regular sync has not started, so every peer is free.
+  it should "boost the header download when the hold starts, then finalise with REAL_DB_TD and the backfill budget" taggedAs UnitTest in new Fixture:
+    withSnapLogs { logs =>
+      val config = cfg(defer = true)
+      val snap: TypedActorRef[Command] = start(config, withAncestors = true)
+      awaitProcessed(snap)
+      eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+
+      snap ! SNAPSyncController.HealingRootUnservable(root)
+      awaitProcessed(snap)
+      fishChain(5.seconds) {
+        case ChainDownloader.BoostConcurrency(n) if n == config.chainDownloadBoostedConcurrentRequests => ()
+      }
+      appStateStorage.isSnapSyncDone() shouldBe false
+
+      val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+      val realTd: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value * 5000
+      storeExactPivotWeight(pivotHeader, realTd)
+      appStateStorage.putBackfillBestHeader(pivot).commit()
+      snap ! SNAPSyncController.HeaderHoldTick
+      awaitFinalized()
+
+      fishChain(5.seconds) {
+        case ChainDownloader.YieldToRegularSync(n) if n == config.chainBackfillConcurrentRequests => ()
+      }
+      logs.awaitLine("SNAP finalize pivot TD") should include("source=REAL_DB_TD")
+      blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(realTd)
+    }
+
+  it should "boost a downloader the hold's stall watchdog respawned" taggedAs UnitTest in new Fixture:
+    val config: SNAPSyncConfig = cfg(defer = true).copy(headerHoldStallTimeout = 0.seconds)
+    val snap: TypedActorRef[Command] = start(config, withAncestors = true)
+    awaitProcessed(snap)
+    eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+    val before = pollers.size
+
+    // With a zero stall timeout, entering the hold boosts the running downloader, then respawns it at once.
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitProcessed(snap)
+    eventually(pollers.size should be > before) // the replacement polled for peers
+    // One boost for the downloader the hold found, one for its replacement (before #1654, none).
+    (1 to 2).foreach { _ =>
+      fishChain(5.seconds) {
+        case ChainDownloader.BoostConcurrency(n) if n == config.chainDownloadBoostedConcurrentRequests => ()
+      }
+    }
+    appStateStorage.isSnapSyncDone() shouldBe false
+
+  // Without the hold (switch off), the pivot's stored weight can be PivotSelector's selection-time estimate. Before
+  // #1654 any stored weight above 1000x the genesis TD was kept and logged as REAL_DB_TD.
+  it should "replace a selection-time pivot estimate with parent weight + difficulty when the parent's weight is exact" taggedAs UnitTest in new Fixture:
+    val snap: TypedActorRef[Command] = start(cfg(defer = false), withAncestors = true)
+    awaitProcessed(snap)
+    val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+    val parentTd: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value * 4999
+    val selectionEstimate: BigInt = parentTd * 3
+    blockchainWriter
+      .storeChainWeight(pivotHeader.parentHash, ChainWeight.totalDifficultyOnly(parentTd))
+      .and(blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(selectionEstimate)))
+      .commit()
+
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitFinalized()
+    blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe
+      Some(parentTd + pivotHeader.difficulty.value)
+
+  it should "not label a selection-time pivot estimate REAL_DB_TD when the pivot's parent has no weight" taggedAs UnitTest in new Fixture:
+    withSnapLogs { logs =>
+      val snap: TypedActorRef[Command] = start(cfg(defer = false), withAncestors = true)
+      awaitProcessed(snap)
+      val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+      val selectionEstimate: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value * 3000
+      blockchainWriter.storeChainWeight(pivotHeader.hash, ChainWeight.totalDifficultyOnly(selectionEstimate)).commit()
+
+      snap ! SNAPSyncController.HealingRootUnservable(root)
+      awaitFinalized()
+      val line = logs.awaitLine("SNAP finalize pivot TD")
+      line should include("source=PIVOT_SELECTION_ESTIMATE")
+      line.contains("REAL_DB_TD") shouldBe false
+      // Only the label changes: the estimate is still the best value available without the headers.
+      blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(
+        selectionEstimate
+      )
+    }
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:
     val snap: TypedActorRef[Command] = start(cfg(defer = false))
