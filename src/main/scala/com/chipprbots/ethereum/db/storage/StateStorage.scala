@@ -220,8 +220,9 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
-      case None                                               => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)  => Some(BadEntryDelete.NoLongerBad)
+      case None => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if !NodeFault.provablyBad(nodeHash, RawNodeRead.Bytes(raw)) =>
+        Some(BadEntryDelete.NoLongerBad)
       case Some(raw) if StateStorage.wrapsNode(nodeHash, raw) => Some(BadEntryDelete.PassesKeccakElsewhere)
       case _                                                  => None
     StateStorage.deleteUnless(kept, stillReached) { () =>
@@ -437,8 +438,9 @@ class ReferenceCountedStateStorage(
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
-      case None                                                   => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.NoLongerBad)
+      case None => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if !NodeFault.provablyBad(nodeHash, StateStorage.unwrapped(raw)) =>
+        Some(BadEntryDelete.NoLongerBad)
       case Some(raw) if StateStorage.hashesTo(nodeHash, raw) || StateStorage.wrapsNode(nodeHash, raw) =>
         Some(BadEntryDelete.PassesKeccakElsewhere)
       case _ => None
@@ -502,12 +504,13 @@ object StateStorage:
   private[storage] def hashesTo(hash: NodeHash, encoded: Array[Byte]): Boolean =
     java.util.Arrays.equals(kec256(encoded), hash.toArray)
 
-  /** Whether `stored` is basic pruning's wrapper around the node stored under `hash`. */
-  private[storage] def unwrapsToNode(hash: NodeHash, stored: Array[Byte]): Boolean =
+  /** What basic pruning's reads make of the wrapper `stored`: the node's bytes, or [[RawNodeRead.Undecodable]] when it
+    * does not unwrap, as `ReferenceCountNodeStorage.multiGetRaw` reads it.
+    */
+  private[storage] def unwrapped(stored: Array[Byte]): RawNodeRead =
     scala.util
       .Try(encoding.storedNodeFromBytes(stored))
-      .toOption
-      .exists(node => hashesTo(hash, node.nodeEncoded.toArray))
+      .fold(_ => RawNodeRead.Undecodable, node => RawNodeRead.Bytes(node.nodeEncoded.toArray))
 
   /** Whether `stored` holds the node stored under `hash`, in a wrapper whose counters may be past reading. Not a whole
     * wrapper a store can use, but those bytes pass keccak, so they are never deleted (the user's rule, 2026-11-01).

@@ -15,12 +15,12 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditTestState
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditTestState.*
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
-import com.chipprbots.ethereum.blockchain.sync.snap.heal.NodeFault
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.NodeFault
 import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.StoredNodeTestAccess
 import com.chipprbots.ethereum.domain.BlockNumber
