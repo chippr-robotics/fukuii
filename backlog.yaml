@@ -1603,7 +1603,7 @@ items:
   - id: B-145
     title: Audit TLS and mTLS on every fukuii listener for zero-trust deployments (user requirement 2026-11-08)
     priority: P1
-    status: claimed
+    status: in-progress
     area: ops
     size: M
     opened: 2026-11-08
@@ -1613,5 +1613,5 @@ items:
       by: dev-node
       agent: conduit
       since: 2026-11-08T20:49:30Z
-      heartbeat: 2026-11-08T20:49:30Z
+      heartbeat: 2026-11-08T20:49:34Z
     notes: Audit by conduit on dev-node (v0.11.0 code + live host); gaps become implementation items for fukuii-fc.
