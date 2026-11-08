@@ -1646,3 +1646,13 @@ items:
     refs: [B-145]
     links:
       issues: [1756]
+  - id: B-149
+    title: Container healthchecks use plaintext http on 8545 (base default 8546) and break under mode = https
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-08
+    refs: [B-145]
+    links:
+      issues: [1756]
