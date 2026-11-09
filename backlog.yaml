@@ -1771,7 +1771,7 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-09T01:17:37Z
-      heartbeat: 2026-11-09T02:09:21Z
+      heartbeat: 2026-11-09T02:29:34Z
     notes: From forge review of B-004, 2026-11-09. forge then herald.
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
