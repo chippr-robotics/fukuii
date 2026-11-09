@@ -457,7 +457,7 @@ items:
   - id: B-041
     title: "Spec 027 slice 4a: peer scoring wired (PeerScoringManager, scores through NetworkMetrics)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: p2p
     size: M
     opened: 2026-11-07
@@ -469,9 +469,11 @@ items:
       by: dev-node
       agent: herald
       since: 2026-11-09T18:55:39Z
-      heartbeat: 2026-11-09T18:55:42Z
+      heartbeat: 2026-11-09T21:46:58Z
       branch: feat/027-s4a-peer-scoring
-    notes: herald owns it. Needs only staging, not slices 1-3.
+    notes: |-
+      herald owns it. Needs only staging, not slices 1-3.
+      2026-11-09 in-progress: Code done; prism review fixes in progress; T149 Mordor run pending.
   - id: B-042
     title: "Spec 027 slice 4: logs and rich peers"
     priority: P2
