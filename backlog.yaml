@@ -1458,7 +1458,7 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-09T04:08:32Z
-      heartbeat: 2026-11-09T04:08:32Z
+      heartbeat: 2026-11-09T04:19:15Z
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-133
     title: "1727 PR7: VM error-text parity (precompile reasons, stack counts, EIP-7823 OutOfGas); vm/, forge+beacon"
