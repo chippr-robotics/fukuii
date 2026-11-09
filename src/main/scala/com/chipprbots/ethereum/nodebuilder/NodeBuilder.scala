@@ -51,10 +51,8 @@ import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.network.*
-import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
-import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.DiscoveryRuntime
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
