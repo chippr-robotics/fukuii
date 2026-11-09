@@ -1879,3 +1879,13 @@ items:
     refs: [B-133]
     links: {}
     notes: "beacon review of #1777: tracers print bare Scala names (VM.scala:141,291 -> CallTracer.scala:128). Also optional: a minStack member on ImmediateStackOp for geth stack-underflow text on DUPN/SWAPN/EXCHANGE (bucket C; text only, no consensus difference per execution-specs stack.py:229-237); do not raise delta."
+  - id: B-172
+    title: "eth_call/eth_estimateGas revert message lacks geth \": <reason>\" suffix; estimator lacks \"failed with %d gas:\" prefix; EIP-2681 nonce overflow text"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-133]
+    links: {}
+    notes: "conduit review of #1777: EthInfoService.scala:614 omits the decoded revert reason (eth_simulateV1 adds it at EthSimulateService:1377; rpc-compat .io fixtures expect it). gasestimator.go:266 prefix missing for non-intrinsic pre-check errors (TypedCallPathSpec:491 pins unprefixed). No ProgramError for nonce uint64 overflow (falls to toString.toLowerCase, CallErrors:39)."
