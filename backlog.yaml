@@ -61,7 +61,7 @@ items:
       by: fukuii-fc
       agent: beacon
       since: 2026-11-08T23:59:22Z
-      heartbeat: 2026-11-09T00:32:08Z
+      heartbeat: 2026-11-09T00:34:29Z
     notes: beacon. Check that PR B's ChainWeightSeed covers H6(2) (seed-chain-weights seeds the head only).
   - id: B-005
     title: "Engine API parity: SYNCING when the payload extends canonical, ACCEPTED otherwise; a typed local-fault error"
