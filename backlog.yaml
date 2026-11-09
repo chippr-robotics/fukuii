@@ -1763,17 +1763,18 @@ items:
   - id: B-160
     title: SNAP pivot header checks on ETC bootstrap/refresh paths (details in private notes)
     priority: P1
-    status: claimed
+    status: review
     area: sync
     size: M
     opened: 2026-11-09
     refs: []
-    links: {}
+    links:
+      prs: [1775]
     claim:
       by: fukuii-fc
       agent: forge
       since: 2026-11-09T01:17:37Z
-      heartbeat: 2026-11-09T04:35:37Z
+      heartbeat: 2026-11-09T04:37:09Z
     notes: From forge review of B-004, 2026-11-09. forge then herald.
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
