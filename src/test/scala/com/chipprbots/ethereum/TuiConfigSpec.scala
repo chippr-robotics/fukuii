@@ -193,3 +193,14 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
     c.copy(glyphs = GlyphSet.Emoji, reducedMotion = false, animationIntervalMs = 250, statusPollIntervalMs = 1000,
       splashMs = 3000) shouldBe TuiConfig.default
   }
+
+  // prism, slice 2 review: a 1 ms frame pace or poll interval would spin a core.
+  "TuiSettings.fromConfig" should "refuse frame paces below 50 ms and poll intervals below 100 ms" taggedAs (
+    UnitTest
+  ) in {
+    for (key, value) <- Seq("animation-interval-ms" -> "49", "status-poll-interval-ms" -> "99") do
+      val e = the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString(s"$key = $value"))
+      e.getMessage should include(s"fukuii.tui.$key")
+    TuiSettings.fromConfig(ConfigFactory.parseString("animation-interval-ms = 50, status-poll-interval-ms = 100")) shouldBe
+      TuiSettings(animationIntervalMs = 50, statusPollIntervalMs = 100)
+  }

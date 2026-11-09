@@ -136,8 +136,8 @@ object TuiSettings:
         value
     TuiSettings(
       glyphs = glyphs,
-      animationIntervalMs = millis("animation-interval-ms", TuiConfig.DefaultAnimationIntervalMs, 1),
-      statusPollIntervalMs = millis("status-poll-interval-ms", TuiConfig.DefaultStatusPollIntervalMs, 1),
+      animationIntervalMs = millis("animation-interval-ms", TuiConfig.DefaultAnimationIntervalMs, 50),
+      statusPollIntervalMs = millis("status-poll-interval-ms", TuiConfig.DefaultStatusPollIntervalMs, 100),
       reducedMotion = tui.hasPath("reduced-motion") && tui.getBoolean("reduced-motion"),
       splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0)
     )
