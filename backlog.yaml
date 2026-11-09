@@ -1964,3 +1964,13 @@ items:
     refs: [B-167]
     links: {}
     notes: Equivalent while floor == INITIAL_BASE_FEE == 1 gwei; ECIP-1111 vector MIN_BASE_FEE > INITIAL_BASE_FEE would fail. ECIP also wants INITIAL_BASE_FEE in chain config (code constant today). forge.
+  - id: B-180
+    title: eth_simulateV1 inline EIP-4788/EIP-2935 writes differ from import on ETH (4788 creates an absent account, 2935 self-deploys at Prague)
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: "EthSimulateService.applyEip4788/applyEip2935 vs BlockExecution (no code: no change). Call BlockExecution.applyBlockPreamble/applyEip2935 instead. ETC Olympia fixed in B-167. beacon, conduit."
