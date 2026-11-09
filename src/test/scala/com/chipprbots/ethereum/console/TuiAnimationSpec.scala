@@ -178,12 +178,13 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     next.stalled shouldBe false
   }
 
-  // In ASCII the worm is `~o`, so the ripple's `~` sits next to the worm's own: pinned in both sets.
-  "The rippling Overview" should "match its golden frames at tick 1, 80×24, in both sets" taggedAs (UnitTest) in {
-    for set <- GlyphSet.values do
+  // In ASCII the worm is `~o`: at tick 0 the ripple's `~` touches the worm's own (`~~o`), at tick 1 it is one cell back
+  // (`~=~o`). Both ticks, both sets.
+  "The rippling Overview" should "match its golden frames at ticks 0 and 1, 80×24, in both sets" taggedAs (UnitTest) in {
+    for set <- GlyphSet.values; tick <- Seq(0L, 1L) do
       matchGolden(
-        s"overview-s-regular-ripple-t01-${set.toString.toLowerCase}.txt",
-        visibleFrame(renderer.render(TuiFixtures.regularSyncEtc(set).copy(tick = 1), 80, 24, theme))
+        f"overview-s-regular-ripple-t$tick%02d-${set.toString.toLowerCase}.txt",
+        visibleFrame(renderer.render(TuiFixtures.regularSyncEtc(set).copy(tick = tick), 80, 24, theme))
       )
   }
 
