@@ -94,14 +94,17 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     s.sync shouldBe a[Sourced.Fresh[?]]
   }
 
+  // Two silent actors and a 1 s wait: one shared wait takes about 1,000 ms, one wait per ask about 2,000 ms. The 1,800 ms
+  // ceiling tells them apart with about 800 ms of room for a loaded runner.
   it should "wait once, for all its asks, not once per ask" taggedAs (UnitTest) in {
-    val p = probe(Behaviors.ignore, Behaviors.ignore, 500.millis)
+    val p = probe(Behaviors.ignore, Behaviors.ignore, 1.second)
     val started = System.nanoTime()
     val s = p()
     val tookMs = (System.nanoTime() - started) / 1_000_000L
-    tookMs should be >= 450L
-    s.peers shouldBe Sourced.Unresponsive("no reply within 500ms")
-    s.sync shouldBe Sourced.Unresponsive("no reply within 500ms")
+    tookMs should be >= 900L
+    tookMs should be < 1_800L
+    s.peers shouldBe Sourced.Unresponsive("no reply within 1000ms")
+    s.sync shouldBe Sourced.Unresponsive("no reply within 1000ms")
   }
 
   it should "keep a source's last answer as Stale when it misses a wait, then call it Unresponsive" taggedAs (
