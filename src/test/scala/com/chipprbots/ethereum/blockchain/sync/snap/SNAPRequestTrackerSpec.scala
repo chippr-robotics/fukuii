@@ -650,6 +650,23 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     f.scorer.getScore(f.peer.id).responsesReceived shouldBe 0
   }
 
+  it should "score the timeout even when the owner's callback throws" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    val fired = new java.util.concurrent.CountDownLatch(1)
+    val requestId = f.tracker.generateRequestId()
+    f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetAccountRange, timeout = 50.millis) {
+      fired.countDown()
+      throw new IllegalStateException("the owner's callback failed")
+    }
+    fired.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    // The request was expired before the callback ran, so the peer's timeout stands whatever the callback did.
+    eventually(timeout(Span(10000, Millis))) {
+      f.scorer.getScore(f.peer.id).requestsTimedOut shouldBe 1
+    }
+    f.tracker.isPending(requestId) shouldBe false
+  }
+
   it should "leave the decision to the owner when it owns the timeout: the timer records nothing, expireRequest does" taggedAs
     UnitTest in {
       val f = new ScoredTracker

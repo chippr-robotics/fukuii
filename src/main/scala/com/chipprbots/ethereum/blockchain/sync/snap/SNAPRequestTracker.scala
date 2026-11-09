@@ -152,40 +152,43 @@ class SNAPRequestTracker(
   ): Cancellable =
     val scheduledAtMs = nowMs()
     scheduler.scheduleOnce(delay) {
-      // The request this timer expired, if it did: scored after the lock is released (see `scoreTimeout`).
+      // The request this timer expired, if it did: scored after the lock is released (see `scoreTimeout`), and
+      // whatever `onTimeout` did: the request is gone from the tracker once it is expired, so the peer's timeout stands
+      // even if the owner's callback throws.
       var expired: Option[PendingRequest] = None
-      synchronized {
-        pendingRequests.get(requestId).foreach { req =>
-          val now = nowMs()
-          val latenessMs = now - scheduledAtMs - delay.toMillis
-          // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
-          // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
-          if !graceGranted && stallPolicy.isStall(latenessMs) then
-            log.warn(
-              s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +
-                s"process stall, granting ${stallPolicy.grace.toMillis}ms grace instead of timing out peer ${req.peer.id}"
-            )
-            pendingRequests.put(
-              requestId,
-              req.copy(
-                timestamp = now,
-                timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, ownerDecidesTimeout, true))
+      try
+        synchronized {
+          pendingRequests.get(requestId).foreach { req =>
+            val now = nowMs()
+            val latenessMs = now - scheduledAtMs - delay.toMillis
+            // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
+            // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
+            if !graceGranted && stallPolicy.isStall(latenessMs) then
+              log.warn(
+                s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +
+                  s"process stall, granting ${stallPolicy.grace.toMillis}ms grace instead of timing out peer ${req.peer.id}"
               )
-            )
-          else if ownerDecidesTimeout then
-            // Leave the request pending: the owner's mailbox may already hold the reply (see expireRequest).
-            log.debug(
-              s"SNAP request ${req.requestType} timer for request ID $requestId fired after ${delay.toSeconds}s — " +
-                s"owner decides the timeout"
-            )
-            onTimeout
-          else
-            expire(requestId, req, delay)
-            expired = Some(req)
-            onTimeout
+              pendingRequests.put(
+                requestId,
+                req.copy(
+                  timestamp = now,
+                  timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, ownerDecidesTimeout, true))
+                )
+              )
+            else if ownerDecidesTimeout then
+              // Leave the request pending: the owner's mailbox may already hold the reply (see expireRequest).
+              log.debug(
+                s"SNAP request ${req.requestType} timer for request ID $requestId fired after ${delay.toSeconds}s — " +
+                  s"owner decides the timeout"
+              )
+              onTimeout
+            else
+              expire(requestId, req, delay)
+              expired = Some(req)
+              onTimeout
+          }
         }
-      }
-      expired.foreach(scoreTimeout)
+      finally expired.foreach(scoreTimeout)
     }
 
   /** Expire a request the owner has decided timed out: forget it, slash the peer's rate capacity and count the failure.
