@@ -435,4 +435,4 @@ class DebugTracingService(
         .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
         .left
         .map(e => JsonRpcError.LogicError(e.message))
-    yield r
+    yield r.txResult

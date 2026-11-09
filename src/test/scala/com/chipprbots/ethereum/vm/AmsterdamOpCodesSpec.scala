@@ -195,8 +195,8 @@ class AmsterdamOpCodesSpec extends AnyFlatSpec with Matchers:
   it should "halt exceptionally where the EIP says so" taggedAs (UnitTest, VMTest) in {
     run("e75b").error shouldBe Some(InvalidOpCode(0xe7.toByte)) // 0x5b is a forbidden immediate
     run("e852").error shouldBe Some(InvalidOpCode(0xe8.toByte)) // 82 is a forbidden immediate
-    // 16 items, one short of DUPN 17.
-    run("6000808080808080808080808080808080e680").error shouldBe Some(StackUnderflow)
+    // 16 items, one short of DUPN 17 (go-ethereum: "stack underflow (16 <=> 17)").
+    run("6000808080808080808080808080808080e680").error shouldBe Some(StackUnderflow(16, 17))
   }
 
   "DUPN, SWAPN and EXCHANGE" should "cost 3 and move pc past the immediate" taggedAs (UnitTest, VMTest) in {
@@ -215,13 +215,13 @@ class AmsterdamOpCodesSpec extends AnyFlatSpec with Matchers:
     // SWAPN 17 needs 18 items; EXCHANGE 1 29 needs 30.
     val seventeen = (1 to 17).foldLeft(Stack.empty())((s, i) => s.push(UInt256(i)))
     SWAPN.execute(stateFor(amsterdam, ByteString(0xe7.toByte, 0x80.toByte)).withStack(seventeen)).error shouldBe
-      Some(StackUnderflow)
+      Some(StackUnderflow(17, 18))
     val twentyNine = (1 to 29).foldLeft(Stack.empty())((s, i) => s.push(UInt256(i)))
     EXCHANGE.execute(stateFor(amsterdam, ByteString(0xe8.toByte, 0x8f.toByte)).withStack(twentyNine)).error shouldBe
-      Some(StackUnderflow)
+      Some(StackUnderflow(29, 30))
     val full = (1 to 1024).foldLeft(Stack.empty())((s, i) => s.push(UInt256(i)))
     DUPN.execute(stateFor(amsterdam, ByteString(0xe6.toByte, 0x80.toByte)).withStack(full)).error shouldBe
-      Some(StackOverflow)
+      Some(StackOverflow(1024, 1023))
   }
 
   "0x4b and 0xe6..0xe8" should "be undefined before Amsterdam" taggedAs (UnitTest, VMTest) in {

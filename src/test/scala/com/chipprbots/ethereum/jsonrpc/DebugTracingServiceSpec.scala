@@ -172,7 +172,7 @@ class DebugTracingServiceSpec
       (mockLedger.simulateCall)
         .expects(*, *, *, *, *)
         .anyNumberOfTimes()
-        .returning(Right(null.asInstanceOf[TxResult]))
+        .returning(Right(StxLedger.CallOutcome(null.asInstanceOf[TxResult], codeDepositShortfall = false)))
 
       val callTx: TxArgs = TxArgs()
       val result: Either[JsonRpcError, TraceCallResponse] = service

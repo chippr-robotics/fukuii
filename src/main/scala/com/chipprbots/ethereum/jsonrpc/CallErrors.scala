@@ -16,9 +16,10 @@ object CallErrors:
     * non-gas failure at the ceiling, the `error` member of eth_createAccessList, and the `error.message` of an
     * eth_simulateV1 call (#1727; it printed a sign-extended opcode byte and the lower-cased case-class name before).
     *
-    * Two errors are still not go-ethereum's, because the error value does not carry what the text needs: a stack
-    * underflow has no `(have <=> want)` counts and a precompile failure has no reason (`invalid input length`, ...).
-    * Both wait on a `vm/` change (#1727, class G); `InvalidCall` falls to the case-class name too.
+    * A stack error carries go-ethereum's counts and a failed code deposit its own name (#1727 PR 7a). A precompile
+    * failure is still not go-ethereum's: it has no reason (`invalid input length`, ...) until #1727 PR 7b.
+    * `InvalidCall` still falls to the case-class name: it carries no reason, and stays a case object (see
+    * `vm.ProgramError`).
     */
   def vmErrorMessage(error: ProgramError): String = error match
     case RevertOccurs => "execution reverted"
@@ -28,11 +29,13 @@ object CallErrors:
     case InvalidOpCode(code)                  => s"invalid opcode: ${opCodeName(code)}"
     case OpCodeNotAvailableInStaticContext(_) => "write protection"
     case InvalidJump(_)                       => "invalid jump destination"
-    case StackOverflow                        => "stack limit reached 1024 (1023)"
-    case StackUnderflow                       => "stack underflow"
+    case StackOverflow(len, limit)            => s"stack limit reached $len ($limit)"
+    case StackUnderflow(len, required)        => s"stack underflow ($len <=> $required)"
     case ReturnDataOverflow                   => "return data out of bounds"
     case InvalidCode                          => "invalid code: must not begin with 0xef"
     case InitCodeSizeLimit                    => "max initcode size exceeded"
+    case MaxCodeSizeExceeded                  => "max code size exceeded"
+    case CodeStoreOutOfGas                    => "contract creation code storage out of gas"
     case other                                => other.toString.toLowerCase
 
   /** go-ethereum `OpCode.String()` (`core/vm/opcodes.go`): the name in geth's `opCodeToString`, whether or not the

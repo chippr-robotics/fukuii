@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
-import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -396,26 +395,36 @@ class EthInfoService(
     * A frame that fails is an error, as geth's `Call` returns `result.Return(), result.Err`: a revert is code 3 with
     * its data, and any other VM error (out of gas, invalid opcode, ...) is -32000 with geth's message. Never an empty
     * result: a caller that reads `0x` as success would be told a message that runs out of gas succeeds.
+    *
+    * A pre-Homestead creation that cannot pay its code deposit succeeds in the frame (no code, gas and state kept) but
+    * is go-ethereum's `ErrCodeStoreOutOfGas` here: -32000 "contract creation code storage out of gas", no data.
     */
   def call(req: CallRequest): ServiceResponse[CallResponse] =
-    callOutcome(req).map(_.flatMap { r =>
+    callOutcome(req).map(_.flatMap { outcome =>
+      val r = outcome.txResult
       r.vmError match
         case Some(com.chipprbots.ethereum.vm.RevertOccurs) => Left(revertError(r.vmReturnData))
         case Some(error) => Left(JsonRpcError.LogicError(CallErrors.vmErrorMessage(error)))
-        case None        => Right(CallResponse(r.vmReturnData))
+        case None if outcome.codeDepositShortfall =>
+          Left(JsonRpcError.LogicError(CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.CodeStoreOutOfGas)))
+        case None => Right(CallResponse(r.vmReturnData))
     })
 
   /** The message call eth_call runs, with its VM outcome as it came out of the frame: a failed frame is a `Right` whose
-    * `vmError` is set. GraphQL's `call` reads its `status` from that (geth `result.Failed()`); a `Left` is a pre-check
-    * failure (geth `preCheck` / `buyGas` / intrinsic gas), which geth's GraphQL returns as an error.
+    * `vmError` is set, a pre-Homestead creation short of its code deposit one whose `codeDepositShortfall` is.
+    * GraphQL's `call` reads its `status` from those (geth `result.Failed()`); a `Left` is a pre-check failure (geth
+    * `preCheck` / `buyGas` / intrinsic gas / the transfer check), which geth's GraphQL returns as an error.
     */
-  def callOutcome(req: CallRequest): ServiceResponse[TxResult] =
+  def callOutcome(req: CallRequest): ServiceResponse[StxLedger.CallOutcome] =
     IO {
       for
         // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
         prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
         (msg, world) = prepared
-        r <- stxLedger.simulateCall(msg.stx, msg.header, world, msg.options, tracer = None).left.map(preCheckError)
+        r <- stxLedger
+          .simulateCall(msg.stx, msg.header, world, msg.options, tracer = None)
+          .left
+          .map(callPreCheckError(msg.stx.tx.tx.gasLimit.value))
       yield r
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -508,11 +517,16 @@ class EthInfoService(
           .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${msg.stx.tx.hash.toHex} err: ${e.message}"))
       yield (msg, r)
       step match
-        case Left(e)                                                 => Left(e)
-        case Right((msg, r)) if tracer.touchedSet == prev.touchedSet =>
+        case Left(e) => Left(e)
+        case Right((msg, outcome)) if tracer.touchedSet == prev.touchedSet =>
+          val r = outcome.txResult
           // geth reports res.UsedGas, which is never below the calldata floor (EIP-7623 / EIP-7976)
           val gasUsed = stxLedger.callFloorGas(msg.stx, msg.header).fold(r.gasUsed)(r.gasUsed.max)
-          Right(CreateAccessListResponse(accessList, gasUsed, r.vmError.map(CallErrors.vmErrorMessage)))
+          // geth's vmerr, a pre-Homestead creation short of its code deposit included (ErrCodeStoreOutOfGas)
+          val vmError = r.vmError.orElse(
+            Option.when(outcome.codeDepositShortfall)(com.chipprbots.ethereum.vm.CodeStoreOutOfGas)
+          )
+          Right(CreateAccessListResponse(accessList, gasUsed, vmError.map(CallErrors.vmErrorMessage)))
         case Right(_) if iteration + 1 >= MaxAccessListIterations =>
           Left(JsonRpcError.LogicError(s"access list did not converge after $MaxAccessListIterations runs"))
         case Right(_) => loop(tracer, iteration + 1)
@@ -587,7 +601,13 @@ class EthInfoService(
   private def defaultFrom: Address =
     keyStore.listAccounts.getOrElse(Nil).headOption.getOrElse(Address(0))
 
-  private def preCheckError(e: StxLedger.CallPreCheckError): JsonRpcError = JsonRpcError.LogicError(e.message)
+  /** eth_call's message for a call refused before execution: go-ethereum `applyMessageWithEVM` (internal/ethapi/
+    * api.go:838-840) wraps whatever `core.ApplyMessage` returns as `err: %w (supplied gas %d)`, the gas being the
+    * message's gas limit after CallDefaults. Only eth_call (and GraphQL's `call`, which reports no message) goes
+    * through it; eth_createAccessList and eth_estimateGas word their own.
+    */
+  private def callPreCheckError(suppliedGas: BigInt)(e: StxLedger.CallPreCheckError): JsonRpcError =
+    JsonRpcError.LogicError(s"err: ${e.message} (supplied gas $suppliedGas)")
 
   private def revertError(data: ByteString): JsonRpcError =
     val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(data.toArray[Byte])

@@ -108,7 +108,9 @@ class EthServiceSpec
     )
 
     val txResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
-    stxLedger.simulateCall.expects(*, *, *, *, *).returning(Right(txResult))
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(Right(StxLedger.CallOutcome(txResult, codeDepositShortfall = false)))
 
     val tx: TxArgs = TxArgs(
       from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
@@ -121,6 +123,76 @@ class EthServiceSpec
     val response: ServiceResponse[CallResponse] = ethService.call(CallRequest(tx, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
+
+  // go-ethereum `applyMessageWithEVM` (internal/ethapi/api.go:838-840) wraps every error `core.ApplyMessage` returns
+  // before the frame runs (preCheck, buyGas, intrinsic gas, the floor, the top-frame transfer check) as
+  // `err: %w (supplied gas %d)`, the gas being the message's gas limit after CallDefaults. eth_call (`DoCall`) is the
+  // one endpoint that wraps; eth_createAccessList and eth_estimateGas have their own wording.
+  it should "wrap a call refused before execution as go-ethereum's eth_call does: err: ... (supplied gas N)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val refused: String = "insufficient funds for transfer: address 0xdA714fE079751FA7a1aD80b76571EA6Ec52a446c"
+    stxLedger.simulateCall.expects(*, *, *, *, *).returning(Left(StxLedger.CallPreCheckError(refused)))
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      gas = Some(GasAmount(50000)),
+      value = Some(3)
+    )
+    ethService.call(CallRequest(tx, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, s"err: $refused (supplied gas 50000)", None))
+
+  // A pre-Homestead creation that runs its init code but cannot pay its code deposit succeeds in the frame (ETC blocks
+  // 0-1,149,999: no code, gas and state kept, `vmError` None). go-ethereum's and core-geth's `create` return
+  // ErrCodeStoreOutOfGas as the message's error there, which each endpoint reports as it reports any VM error.
+  it should "report a pre-Homestead creation short of its code deposit as go-ethereum's ErrCodeStoreOutOfGas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val world: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val shortfall: StxLedger.CallOutcome = StxLedger.CallOutcome(
+      TxResult(world, 41000, Nil, ByteString(Array.fill[Byte](1000)(0)), None),
+      codeDepositShortfall = true
+    )
+    val creation: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      gas = Some(GasAmount(60000)),
+      nonce = Some(0),
+      data = Some(ByteString(org.bouncycastle.util.encoders.Hex.decode("6103e86000f3")))
+    )
+    val codeStorageOutOfGas: String = "contract creation code storage out of gas"
+
+    // eth_call: Call returns result.Return() (nil) and result.Err: -32000, no data
+    stxLedger.simulateCall.expects(*, *, *, *, *).returning(Right(shortfall))
+    ethService.call(CallRequest(creation, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, codeStorageOutOfGas, None))
+
+    // eth_createAccessList: the error member is vmerr.Error()
+    stxLedger.worldAt.expects(*).returning(world)
+    stxLedger.simulateCall.expects(*, *, *, *, *).returning(Right(shortfall))
+    stxLedger.callFloorGas.expects(*, *).returning(None)
+    ethService.createAccessList(CreateAccessListRequest(creation, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Right(CreateAccessListResponse(Nil, BigInt(41000), Some(codeStorageOutOfGas)))
+
+    // eth_estimateGas: the estimator's answer at the ceiling (StxLedgerSpec runs it), -32000 with no data
+    stxLedger.estimateCallGas
+      .expects(*, *, *, *)
+      .returning(Left(StxLedger.CallEstimateFailure.Failed(com.chipprbots.ethereum.vm.CodeStoreOutOfGas)))
+    ethService.estimateGas(CallRequest(creation, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, codeStorageOutOfGas, None))
 
   it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup:
     blockchainWriter.storeBlock(blockToRequest).commit()

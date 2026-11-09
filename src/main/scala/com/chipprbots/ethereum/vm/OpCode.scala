@@ -314,8 +314,8 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
     // `availableInContext` is only consulted inside a static frame: outside one it is true for every instruction (see
     // its contract below), and asking costs a virtual call and a function application per instruction.
     if state.staticCtx && !availableInContext(state) then state.withError(OpCodeNotAvailableInStaticContext(code))
-    else if state.stack.size < delta then state.withError(StackUnderflow)
-    else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(StackOverflow)
+    else if state.stack.size < delta then state.withError(stackUnderflow(state.stack))
+    else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(stackOverflow(state.stack))
     else
       val gas: BigInt = calcGas(state)
       if gas > state.gas then
@@ -340,6 +340,18 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
           // the transaction consumes its whole limit having written nothing.
           state.copy(gas = 0).withError(OutOfGas)
         else executed.chargeStateGas(stateGas)
+
+  /** The stack is shallower than the `delta` items this instruction pops: go-ethereum's `ErrStackUnderflow{stackLen,
+    * required: minStack}` (core/vm/interpreter.go:204-205), `minStack` being the pops.
+    */
+  final protected def stackUnderflow(stack: Stack): StackUnderflow = StackUnderflow(stack.size, delta)
+
+  /** The stack is deeper than this instruction can run on: go-ethereum's `ErrStackOverflow{stackLen, limit: maxStack}`
+    * (core/vm/interpreter.go:206-207), `maxStack` being `1024 + pops - pushes` (jump_table.go). The bound `execute`
+    * checks, `size - delta + alpha > maxSize`, is `size > maxSize + delta - alpha`.
+    */
+  final protected def stackOverflow(stack: Stack): StackOverflow =
+    StackOverflow(stack.size, stack.maxSize + delta - alpha)
 
   protected def calcGas[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): BigInt =
     baseGas(state) + varGas(state)
@@ -1216,7 +1228,8 @@ case object DUPN extends ImmediateStackOp(0xe6, alpha = 1):
     if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
     else
       val n = OpCode.decodeSingle(x)
-      if n > stack.size then Left(StackUnderflow) else Right(stack.dup(n - 1))
+      // go-ethereum instructions.go:1026-1027: ErrStackUnderflow{len, n}
+      if n > stack.size then Left(StackUnderflow(stack.size, n)) else Right(stack.dup(n - 1))
 
 /** EIP-8024: swap the top with the (n + 1)-th stack item (1-based), 17 <= n <= 235. */
 case object SWAPN extends ImmediateStackOp(0xe7, alpha = 0):
@@ -1224,7 +1237,8 @@ case object SWAPN extends ImmediateStackOp(0xe7, alpha = 0):
     if !OpCode.isValidSingleImmediate(x) then Left(InvalidOpCode(code))
     else
       val n = OpCode.decodeSingle(x)
-      if n + 1 > stack.size then Left(StackUnderflow) else Right(stack.swap(n))
+      // go-ethereum instructions.go:1054-1055: ErrStackUnderflow{len, n + 1}
+      if n + 1 > stack.size then Left(StackUnderflow(stack.size, n + 1)) else Right(stack.swap(n))
 
 /** EIP-8024: exchange the (n + 1)-th and (m + 1)-th stack items (1-based), 1 <= n < m <= 30 - n. */
 case object EXCHANGE extends ImmediateStackOp(0xe8, alpha = 0):
@@ -1234,7 +1248,9 @@ case object EXCHANGE extends ImmediateStackOp(0xe8, alpha = 0):
       val (n, m) = OpCode.decodePair(x)
       // Plain Int arithmetic: `n.max(m)` would resolve through UInt256's implicit conversion in this file.
       val deeper = math.max(n, m)
-      if deeper + 1 > stack.size then Left(StackUnderflow) else Right(stack.exchange(math.min(n, m), deeper))
+      // go-ethereum instructions.go:1083-1088: ErrStackUnderflow{len, max(n, m) + 1}
+      if deeper + 1 > stack.size then Left(StackUnderflow(stack.size, deeper + 1))
+      else Right(stack.exchange(math.min(n, m), deeper))
 
 sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0, _.G_log):
   def this(code: Int) = this(code, code - 0xa0)
@@ -1275,8 +1291,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
   // avoiding the duplicate gas calculation that CreateOp.exec() previously performed (EC-243).
   override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
     if !availableInContext(state) then state.withError(OpCodeNotAvailableInStaticContext(code.toByte))
-    else if state.stack.size < delta then state.withError(StackUnderflow)
-    else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(StackOverflow)
+    else if state.stack.size < delta then state.withError(stackUnderflow(state.stack))
+    else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(stackOverflow(state.stack))
     else
       val gas: BigInt = calcGas(state)
       if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
@@ -1508,8 +1524,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
 
   override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state0: ProgramState[W, S]): ProgramState[W, S] =
     if !availableInContext(state0) then state0.withError(OpCodeNotAvailableInStaticContext(code.toByte))
-    else if state0.stack.size < delta then state0.withError(StackUnderflow)
-    else if state0.stack.size - delta + alpha > state0.stack.maxSize then state0.withError(StackOverflow)
+    else if state0.stack.size < delta then state0.withError(stackUnderflow(state0.stack))
+    else if state0.stack.size - delta + alpha > state0.stack.maxSize then state0.withError(stackOverflow(state0.stack))
     else
       // EIP-7928: before any out-of-gas outcome below, which may come after execution-specs has read the target.
       if state0.env.accessRecorder.isDefined then recordCallTargets(state0)
