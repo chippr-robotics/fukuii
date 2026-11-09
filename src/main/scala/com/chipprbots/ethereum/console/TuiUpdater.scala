@@ -99,8 +99,11 @@ class TuiUpdater(
             failedFrames = 0
             more
           catch
-            case _: InterruptedException => false
-            case NonFatal(e)             => frameFailed(e)
+            case _: InterruptedException =>
+              // Ends the loop without clearing `running`, so the finally tells stop()'s interrupt from any other.
+              Thread.currentThread().interrupt()
+              true
+            case NonFatal(e) => frameFailed(e)
         if !keepGoing then running = false
     finally
       // stop(), q, d and the give-up all clear `running` first. Anything else that ends the loop (an interrupt from

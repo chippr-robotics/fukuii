@@ -299,3 +299,21 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       events.map(_._1) shouldBe List(Level.WARN)
     }
   }
+
+  // prism, slice 2 final review: a frame that threw InterruptedException ended the loop by clearing `running`, so the
+  // unasked-exit rule never saw it, and the TUI stayed up in raw mode. Only stop(), q, d and the give-up clear it now.
+  it should "give the terminal back, with a WARN, when an InterruptedException not from stop() ends the loop" taggedAs (
+    UnitTest
+  ) in {
+    val thrown = new java.util.concurrent.atomic.AtomicBoolean(false)
+    withUpdater(snapshots =
+      () => if thrown.compareAndSet(false, true) then throw new InterruptedException("not stop()") else Some(snapshot)
+    ) { (updater, tui, _) =>
+      val events = warningsDuring(classOf[TuiUpdater]) {
+        updater.start()
+        eventually(timeout(5.seconds), interval(10.millis))(updater.isRunning shouldBe false)
+      }
+      tui.isEnabled shouldBe false
+      events.map(_._1) shouldBe List(Level.WARN)
+    }
+  }
