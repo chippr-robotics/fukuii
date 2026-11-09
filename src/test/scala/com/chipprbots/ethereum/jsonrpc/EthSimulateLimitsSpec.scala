@@ -12,10 +12,12 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -51,13 +53,32 @@ class EthSimulateLimitsSpec extends AnyFlatSpec with Matchers with AmsterdamFixt
   private class Node extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = amsterdamConfig
 
+    // The base state holds the four request contracts, as a real chain's does: past timestamp 360 the simulated blocks
+    // are Amsterdam blocks, which run the request system calls and fail without them (see RequestContractStubs).
+    private val baseStateRoot: ByteString =
+      val empty = InMemoryWorldStateProxy(
+        storagesInstance.storages.evmCodeStorage,
+        blockchain.getBackingMptStorage(-1),
+        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        UInt256.Zero,
+        ByteString(MerklePatriciaTrie.EmptyRootHash),
+        noEmptyAccounts = false,
+        ethCompatibleStorage = true
+      )
+      val stubs = RequestContractStubs.Addresses.foldLeft(empty) { (world, address) =>
+        world
+          .saveAccount(address, Account(codeHash = CodeHash(kec256(RequestContractStubs.Stop))))
+          .saveCode(address, RequestContractStubs.Stop)
+      }
+      InMemoryWorldStateProxy.persistState(stubs).stateRootHash
+
     blockchainWriter.save(
       Block(
         Fixtures.Blocks.ValidBlock.header.copy(
           number = BlockNumber(BaseNumber),
           difficulty = Difficulty(0),
           beneficiary = ByteString(new Array[Byte](20)),
-          stateRoot = TrieRoot(emptyRoot),
+          stateRoot = TrieRoot(baseStateRoot),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = Timestamp(300),

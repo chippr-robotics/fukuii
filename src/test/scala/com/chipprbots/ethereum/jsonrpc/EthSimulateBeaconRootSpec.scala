@@ -72,8 +72,13 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
     /** The simulated blocks of one block state call at `time`, with the overrides `beaconRoot` and `number` given. */
     def simulate(time: Long, beaconRoot: Option[ByteString], number: Option[Int] = None): Seq[SimulateBlockResult] =
       val overrides = BlockOverrides(time = Some(BigInt(time)), beaconRoot = beaconRoot, number = number.map(BigInt(_)))
+      // an Amsterdam block gets the four request contracts a real chain has (see RequestContractStubs)
+      val requestContracts =
+        Option.when(amsterdamConfig.isAmsterdamTimestamp(Timestamp(time)))(RequestContractStubs.overrides)
       service
-        .ethSimulate(EthSimulateRequest(Seq(BlockStateCall(blockOverrides = Some(overrides)))))
+        .ethSimulate(
+          EthSimulateRequest(Seq(BlockStateCall(blockOverrides = Some(overrides), stateOverrides = requestContracts)))
+        )
         .unsafeRunSync()
         .fold(err => fail(s"eth_simulateV1 failed: $err"), _.blocks)
 
