@@ -23,6 +23,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
@@ -343,6 +344,27 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.kit.run(RetrySnapSyncStart)
 
     h.module.snapSyncStarts shouldBe 1
+  }
+
+  it should "forget the persisted bootstrap target when the bootstrap found no eligible peer after a rejected header" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.ExhaustedAfterRejection))
+
+    // The next start chooses the target again from the peers that remain.
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.module.bootstrapRetryCount shouldBe 1
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 4.seconds))
+  }
+
+  it should "keep the persisted bootstrap target after any other bootstrap failure" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(PivotBootstrapFailed("no header"))
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(BigInt(500))
   }
 
   it should "give up into dormant mode on the tenth failed bootstrap, without another retry" taggedAs UnitTest in {

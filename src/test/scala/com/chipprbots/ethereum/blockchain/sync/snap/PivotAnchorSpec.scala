@@ -49,7 +49,7 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     downloaded(20)
     // A header at 15 on the real 14, with another state root, stored with its index entry after the download stored the
     // real 15 (as the pivot bootstrap and the pivot's best-block record do) and committed as the pivot.
-    val altered = headers(15).copy(stateRoot = otherRoot)
+    val altered: BlockHeader = headers(15).copy(stateRoot = otherRoot)
     blockchainWriter.storeBlockHeader(altered).commit()
     committed(altered)
     blockchainReader.getBlockHeaderByNumber(15) shouldBe Some(altered)
@@ -59,8 +59,48 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
   it should "reject a pinned hash that differs even when the state root matches" taggedAs UnitTest in new Chain:
     downloaded(20)
     committed(headers(15))
-    appState.putSnapSyncPivotHash(headers(14).hash.value).commit()
+    // Another header at the pivot's height with the same state root (another extra data, say).
+    val sibling: BlockHeader = headers(15).copy(extraData = ByteString("other"))
+    blockchainWriter.storeBlockHeader(sibling).commit()
+    appState.putSnapSyncPivotHash(sibling.hash.value).commit()
     check(15) shouldBe a[PivotAnchor.Check.Diverged]
+
+  it should "compare a pinned hash that names no stored header" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    committed(headers(15))
+    appState.putSnapSyncPivotHash(ByteString(Array.fill(32)(0x44.toByte))).commit()
+    check(15) shouldBe a[PivotAnchor.Check.Diverged]
+
+  it should "ignore a stale pin that names a stored header at another height, and let the state root decide" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    committed(headers(15))
+    appState.putSnapSyncPivotHash(headers(14).hash.value).commit()
+    check(15) shouldBe PivotAnchor.Check.Anchored(headers(15))
+
+  it should "take the header the download recorded at its target, with no walk back" taggedAs UnitTest in new Chain:
+    // Only blocks 0, 15 and 20 are stored: a walk back from the tip at 20 would stop at 19.
+    Seq(headers.head, headers(15), headers(20)).foreach(h => blockchainWriter.storeBlockHeader(h).commit())
+    appState
+      .putBackfillBestHeader(20)
+      .and(appState.putBackfillBestHeaderHash(headers(20).hash.value))
+      .and(appState.putBackfillTargetHash(headers(15).hash.value))
+      .commit()
+    committed(headers(15))
+    check(15) shouldBe PivotAnchor.Check.Anchored(headers(15))
+    check(14) shouldBe a[PivotAnchor.Check.Undecided] // not the target: the walk back finds 19 missing
+
+  it should "not walk back further than its cap" taggedAs UnitTest in new Chain:
+    val farTip: BlockHeader =
+      headers(20).copy(number = com.chipprbots.ethereum.domain.BlockNumber(15 + PivotAnchor.MaxWalkBack + 1))
+    blockchainWriter.storeBlockHeader(farTip).commit()
+    appState
+      .putBackfillBestHeader(farTip.number.value)
+      .and(appState.putBackfillBestHeaderHash(farTip.hash.value))
+      .commit()
+    committed(headers(15))
+    check(15) match
+      case PivotAnchor.Check.Undecided(reason) => reason should include("walk > cap")
+      case other                               => fail(s"expected undecided, got $other")
 
   it should "compare the state root alone for a pivot committed without a hash (a datadir from before the key)" taggedAs UnitTest in new Chain:
     downloaded(20)
@@ -103,7 +143,7 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
 
   "PivotAnchor.reanchor" should "persist the validated header as the pivot, its index entry and the best block" taggedAs UnitTest in new Chain:
     downloaded(20)
-    val altered = headers(15).copy(stateRoot = otherRoot)
+    val altered: BlockHeader = headers(15).copy(stateRoot = otherRoot)
     blockchainWriter.storeBlockHeader(altered).commit()
     committed(altered)
 

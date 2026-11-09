@@ -247,7 +247,8 @@ trait ChildFactories:
       deferBodiesAndReceipts: Boolean = false,
       emptyHeaderBackoff: Option[FiniteDuration] = None,
       nowMs: () => Long = () => System.currentTimeMillis(),
-      headerChainCheck: HeaderChainCheck
+      headerChainCheck: HeaderChainCheck,
+      sharedBlacklist: Option[Blacklist] = None
   ): Behavior[ChainDownloader.Command] =
     ChainDownloader(
       blockchainReader = blockchainReader,
@@ -265,7 +266,8 @@ trait ChildFactories:
       deferBodiesAndReceipts = deferBodiesAndReceipts,
       emptyHeaderBackoff = emptyHeaderBackoff,
       nowMs = nowMs,
-      headerChainCheck = headerChainCheck
+      headerChainCheck = headerChainCheck,
+      sharedBlacklist = sharedBlacklist
     )
   // scalastyle:on parameter.number
 

@@ -207,6 +207,9 @@ private class SNAPSyncControllerImpl(
 
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
+  // Implements `SnapFinalizationState.sharedBlacklist`: the blacklist SyncController shares with the rest of sync.
+  val sharedBlacklist: Blacklist = blacklist
+
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
   // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry

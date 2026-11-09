@@ -108,7 +108,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           deferBodiesAndReceipts: Boolean,
           emptyHeaderBackoff: Option[FiniteDuration],
           nowMs: () => Long,
-          headerChainCheck: HeaderChainCheck
+          headerChainCheck: HeaderChainCheck,
+          sharedBlacklist: Option[Blacklist]
       ): Behavior[ChainDownloader.Command] =
         Behaviors.monitor(
           chainMessages.ref,
@@ -128,7 +129,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
             deferBodiesAndReceipts,
             emptyHeaderBackoff,
             nowMs,
-            headerChainCheck
+            headerChainCheck,
+            sharedBlacklist
           )
         )
 
@@ -462,7 +464,7 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   ) in new Fixture:
     // The committed pivot: a header at the pivot's number on the real parent, with another state root, stored with its
     // number index entry (as the pivot bootstrap stores it); SNAP synced its state root.
-    val otherRoot = ByteString(Array.fill(32)(0x22.toByte))
+    val otherRoot: ByteString = ByteString(Array.fill(32)(0x22.toByte))
     var validatedPivot: BlockHeader = null
     val snap: TypedActorRef[Command] = start(
       cfg(defer = true),

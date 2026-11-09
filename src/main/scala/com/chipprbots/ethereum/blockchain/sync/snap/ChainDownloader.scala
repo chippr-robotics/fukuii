@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders.G
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts.GetReceiptsEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetReceipts70.GetReceipts70Enc
 import com.chipprbots.ethereum.rlp.*
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Downloads block headers, bodies, and receipts from genesis to a target block in parallel with SNAP state sync.
@@ -87,7 +88,8 @@ class ChainDownloader private (
     deferBodiesAndReceipts: Boolean,
     emptyHeaderBackoff: Option[FiniteDuration],
     nowMs: () => Long,
-    headerChainCheck: HeaderChainCheck
+    headerChainCheck: HeaderChainCheck,
+    sharedBlacklist: Option[Blacklist]
 ):
 
   import ChainDownloader.*
@@ -98,6 +100,9 @@ class ChainDownloader private (
   // another writer of the number→hash index cannot change it. Settled by `establishTip` on every (re)start, then
   // advanced with each stored response (and persisted with the cursor as `BackfillBestHeaderHash`).
   private var tipHash: Option[ByteString] = None
+
+  // When the all-peers-blacklisted warning was last logged (rate-limited: the dispatch tick runs every 200 ms - 2 s).
+  private var lastAllBlacklistedWarnMs: Long = 0L
 
   private val prhResultAdapter: TypedActorRef[PeerRequestHandler.Result] =
     context.messageAdapter[PeerRequestHandler.Result](PeerResult(_))
@@ -477,7 +482,9 @@ class ChainDownloader private (
         headerExcluded(peerId)
       }
 
-      if available.isEmpty then Behaviors.same
+      if available.isEmpty then
+        warnIfAllBlacklisted()
+        Behaviors.same
       else
         val peers = available.values.toList
         var slotsLeft = maxConcurrentRequests - inFlightCount
@@ -715,9 +722,26 @@ class ChainDownloader private (
         )
         None
 
-    usableOpt.foreach(usable => storeHeaderRun(peer, usable.toIndexedSeq))
+    // Nothing above the target is stored: the run that reaches the target ends at it.
+    usableOpt.foreach(usable => storeHeaderRun(peer, usable.toIndexedSeq.takeWhile(_.number.value <= targetBlock)))
 
-  /** Check one response's usable headers (ascending, starting right above the tip) and store the accepted run.
+  /** A rate-limited WARN when every connected peer is blacklisted while there is work left, so a download stalled on
+    * its blacklist is not silent.
+    */
+  private def warnIfAllBlacklisted(): Unit =
+    val connected = peerListHelper.handshakedPeers
+    val workLeft = bestHeaderNumber < targetBlock || bodiesQueue.nonEmpty || receiptsQueue.nonEmpty
+    if workLeft && connected.nonEmpty && connected.keys.forall(blacklist.isBlacklisted) then
+      val now = nowMs()
+      if now - lastAllBlacklistedWarnMs >= AllBlacklistedWarnIntervalMs then
+        lastAllBlacklistedWarnMs = now
+        log.warn(
+          s"${HeaderChainCheck.LogTag} Chain download: all ${connected.size} connected peer(s) are blacklisted; the " +
+            s"download waits until one is released (headers at $bestHeaderNumber of $targetBlock)"
+        )
+
+  /** Check one response's usable headers (ascending, starting right above the tip, none above the target) and store the
+    * accepted run.
     *
     * Each header must name the previous one (the tip, for the first) as its parent, and pass `headerChainCheck` against
     * it: on proof-of-work chains the block-import header rules, with the seal on the positions `sealPositions` picks.
@@ -727,118 +751,153 @@ class ChainDownloader private (
     * as it always did.
     *
     * The accepted run is stored in one write with each header's chain weight (the tip's plus the run's difficulties),
-    * the cursor and the tip hash (#1169: the cursor never runs ahead of the data on disk).
+    * the cursor and the tip hash (#1169: the cursor never runs ahead of the data on disk), and, for the run that
+    * reaches the target, the target's hash (`BackfillTargetHash`).
     */
   private def storeHeaderRun(peer: Peer, usable: IndexedSeq[BlockHeader]): Unit =
-    tipHash.flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h))) match
-      case None =>
-        log.warn(
-          "Chain download: the tip header at block {} is not stored — aborting batch (cursor stays at {})",
-          bestHeaderNumber,
-          bestHeaderNumber
-        )
-      case Some(tip) =>
-        blockchainReader.getChainWeightByHash(tip.hash) match
-          case None =>
-            // Parent weight missing means the pivot TD was not seeded for this hash.
-            // Storing TD=0 here would corrupt every subsequent header's accumulated weight.
-            // Abort this batch; the backfill cursor stays at bestHeaderNumber so the next
-            // request will retry from the last committed position.
-            log.warn(
-              "Chain download: parent chain weight missing for block {} parentHash={} — aborting batch (cursor stays at {})",
-              usable.head.number,
-              tip.hash,
-              bestHeaderNumber
-            )
-          case Some(tipWeight) =>
-            val seal = headerChainCheck.sealPositions(usable, targetBlock)
-            var parent = tip
-            var accepted = 0
-            var failure: Option[Blacklist.BlacklistReason] = None
-            while failure.isEmpty && accepted < usable.size do
-              val header = usable(accepted)
-              if header.parentHash != parent.hash then
-                log.warn(
-                  "Chain download: header {} parent hash mismatch from peer {}",
-                  header.number,
-                  peer.id
-                )
-                failure = Some(ErrorInBlockHeaders)
-              else
-                headerChainCheck.check(header, parent, seal(accepted)) match
-                  case Left(error) =>
-                    log.warn(
-                      s"Chain download: header ${header.number} (${header.hashAsHexString}) from peer ${peer.id} " +
-                        s"failed validation ($error, seal checked: ${seal(accepted)}); rejecting its response of " +
-                        s"${usable.size} header(s) from block ${usable.head.number}"
-                    )
-                    failure = Some(BlockHeaderValidationFailed)
-                  case Right(_) =>
-                    parent = header
-                    accepted += 1
+    if usable.nonEmpty then
+      tipHash.flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h))) match
+        case None =>
+          log.warn(
+            "Chain download: the tip header at block {} is not stored — aborting batch (cursor stays at {})",
+            bestHeaderNumber,
+            bestHeaderNumber
+          )
+        case Some(tip) =>
+          blockchainReader.getChainWeightByHash(tip.hash) match
+            case None =>
+              // Parent weight missing means the pivot TD was not seeded for this hash.
+              // Storing TD=0 here would corrupt every subsequent header's accumulated weight.
+              // Abort this batch; the backfill cursor stays at bestHeaderNumber so the next
+              // request will retry from the last committed position.
+              log.warn(
+                "Chain download: parent chain weight missing for block {} parentHash={} — aborting batch (cursor stays at {})",
+                usable.head.number,
+                tip.hash,
+                bestHeaderNumber
+              )
+            case Some(tipWeight) =>
+              val seal = headerChainCheck.sealPositions(usable, targetBlock)
+              var parent = tip
+              var accepted = 0
+              // The blacklist reason and the metric's reason of the first header that failed.
+              var failure: Option[(Blacklist.BlacklistReason, String)] = None
+              while failure.isEmpty && accepted < usable.size do
+                val header = usable(accepted)
+                if header.parentHash != parent.hash then
+                  log.warn(
+                    s"${HeaderChainCheck.LogTag} Chain download: header ${header.number} from peer ${peer.id} does not " +
+                      "name the previous header as its parent"
+                  )
+                  failure = Some((ErrorInBlockHeaders, HeaderChainCheck.ParentLinkReason))
+                else
+                  headerChainCheck.check(header, parent, seal(accepted)) match
+                    case Left(error) =>
+                      log.warn(
+                        s"${HeaderChainCheck.LogTag} Chain download: header ${header.number} (${header.hashAsHexString}) " +
+                          s"from peer ${peer.id} failed validation ($error, seal checked: ${seal(accepted)}); rejecting " +
+                          s"its response of ${usable.size} header(s) from block ${usable.head.number} and blacklisting " +
+                          s"the peer for ${BlockHeaderValidationFailed.duration(syncConfig.blacklistDuration)}"
+                      )
+                      failure = Some((BlockHeaderValidationFailed, HeaderChainCheck.rejectionReason(error)))
+                    case Right(_) =>
+                      parent = header
+                      accepted += 1
 
-            val stored = if failure.isDefined && headerChainCheck.validatesChain then 0 else accepted
-            if stored > 0 then
-              val run = usable.take(stored)
-              val weights = run.scanLeft(tipWeight)((weight, header) => weight.increase(header)).tail
-              run
-                .zip(weights)
-                .map { case (header, weight) =>
-                  blockchainWriter.storeBlockHeader(header).and(blockchainWriter.storeChainWeight(header.hash, weight))
-                }
-                .reduce(_.and(_))
-                .and(appStateStorage.putBackfillBestHeader(run.last.number.value))
-                .and(appStateStorage.putBackfillBestHeaderHash(run.last.hash.value))
-                .commit()
+              val stored = if failure.isDefined && headerChainCheck.validatesChain then 0 else accepted
+              if stored > 0 then
+                val run = usable.take(stored)
+                val weights = run.scanLeft(tipWeight)((weight, header) => weight.increase(header)).tail
+                val atTarget = run
+                  .find(_.number.value == targetBlock)
+                  .fold(appStateStorage.emptyBatchUpdate)(h => appStateStorage.putBackfillTargetHash(h.hash.value))
+                run
+                  .zip(weights)
+                  .map { case (header, weight) =>
+                    blockchainWriter
+                      .storeBlockHeader(header)
+                      .and(blockchainWriter.storeChainWeight(header.hash, weight))
+                  }
+                  .reduce(_.and(_))
+                  .and(appStateStorage.putBackfillBestHeader(run.last.number.value))
+                  .and(appStateStorage.putBackfillBestHeaderHash(run.last.hash.value))
+                  .and(atTarget)
+                  .commit()
 
-              if !bodiesReceiptsDeferred then
-                run.foreach { header =>
-                  bodiesQueue :+= header.hash.value
-                  receiptsQueue :+= header.hash.value
-                }
-              tipHash = Some(run.last.hash.value)
-              bestHeaderNumber += stored
-              headersDownloaded += stored
+                if !bodiesReceiptsDeferred then
+                  run.foreach { header =>
+                    bodiesQueue :+= header.hash.value
+                    receiptsQueue :+= header.hash.value
+                  }
+                tipHash = Some(run.last.hash.value)
+                bestHeaderNumber += stored
+                headersDownloaded += stored
 
-            failure.foreach(reason => blacklist.add(peer.id, syncConfig.blacklistDuration, reason))
+              failure.foreach { case (reason, metricReason) => rejectPeer(peer, reason, metricReason) }
+
+  /** Blacklist the peer that served a rejected response, for the reason's duration. A header that failed validation
+    * also goes to the node's shared sync blacklist (`sharedBlacklist`), so the rest of sync stops asking that peer too:
+    * a header that fails the block-import rules is not a transient fault, and this download blacklists any peer for it,
+    * whatever its standing. A broken parent link (a fork, a reorg) stays in this download's own list.
+    */
+  private def rejectPeer(peer: Peer, reason: Blacklist.BlacklistReason, metricReason: String): Unit =
+    SNAPSyncMetrics.incrementHeaderRejected(metricReason, HeaderChainCheck.Phase.HeaderDownload)
+    val duration = reason.duration(syncConfig.blacklistDuration)
+    blacklist.add(peer.id, duration, reason)
+    if reason == BlockHeaderValidationFailed then sharedBlacklist.foreach(_.add(peer.id, duration, reason))
 
   /** Settle the tip after (re)computing `bestHeaderNumber`: the stored header at that height, by the recorded tip hash
     * when it names one, else through the number index (a datadir whose headers predate the recorded hash).
     *
-    * Where the chain is validated and bodies are still held for SNAP finalisation, headers stored before the tip hash
-    * was recorded were stored by a build that did not validate them, so the download starts again from genesis and
-    * every header it keeps is validated: finalisation anchors the SNAP pivot to this chain. Re-storing an identical
-    * header changes nothing.
-    *
-    * When the recorded tip and the number index disagree at the tip's height, the index entry is put back to the
-    * downloaded header.
+    * Before the SNAP hand-off on a validated chain (bodies still held for finalisation, which anchors the pivot to
+    * these headers), two repairs:
+    *   - headers stored without a valid recorded tip are downloaded again from genesis: a missing tip means a build
+    *     that did not validate them stored them; a recorded tip that names no stored header at the cursor means the
+    *     record cannot be trusted (logged as an ERROR). The header, body and receipt cursors are reset in one write.
+    *   - when the number index does not name the recorded tip at the tip's height (another header, or no entry), the
+    *     entry is put back to the downloaded header.
+    * Elsewhere (the parent-link-only check on ETH, and after the hand-off) neither runs.
     */
   private def establishTip(): Unit =
+    val anchoring = headerChainCheck.validatesChain && bodiesReceiptsDeferred
+    val recordedHash = appStateStorage.getBackfillBestHeaderHash()
     def recordedTip: Option[BlockHeader] =
-      appStateStorage
-        .getBackfillBestHeaderHash()
+      recordedHash
         .flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h)))
         .filter(_.number.value == bestHeaderNumber)
-    if headerChainCheck.validatesChain && bodiesReceiptsDeferred && bestHeaderNumber > 0 && recordedTip.isEmpty then
-      log.warn(
-        "Chain download: the {} headers stored without a recorded validated tip are downloaded again from genesis, " +
-          "so that every stored header is validated against its parent",
-        bestHeaderNumber
-      )
-      appStateStorage.putBackfillBestHeader(0).commit()
+    if anchoring && bestHeaderNumber > 0 && recordedTip.isEmpty then
+      recordedHash match
+        case None =>
+          log.warn(
+            s"${HeaderChainCheck.LogTag} Chain download: the $bestHeaderNumber headers stored before a validated tip was " +
+              "recorded are downloaded again from genesis, so that every stored header is validated against its parent"
+          )
+        case Some(h) =>
+          val found = blockchainReader
+            .getBlockHeaderByHash(BlockHash(h))
+            .fold("is not stored")(header => s"names block ${header.number}")
+          log.error(
+            s"${HeaderChainCheck.LogTag} Chain download: the recorded tip ${ByteStringUtils.hash2string(h)} $found, not " +
+              s"block $bestHeaderNumber (the cursor); downloading the header chain again from genesis"
+          )
+      appStateStorage
+        .putBackfillBestHeader(0)
+        .and(appStateStorage.putBackfillBestBody(0))
+        .and(appStateStorage.putBackfillBestReceipt(0))
+        .and(appStateStorage.removeBackfillTargetHash())
+        .commit()
       bestHeaderNumber = 0
     val byRecord = recordedTip
     val byIndex = blockchainReader.getBlockHeaderByNumber(bestHeaderNumber)
-    (byRecord, byIndex) match
-      case (Some(tip), Some(indexed)) if indexed.hash != tip.hash =>
+    if anchoring then
+      byRecord.filterNot(tip => byIndex.exists(_.hash == tip.hash)).foreach { tip =>
         log.warn(
-          "Chain download: the number index names {} at block {}, not the downloaded header {}; restoring the entry",
-          indexed.hashAsHexString,
-          bestHeaderNumber,
-          tip.hashAsHexString
+          s"${HeaderChainCheck.LogTag} Chain download: the number index names " +
+            s"${byIndex.fold("no header")(_.hashAsHexString)} at block $bestHeaderNumber, not the downloaded header " +
+            s"${tip.hashAsHexString}; restoring the entry"
         )
         blockchainWriter.storeBlockHeader(tip).commit()
-      case _ => ()
+      }
     tipHash = byRecord.orElse(byIndex).map(_.hash.value)
 
   private def handleBodies(peer: Peer, requestedHashes: Seq[ByteString], bodies: Seq[BlockBody]): Unit =
@@ -1284,6 +1343,7 @@ class ChainDownloader private (
       // three.
       appStateStorage
         .putBackfillBestHeader(bestHeaderNumber)
+        .and(tipHash.fold(appStateStorage.emptyBatchUpdate)(appStateStorage.putBackfillBestHeaderHash))
         .and(appStateStorage.putBackfillBestBody(bestHeaderNumber))
         .and(appStateStorage.putBackfillBestReceipt(bestHeaderNumber))
         .and(appStateStorage.removeBackfillTarget())
@@ -1310,9 +1370,17 @@ class ChainDownloader private (
     // if the cursor was somehow corrupted (manual DB intervention, downgrade), fall
     // back to the binary search.
     val cursorHeader = appStateStorage.getBackfillBestHeader()
+    // On a validated chain before the hand-off the recorded tip vouches for the cursor too, when the number index has
+    // lost its entry: establishTip then puts the entry back, instead of the download starting again from genesis.
+    def recordedTipAtCursor: Boolean =
+      headerChainCheck.validatesChain && bodiesReceiptsDeferred &&
+        appStateStorage
+          .getBackfillBestHeaderHash()
+          .flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h)))
+          .exists(_.number.value == cursorHeader)
     val (low0, best0) =
-      if cursorHeader > 0 && blockchainReader.getBlockHeaderByNumber(cursorHeader).isDefined then
-        (cursorHeader + 1, cursorHeader)
+      if cursorHeader > 0 && (blockchainReader.getBlockHeaderByNumber(cursorHeader).isDefined || recordedTipAtCursor)
+      then (cursorHeader + 1, cursorHeader)
       else (BigInt(0), BigInt(0))
 
     // Deferred bodies/receipts: no queue is built, so the contiguity walk and the binary search (which could latch
@@ -1450,6 +1518,9 @@ object ChainDownloader:
   private val QueueWindow: Int = 2000
   private val QueueLowWater: Int = 1000
 
+  // The all-peers-blacklisted warning at most once a minute.
+  private val AllBlacklistedWarnIntervalMs: Long = 60000L
+
   // Internal — timer ticks
   private case object Dispatch extends Command
   private case object ScanPeers extends Command
@@ -1493,7 +1564,10 @@ object ChainDownloader:
       nowMs: () => Long = () => System.currentTimeMillis(),
       // How each stored header is checked against its parent (HeaderChainCheck.forChain). No default: every caller states
       // it, so a proof-of-work spawn cannot fall back to the parent-link-only check by omission.
-      headerChainCheck: HeaderChainCheck
+      headerChainCheck: HeaderChainCheck,
+      // The node's shared sync blacklist: a peer that served a header failing validation is added to it as well as to
+      // `blacklist` (SNAP and the standalone backfill pass it). None: `blacklist` only.
+      sharedBlacklist: Option[Blacklist] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -1529,7 +1603,8 @@ object ChainDownloader:
           deferBodiesAndReceipts,
           emptyHeaderBackoff,
           nowMs,
-          headerChainCheck
+          headerChainCheck,
+          sharedBlacklist
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).

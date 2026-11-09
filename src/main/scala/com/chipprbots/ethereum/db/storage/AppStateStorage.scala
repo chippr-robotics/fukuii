@@ -746,6 +746,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestHeaderHash(hash: ByteString): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeaderHash, Hex.toHexString(hash.toArray))
 
+  /** Hash of the header `ChainDownloader` stored at its target block (`BackfillTarget`, the SNAP pivot), written in the
+    * batch that stores it. SNAP finalisation reads the downloaded chain's header at the pivot from it, without walking
+    * back from the tip; readers check the header's number. Removed when the download starts again from genesis.
+    */
+  def getBackfillTargetHash(): Option[ByteString] =
+    get(Keys.BackfillTargetHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillTargetHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillTargetHash, Hex.toHexString(hash.toArray))
+
+  def removeBackfillTargetHash(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTargetHash)
+
   /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
     * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
     * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
@@ -783,6 +796,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         Keys.BackfillTarget,
         Keys.BackfillBestHeader,
         Keys.BackfillBestHeaderHash,
+        Keys.BackfillTargetHash,
         Keys.BackfillBestBody,
         Keys.BackfillBestReceipt
       ),
@@ -877,6 +891,7 @@ object AppStateStorage:
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"
     val BackfillBestHeaderHash = "BackfillBestHeaderHash"
+    val BackfillTargetHash = "BackfillTargetHash"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealInvariant = "snap.heal.invariant"

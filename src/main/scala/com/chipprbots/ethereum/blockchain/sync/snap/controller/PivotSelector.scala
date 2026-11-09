@@ -7,6 +7,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
@@ -173,9 +174,12 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                     headerChainCheck.validateHeaderOnly(header) match
                       case Left(err) =>
                         ctx.log.error(
-                          "SNAP bootstrap pivot header {} failed header validation — aborting commit, restarting sync: {}",
-                          header.idTag,
-                          err
+                          s"${HeaderChainCheck.LogTag} SNAP bootstrap pivot header ${header.idTag} failed header " +
+                            s"validation — aborting commit, restarting sync: $err"
+                        )
+                        SNAPSyncMetrics.incrementHeaderRejected(
+                          HeaderChainCheck.rejectionReason(err),
+                          HeaderChainCheck.Phase.PivotGate
                         )
                         false
                       case Right(_) => true
@@ -314,6 +318,11 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
         case PivotBootstrapFailed(reason) =>
           ctx.log.warn(s"Pivot header bootstrap failed during initial startup: $reason")
+          // After a rejected header left no eligible peer, the next start chooses the target again from the peers that
+          // remain: the persisted target came from the claims of peers that are now blacklisted, and resuming it would
+          // ask for the same height.
+          if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
+            stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
           bootstrapRetryCount += 1
           checkBootstrapRetryTimeout(s"bootstrap failed: $reason") match
             case Some(b) => b

@@ -15,15 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     go-ethereum and core-geth do: one header at a random position in every 100 of a response, the last header of every
     response, and every header in the 100 blocks up to the pivot. A response with a header that fails stores nothing;
     the peer that served it is blacklisted and the range is asked of another peer. The download continues from the
-    hash of the last header it stored (new `AppStateStorage` key `BackfillBestHeaderHash`). Headers a datadir stored
-    before this release, during a SNAP sync still in progress, are downloaded again from genesis once.
+    hash of the last header it stored (new `AppStateStorage` key `BackfillBestHeaderHash`), and stores nothing above
+    its target, whose hash it records (new key `BackfillTargetHash`). Headers a datadir stored before this release,
+    during a SNAP sync still in progress, are downloaded again from genesis once, with the body and receipt cursors.
   - **Pivot.** The pivot's header hash is persisted with its number and state root (new key `SnapSyncPivotHash`).
     Finalisation waits for the header download to reach the pivot, then requires the pivot to be the downloaded chain's
     header at that number, with the persisted state root. A pivot that is not is replaced by the downloaded chain's
     header, and SNAP restarts and heals toward its state root. A pivot persisted without a hash (an older datadir) is
     checked by its state root.
   - **Pivot bootstrap.** The pivot header's header-only rules, Ethash seal included, are checked when it arrives; a
-    header that fails is not stored, its peer is blacklisted and another peer is asked.
+    header that fails is not stored, its peer is blacklisted and another peer is asked. When no eligible peer is
+    left after such a header, the bootstrap stops, and the pivot is chosen again from the peers that remain.
+  - **Blacklisting.** A peer that served a header failing these rules is blacklisted for 15 minutes (or the
+    configured `sync.blacklist-duration`, if longer), in the node's shared sync blacklist as well as the download's
+    own, and a static or trusted peer is not exempt. Other header-response errors keep the configured duration.
+  - **Observability.** New counter `chain.header.rejected` (tags `reason`, `phase`); these logs carry the tag
+    `[HEADER-CHECK]`. The header download warns, at most once a minute, when every connected peer is blacklisted.
   - **Config.** On proof-of-work chains the header hold is always on: `sync.snap-sync.chain-download-enabled` and
     `defer-chain-backfill-until-state-complete` are forced to `true`, and a config that sets either to `false` gets a
     warning at SNAP start. As a result, the body and receipt backfill after SNAP now runs on these chains even where

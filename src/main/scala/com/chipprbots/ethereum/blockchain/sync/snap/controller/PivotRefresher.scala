@@ -7,6 +7,7 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
@@ -227,9 +228,11 @@ private[snap] trait PivotRefresher
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
     * `PivotBootstrapFailed` while `pendingPivotRefresh` is set: backtrack by `pivotBlockOffset`
-    * (`RetryBootstrapAtBlock` in 5 s), or retry the refresh in 60 s when the backtracked block is not positive. With no
-    * refresh pending the guard is false and the message falls through to the next arm of `commonSyncingArms`, as
-    * before. `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
+    * (`RetryBootstrapAtBlock` in 5 s), or retry the refresh in 60 s when the backtracked block is not positive. When
+    * the bootstrap gave up after rejecting a header (`PivotHeaderBootstrap.ExhaustedAfterRejection`), the refresh is
+    * retried in 5 s instead, which chooses the target again from the peers that are not blacklisted. With no refresh
+    * pending the guard is false and the message falls through to the next arm of `commonSyncingArms`, as before.
+    * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
     */
   private[snap] lazy val pivotRefreshBootstrapFailedArms: PartialFunction[Command, Behavior[Command]] = {
     // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
@@ -239,7 +242,17 @@ private[snap] trait PivotRefresher
       pendingPivotRefresh = None
       timers.cancel(PivotBootstrapRetryKey)
       val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
-      if backtrackedPivot > 0 then
+      if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
+        // The peers that claimed this height served headers that failed validation, and are blacklisted: choose the
+        // target again from the peers that remain. A backtrack would ask for a height derived from their claim.
+        ctx.log.warn(
+          s"${HeaderChainCheck.LogTag} pivot header bootstrap for block $pendingPivot found no eligible peer after " +
+            s"rejecting a header (original: $originalReason); choosing the pivot again from the remaining peers in 5s."
+        )
+        retryRefreshCounts = false
+        retryRefreshUnservable = false
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+      else if backtrackedPivot > 0 then
         ctx.log.warn(
           s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
             s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
@@ -677,9 +690,12 @@ private[snap] trait PivotRefresher
             headerChainCheck.validateHeaderOnly(newPivotHeader) match
               case Left(err) =>
                 ctx.log.error(
-                  "SNAP pivot header {} failed header validation — aborting pivot commit: {}",
-                  newPivotHeader.idTag,
-                  err
+                  s"${HeaderChainCheck.LogTag} SNAP pivot header ${newPivotHeader.idTag} failed header validation — " +
+                    s"aborting pivot commit: $err"
+                )
+                SNAPSyncMetrics.incrementHeaderRejected(
+                  HeaderChainCheck.rejectionReason(err),
+                  HeaderChainCheck.Phase.PivotGate
                 )
                 false
               case Right(_) => true

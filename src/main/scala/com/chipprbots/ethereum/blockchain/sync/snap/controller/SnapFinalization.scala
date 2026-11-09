@@ -8,6 +8,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -37,6 +38,9 @@ private[snap] trait SnapFinalizationState:
 
   /** The check the header download applies to each header it stores (HeaderChainCheck.forChain). */
   def headerChainCheck: HeaderChainCheck
+
+  /** The node's shared sync blacklist; the header download adds a peer whose header failed validation to it. */
+  def sharedBlacklist: Blacklist
 
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
@@ -700,7 +704,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                   Option.when(SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig))(
                     SNAPSyncController.EmptyHeaderBackoff
                   ),
-                headerChainCheck = headerChainCheck
+                headerChainCheck = headerChainCheck,
+                sharedBlacklist = Some(sharedBlacklist)
               ),
               s"chain-downloader-$coordinatorGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")

@@ -38,6 +38,8 @@ import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -551,10 +553,10 @@ object SyncController:
     /** The pivot bootstrap's header-only gate (extra data, gas used, and the Ethash seal on proof of work): a header
       * that fails it is not stored, and the peer that served it is blacklisted.
       */
-    private lazy val snapPivotHeaderCheck: BlockHeader => Option[String] =
+    private lazy val snapPivotHeaderCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] =
       // Settled here, on the actor thread: the bootstrap runs the function on its ask callbacks' threads.
       val check = snapHeaderChainCheck
-      header => check.validateHeaderOnly(header).left.toOption.map(_.toString)
+      header => check.validateHeaderOnly(header)
 
     /** Load SNAP sync configuration with fallback to defaults */
     private def loadSnapSyncConfig(): SNAPSyncConfig =
@@ -2265,7 +2267,8 @@ object SyncController:
                   replyTo = chainDownloaderAdapter,
                   maxConcurrentRequests = snapSyncConfig.chainBackfillConcurrentRequests,
                   requestTimeout = snapSyncConfig.chainDownloadTimeout,
-                  headerChainCheck = snapHeaderChainCheck
+                  headerChainCheck = snapHeaderChainCheck,
+                  sharedBlacklist = Some(blacklist)
                 )
               )
               // PR #1378: ChainDownloader must run until backfill completes — backoff, no cap.

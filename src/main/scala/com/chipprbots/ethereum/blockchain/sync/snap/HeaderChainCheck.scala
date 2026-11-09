@@ -57,6 +57,23 @@ object HeaderChainCheck:
   def isProofOfWork(blockchainConfig: BlockchainConfig): Boolean =
     blockchainConfig.terminalTotalDifficulty.isEmpty
 
+  /** The log tag of every header rejection: the header download, the pivot bootstrap and the pivot gate. */
+  val LogTag: String = "[HEADER-CHECK]"
+
+  /** Where a header was rejected: the `phase` of the `chain.header.rejected` metric. */
+  object Phase:
+    val HeaderDownload: String = "header-download"
+    val PivotBootstrap: String = "pivot-bootstrap"
+    val PivotGate: String = "pivot-gate"
+
+  /** The `reason` of the `chain.header.rejected` metric for a header whose parent hash does not name the previous one.
+    */
+  val ParentLinkReason: String = "ParentLink"
+
+  /** The `reason` of the `chain.header.rejected` metric for a rule `error`: its name, so the label set stays bounded.
+    */
+  def rejectionReason(error: BlockHeaderError): String = error.getClass.getSimpleName.stripSuffix("$")
+
   case object LinkOnly extends HeaderChainCheck:
     val validatesChain: Boolean = false
     val description: String = "parent-hash link only"

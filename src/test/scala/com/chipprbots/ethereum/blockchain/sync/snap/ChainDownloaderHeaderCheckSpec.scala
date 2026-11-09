@@ -79,9 +79,11 @@ class ChainDownloaderHeaderCheckSpec
   final private class RecordingBlacklist extends Blacklist:
     private val delegate = CacheBasedBlacklist.empty(100)
     @volatile var added: Vector[(BlacklistId, BlacklistReason)] = Vector.empty
+    @volatile var durations: Vector[FiniteDuration] = Vector.empty
     override def isBlacklisted(id: BlacklistId): Boolean = delegate.isBlacklisted(id)
     override def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit =
       added :+= (id -> reason)
+      durations :+= duration
       delegate.add(id, duration, reason)
     override def remove(id: BlacklistId): Unit = delegate.remove(id)
     override def keys: Set[BlacklistId] = delegate.keys
@@ -96,6 +98,8 @@ class ChainDownloaderHeaderCheckSpec
     val storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {}
     val appState: AppStateStorage = storage.storagesInstance.storages.appStateStorage
     val blacklist = new RecordingBlacklist
+    // The node's shared sync blacklist, as SNAP and the standalone backfill pass it.
+    val shared = new RecordingBlacklist
     val networkPeerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
 
@@ -115,12 +119,13 @@ class ChainDownloaderHeaderCheckSpec
         appStateStorage = appState,
         networkPeerManager = networkPeerManager.ref,
         peerEventBus = peerEventBus.ref,
-        syncConfig = defaultSyncConfig.copy(blockHeadersPerRequest = perRequest, blacklistDuration = 1.minute),
+        syncConfig = defaultSyncConfig.copy(blockHeadersPerRequest = perRequest, blacklistDuration = 60.seconds),
         replyTo = TestProbe().ref,
         maxConcurrentRequests = 1, // one request in flight at a time: each response decides the next request
         blacklist = blacklist,
         deferBodiesAndReceipts = deferred,
-        headerChainCheck = check
+        headerChainCheck = check,
+        sharedBlacklist = Some(shared)
       ),
       s"chain-downloader-header-check-${System.nanoTime()}"
     )
@@ -320,5 +325,150 @@ class ChainDownloaderHeaderCheckSpec
     rig.cursor shouldBe BigInt(20)
     rig.storage.blockchainReader.getBlockHeaderByNumber(20).map(_.difficulty.value) shouldBe Some(BigInt(1))
     rig.blacklist.added shouldBe Vector(first.peerId -> BlacklistReason.ErrorInBlockHeaders)
+    testKit.stop(rig.downloader)
+  }
+
+  // ── Blacklisting: a header that fails validation is not a transient fault ─────────────────────────────────────────
+
+  "ChainDownloader rejecting a header" should "blacklist the peer for 15 minutes in its own list and the shared one" taggedAs UnitTest in {
+    val rig = new Rig(mordorCheck, target = BigInt(64), perRequest = 64, deferred = true, _ => ())
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max, at = Some(BigInt(30)), _.copy(difficulty = Difficulty(BigInt(1)))))
+    rig.nextRequest() // the range again, from the other peer
+
+    rig.blacklist.added shouldBe Vector(first.peerId -> BlacklistReason.BlockHeaderValidationFailed)
+    rig.blacklist.durations shouldBe Vector(15.minutes)
+    rig.shared.added shouldBe Vector(first.peerId -> BlacklistReason.BlockHeaderValidationFailed)
+    rig.shared.durations shouldBe Vector(15.minutes)
+    testKit.stop(rig.downloader)
+  }
+
+  it should "keep a broken parent link in its own list, for the configured duration" taggedAs UnitTest in {
+    val rig = new Rig(mordorCheck, target = BigInt(64), perRequest = 64, deferred = true, _ => ())
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max, at = Some(BigInt(30)), _.copy(parentHash = fromGenesis(5).hash)))
+    rig.nextRequest()
+
+    rig.blacklist.added shouldBe Vector(first.peerId -> BlacklistReason.ErrorInBlockHeaders)
+    rig.blacklist.durations shouldBe Vector(60.seconds)
+    rig.shared.added shouldBe empty
+    testKit.stop(rig.downloader)
+  }
+
+  it should "warn when every connected peer is blacklisted, so a stalled download is not silent" taggedAs UnitTest in {
+    val logs = new SnapLogCapture
+    try
+      val rig = new Rig(
+        mordorCheck,
+        target = BigInt(64),
+        perRequest = 64,
+        deferred = true,
+        r =>
+          r.blacklist.add(peerA, 1.hour, BlacklistReason.BlockHeaderValidationFailed)
+          r.blacklist.add(peerB, 1.hour, BlacklistReason.BlockHeaderValidationFailed)
+      )
+      logs.awaitLine("connected peer(s) are blacklisted") should include("[HEADER-CHECK]")
+      rig.networkPeerManager.expectNoMessage(200.millis) // nothing to ask
+      testKit.stop(rig.downloader)
+    finally logs.close()
+  }
+
+  // ── Target: the run that reaches it ends at it, and records its hash ─────────────────────────────────────────────
+
+  "ChainDownloader reaching its target" should "store nothing above it and record the target's hash" taggedAs UnitTest in {
+    val rig = new Rig(mordorCheck, target = BigInt(64), perRequest = 64, deferred = true, _ => ())
+    val first = rig.nextRequest()
+    first.max shouldBe BigInt(64)
+    first.answer(run(first.from, 80)) // more headers than were asked for
+    eventually(rig.cursor shouldBe BigInt(64))
+    rig.appState.getBackfillTargetHash() shouldBe Some(fromGenesis(64).hash.value)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(65) shouldBe None
+    rig.blacklist.added shouldBe empty
+    testKit.stop(rig.downloader)
+  }
+
+  // ── The recorded tip on start ─────────────────────────────────────────────────────────────────────────────────────
+
+  /** What an earlier run of the download left: blocks 1..`upTo`, their weights, the cursor and (optionally) the tip. */
+  private def downloaded(r: Rig, upTo: Int, tip: Option[ByteString]): Unit =
+    val weights = fromGenesis.take(upTo + 1).scanLeft(BigInt(0))(_ + _.difficulty.value).tail
+    fromGenesis.slice(1, upTo + 1).zip(weights.drop(1)).foreach { case (h, w) =>
+      r.storage.blockchainWriter
+        .storeBlockHeader(h)
+        .and(r.storage.blockchainWriter.storeChainWeight(h.hash, ChainWeight.totalDifficultyOnly(w)))
+        .commit()
+    }
+    val cursor = r.appState.putBackfillBestHeader(upTo)
+    tip.fold(cursor)(h => cursor.and(r.appState.putBackfillBestHeaderHash(h))).commit()
+
+  "ChainDownloader starting on a validated chain" should "put back a missing number-index entry at its recorded tip" taggedAs UnitTest in {
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(150),
+      perRequest = 64,
+      deferred = true,
+      r =>
+        downloaded(r, 100, Some(fromGenesis(100).hash.value))
+        r.storage.blockchainWriter.setCanonicalChainHead(99, fromGenesis(99).hash, currentBest = 100) // drops 100
+        r.storage.blockchainReader.getBlockHeaderByNumber(100) shouldBe None
+    )
+    rig.nextRequest().from shouldBe BigInt(101)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(100) shouldBe Some(fromGenesis(100))
+    testKit.stop(rig.downloader)
+  }
+
+  it should "download again from genesis, with every cursor reset, when its recorded tip names no stored header" taggedAs UnitTest in {
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(150),
+      perRequest = 64,
+      deferred = true,
+      r =>
+        downloaded(r, 100, Some(ByteString(Array.fill(32)(0x33.toByte))))
+        r.appState.putBackfillBestBody(40).and(r.appState.putBackfillBestReceipt(40)).commit()
+    )
+    rig.nextRequest().from shouldBe BigInt(1)
+    rig.cursor shouldBe BigInt(0)
+    rig.appState.getBackfillBestBody() shouldBe BigInt(0)
+    rig.appState.getBackfillBestReceipt() shouldBe BigInt(0)
+    testKit.stop(rig.downloader)
+  }
+
+  "ChainDownloader with the parent-link-only check (ETH)" should "leave the number index alone at its recorded tip" taggedAs UnitTest in {
+    val rig = new Rig(
+      HeaderChainCheck.LinkOnly,
+      target = BigInt(150),
+      perRequest = 64,
+      deferred = true,
+      r =>
+        downloaded(r, 100, Some(fromGenesis(100).hash.value))
+        r.storage.blockchainWriter.storeBlockHeader(fromGenesis(100).copy(stateRoot = otherRoot)).commit()
+    )
+    rig.nextRequest().from shouldBe BigInt(101)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(100).map(_.stateRoot) shouldBe Some(otherRoot)
+    testKit.stop(rig.downloader)
+  }
+
+  "ChainDownloader completing" should "record the tip hash with the cursors it writes" taggedAs UnitTest in {
+    val header1 = fromGenesis(1)
+    val rig = new Rig(
+      HeaderChainCheck.LinkOnly,
+      target = BigInt(1),
+      perRequest = 64,
+      deferred = false,
+      r =>
+        r.storage.blockchainWriter
+          .storeBlockHeader(header1)
+          .and(r.storage.blockchainWriter.storeBlockBody(header1.hash, BlockBody.empty))
+          .and(r.storage.blockchainWriter.storeReceipts(header1.hash, Nil))
+          .commit()
+        r.appState
+          .putBackfillBestHeader(1)
+          .and(r.appState.putBackfillBestBody(1))
+          .and(r.appState.putBackfillBestReceipt(1))
+          .commit()
+        r.appState.getBackfillBestHeaderHash() shouldBe None
+    )
+    eventually(rig.appState.getBackfillBestHeaderHash() shouldBe Some(header1.hash.value))
     testKit.stop(rig.downloader)
   }

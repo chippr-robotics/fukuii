@@ -20,6 +20,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
@@ -298,6 +299,16 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
 
     h.module.pendingPivotRefresh shouldBe None
     h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 60.seconds))
+  }
+
+  it should "choose the pivot again, not backtrack, when a refresh bootstrap found no eligible peer after a rejected header" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+
+    h.call(m => m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed(PivotHeaderBootstrap.ExhaustedAfterRejection)))
+
+    h.module.pendingPivotRefresh shouldBe None
+    h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 5.seconds))
   }
 
   it should "count a stateless report, mark the pivot failed, and fast-track a same-root refresh onto it" taggedAs UnitTest in {

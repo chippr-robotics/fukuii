@@ -18,9 +18,10 @@ import com.chipprbots.ethereum.domain.appstate.BlockInfo
   *
   * The persisted pivot (`SnapSyncPivotBlock`, `SnapSyncStateRoot` and `SnapSyncPivotHash`) names the header whose state
   * root SNAP downloaded. At finalisation that header must be the one the validated header download holds at the pivot's
-  * number, and its state root the persisted one. The download's header at that number is found from the download's
-  * recorded tip (`BackfillBestHeaderHash`) by parent hash, never through the number→hash index: the pivot bootstrap and
-  * the pivot's best-block record write that index too, with headers no one validated.
+  * number, and its state root the persisted one. The download's header at that number is the one it recorded at its
+  * target (`BackfillTargetHash`), or else its recorded tip (`BackfillBestHeaderHash`) walked back by parent hash; never
+  * the number→hash index: the pivot bootstrap and the pivot's best-block record write that index too, with headers no
+  * one validated.
   */
 private[sync] object PivotAnchor:
 
@@ -56,18 +57,29 @@ private[sync] object PivotAnchor:
       .and(appState.putSnapSyncStateRoot(header.stateRoot.value))
       .and(appState.putSnapSyncPivotHash(header.hash.value))
 
+  /** The longest walk back by parent hash from the download's tip to the pivot. The pivot is normally the download's
+    * target, read directly ([[validatedHeaderAt]]); a pivot further below the tip than this is not decided.
+    */
+  val MaxWalkBack: Int = 65536
+
   def check(appState: AppStateStorage, reader: BlockchainReader, pivot: BigInt): Check =
     validatedHeaderAt(appState, reader, pivot) match
-      case Left(reason) => Check.Undecided(reason)
+      case Left(reason)     => Check.Undecided(reason)
       case Right(validated) =>
-        val pinned = appState.getSnapSyncPivotHash()
+        // A pin naming a stored header at another height is stale (written for an earlier pivot and not replaced, say by
+        // a build without the key between two that have it): it says nothing about this pivot, so it is ignored and the
+        // state root decides. A pin naming no stored header is still compared.
+        val pinned = appState
+          .getSnapSyncPivotHash()
+          .filterNot(h => reader.getBlockHeaderByHash(BlockHash(h)).exists(_.number.value != pivot))
         val root = appState.getSnapSyncStateRoot()
         if pinned.forall(_ == validated.hash.value) && root.contains(validated.stateRoot.value) then
           Check.Anchored(validated)
         else Check.Diverged(validated, pinned, root)
 
-  /** The header the validated download holds at `number`: the recorded tip, walked back by parent hash. With nothing
-    * downloaded (cursor 0) the chain is genesis alone.
+  /** The header the validated download holds at `number`. With nothing downloaded (cursor 0) the chain is genesis
+    * alone. When `number` is the download's target, the header it recorded there (`BackfillTargetHash`); otherwise the
+    * recorded tip walked back by parent hash, at most [[MaxWalkBack]] headers.
     */
   def validatedHeaderAt(
       appState: AppStateStorage,
@@ -75,8 +87,18 @@ private[sync] object PivotAnchor:
       number: BigInt
   ): Either[String, BlockHeader] =
     val cursor = appState.getBackfillBestHeader()
+    lazy val atTarget = appState
+      .getBackfillTargetHash()
+      .flatMap(h => reader.getBlockHeaderByHash(BlockHash(h)))
+      .filter(_.number.value == number)
     if cursor < number then Left(s"the header download is at block $cursor, below block $number")
     else if cursor == 0 then Right(reader.genesisHeader)
+    else if atTarget.isDefined then Right(atTarget.get)
+    else if cursor - number > MaxWalkBack then
+      Left(
+        s"block $number is ${cursor - number} blocks below the header download's tip, more than the $MaxWalkBack " +
+          "walked back (walk > cap)"
+      )
     else
       appState.getBackfillBestHeaderHash() match
         case None => Left(s"the header download's tip (block $cursor) has no recorded hash")

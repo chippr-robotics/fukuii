@@ -24,8 +24,13 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.BlacklistPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.NoSuitablePeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -54,9 +59,11 @@ object PivotHeaderBootstrap:
   sealed trait Command
   private case object Fetch extends Command
   private case object WaitForPeer extends Command
-  // Sent from the off-thread `peersClient ?` callback to arm the wait-for-peer timer on the actor thread
-  // (TimerScheduler is only safe to drive from the behavior).
-  private case object ScheduleWaitForPeer extends Command
+  // Sent from the off-thread `peersClient ?` callback when no peer was eligible, so the decision (wait for a peer, or
+  // give up after a rejection) and the wait-for-peer timer stay on the actor thread.
+  private case object NoEligiblePeer extends Command
+  // Sent from the off-thread callback when `headerCheck` rejected the header `peer` served.
+  final private case class Rejected(peer: Option[Peer], header: BlockHeader, error: BlockHeaderError) extends Command
   final private case class Retry(reason: String) extends Command
   final private case class Fetched(header: BlockHeader) extends Command
 
@@ -69,13 +76,20 @@ object PivotHeaderBootstrap:
   final case class Failed(reason: String) extends Reply
 
   /** The default `headerCheck`: every header that matches the target is accepted. */
-  val AcceptAll: BlockHeader => Option[String] = _ => None
+  val AcceptAll: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = _ => Right(BlockHeaderValid)
+
+  /** The `Failed` reason when no peer is left to ask after a header was rejected: the caller re-selects the target from
+    * the peers that remain (the peer that served the rejected header is blacklisted).
+    */
+  val ExhaustedAfterRejection: String = "eligible peers exhausted after header rejection"
 
   /** Fetch by block number (the standard pre-merge / TD-driven SNAP path).
     *
     * @param headerCheck
-    *   run on a header that matches the target before it is stored; `Some(reason)` rejects it: the peer that served it
-    *   is blacklisted (`BlockHeaderValidationFailed`) and the fetch is retried from another peer, consuming an attempt.
+    *   run on a header that matches the target before it is stored; a `Left` rejects it: the peer that served it is
+    *   blacklisted (`BlockHeaderValidationFailed`) and the fetch is retried from another peer, consuming an attempt.
+    *   When no eligible peer is left after a rejection, the bootstrap replies [[Failed]] ([[ExhaustedAfterRejection]])
+    *   instead of waiting for a fresh peer.
     */
   def apply(
       peersClient: ActorRef[PeersClient.Command],
@@ -88,7 +102,7 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration = 10.seconds,
       waitForPeerDelay: FiniteDuration = 30.seconds,
       preferSnapPeers: Boolean = false,
-      headerCheck: BlockHeader => Option[String] = AcceptAll
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = AcceptAll
   ): Behavior[Command] =
     behavior(
       peersClient,
@@ -147,7 +161,7 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
       preferSnapPeers: Boolean,
-      headerCheck: BlockHeader => Option[String]
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -183,7 +197,7 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
       preferSnapPeers: Boolean,
-      headerCheck: BlockHeader => Option[String]
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid]
   ):
 
     // Safe from any thread (the `peersClient ?` callbacks run off the actor thread).
@@ -202,6 +216,9 @@ object PivotHeaderBootstrap:
     private var attempt: Int = 0
     private val triedPeers: scala.collection.mutable.Set[PeerId] = scala.collection.mutable.Set.empty
     private var waitCount: Int = 0
+    // Headers `headerCheck` rejected. Once one has been, an empty pool ends the bootstrap instead of waiting: the peers
+    // that claimed the target's height may be exactly the ones that served a rejected header.
+    private var rejections: Int = 0
 
     private def currentRetryDelay: FiniteDuration =
       // Exponential backoff: initialRetryDelay * 2^(attempt-1), capped at maxRetryDelay
@@ -254,8 +271,40 @@ object PivotHeaderBootstrap:
         timers.startSingleTimer(Fetch, delay)
         Behaviors.same
 
-      case ScheduleWaitForPeer =>
-        // Arm the wait-for-peer timer on the actor thread (requested by the off-thread fetch callback).
+      case Rejected(peerOpt, header, error) =>
+        // Not stored: blacklist the peer that served it (the shared sync blacklist, via PeersClient) and retry; the peer
+        // is already in `triedPeers`, so the next attempt asks another.
+        rejections += 1
+        val peerDesc = peerOpt.map(_.id.value).getOrElse("?")
+        ctx.log.warn(
+          s"${HeaderChainCheck.LogTag} pivot header ${header.idTag} from peer $peerDesc failed validation ($error); " +
+            "blacklisting the peer and asking another"
+        )
+        SNAPSyncMetrics.incrementHeaderRejected(
+          HeaderChainCheck.rejectionReason(error),
+          HeaderChainCheck.Phase.PivotBootstrap
+        )
+        peerOpt.foreach(p => peersClient ! BlacklistPeer(p.id, BlacklistReason.BlockHeaderValidationFailed))
+        ctx.self ! Retry(s"header ${header.idTag} from peer $peerDesc failed validation: $error")
+        Behaviors.same
+
+      case NoEligiblePeer if rejections > 0 =>
+        ctx.log.warn(
+          s"${HeaderChainCheck.LogTag} pivot header bootstrap for $targetDesc: no eligible peer left after " +
+            s"$rejections rejected header(s) (${triedPeers.size} peer(s) tried); giving up so the target is chosen again"
+        )
+        replyTo ! Failed(ExhaustedAfterRejection)
+        Behaviors.stopped
+
+      case NoEligiblePeer =>
+        // Pool empty or every known peer already tried. Model Besu's waitForPeer(!peersUsed.contains(p)): wait for a
+        // fresh peer to connect.
+        ctx.log.info(
+          "Pivot header bootstrap for {}: no eligible peer available ({} tried). Waiting {} for a fresh peer.",
+          targetDesc,
+          triedPeers.size,
+          waitForPeerDelay
+        )
         timers.startSingleTimer(WaitForPeer, waitForPeerDelay)
         Behaviors.same
 
@@ -336,14 +385,8 @@ object PivotHeaderBootstrap:
           headerOpt match
             case Some(header) if matchesTarget(header) =>
               headerCheck(header) match
-                case None        => ctx.self ! Fetched(header)
-                case Some(error) =>
-                  // Rejected before it is stored: blacklist the peer that served it (the shared sync blacklist, via
-                  // PeersClient) and retry; the peer is already in `triedPeers`, so the next attempt asks another.
-                  peerOpt.foreach(p => peersClient ! BlacklistPeer(p.id, BlacklistReason.BlockHeaderValidationFailed))
-                  ctx.self ! Retry(
-                    s"header ${header.idTag} from peer ${peerOpt.map(_.id.value).getOrElse("?")} failed validation: $error"
-                  )
+                case Right(_)    => ctx.self ! Fetched(header)
+                case Left(error) => ctx.self ! Rejected(peerOpt, header, error)
             case Some(header) =>
               ctx.self ! Retry(
                 s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
@@ -358,18 +401,8 @@ object PivotHeaderBootstrap:
               // transient disconnects.
               ctx.self ! WaitForPeer
             case None =>
-              // NoSuitablePeer — pool empty or all known peers already tried.
-              // Model Besu's waitForPeer(!peersUsed.contains(p)): wait for a fresh peer to connect.
-              asyncLog.info(
-                "Pivot header bootstrap for {}: no eligible peer available ({} tried). " +
-                  "Waiting {} for a fresh peer.",
-                targetDesc,
-                triedPeers.size,
-                waitForPeerDelay
-              )
-              // Schedule the wait via a self-message; startSingleTimer is thread-safe to call here, but to
-              // keep timer ownership on the actor thread we send a self-Command that arms the timer there.
-              ctx.self ! ScheduleWaitForPeer
+              // NoSuitablePeer: decided on the actor thread (wait for a fresh peer, or give up after a rejection).
+              ctx.self ! NoEligiblePeer
         }
 
     private def matchesTarget(header: BlockHeader): Boolean =
