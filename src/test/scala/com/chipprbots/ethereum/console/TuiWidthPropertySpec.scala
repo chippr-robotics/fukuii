@@ -86,6 +86,46 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       phaseElapsedSeconds = elapsed / 2
     )
 
+  private val peer: Gen[TuiPeer] =
+    for
+      id <- text
+      address <- text
+      incoming <- Gen.oneOf(true, false)
+      ago <- Gen.chooseNum(-100L, 100_000_000L)
+    yield TuiPeer(id, address, incoming, TuiFixtures.Now.minusSeconds(ago))
+
+  private val local: Gen[LocalSample] =
+    for
+      disk <- Gen.option(Gen.oneOf(Gen.chooseNum(0L, Long.MaxValue), Gen.const(-1L)))
+      heap <- Gen.option(Gen.zip(count, count, Gen.option(Gen.chooseNum(-1.0, 2.0))))
+      discovery <- Gen.option(Gen.zip(count, count, count))
+      head <- Gen.option(Gen.chooseNum(0L, 4_000_000_000L))
+      counters <- Gen.option(count)
+    yield LocalSample(
+      diskFree = disk,
+      jvm = heap.map((u, m, gc) => JvmSample(u, m, gc)),
+      discovery = discovery.map((k, p, b) => DiscoverySample(k, p, b)),
+      headTimestamp = head,
+      snapCounters = counters.map(n => SnapCounters(n, n, n, n, n, n, n, n, n, n, n))
+    )
+
+  /** A poll: each source fresh, stale or unresponsive, with awkward text in its reason and its peers. */
+  private def snapshot(peers: Int, maxPeers: Int, current: Long, best: Long): Gen[NodeStatusSnapshot] =
+    def sourced[A](value: Gen[A]): Gen[Sourced[A]] =
+      Gen.oneOf(
+        value.map(Sourced.Fresh(_, TuiFixtures.Now)),
+        value.map(Sourced.Stale(_, TuiFixtures.Now.minusSeconds(3))),
+        text.map(Sourced.Unresponsive(_))
+      )
+    for
+      list <- Gen.listOfN(peers.min(60), peer)
+      peerSource <- sourced(Gen.const(list))
+      sampledAgo <- Gen.option(Gen.chooseNum(0L, 1_000L))
+      status <- text
+      syncSource <- sourced(Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds))))
+      l <- local
+    yield NodeStatusSnapshot(TuiFixtures.Now, maxPeers, current, peerSource, syncSource, l)
+
   private val state: Gen[TuiState] =
     for
       network <- text
@@ -106,6 +146,11 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       celebrationAt <- Gen.option(Gen.chooseNum(0L, 200L))
       backAtHead <- Gen.option(Gen.chooseNum(0L, 200L))
       advancedAgo <- Gen.option(Gen.chooseNum(0L, 1_000L))
+      view <- Gen.oneOf(TuiView.values.toSeq)
+      helpOpen <- Gen.oneOf(false, false, true)
+      chain <- Gen.option(Gen.oneOf(TuiFixtures.chainEtc, TuiFixtures.chainMordor, TuiFixtures.chainSepolia))
+      polled <- Gen.option(snapshot(peers, maxPeers, current, best))
+      zeroSince <- Gen.option(Gen.chooseNum(0L, 100_000L))
     yield TuiState(
       networkName = network,
       connectionStatus = connection,
@@ -125,7 +170,12 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       splashUntilTick = splashUntil,
       celebrationStartedTick = celebrationAt,
       backAtHeadTick = backAtHead,
-      lastAdvanceAt = advancedAgo.map(TuiFixtures.Now.minusSeconds)
+      lastAdvanceAt = advancedAgo.map(TuiFixtures.Now.minusSeconds),
+      view = view,
+      helpOpen = helpOpen,
+      chain = chain,
+      snapshot = polled,
+      zeroPeersSince = zeroSince.map(TuiFixtures.Now.minusSeconds)
     )
 
   private val size: Gen[(Int, Int)] = Gen.frequency(

@@ -142,7 +142,7 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       clock = clock
     )(using system.scheduler)()
     s.now shouldBe now
-    s.peers shouldBe Sourced.Fresh(1, now)
+    s.peers should matchPattern { case Sourced.Fresh(Seq(_), `now`) => }
     s.sync shouldBe Sourced.Fresh(SyncSample(9, 9, "Synced"), now)
   }
 
@@ -251,4 +251,103 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val status = SyncProtocol.Status.Syncing(0, Progress(0, 0), None)
     val s = probe(peerManager(), syncController(status), best = 0)()
     (s.bestBlock, s.syncStatus) shouldBe ((0L, "Syncing (no target yet)"))
+  }
+
+  // ---- Spec 027 T065: what the probe reads on the node itself, and the peers' own fields -------------------------
+
+  private def localProbe(local: TuiStatusProbe.LocalSources, probeClock: java.time.Clock = clock) =
+    new TuiStatusProbe(
+      spawn(peerManager()),
+      spawn(syncController(SyncProtocol.Status.SyncDone)),
+      () => 9,
+      50,
+      () => None,
+      300.millis,
+      probeClock,
+      local
+    )(using system.scheduler)
+
+  it should "read the disk free on the datadir through the injected File => Long" taggedAs (UnitTest) in {
+    val dataDir = new java.io.File("/var/lib/fukuii/etc")
+    val p = localProbe(TuiStatusProbe.LocalSources(dataDir = Some(dataDir), usableSpace = f => if f == dataDir then 42L else -1L))
+    p().local.diskFree shouldBe Some(42L)
+    localProbe(TuiStatusProbe.LocalSources())().local.diskFree shouldBe None // no datadir, no reading
+  }
+
+  it should "read the JVM heap, and the GC share of the time between two polls" taggedAs (UnitTest) in {
+    val testClock = new TuiFixtures.TestClock(now)
+    val gc = Iterator(100L, 150L, 150L)
+    val p = localProbe(
+      TuiStatusProbe.LocalSources(heap = () => Some((2L << 30, 8L << 30)), gcMillis = () => Some(gc.next())),
+      testClock
+    )
+    val first = p().local.jvm.get
+    (first.heapUsed, first.heapMax, first.gcShare) shouldBe ((2L << 30, 8L << 30, None)) // no interval yet
+    testClock.advanceMillis(1_000L)
+    p().local.jvm.flatMap(_.gcShare).get shouldBe 0.05 +- 1e-9 // 50 ms of GC in 1,000 ms
+    testClock.advanceMillis(1_000L)
+    p().local.jvm.flatMap(_.gcShare).get shouldBe 0.0 +- 1e-9
+  }
+
+  it should "read the discovery counts from NetworkMetrics" taggedAs (UnitTest) in {
+    com.chipprbots.ethereum.network.NetworkMetrics.DiscoveredPeersSize.set(1_912L)
+    com.chipprbots.ethereum.network.NetworkMetrics.PendingPeersSize.set(14L)
+    com.chipprbots.ethereum.network.NetworkMetrics.BlacklistedPeersSize.set(3L)
+    TuiStatusProbe.LocalSources.networkDiscovery() shouldBe Some(DiscoverySample(1_912L, 14L, 3L))
+    localProbe(TuiStatusProbe.LocalSources(discovery = TuiStatusProbe.LocalSources.networkDiscovery))().local.discovery shouldBe
+      Some(DiscoverySample(1_912L, 14L, 3L))
+  }
+
+  it should "read the best header's timestamp" taggedAs (UnitTest) in {
+    localProbe(TuiStatusProbe.LocalSources(headTimestamp = () => Some(1_791_294_816L)))().local.headTimestamp shouldBe
+      Some(1_791_294_816L)
+  }
+
+  it should "read the SNAP request counters from SNAPSyncMetrics" taggedAs (UnitTest) in {
+    val counters = TuiStatusProbe.LocalSources.snapMetrics().get
+    val p = localProbe(TuiStatusProbe.LocalSources(snapCounters = TuiStatusProbe.LocalSources.snapMetrics))
+    p().local.snapCounters.map(_.accountRequests) should contain(counters.accountRequests)
+  }
+
+  it should "leave a local reading empty when it fails, and still answer" taggedAs (UnitTest) in {
+    val failing = TuiStatusProbe.LocalSources(
+      dataDir = Some(new java.io.File("/x")),
+      usableSpace = _ => throw new SecurityException("denied"),
+      heap = () => throw new IllegalStateException("no MXBean"),
+      headTimestamp = () => throw new RuntimeException("storage closed")
+    )
+    val s = localProbe(failing)()
+    s.local shouldBe LocalSample()
+    s.sync shouldBe a[Sourced.Fresh[?]]
+  }
+
+  it should "carry each handshaked peer's id, address, direction and connection time from GetPeersCmd" taggedAs (
+    UnitTest
+  ) in {
+    val connectedAt = now.minusSeconds(4 * 3_600L)
+    val inbound =
+      Peer(
+        PeerId("3fa1e2"),
+        new InetSocketAddress("203.0.113.7", 30303),
+        createTestProbe[PeerActor.Command]().ref,
+        incomingConnection = true,
+        createTimeMillis = connectedAt.toEpochMilli
+      )
+    val pm: Behavior[PeerManagerActor.Command] = Behaviors.receiveMessage {
+      case PeerManagerActor.GetPeersCmd(replyTo) =>
+        replyTo ! PeerManagerActor.Peers(Map(inbound -> PeerActor.Status.Handshaked, peer("x") -> PeerActor.Status.Connecting))
+        Behaviors.same
+      case _ => Behaviors.same
+    }
+    val s = probe(pm, syncController(SyncProtocol.Status.SyncDone))()
+    s.peers.value shouldBe Some(Seq(TuiPeer("3fa1e2", "203.0.113.7:30303", incoming = true, connectedAt)))
+    s.peerCount shouldBe 1
+  }
+
+  // Spec 027 FR-016: the SNAP sample-age alert needs the sample's time even when the sample is too old to show.
+  it should "carry the SNAP sample's time past 90 s, while no longer showing the sample" taggedAs (UnitTest) in {
+    val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 0), None)
+    val s = probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 91)()
+    s.snapSync shouldBe None
+    s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(now.minusSeconds(91))
   }
