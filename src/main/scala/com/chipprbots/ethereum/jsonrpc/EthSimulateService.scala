@@ -540,6 +540,10 @@ class EthSimulateService(
 
       // Apply EIP-2935: store parent block hash in history storage
       if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
+      // ETC from Olympia (ECIP-1121): block import's own EIP-2935 step (the client-deployed history contract and the
+      // parent hash), so a simulated block's state root is the one its import gives. On ETH it is a no-op before Prague,
+      // the only ETH blocks that reach this branch.
+      else world = BlockExecution.applyEip2935(Block(simHeader, BlockBody.empty), world)
 
     // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
     // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.

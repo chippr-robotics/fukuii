@@ -1029,11 +1029,20 @@ class BlockPreparator(
         )
       )
 
-    val prepared = executePreparedTransactions(block.body.transactionList, initialWorld, block.header)
+    // What block import does before the first transaction (on ETC from Olympia: EIP-2935's history contract and the
+    // parent hash), by the function import runs, so the block is built on the state import executes it on.
+    val preambleWorld =
+      BlockExecution.applyBlockPreamble(block, block.header.number.value, initialWorld, accessList = None)
+    val prepared = executePreparedTransactions(block.body.transactionList, preambleWorld, block.header)
 
     prepared match
       case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _, _), txExecuted) =>
-        val worldToPersist = payBlockReward(block, resultingWorldStateProxy)
+        // The rewards are paid on the header the block will be sealed with. A block being built arrives with gasUsed
+        // still 0 (BlockGeneratorSkeleton fills it in from this result afterwards), and ECIP-1111's treasury credit
+        // reads it: import pays baseFee * header.gasUsed, and block validation holds header.gasUsed equal to the gas
+        // executed, so it is paid on the gas executed here too. Before Olympia no reward reads gasUsed.
+        val sealedHeader = block.header.copy(gasUsed = GasAmount(execResult.gasUsed))
+        val worldToPersist = payBlockReward(block.copy(header = sealedHeader), resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
         PreparedBlock(
           block.copy(body = block.body.copy(transactionList = txExecuted)),

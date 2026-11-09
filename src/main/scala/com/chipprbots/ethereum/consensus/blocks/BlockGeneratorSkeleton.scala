@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
@@ -14,6 +15,9 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.ledger.BlockResult
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -64,8 +68,26 @@ abstract class BlockGeneratorSkeleton(
         .flatMap(daoForkConfig => daoForkConfig.getExtraData(blockNumber))
         .getOrElse(headerExtraData),
       mixHash = BlockHash(ByteString.empty),
-      nonce = ByteString.empty
+      nonce = ByteString.empty,
+      extraFields = baseFeeFields(blockNumber, parent.header)
     )
+
+  /** The header field EIP-1559 adds, from the Olympia block on (ECIP-1111): the base fee, from the parent, by the
+    * function block import's header validation recomputes it with (`BlockHeaderValidatorSkeleton.validateBaseFee`):
+    * INITIAL_BASE_FEE at the first Olympia block, never below the chain's `base-fee-floor` after it. The gate is that
+    * validator's own, `number >= olympiaBlockNumber`, so the header has exactly the shape import requires; before
+    * Olympia it is `HefEmpty`, byte for byte the header mined before. Transactions run against this header, so BASEFEE,
+    * the miner's tip and the treasury credit all see the base fee import sees.
+    *
+    * core-geth's miner sets the base fee at the same point (miner/worker.go `prepareWork`: `header.BaseFee =
+    * eip1559.CalcBaseFee(config, parent)`), and its seal hash covers it, as `BlockHeader.getEncodedWithoutNonce` does.
+    */
+  private def baseFeeFields(blockNumber: BigInt, parent: BlockHeader)(implicit
+      blockchainConfig: BlockchainConfig
+  ): HeaderExtraFields =
+    if blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber then
+      HefPostOlympia(BaseFeeCalculator.calcBaseFee(parent, blockchainConfig))
+    else HefEmpty
 
   protected def prepareHeader(
       blockNumber: BigInt,
