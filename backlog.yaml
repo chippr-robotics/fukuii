@@ -1867,3 +1867,13 @@ items:
     refs: [B-132]
     links: {}
     notes: "beacon review of #1776, 2026-11-09: sepolia-chain.conf:103-105. Import and simulate both diverge from geth for pre-merge Sepolia blocks; a full sync from genesis would mismatch state roots (SNAP hides it). Chesterton first: why 404de9937 set 0. beacon."
+  - id: B-170
+    title: "BlockRewards follow-ups: one increaseAccountBalance (not two copies); comment the simulate vs import PoS gate; test an ETH London-to-merge difficulty override"
+    priority: P3
+    status: open
+    area: ledger
+    size: S
+    opened: 2026-11-09
+    refs: [B-132]
+    links: {}
+    notes: "beacon nits on #1776: BlockRewards.increaseAccountBalance duplicates BlockPreparator:290-295; simulate gates on difficulty != 0 (geth IsPoSHeader), import on isPoS (base fee too); they differ only for a pre-London zero-difficulty header."
