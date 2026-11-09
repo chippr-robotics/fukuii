@@ -1944,3 +1944,13 @@ items:
     refs: [B-133]
     links: {}
     notes: "beacon review of #1778: PrecompiledContracts.getContracts (~:192) has no isEthereum guard on the Olympia branch (ModExp has one); hive/fukuii/fukuii.sh:141 maps London to olympiaBlockNumber, so on hive ETH configs 0x0b-0x11 and 0x100 are active London..Prague. Pre-existing. beacon then forge."
+  - id: B-178
+    title: ECIP-1111 (published 2026-09-08) credits the base fee per transaction; fukuii credits baseFee*gasUsed once, at block finalization
+    priority: P1
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: "ethereumclassic/ECIPs 2e1d632323: credit inside each tx after the tip, block-level credit MUST NOT. fukuii BlockRewards.creditBaseFeeToTreasury and Besu-fork OlympiaBlockProcessor are block-level; roots differ when a tx reads BALANCE(vault) mid-block. User decision first; forge."
