@@ -2014,3 +2014,13 @@ items:
     notes: |-
       User decision 2026-11-09. Published text (ethereumclassic/ECIPs 2e1d632323, 2026-09-08) requires a per-transaction credit and forbids a block-level one; fukuii and the Besu fork credit per block. State roots differ if a tx reads the vault balance mid-block. Owner: user (ECIP PR); fukuii keeps per-block.
       2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
+  - id: B-184
+    title: "Remove Olympia-only parts merged in #1776 and #1779 (simulate treasury credit, simulate ETC-Olympia EIP-2935, Olympia tests and wording)"
+    priority: P1
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: "User decision 2026-11-09: Olympia deferred; ETH EIP-1559 is the only implementation that matters. Keep the generic import parity and the ETH London base fee for PoW-mined blocks; do not touch import code that predates these PRs."
