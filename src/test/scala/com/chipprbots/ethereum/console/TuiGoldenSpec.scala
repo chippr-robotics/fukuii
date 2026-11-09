@@ -10,7 +10,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * 120×40 and 160×48, in both glyph sets, compared on the visible text.
   *
   * The files under `src/test/resources/tui/golden/` are generated, never edited by hand ([[TuiGoldenFiles]] says how to
-  * rewrite them). Each frame is at tick 0 under full motion, so a worm that ripples shows its ripple behind the worm.
+  * rewrite them). They are drawn without motion: they pin the layout (SC-002), and motion is pinned by
+  * `TuiAnimationSpec` and the celebration, splash, stall and ripple goldens.
   */
 class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with TuiGoldenFiles:
 
@@ -23,7 +24,7 @@ class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll wit
     "synced" -> (g => TuiFixtures.syncedEtc(g)),
     "snap-storage" -> (g => TuiFixtures.snapStorageMordor(g)),
     "regular" -> (g => TuiFixtures.regularSyncEtc(g))
-  )
+  ).map((name, fixture) => name -> (fixture.andThen(_.copy(motion = Motion.Reduced))))
   private val sizes: Seq[(Int, Int)] = Seq((80, 24), (120, 40), (160, 48))
 
   private def glyphsName(set: GlyphSet): String = set.toString.toLowerCase

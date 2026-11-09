@@ -178,6 +178,13 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     next.stalled shouldBe false
   }
 
+  "The rippling Overview" should "match its golden frame at tick 1, 80×24" taggedAs (UnitTest) in {
+    matchGolden(
+      "overview-s-regular-ripple-t01-emoji.txt",
+      visibleFrame(renderer.render(TuiFixtures.regularSyncEtc().copy(tick = 1), 80, 24, theme))
+    )
+  }
+
   "The stalled Overview" should "match its golden frames at 80×24" taggedAs (UnitTest) in {
     for set <- GlyphSet.values do
       val frame = visibleFrame(renderer.render(TuiFixtures.stalledEtc(set), 80, 24, theme))
