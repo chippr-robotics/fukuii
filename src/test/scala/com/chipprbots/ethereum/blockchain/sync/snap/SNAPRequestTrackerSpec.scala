@@ -591,6 +591,35 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     score.requestsTimedOut shouldBe 0
   }
 
+  it should "record nothing when a request is completed with no items: that is how an abandoned request is forgotten" taggedAs
+    UnitTest in {
+      // TrieNodeHealingCoordinator (pivot refresh, every ~12 min), AccountRangeWorker and ByteCodeWorker complete the
+      // requests they abandon with completeRequest(id, 0). A peer that disconnected has not answered.
+      val f = new ScoredTracker
+      val requestId = f.tracker.generateRequestId()
+      f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetTrieNodes) {}
+      f.nowMs.set(1250L)
+
+      f.tracker.completeRequest(requestId, 0) shouldBe defined
+
+      f.tracker.isPending(requestId) shouldBe false
+      f.scorer.getAllScores shouldBe empty
+    }
+
+  it should "record a response when a request is completed with one item or more, and with the default" taggedAs
+    UnitTest in {
+      val f = new ScoredTracker
+      val requestIds = (1 to 3).map(_ => f.tracker.generateRequestId())
+      requestIds.foreach(id => f.tracker.trackRequest(id, f.peer, SNAPRequestTracker.RequestType.GetByteCodes) {})
+      f.nowMs.set(1100L)
+
+      f.tracker.completeRequest(requestIds(0), 1) shouldBe defined
+      f.tracker.completeRequest(requestIds(1), 40) shouldBe defined
+      f.tracker.completeRequest(requestIds(2)) shouldBe defined // the default is one item
+
+      f.scorer.getScore(f.peer.id).responsesReceived shouldBe 3
+    }
+
   it should "record nothing when completing a request that is not pending" taggedAs UnitTest in {
     val f = new ScoredTracker
     f.tracker.completeRequest(BigInt(99)) shouldBe None

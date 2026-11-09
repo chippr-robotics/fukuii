@@ -24,8 +24,9 @@ import com.chipprbots.ethereum.utils.Logger
   *   - Adaptive timeout via PeerRateTracker (port of geth's msgrate)
   *   - Response validation and matching
   *   - Peer management for SNAP requests
-  *   - Feeds the peer scorer, if given one (spec 027 slice 4a): a response with its round-trip time at completion, a
-  *     timeout when a request expires. Observation only: nothing in the tracker reads a score.
+  *   - Feeds the peer scorer, if given one (spec 027 slice 4a): a response with its round-trip time when a request is
+  *     completed with at least one item, a timeout when a request expires. Observation only: nothing in the tracker
+  *     reads a score.
   */
 class SNAPRequestTracker(
     // Monotonic: a wall-clock (NTP) step must not look like a process stall. Only differences are ever used.
@@ -263,8 +264,11 @@ class SNAPRequestTracker(
       val msgType = requestTypeToMsgType(request.requestType)
       rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
       recordDownloadTime(request.requestType, elapsed)
-      // The size of the reply is not known here; the byte count is not part of the score.
-      scorer.foreach(_.recordResponse(request.peer.id, bytes = 0L, latencyMs = elapsed))
+      // Only a reply that carried something is the peer answering. Requesters that abandon a request (the pivot refresh,
+      // a peer that disconnected, a coordinator that drained its tasks) complete it with 0 items to forget it, and an
+      // empty range with no proof passes 0 too; neither earns the peer a response. The sites that record a real reply
+      // pass at least 1. The size of the reply is not known here; the byte count is not part of the score.
+      if responseItems > 0 then scorer.foreach(_.recordResponse(request.peer.id, bytes = 0L, latencyMs = elapsed))
 
       log.debug(
         s"SNAP request ${request.requestType} completed for request ID $requestId " +
