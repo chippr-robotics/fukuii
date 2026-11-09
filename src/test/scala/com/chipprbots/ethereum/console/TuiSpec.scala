@@ -346,7 +346,8 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     try
       tui.getState.splashUntilTick shouldBe Some(12L) // the default config has a splash to show
       Await.result(Future(tui.initialize()), 10.seconds) shouldBe true
-      tt.output shouldBe Tui.EnterAltScreen + Tui.HideCursor + Tui.ClearScreen // no frame drawn, none held
+      // No frame drawn, none held: nothing visible on the screen, whatever escape sequences JLine wrote.
+      TuiTestTerminal.visible(tt.output).trim shouldBe empty
       Await.result(Future(tui.isEnabled), 10.seconds) shouldBe true // the lock is free
     finally
       tui.shutdown()
