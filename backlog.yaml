@@ -1985,3 +1985,13 @@ items:
     refs: [B-167]
     links: {}
     notes: Earlier txs of an ETC Olympia or ETH Cancun/Prague block replay on a state without the history/beacon writes, so a traced tx that reads them sees a different state. Use BlockExecution.applyBlockPreamble.
+  - id: B-182
+    title: "PoW generator on ETH configs: apply London gas-limit elasticity at the fork block (parent < olympia <= block), as the validator expects"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: "beacon review of #1779: BlockGeneratorSkeleton.scala:213-221 computes the gas limit from the raw parent; the validator (BlockHeaderValidatorSkeleton:255-268) expects ~2x at the London block when olympiaGasLimitElasticity=Some(2); geth worker.go doubles it. Not a regression; only hive with HIVE_MINER reaches it. ETC unaffected (None)."
