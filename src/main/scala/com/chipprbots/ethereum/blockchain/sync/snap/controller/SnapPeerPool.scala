@@ -47,6 +47,9 @@ private[snap] trait SnapPeerPoolState:
   var snapServerPeersSchedulerStarted: Boolean
   def BootstrapCheckKey: String
 
+  /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.bestPeerEstimate]]. */
+  def terminalTotalDifficulty: Option[BigInt]
+
 /** The SNAP peer pool (spec 016 M3, research.md R6 "Peer tracking / eviction"): the handshaked-peer view
   * (`handshakedPeers`, `peersToDownloadFrom`, `snapServingPeers` with its `[SNAP-PEERS]` exclusion log), the peer-list
   * refresh with rate tracking and bootstrap reactivity, the debounced disconnect flush, the handshaked-peer poll,
@@ -355,8 +358,8 @@ private[snap] trait SnapPeerPool
     * their STATUS). For each ETH68 peer whose reported head is above the pivot, we interpolate: pivotTD ≈ peerTipTD ×
     * (pivotNumber / peerTipNumber) The gap between our pivot and the peer's tip is typically ≤ 128 blocks, giving an
     * error ≤ 0.0005% — negligible compared to the ~1.4-billion× error of the genesis-proxy fallback. A post-merge pivot
-    * (difficulty 0) takes the peer's TD unscaled (#1654 H6(1)): no block past the merge adds weight, so the
-    * interpolation would land under the frozen terminal TD.
+    * (difficulty 0, on a chain with a terminal TD) takes the peer's TD unscaled (#1654 H6(1)): no block past the merge
+    * adds weight, so the interpolation would land under the frozen terminal TD.
     *
     * Returns None when no qualified ETH68 peers are connected (e.g. very early in startup before any handshakes). The
     * caller falls back to the block-number proxy in that case.
@@ -395,4 +398,4 @@ private[snap] trait SnapPeerPool
         s"SNAP_CALIBRATION_STATS: pivot=$pivotBlockNumber currentPeers=${currentPeerCandidates.size} historicalPeer=(td=$histTD block=$histBlock) source=$source"
       )
 
-    HeadChainWeight.bestPeerEstimate(allCandidates, pivot, genesisBlockTD)
+    HeadChainWeight.bestPeerEstimate(allCandidates, pivot, genesisBlockTD, terminalTotalDifficulty)

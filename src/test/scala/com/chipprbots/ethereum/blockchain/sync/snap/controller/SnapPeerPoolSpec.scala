@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -65,6 +66,8 @@ private[snap] class StubSnapPeerPoolState(
   var snapPeerEvictionStarted: Boolean = false
   var snapServerPeersSchedulerStarted: Boolean = false
   val BootstrapCheckKey: String = "bootstrap-check"
+  var ttd: Option[BigInt] = None
+  def terminalTotalDifficulty: Option[BigInt] = ttd
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -220,9 +223,35 @@ class SnapPeerPoolSpec extends AnyFlatSpec with Matchers:
     h.peerManager.receiveAll() shouldBe Seq(NetworkPeerManagerActor.GetHandshakedPeersCmd(h.adapter.ref))
   }
 
-  // #1654 H6(1): calibratePivotTD hands the pivot HEADER to HeadChainWeight.bestPeerEstimate, so a post-merge pivot
-  // (difficulty 0) takes the peer's TD as is, and a PoW pivot at the same height is scaled as before.
+  // #1654 H6(1): calibratePivotTD hands the pivot HEADER and the configured terminal TD to
+  // HeadChainWeight.bestPeerEstimate. On Sepolia's config a post-merge pivot (difficulty 0) takes the peer's TD as is
+  // and a PoW pivot at the same height is scaled as before; with no terminal TD (ETC) both are scaled (forge review: a
+  // SNAP pivot header gets no PoW check there, so a peer could hand over one of difficulty 0).
   it should "estimate a post-merge pivot's TD as the peer TD unscaled, and scale a PoW pivot" taggedAs UnitTest in {
+    val (h, frozenTD, pivot, postMerge, pow) = calibrationHarness()
+    h.module.ttd = Some(BigInt("17000000000000000"))
+
+    var estimates: Seq[Option[BigInt]] = Nil
+    h.call(m => estimates = Seq(m.calibratePivotTD(postMerge), m.calibratePivotTD(pow)))
+
+    estimates shouldBe Seq(Some(frozenTD), Some(frozenTD * pivot / (pivot + 64)))
+  }
+
+  it should "scale a difficulty-0 pivot's estimate where no terminal TD is configured (ETC)" taggedAs UnitTest in {
+    val (h, frozenTD, pivot, postMerge, _) = calibrationHarness()
+    h.module.ttd = None
+
+    var estimate: Option[BigInt] = None
+    h.call(m => estimate = m.calibratePivotTD(postMerge))
+
+    estimate shouldBe Some(frozenTD * pivot / (pivot + 64))
+  }
+
+  /** A harness whose reader holds the fixture genesis and its weight, with Sepolia's frozen TD from the best ETH68 peer
+    * seen this session, 64 blocks above a pivot at 9.5M. Returns it with the frozen TD, the pivot number, and the pivot
+    * header at difficulty 0 and at the fixture's (PoW) difficulty.
+    */
+  private def calibrationHarness(): (Harness, BigInt, BigInt, BlockHeader, BlockHeader) =
     val h = new Harness(SNAPSyncConfig())
     val chain = new EphemBlockchainTestSetup with TestSyncConfig {}
     val genesis = Fixtures.Blocks.Genesis.header
@@ -232,15 +261,9 @@ class SnapPeerPoolSpec extends AnyFlatSpec with Matchers:
       .and(chain.blockchainWriter.storeChainWeight(genesis.hash, genesisWeight))
       .commit()
     h.module.reader = Some(chain.blockchainReader)
-    // Sepolia's frozen TD, from the best ETH68 peer seen this session, 64 blocks above the pivot.
     val frozenTD = BigInt("17000018015853232")
     val pivot = BigInt(9500000)
     h.module.bestEth68PeerForCalibration = Some((frozenTD, pivot + 64))
     val postMerge = genesis.copy(number = BlockNumber(pivot), difficulty = Difficulty.Zero)
     val pow = genesis.copy(number = BlockNumber(pivot))
-
-    var estimates: Seq[Option[BigInt]] = Nil
-    h.call(m => estimates = Seq(m.calibratePivotTD(postMerge), m.calibratePivotTD(pow)))
-
-    estimates shouldBe Seq(Some(frozenTD), Some(frozenTD * pivot / (pivot + 64)))
-  }
+    (h, frozenTD, pivot, postMerge, pow)

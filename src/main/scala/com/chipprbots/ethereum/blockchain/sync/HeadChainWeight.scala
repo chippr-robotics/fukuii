@@ -109,16 +109,22 @@ object HeadChainWeight:
 
   /** A peer's total difficulty carried to `header`: an ESTIMATE of `header`'s weight from the peer's TD and head number
     * (#1654 H6(1)).
-    *   - `header` carries difficulty 0, so it is past the merge, where no block adds weight: the weight of every
-    *     post-merge block is the TD frozen at the merge, which is what a peer with a post-merge head reports. So the
-    *     peer's TD as is. Scaling it by `number / peerBlock` (below) wrote less than the frozen TD (Sepolia, mainnet).
-    *     The gate is the difficulty, not a configured terminal TD: every ETC and Mordor block above genesis carries at
-    *     least [[Difficulty.MinimumDifficulty]], so ETC never takes it.
+    *   - `header` carries difficulty 0 on a chain with a configured terminal TD, so it is past the merge, where no
+    *     block adds weight: the weight of every post-merge block is the TD frozen at the merge, which is what a peer
+    *     with a post-merge head reports. So the peer's TD as is. Scaling it by `number / peerBlock` (below) wrote less
+    *     than the frozen TD (Sepolia, mainnet). The difficulty tells a pre-merge block from a post-merge one on such a
+    *     chain. The terminal TD keeps ETC out by construction (forge review): ETC and Mordor configure none, and a SNAP
+    *     pivot header reaches here without a PoW check there, so a peer could hand over one of difficulty 0.
     *   - `peerBlock` is unknown (0: an ETH68 STATUS with no probed height): the peer's TD as is.
     *   - Otherwise linear interpolation, `peerTD * number / peerBlock`, which assumes every block adds the same.
     */
-  def peerEstimate(header: BlockHeader, peerTD: BigInt, peerBlock: BigInt): BigInt =
-    if header.difficulty == Difficulty.Zero || peerBlock <= 0 then peerTD
+  def peerEstimate(
+      header: BlockHeader,
+      peerTD: BigInt,
+      peerBlock: BigInt,
+      terminalTotalDifficulty: Option[BigInt]
+  ): BigInt =
+    if (header.difficulty == Difficulty.Zero && terminalTotalDifficulty.isDefined) || peerBlock <= 0 then peerTD
     else peerTD * header.number.value / peerBlock
 
   /** SNAP's pivot estimate (`SnapPeerPool.calibratePivotTD`) from ETH68 peers' (TD, head number) pairs: the highest
@@ -127,8 +133,16 @@ object HeadChainWeight:
     * The 1000x check rejects a genesis or block-number proxy, except where the genesis weight is 0 (see
     * [[posFromGenesisWeight]], which the callers ask first).
     */
-  def bestPeerEstimate(candidates: Seq[(BigInt, BigInt)], pivot: BlockHeader, genesisWeight: BigInt): Option[BigInt] =
+  def bestPeerEstimate(
+      candidates: Seq[(BigInt, BigInt)],
+      pivot: BlockHeader,
+      genesisWeight: BigInt,
+      terminalTotalDifficulty: Option[BigInt]
+  ): Option[BigInt] =
     candidates
-      .collect { case (peerTD, peerBlock) if peerBlock > pivot.number.value => peerEstimate(pivot, peerTD, peerBlock) }
+      .collect {
+        case (peerTD, peerBlock) if peerBlock > pivot.number.value =>
+          peerEstimate(pivot, peerTD, peerBlock, terminalTotalDifficulty)
+      }
       .filter(_ > genesisWeight * BigInt(1000))
       .maxOption

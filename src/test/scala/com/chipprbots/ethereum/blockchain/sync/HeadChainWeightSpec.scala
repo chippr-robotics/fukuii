@@ -162,16 +162,24 @@ class HeadChainWeightSpec extends AnyFlatSpec with Matchers:
       HeadChainWeight.posFromGenesisWeight(Some(BigInt("58750000000000000000000")), blockchainReader) shouldBe None
 
   "HeadChainWeight.peerEstimate" should
-    "take the peer TD unscaled at difficulty 0, and scale it at any ETC difficulty" taggedAs (UnitTest, SyncTest) in {
+    "take the peer TD unscaled at difficulty 0 with a terminal TD, and scale it otherwise" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
       val block = BigInt(9_500_000)
       val peerTD = BigInt("17000018015853232")
       val postMerge = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(block), difficulty = Difficulty.Zero)
-      HeadChainWeight.peerEstimate(postMerge, peerTD, block + 64) shouldBe peerTD
-      // Ethash's least difficulty (every ETC and Mordor block carries at least this): unchanged linear interpolation.
+      HeadChainWeight.peerEstimate(postMerge, peerTD, block + 64, Some(SepoliaTTD)) shouldBe peerTD
+      // A pre-merge Sepolia block at Ethash's least difficulty: unchanged linear interpolation.
       val etcLike = postMerge.copy(difficulty = Difficulty.MinimumDifficulty)
-      HeadChainWeight.peerEstimate(etcLike, peerTD, block + 64) shouldBe peerTD * block / (block + 64)
-      // An unknown peer height (Tier 2): the peer's TD as is, at any difficulty.
-      HeadChainWeight.peerEstimate(etcLike, peerTD, BigInt(0)) shouldBe peerTD
+      HeadChainWeight.peerEstimate(etcLike, peerTD, block + 64, Some(SepoliaTTD)) shouldBe peerTD * block / (block + 64)
+      // ETC and Mordor (no terminal TD): scaled at every difficulty, 0 included (forge review: a SNAP pivot header gets
+      // no PoW check there, so a peer could hand over one of difficulty 0).
+      HeadChainWeight.peerEstimate(etcLike, peerTD, block + 64, None) shouldBe peerTD * block / (block + 64)
+      HeadChainWeight.peerEstimate(postMerge, peerTD, block + 64, None) shouldBe peerTD * block / (block + 64)
+      // An unknown peer height (Tier 2): the peer's TD as is, at any difficulty, on any chain.
+      HeadChainWeight.peerEstimate(etcLike, peerTD, BigInt(0), None) shouldBe peerTD
+      HeadChainWeight.peerEstimate(postMerge, peerTD, BigInt(0), Some(SepoliaTTD)) shouldBe peerTD
     }
 
   /** Store a parent at block 15M-1 (whose own parent is unknown) with `parentTD`, and its child at 15M; return both.

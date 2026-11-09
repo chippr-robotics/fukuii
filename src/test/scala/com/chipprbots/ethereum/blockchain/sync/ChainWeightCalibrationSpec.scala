@@ -633,12 +633,15 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
   // The estimate path still runs when the post-merge head is the SNAP pivot itself (no parent weight); only the value
   // changes (H6(1)). Before, this test pinned Tier 1's linear interpolation, SepoliaFrozenTD * P / (P + 53): every
-  // block past the merge adds 0, so that is below the frozen TD every post-merge block carries.
+  // block past the merge adds 0, so that is below the frozen TD every post-merge block carries. Sepolia's config: its
+  // terminal TD and its genesis difficulty (0x20000).
   it should "write Tier 1 unscaled at difficulty 0: a post-merge SNAP pivot head takes the peer TD as is" taggedAs (
     UnitTest,
     SyncTest
   ) in
-    (new RegularSyncSetup:
+    (new TerminalTDSetup:
+      override def genesisDifficulty: BigInt = BigInt(131072)
+      override def terminalTD: BigInt = SepoliaTTD
       val pivotEstimate: BigInt = SepoliaFrozenTD * PoSPivot / (PoSPivot + 100)
       val chain: Vector[BlockHeader] =
         saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 1, difficulty = BigInt(0))
@@ -660,6 +663,26 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       // is ETC's, and it is unchanged.
       val chain: Vector[BlockHeader] =
         saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 1, difficulty = MordorDifficulty)
+      drainRegistration()
+
+      val peerTD: BigInt = MordorHeadTD
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(peerTD, PoSPivot + 53)
+      )
+
+      blockchainReader.getChainWeightByHash(chain.head.hash).get.totalDifficulty.value shouldBe
+        peerTD * PoSPivot / (PoSPivot + 53)
+    )
+
+  // forge review: on ETC a SNAP pivot header reaches here without a PoW check, so a peer could hand over one of
+  // difficulty 0. With no terminal TD configured the unscaled branch is never taken, whatever the difficulty.
+  it should "still scale Tier 1 on a difficulty-0 head where no terminal TD is configured (ETC)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 1, difficulty = BigInt(0))
       drainRegistration()
 
       val peerTD: BigInt = MordorHeadTD
@@ -739,7 +762,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       UnitTest,
       SyncTest
     ) in
-    (new PosFromGenesisSetup:
+    (new TerminalTDSetup:
       // SNAP pivot P stored the block-number proxy (`td = P`, BLOCK_NUMBER_PROXY) and P+1 was imported on top of it.
       val chain: Vector[BlockHeader] =
         saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 2, difficulty = BigInt(0))
@@ -774,7 +797,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       UnitTest,
       SyncTest
     ) in
-    (new PosFromGenesisSetup:
+    (new TerminalTDSetup:
       override def genesisDifficulty: BigInt = BigInt(131072)
       override def terminalTD: BigInt = BigInt(131072)
       // A SNAP pivot whose parent has no weight (a base), with a plausible seed value: before, this seed was applied.
@@ -798,6 +821,7 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
   // Sepolia: the TD frozen at the merge, and a post-merge SNAP pivot height.
   private val SepoliaFrozenTD: BigInt = BigInt("17000018015853232")
+  private val SepoliaTTD: BigInt = BigInt("17000000000000000")
   private val PoSPivot: BigInt = BigInt(9500000)
 
   private val MordorPivot: BigInt = BigInt(15000000)
@@ -993,11 +1017,11 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
 
     def cleanup(): Unit = Await.result(system.terminate(), 10.seconds)
 
-  /** A chain merged at genesis (#1654): terminal TD `terminalTD`, at or below the difficulty of a genesis stored as
+  /** A chain with a terminal TD (#1654): `terminalTD`, and a genesis of difficulty `genesisDifficulty` stored as
     * GenesisDataLoader stores it (weight = its difficulty). It replaces the ETC genesis the base setup indexes at
-    * height 0. By default Platåberget's shape: both 0.
+    * height 0. By default Platåberget's shape, merged at genesis: both 0.
     */
-  trait PosFromGenesisSetup extends RegularSyncSetup:
+  trait TerminalTDSetup extends RegularSyncSetup:
     def genesisDifficulty: BigInt = BigInt(0)
     def terminalTD: BigInt = BigInt(0)
 

@@ -299,8 +299,9 @@ private class SNAPSyncControllerImpl(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
     )
 
-  // #1654: read by the pivot-weight writes (PivotSelector, SnapFinalization). None on ETC and Mordor; on a chain that
-  // was PoS from genesis (Platåberget, 0) every block's weight is the genesis weight.
+  // #1654: read by the pivot-weight writes (PivotSelector, SnapFinalization) and the pivot estimate (SnapPeerPool).
+  // None on ETC and Mordor; on a chain that was PoS from genesis (Platåberget, 0) every block's weight is the genesis
+  // weight.
   val terminalTotalDifficulty: Option[BigInt] =
     terminalTotalDifficultyOverride.orElse(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty

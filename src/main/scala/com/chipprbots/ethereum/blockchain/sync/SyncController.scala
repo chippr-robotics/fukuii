@@ -2875,8 +2875,8 @@ object SyncController:
       * ESTIMATE and log it as one.
       *   - Tier 1 (peerTD > 0, peerMaxBlock > 0): linear interpolation `peerTD * ourBest / peerMaxBlock`. The pair
       *     comes from a NewBlock or from an ETH68 STATUS plus the peer's probed height; either way the result is a
-      *     guess. A post-merge best block (difficulty 0) takes the peer's TD unscaled (#1654 H6(1),
-      *     [[HeadChainWeight.peerEstimate]]).
+      *     guess. A post-merge best block (difficulty 0, terminal TD configured) takes the peer's TD unscaled (#1654
+      *     H6(1), [[HeadChainWeight.peerEstimate]]).
       *   - Tier 2 (peerTD > 0, peerMaxBlock = 0): the peer's TD as is (ETH68 STATUS only).
       *   - Tier 3 (peerTD = 0): pure ETH69 sentinel — accumulate from a plausible local anchor
       *     ([[calibrateTDFromLocalChain]]).
@@ -2889,7 +2889,12 @@ object SyncController:
             .getChainWeightByHash(blockchainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
             .getOrElse(blockchainReader.genesisHeader.difficulty.value)
-          val calibratedTD = HeadChainWeight.peerEstimate(bestBlock.header, peerTD, peerMaxBlock)
+          val calibratedTD = HeadChainWeight.peerEstimate(
+            bestBlock.header,
+            peerTD,
+            peerMaxBlock,
+            configBuilder.blockchainConfig.terminalTotalDifficulty
+          )
           val storedTD: BigInt = blockchainReader
             .getChainWeightByHash(bestBlock.header.hash)
             .map(_.totalDifficulty.value)

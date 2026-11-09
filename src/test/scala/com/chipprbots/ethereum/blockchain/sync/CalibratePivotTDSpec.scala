@@ -53,13 +53,15 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
   //     .filter(_ > genesisBlockTD * BigInt(1000))  // plausibility
   //     .maxOption
 
-  /** The calibratePivotTD rule at a PoW pivot (the fixture genesis difficulty, as on ETC) numbered `pivot`. */
+  /** The calibratePivotTD rule at a PoW pivot (the fixture genesis difficulty) numbered `pivot`, on ETC (no terminal
+    * TD).
+    */
   private def calcPivotTD(
       candidates: Seq[(BigInt, BigInt)],
       pivot: BigInt,
       genesisTD: BigInt
   ): Option[BigInt] =
-    HeadChainWeight.bestPeerEstimate(candidates, powPivot(pivot), genesisTD)
+    HeadChainWeight.bestPeerEstimate(candidates, powPivot(pivot), genesisTD, None)
 
   private def powPivot(pivot: BigInt): BlockHeader =
     Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot))
@@ -161,24 +163,32 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
   // Every block past the merge carries difficulty 0, so a peer whose head is past the merge reports the TD frozen at
   // the merge, which is the weight of every post-merge block, the pivot included. Sepolia's frozen TD, a peer 64 above.
   private val sepoliaFrozenTD = BigInt("17000018015853232")
+  private val sepoliaTTD: Option[BigInt] = Some(BigInt("17000000000000000"))
   private val postMergePivotNumber = BigInt(9500000)
 
   "A post-merge pivot" should "take the peer TD unscaled" taggedAs (UnitTest) in {
     val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
     // Before #1654: frozenTD * P / (P + 64), under the frozen TD.
-    HeadChainWeight.bestPeerEstimate(candidates, postMergePivot(postMergePivotNumber), genesisTD) shouldBe
+    HeadChainWeight.bestPeerEstimate(candidates, postMergePivot(postMergePivotNumber), genesisTD, sepoliaTTD) shouldBe
       Some(sepoliaFrozenTD)
   }
 
   it should "still leave out a peer at or below the pivot, and keep the highest of several" taggedAs (UnitTest) in {
     val pivot = postMergePivot(postMergePivotNumber)
-    HeadChainWeight.bestPeerEstimate(Seq((sepoliaFrozenTD, postMergePivotNumber)), pivot, genesisTD) shouldBe None
-    HeadChainWeight.bestPeerEstimate(Seq((sepoliaFrozenTD, BigInt(0))), pivot, genesisTD) shouldBe None
+    HeadChainWeight.bestPeerEstimate(
+      Seq((sepoliaFrozenTD, postMergePivotNumber)),
+      pivot,
+      genesisTD,
+      sepoliaTTD
+    ) shouldBe
+      None
+    HeadChainWeight.bestPeerEstimate(Seq((sepoliaFrozenTD, BigInt(0))), pivot, genesisTD, sepoliaTTD) shouldBe None
     val lower = sepoliaFrozenTD - 1
     HeadChainWeight.bestPeerEstimate(
       Seq((lower, postMergePivotNumber + 1), (sepoliaFrozenTD, postMergePivotNumber + 500)),
       pivot,
-      genesisTD
+      genesisTD,
+      sepoliaTTD
     ) shouldBe Some(sepoliaFrozenTD)
   }
 
@@ -187,6 +197,14 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
   ) in {
     val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
     calcPivotTD(candidates, postMergePivotNumber, genesisTD) shouldBe
+      Some(sepoliaFrozenTD * postMergePivotNumber / (postMergePivotNumber + 64))
+  }
+
+  // forge review: on ETC a SNAP pivot header gets no PoW check on the bootstrap and refresh paths, so a peer could hand
+  // over one of difficulty 0. With no terminal TD configured it is scaled like any other.
+  "A difficulty-0 pivot where no terminal TD is configured (ETC)" should "still be scaled" taggedAs (UnitTest) in {
+    val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
+    HeadChainWeight.bestPeerEstimate(candidates, postMergePivot(postMergePivotNumber), genesisTD, None) shouldBe
       Some(sepoliaFrozenTD * postMergePivotNumber / (postMergePivotNumber + 64))
   }
 
