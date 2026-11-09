@@ -2027,7 +2027,7 @@ items:
       by: fukuii-fc
       agent: forge
       since: 2026-11-09T12:13:36Z
-      heartbeat: 2026-11-09T12:24:44Z
+      heartbeat: 2026-11-09T12:49:00Z
     notes: "User decision 2026-11-09: Olympia deferred; ETH EIP-1559 is the only implementation that matters. Keep the generic import parity and the ETH London base fee for PoW-mined blocks; do not touch import code that predates these PRs."
   - id: B-185
     title: "Post-merge SNAP: spec-004 serve-root and post-SNAP storage recovery RecentRoot still take a peer-height root by number"
