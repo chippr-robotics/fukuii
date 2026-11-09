@@ -1998,10 +1998,13 @@ items:
   - id: B-183
     title: "Propose an ECIP-1111 text amendment: the treasury credit is once per block, not per transaction"
     priority: P1
-    status: open
+    status: dropped
     area: spec
     size: S
     opened: 2026-11-09
+    closed: 2026-11-09
     refs: [B-178]
     links: {}
-    notes: "User decision 2026-11-09. Published text (ethereumclassic/ECIPs 2e1d632323, 2026-09-08) requires a per-transaction credit and forbids a block-level one; fukuii and the Besu fork credit per block. State roots differ if a tx reads the vault balance mid-block. Owner: user (ECIP PR); fukuii keeps per-block."
+    notes: |-
+      User decision 2026-11-09. Published text (ethereumclassic/ECIPs 2e1d632323, 2026-09-08) requires a per-transaction credit and forbids a block-level one; fukuii and the Besu fork credit per block. State roots differ if a tx reads the vault balance mid-block. Owner: user (ECIP PR); fukuii keeps per-block.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
