@@ -22,23 +22,21 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** #1727 PR 6 (B-132): a simulated block is paid what block import pays it, on the chain's proof-of-work rules at its
-  * number.
+/** #1727 PR 6 (B-132): a simulated block is paid the miner reward block import pays it, on the chain's proof-of-work
+  * rules at its number.
   *
   * go-ethereum's eth_simulateV1 gives a simulated block the previous block's difficulty, or zero after the merge
   * (internal/ethapi/simulate.go:661-669, `ChainConfig.IsPostMerge`), and pays it through the engine's `Finalize`
   * (simulate.go:511), which pays the proof-of-work reward for a header with a difficulty (consensus/beacon
   * `IsPoSHeader`). core-geth has no eth_simulateV1, so on ETC the reference is block import itself: ECIP-1017's era
-  * reward (5,000,000-block eras on ETC, 2,000,000 on Mordor) and, from Olympia, ECIP-1111's base fee times gas used to
-  * the treasury. Before this change a simulated ETC block was paid the first era's 5 ETC at every height, and an
-  * Olympia block got zero difficulty and no reward, because both were read from the header's shape.
+  * reward (5,000,000-block eras on ETC, 2,000,000 on Mordor). Before this change a simulated ETC block was paid the
+  * first era's 5 ETC at every height, because the reward was read from the header's shape.
   *
   * The balances are read inside the simulation: a later block calls a contract that returns BALANCE(address). The
   * oracle cases check the simulated state root against `BlockPreparator.prepareBlock` (the block's transactions, then
   * `payBlockReward`, as block import runs them), given the same parent state, header and transactions, signed.
   *
-  * Chains: the shipped ETC, Mordor, ETH and Sepolia configs; Olympia, unscheduled on every shipped chain, is moved to
-  * block 23,000,000 on ETC and 15,000,000 on Mordor.
+  * Chains: the shipped ETC, Mordor, ETH and Sepolia configs.
   */
 // scalastyle:off magic.number
 class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
@@ -51,8 +49,6 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
   private val mordor: BlockchainConfig = shipped("mordor")
   private val eth: BlockchainConfig = shipped("eth")
   private val sepolia: BlockchainConfig = shipped("sepolia")
-  private val etcOlympia: BlockchainConfig = etc.withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 23_000_000))
-  private val mordorOlympia: BlockchainConfig = mordor.withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 15_000_000))
 
   private val E = BigInt(10).pow(18)
   private val Gwei = BigInt(1_000_000_000)
@@ -77,15 +73,11 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
   private val BalanceReader = "0xbbbb00000000000000000000000000000000bbbb"
   private val BalanceReaderCode = "0x6000353160005260206000f3"
 
-  /** DIFFICULTY, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN: what DIFFICULTY reads in the block. */
-  private val DifficultyReader = "0xdddd00000000000000000000000000000000dddd"
-  private val DifficultyReaderCode = "0x4460005260206000f3"
-
   private def hexQuantity(n: BigInt): String = "0x" + n.toString(16)
   private def word(address: String): String = "0x" + "00" * 12 + address.drop(2)
 
   /** A node whose best block is `baseNumber`, with `baseDifficulty` and `baseExtraFields` (`HefPostOlympia` for a block
-    * with a base fee: ETC from Olympia, ETH from London), and a state that holds only the funded sender.
+    * with a base fee: ETH from London), and a state that holds only the funded sender.
     */
   private class Node(
       config: BlockchainConfig,
@@ -212,48 +204,6 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
     balances(bs(1)) shouldBe Seq(BigInt("2048000000000000000"))
   }
 
-  // ── ETC and Mordor at Olympia ───────────────────────────────────────────────
-
-  "eth_simulateV1 at Olympia on Mordor" should "keep the parent's difficulty, pay the era reward and credit the treasury" taggedAs (
-    UnitTest,
-    RPCTest,
-    OlympiaTest
-  ) in {
-    val node =
-      new Node(mordorOlympia, 15_000_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
-    val treasury = "0x" + Hex.toHexString(mordorOlympia.treasuryAddress.bytes.toArray)
-    // block 15,000,001 (era 7): base fee 1 gwei, the transfer at 2 gwei, and nothing else, so its gasUsed is 21,000
-    val olympiaBlock =
-      s"""{"blockOverrides":{"feeRecipient":"$MinerA","baseFeePerGas":"${hexQuantity(Gwei)}"},
-         |"calls":[${transferCall(Gwei * 2)}]}""".stripMargin
-    // block 15,000,002 (base fee 0, so it credits the treasury nothing): the balances, and what DIFFICULTY reads
-    val readBlock =
-      s"""{"blockOverrides":{"feeRecipient":"$MinerC"},
-         |"stateOverrides":{"$BalanceReader":{"code":"$BalanceReaderCode"},"$DifficultyReader":{"code":"$DifficultyReaderCode"}},
-         |"calls":[{"from":"$Caller","to":"$BalanceReader","input":"${word(MinerA)}"},
-         |{"from":"$Caller","to":"$BalanceReader","input":"${word(treasury)}"},
-         |{"from":"$Caller","to":"$DifficultyReader"}]}""".stripMargin
-    val bs = node.blocks(request(olympiaBlock, readBlock))
-    val header = bs.head.header
-    header.extraFields shouldBe HefPostOlympia(Gwei)
-    header.gasUsed.value shouldBe BigInt(21_000)
-    bs.map(_.header.difficulty.value).distinct shouldBe Seq(PowDifficulty)
-    header.isPoS shouldBe false
-    // miner: 5 x 0.8^7 = 1.048576 ETC, plus the 1 gwei tip on 21,000 gas; treasury: 1 gwei base fee x 21,000 gas; and
-    // DIFFICULTY reads the proof-of-work difficulty (it read the zero prevRandao while the block had zero difficulty)
-    balances(bs(1)) shouldBe Seq(BigInt("1048576000000000000") + Gwei * 21_000, Gwei * 21_000, PowDifficulty)
-  }
-
-  "eth_simulateV1 at Olympia on ETC" should "accept a difficulty override: an ETC block is never after the merge" taggedAs (
-    UnitTest,
-    RPCTest,
-    OlympiaTest
-  ) in {
-    val node = new Node(etcOlympia, 23_000_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
-    val bs = node.blocks(request("""{"blockOverrides":{"difficulty":"0x1234"}}"""))
-    bs.head.header.difficulty.value shouldBe BigInt(0x1234)
-  }
-
   // ── The oracle: a simulated block's state root is block import's ───────────
 
   private def oracle(node: Node, gasPrice: BigInt, config: BlockchainConfig, baseFee: Option[BigInt]): Unit =
@@ -264,8 +214,8 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
     val header = bs.head.header
     bs.head.calls.map(_.error) shouldBe Seq(None)
     header.gasUsed.value shouldBe BigInt(21_000)
-    // The header block import would see: an ETC block always has a proof-of-work difficulty. With zero (and a base fee),
-    // import's own `isPoS` skip would pay nothing too, and agree with a simulation that paid nothing.
+    // The header block import would see: a block before the merge has a proof-of-work difficulty. With zero (and a
+    // base fee), import's own `isPoS` skip would pay nothing too, and agree with a simulation that paid nothing.
     header.difficulty.value shouldBe PowDifficulty
     Hex.toHexString(header.stateRoot.value.toArray) shouldBe
       Hex.toHexString(node.preparedStateRoot(header, Seq(signedTransfer(gasPrice, config))).toArray)
@@ -277,22 +227,12 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
     oracle(new Node(mordor, 2_000_000, PowDifficulty), Gwei, mordor, None)
   }
 
-  it should "be block import's on Mordor at Olympia (block 15,000,001), treasury credit included" taggedAs (
+  "A simulated ETH block's state root" should "be block import's after London (block 12,965,001), base fee included" taggedAs (
     UnitTest,
-    RPCTest,
-    OlympiaTest
+    RPCTest
   ) in {
-    val node = new Node(mordorOlympia, 15_000_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
-    oracle(node, Gwei * 2, mordorOlympia, Some(Gwei))
-  }
-
-  it should "be block import's on ETC at Olympia (block 23,000,001, era 4), treasury credit included" taggedAs (
-    UnitTest,
-    RPCTest,
-    OlympiaTest
-  ) in {
-    val node = new Node(etcOlympia, 23_000_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
-    oracle(node, Gwei * 2, etcOlympia, Some(Gwei))
+    val node = new Node(eth, 12_965_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
+    oracle(node, Gwei * 2, eth, Some(Gwei))
   }
 
   // ── ETH: unchanged before London and after the merge; geth's rule in between ─
@@ -321,6 +261,15 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
     val bs = node.blocks(request(emptyBlock(MinerA), readerBlock(MinerA)))
     bs.head.header.difficulty.value shouldBe PowDifficulty
     balances(bs(1)) shouldBe Seq(E * 2)
+  }
+
+  it should "accept a difficulty override: the block's inherited difficulty is not zero" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node = new Node(eth, 12_965_000, PowDifficulty, baseExtraFields = HefPostOlympia(Gwei))
+    val bs = node.blocks(request("""{"blockOverrides":{"difficulty":"0x1234"}}"""))
+    bs.head.header.difficulty.value shouldBe BigInt(0x1234)
   }
 
   "eth_simulateV1 on ETH after the merge" should "give zero difficulty and pay nothing on a post-merge parent, before Shanghai" taggedAs (

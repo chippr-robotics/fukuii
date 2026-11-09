@@ -1035,7 +1035,7 @@ object BlockExecution:
     * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
     * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
     */
-  private[ethereum] def applyEip2935(
+  private def applyEip2935(
       block: Block,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =

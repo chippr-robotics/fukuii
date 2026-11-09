@@ -255,17 +255,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
-- **A PoW block mined from ETC's Olympia block is the block import computes (B-167). ETC and Mordor.** Olympia is not
-  scheduled on any shipped chain yet; this matters once it is. A block from fukuii's PoW miner (internal, or
-  `eth_getWork` / `eth_submitWork`) at or after Olympia differed from import in three ways:
-  - the header had no base fee, so import refused it;
-  - the ECIP-1111 treasury credit was paid on a gas used of 0 instead of the block's real gas used;
-  - the block skipped import's pre-transaction steps, so EIP-2935's history contract and the parent hash (ECIP-1121)
-    were missing from its state.
-  The miner now sets the base fee with the validator's own rule (`BaseFeeCalculator`), runs import's pre-transaction
-  steps (`BlockExecution.applyBlockPreamble`, moved there unchanged), and pays the reward on the executed gas.
-  `eth_simulateV1` on ETC from Olympia also writes the EIP-2935 history now. Blocks before Olympia are unchanged; on
-  ETH configs the PoW miner gives blocks from London a base fee as well (ETH's real blocks come from the Engine API).
+- **A PoW block mined by fukuii is built on the state block import computes for it (B-167).** fukuii's PoW miner
+  (internal, or `eth_getWork` / `eth_submitWork`) now runs import's steps before the first transaction
+  (`BlockExecution.applyBlockPreamble`, moved there unchanged: the DAO fork block's drain, EIP-4788, EIP-2935), and pays
+  the rewards on the header as it is sealed, with the gas the block used. On ETH configs it gives a block after London
+  EIP-1559's base fee, with the gate and the function import's header validation uses (`BaseFeeCalculator`); before,
+  such a block failed import's header rules. ETC and Mordor blocks are unchanged: the steps do nothing there, and the
+  headers carry no base fee. ETH's real blocks come from the Engine API, which this does not touch.
 - **A block whose parent this node lacks no longer gets the peer that sent it blacklisted (B-007, #1683).** Regular sync
   read such a block as a bad block, and blacklisted the peer for 60 s. The gap is the node's, not the peer's. T062 (Mordor,
   24 h) blacklisted 33 peers for `Block import error: UNKNOWN_PARENT: parent header not found` in a run with only five
@@ -559,21 +555,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an empty request contract before any call (`SYSTEM_CONTRACT_EMPTY`), and `RequestSystemCallsBlockImportPinSpec`
   pins the requests, requests hash, receipts and state root of Prague, Osaka and Amsterdam blocks on ETH, and of an
   Olympia block on ETC, as recorded before the change.
-- **`eth_simulateV1` pays a simulated block what block import pays it (#1727, B-132). Both chains.** On ETC a
-  simulated block was paid the first era's 5 ETC at any height, not ECIP-1017's era reward (4 ETC from block 5,000,001
-  on ETC and 2,000,001 on Mordor, and 20% less each era after). An Olympia block got zero difficulty and no reward at
-  all, its base fee was not credited to the treasury, and DIFFICULTY read zero. A simulated block now takes its
-  difficulty as go-ethereum's `makeHeaders` gives it: the previous block's, or zero after the merge (geth's
-  `IsPostMerge`, which no ETC chain ever reaches). A block with a difficulty is paid by the code block import pays it
-  with (`BlockRewards`): the era reward, and from Olympia ECIP-1111's base fee times gas used to the treasury, before
-  the miner. ETC blocks therefore keep their proof-of-work difficulty at every fork and take a `difficulty` override at
-  Olympia too. On ETH, a simulated block after London and before the merge now keeps its parent's difficulty and is paid
-  2 ETH, as in go-ethereum, where it had zero difficulty and no reward. Blocks before London and after the merge are
-  unchanged. core-geth has no `eth_simulateV1`, so on ETC the reference is block import: `EthSimulateEtcRewardSpec`
-  checks a simulated block's state root against `BlockPreparator`'s for the same header and transactions, on Mordor
-  and, at Olympia, on ETC and Mordor. Block import is unchanged: `BlockRewardImportPinSpec` pins the miner, ommer and
-  treasury balances and the state root of blocks with two ommers in several ETC and Mordor eras, at Olympia, and on
-  ETH before and after the merge, as recorded before the change.
+- **`eth_simulateV1` pays a simulated block the miner reward block import pays it (#1727, B-132). Both chains.** On
+  ETC a simulated block was paid the first era's 5 ETC at any height, not ECIP-1017's era reward (4 ETC from block
+  5,000,001 on ETC and 2,000,001 on Mordor, and 20% less each era after). A simulated block now takes its difficulty as
+  go-ethereum's `makeHeaders` gives it: the previous block's, or zero after the merge (geth's `IsPostMerge`, which no
+  ETC chain ever reaches). A block with a difficulty is paid the miner reward by the code block import pays it with
+  (`BlockRewards.payMinerAndOmmers`): the era reward on ETC; on ETH before the merge, the Frontier, Byzantium or
+  Constantinople reward. On ETH, a simulated block after London and before the merge now keeps its parent's difficulty,
+  takes a `difficulty` override, and is paid 2 ETH, as in go-ethereum, where it had zero difficulty and no reward.
+  Blocks before London and after the merge are unchanged. core-geth has no `eth_simulateV1`, so on ETC the reference is
+  block import: `EthSimulateEtcRewardSpec` checks a simulated block's state root against `BlockPreparator`'s for the
+  same header and transactions, on Mordor and on ETH after London. Block import is unchanged: `BlockRewardImportPinSpec`
+  pins the balances and the state root of blocks with two ommers in several ETC and Mordor eras and on ETH before and
+  after the merge, as recorded before the change.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.

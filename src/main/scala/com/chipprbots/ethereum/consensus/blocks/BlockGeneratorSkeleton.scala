@@ -72,14 +72,13 @@ abstract class BlockGeneratorSkeleton(
       extraFields = baseFeeFields(blockNumber, parent.header)
     )
 
-  /** The header field EIP-1559 adds, from the Olympia block on (ECIP-1111): the base fee, from the parent, by the
-    * function block import's header validation recomputes it with (`BlockHeaderValidatorSkeleton.validateBaseFee`):
-    * INITIAL_BASE_FEE at the first Olympia block, never below the chain's `base-fee-floor` after it. The gate is that
-    * validator's own, `number >= olympiaBlockNumber`, so the header has exactly the shape import requires; before
-    * Olympia it is `HefEmpty`, byte for byte the header mined before. Transactions run against this header, so BASEFEE,
-    * the miner's tip and the treasury credit all see the base fee import sees.
+  /** The header field EIP-1559 adds: the base fee, from the parent, by the function block import's header validation
+    * recomputes it with (`BlockHeaderValidatorSkeleton.validateBaseFee`). The gate is that validator's own, `number >=
+    * olympiaBlockNumber` (the London block on ETH configs), so the header has exactly the shape import requires; before
+    * it the header is `HefEmpty`, byte for byte the header mined before. Transactions run against this header, so
+    * BASEFEE and the miner's tip see the base fee import sees.
     *
-    * core-geth's miner sets the base fee at the same point (miner/worker.go `prepareWork`: `header.BaseFee =
+    * go-ethereum's miner sets the base fee at the same point (miner/worker.go `prepareWork`: `header.BaseFee =
     * eip1559.CalcBaseFee(config, parent)`), and its seal hash covers it, as `BlockHeader.getEncodedWithoutNonce` does.
     */
   private def baseFeeFields(blockNumber: BigInt, parent: BlockHeader)(implicit
