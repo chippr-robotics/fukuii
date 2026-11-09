@@ -275,6 +275,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **Every peer the node deals with has a reliability score, exported to the metrics registry (spec 027 slice 4a).**
+  `PeerScoringManager` (written long ago, never constructed) is now built once per node and fed from the peer events:
+  a successful handshake (`PeerManagerActor`), a failed handshake and a protocol violation (`PeerActor`), a response
+  with its round-trip time and a timeout (`PeersClient` for eth requests, `SNAPRequestTracker` for SNAP requests), and a
+  blacklisting of a peer id. Nothing decides on a score: no dial, peer selection, blacklist or disconnect reads it; the
+  scores are for the operator and the TUI's Peers view.
+  - **Metrics.** Gauges `network_peers_scored_gauge`, `network_peers_score_average_gauge` and
+    `network_peers_score_{high,medium,low}_gauge` (high 0.7 and above, medium 0.4 up to 0.7, low below 0.4). The
+    per-peer scores are not metric series; they are read through `NetworkMetrics.peerScores`.
+  - **Scoring changes that wiring needed.** A score is a function of the history and an injected clock (it read the
+    wall clock). Events for one peer are applied atomically (the get-then-put lost updates under load). The score map is
+    bounded at 4096 peers, evicting the oldest `lastSeen`. A failed handshake, a timeout, a protocol violation and a
+    blacklisting never raise a score: only a successful handshake and a response refresh `lastSeen`, a blacklisting
+    counts against the compliance term, and timeouts no longer dilute the violation rate.
 - **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a
   throttled walk (25% duty cycle) from the current head checks every node's hash, every account's code and every
   storage trie, fetches what is missing and logs each hole with its position. It does not block import, and it replaces

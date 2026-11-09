@@ -75,7 +75,11 @@ final case class PeerScore(
 
 **Blacklist Retry Logic**: Exponential penalty with 1-hour maximum backoff prevents persistent reconnection attempts while allowing recovery from transient issues.
 
-**Thread Safety**: `PeerScoringManager` uses concurrent data structures (TrieMap) for thread-safe operation.
+**Thread Safety** (corrected 2026-11-09, spec 027 slice 4a): `PeerScoringManager` stores scores in a `TrieMap`, but it
+originally read a score and wrote it back in two steps (`getScore`, then `put`), so concurrent events for one peer lost
+updates; it was not thread-safe. Since slice 4a each event is one atomic `TrieMap.updateWith`, new peers are admitted
+under a lock that also bounds the map (4096 entries; the oldest `lastSeen` is evicted), and every time is read from an
+injected `java.time.Clock`. Pinned by `PeerScoringManagerSpec` (four threads, no lost event).
 
 ### Priority 2: Adaptive Sync Strategy with Fallback Chain
 
@@ -240,13 +244,22 @@ fukuii {
 | Component | File | Lines | Tests | Status |
 |-----------|------|-------|-------|--------|
 | Peer Scoring | PeerScore.scala | 160 | 20+ | ✅ Complete |
-| Scoring Manager | PeerScoringManager.scala | 131 | Integrated | ✅ Complete |
+| Scoring Manager | PeerScoringManager.scala | 131 | `PeerScoringManagerSpec`, `NetworkMetricsSpec` (see note) | ✅ Wired as an observer 2026-11-09 (spec 027 slice 4a); not used for selection |
 | Adaptive Sync | AdaptiveSyncStrategy.scala | 188 | Unit tested | ✅ Complete |
 | Retry Strategy | RetryStrategy.scala | 125 | 15+ | ✅ Complete |
 | Checkpoint Service | CheckpointUpdateService.scala | 201 | Framework | ⚠️ JSON parsing pending |
 | Bootstrap Config | bootstrap-node.conf | 138 | Template | ⚠️ Integration pending |
 
 ### Integration Points
+
+> **Status (corrected 2026-11-09).** The table above used to mark the scoring manager "Integrated". It was not: no code
+> in `src/main` ever constructed it (added in `bee01af48`, never wired). Spec 027 slice 4a wires it **as an observer
+> only**: `NodeBuilder` constructs one `PeerScoringManager`; `PeerManagerActor` (successful handshake), `PeerActor`
+> (failed handshake, protocol violation), `PeersClient` and `SNAPRequestTracker` (responses, timeouts) and a
+> `ScoringBlacklist` decorator (blacklisting of a peer id) feed it; it exports the scores through `NetworkMetrics`.
+> **Nothing selects, dials, blacklists or disconnects on a score.** The `getBestPeersExcluding` snippet below is the
+> original design and is **not implemented**; `getBestPeers`, `getBestPeersExcluding` and `shouldRetry` stay unused.
+> Changing that is a new decision with its own spec.
 
 #### In PeersClient.scala
 
