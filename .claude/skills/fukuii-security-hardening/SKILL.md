@@ -13,7 +13,10 @@ description: >-
 # Fukuii security hardening
 
 Read `../CONVENTIONS.md` first. Block/trusted-peer calls are 🟡; RPC-exposure
-config changes (restart) are 🔴.
+config changes (restart) are 🔴. HTTP and WebSocket serve only `eth,net,web3,fukuii` by
+default; `personal`, `debug`, `admin`, `qa` (and `miner`) are opt-in per transport
+(`network.rpc.http.apis`, `ws.apis`, `ipc.apis`), and the node logs a warning at startup
+when one is enabled on a non-loopback HTTP/WS endpoint. `admin_blockIP` needs `admin`.
 
 ## When to use
 - An abusive/misbehaving peer or IP needs blocking.
@@ -31,7 +34,7 @@ config changes (restart) are 🔴.
 2. **Block an abusive IP** (🟡) — `admin_blockIP("<ip>")`; verify with
    `admin_listBlockedIPs`; reverse with `admin_unblockIP("<ip>")`. (Equivalent
    `net_addToBlacklist` / `net_removeFromBlacklist` / `net_listBlacklistedPeers`
-   exist if that namespace is enabled.)
+   are served with the same `admin` namespace.)
 3. **Pin / drop peers** (🟡) — `admin_addTrustedPeer` to keep a vetted peer;
    `admin_removePeer` to drop a bad one (→ `fukuii-peer-management`).
 4. **Protect secrets** (🔴) — `node.key` and `keystore/` must be permission-

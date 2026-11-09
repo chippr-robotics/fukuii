@@ -798,6 +798,8 @@ trait KeyStoreBuilder:
 trait ApisBuilder extends ApisBase:
   object Apis:
     val Eth = "eth"
+    // Mining control (miner_start, miner_stop, miner_getStatus, miner_setEtherbase): opt-in, as in go-ethereum.
+    val Miner = "miner"
     val Web3 = "web3"
     val Net = "net"
     val Personal = "personal"
@@ -819,7 +821,7 @@ trait ApisBuilder extends ApisBase:
 
   import Apis.*
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Miner, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Testing, Qa, Admin, TxPool, Trace, Subscribe)
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
@@ -931,6 +933,14 @@ trait JSONRpcControllerBuilder:
       jsonRpcConfig,
       classicSystem
     )
+
+  // One controller per transport, each answering only the namespaces enabled for that transport
+  // (`network.rpc.http.apis`, `ws.apis`, `ipc.apis`; each falls back to `network.rpc.apis`). `jsonRpcController` keeps
+  // the shared set and serves the Engine API's eth_, net_ and web3_ pass-through.
+  lazy val jsonRpcTransportControllers: JsonRpcController.PerTransport = jsonRpcController.perTransport
+  lazy val jsonRpcHttpController: JsonRpcController = jsonRpcTransportControllers.http
+  lazy val jsonRpcWsController: JsonRpcController = jsonRpcTransportControllers.ws
+  lazy val jsonRpcIpcController: JsonRpcController = jsonRpcTransportControllers.ipc
 
 trait JSONRpcHealthcheckerBuilder:
   this: NetServiceBuilder & EthBlocksServiceBuilder & JSONRpcConfigBuilder & AsyncConfigBuilder &
@@ -1068,7 +1078,7 @@ trait JSONRpcHttpServerBuilder:
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
     JsonRpcHttpServer(
-      jsonRpcController,
+      jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
       () => sslContext("fukuii.network.rpc.http"),
@@ -1078,7 +1088,7 @@ trait JSONRpcHttpServerBuilder:
 trait JSONRpcIpcServerBuilder:
   self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder =>
 
-  lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcController, jsonRpcConfig.ipcServerConfig)
+  lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcIpcController, jsonRpcConfig.ipcServerConfig)
 
 trait SubscriptionManagerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & EventTopicsBuilder =>
@@ -1100,7 +1110,7 @@ trait JSONRpcWsServerBuilder:
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
-      jsonRpcController,
+      jsonRpcWsController,
       subscriptionManager,
       jsonRpcConfig.wsServerConfig
     )(using classicSystem)

@@ -192,7 +192,7 @@ object App extends Logger:
         |
         |MCP (Model Context Protocol) Support:
         |  MCP methods are available via the JSON-RPC API on port 8545
-        |  Enable with: fukuii.network.rpc.apis = [..., "mcp"]
+        |  Enable with: fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,mcp"
         |  Methods: mcp_initialize, tools/list, tools/call, resources/list,
         |           resources/read, prompts/list, prompts/get
         |

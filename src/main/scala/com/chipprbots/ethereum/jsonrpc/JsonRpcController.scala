@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 import org.apache.pekko.actor.ActorSystem
 
 import cats.effect.IO
@@ -58,7 +60,12 @@ case class JsonRpcController(
     debugTracingService: DebugTracingService,
     traceService: TraceService,
     override val config: JsonRpcConfig,
-    actorSystem: ActorSystem
+    actorSystem: ActorSystem,
+    // The namespaces this instance answers when it serves one transport (see `forApis`); None: `config.apis`.
+    transportApis: Option[Seq[String]] = None,
+    // Set once the deprecated `eth_setEtherbase` alias has logged its warning. The per-transport copies (`forApis`)
+    // share it, so the node logs the warning once, however many transports and calls there are.
+    etherbaseAliasWarned: AtomicBoolean = new AtomicBoolean(false)
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController:
@@ -84,6 +91,7 @@ case class JsonRpcController(
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
+    Apis.Miner -> handleMinerRequest,
     Apis.Web3 -> handleWeb3Request,
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
@@ -94,12 +102,58 @@ case class JsonRpcController(
     Apis.Test -> handleTestRequest,
     Apis.Testing -> handleTestingRequest,
     Apis.Qa -> handleQARequest,
-    Apis.Admin -> handleAdminRequest,
+    Apis.Admin -> handleAdminRequest.orElse(handleNetAdminRequest),
     Apis.TxPool -> handleTxPoolRequest,
     Apis.Trace -> handleTraceRequest
   )
 
-  override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
+  // The dispatch folds the namespaces in this order and tries the one folded last first, so `test` goes last. The
+  // `test` namespace (retesteth) also answers `miner_setEtherbase`, which `miner` answers for the node's own mining;
+  // when `test` is enabled, test mode owns it, whatever the order of the `apis` list.
+  override def enabledApis: Seq[String] =
+    val apis = transportApis.getOrElse(config.apis) :+ Apis.Rpc // RPC enabled by default
+    apis.filterNot(_ == Apis.Test) ++ apis.filter(_ == Apis.Test)
+
+  /** A copy of this controller that answers only the namespaces in `apis`, and reports them in `rpc_modules`. A method
+    * outside the set is answered with MethodNotFound before any service is called.
+    */
+  def forApis(apis: Seq[String]): JsonRpcController = copy(transportApis = Some(apis))
+
+  /** One controller per transport, each answering the namespaces of that transport's key (`network.rpc.http.apis`,
+    * `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each server its own.
+    */
+  def perTransport: JsonRpcController.PerTransport =
+    JsonRpcController.PerTransport(
+      http = forApis(config.httpApis),
+      ws = forApis(config.wsApis),
+      ipc = forApis(config.ipcApis)
+    )
+
+  /** The `miner` namespace: mining control, opt-in as in go-ethereum (HTTP and WebSocket do not serve it unless `miner`
+    * is listed). `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and `eth_submitHashrate`
+    * stay in `eth`. `eth_setEtherbase`, which `eth` used to serve, is a deprecated alias of `miner_setEtherbase` and is
+    * served only when `miner` is enabled.
+    */
+  private def handleMinerRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
+      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
+    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
+      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
+    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
+      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
+    case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
+    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
+      if etherbaseAliasWarned.compareAndSet(false, true) then
+        log.warn("eth_setEtherbase is deprecated and will be removed; use miner_setEtherbase")
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
+  }
 
   private def handleWeb3Request: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "web3_sha3", _, _) =>
@@ -115,6 +169,14 @@ case class JsonRpcController(
       handle[ListeningRequest, ListeningResponse](netService.listening, req)
     case req @ JsonRpcRequest(_, "net_peerCount", _, _) =>
       handle[PeerCountRequest, PeerCountResponse](netService.peerCount, req)
+  }
+
+  /** The non-standard peer-management methods that carry a `net_` name. `net` keeps only `net_version`, `net_listening`
+    * and `net_peerCount`, as in go-ethereum; these show peers and addresses, dial and drop peers and edit the
+    * blacklist, so they are served with the `admin` namespace, under the same names, the way `eth_setEtherbase` is
+    * served with `miner`.
+    */
+  private def handleNetAdminRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "net_nodeInfo", _, _) =>
       handle[NodeInfoRequest, NodeInfoResponse](netService.nodeInfo, req)
     // Enhanced peer management endpoints
@@ -183,17 +245,6 @@ case class JsonRpcController(
       handle[GetWorkRequest, GetWorkResponse](ethMiningService.getWork, req)
     case req @ JsonRpcRequest(_, "eth_submitWork", _, _) =>
       handle[SubmitWorkRequest, SubmitWorkResponse](ethMiningService.submitWork, req)
-    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
-      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
-    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
-      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
-    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
-      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
-    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
-      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
-        ethMiningService.setEtherbase,
-        req
-      )
     case req @ JsonRpcRequest(_, "eth_blockNumber", _, _) =>
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>
@@ -630,3 +681,8 @@ case class JsonRpcController(
       val result = enabledApis.map(_ -> "1.0").toMap
       IO(JsonRpcResponse("2.0", Some(result), None, req.id))
   }
+
+object JsonRpcController:
+
+  /** The controllers of the three JSON-RPC transports. */
+  final case class PerTransport(http: JsonRpcController, ws: JsonRpcController, ipc: JsonRpcController)

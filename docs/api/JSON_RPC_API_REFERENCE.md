@@ -32,6 +32,28 @@ Fukuii implements a complete JSON-RPC API compatible with the Ethereum JSON-RPC 
 - **HTTP RPC**: `http://localhost:8546`
 - **WebSocket**: `ws://localhost:8546/ws` (if enabled)
 
+### Enabled Namespaces
+
+A method answers only when its namespace is enabled for the transport the request arrived on; otherwise the reply is
+`-32601 Method not found`. Each transport has its own key, and each falls back to `fukuii.network.rpc.apis`:
+
+| Transport | Key | Default |
+|-----------|-----|---------|
+| HTTP | `fukuii.network.rpc.http.apis` | `eth`, `net`, `web3`, `fukuii` |
+| WebSocket | `fukuii.network.rpc.ws.apis` | `eth`, `net`, `web3`, `fukuii` |
+| IPC | `fukuii.network.rpc.ipc.apis` | `eth`, `net`, `web3`, `fukuii`, `personal`, `debug`, `admin`, `miner`, `txpool`, `trace` |
+
+The value is a comma-separated string (`"eth,net,web3"`). The `rpc` namespace (`rpc_modules`, which lists what the
+transport serves) is always on. Namespaces that are **opt-in** on HTTP and WebSocket: `personal`, `debug`, `admin`,
+`miner`, `qa`, `txpool`, `trace`, `test`, `testing` and `mcp`. A method's namespace is the prefix of its name
+(`miner_start` needs `miner`), except `eth_setEtherbase`, a deprecated alias of `miner_setEtherbase` that is served only
+where `miner` is enabled. `eth_mining`, `eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+`eth_submitHashrate` are in `eth`. `net` serves only `net_version`, `net_listening` and `net_peerCount`: the
+non-standard peer methods named `net_*` (see below) are served with `admin`. On WebSocket, `eth_subscribe` and
+`eth_unsubscribe` need `eth`. The GraphQL endpoint (`/graphql` on the HTTP port) is not governed by these keys
+(`fukuii.network.rpc.graphql.enabled` controls it). See the [node configuration runbook](../runbooks/node-configuration.md)
+for examples.
+
 ### Request Format
 
 All requests follow the JSON-RPC 2.0 specification:
@@ -71,17 +93,22 @@ Or on error:
 ## Endpoint Categories
 
 ### Production-Ready (Core)
-Standard Ethereum methods suitable for production use:
+Standard Ethereum methods suitable for production use, on by default over HTTP and WebSocket:
 - ETH namespace (blocks, transactions, accounts, state)
 - WEB3 namespace (utilities)
 - NET namespace (network info)
 
+### Opt-in (off by default over HTTP and WebSocket)
+Methods that change node state or reveal node internals; enable them only where trusted programs can reach them:
+- PERSONAL namespace (account management)
+- ADMIN namespace (peers, chain import and export, log level)
+- MINER namespace (start and stop mining, set the coinbase)
+- DEBUG namespace (performance impact)
+
 ### Development/Testing Only
 Methods that should be disabled in production:
-- PERSONAL namespace (account management)
 - TEST namespace (chain manipulation)
 - QA namespace (testing utilities)
-- DEBUG namespace (performance impact)
 
 ### ETC-Specific
 Ethereum Classic extensions:
@@ -1097,9 +1124,13 @@ curl -X POST http://localhost:8546 \
 
 ---
 
-### Enhanced Mining Control (Fukuii Extension)
+### Mining Control: the MINER Namespace (Fukuii Extension)
 
 Since Ethereum mainnet no longer supports mining, Fukuii has enhanced the mining RPC API to provide better control for Ethereum Classic mining operations.
+
+**Namespace:** `miner`, opt-in as in go-ethereum: HTTP and WebSocket do not serve it unless `miner` is listed in
+`fukuii.network.rpc.http.apis` (or `ws.apis`); IPC serves it by default. Without it these methods answer
+`-32601 Method not found`.
 
 #### miner_start
 
@@ -1483,9 +1514,18 @@ curl -X POST http://localhost:8546 \
 
 ---
 
+### Peer-management methods named `net_*` (served with the `admin` namespace)
+
+`net_nodeInfo`, `net_listPeers`, `net_disconnectPeer`, `net_connectToPeer`, `net_listBlacklistedPeers`,
+`net_addToBlacklist` and `net_removeFromBlacklist` are not part of the standard `net` namespace (go-ethereum's `net`
+has `net_version`, `net_listening` and `net_peerCount`). They show peers and addresses, dial and drop peers and edit
+the blacklist, so they keep their names and are served with **`admin`**: a transport whose `apis` list has `net` but
+not `admin` answers them with `-32601`. Add `admin` to the transport's list to use them (opt-in over HTTP and
+WebSocket, on over IPC).
+
 ### net_listPeers
 
-Returns detailed information about all connected peers.
+Returns detailed information about all connected peers (needs `admin`).
 
 **Parameters**: None
 
@@ -2196,7 +2236,9 @@ curl -X POST http://localhost:8546 \
 
 #### miner_setEtherbase
 
-Sets the etherbase (coinbase) address for mining rewards.
+Sets the etherbase (coinbase) address for mining rewards. Needs the `miner` namespace. `eth_setEtherbase` is a
+deprecated alias of this method, served only where `miner` is enabled; it logs a deprecation warning once. In test mode
+(the `test` namespace, used by retesteth) this method belongs to the test harness instead.
 
 **Parameters**:
 1. `DATA`, 20 Bytes - Address to receive mining rewards
@@ -2334,7 +2376,7 @@ fukuii.network.rpc {
     interface = "127.0.0.1"  # Only localhost
     port = 8546
     
-    # Disable personal namespace
+    # The default is "eth,net,web3,fukuii"; personal, debug, admin and qa stay off unless listed here
     apis = "eth,web3,net"
   }
   

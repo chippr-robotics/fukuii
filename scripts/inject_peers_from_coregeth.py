@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# The Fukuii calls below (net_nodeInfo, net_connectToPeer, net_listPeers) are served with Fukuii's `admin` namespace:
+# list it in fukuii.network.rpc.http.apis (or rpc.apis) on the node this script talks to. Core-geth needs admin_peers.
 import argparse
 import json
 import time

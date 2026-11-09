@@ -33,6 +33,7 @@ import org.json4s.*
 import org.json4s.native.JsonMethods.*
 import org.json4s.native.Serialization
 
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager.*
@@ -162,6 +163,11 @@ class JsonRpcWsServer(
         val params = (json \ "params").toOption
 
         method match
+          // eth_subscribe and eth_unsubscribe are in the `eth` namespace, as in go-ethereum: a WebSocket endpoint that
+          // does not serve `eth` answers them like any other method it does not serve.
+          case "eth_subscribe" | "eth_unsubscribe" if !jsonRpcController.enabledApis.contains("eth") =>
+            sendResponse(errorResponse(id, JsonRpcError.MethodNotFound.code, JsonRpcError.MethodNotFound.message))
+
           case "eth_subscribe" =>
             val subType = params.flatMap {
               case JArray(JString(t) :: _) => Some(t)

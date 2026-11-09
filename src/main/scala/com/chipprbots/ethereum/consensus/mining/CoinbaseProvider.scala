@@ -6,8 +6,8 @@ import com.chipprbots.ethereum.domain.Address
 
 /** Thread-safe provider for the miner's coinbase address (etherbase).
   *
-  * Allows runtime updates to the coinbase address via RPC methods like eth_setEtherbase, while ensuring safe concurrent
-  * access from mining and RPC operations.
+  * Allows runtime updates to the coinbase address via RPC methods like miner_setEtherbase, while ensuring safe
+  * concurrent access from mining and RPC operations.
   *
   * @param initialCoinbase
   *   The initial coinbase address to use

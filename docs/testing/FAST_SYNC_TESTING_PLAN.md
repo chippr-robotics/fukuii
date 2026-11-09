@@ -417,7 +417,7 @@ docker stats fukuii-node4 fukuii-node5 fukuii-node6 --no-stream
 
 #### 3.3.2 Mining After Fast Sync
 ```bash
-# Start mining on node 6
+# Start mining on node 6 (needs the `miner` namespace on this endpoint: fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner")
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"miner_start","params":[],"id":1}' \
   http://localhost:8556

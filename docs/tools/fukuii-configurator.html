@@ -752,19 +752,23 @@
             rpcHttpMode: 'http',
             rpcHttpInterface: '127.0.0.1',
             rpcHttpPort: '8545',
-            rpcHttpAPIs: ['eth', 'web3', 'net'],
+            // Namespaces per transport (network.rpc.http.apis, ws.apis, ipc.apis). These are the node's defaults:
+            // HTTP and WebSocket serve the standard chain namespaces, IPC serves every production namespace.
+            rpcHttpAPIs: ['eth', 'net', 'web3', 'fukuii'],
             rpcHttpCORSAllowedOrigins: '*',
             rpcHttpRateLimitEnabled: false,
             rpcHttpRateLimitMinDelay: '5.seconds',
-            
+
             // RPC WebSocket Configuration
             enableRpcWs: false,
             rpcWsInterface: '127.0.0.1',
             rpcWsPort: '8546',
-            
+            rpcWsAPIs: ['eth', 'net', 'web3', 'fukuii'],
+
             // RPC IPC Configuration
             enableRpcIpc: false,
             rpcIpcSocketFile: '~/.fukuii/fukuii.ipc',
+            rpcIpcAPIs: ['eth', 'net', 'web3', 'fukuii', 'personal', 'debug', 'admin', 'miner', 'txpool', 'trace'],
             
             // Mining Configuration
             enableMining: false,
@@ -924,8 +928,16 @@
                 description: 'Port for JSON-RPC API access. Default 8545 for EVM compatibility. Block from internet via firewall. Use VPN or SSH tunnel for remote access.'
             },
             rpcHttpAPIs: {
-                title: 'Enabled RPC APIs',
-                description: '<strong>Security:</strong> Only enable needed APIs. Safe: eth, web3, net. <strong>Dangerous</strong> on public nodes: personal, admin, debug. Limit exposure per security policy.'
+                title: 'Enabled RPC APIs (HTTP)',
+                description: '<strong>Security:</strong> Only enable needed APIs. Default: eth, net, web3, fukuii. <strong>Opt-in</strong> (they change node state or reveal node internals): personal, admin, debug, miner (mining control), qa. Enable them only on a loopback endpoint; the node logs a warning at startup when one is enabled on another address.'
+            },
+            rpcWsAPIs: {
+                title: 'Enabled RPC APIs (WebSocket)',
+                description: 'Same rules as HTTP. Default: eth, net, web3, fukuii.'
+            },
+            rpcIpcAPIs: {
+                title: 'Enabled RPC APIs (IPC)',
+                description: 'The socket is protected by file permissions, so IPC serves every production namespace by default (eth, net, web3, fukuii, personal, debug, admin, miner, txpool, trace). Untick what local programs do not need.'
             },
             rpcHttpCORSAllowedOrigins: {
                 title: 'CORS Allowed Origins',
@@ -1089,12 +1101,45 @@
             renderTabContent();
         }
 
-        function toggleAPI(api) {
-            const index = config.rpcHttpAPIs.indexOf(api);
+        // Namespaces the node can serve over a transport. `rpc` (rpc_modules) is always on and is not a valid entry.
+        const RPC_NAMESPACES = ['eth', 'net', 'web3', 'fukuii', 'txpool', 'trace', 'personal', 'admin', 'debug', 'miner', 'qa'];
+        // Off by default on HTTP and WebSocket: they change node state or reveal node internals.
+        const SENSITIVE_RPC_NAMESPACES = ['personal', 'admin', 'debug', 'miner', 'qa'];
+
+        function isLoopbackInterface(iface) {
+            const host = String(iface).trim().replace(/^\[|\]$/g, '').toLowerCase();
+            return host === 'localhost' || host === '::1' || /^127\./.test(host);
+        }
+
+        // listKey: 'rpcHttpAPIs', 'rpcWsAPIs' or 'rpcIpcAPIs'. interfaceValue: the transport's bind address, or null
+        // for IPC (a file-permission-protected socket needs no warning).
+        function renderApiGrid(listKey, interfaceValue) {
+            const selected = config[listKey];
+            const exposed = SENSITIVE_RPC_NAMESPACES.filter(api => selected.includes(api));
+            const warning = (interfaceValue !== null && exposed.length > 0 && !isLoopbackInterface(interfaceValue))
+                ? `<div class="help-text" style="color: #ff6b6b;"><strong>Warning:</strong> ${exposed.join(', ')} on ${interfaceValue}, which is not a loopback address. These namespaces can unlock accounts, change node settings or reveal node internals to every client that can reach the port. The node logs a warning at startup.</div>`
+                : '';
+            return `
+                <div class="grid">
+                    ${RPC_NAMESPACES.map(api => `
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="api-${listKey}-${api}"
+                                ${selected.includes(api) ? 'checked' : ''}
+                                onchange="toggleAPI('${listKey}', '${api}')">
+                            <label for="api-${listKey}-${api}">${api}${SENSITIVE_RPC_NAMESPACES.includes(api) ? ' (opt-in)' : ''}</label>
+                        </div>
+                    `).join('')}
+                </div>
+                ${warning}
+            `;
+        }
+
+        function toggleAPI(listKey, api) {
+            const index = config[listKey].indexOf(api);
             if (index > -1) {
-                config.rpcHttpAPIs.splice(index, 1);
+                config[listKey].splice(index, 1);
             } else {
-                config.rpcHttpAPIs.push(api);
+                config[listKey].push(api);
             }
             renderTabContent();
         }
@@ -1297,17 +1342,8 @@
                                         </div>
                                     </div>
                                     <div class="form-group">
-                                        <label>Enabled APIs</label>
-                                        <div class="grid">
-                                            ${['eth', 'web3', 'net', 'personal', 'admin', 'debug', 'txpool', 'rpc'].map(api => `
-                                                <div class="checkbox-group">
-                                                    <input type="checkbox" id="api-${api}" 
-                                                        ${config.rpcHttpAPIs.includes(api) ? 'checked' : ''}
-                                                        onchange="toggleAPI('${api}')">
-                                                    <label for="api-${api}">${api}</label>
-                                                </div>
-                                            `).join('')}
-                                        </div>
+                                        <label>Enabled APIs (HTTP)</label>
+                                        ${renderApiGrid('rpcHttpAPIs', config.rpcHttpInterface)}
                                     </div>
                                 ` : ''}
                             </div>
@@ -1332,10 +1368,14 @@
                                         </div>
                                         <div class="form-group">
                                             <label for="rpc-ws-port">WebSocket Port</label>
-                                            <input type="number" id="rpc-ws-port" value="${config.rpcWsPort}" 
+                                            <input type="number" id="rpc-ws-port" value="${config.rpcWsPort}"
                                                 onchange="updateConfig('rpcWsPort', this.value)"
                                                 placeholder="8546">
                                         </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Enabled APIs (WebSocket)</label>
+                                        ${renderApiGrid('rpcWsAPIs', config.rpcWsInterface)}
                                     </div>
                                 ` : ''}
                             </div>
@@ -1356,6 +1396,10 @@
                                         <input type="text" id="rpc-ipc-socket" value="${config.rpcIpcSocketFile}" 
                                             onchange="updateConfig('rpcIpcSocketFile', this.value)"
                                             placeholder="~/.fukuii/fukuii.ipc">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Enabled APIs (IPC)</label>
+                                        ${renderApiGrid('rpcIpcAPIs', null)}
                                     </div>
                                 ` : ''}
                             </div>
@@ -1894,27 +1938,37 @@
             // RPC Configuration
             lines.push('    # RPC Configuration');
             lines.push('    rpc {');
+            // The node reads network.rpc.http, network.rpc.ws and network.rpc.ipc; each has its own `apis` list
+            // (a comma-separated string) and `enabled` flag. The endpoints are off unless enabled = true.
+            lines.push('      http {');
+            lines.push(`        enabled = ${config.enableRpcHttp}`);
             if (config.enableRpcHttp) {
-                lines.push('      http {');
                 lines.push(`        mode = "${config.rpcHttpMode}"`);
                 lines.push(`        interface = "${config.rpcHttpInterface}"`);
                 lines.push(`        port = ${config.rpcHttpPort}`);
                 lines.push(`        apis = "${config.rpcHttpAPIs.join(',')}"`);
                 lines.push(`        cors-allowed-origins = "${config.rpcHttpCORSAllowedOrigins}"`);
-                lines.push(`        rate-limit-enabled = ${config.rpcHttpRateLimitEnabled}`);
-                lines.push('      }');
+                lines.push('        rate-limit {');
+                lines.push(`          enabled = ${config.rpcHttpRateLimitEnabled}`);
+                lines.push(`          min-request-interval = ${config.rpcHttpRateLimitMinDelay}`);
+                lines.push('        }');
             }
+            lines.push('      }');
+            lines.push('      ws {');
+            lines.push(`        enabled = ${config.enableRpcWs}`);
             if (config.enableRpcWs) {
-                lines.push('      websocket {');
                 lines.push(`        interface = "${config.rpcWsInterface}"`);
                 lines.push(`        port = ${config.rpcWsPort}`);
-                lines.push('      }');
+                lines.push(`        apis = "${config.rpcWsAPIs.join(',')}"`);
             }
+            lines.push('      }');
+            lines.push('      ipc {');
+            lines.push(`        enabled = ${config.enableRpcIpc}`);
             if (config.enableRpcIpc) {
-                lines.push('      ipc {');
                 lines.push(`        socket-file = "${config.rpcIpcSocketFile}"`);
-                lines.push('      }');
+                lines.push(`        apis = "${config.rpcIpcAPIs.join(',')}"`);
             }
+            lines.push('      }');
             if (config.enableHealthCheck) {
                 lines.push('      health {');
                 lines.push(`        no-update-duration-threshold = ${config.healthCheckNoUpdateThreshold}`);

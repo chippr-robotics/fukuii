@@ -14,7 +14,9 @@ description: >-
 # Fukuii node health check
 
 Read `../CONVENTIONS.md` first (locating the node, calling RPC, output contract).
-This skill is **read-only** — no guarded writes.
+This skill is **read-only** — no guarded writes. `admin_peers`/`admin_datadir` and the
+`mcp_*` tools are opt-in over HTTP: check `rpc_modules`, and use `net_peerCount` (the
+`net_listPeers` family is served with `admin` too) when `admin` is not served.
 
 ## When to use
 - Routine "is everything OK?" checks, dashboards-by-hand, on-call triage.
@@ -37,7 +39,8 @@ Network (`etc`/`mordor`/`sepolia`/…), RPC host/port, datadir. See CONVENTIONS 
    target for all networks; Sepolia may run lower in practice due to smaller
    network). CL beacon peers are separate and not visible here.
    **< 3 peers = degraded**; 0 = isolated.
-5. **Mining (ETC/Mordor only)** — `eth_mining`, `miner_getStatus`,
+5. **Mining (ETC/Mordor only)** — `eth_mining`, `miner_getStatus` (needs the
+   opt-in `miner` namespace over HTTP; the `eth_*` ones do not),
    `eth_hashrate`, `eth_coinbase`. Skip for ETH/Sepolia (PoS — no mining).
    See `fukuii-mining-operations` for depth.
 6. **Engine API / CL connectivity (ETH/Sepolia only)** — check logs for

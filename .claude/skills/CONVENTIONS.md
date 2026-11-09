@@ -27,11 +27,26 @@ curl -s -X POST http://localhost:<RPC_PORT> \
   -d '{"jsonrpc":"2.0","id":1,"method":"<method>","params":[<args>]}'
 ```
 
-The relevant namespace must be enabled in config. The shipped default is
-`network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"` — note that
-**`mcp` is NOT enabled by default**, so the in-process MCP tools require adding
-`mcp` to that list. If a method returns "method not found", the namespace is
-likely disabled — surface that, don't silently retry.
+The relevant namespace must be enabled **for the transport you call**. Each
+transport has its own key (`network.rpc.http.apis`, `network.rpc.ws.apis`,
+`network.rpc.ipc.apis`), and each falls back to `network.rpc.apis` when you set
+it. The shipped defaults are go-ethereum's: **HTTP and WebSocket serve only
+`eth,net,web3,fukuii`**; IPC serves `eth,net,web3,fukuii,personal,debug,admin,miner,txpool,trace`.
+So over HTTP, `admin_*`, `personal_*`, `debug_*`, `qa_*`, `txpool_*`, `trace_*`
+and `miner_*` (including `miner_setEtherbase`; `eth_setEtherbase` is its
+deprecated alias) are **opt-in**, and **`mcp` is NOT enabled by default**
+either: the in-process MCP tools need `mcp` in the list. `eth_mining`,
+`eth_hashrate`, `eth_coinbase`, `eth_getWork`, `eth_submitWork` and
+`eth_submitHashrate` stay in `eth`.
+
+**Preflight:** before a skill calls anything outside `eth`/`net`/`web3`/`fukuii`,
+call `rpc_modules` on the same endpoint. It lists the namespaces that transport
+serves. If the one you need is missing (or a method returns "method not found"),
+say which namespace and which key to set, e.g. `network.rpc.http.apis =
+"eth,net,web3,fukuii,admin"`, and that the node needs a restart. Enabling
+`personal`, `debug`, `admin`, `qa` or `miner` is a 🟡 config change: do not
+enable it on an endpoint that is not bound to loopback without the operator's
+explicit confirmation. Don't silently retry.
 
 Useful read-only methods for diagnostics (safe, no state change):
 `web3_clientVersion`, `net_version`, `net_listening`, `net_peerCount`,
