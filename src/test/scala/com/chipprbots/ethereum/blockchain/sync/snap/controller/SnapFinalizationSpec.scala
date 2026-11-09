@@ -442,3 +442,162 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
     h.factories.calls.map(_.headerChainCheck).toSeq shouldBe Seq(check)
     h.factories.sharedBlacklists.toSeq shouldBe Seq(Some(h.module.sharedBlacklist))
   }
+
+  // ── A pivot the consensus layer chose (post-merge: HeaderChainCheck.trustsPinnedPivot) ─────────────────────────────
+
+  private val chainHeaders: IndexedSeq[BlockHeader] =
+    com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures.fromGenesis.take(21) // blocks 0..20
+  private val PinnedAt = BigInt(15)
+  private val otherRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x5a)))
+
+  /** The download holds blocks 0..20 with its tip and its target (block 15) recorded; the consensus layer's pivot at 15
+    * is on a chain that parts from it above block 12 (stored by hash, as the CL's blocks are), and is pinned. Returns
+    * that pinned header.
+    */
+  private def postMergeDivergence(h: Harness, pinTheFork: Boolean = true): BlockHeader =
+    val writer = h.module.blockchainWriter
+    val appState = h.module.appStateStorage
+    chainHeaders.foreach(header => writer.storeBlockHeader(header).commit())
+    appState
+      .putBackfillBestHeader(20)
+      .and(appState.putBackfillBestHeaderHash(chainHeaders(20).hash.value))
+      .and(appState.putBackfillTargetHash(chainHeaders(15).hash.value))
+      .commit()
+    val fork = (13 to 15)
+      .scanLeft(chainHeaders(12)) { (parent, n) =>
+        chainHeaders(n).copy(parentHash = parent.hash, stateRoot = otherRoot)
+      }
+      .tail
+    fork.foreach(header =>
+      writer
+        .storeBlockByHashOnly(
+          com.chipprbots.ethereum.domain.Block(header, com.chipprbots.ethereum.domain.BlockBody.empty)
+        )
+        .commit()
+    )
+    val pinned = fork.last
+    val commit = appState.putSnapSyncPivotBlock(PinnedAt).and(appState.putSnapSyncStateRoot(otherRoot.value))
+    (if pinTheFork then commit.and(appState.putSnapSyncPivotHash(pinned.hash.value)) else commit).commit()
+    h.module.pivotBlock = Some(PinnedAt)
+    h.module.stateRoot = Some(otherRoot)
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(
+      com.chipprbots.ethereum.blockchain.sync.snap.PosHeaderFixtures.sepoliaConfig,
+      BigInt(0)
+    )
+    pinned
+
+  private def rewindsSent(h: Harness): Seq[BlockHeader] =
+    h.kit.childInbox[ChainDownloader.Command]("chain-downloader-1").receiveAll().collect {
+      case ChainDownloader.RewindTo(forkPoint, _) => forkPoint
+    }
+
+  "SnapFinalization of a pivot the consensus layer chose" should "rewind the header download to the fork point, not re-anchor" taggedAs (
+    UnitTest,
+    com.chipprbots.ethereum.testing.Tags.ConsensusTest
+  ) in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    rewindsSent(h) shouldBe Seq(chainHeaders(12))
+    h.module.headerHold shouldBe defined
+    h.parent.hasMessages shouldBe false
+    // The pinned pivot stays the pivot: the downloaded chain's header is never made the pivot.
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(pinned.hash.value)
+    h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(otherRoot.value)
+  }
+
+  it should "hold without checking again while the rewind is not applied, and keep holding once it is" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h)
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe Seq(chainHeaders(12))
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe empty
+
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+    h.parent.hasMessages shouldBe false
+    h.module.headerHold shouldBe defined
+  }
+
+  it should "restart SNAP, still without re-anchoring, when the same pinned pivot diverges again after its rewind" taggedAs (
+    UnitTest,
+    com.chipprbots.ethereum.testing.Tags.ConsensusTest
+  ) in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    h.call(_.finalizeSnapSync(PinnedAt))
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+
+    // The download came back with the same chain (this stub's downloader stores nothing, so the records are as before).
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe Seq(chainHeaders(12), chainHeaders(12))
+    h.parent.hasMessages shouldBe false // not before the rewind is applied
+
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.module.headerHold shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(pinned.hash.value)
+  }
+
+  it should "rewind to genesis when the pinned pivot's stored ancestry has no header in common with the download" taggedAs UnitTest in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    // The fork's block 14 is not stored: the walk down from the pinned pivot stops above the fork point.
+    h.module.blockchainWriter.removeBlockByHash(pinned.parentHash).commit()
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    rewindsSent(h).map(_.number.value) shouldBe Seq(BigInt(0))
+  }
+
+  it should "restart SNAP, keeping the download, when the pinned header itself is not stored" taggedAs UnitTest in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    h.module.blockchainWriter.removeBlockByHash(pinned.hash).commit()
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty // no hold, no rewind
+    h.module.appStateStorage.getBackfillBestHeader() shouldBe BigInt(20)
+  }
+
+  // A rewind sent to a downloader that the hold's stall watchdog then restarts may never be applied: it does not count
+  // toward the second divergence that restarts SNAP.
+  it should "not count a rewind that was never reported applied" taggedAs UnitTest in {
+    // A zero stall timeout: every hold tick restarts the downloader, dropping the rewind in flight.
+    val h = new Harness(SNAPSyncConfig(headerHoldStallTimeout = Duration.Zero))
+    postMergeDivergence(h)
+
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged: rewind sent
+    h.call(_.finalizeSnapSync(PinnedAt)) // the stall restart drops it
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged again: a first rewind, as far as anyone knows
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+
+    h.parent.hasMessages shouldBe false
+    h.module.headerHold shouldBe defined
+  }
+
+  it should "restart SNAP when no pinned hash can name the pivot" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h, pinTheFork = false)
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty // no rewind, no hold
+  }
+
+  it should "restart SNAP when the download reached the pinned pivot but the persisted state root is another" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h)
+    h.module.appStateStorage.putSnapSyncPivotHash(chainHeaders(15).hash.value).commit() // the downloaded header
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty
+  }

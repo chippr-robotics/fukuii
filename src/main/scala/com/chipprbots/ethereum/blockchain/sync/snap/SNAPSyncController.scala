@@ -673,6 +673,8 @@ private class SNAPSyncControllerImpl(
         case _: ChainDownloaderProgress =>
           ctx.log.debug("Dropping stale ChainDownloaderProgress in idle"); Behaviors.same
         case ChainDownloaderDone => ctx.log.debug("Dropping stale ChainDownloaderDone in idle"); Behaviors.same
+        case _: ChainDownloaderRewound =>
+          ctx.log.debug("Dropping stale ChainDownloaderRewound in idle"); Behaviors.same
 
         // ── Syncing-state retry timers (stale after sync stops) ───────────────────────
         case RetrySnapSyncStart       => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
@@ -930,9 +932,11 @@ private class SNAPSyncControllerImpl(
         Behaviors.same
       // Deferred-backfill hold (see enterHeaderHold): only the tick, status/progress and the downloader's reports run.
       case HeaderHoldTick =>
-        if headerHold.isDefined then
-          pivotBlock.map(p => finalizeSnapSync(p, pathPublished = true)).getOrElse(Behaviors.same)
+        if headerHold.isDefined then pivotBlock.map(onHeaderHoldTick).getOrElse(Behaviors.same)
         else Behaviors.same
+      // The header download applied a rewind the hold asked for (a pivot the consensus layer chose).
+      case ChainDownloaderRewound(forkPoint) =>
+        onHeaderDownloadRewound(forkPoint)
       case msg
           if headerHold.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] &&
             !msg.isInstanceOf[ChainDownloaderProgress] && msg != ChainDownloaderDone =>
@@ -1165,6 +1169,8 @@ object SNAPSyncController:
       targetBlock: BigInt
   ) extends Command
   private[snap] case object ChainDownloaderDone extends Command
+  // ChainDownloader.Rewound, the reply to a ChainDownloader.RewindTo that SNAP finalisation sent.
+  final private[snap] case class ChainDownloaderRewound(forkPoint: BigInt) extends Command
   private[snap] case object HeaderHoldTick extends Command
 
   // ── Group: Peer-event wrappers (OQ-3 — PeerListHelper bridge) ──────────────
@@ -1212,6 +1218,13 @@ object SNAPSyncController:
     * but not its block number — `PivotHeaderBootstrap` then fetches by `GetBlockHeaders(Right(hash))`. Closes #1207.
     */
   final case class StartRegularSyncBootstrapByHash(headHash: ByteString) extends SyncProtocol.SyncControllerReply
+
+  /** Post-merge chains: the pivot header `depth` blocks below the consensus layer's head `headHash`, fetched by walking
+    * back from that head (`PivotHeaderBootstrap.applyAncestry`), so the pivot is the head's ancestor whichever peer
+    * serves it. Answered like the other bootstraps, with `BootstrapComplete` or `PivotBootstrapFailed`.
+    */
+  final case class StartPivotAncestryBootstrap(headHash: ByteString, depth: Int)
+      extends SyncProtocol.SyncControllerReply
   // Two-phase handshake with SyncController:
   //   1. SnapSyncFinalized(pivot) — pivot/state anchored, regular sync can start.
   //      SyncController starts RegularSync but does NOT poison-pill SNAPSyncController.

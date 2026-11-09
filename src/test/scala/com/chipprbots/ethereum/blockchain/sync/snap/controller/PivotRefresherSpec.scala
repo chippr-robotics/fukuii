@@ -41,15 +41,20 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.testing.Tags.ConsensusTest
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -204,7 +209,7 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(number), stateRoot = TrieRoot(root))
 
   /** The module on its stub, the kit that runs it, and the inboxes of the parent and two coordinators. */
-  final private class Harness:
+  final private class Harness(config: SNAPSyncConfig = SNAPSyncConfig()):
     val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
     val accounts: TestInbox[AccountRangeCoordinator.Command] = TestInbox[AccountRangeCoordinator.Command]()
     val storage: TestInbox[StorageRangeCoordinator.Command] = TestInbox[StorageRangeCoordinator.Command]()
@@ -213,7 +218,7 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     private var captured: StubPivotRefresherState & PivotRefresher = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
-        captured = new StubPivotRefresherState(ctx, timers, SNAPSyncConfig(), chain) with PivotRefresher
+        captured = new StubPivotRefresherState(ctx, timers, config, chain) with PivotRefresher
         captured.syncControllerRef = Some(parent.ref)
         Behaviors.receiveMessage { _ =>
           action()
@@ -439,7 +444,10 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.accounts.hasMessages shouldBe false
   }
 
-  it should "request the header of a CL-anchored refresh target that is not stored" taggedAs UnitTest in {
+  it should "fetch a CL-anchored refresh target whose ancestry is not stored by walking back from the CL head's hash" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val h = new Harness()
     h.module.posChain = true
     h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(1_000, rootB))))
@@ -447,9 +455,147 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.call(m => m.refreshPivotInPlace("stale pivot"))
 
     h.module.pendingPivotRefresh shouldBe Some((BigInt(1_000 - 64), "stale pivot"))
-    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(1_000 - 64)))
+    // Never the target's number: the pivot is the CL head's ancestor, 64 blocks down.
+    h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, 64))
     h.module.stagnationResets shouldBe Seq(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
     h.module.pivotBlock shouldBe Some(BigInt(400))
+  }
+
+  /** `head` and the `depth` headers below it, linked by parent hash and stored by hash (as newPayload stores the CL's
+    * blocks); the first is at `head - depth`. Also stores a different header at each height in the number index, so a
+    * lookup by number would find the wrong one.
+    */
+  private def storeClChain(h: Harness, head: BigInt, depth: Int): IndexedSeq[BlockHeader] =
+    // Post-merge-shaped, so the PoS header gate in completePivotRefreshWithStateRoot accepts the pivot.
+    def posHeaderAt(number: BigInt): BlockHeader = headerAt(number, rootB).copy(
+      difficulty = Difficulty.Zero,
+      nonce = ByteString(new Array[Byte](8)),
+      ommersHash = BlockHash(BlockHeader.EmptyOmmers),
+      extraFields = BlockHeader.HeaderExtraFields.HefEmpty
+    )
+    val bottom = posHeaderAt(head - depth)
+    val chain =
+      (1 to depth).scanLeft(bottom)((parent, i) => posHeaderAt(head - depth + i).copy(parentHash = parent.hash))
+    chain.foreach { header =>
+      h.module.blockchainWriter.storeBlockByHashOnly(Block(header, BlockBody.empty)).commit()
+      h.module.blockchainWriter.storeBlockHeader(header.copy(extraData = ByteString("by number"))).commit()
+    }
+    chain
+
+  it should "walk back to a CL-anchored refresh target through headers stored by hash, with no request" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val h = new Harness()
+    h.module.posChain = true
+    val chain = storeClChain(h, BigInt(1_000), depth = 64)
+    h.module.clPivotHint = Some(CLPivotHint(chain.last.hash.value, Some(chain.last)))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    h.parent.receiveAll() shouldBe empty
+    h.module.pendingPivotRefresh shouldBe None
+    h.module.pivotBlock shouldBe Some(BigInt(1_000 - 64))
+    // The CL head's ancestor, not the header the number index names at that height.
+    h.module.bestBlockUpdates.map(_._1) shouldBe Seq(chain.head)
+  }
+
+  it should "take the CL head's number from the header stored under its hash when the hint carries none" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    val chain = storeClChain(h, BigInt(1_000), depth = 64)
+    h.module.clPivotHint = Some(CLPivotHint(chain.last.hash.value, None))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    h.module.pivotBlock shouldBe Some(BigInt(1_000 - 64))
+    h.module.bestBlockUpdates.map(_._1) shouldBe Seq(chain.head)
+  }
+
+  it should "not take the SNAP peers' best block as the pivot on a PoS chain with no CL head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.networkBest = Some(BigInt(10_000))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    h.parent.receiveAll() shouldBe empty
+    h.module.pendingPivotRefresh shouldBe None
+    h.module.pivotBlock shouldBe Some(BigInt(400))
+    h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 30.seconds))
+  }
+
+  it should "keep an unservable pivot's fallback at or below the CL head however far the peers' tip leads" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val h = new Harness()
+    h.module.posChain = true
+    // The CL head has not moved past the current pivot's offset, and the pivot is known unservable.
+    h.module.pivotBlock = Some(BigInt(1_000 - 64))
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(1_000, rootB))))
+    h.module.networkBest = Some(BigInt(5_000))
+
+    h.call(m => m.refreshPivotInPlace("stateless", pivotUnservable = true))
+
+    // min(5_000, 1_000 + 50) - 50 = 1_000: the CL head itself, walked back zero blocks from its hash.
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(1_000), "stateless"))
+    h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, 0))
+  }
+
+  it should "back off, 5 s doubling to 60 s, while PoS refresh fetches keep failing, and start again after a header" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    def failOnce(): FiniteDuration =
+      h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+      h.call(m => m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed(PivotHeaderBootstrap.AncestryNotServed)))
+      h.scheduledTimers().collect { case (_, RetryPivotRefresh, delay) => delay }.last
+
+    Seq.fill(7)(failOnce()) shouldBe Seq(5, 10, 20, 40, 60, 60, 60).map(_.seconds)
+
+    // A header arrives: the next failure waits 5 s again.
+    h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+    h.call(m => m.pivotRefreshBootstrapCompleteArms(BootstrapComplete(Some(headerAt(500, rootB)))))
+    failOnce() shouldBe 5.seconds
+  }
+
+  it should "take the pivot one ancestry request deep when the configured offset is deeper" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig(pivotBlockOffset = 300))
+    h.module.posChain = true
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(1_000, rootB))))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    val depth = PivotHeaderBootstrap.MaxAncestryDepth
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(1_000 - depth), "stale pivot"))
+    h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, depth))
+  }
+
+  it should "refresh again from the CL head, not backtrack by number, when a PoS refresh bootstrap failed" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+
+    h.call(m => m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed("no peer served the head's ancestry")))
+
+    h.module.pendingPivotRefresh shouldBe None
+    h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 5.seconds))
+  }
+
+  it should "not commit a PoS refresh reply at another height than the one asked for" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+
+    h.call(m => m.pivotRefreshBootstrapCompleteArms(BootstrapComplete(Some(headerAt(501, rootB)))))
+
+    h.module.pendingPivotRefresh shouldBe None
+    h.module.pivotBlock shouldBe Some(BigInt(400))
+    h.module.bestBlockUpdates shouldBe empty
+    h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 5.seconds))
   }
 
   /** Run the proactive roll trigger once with the SNAP peers' best block at `best`. */

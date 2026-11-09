@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.BootstrapComplete
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBootstrapFailed
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartPivotAncestryBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
@@ -569,14 +570,19 @@ object SyncController:
             // default is on for every chain (#1654): a node on this fallback must not end SNAP with an estimated
             // pivot total difficulty.
             SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
-      // Proof of work: finalisation anchors the pivot to the validated header download, so the header hold cannot be
-      // turned off. A config that turns it off is overridden (with a warning) rather than refused: the node stays
-      // usable, and the setting it asked for is not one it can safely run with.
+      // Proof of work, and post-merge chains: finalisation anchors the pivot to the validated header download, so the
+      // header hold cannot be turned off. A config that turns it off is overridden (with a warning) rather than refused:
+      // the node stays usable, and the setting it asked for is not one it can safely run with.
+      val proofOfWork = HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig)
       val (config, ignoredKeys) =
-        HeaderChainCheck.enforceHeaderHold(loaded, HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig))
+        HeaderChainCheck.enforceHeaderHold(
+          loaded,
+          HeaderChainCheck.headerHoldRequired(configBuilder.blockchainConfig, snapHeaderChainCheck)
+        )
+      val chainKind = if proofOfWork then "proof-of-work chains" else "chains with a terminal total difficulty"
       ignoredKeys.foreach { key =>
         log.warn(
-          s"sync.snap-sync.$key = false is ignored on proof-of-work chains: SNAP finalisation waits for the validated " +
+          s"sync.snap-sync.$key = false is ignored on $chainKind: SNAP finalisation waits for the validated " +
             "header download to reach the pivot"
         )
       }
@@ -704,6 +710,18 @@ object SyncController:
             // With targetBlock == 0 the bootstrap's `Completed` guard accepts ANY block, so a stray healing `Completed`
             // could otherwise be mis-consumed as the pivot header. Clearing here also prevents the dead-letter wedge.
             abortHealingServeRootRequest("entering by-hash pivot header bootstrap")
+            runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock = BigInt(0), snapSync)
+
+          case StartPivotAncestryBootstrap(headHash, depth) =>
+            // Post-merge pivot (refresh, or heal at a newer pivot): the header `depth` below the CL head, walked back
+            // from it. targetBlock = 0, as for by-hash: the reply carries the pivot's number.
+            log.info(
+              "SNAP requested the pivot {} blocks below the CL head {}",
+              depth,
+              com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(headHash)
+            )
+            val (peersClient, headerBootstrap) = spawnAncestryBootstrap(headHash, depth)
+            abortHealingServeRootRequest("entering pivot ancestry bootstrap")
             runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock = BigInt(0), snapSync)
 
           case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
@@ -920,6 +938,45 @@ object SyncController:
           log.info("[HEAL-SERVE-ROOT] No usable peer height yet; replying None (serve root kept).")
           healingServeRootRequester.foreach(_ ! SNAPSyncController.HealingServeRoot(0, None))
           healingServeRootRequester = None
+
+    /** A PeersClient and a pivot ancestry bootstrap (`PivotHeaderBootstrap.applyAncestry`) for the header `depth` below
+      * the CL head `headHash`, supervised as the other pivot bootstraps are.
+      */
+    private def spawnAncestryBootstrap(
+        headHash: ByteString,
+        depth: Int
+    ): (TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command]) =
+      bootstrapGeneration += 1
+      val gen = bootstrapGeneration
+      val peersClient =
+        ctx.spawn(
+          Behaviors
+            .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+            .onFailure[Throwable](
+              // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
+              SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
+            ),
+          s"peers-client-bootstrap-$gen"
+        )
+      val headerBootstrap =
+        ctx.spawn(
+          Behaviors
+            .supervise(
+              PivotHeaderBootstrap.applyAncestry(
+                peersClient,
+                blockchainWriter,
+                headHash,
+                depth,
+                replyTo = pivotBootstrapAdapter,
+                syncConfig,
+                // Above PeersClient's own request timeout, so a slow peer's failure names it (applyAncestry).
+                askTimeout = syncConfig.peerResponseTimeout + PivotHeaderBootstrap.AskTimeoutMargin
+              )
+            )
+            .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),
+          s"pivot-header-bootstrap-$gen"
+        )
+      (peersClient, headerBootstrap)
 
     private def stopHealingServeRootBootstrap(): Unit =
       healingServeRootBootstrap.foreach { case (peersClient, bootstrap) =>
@@ -1451,6 +1508,18 @@ object SyncController:
                 .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),
               s"pivot-header-bootstrap-$gen"
             )
+          runningPivotHeaderBootstrap(newPeersClient, newHeaderBootstrap, targetBlock = BigInt(0), originalSnapSyncRef)
+
+        // SSC requested a post-merge pivot ancestry walk while a bootstrap is running: restart with the new head.
+        case StartPivotAncestryBootstrap(headHash, depth) =>
+          log.info(
+            "SNAP requested the pivot {} blocks below the CL head {} during an active bootstrap, restarting.",
+            depth,
+            com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(headHash)
+          )
+          ctx.stop(headerBootstrap)
+          ctx.stop(peersClient)
+          val (newPeersClient, newHeaderBootstrap) = spawnAncestryBootstrap(headHash, depth)
           runningPivotHeaderBootstrap(newPeersClient, newHeaderBootstrap, targetBlock = BigInt(0), originalSnapSyncRef)
 
         // Stale completion from a previous bootstrap generation (block doesn't match current targetBlock).

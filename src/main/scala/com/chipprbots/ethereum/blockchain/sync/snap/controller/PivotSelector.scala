@@ -69,6 +69,8 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
   private lazy val BootstrapRetryBaseDelay = 2.seconds
   private lazy val BootstrapRetryMaxDelay = 60.seconds
   private lazy val MaxBootstrapRetries = 10
+  // Post-merge: the `engine-api-required = false` warning (the peers' best block is not used as the pivot) is logged once.
+  private var peerPivotFallbackRefused: Boolean = false
 
   def bootstrapping(): Behavior[Command] =
     Behaviors
@@ -142,7 +144,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
             case Some(header) =>
               val targetPivot = header.number.value
 
-              if pivotTooStaleAgainstNetworkHead(targetPivot) then
+              // Post-merge, the header is the CL head or its ancestor (by-hash and ancestry bootstraps), chosen by the
+              // consensus layer and not from the peers' advertised heights, so those heights do not judge it either.
+              if !isPoSChain && pivotTooStaleAgainstNetworkHead(targetPivot) then
                 // Don't commit a pivot that peers are unlikely to serve.
                 startSnapSync()
               else
@@ -212,6 +216,11 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                     currentPhase = AccountRangeSync
                     startAccountRangeSync(header.stateRoot)
                   syncing()
+
+            case None if isPoSChain =>
+              // Post-merge: no header by number. Choose the pivot again from the CL head.
+              ctx.log.info("Bootstrap complete without a header; choosing the pivot again from the CL head")
+              startSnapSync()
 
             case None =>
               // Backward-compat / fallback: use the stored bootstrap target and local header.
@@ -473,6 +482,13 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
     */
   private[snap] lazy val retryBootstrapAtBlockArms: PartialFunction[Command, Behavior[Command]] = {
+    case RetryBootstrapAtBlock(blockNumber) if isPoSChain =>
+      // Post-merge: no pivot by number (the refresh failure arm no longer arms this there). Refresh from the CL head.
+      ctx.log.info(
+        s"Not retrying the pivot bootstrap at block $blockNumber: refreshing the pivot from the CL head instead"
+      )
+      ctx.self ! RetryPivotRefresh
+      Behaviors.same
     case RetryBootstrapAtBlock(blockNumber) =>
       if currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
       then
@@ -502,9 +518,15 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
         // Header-only bootstrap may not advance bestBlockNumber; allow resume if pivot header exists.
         val hasPivotHeader = stateIngest.chainReader.getBlockHeaderByNumber(bootstrapTarget).isDefined
 
-        if bestBlockNumber >= bootstrapTarget || hasPivotHeader then
+        // Post-merge, a target by number (written by an older build) is not resumed either: the pivot is taken from the
+        // CL head below.
+        if isPoSChain || bestBlockNumber >= bootstrapTarget || hasPivotHeader then
           // Bootstrap already complete - clear the target and proceed with SNAP sync
-          ctx.log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
+          if isPoSChain then
+            ctx.log.info(
+              s"Not resuming the pivot bootstrap to block $bootstrapTarget: the pivot comes from the CL head"
+            )
+          else ctx.log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
           stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
           // Continue to normal SNAP sync logic below
         else
@@ -522,12 +544,11 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     */
   private[snap] def selectPivotAndStart()(using scala.util.boundary.Label[Behavior[Command]]): Unit =
     import scala.util.boundary.break
-    // CL-wait gate (post-merge chains only). When TTD is configured but no CL hint has
-    // arrived yet, either wait indefinitely (`engine-api-required = true`, default) or
-    // fall back to peer-best-by-block-number after `cl-wait-timeout` elapsed since the
-    // first start attempt. Either way, we must NOT walk into TD-based selection here —
-    // TD is frozen at TTD on post-merge chains and pivot selection produces useless
-    // targets. Closes #1207.
+    // CL-wait gate (post-merge chains only). When TTD is configured but no CL hint has arrived yet, wait for the consensus
+    // layer's engine_forkchoiceUpdated: the pivot is taken from the CL's head hash only, never from a block number the
+    // peers name. `engine-api-required = false` used to fall back to the peers' best block after `cl-wait-timeout`; that
+    // fallback is not taken on these chains, and the setting is ignored with a warning once the timeout has passed. We
+    // must NOT walk into TD-based selection here either: TD is frozen at TTD on post-merge chains. Closes #1207.
     if isPoSChain && clPivotHint.isEmpty then
       val firstAttemptMs =
         clHintArrivedAtMs.getOrElse {
@@ -538,24 +559,24 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           now
         }
       val waitedMs = System.currentTimeMillis() - firstAttemptMs
-      if syncConfig.engineApiRequired || waitedMs < syncConfig.clWaitTimeout.toMillis then
-        if bootstrapRetryCount % 10 == 0 then
-          ctx.log.info(
-            s"[CL-PIVOT] Post-merge chain (TTD configured), waiting for engine_forkchoiceUpdated " +
-              s"from CL (engineApiRequired=${syncConfig.engineApiRequired}, waited=${waitedMs / 1000}s)"
-          )
-        bootstrapRetryCount += 1
-        val delay = 5.seconds
-        timers.cancel(BootstrapCheckKey)
-        timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
-        break(bootstrapping())
-      else
+      if !syncConfig.engineApiRequired && waitedMs >= syncConfig.clWaitTimeout.toMillis && !peerPivotFallbackRefused
+      then
+        peerPivotFallbackRefused = true
         ctx.log.warn(
-          s"[CL-PIVOT] cl-wait-timeout elapsed (${syncConfig.clWaitTimeout}); engineApiRequired=false. " +
-            "Falling back to peer-best-by-block-number pivot selection."
+          s"[CL-PIVOT] cl-wait-timeout elapsed (${syncConfig.clWaitTimeout}) with engine-api-required = false, which is " +
+            "ignored on chains with a terminal total difficulty: the SNAP pivot is taken from the consensus layer's " +
+            "head only. Still waiting for engine_forkchoiceUpdated."
         )
-      // Fallthrough: engineApiRequired=false and timeout elapsed → continue to TD path below.
-      clHintArrivedAtMs = None // reset so the wait window restarts on next retry
+      if bootstrapRetryCount % 10 == 0 then
+        ctx.log.info(
+          s"[CL-PIVOT] Post-merge chain (TTD configured), waiting for engine_forkchoiceUpdated " +
+            s"from CL (engineApiRequired=${syncConfig.engineApiRequired}, waited=${waitedMs / 1000}s)"
+        )
+      bootstrapRetryCount += 1
+      val delay = 5.seconds
+      timers.cancel(BootstrapCheckKey)
+      timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, delay)
+      break(bootstrapping())
 
     // CL-driven pivot path (post-merge chains only). When the consensus layer has pushed a
     // forkchoiceUpdated, prefer its head over TD-based peer selection. TD on post-merge
@@ -564,7 +585,25 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
     // Closes #1207.
     if isPoSChain && clPivotHint.isDefined then
       val hint = clPivotHint.get
+      // The header stored under the CL's head hash is that head (headers are stored by their hash), but its fields must
+      // still have its fork's layout and pass the post-merge header rules before its state root is used.
+      val knownHeaderGate = hint.knownHeader.map(headerChainCheck.validateHeaderOnly)
       hint.knownHeader match
+        case Some(header) if knownHeaderGate.exists(_.isLeft) =>
+          val err = knownHeaderGate.flatMap(_.left.toOption)
+          ctx.log.error(
+            s"${HeaderChainCheck.LogTag} SNAP pivot from the CL head ${header.idTag} failed the post-merge header " +
+              s"checks (${err.getOrElse("?")}); not committing it, retrying in 5s"
+          )
+          SNAPSyncMetrics.incrementHeaderRejected(
+            err.map(HeaderChainCheck.rejectionReason).getOrElse("?"),
+            HeaderChainCheck.Phase.PivotGate
+          )
+          bootstrapRetryCount += 1
+          timers.cancel(BootstrapCheckKey)
+          timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, 5.seconds)
+          break(bootstrapping())
+
         case Some(header) =>
           ctx.log.info("=" * 80)
           ctx.log.info("🛰  SNAP pivot from CL forkchoiceUpdated")

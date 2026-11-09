@@ -101,6 +101,12 @@ class BlockchainWriter(
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash.value, blockHeader).and(saveBlockNumberMapping(blockHeader.number.value, hash))
 
+  /** Store a header by hash only (no number→hash mapping, no body), as [[storeBlockByHashOnly]] stores a block: a
+    * header that is known by its hash but must not name its height in the canonical index.
+    */
+  def storeBlockHeaderByHashOnly(blockHeader: BlockHeader): DataSourceBatchUpdate =
+    blockHeadersStorage.put(blockHeader.hash.value, blockHeader)
+
   /** Startup consistency repair for the number→hash index at the best block's height.
     *
     * An earlier SyncController start-up path re-stored the best block's header with a rewritten `stateRoot`.

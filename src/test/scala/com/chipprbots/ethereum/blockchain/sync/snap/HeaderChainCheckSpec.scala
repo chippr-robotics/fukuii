@@ -180,10 +180,10 @@ class HeaderChainCheckSpec extends AnyFlatSpec with Matchers:
       case other => fail(s"expected a validating check on Mordor, got $other")
   }
 
-  it should "keep the parent-link-only check on chains with a terminal total difficulty (ETH, Sepolia)" taggedAs UnitTest in {
+  it should "give chains with a terminal total difficulty (ETH, Sepolia) the post-merge check, whatever the validator" taggedAs UnitTest in {
     val postMerge = mordorConfig.copy(terminalTotalDifficulty = Some(BigInt(1)))
-    HeaderChainCheck.forChain(postMerge, TransitionBlockHeaderValidator) shouldBe HeaderChainCheck.LinkOnly
-    HeaderChainCheck.forChain(postMerge, PoWBlockHeaderValidator) shouldBe HeaderChainCheck.LinkOnly
+    HeaderChainCheck.forChain(postMerge, TransitionBlockHeaderValidator) shouldBe a[HeaderChainCheck.ProofOfStake]
+    HeaderChainCheck.forChain(postMerge, PoWBlockHeaderValidator) shouldBe a[HeaderChainCheck.ProofOfStake]
   }
 
   it should "fall back to the parent-link-only check when the import validator has no separate seal (test mode)" taggedAs UnitTest in {
@@ -210,11 +210,18 @@ class HeaderChainCheckSpec extends AnyFlatSpec with Matchers:
     HeaderChainCheck.enforceHeaderHold(alreadyOn, proofOfWork = true) shouldBe ((alreadyOn, Nil))
   }
 
-  it should "leave the config alone on chains with a terminal total difficulty" taggedAs UnitTest in {
+  it should "leave the config alone where the hold is not required" taggedAs UnitTest in {
     val off = SNAPSyncConfig(chainDownloadEnabled = false, deferChainBackfillUntilStateComplete = false)
     HeaderChainCheck.enforceHeaderHold(off, proofOfWork = false) shouldBe ((off, Nil))
     HeaderChainCheck.isProofOfWork(mordorConfig) shouldBe true
     HeaderChainCheck.isProofOfWork(mordorConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))) shouldBe false
+    // Chains with a terminal total difficulty require it too: their download anchors the pivot (headerHoldRequired).
+    val postMerge = mordorConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
+    HeaderChainCheck.headerHoldRequired(
+      postMerge,
+      HeaderChainCheck.forChain(postMerge, PoWBlockHeaderValidator)
+    ) shouldBe
+      true
   }
 
   /** `header` with the mixHash its nonce gives (Ethash light verification): sealed for its own difficulty when that

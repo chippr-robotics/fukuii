@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -69,6 +70,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private var holdLastAdvanceMs: Long = 0L
   // The pivot whose anchor check last came out undecided, so the hold tick logs that once per pivot.
   private var anchorUndecidedLoggedFor: Option[BigInt] = None
+  // A pivot the consensus layer chose (HeaderChainCheck.trustsPinnedPivot): a rewind of the header download sent and not
+  // yet reported applied (ChainDownloader.Rewound): the fork point, whether to restart SNAP once it is applied (the
+  // pinned pivot diverged a second time), and the pinned hash it was for. While set the hold does not check the anchor.
+  private var rewindInFlight: Option[(BigInt, Boolean, Option[ByteString])] = None
+  // The pinned pivot hashes a rewind was applied for (reported by the download), in this controller's life. A rewind
+  // lost to a downloader restart is not counted.
+  private var rewoundForPins: Set[ByteString] = Set.empty
+  // The pivot whose Path-scheme publish completed (onPathPublishDone), so the hold tick re-enters finalisation past it.
+  private var pathPublishedFor: Option[BigInt] = None
 
   def completed(): Behavior[Command] =
     Behaviors
@@ -159,6 +169,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         s"SNAP finalisation hold: header cursor stuck at $cursor (pivot $pivot) for " +
           s"${(now - holdLastAdvanceMs) / 1000}s; restarting the chain downloader"
       )
+      // A rewind sent to the stopped downloader may never be applied or reported: the next tick checks the anchor again.
+      rewindInFlight = None
       chainDownloader.stop()
       startChainDownloader()
       boostHeaderDownload() // a respawned downloader starts at the SNAP-era budget
@@ -170,6 +182,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           s"lastKnownPeers=${peersToDownloadFrom.size} (peer events are not processed during the hold)"
       )
     headerHold = Some(pivotHash)
+
+  /** The hold's tick: finalisation again. Past the Path-scheme publish only if it completed for this pivot: where the
+    * hold comes first (a validated header chain), the publish has not run yet when the hold ends.
+    */
+  private[snap] def onHeaderHoldTick(pivot: BigInt): Behavior[Command] =
+    finalizeSnapSync(pivot, pathPublished = pathPublishedFor.contains(pivot))
 
   private def leaveHeaderHold(): Unit =
     if headerHold.isDefined then
@@ -465,6 +483,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     *     ([[PivotAnchor.reanchor]]) and SyncController restarts SNAP, which resumes on it and heals toward its root;
     *   - undecided (the download holds no recorded tip at or above the pivot): keep holding. The hold's stall restart
     *     re-runs the download, which re-validates headers stored without a recorded tip.
+    *
+    * Where the consensus layer chose the pivot (`headerChainCheck.trustsPinnedPivot`, post-merge chains) the pinned
+    * hash is the authority, and the pivot is never moved to the downloaded chain's header:
+    *   - no pin that can name this pivot: SyncController restarts SNAP, which chooses (and pins) a pivot again;
+    *   - diverged: the downloaded headers above the fork point are discarded and downloaded again
+    *     ([[rewindToPinnedChain]]); a second divergence of the same pinned pivot restarts SNAP once that is done.
     */
   private def anchoredPivotHeader(pivot: BigInt)(using scala.util.boundary.Label[Behavior[Command]]): BlockHeader =
     import scala.util.boundary.break
@@ -473,13 +497,37 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     // Identifies this pivot for the hold (a changed pivot re-targets the download).
     val holdKey =
       appState.getSnapSyncPivotHash().orElse(appState.getSnapSyncStateRoot()).getOrElse(ByteString(pivot.toByteArray))
+    if rewindInFlight.isDefined then
+      enterHeaderHold(pivot, holdKey, cursor)
+      break(Behaviors.same)
     if cursor < pivot then
       enterHeaderHold(pivot, holdKey, cursor)
+      break(Behaviors.same)
+    if headerChainCheck.trustsPinnedPivot && PivotAnchor.currentPin(stateIngest, pivot).isEmpty then
+      ctx.log.error(
+        s"${HeaderChainCheck.LogTag} SNAP finalisation: no pinned hash names the pivot at block $pivot, and on this " +
+          "chain the pivot is the consensus layer's choice; escalating to SyncController for a SNAP restart"
+      )
+      leaveHeaderHold()
+      syncController ! SyncProtocol.HealingImpossible
       break(Behaviors.same)
     PivotAnchor.check(stateIngest, pivot) match
       case PivotAnchor.Check.Anchored(header) =>
         leaveHeaderHold()
         header
+      case PivotAnchor.Check.Diverged(downloaded, pinnedHash, persistedRoot) if headerChainCheck.trustsPinnedPivot =>
+        if pinnedHash.contains(downloaded.hash.value) then
+          // The download reached the pinned pivot, but the persisted state root is not its: the state belongs to another
+          // root (the A5 guard's case).
+          ctx.log.error(
+            s"SNAP finalisation aborted: the pivot at block $pivot (hash ${downloaded.hash.value.toHex}) has state root " +
+              s"${downloaded.stateRoot.value.toHex}, the persisted one is " +
+              s"${persistedRoot.map(_.toHex).getOrElse("not recorded")}. Escalating to SyncController for SNAP restart."
+          )
+          leaveHeaderHold()
+          syncController ! SyncProtocol.HealingImpossible
+        else rewindToPinnedChain(pivot, downloaded, pinnedHash, holdKey, cursor)
+        break(Behaviors.same)
       case PivotAnchor.Check.Diverged(validated, pinnedHash, persistedRoot) =>
         ctx.log.error(
           s"SNAP finalisation: the pivot at block $pivot (hash ${pinnedHash.map(_.toHex).getOrElse("not recorded")}, " +
@@ -500,6 +548,79 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           )
         enterHeaderHold(pivot, holdKey, cursor)
         break(Behaviors.same)
+
+  /** The downloaded chain does not reach the pinned pivot (a pivot the consensus layer chose).
+    *   - Its headers above the fork point ([[PivotAnchor.forkPoint]]: the highest header it shares with the pinned
+    *     pivot's stored ancestry; genesis when there is none within reach) are discarded and downloaded again
+    *     ([[ChainDownloader.RewindTo]]), and the hold waits for the download to report it applied.
+    *   - A second divergence of the same pinned pivot, after a rewind for it was applied, also restarts SNAP once its
+    *     rewind is applied: the consensus layer may have moved off that pivot, and the restart chooses a pivot again.
+    *   - The pinned header itself not stored: nothing to walk from, so the download is kept and SNAP restarts.
+    */
+  private def rewindToPinnedChain(
+      pivot: BigInt,
+      downloaded: BlockHeader,
+      pinnedHash: Option[ByteString],
+      holdKey: ByteString,
+      cursor: BigInt
+  )(using scala.util.boundary.Label[Behavior[Command]]): Unit =
+    import scala.util.boundary.break
+    val pinnedDesc = pinnedHash.map(_.toHex).getOrElse("?")
+    val (rewindTo, how) = PivotAnchor.rewindTarget(stateIngest, pinnedHash, downloaded) match
+      case PivotAnchor.Rewind.ToForkPoint(fork) =>
+        (fork, s"Downloading the headers above ${fork.idTag}, where the two chains part, again")
+      case PivotAnchor.Rewind.ToGenesis(genesis) =>
+        (
+          genesis,
+          "No common header within the pinned pivot's stored ancestry: downloading the header chain again from genesis"
+        )
+      case PivotAnchor.Rewind.PinnedNotStored =>
+        ctx.log.error(
+          s"${HeaderChainCheck.LogTag} SNAP finalisation: the downloaded header at block $pivot " +
+            s"(${downloaded.hash.value.toHex}) is not the pinned pivot $pinnedDesc, whose header is not stored; " +
+            "escalating to SyncController for a SNAP restart"
+        )
+        SNAPSyncMetrics.incrementHeaderRejected(HeaderChainCheck.PinnedPivotReason, HeaderChainCheck.Phase.Finalisation)
+        leaveHeaderHold()
+        syncController ! SyncProtocol.HealingImpossible
+        break(Behaviors.same)
+    val escalate = pinnedHash.exists(rewoundForPins.contains)
+    ctx.log.error(
+      s"${HeaderChainCheck.LogTag} SNAP finalisation: the downloaded header at block $pivot " +
+        s"(${downloaded.hash.value.toHex}) is not the pinned pivot $pinnedDesc. $how" +
+        (if escalate then "; the same pivot diverged before, so SNAP restarts once that is done" else "")
+    )
+    SNAPSyncMetrics.incrementHeaderRejected(HeaderChainCheck.PinnedPivotReason, HeaderChainCheck.Phase.Finalisation)
+    // The hold first: it starts the downloader if none runs, so the rewind reaches one.
+    enterHeaderHold(pivot, holdKey, cursor)
+    rewindInFlight = Some((rewindTo.number.value, escalate, pinnedHash))
+    val rewoundAdapter =
+      ctx.messageAdapter[ChainDownloader.Rewound](r => ChainDownloaderRewound(r.forkPoint))
+    chainDownloader.tell(ChainDownloader.RewindTo(rewindTo, rewoundAdapter))
+
+  /** The header download applied a rewind [[rewindToPinnedChain]] asked for: its pinned pivot now counts as rewound
+    * for. The hold checks the anchor again on its next tick, or, after a second divergence of the same pinned pivot,
+    * SyncController restarts SNAP.
+    */
+  private[snap] def onHeaderDownloadRewound(forkPoint: BigInt): Behavior[Command] =
+    rewindInFlight match
+      case Some((_, escalate, pinnedHash)) =>
+        rewindInFlight = None
+        rewoundForPins = rewoundForPins ++ pinnedHash
+        if escalate then
+          ctx.log.error(
+            s"${HeaderChainCheck.LogTag} SNAP finalisation: the header download is back at block $forkPoint; the " +
+              "pinned pivot diverged twice, escalating to SyncController for a SNAP restart"
+          )
+          leaveHeaderHold()
+          syncController ! SyncProtocol.HealingImpossible
+        else
+          ctx.log.info(
+            s"SNAP finalisation: the header download is back at block $forkPoint; holding until it reaches the pivot"
+          )
+      case None =>
+        ctx.log.debug(s"SNAP finalisation: a header download rewind to block $forkPoint reported with none in flight")
+    Behaviors.same
 
   /** CQ-020-07: settle the pivot's body without inventing one (see [[StoredBodyCheck]]). A body a newPayload stored is
     * kept when it validates; a body that contradicts the header is replaced by the derived empty one or removed, so the
@@ -613,6 +734,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       case Some((pivot, pivotRoot)) =>
         pathPublish = None
         if scala.util.Try(getOrCreateMptStorage(pivot).get(pivotRoot.toArray)).isSuccess then
+          pathPublishedFor = Some(pivot)
           finalizeSnapSync(pivot, pathPublished = true)
         else
           ctx.log.error(

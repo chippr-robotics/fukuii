@@ -278,13 +278,16 @@ class SNAPPivotRefreshArmsCharacterizationSpec
         log.contains("Cannot re-peg heal root: no suitable SNAP peers available (attempt 1/10)") shouldBe true
       }
 
-      // A snap peer now advertises pivot + 100. The replay's fallback is min(100, CL head + 128) - margin = pivot + 50;
-      // without the unservable flag it would find no newer pivot.
+      // A snap peer now advertises pivot + 100. The replay's fallback is min(pivot + 100, CL head + margin) - margin =
+      // pivot + 50, the CL head itself (post-merge the peers' tip leads the CL head by the margin at most, so the pivot is
+      // the CL head's ancestor, here at depth 0); without the unservable flag it would find no newer pivot.
+      val clHeadHash = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(Pivot + Margin)).hash.value
       f.pollWith(snap, f.peersAt(height = (Pivot + 100).toInt))
       snap ! SNAPSyncController.RetryPivotRefresh
       f.parent.fishForMessage(10.seconds) {
-        case SNAPSyncController.StartRegularSyncBootstrap(n) if n == Pivot + Margin => FishingOutcomes.complete
-        case SNAPSyncController.StartRegularSyncBootstrap(n) => FishingOutcomes.fail(s"unexpected re-peg target $n")
+        case SNAPSyncController.StartPivotAncestryBootstrap(h, 0) if h == clHeadHash => FishingOutcomes.complete
+        case m: SNAPSyncController.StartPivotAncestryBootstrap => FishingOutcomes.fail(s"unexpected re-peg $m")
+        case m: SNAPSyncController.StartRegularSyncBootstrap   => FishingOutcomes.fail(s"a re-peg by number: $m")
         case _: SNAPSyncController.SnapSyncFinalized => FishingOutcomes.fail("lazy hand-off instead of a re-peg")
         case _                                       => FishingOutcomes.continueAndIgnore
       }
