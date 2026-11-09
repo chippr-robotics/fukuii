@@ -1786,3 +1786,13 @@ items:
     refs: [B-130]
     links: {}
     notes: "From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)."
+  - id: B-162
+    title: "maxUsedGas tests: add an Amsterdam case with non-zero EIP-8037 state gas; mark TxResultMaxUsedGasSpec:155 zero-state-gas-only"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-09
+    refs: [B-130]
+    links: {}
+    notes: "beacon review of #1773: every pin scenario has state 0; exec+state==maxUsedGas holds only at zero state gas (max(before-state,floor)+state can exceed max(before,floor))."
