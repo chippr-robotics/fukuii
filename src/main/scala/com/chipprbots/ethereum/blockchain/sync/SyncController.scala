@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.BootstrapComplete
@@ -37,6 +38,8 @@ import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
@@ -534,9 +537,30 @@ object SyncController:
     val recoverySnapAdapter: TypedActorRef[SNAPSyncController.Command] =
       ctx.messageAdapter[SNAPSyncController.Command](WrappedExternal.apply)
 
+    /** How the SNAP header download checks headers on this chain: on proof-of-work chains, validated against the parent
+      * by the block-import header validator (`validators.blockHeaderValidator`), with sampled seals; parent-link only
+      * elsewhere.
+      */
+    private lazy val snapHeaderChainCheck: HeaderChainCheck =
+      val check = HeaderChainCheck.forChain(configBuilder.blockchainConfig, validators.blockHeaderValidator)
+      if HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig) && !check.validatesChain then
+        log.warn(
+          "SNAP header download on a proof-of-work chain checks parent links only: the block-import header validator " +
+            s"(${validators.blockHeaderValidator.getClass.getName}) does not separate the seal from the other rules"
+        )
+      check
+
+    /** The pivot bootstrap's header-only gate (extra data, gas used, and the Ethash seal on proof of work): a header
+      * that fails it is not stored, and the peer that served it is blacklisted.
+      */
+    private lazy val snapPivotHeaderCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] =
+      // Settled here, on the actor thread: the bootstrap runs the function on its ask callbacks' threads.
+      val check = snapHeaderChainCheck
+      header => check.validateHeaderOnly(header)
+
     /** Load SNAP sync configuration with fallback to defaults */
     private def loadSnapSyncConfig(): SNAPSyncConfig =
-      val config =
+      val loaded =
         try SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
         catch
           case e: Exception =>
@@ -545,6 +569,17 @@ object SyncController:
             // default is on for every chain (#1654): a node on this fallback must not end SNAP with an estimated
             // pivot total difficulty.
             SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
+      // Proof of work: finalisation anchors the pivot to the validated header download, so the header hold cannot be
+      // turned off. A config that turns it off is overridden (with a warning) rather than refused: the node stays
+      // usable, and the setting it asked for is not one it can safely run with.
+      val (config, ignoredKeys) =
+        HeaderChainCheck.enforceHeaderHold(loaded, HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig))
+      ignoredKeys.foreach { key =>
+        log.warn(
+          s"sync.snap-sync.$key = false is ignored on proof-of-work chains: SNAP finalisation waits for the validated " +
+            "header download to reach the pivot"
+        )
+      }
       val networkType = configBuilder.blockchainConfig.networkType
       val expectedScheme = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
       require(
@@ -609,7 +644,8 @@ object SyncController:
                         targetBlock,
                         replyTo = pivotBootstrapAdapter,
                         syncConfig,
-                        preferSnapPeers = true
+                        preferSnapPeers = true,
+                        headerCheck = snapPivotHeaderCheck
                       )
                     )
                     // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -1332,7 +1368,8 @@ object SyncController:
                       newTargetBlock,
                       replyTo = pivotBootstrapAdapter,
                       syncConfig,
-                      preferSnapPeers = true
+                      preferSnapPeers = true,
+                      headerCheck = snapPivotHeaderCheck
                     )
                   )
                   // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -1842,7 +1879,8 @@ object SyncController:
             scheduler,
             blacklist,
             syncController = snapAdapter,
-            failedFinalizationPivot = snapPivotFailedFinalization
+            failedFinalizationPivot = snapPivotFailedFinalization,
+            headerChainCheck = snapHeaderChainCheck
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2228,7 +2266,9 @@ object SyncController:
                   syncConfig = syncConfig,
                   replyTo = chainDownloaderAdapter,
                   maxConcurrentRequests = snapSyncConfig.chainBackfillConcurrentRequests,
-                  requestTimeout = snapSyncConfig.chainDownloadTimeout
+                  requestTimeout = snapSyncConfig.chainDownloadTimeout,
+                  headerChainCheck = snapHeaderChainCheck,
+                  sharedBlacklist = Some(blacklist)
                 )
               )
               // PR #1378: ChainDownloader must run until backfill completes — backoff, no cap.

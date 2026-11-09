@@ -102,7 +102,10 @@ private class SNAPSyncControllerImpl(
     val failedFinalizationPivot: Option[BigInt] = None,
     // Test seam (#1654): the terminal total difficulty the pivot-weight writes read. None (production) reads the
     // process-global chain config. Independent of isPoSChainOverride.
-    terminalTotalDifficultyOverride: Option[BigInt] = None
+    terminalTotalDifficultyOverride: Option[BigInt] = None,
+    // How the header download checks headers (HeaderChainCheck.forChain; SyncController passes the chain's). Implements
+    // the state traits' `headerChainCheck` members.
+    val headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -204,6 +207,9 @@ private class SNAPSyncControllerImpl(
 
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
+  // Implements `SnapFinalizationState.sharedBlacklist`: the blacklist SyncController shares with the rest of sync.
+  val sharedBlacklist: Blacklist = blacklist
+
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
   // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry
@@ -211,6 +217,7 @@ private class SNAPSyncControllerImpl(
   val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
 
   ctx.log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
+  ctx.log.info("SNAP header download check: {}", headerChainCheck.description)
 
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
@@ -1494,7 +1501,10 @@ object SNAPSyncController:
       heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
       intakeBudgetOverride: Option[SnapIntakeBudget] = None,
       failedFinalizationPivot: Option[BigInt] = None,
-      terminalTotalDifficultyOverride: Option[BigInt] = None
+      terminalTotalDifficultyOverride: Option[BigInt] = None,
+      // The header download's check for this chain (HeaderChainCheck.forChain). Parent-link only by default, which is
+      // what suites that drive SNAP with synthetic headers need; production passes the chain's check.
+      headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -1520,7 +1530,8 @@ object SNAPSyncController:
           heapWatchdogStart,
           intakeBudgetOverride,
           failedFinalizationPivot,
-          terminalTotalDifficultyOverride
+          terminalTotalDifficultyOverride,
+          headerChainCheck
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

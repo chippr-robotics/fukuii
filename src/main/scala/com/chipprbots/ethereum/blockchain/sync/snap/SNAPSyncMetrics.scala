@@ -62,6 +62,17 @@ object SNAPSyncMetrics extends MetricsContainer:
       .register(metrics.registry)
       .increment()
 
+  /** One block header rejected by the SNAP header checks: `reason` is the rule it failed
+    * (`HeaderChainCheck.rejectionReason`, or `ParentLink`) and `phase` where (`HeaderChainCheck.Phase`).
+    */
+  def incrementHeaderRejected(reason: String, phase: String): Unit =
+    Counter
+      .builder("chain.header.rejected")
+      .tag("reason", reason)
+      .tag("phase", phase)
+      .register(metrics.registry)
+      .increment()
+
   // ===== Sync Phase Metrics =====
 
   /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=ByteCode+Storage, 4=Storage, 5=StateHealing,

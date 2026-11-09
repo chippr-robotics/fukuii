@@ -167,7 +167,9 @@ private[snap] class StubHealingOrchestratorState(
   val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = notUsed("snapValidationEc")
-  def blockchainReader: BlockchainReader = notUsed("blockchainReader")
+  // The healing anchors read the stored pivot header to pin its hash (PivotAnchor.pinFor); none is stored here.
+  lazy val blockchainReader: BlockchainReader =
+    new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}.blockchainReader
   def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None

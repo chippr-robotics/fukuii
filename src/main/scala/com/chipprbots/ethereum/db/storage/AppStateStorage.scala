@@ -512,6 +512,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 
+  /** The hash of the header the SNAP pivot was taken from: written in the same batch as `SnapSyncPivotBlock` and
+    * `SnapSyncStateRoot` wherever a pivot is committed. Finalisation compares it with the header the validated header
+    * download holds at the pivot's number. Absent on a datadir whose pivot was committed before this key existed, and
+    * where the committed pivot's header could not be identified; finalisation then compares the state root only.
+    */
+  def getSnapSyncPivotHash(): Option[ByteString] =
+    get(Keys.SnapSyncPivotHash).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapSyncPivotHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncPivotHash, Hex.toHexString(hash.toArray))
+
+  def removeSnapSyncPivotHash(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncPivotHash)
+
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     *
     * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is
@@ -719,6 +733,32 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
+  /** Hash of the header at `BackfillBestHeader`, the tip of the header chain `ChainDownloader` stored: written in the
+    * same batch as the cursor whenever the download stores headers. The download continues from this header, and SNAP
+    * finalisation finds the downloaded chain's header at the pivot from it by parent hash, so neither depends on the
+    * number→hash index, which other writers (the pivot bootstrap) also update. A value that does not name a stored
+    * header at the cursor's height is stale; readers check that. Absent on a datadir whose headers were stored before
+    * this key existed.
+    */
+  def getBackfillBestHeaderHash(): Option[ByteString] =
+    get(Keys.BackfillBestHeaderHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillBestHeaderHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillBestHeaderHash, Hex.toHexString(hash.toArray))
+
+  /** Hash of the header `ChainDownloader` stored at its target block (`BackfillTarget`, the SNAP pivot), written in the
+    * batch that stores it. SNAP finalisation reads the downloaded chain's header at the pivot from it, without walking
+    * back from the tip; readers check the header's number. Removed when the download starts again from genesis.
+    */
+  def getBackfillTargetHash(): Option[ByteString] =
+    get(Keys.BackfillTargetHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillTargetHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillTargetHash, Hex.toHexString(hash.toArray))
+
+  def removeBackfillTargetHash(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTargetHash)
+
   /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
     * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
     * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
@@ -755,6 +795,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       toRemove = Seq(
         Keys.BackfillTarget,
         Keys.BackfillBestHeader,
+        Keys.BackfillBestHeaderHash,
+        Keys.BackfillTargetHash,
         Keys.BackfillBestBody,
         Keys.BackfillBestReceipt
       ),
@@ -828,6 +870,7 @@ object AppStateStorage:
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
+    val SnapSyncPivotHash = "SnapSyncPivotHash"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapAccountResumeCheckpoint = "SnapAccountResumeCheckpoint"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
@@ -847,6 +890,8 @@ object AppStateStorage:
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"
+    val BackfillBestHeaderHash = "BackfillBestHeaderHash"
+    val BackfillTargetHash = "BackfillTargetHash"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealInvariant = "snap.heal.invariant"

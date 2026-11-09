@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscape
 import com.chipprbots.ethereum.blockchain.sync.snap.HeapWatchdogEscapePolicy
 import com.chipprbots.ethereum.blockchain.sync.snap.OldGenReading
@@ -245,7 +246,9 @@ trait ChildFactories:
       cursorScanCap: Long = 5000L,
       deferBodiesAndReceipts: Boolean = false,
       emptyHeaderBackoff: Option[FiniteDuration] = None,
-      nowMs: () => Long = () => System.currentTimeMillis()
+      nowMs: () => Long = () => System.currentTimeMillis(),
+      headerChainCheck: HeaderChainCheck,
+      sharedBlacklist: Option[Blacklist] = None
   ): Behavior[ChainDownloader.Command] =
     ChainDownloader(
       blockchainReader = blockchainReader,
@@ -262,7 +265,9 @@ trait ChildFactories:
       cursorScanCap = cursorScanCap,
       deferBodiesAndReceipts = deferBodiesAndReceipts,
       emptyHeaderBackoff = emptyHeaderBackoff,
-      nowMs = nowMs
+      nowMs = nowMs,
+      headerChainCheck = headerChainCheck,
+      sharedBlacklist = sharedBlacklist
     )
   // scalastyle:on parameter.number
 

@@ -14,6 +14,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -55,7 +57,8 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       maxAttempts: Int = 1,
       retryDelay: FiniteDuration = 50.millis,
       waitForPeerDelay: FiniteDuration = 50.millis,
-      preferSnapPeers: Boolean = false
+      preferSnapPeers: Boolean = false,
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = PivotHeaderBootstrap.AcceptAll
   ): ActorRef =
     testKit
       .spawn(
@@ -69,7 +72,8 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           initialRetryDelay = retryDelay,
           maxRetryDelay = retryDelay,
           waitForPeerDelay = waitForPeerDelay,
-          preferSnapPeers = preferSnapPeers
+          preferSnapPeers = preferSnapPeers,
+          headerCheck = headerCheck
         )
       )
       .toClassic
@@ -229,3 +233,76 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
+
+  it should "not store a header its check rejects: blacklist the peer that served it and ask another peer" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    val rejected = correctHeader.copy(difficulty = com.chipprbots.ethereum.domain.Difficulty(BigInt(1)))
+    mkBootstrap(
+      peersClient,
+      parent,
+      maxAttempts = 3,
+      preferSnapPeers = true,
+      headerCheck = rejectDifficultyOne
+    )
+
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(rejected)))
+    peersClient.expectMsg(
+      3.seconds,
+      PeersClient.BlacklistPeer(testPeer.id, BlacklistReason.BlockHeaderValidationFailed)
+    )
+
+    val retry = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    retry.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set(testPeer.id))
+    retry.replyTo ! PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader)))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "give up, not wait for a peer forever, when no eligible peer is left after a rejected header" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    val rejected = correctHeader.copy(difficulty = com.chipprbots.ethereum.domain.Difficulty(BigInt(1)))
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, headerCheck = rejectDifficultyOne)
+
+    // The only peer that claims the target's height serves a header that fails the check.
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(rejected)))
+    peersClient.expectMsg(
+      3.seconds,
+      PeersClient.BlacklistPeer(testPeer.id, BlacklistReason.BlockHeaderValidationFailed)
+    )
+
+    // The other peers are below the target: neither the SNAP selector nor its fallback finds one.
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Failed(PivotHeaderBootstrap.ExhaustedAfterRejection))
+  }
+
+  it should "still wait for a fresh peer when no peer is eligible and no header was rejected" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, headerCheck = rejectDifficultyOne)
+
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+
+    // WaitForPeer fires after waitForPeerDelay and asks again; nothing is reported to the parent.
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    parent.expectNoMessage(100.millis)
+  }
+
+  /** Rejects a header with difficulty 1, as the header-only check rejects a header it cannot validate. */
+  private val rejectDifficultyOne: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = h =>
+    if h.difficulty.value == 1 then Left(BlockHeaderError.HeaderUnexpectedError("difficulty 1"))
+    else Right(BlockHeaderValid)

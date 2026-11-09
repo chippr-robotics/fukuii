@@ -34,9 +34,17 @@ object Blacklist:
   trait BlacklistId:
     def value: String
 
+  /** How long, at least, a peer that served a block header failing validation stays blacklisted: a header that fails
+    * the block-import rules is not a transient fault. A longer configured `sync.blacklist-duration` is kept.
+    */
+  val HeaderValidationFailureDuration: FiniteDuration = 15.minutes
+
   sealed trait BlacklistReason:
     def reasonType: BlacklistReasonType
     def description: String
+
+    /** How long to blacklist for this reason; `default` is the configured `sync.blacklist-duration`. */
+    def duration(default: FiniteDuration): FiniteDuration = default
 
   object BlacklistGroup:
     trait FastSyncBlacklistGroup:
@@ -157,6 +165,7 @@ object Blacklist:
     case object BlockHeaderValidationFailed extends BlacklistReason:
       val reasonType: BlacklistReasonType = BlockHeaderValidationFailedType
       val description: String = "Block header validation failed"
+      override def duration(default: FiniteDuration): FiniteDuration = default.max(HeaderValidationFailureDuration)
     case object ErrorInBlockHeaders extends BlacklistReason:
       val reasonType: BlacklistReasonType = ErrorInBlockHeadersType
       val description: String = "Error in block headers response"

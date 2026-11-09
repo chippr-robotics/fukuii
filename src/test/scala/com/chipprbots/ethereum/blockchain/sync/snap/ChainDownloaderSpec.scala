@@ -274,6 +274,7 @@ class ChainDownloaderSpec
     val info = PeerInfo(status, status.chainWeight, forkAccepted = true, BigInt(1000), status.bestHash)
     val downloader = testKit.spawn(
       ChainDownloader(
+        headerChainCheck = HeaderChainCheck.LinkOnly,
         blockchainReader = storage.blockchainReader,
         blockchainWriter = storage.blockchainWriter,
         appStateStorage = storage.storagesInstance.storages.appStateStorage,
@@ -564,6 +565,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -663,6 +665,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -778,6 +781,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -929,6 +933,7 @@ class ChainDownloaderSpec
     val downloader1: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1005,6 +1010,7 @@ class ChainDownloaderSpec
     val downloader2: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1089,6 +1095,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1183,6 +1190,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1292,6 +1300,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1419,6 +1428,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1521,6 +1531,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1638,6 +1649,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1773,6 +1785,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1889,6 +1902,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -2106,6 +2120,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -2180,10 +2195,16 @@ class ChainDownloaderSpec
       .expects(BigInt(1))
       .returning(None)
       .anyNumberOfTimes()
+    // The tip the download would extend (block 0 here): looked up when it starts.
+    blockchainReader.getBlockHeaderByNumber
+      .expects(BigInt(0))
+      .returning(None)
+      .anyNumberOfTimes()
 
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = blockchainReader,
           blockchainWriter = blockchainWriter,
           appStateStorage = appStateStorage,

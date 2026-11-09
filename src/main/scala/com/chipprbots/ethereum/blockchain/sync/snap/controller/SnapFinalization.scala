@@ -8,11 +8,14 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -32,6 +35,12 @@ private[snap] trait SnapFinalizationState:
 
   /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
   def terminalTotalDifficulty: Option[BigInt]
+
+  /** The check the header download applies to each header it stores (HeaderChainCheck.forChain). */
+  def headerChainCheck: HeaderChainCheck
+
+  /** The node's shared sync blacklist; the header download adds a peer whose header failed validation to it. */
+  def sharedBlacklist: Blacklist
 
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
@@ -58,6 +67,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   // Stall watchdog for the hold: highest header cursor seen and when it last advanced.
   private var holdLastCursor: BigInt = 0
   private var holdLastAdvanceMs: Long = 0L
+  // The pivot whose anchor check last came out undecided, so the hold tick logs that once per pivot.
+  private var anchorUndecidedLoggedFor: Option[BigInt] = None
 
   def completed(): Behavior[Command] =
     Behaviors
@@ -182,24 +193,32 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       // RegularSync's BranchResolution needs: header, body, number→hash mapping,
       // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
       // from the pivot.
-      stateIngest.chainReader.getBlockHeaderByNumber(pivot) match
+      //
+      // Where the header download validates the chain (proof of work), the pivot header is the downloaded chain's, taken
+      // after the download reaches the pivot and checked against the persisted pivot (anchoredPivotHeader). The number
+      // index is not consulted there: the pivot bootstrap writes it with headers nothing validated.
+      val pivotHeaderOpt =
+        if headerChainCheck.validatesChain then Some(anchoredPivotHeader(pivot))
+        else stateIngest.chainReader.getBlockHeaderByNumber(pivot)
+      pivotHeaderOpt match
         case Some(pivotHeader) =>
           // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
           // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
           // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
-          // a broken state.
-          stateIngest.appState.getSnapSyncStateRoot().foreach { snapRoot =>
-            if snapRoot != pivotHeader.stateRoot.value then
-              ctx.log.error(
-                "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
-                  "State trie root mismatch — escalating to SyncController for SNAP restart.",
-                snapRoot.toHex,
-                pivotHeader.stateRoot.value.toHex
-              )
-              leaveHeaderHold() // else the hold tick would re-run this guard and re-send HealingImpossible every 2 s
-              syncController ! SyncProtocol.HealingImpossible
-              break(Behaviors.same)
-          }
+          // a broken state. (A validated chain: anchoredPivotHeader has compared the state root and the pinned hash.)
+          if !headerChainCheck.validatesChain then
+            stateIngest.appState.getSnapSyncStateRoot().foreach { snapRoot =>
+              if snapRoot != pivotHeader.stateRoot.value then
+                ctx.log.error(
+                  "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
+                    "State trie root mismatch — escalating to SyncController for SNAP restart.",
+                  snapRoot.toHex,
+                  pivotHeader.stateRoot.value.toHex
+                )
+                leaveHeaderHold() // else the hold tick would re-run this guard and re-send HealingImpossible every 2 s
+                syncController ! SyncProtocol.HealingImpossible
+                break(Behaviors.same)
+            }
 
           // Path scheme only: SNAP/healing wrote the trie path-keyed, but block execution reads hash-keyed nodes.
           // Publish the completed trie to the hash-keyed store BEFORE anchoring/handing off, so the first imported
@@ -234,7 +253,9 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // (calibratePivotTD scales a peer's TD by pivot/peerBlock over ETH68 peers only, falls back to the block
           // number with ETH69-only peers, and every block above the pivot inherits whatever is stored here).
           // The header cursor is written atomically with each stored header, so cursor >= pivot means contiguous.
-          if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) then
+          // (A validated chain: anchoredPivotHeader has already held for it.)
+          if SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig) && !headerChainCheck.validatesChain
+          then
             val cursor = stateIngest.appState.getBackfillBestHeader()
             if cursor < pivot then
               enterHeaderHold(pivot, pivotHeader.hash.value, cursor)
@@ -434,6 +455,51 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         syncController ! Done
         completed()
     } // end boundary
+
+  /** The pivot header for finalisation where the header download validates the chain (proof of work). Holds while the
+    * download is below the pivot (the deferred backfill's hold), then compares the persisted pivot with the header the
+    * download holds at the pivot's number ([[PivotAnchor.check]]):
+    *   - anchored: that header, with the persisted state root (and the pinned hash, when one is pinned), is the pivot
+    *     header;
+    *   - diverged: the persisted pivot is not on the validated chain. The validated header is persisted as the pivot
+    *     ([[PivotAnchor.reanchor]]) and SyncController restarts SNAP, which resumes on it and heals toward its root;
+    *   - undecided (the download holds no recorded tip at or above the pivot): keep holding. The hold's stall restart
+    *     re-runs the download, which re-validates headers stored without a recorded tip.
+    */
+  private def anchoredPivotHeader(pivot: BigInt)(using scala.util.boundary.Label[Behavior[Command]]): BlockHeader =
+    import scala.util.boundary.break
+    val appState = stateIngest.appState
+    val cursor = appState.getBackfillBestHeader()
+    // Identifies this pivot for the hold (a changed pivot re-targets the download).
+    val holdKey =
+      appState.getSnapSyncPivotHash().orElse(appState.getSnapSyncStateRoot()).getOrElse(ByteString(pivot.toByteArray))
+    if cursor < pivot then
+      enterHeaderHold(pivot, holdKey, cursor)
+      break(Behaviors.same)
+    PivotAnchor.check(stateIngest, pivot) match
+      case PivotAnchor.Check.Anchored(header) =>
+        leaveHeaderHold()
+        header
+      case PivotAnchor.Check.Diverged(validated, pinnedHash, persistedRoot) =>
+        ctx.log.error(
+          s"SNAP finalisation: the pivot at block $pivot (hash ${pinnedHash.map(_.toHex).getOrElse("not recorded")}, " +
+            s"state root ${persistedRoot.map(_.toHex).getOrElse("not recorded")}) is not the validated header chain's " +
+            s"(hash ${validated.hash.value.toHex}, state root ${validated.stateRoot.value.toHex}). Anchoring the pivot " +
+            "to the validated header and escalating to SyncController for a SNAP restart."
+        )
+        leaveHeaderHold() // else the hold tick would re-run this and re-send HealingImpossible every 2 s
+        PivotAnchor.reanchor(stateIngest, validated)
+        syncController ! SyncProtocol.HealingImpossible
+        break(Behaviors.same)
+      case PivotAnchor.Check.Undecided(reason) =>
+        if !anchorUndecidedLoggedFor.contains(pivot) then
+          anchorUndecidedLoggedFor = Some(pivot)
+          ctx.log.error(
+            s"SNAP finalisation at pivot $pivot cannot check the pivot against the validated header chain ($reason); " +
+              "holding until the header download records it"
+          )
+        enterHeaderHold(pivot, holdKey, cursor)
+        break(Behaviors.same)
 
   /** CQ-020-07: settle the pivot's body without inventing one (see [[StoredBodyCheck]]). A body a newPayload stored is
     * kept when it validates; a body that contradicts the header is replaced by the derived empty one or removed, so the
@@ -637,7 +703,9 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                 emptyHeaderBackoff =
                   Option.when(SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig))(
                     SNAPSyncController.EmptyHeaderBackoff
-                  )
+                  ),
+                headerChainCheck = headerChainCheck,
+                sharedBlacklist = Some(sharedBlacklist)
               ),
               s"chain-downloader-$coordinatorGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")

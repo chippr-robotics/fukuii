@@ -18,11 +18,13 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
+import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -54,12 +56,14 @@ final private[snap] case class ChainDownloaderCall(
     maxConcurrentRequests: Int,
     requestTimeout: FiniteDuration,
     deferBodiesAndReceipts: Boolean,
-    emptyHeaderBackoff: Option[FiniteDuration]
+    emptyHeaderBackoff: Option[FiniteDuration],
+    headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
 )
 
 /** Records each ChainDownloader the module builds and returns a behaviour that ignores everything. */
 final private[snap] class RecordingChainDownloaderFactory extends ChildFactories:
   val calls: mutable.ArrayBuffer[ChainDownloaderCall] = mutable.ArrayBuffer.empty
+  val sharedBlacklists: mutable.ArrayBuffer[Option[Blacklist]] = mutable.ArrayBuffer.empty
 
   override def chainDownloader(
       blockchainReader: BlockchainReader,
@@ -76,14 +80,18 @@ final private[snap] class RecordingChainDownloaderFactory extends ChildFactories
       cursorScanCap: Long,
       deferBodiesAndReceipts: Boolean,
       emptyHeaderBackoff: Option[FiniteDuration],
-      nowMs: () => Long
+      nowMs: () => Long,
+      headerChainCheck: HeaderChainCheck,
+      sharedBlacklist: Option[Blacklist]
   ): Behavior[ChainDownloader.Command] =
+    sharedBlacklists += sharedBlacklist
     calls += ChainDownloaderCall(
       replyTo,
       maxConcurrentRequests,
       requestTimeout,
       deferBodiesAndReceipts,
-      emptyHeaderBackoff
+      emptyHeaderBackoff,
+      headerChainCheck
     )
     Behaviors.ignore
 
@@ -121,6 +129,8 @@ private[snap] class StubSnapFinalizationState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def terminalTotalDifficulty: Option[BigInt] = None
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
+  val sharedBlacklist: Blacklist = CacheBasedBlacklist.empty(100)
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -416,4 +426,19 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
 
     h.module.healedCodeQueued shouldBe empty
     h.kit.retrieveAllEffects().collect { case t: Effect.TimerScheduled[?] => t.key } shouldBe empty
+  }
+
+  it should "give the ChainDownloader the header check and the shared sync blacklist" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig())
+    h.module.pivotBlock = Some(pivot)
+    val check = new HeaderChainCheck.Validated(
+      com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator,
+      com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures.mordorConfig
+    )
+    h.module.headerChainCheck = check
+
+    h.call(_.startChainDownloader())
+
+    h.factories.calls.map(_.headerChainCheck).toSeq shouldBe Seq(check)
+    h.factories.sharedBlacklists.toSeq shouldBe Seq(Some(h.module.sharedBlacklist))
   }

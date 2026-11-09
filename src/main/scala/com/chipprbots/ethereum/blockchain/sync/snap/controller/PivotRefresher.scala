@@ -7,7 +7,10 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -23,6 +26,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 private[snap] trait PivotRefresherState:
   var clPivotHint: Option[CLPivotHint]
   def isPoSChain: Boolean
+  def headerChainCheck: HeaderChainCheck
   var pendingPivotRefresh: Option[(BigInt, String)]
   var healRepegNoRootAttempts: Int
   var validationGeneration: Long
@@ -224,9 +228,11 @@ private[snap] trait PivotRefresher
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
     * `PivotBootstrapFailed` while `pendingPivotRefresh` is set: backtrack by `pivotBlockOffset`
-    * (`RetryBootstrapAtBlock` in 5 s), or retry the refresh in 60 s when the backtracked block is not positive. With no
-    * refresh pending the guard is false and the message falls through to the next arm of `commonSyncingArms`, as
-    * before. `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
+    * (`RetryBootstrapAtBlock` in 5 s), or retry the refresh in 60 s when the backtracked block is not positive. When
+    * the bootstrap gave up after rejecting a header (`PivotHeaderBootstrap.ExhaustedAfterRejection`), the refresh is
+    * retried in 5 s instead, which chooses the target again from the peers that are not blacklisted. With no refresh
+    * pending the guard is false and the message falls through to the next arm of `commonSyncingArms`, as before.
+    * `commonSyncingArms` delegates to it at the arm's original position, so the arm order is unchanged.
     */
   private[snap] lazy val pivotRefreshBootstrapFailedArms: PartialFunction[Command, Behavior[Command]] = {
     // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
@@ -236,7 +242,17 @@ private[snap] trait PivotRefresher
       pendingPivotRefresh = None
       timers.cancel(PivotBootstrapRetryKey)
       val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
-      if backtrackedPivot > 0 then
+      if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
+        // The peers that claimed this height served headers that failed validation, and are blacklisted: choose the
+        // target again from the peers that remain. A backtrack would ask for a height derived from their claim.
+        ctx.log.warn(
+          s"${HeaderChainCheck.LogTag} pivot header bootstrap for block $pendingPivot found no eligible peer after " +
+            s"rejecting a header (original: $originalReason); choosing the pivot again from the remaining peers in 5s."
+        )
+        retryRefreshCounts = false
+        retryRefreshUnservable = false
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+      else if backtrackedPivot > 0 then
         ctx.log.warn(
           s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
             s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
@@ -649,8 +665,10 @@ private[snap] trait PivotRefresher
               )
         if !deferForProbe then
 
-          // Gate on ETH/Sepolia only — ETC pivot headers use StdBlockHeaderValidator (PoW).
-          val posValidationOk = if isPoSChain then
+          // Pivot header gate. ETH/Sepolia: field count and the post-merge header-only rules. Other chains: the header
+          // download's header-only rules (proof of work: the block-import validator's, Ethash seal included). The header's
+          // place in the chain is checked against the validated header download at finalisation (PivotAnchor).
+          val pivotHeaderValid = if isPoSChain then
             given bc: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
             BlockHeader.validateFieldCount(newPivotHeader, bc) match
               case Left(msg) =>
@@ -668,9 +686,21 @@ private[snap] trait PivotRefresher
                     )
                     false
                   case Right(_) => true
-          else true
+          else
+            headerChainCheck.validateHeaderOnly(newPivotHeader) match
+              case Left(err) =>
+                ctx.log.error(
+                  s"${HeaderChainCheck.LogTag} SNAP pivot header ${newPivotHeader.idTag} failed header validation — " +
+                    s"aborting pivot commit: $err"
+                )
+                SNAPSyncMetrics.incrementHeaderRejected(
+                  HeaderChainCheck.rejectionReason(err),
+                  HeaderChainCheck.Phase.PivotGate
+                )
+                false
+              case Right(_) => true
 
-          if posValidationOk then
+          if pivotHeaderValid then
             ctx.log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
 
             // Update internal state
@@ -707,10 +737,7 @@ private[snap] trait PivotRefresher
             // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
             // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
             if currentPhase != StateHealing then
-              stateIngest.appState
-                .putSnapSyncPivotBlock(newPivotBlock)
-                .and(stateIngest.appState.putSnapSyncStateRoot(newStateRoot.value))
-                .commit()
+              PivotAnchor.committed(stateIngest, newPivotBlock, newPivotHeader).commit() // root = newStateRoot
             updateBestBlockForPivot(newPivotHeader, newPivotBlock)
             SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
             SNAPSyncMetrics.incrementPivotRefreshed()
@@ -746,7 +773,7 @@ private[snap] trait PivotRefresher
             // This ensures that repeated stateless-peer pivot cycles don't prevent the
             // stagnation watchdog from eventually triggering a full restart.
             resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshCommit)
-          // end if posValidationOk
+          // end if pivotHeaderValid
         // end if !deferForProbe
       // end else (stateRoot changed)
     // end else (not StateValidation phase)

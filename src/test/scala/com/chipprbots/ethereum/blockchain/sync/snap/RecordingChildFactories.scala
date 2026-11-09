@@ -414,7 +414,9 @@ final class RecordingChildFactories(
       cursorScanCap: Long,
       deferBodiesAndReceipts: Boolean,
       emptyHeaderBackoff: Option[FiniteDuration],
-      nowMs: () => Long
+      nowMs: () => Long,
+      headerChainCheck: HeaderChainCheck,
+      sharedBlacklist: Option[Blacklist]
   ): Behavior[ChainDownloader.Command] =
     chainSpawns.incrementAndGet()
     spawns ! ChildSpawn.Chain(

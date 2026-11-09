@@ -189,7 +189,7 @@ object PeersClient:
           Behaviors.same
 
         case BlacklistPeer(peerId, reason) =>
-          peerHelper.blacklistIfHandshaked(peerId, syncConfig.blacklistDuration, reason)
+          peerHelper.blacklistIfHandshaked(peerId, reason.duration(syncConfig.blacklistDuration), reason)
           Behaviors.same
 
         case RecordNodeDataFailure(peerId) =>

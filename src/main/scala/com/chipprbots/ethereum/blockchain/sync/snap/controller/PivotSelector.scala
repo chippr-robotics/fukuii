@@ -7,8 +7,11 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -42,6 +45,7 @@ private[snap] trait PivotSelectorState:
 
   /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
   def terminalTotalDifficulty: Option[BigInt]
+  def headerChainCheck: HeaderChainCheck
   def bigIntReverseOrdering: Ordering[BigInt]
   def BootstrapCheckKey: String
   def peerEventArms: PartialFunction[Command, Behavior[Command]]
@@ -142,7 +146,10 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 // Don't commit a pivot that peers are unlikely to serve.
                 startSnapSync()
               else
-                // Gate on ETH/Sepolia only — ETC pivot headers use StdBlockHeaderValidator (PoW).
+                // Pivot header gate. ETH/Sepolia: field count and the post-merge header-only rules. Other chains: the
+                // header download's header-only rules (proof of work: the block-import validator's, Ethash seal
+                // included). This gate checks the header alone; its place in the chain is checked against the validated
+                // header download at finalisation (SnapFinalization, PivotAnchor).
                 val pivotHeaderValid =
                   if isPoSChain then
                     given bc: BlockchainConfig =
@@ -163,16 +170,25 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                             )
                             false
                           case Right(_) => true
-                  else true
+                  else
+                    headerChainCheck.validateHeaderOnly(header) match
+                      case Left(err) =>
+                        ctx.log.error(
+                          s"${HeaderChainCheck.LogTag} SNAP bootstrap pivot header ${header.idTag} failed header " +
+                            s"validation — aborting commit, restarting sync: $err"
+                        )
+                        SNAPSyncMetrics.incrementHeaderRejected(
+                          HeaderChainCheck.rejectionReason(err),
+                          HeaderChainCheck.Phase.PivotGate
+                        )
+                        false
+                      case Right(_) => true
 
                 if !pivotHeaderValid then startSnapSync()
                 else
                   pivotBlock = Some(targetPivot)
                   stateRoot = Some(header.stateRoot)
-                  stateIngest.appState
-                    .putSnapSyncPivotBlock(targetPivot)
-                    .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-                    .commit()
+                  PivotAnchor.committed(stateIngest, targetPivot, header).commit()
                   updateBestBlockForPivot(header, targetPivot)
 
                   SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -207,10 +223,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                       case Some(header) =>
                         pivotBlock = Some(targetPivot)
                         stateRoot = Some(header.stateRoot)
-                        stateIngest.appState
-                          .putSnapSyncPivotBlock(targetPivot)
-                          .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-                          .commit()
+                        PivotAnchor.committed(stateIngest, targetPivot, header).commit()
                         updateBestBlockForPivot(header, targetPivot)
 
                         SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -305,6 +318,11 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
         case PivotBootstrapFailed(reason) =>
           ctx.log.warn(s"Pivot header bootstrap failed during initial startup: $reason")
+          // After a rejected header left no eligible peer, the next start chooses the target again from the peers that
+          // remain: the persisted target came from the claims of peers that are now blacklisted, and resuming it would
+          // ask for the same height.
+          if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
+            stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
           bootstrapRetryCount += 1
           checkBootstrapRetryTimeout(s"bootstrap failed: $reason") match
             case Some(b) => b
@@ -560,10 +578,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
           pivotBlock = Some(header.number.value)
           stateRoot = Some(header.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(header.number.value)
-            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, header.number.value, header).commit()
           updateBestBlockForPivot(header, header.number.value)
 
           SNAPSyncMetrics.setPivotBlockNumber(header.number.value)
@@ -719,10 +734,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(0)
-            .and(stateIngest.appState.putSnapSyncStateRoot(genesisHeader.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, 0, genesisHeader).commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
@@ -804,10 +816,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(pivotBlockNumber)
-            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, pivotBlockNumber, header).commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block
