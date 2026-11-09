@@ -1793,3 +1793,13 @@ items:
     refs: [B-130]
     links: {}
     notes: "beacon review of #1773: every pin scenario has state 0; exec+state==maxUsedGas holds only at zero state gas (max(before-state,floor)+state can exceed max(before,floor))."
+  - id: B-163
+    title: "eth_simulateV1: run the request system calls (withdrawal/consolidation queues, deposit logs) for Prague and Osaka blocks, as geth PostExecution does"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-09
+    refs: [B-131]
+    links: {}
+    notes: "From #1727 PR 5 (conduit): EthSimulateService runs request system calls only for Amsterdam blocks; geth runs PostExecution for every Prague block (simulate.go:499). Changes simulated requestsHash and state for Prague/Osaka; RPC only, not import. Many simulate tests on empty state will need the queue stubs (RequestContractStubs)."
