@@ -248,8 +248,8 @@ object PeerActor:
     /** The peer sent something malformed or invalid, and is being disconnected for it. Scored before the Disconnect
       * frame goes out. Observation only: nothing reads the score to decide anything.
       */
-    private def recordProtocolViolation(remoteNodeId: ByteString): Unit =
-      peerScoringManager.foreach(_.recordProtocolViolation(peerIdOf(remoteNodeId)))
+    private def recordProtocolViolation(peerId: PeerId): Unit =
+      peerScoringManager.foreach(_.recordProtocolViolation(peerId))
 
     private def modifyOutGoingUri(remoteNodeId: ByteString, rlpxConnection: RLPxConnection, uri: URI): URI =
       val host = getHostName(rlpxConnection.remoteAddress.getAddress)
@@ -656,7 +656,7 @@ object PeerActor:
                   bru.earliestBlock,
                   bru.latestBlock
                 )
-                recordProtocolViolation(remoteNodeId)
+                recordProtocolViolation(peerId)
                 disconnectFromPeer(
                   rlpxConnection,
                   com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol
@@ -672,7 +672,7 @@ object PeerActor:
 
         case DisconnectPeer(reason) =>
           // RLPxConnectionHandler asks for BreachOfProtocol when a message from this peer cannot be decoded.
-          if reason == Disconnect.Reasons.BreachOfProtocol then recordProtocolViolation(remoteNodeId)
+          if reason == Disconnect.Reasons.BreachOfProtocol then recordProtocolViolation(peerId)
           disconnectFromPeer(rlpxConnection, reason)
 
         case SendMessage(message) =>
