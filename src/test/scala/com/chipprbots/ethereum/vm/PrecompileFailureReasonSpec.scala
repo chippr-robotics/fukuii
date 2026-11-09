@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
+import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks
 
 /** #1727 PR 7b: a precompile that fails says why in go-ethereum v1.17.9's words (core/vm/contracts.go), on ETC Olympia
   * and ETH Osaka, where every precompile with a failure mode is active.
@@ -122,6 +124,40 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
     ).foreach(check)
   }
 
+  it should "run out of gas first when its gas does not cover the price, as go-ethereum charges before it runs" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    val modexpAddr = PrecompiledContracts.ModExpAddr
+    Seq(
+      Failing("base 1025, one gas short", modexpAddr, modexp(1025, 1, 1), 33_281, "out of gas"),
+      Failing("base 1025, little gas", modexpAddr, modexp(1025, 1, 1), 10_000, "out of gas"),
+      Failing("a 2^32 length word", modexpAddr, modexp(BigInt(1) << 32, 1, 1), Plenty, "out of gas")
+    ).foreach(check)
+  }
+
+  it should "still run an operand longer than 1024 bytes before ETC Olympia and ETH Osaka" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    val spiral = Chain(
+      "ETC Spiral",
+      EvmConfig.SpiralConfigBuilder(Fixtures.blockchainConfig),
+      BlockFixtures.ValidBlock.header.copy(number = BlockNumber(Fixtures.SpiralBlockNumber))
+    )
+    val prague =
+      val header = preAmsterdamHeader(500, 120)
+      Chain("ETH Prague", EvmConfig.forBlock(header.number.value, header.unixTimestamp, preAmsterdamConfig), header)
+    for chain <- Seq(spiral, prague) do
+      withClue(s"${chain.name}: ") {
+        // EIP-2565: ceil(1025 / 8)^2 / 3 = 5,547
+        val (_, result) = run(chain, PrecompiledContracts.ModExpAddr, modexp(1025, 1, 1), 5_547)
+        result.error shouldBe None
+        result.gasRemaining shouldBe 0
+        result.returnData shouldBe zeros(1)
+      }
+  }
+
   // ── BN254 (0x06 - 0x08) ──────────────────────────────────────────────────────────────────────────────────────
 
   private val BnP = BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583")
@@ -213,6 +249,21 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
       Failing("214 bytes", blake, zeros(214), Plenty, "invalid input length"),
       Failing("flag 2", blake, blake2f(0, 2), Plenty, "invalid final flag"),
       Failing("flag 0xff, 12 rounds, exactly 12 gas", blake, blake2f(12, 0xff), 12, "invalid final flag")
+    ).foreach(check)
+  }
+
+  it should "price a bad final flag by its rounds, and run out of gas first, as go-ethereum" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    val blake = PrecompiledContracts.Blake2bCompressionAddr
+    // go-ethereum blake2F.RequiredGas: the rounds for any 213-byte input, 0 for any other length
+    PrecompiledContracts.Blake2bCompress.gas(blake2f(12, 2), EtcForks.Olympia, EthForks.Berlin) shouldBe 12
+    PrecompiledContracts.Blake2bCompress.gas(blake2f(12, 1), EtcForks.Olympia, EthForks.Berlin) shouldBe 12
+    PrecompiledContracts.Blake2bCompress.gas(zeros(212), EtcForks.Olympia, EthForks.Berlin) shouldBe 0
+    Seq(
+      Failing("flag 2, 65,535 rounds, 100 gas", blake, blake2f(0xffff, 2), 100, "out of gas"),
+      Failing("flag 0xff, 12 rounds, 11 gas", blake, blake2f(12, 0xff), 11, "out of gas")
     ).foreach(check)
   }
 
@@ -523,6 +574,36 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
         Plenty,
         NotCanonical
       )
+    ).foreach(check)
+  }
+
+  it should "price fewer than one MSM or pairing pair as EIP-2537 does, so its error is its length" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    // EIP-2537 "Gas schedule clarifications" and go-ethereum RequiredGas: k = floor(length / pair size); an MSM with
+    // k = 0 costs 0, a pairing 37,700 + 32,600 k
+    val (etc, eth) = (EtcForks.Olympia, EthForks.Berlin)
+    PrecompiledContracts.BlsG1MultiExp.gas(ByteString.empty, etc, eth) shouldBe 0
+    PrecompiledContracts.BlsG1MultiExp.gas(zeros(159), etc, eth) shouldBe 0
+    PrecompiledContracts.BlsG1MultiExp.gas(zeros(161), etc, eth) shouldBe 12_000
+    PrecompiledContracts.BlsG2MultiExp.gas(zeros(287), etc, eth) shouldBe 0
+    PrecompiledContracts.BlsG2MultiExp.gas(zeros(288), etc, eth) shouldBe 22_500
+    PrecompiledContracts.BlsPairing.gas(ByteString.empty, etc, eth) shouldBe 37_700
+    PrecompiledContracts.BlsPairing.gas(zeros(383), etc, eth) shouldBe 37_700
+    PrecompiledContracts.BlsPairing.gas(zeros(384), etc, eth) shouldBe 70_300
+
+    val g1Msm = PrecompiledContracts.BlsG1MultiExpAddr
+    val g2Msm = PrecompiledContracts.BlsG2MultiExpAddr
+    val pairing = PrecompiledContracts.BlsPairingAddr
+    Seq(
+      Failing("G1MSM empty, no gas", g1Msm, ByteString.empty, 0, "invalid input length"),
+      Failing("G1MSM 159 bytes, no gas", g1Msm, zeros(159), 0, "invalid input length"),
+      Failing("G2MSM 287 bytes, no gas", g2Msm, zeros(287), 0, "invalid input length"),
+      Failing("PAIRING empty, 37,700 gas", pairing, ByteString.empty, 37_700, "invalid input length"),
+      Failing("PAIRING 383 bytes, 37,700 gas", pairing, zeros(383), 37_700, "invalid input length"),
+      Failing("PAIRING empty, 37,699 gas", pairing, ByteString.empty, 37_699, "out of gas"),
+      Failing("G1MSM 161 bytes, one pair's price less one", g1Msm, zeros(161), 11_999, "out of gas")
     ).foreach(check)
   }
 

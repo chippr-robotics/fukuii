@@ -338,32 +338,25 @@ object PrecompiledContracts:
       // so etcFork >= Olympia is true but EIP-7823 is not yet active pre-Osaka.
       val useEip7823 = isOsaka || (etcFork >= EtcForks.Olympia && !isEthereum)
 
-      // EIP-7823: reject inputs with operand lengths > 1024 bytes
-      if useEip7823 then
-        if exceedsEip7823(context.inputData) then
-          // DEFER: nested guard inside the EIP-7823 (Unit-typed) validation block; the method
-          // value (ProgramResult / MODEXP output) is produced below. An expression rewrite would
-          // require restructuring the validation into a separate boolean and is byte-level risky
-          // for a precompile result that feeds state. Keep the short-circuit.
-          return frameResult( // scalafix:ok DisableSyntax.return
-            context,
-            ByteString.empty,
-            BigInt(0),
-            Some(PreCompiledContractFail(this, context.inputData))
-          )
-
       // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
       // (Prague keeps EIP-2565 per execution-specs); on ETC, it activates at Olympia.
       // Hive maps London→olympiaBlockNumber, which we must ignore on ETH to avoid firing
       // EIP-7883 pre-Osaka.
       val g = gasWithOsaka(context.inputData, etcFork, ethFork, isOsaka, isEthereum)
+
+      // go-ethereum `RunPrecompiledContract` (core/vm/contracts.go) charges the price first; only a call that paid it
+      // reaches `bigModExp.Run`, which rejects an operand longer than 1024 bytes (EIP-7823). So an over-long input its
+      // gas cannot pay for is out of gas, like any other (#1727 PR 7b; it used to be rejected before the charge). The
+      // frame is the same either way, all gas consumed and no output: only the error's name depends on the order.
       val (result, error, gasRemaining) = (
-        if g <= context.startGas then
+        if g > context.startGas then (ByteString.empty, Some(OutOfGas), BigInt(0))
+        else if useEip7823 && exceedsEip7823(context.inputData) then
+          (ByteString.empty, Some(PreCompiledContractFail(this, context.inputData)), BigInt(0))
+        else
           exec(context.inputData) match
             case Some(returnData) => (returnData, None, context.startGas - g)
             case None => (ByteString.empty, Some(PreCompiledContractFail(this, context.inputData)), BigInt(0))
-        else (ByteString.empty, Some(OutOfGas), BigInt(0))
-      ): (ByteString, Option[ProgramError], BigInt)
+      ) : (ByteString, Option[ProgramError], BigInt)
 
       frameResult(context, result, gasRemaining, error)
 
@@ -684,11 +677,15 @@ object PrecompiledContracts:
     def exec(inputData: ByteString): Option[ByteString] =
       Blake2bCompression.blake2bCompress(inputData.toArray).map(ByteString.fromArrayUnsafe)
 
+    /** go-ethereum `blake2F.RequiredGas`: one gas per round for an input of the right length, whatever its final flag,
+      * and 0 for any other length. A flag other than 0 or 1 still fails the call, but only once the rounds are paid
+      * for, so with too little gas it is out of gas, as in go-ethereum (#1727 PR 7b; it used to be priced at 0). The
+      * frame is the same either way, all gas consumed and no output: only the error's name changes.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val inputArray = inputData.toArray
-      if Blake2bCompression.isValidInput(inputArray) then
+      if inputData.length == Blake2bCompression.MessageBytesLength then
         // Each round costs 1gas
-        BigInt(Blake2bCompression.parseNumberOfRounds(inputArray))
+        BigInt(Blake2bCompression.parseNumberOfRounds(inputData.toArray))
       else
         // bad input to contract, contract will not execute, set price to zero
         BigInt(0)
@@ -843,8 +840,13 @@ object PrecompiledContracts:
     private val pairSize = 160 // 128-byte G1 point + 32-byte scalar
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_G1MULTIEXP_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381G1MultiExp.RequiredGas`: k = floor(length / 160) pairs, and 0 when there is
+      * not one. Such an input always fails; priced at 0 its error is its length, as in go-ethereum, where it used to be
+      * priced as one pair and could run out of gas (#1727 PR 7b). The frame is the same either way.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       val discount = blsG1MsmDiscount(k)
       BigInt(12000) * k * discount / 1000
 
@@ -883,8 +885,12 @@ object PrecompiledContracts:
     private val pairSize = 288 // 256-byte G2 point + 32-byte scalar
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_G2MULTIEXP_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381G2MultiExp.RequiredGas`: k = floor(length / 288) pairs, and 0 when there is
+      * not one (see [[BlsG1MultiExp.gas]]).
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       val discount = blsG2MsmDiscount(k)
       BigInt(22500) * k * discount / 1000
 
@@ -908,8 +914,13 @@ object PrecompiledContracts:
     private val pairSize = 384 // 128-byte G1 + 256-byte G2
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_PAIR_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381Pairing.RequiredGas`: 37,700 plus 32,600 for each of floor(length / 384)
+      * pairs. An input of fewer than one pair costs the 37,700 base, where it used to be priced as one pair (#1727 PR
+      * 7b); it always fails, and the frame is the same either way.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       BigInt(32600) * k + BigInt(37700)
 
     /** go-ethereum `bls12381Pairing.Run`: a non-zero multiple of 384 bytes, then pair by pair: G1 decodes, G2 decodes,
