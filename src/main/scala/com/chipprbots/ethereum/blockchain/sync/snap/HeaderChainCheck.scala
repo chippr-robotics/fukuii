@@ -156,3 +156,17 @@ object HeaderChainCheck:
       case skeleton: BlockHeaderValidatorSkeleton if isProofOfWork(blockchainConfig) =>
         new Validated(skeleton, blockchainConfig)
       case _ => LinkOnly
+
+  /** The SNAP config with the header hold on, for a proof-of-work chain: `chain-download-enabled` and
+    * `defer-chain-backfill-until-state-complete` are both forced on, because finalisation anchors the pivot to the
+    * downloaded, validated header chain and must wait for it to reach the pivot. Returns the config and the keys that
+    * were set off (and are now ignored), for the caller's warning. Other chains: unchanged, no keys.
+    */
+  def enforceHeaderHold(cfg: SNAPSyncConfig, proofOfWork: Boolean): (SNAPSyncConfig, Seq[String]) =
+    if !proofOfWork then (cfg, Nil)
+    else
+      val ignored =
+        Seq("chain-download-enabled" -> cfg.chainDownloadEnabled)
+          .appended("defer-chain-backfill-until-state-complete" -> cfg.deferChainBackfillUntilStateComplete)
+          .collect { case (key, false) => key }
+      (cfg.copy(chainDownloadEnabled = true, deferChainBackfillUntilStateComplete = true), ignored)

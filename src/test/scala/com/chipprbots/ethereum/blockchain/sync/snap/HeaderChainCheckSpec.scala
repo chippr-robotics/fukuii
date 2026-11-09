@@ -22,7 +22,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** The SNAP header download's per-header check ([[HeaderChainCheck]]) against real mined Mordor headers, with the
   * block-import validator (`PoWBlockHeaderValidator`) and the shipped Mordor config; its seal sampling; its dispatch by
-  * chain.
+  * chain; and the header hold it makes mandatory on proof-of-work chains.
   */
 class HeaderChainCheckSpec extends AnyFlatSpec with Matchers:
 
@@ -196,6 +196,25 @@ class HeaderChainCheckSpec extends AnyFlatSpec with Matchers:
     HeaderChainCheck.LinkOnly.check(altered, fromGenesis(9), checkSeal = true) shouldBe Right(BlockHeaderValid)
     HeaderChainCheck.LinkOnly.validateHeaderOnly(altered) shouldBe Right(BlockHeaderValid)
     HeaderChainCheck.LinkOnly.sealPositions(fromGenesis.take(5), BigInt(4)) shouldBe Seq.fill(5)(false)
+  }
+
+  "HeaderChainCheck.enforceHeaderHold" should "turn the header hold on for proof-of-work chains and name what it overrode" taggedAs UnitTest in {
+    val off = SNAPSyncConfig(chainDownloadEnabled = false, deferChainBackfillUntilStateComplete = false)
+    val (held, ignored) = HeaderChainCheck.enforceHeaderHold(off, proofOfWork = true)
+    held.chainDownloadEnabled shouldBe true
+    held.deferChainBackfillUntilStateComplete shouldBe true
+    SNAPSyncController.chainBackfillDeferredToFinalization(held) shouldBe true
+    ignored shouldBe Seq("chain-download-enabled", "defer-chain-backfill-until-state-complete")
+
+    val alreadyOn = SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
+    HeaderChainCheck.enforceHeaderHold(alreadyOn, proofOfWork = true) shouldBe ((alreadyOn, Nil))
+  }
+
+  it should "leave the config alone on chains with a terminal total difficulty" taggedAs UnitTest in {
+    val off = SNAPSyncConfig(chainDownloadEnabled = false, deferChainBackfillUntilStateComplete = false)
+    HeaderChainCheck.enforceHeaderHold(off, proofOfWork = false) shouldBe ((off, Nil))
+    HeaderChainCheck.isProofOfWork(mordorConfig) shouldBe true
+    HeaderChainCheck.isProofOfWork(mordorConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))) shouldBe false
   }
 
   /** `header` with the mixHash its nonce gives (Ethash light verification): sealed for its own difficulty when that

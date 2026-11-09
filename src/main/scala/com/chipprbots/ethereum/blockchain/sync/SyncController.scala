@@ -550,7 +550,7 @@ object SyncController:
 
     /** Load SNAP sync configuration with fallback to defaults */
     private def loadSnapSyncConfig(): SNAPSyncConfig =
-      val config =
+      val loaded =
         try SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
         catch
           case e: Exception =>
@@ -559,6 +559,17 @@ object SyncController:
             // default is on for every chain (#1654): a node on this fallback must not end SNAP with an estimated
             // pivot total difficulty.
             SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
+      // Proof of work: finalisation anchors the pivot to the validated header download, so the header hold cannot be
+      // turned off. A config that turns it off is overridden (with a warning) rather than refused: the node stays
+      // usable, and the setting it asked for is not one it can safely run with.
+      val (config, ignoredKeys) =
+        HeaderChainCheck.enforceHeaderHold(loaded, HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig))
+      ignoredKeys.foreach { key =>
+        log.warn(
+          s"sync.snap-sync.$key = false is ignored on proof-of-work chains: SNAP finalisation waits for the validated " +
+            "header download to reach the pivot"
+        )
+      }
       val networkType = configBuilder.blockchainConfig.networkType
       val expectedScheme = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
       require(
