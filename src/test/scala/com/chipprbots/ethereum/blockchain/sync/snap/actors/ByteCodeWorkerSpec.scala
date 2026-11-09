@@ -213,6 +213,24 @@ class ByteCodeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     scorer.getScore(peer.id).responsesReceived shouldBe 1
   }
 
+  it should "credit no response when it is told a request timed out that the tracker still holds" taggedAs UnitTest in {
+    val coordinator = makeCoordinatorProbe()
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-10", ClassicTestProbe().ref)
+    val (tracker, scorer) = scoredTracker()
+    val worker = makeWorker(coordinator, networkPeerManager, tracker)
+
+    val reqId = BigInt(23)
+    worker ! ByteCodeCoordinator.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
+
+    worker ! ByteCodeCoordinator.ByteCodeRequestTimeout(reqId)
+    coordinator.expectMessage(1.second, ByteCodeCoordinator.ByteCodeTaskFailed(reqId, "Timeout"))
+
+    tracker.isPending(reqId) shouldBe false
+    scorer.getAllScores shouldBe empty
+  }
+
   it should "ignore ByteCodesResponseMsg for mismatched request ID" taggedAs UnitTest in {
     val coordinator = makeCoordinatorProbe()
     val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()

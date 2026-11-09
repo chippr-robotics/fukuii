@@ -111,8 +111,9 @@ object ByteCodeWorker:
 
         case ByteCodeRequestTimeout(reqId) =>
           if reqId == requestId then
-            // RequestTracker already removed this request when firing the callback; this is defensive.
-            requestTracker.completeRequest(requestId)
+            // RequestTracker already removed this request when firing the callback; this is defensive. 0 items: a request
+            // that timed out is not a response, should the tracker ever still hold it.
+            requestTracker.completeRequest(requestId, 0)
             context.log.warn(s"Bytecode request $requestId timed out")
             coordinator ! ByteCodeTaskFailed(requestId, "Timeout")
             goIdle
