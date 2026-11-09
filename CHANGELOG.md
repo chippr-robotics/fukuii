@@ -392,6 +392,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid opcode: 0xfffffffe`), a jump to a non-`JUMPDEST` says `invalid jump destination`, a write in a static call
   `write protection`, and so on. A stack underflow still lacks go-ethereum's `(0 <=> 2)` counts and a precompile failure
   its reason; both stay under Known issues.
+- **`eth_simulateV1` reads `blockOverrides` and `stateOverrides` as go-ethereum v1.17.9 does (#1727, B-128). Both
+  chains.** It now decodes them with the decoder `eth_call` and `eth_estimateGas` already used for their overrides, so
+  the three RPCs share one set of rules, and every decode error is -32602.
+  - **Malformed values are refused.** A quantity needs `0x` and has no leading zero (`""` is zero, as `hexutil` reads
+    it). `prevRandao`, `beaconRoot` and every `state` / `stateDiff` slot key and value are exactly 32 bytes; a
+    `feeRecipient`, a `movePrecompileToAddress`, a withdrawal's `address` and a state override's key are exactly 20.
+    `"prevRandao":"0x00"`, a one-byte storage slot and a quantity without `0x` were accepted before; a request that sent
+    such values must now send go-ethereum's. A `blockOverrides`, `stateOverrides` or account override that is not an
+    object is refused (`json: cannot unmarshal number into Go value of type override.BlockOverrides`); before, the
+    simulation ignored a `blockOverrides` or `stateOverrides` of another type and ran without it.
+  - **Keys match case-insensitively**, as go-ethereum's `checkOverrideKeys` matches them: `Number`, `GASLIMIT`,
+    `StateDiff`, and a block state call's `BlockOverrides`, `stateOverrides` and `Calls`. Two keys that name one field
+    are -32602 (`keys "Number" and "number" in block override name the same field`), as an unknown key still is.
+    `eth_call` and `eth_estimateGas` match the same way, and still refuse an unknown key, which go-ethereum ignores.
+  - **`beaconRoot` is accepted.** From Cancun on it is the simulated block's `parentBeaconBlockRoot`: the response
+    carries it, the EIP-4788 system call stores it and the block hash commits to it. It was refused as an unknown key. In
+    `eth_call` and `eth_estimateGas` it, and `withdrawals`, stay -32000 `not supported for this RPC method`, now only
+    once they have decoded; a malformed one is -32602.
+  - **Withdrawals** decode as go-ethereum's `Withdrawal` does: no field is required (one left out is zero), field names
+    match case-insensitively, other keys are ignored and the quantities are `hexutil.Uint64`. A `null` entry is still
+    refused. A `null` account override is an override that changes nothing, as in go-ethereum; `eth_call` refused it.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -506,10 +527,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
-  unbounded block-gap loop that stalled the node is fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on
-  Ephemery found these differences:
-  - malformed override values (unprefixed or short hex, overrides sent as an array) are accepted, where geth returns
-    -32602;
+  unbounded block-gap loop that stalled the node is fixed (see Fixed), and so are the malformed override values it
+  accepted. A comparison of 815 cases with geth v1.17.9 on Ephemery found these differences:
   - an override at a precompile's address does not disable the precompile;
   - `movePrecompileToAddress` refuses 0x0a (KZG), and two moves to the same address are both dropped;
   - `maxUsedGas` reports gas after refunds;

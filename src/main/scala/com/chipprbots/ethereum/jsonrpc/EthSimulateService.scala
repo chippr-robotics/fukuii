@@ -44,7 +44,9 @@ object EthSimulateService:
       blobBaseFee: Option[BigInt] = None,
       difficulty: Option[BigInt] = None,
       // EIP-4895: the block's withdrawals (go-ethereum BlockOverrides.Withdrawals); read from Shanghai on
-      withdrawals: Option[Seq[Withdrawal]] = None
+      withdrawals: Option[Seq[Withdrawal]] = None,
+      // EIP-4788: the block's parent beacon block root (go-ethereum BlockOverrides.BeaconRoot); read from Cancun on
+      beaconRoot: Option[ByteString] = None
   )
 
   case class StateOverride(
@@ -761,7 +763,10 @@ class EthSimulateService(
       if !validation then BigInt(0)
       else computeNextBaseFee(parentHeader)
     )
-    val parentBeaconBlockRoot = ByteString(new Array[Byte](32)) // Zero for simulated blocks
+    // go-ethereum makeHeaders (simulate.go:654-660): from Cancun on, the block's parent beacon block root is the
+    // `beaconRoot` override, and zero without one. Before Cancun the header has no such field, so the override is not
+    // read.
+    val parentBeaconBlockRoot = ov.beaconRoot.getOrElse(ByteString(new Array[Byte](32)))
 
     // Determine the fork era for the header based on the block's timestamp
     // This handles both pre-merge blocks and fork boundary crossings

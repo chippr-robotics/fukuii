@@ -354,7 +354,9 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     bad(""""blockOverrides":{"feeRecipient":"0x12"}""") shouldBe Left(-32602)
     bad(""""blockOverrides":{"prevRandao":"0xnothex"}""") shouldBe Left(-32602)
     bad(""""blockOverrides":{"time":5}""") shouldBe Left(-32602)
-    bad(""""blockOverrides":{"withdrawals":[{"index":"0x0"}]}""") shouldBe Left(-32602)
+    // geth's Withdrawal has no required field, so a withdrawal missing some is not malformed (see
+    // EthSimulateOverrideDecodingSpec); a quantity with a leading zero is
+    bad(""""blockOverrides":{"withdrawals":[{"index":"0x01"}]}""") shouldBe Left(-32602)
   }
 
   it should "refuse a malformed state override value (-32602)" taggedAs (UnitTest, RPCTest) in {
@@ -366,11 +368,13 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
   }
 
   it should "still accept well-formed overrides" taggedAs (UnitTest, RPCTest) in {
+    // a storage slot, its value and a prevRandao are a common.Hash: exactly 32 bytes
+    val slot = "0x" + "00" * 31 + "01"
     bad(
-      s""""stateOverrides":{"$To":{"balance":"0x1","code":"0x00","stateDiff":{"0x01":"0x02"}}}"""
+      s""""stateOverrides":{"$To":{"balance":"0x1","code":"0x00","stateDiff":{"$slot":"$slot"}}}"""
     ).isLeft shouldBe false
     bad(
-      """"blockOverrides":{"number":"0x21","prevRandao":"0x00","feeRecipient":"0x00000000000000000000000000000000000000aa"}"""
+      s""""blockOverrides":{"number":"0x21","prevRandao":"$slot","feeRecipient":"0x00000000000000000000000000000000000000aa"}"""
     ).isLeft shouldBe false
   }
 
