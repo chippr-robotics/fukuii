@@ -106,7 +106,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           cursorScanCap: Long,
           deferBodiesAndReceipts: Boolean,
           emptyHeaderBackoff: Option[FiniteDuration],
-          nowMs: () => Long
+          nowMs: () => Long,
+          headerChainCheck: HeaderChainCheck
       ): Behavior[ChainDownloader.Command] =
         Behaviors.monitor(
           chainMessages.ref,
@@ -125,7 +126,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
             cursorScanCap,
             deferBodiesAndReceipts,
             emptyHeaderBackoff,
-            nowMs
+            nowMs,
+            headerChainCheck
           )
         )
 

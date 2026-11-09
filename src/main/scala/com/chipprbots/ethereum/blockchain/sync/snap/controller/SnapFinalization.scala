@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
@@ -32,6 +33,9 @@ private[snap] trait SnapFinalizationState:
 
   /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
   def terminalTotalDifficulty: Option[BigInt]
+
+  /** The check the header download applies to each header it stores (HeaderChainCheck.forChain). */
+  def headerChainCheck: HeaderChainCheck
 
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
@@ -637,7 +641,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
                 emptyHeaderBackoff =
                   Option.when(SNAPSyncController.chainBackfillDeferredToFinalization(snapSyncConfig))(
                     SNAPSyncController.EmptyHeaderBackoff
-                  )
+                  ),
+                headerChainCheck = headerChainCheck
               ),
               s"chain-downloader-$coordinatorGeneration",
               DispatcherSelector.fromConfig("sync-dispatcher")

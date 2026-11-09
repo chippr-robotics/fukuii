@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.BootstrapComplete
@@ -533,6 +534,19 @@ object SyncController:
     // SNAPSyncController.Command (common supertype of all SNAP protocol messages).
     val recoverySnapAdapter: TypedActorRef[SNAPSyncController.Command] =
       ctx.messageAdapter[SNAPSyncController.Command](WrappedExternal.apply)
+
+    /** How the SNAP header download checks headers on this chain: on proof-of-work chains, validated against the parent
+      * by the block-import header validator (`validators.blockHeaderValidator`), with sampled seals; parent-link only
+      * elsewhere.
+      */
+    private lazy val snapHeaderChainCheck: HeaderChainCheck =
+      val check = HeaderChainCheck.forChain(configBuilder.blockchainConfig, validators.blockHeaderValidator)
+      if HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig) && !check.validatesChain then
+        log.warn(
+          "SNAP header download on a proof-of-work chain checks parent links only: the block-import header validator " +
+            s"(${validators.blockHeaderValidator.getClass.getName}) does not separate the seal from the other rules"
+        )
+      check
 
     /** Load SNAP sync configuration with fallback to defaults */
     private def loadSnapSyncConfig(): SNAPSyncConfig =
@@ -1842,7 +1856,8 @@ object SyncController:
             scheduler,
             blacklist,
             syncController = snapAdapter,
-            failedFinalizationPivot = snapPivotFailedFinalization
+            failedFinalizationPivot = snapPivotFailedFinalization,
+            headerChainCheck = snapHeaderChainCheck
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2228,7 +2243,8 @@ object SyncController:
                   syncConfig = syncConfig,
                   replyTo = chainDownloaderAdapter,
                   maxConcurrentRequests = snapSyncConfig.chainBackfillConcurrentRequests,
-                  requestTimeout = snapSyncConfig.chainDownloadTimeout
+                  requestTimeout = snapSyncConfig.chainDownloadTimeout,
+                  headerChainCheck = snapHeaderChainCheck
                 )
               )
               // PR #1378: ChainDownloader must run until backfill completes — backoff, no cap.

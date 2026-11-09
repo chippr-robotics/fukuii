@@ -719,6 +719,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
+  /** Hash of the header at `BackfillBestHeader`, the tip of the header chain `ChainDownloader` stored: written in the
+    * same batch as the cursor whenever the download stores headers. The download continues from this header, and SNAP
+    * finalisation finds the downloaded chain's header at the pivot from it by parent hash, so neither depends on the
+    * number→hash index, which other writers (the pivot bootstrap) also update. A value that does not name a stored
+    * header at the cursor's height is stale; readers check that. Absent on a datadir whose headers were stored before
+    * this key existed.
+    */
+  def getBackfillBestHeaderHash(): Option[ByteString] =
+    get(Keys.BackfillBestHeaderHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillBestHeaderHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillBestHeaderHash, Hex.toHexString(hash.toArray))
+
   /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
     * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
     * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
@@ -755,6 +768,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       toRemove = Seq(
         Keys.BackfillTarget,
         Keys.BackfillBestHeader,
+        Keys.BackfillBestHeaderHash,
         Keys.BackfillBestBody,
         Keys.BackfillBestReceipt
       ),
@@ -847,6 +861,7 @@ object AppStateStorage:
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"
+    val BackfillBestHeaderHash = "BackfillBestHeaderHash"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealInvariant = "snap.heal.invariant"

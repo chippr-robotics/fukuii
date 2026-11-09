@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -54,7 +55,8 @@ final private[snap] case class ChainDownloaderCall(
     maxConcurrentRequests: Int,
     requestTimeout: FiniteDuration,
     deferBodiesAndReceipts: Boolean,
-    emptyHeaderBackoff: Option[FiniteDuration]
+    emptyHeaderBackoff: Option[FiniteDuration],
+    headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
 )
 
 /** Records each ChainDownloader the module builds and returns a behaviour that ignores everything. */
@@ -76,14 +78,16 @@ final private[snap] class RecordingChainDownloaderFactory extends ChildFactories
       cursorScanCap: Long,
       deferBodiesAndReceipts: Boolean,
       emptyHeaderBackoff: Option[FiniteDuration],
-      nowMs: () => Long
+      nowMs: () => Long,
+      headerChainCheck: HeaderChainCheck
   ): Behavior[ChainDownloader.Command] =
     calls += ChainDownloaderCall(
       replyTo,
       maxConcurrentRequests,
       requestTimeout,
       deferBodiesAndReceipts,
-      emptyHeaderBackoff
+      emptyHeaderBackoff,
+      headerChainCheck
     )
     Behaviors.ignore
 
@@ -121,6 +125,7 @@ private[snap] class StubSnapFinalizationState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def terminalTotalDifficulty: Option[BigInt] = None
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
