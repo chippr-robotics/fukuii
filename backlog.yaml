@@ -1958,13 +1958,16 @@ items:
   - id: B-179
     title: BaseFeeCalculator applies the MIN_BASE_FEE floor only on the decrease path; ECIP-1111 requires it on every path, fork block included
     priority: P2
-    status: open
+    status: dropped
     area: consensus
     size: S
     opened: 2026-11-09
+    closed: 2026-11-09
     refs: [B-167]
     links: {}
-    notes: Equivalent while floor == INITIAL_BASE_FEE == 1 gwei; ECIP-1111 vector MIN_BASE_FEE > INITIAL_BASE_FEE would fail. ECIP also wants INITIAL_BASE_FEE in chain config (code constant today). forge.
+    notes: |-
+      Equivalent while floor == INITIAL_BASE_FEE == 1 gwei; ECIP-1111 vector MIN_BASE_FEE > INITIAL_BASE_FEE would fail. ECIP also wants INITIAL_BASE_FEE in chain config (code constant today). forge.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
   - id: B-180
     title: eth_simulateV1 inline EIP-4788/EIP-2935 writes differ from import on ETH (4788 creates an absent account, 2935 self-deploys at Prague)
     priority: P2
