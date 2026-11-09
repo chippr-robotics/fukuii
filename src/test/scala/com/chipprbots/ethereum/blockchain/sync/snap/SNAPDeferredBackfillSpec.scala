@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.ledger.AncestorBlockHashes
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -154,8 +155,15 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     val pivot: BigInt = BigInt(10_000)
     val root: ByteString = ByteString(Array.fill(32)(0x11.toByte))
 
-    def start(cfg: SNAPSyncConfig, withAncestors: Boolean = false): TypedActorRef[SNAPSyncController.Command] =
-      val genesis = Fixtures.Blocks.Genesis.header
+    /** `genesis` and `terminalTotalDifficulty` default to the ETC genesis and no terminal TD; every header below the
+      * pivot copies the genesis difficulty.
+      */
+    def start(
+        cfg: SNAPSyncConfig,
+        withAncestors: Boolean = false,
+        genesis: BlockHeader = Fixtures.Blocks.Genesis.header,
+        terminalTotalDifficulty: Option[BigInt] = None
+    ): TypedActorRef[SNAPSyncController.Command] =
       blockchainWriter.save(
         Block(genesis, BlockBody.empty),
         Nil,
@@ -198,7 +206,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           system.classicSystem.scheduler,
           CacheBasedBlacklist.empty(100),
           parent.ref,
-          childFactories = monitoredChildren
+          childFactories = monitoredChildren,
+          terminalTotalDifficultyOverride = terminalTotalDifficulty
         )
       )
       eventually(pollsAnswered.get() should be >= 1)
@@ -366,6 +375,31 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(
         selectionEstimate
       )
+    }
+
+  // #1654: Platåberget (terminal TD 0, genesis difficulty 0). The header download stores the exact weight, 0, at every
+  // header; the floor rejects 0 at every height above 1, and the selection-time check "above 1000x the genesis TD" is
+  // `> 0`. So the hold reached the pivot and finalisation still wrote the block-number proxy (`td = pivot`) over 0.
+  it should "finalise with the genesis weight, not the block-number proxy, on a chain that was PoS from genesis" taggedAs UnitTest in new Fixture:
+    withSnapLogs { logs =>
+      val posGenesis: BlockHeader = Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty.Zero)
+      val snap: TypedActorRef[Command] =
+        start(cfg(defer = true), withAncestors = true, genesis = posGenesis, terminalTotalDifficulty = Some(BigInt(0)))
+      awaitProcessed(snap)
+      eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+      snap ! SNAPSyncController.HealingRootUnservable(root)
+      awaitProcessed(snap)
+      appStateStorage.isSnapSyncDone() shouldBe false // holding for the headers
+
+      val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+      pivotHeader.difficulty shouldBe Difficulty.Zero
+      storeExactPivotWeight(pivotHeader, BigInt(0))
+      appStateStorage.putBackfillBestHeader(pivot).commit()
+      snap ! SNAPSyncController.HeaderHoldTick
+      awaitFinalized()
+
+      logs.awaitLine("SNAP finalize pivot TD") should include("source=GENESIS_WEIGHT")
+      blockchainReader.getChainWeightByHash(pivotHeader.hash).map(_.totalDifficulty.value) shouldBe Some(BigInt(0))
     }
 
   it should "be unchanged with the switch off: the downloader starts during state sync, before finalisation" taggedAs UnitTest in new Fixture:

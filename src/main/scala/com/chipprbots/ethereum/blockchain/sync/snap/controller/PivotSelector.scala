@@ -6,6 +6,7 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import scala.concurrent.duration.*
 
+import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
@@ -38,6 +39,9 @@ private[snap] trait PivotSelectorState:
   var clHintArrivedAtMs: Option[Long]
   var bootstrapRetryCount: Int
   def isPoSChain: Boolean
+
+  /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
+  def terminalTotalDifficulty: Option[BigInt]
   def bigIntReverseOrdering: Ordering[BigInt]
   def BootstrapCheckKey: String
   def peerEventArms: PartialFunction[Command, Behavior[Command]]
@@ -404,17 +408,21 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
   ): Unit =
     val pivotHash = header.hash
     // Priority:
+    //   (0) A chain that was PoS from genesis (Platåberget): the genesis weight, exact at every height (#1654). The
+    //       rest of this cascade would store the block-number proxy there.
     //   (1) Real cumulative TD already in DB (ChainDownloader has backfilled it) — never overwrite.
     //   (2) Peer-interpolated TD from a connected ETH68 peer — accurate to <0.0005% for typical gaps.
     //       The old ETH68_BOOTSTRAP approach stored the peer's tip TD directly, inflating every
     //       subsequent block by (peerHead − pivot) × avgDifficulty. Interpolation avoids that by
-    //       scaling to the pivot height.
+    //       scaling to the pivot height. A post-merge pivot takes the peer's TD unscaled (#1654).
     //   (3) Block-number proxy — last resort when no ETH68 peers are connected yet (very early startup).
+    val reader = stateIngest.chainReader
     val (estimatedTotalDifficulty, tdSource) =
-      stateIngest.chainReader
-        .getChainWeightByHash(pivotHash)
-        .map(cw => (cw.totalDifficulty.value, "REAL_PIVOT_TD"))
-        .orElse(calibratePivotTD(pivotBlockNumber).map(td => (td, "PEER_INTERPOLATED_TD")))
+      HeadChainWeight
+        .posFromGenesisWeight(terminalTotalDifficulty, reader)
+        .map(w => (w.totalDifficulty.value, "GENESIS_WEIGHT"))
+        .orElse(reader.getChainWeightByHash(pivotHash).map(cw => (cw.totalDifficulty.value, "REAL_PIVOT_TD")))
+        .orElse(calibratePivotTD(header).map(td => (td, "PEER_INTERPOLATED_TD")))
         .getOrElse {
           val genesisTD: BigInt = stateIngest.chainReader
             .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)

@@ -30,6 +30,9 @@ private[snap] trait SnapFinalizationState:
   def healedCodeHashes: mutable.LinkedHashSet[ByteString]
   def chainDownloaderReplyAdapter: TypedActorRef[ChainDownloader.Done.type]
 
+  /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
+  def terminalTotalDifficulty: Option[BigInt]
+
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
 
@@ -260,6 +263,10 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           //   - NoExact (the parent has no plausible weight): an ESTIMATE, in this order: the selection-time estimate if
           //     it exceeds 1000x the genesis TD (which rejects a genesis or block-number proxy), a peer interpolation now,
           //     the block-number proxy. Before #1654 the first of these was logged as REAL_DB_TD.
+          //   - NoExact on a chain that was PoS from genesis (Platåberget), even with the hold: the floor rejects every
+          //     weight there, and at genesis difficulty 0 the 1000x check is `> 0`, so the cascade above replaced the
+          //     header download's exact 0 with the pivot number. The genesis weight is exact at every height: it goes
+          //     first (#1654).
           val genesisBlockTD: BigInt = stateIngest.chainReader
             .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
@@ -271,12 +278,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
               case HeadChainWeight.Status.Derivable(_, exact) =>
                 (exact.totalDifficulty.value, "DERIVED_FROM_PARENT")
               case HeadChainWeight.Status.NoExact =>
-                reader
-                  .getChainWeightByHash(pivotHash)
-                  .map(_.totalDifficulty.value)
-                  .filter(_ > genesisBlockTD * BigInt(1000))
-                  .map(td => (td, "PIVOT_SELECTION_ESTIMATE"))
-                  .orElse(calibratePivotTD(pivot).map(td => (td, "PEER_INTERPOLATED_TD")))
+                HeadChainWeight
+                  .posFromGenesisWeight(terminalTotalDifficulty, reader)
+                  .map(w => (w.totalDifficulty.value, "GENESIS_WEIGHT"))
+                  .orElse(
+                    reader
+                      .getChainWeightByHash(pivotHash)
+                      .map(_.totalDifficulty.value)
+                      .filter(_ > genesisBlockTD * BigInt(1000))
+                      .map(td => (td, "PIVOT_SELECTION_ESTIMATE"))
+                  )
+                  .orElse(calibratePivotTD(pivotHeader).map(td => (td, "PEER_INTERPOLATED_TD")))
                   .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
           ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
           stateIngest.chainWriter

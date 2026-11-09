@@ -26,7 +26,9 @@ import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.CalibrateChainWeightNowCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterChainWeightCalibrationTargetCmd
+import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 // scalastyle:off magic.number
@@ -629,7 +631,10 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       networkPeerManager.expectNoMessage(200.millis)
     )
 
-  it should "still run the estimate path when the post-merge head is the SNAP pivot itself (no parent weight)" taggedAs (
+  // The estimate path still runs when the post-merge head is the SNAP pivot itself (no parent weight); only the value
+  // changes (H6(1)). Before, this test pinned Tier 1's linear interpolation, SepoliaFrozenTD * P / (P + 53): every
+  // block past the merge adds 0, so that is below the frozen TD every post-merge block carries.
+  it should "write Tier 1 unscaled at difficulty 0: a post-merge SNAP pivot head takes the peer TD as is" taggedAs (
     UnitTest,
     SyncTest
   ) in
@@ -639,14 +644,31 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
         saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, pivotEstimate, length = 1, difficulty = BigInt(0))
       drainRegistration()
 
-      val peerMaxBlock: BigInt = PoSPivot + 53
       syncController ! SyncController.WrappedSyncProtocol(
-        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, peerMaxBlock)
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, PoSPivot + 53)
       )
 
-      // Unchanged from before #1654: Tier 1's linear interpolation.
+      blockchainReader.getChainWeightByHash(chain.head.hash).get.totalDifficulty.value shouldBe SepoliaFrozenTD
+    )
+
+  it should "still scale Tier 1 on an ETC-like head (difficulty > 0), the same scenario otherwise" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    (new RegularSyncSetup:
+      // The H6(1) test above at Mordor's difficulty: every ETC and Mordor block carries at least 131072, so this path
+      // is ETC's, and it is unchanged.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 1, difficulty = MordorDifficulty)
+      drainRegistration()
+
+      val peerTD: BigInt = MordorHeadTD
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(peerTD, PoSPivot + 53)
+      )
+
       blockchainReader.getChainWeightByHash(chain.head.hash).get.totalDifficulty.value shouldBe
-        SepoliaFrozenTD * PoSPivot / peerMaxBlock
+        peerTD * PoSPivot / (PoSPivot + 53)
     )
 
   // ─── #1654: the chain-weight marker, and the seed as a base anchor (H6(2)) ─
@@ -705,6 +727,64 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       withSeed(s"${hex(chain.last.hash)}:${MordorHeadTD * 2}")(drainRegistration())
 
       chain.map(h => blockchainReader.getChainWeightByHash(h.hash)) shouldBe before
+    )
+
+  // ─── #1654: a chain that was PoS from genesis (Platåberget: terminal TD 0, genesis difficulty 0) ─────────────────
+  //
+  // Every block's weight is the genesis weight, 0. The floor rejects it at every height above 1, so the head is
+  // NoExact, and at genesis weight 0 the estimate path's "above 1000x the genesis weight" gate is `> 0`.
+
+  "#1654 timed calibration on a chain that was PoS from genesis" should
+    "write the genesis weight over an estimate, whatever the peer sends, and schedule no retry" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in
+    (new PosFromGenesisSetup:
+      // SNAP pivot P stored the block-number proxy (`td = P`, BLOCK_NUMBER_PROXY) and P+1 was imported on top of it.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 2, difficulty = BigInt(0))
+      val head: BlockHeader = chain.last
+      def headTD: BigInt = blockchainReader.getChainWeightByHash(head.hash).get.totalDifficulty.value
+      headTD shouldBe PoSPivot
+      drainRegistration()
+
+      // Tier 1 with a positive peer TD. Before, the gate `> 1000 x 0` let `5 * (P+1) / (P+11)` = 4 through.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(5), PoSPivot + 11)
+      )
+      headTD shouldBe BigInt(0)
+      // Tier 2, and Tier 3 (pure ETH69). Before, Tier 3 found no anchor above the floor and retried every 30 minutes.
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(SepoliaFrozenTD, BigInt(0))
+      )
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.CalibrateChainWeightFromPeer(BigInt(0), BigInt(0))
+      )
+      headTD shouldBe BigInt(0)
+      testScheduler.timePasses(30.minutes)
+      networkPeerManager.expectNoMessage(200.millis)
+    )
+
+  // The seed asks the same HeadChainWeight.posFromGenesis. The one config on which that differs from the
+  // `terminalTotalDifficulty.contains(0)` the seed asked before: a hive-style genesis whose terminal TD equals its
+  // (non-zero) difficulty. Merged at genesis all the same, so every block weighs the genesis difficulty and a seed
+  // is refused.
+  "-Dfukuii.seed-chain-weights on a chain that was PoS from genesis" should
+    "be refused by the same rule, also where the terminal TD equals a non-zero genesis difficulty" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in
+    (new PosFromGenesisSetup:
+      override def genesisDifficulty: BigInt = BigInt(131072)
+      override def terminalTD: BigInt = BigInt(131072)
+      // A SNAP pivot whose parent has no weight (a base), with a plausible seed value: before, this seed was applied.
+      val chain: Vector[BlockHeader] =
+        saveLinkedChain(BlockHash(fakeMissingHash), PoSPivot, PoSPivot, length = 3, difficulty = BigInt(0))
+      val before: Vector[Option[ChainWeight]] = chain.map(h => blockchainReader.getChainWeightByHash(h.hash))
+      withSeed(s"${hex(chain.head.hash)}:$SepoliaFrozenTD")(drainRegistration())
+
+      chain.map(h => blockchainReader.getChainWeightByHash(h.hash)) shouldBe before
+      storagesInstance.storages.appStateStorage.getChainWeightReconcileProgress() shouldBe None
     )
 
   private def withSeed[A](spec: String)(body: => A): A =
@@ -787,13 +867,17 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
           networkPeerManager.ref,
           blacklist,
           syncConfig,
-          this,
+          chainConfigBuilder,
           externalSchedulerOpt = Some(system.scheduler),
           // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
           chainWeightReconcileOn = false
         )
       )
     )
+
+    /** The chain config SyncController reads: this setup's (no terminal TD, as on ETC) unless a subclass overrides it.
+      */
+    def chainConfigBuilder: BlockchainConfigBuilder = this
 
     // Store genesis so blockchainReader.genesisHeader works (needed for calibration plausibility gate)
     blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header).commit()
@@ -908,4 +992,25 @@ class ChainWeightCalibrationSpec extends AnyFlatSpec with Matchers:
       setBestBlockHeader(bestHdr)
 
     def cleanup(): Unit = Await.result(system.terminate(), 10.seconds)
+
+  /** A chain merged at genesis (#1654): terminal TD `terminalTD`, at or below the difficulty of a genesis stored as
+    * GenesisDataLoader stores it (weight = its difficulty). It replaces the ETC genesis the base setup indexes at
+    * height 0. By default Platåberget's shape: both 0.
+    */
+  trait PosFromGenesisSetup extends RegularSyncSetup:
+    def genesisDifficulty: BigInt = BigInt(0)
+    def terminalTD: BigInt = BigInt(0)
+
+    private val baseChainConfig: BlockchainConfig = blockchainConfig
+    private lazy val posChainConfigBuilder: BlockchainConfigBuilder =
+      new BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        implicit override def blockchainConfig: BlockchainConfig =
+          baseChainConfig.copy(terminalTotalDifficulty = Some(terminalTD))
+    override def chainConfigBuilder: BlockchainConfigBuilder = posChainConfigBuilder
+
+    val posGenesis: BlockHeader = Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty(genesisDifficulty))
+    blockchainWriter
+      .storeBlockHeader(posGenesis)
+      .and(blockchainWriter.storeChainWeight(posGenesis.hash, ChainWeight.totalDifficultyOnly(genesisDifficulty)))
+      .commit()
 // scalastyle:on magic.number

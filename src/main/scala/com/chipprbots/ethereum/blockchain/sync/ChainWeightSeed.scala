@@ -23,9 +23,10 @@ import com.chipprbots.ethereum.utils.Hex
   * it from genesis.
   *
   * A seed is trusted, not proven: the seeded pass does not set the marker, and the pass after it checks every weight
-  * from genesis once the headers are in, the seeded one included. On a chain that was PoS from genesis (terminal TD 0)
-  * every seed is refused: the true weight is the genesis weight at every height, the pass derives it, and only a wrong
-  * seed could pass the checks here.
+  * from genesis once the headers are in, the seeded one included. On a chain that was PoS from genesis
+  * ([[HeadChainWeight.posFromGenesis]]: terminal TD at or below the genesis difficulty, e.g. Platåberget's 0) every
+  * seed is refused: the true weight is the genesis weight at every height, the pass derives it, and only a wrong seed
+  * could pass the checks here.
   *
   * Where the value comes from: a client that still reports total difficulty, for the base block (the lowest block with
   * a weight, usually the SNAP pivot), not the head. core-geth does. go-ethereum dropped `totalDifficulty` from its
@@ -63,7 +64,8 @@ object ChainWeightSeed:
 
   /** Every entry of `spec`, in order. The caller holds the chain insert lock exclusively and runs it inside
     * `ChainWeightReconcile.Epoch.supersede`. Each accepted seed is one small batch: the anchor weight, the marker taken
-    * away, and the pass's saved place set at the base.
+    * away, and the pass's saved place set at the base. `posFromGenesis` is [[HeadChainWeight.posFromGenesis]] for the
+    * configured terminal TD.
     */
   def apply(
       spec: String,
@@ -73,13 +75,13 @@ object ChainWeightSeed:
       posFromGenesis: Boolean
   ): Seq[Outcome] =
     parse(spec).map {
-      // A chain PoS from genesis (terminal TD 0): every weight is the genesis weight, which the plausibility floor
-      // cannot accept above height 0, and a seed has nothing to add to it (beacon W4).
+      // A chain PoS from genesis (terminal TD at or below the genesis difficulty): every weight is the genesis weight,
+      // which the plausibility floor cannot accept above height 0, and a seed has nothing to add to it (beacon W4).
       case Right((hash, td)) if posFromGenesis =>
         Outcome.Refused(
           s"${Hex.toHexString(hash.toArray)}:$td",
-          "this chain is PoS from genesis (terminal total difficulty 0): every block's weight is the genesis weight, " +
-            "and the chain-weight pass derives it"
+          "this chain is PoS from genesis (terminal total difficulty at or below the genesis difficulty): every " +
+            "block's weight is the genesis weight, and the chain-weight pass derives it"
         )
       case Right((hash, td)) => seed(hash, td, reader, writer, appState)
       case Left(refused)     => refused

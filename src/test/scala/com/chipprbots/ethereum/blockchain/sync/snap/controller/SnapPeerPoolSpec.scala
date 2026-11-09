@@ -14,9 +14,12 @@ import scala.concurrent.duration.*
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -30,8 +33,11 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
@@ -76,7 +82,8 @@ private[snap] class StubSnapPeerPoolState(
   def flatSlotStorage: FlatSlotStorage = notUsed("flatSlotStorage")
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = notUsed("snapValidationEc")
-  def blockchainReader: BlockchainReader = notUsed("blockchainReader")
+  var reader: Option[BlockchainReader] = None
+  def blockchainReader: BlockchainReader = reader.getOrElse(notUsed("blockchainReader"))
   def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   def syncController: ActorRef[SyncProtocol.SyncControllerReply] = notUsed("syncController")
@@ -211,4 +218,29 @@ class SnapPeerPoolSpec extends AnyFlatSpec with Matchers:
     h.call(_.pollHandshakedPeers())
 
     h.peerManager.receiveAll() shouldBe Seq(NetworkPeerManagerActor.GetHandshakedPeersCmd(h.adapter.ref))
+  }
+
+  // #1654 H6(1): calibratePivotTD hands the pivot HEADER to HeadChainWeight.bestPeerEstimate, so a post-merge pivot
+  // (difficulty 0) takes the peer's TD as is, and a PoW pivot at the same height is scaled as before.
+  it should "estimate a post-merge pivot's TD as the peer TD unscaled, and scale a PoW pivot" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig())
+    val chain = new EphemBlockchainTestSetup with TestSyncConfig {}
+    val genesis = Fixtures.Blocks.Genesis.header
+    val genesisWeight = ChainWeight.totalDifficultyOnly(genesis.difficulty.value)
+    chain.blockchainWriter
+      .storeBlockHeader(genesis)
+      .and(chain.blockchainWriter.storeChainWeight(genesis.hash, genesisWeight))
+      .commit()
+    h.module.reader = Some(chain.blockchainReader)
+    // Sepolia's frozen TD, from the best ETH68 peer seen this session, 64 blocks above the pivot.
+    val frozenTD = BigInt("17000018015853232")
+    val pivot = BigInt(9500000)
+    h.module.bestEth68PeerForCalibration = Some((frozenTD, pivot + 64))
+    val postMerge = genesis.copy(number = BlockNumber(pivot), difficulty = Difficulty.Zero)
+    val pow = genesis.copy(number = BlockNumber(pivot))
+
+    var estimates: Seq[Option[BigInt]] = Nil
+    h.call(m => estimates = Seq(m.calibratePivotTD(postMerge), m.calibratePivotTD(pow)))
+
+    estimates shouldBe Seq(Some(frozenTD), Some(frozenTD * pivot / (pivot + 64)))
   }

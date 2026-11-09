@@ -1092,6 +1092,15 @@ object SyncController:
                   s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
                     s"source=DERIVED_FROM_PARENT attempt=$tdCalibrationAttempt"
                 )
+            case Some((head, HeadChainWeight.Status.NoExact)) =>
+              // #1654: on a chain that was PoS from genesis (Platåberget) the floor says NoExact at every height, yet
+              // the exact weight is known: the genesis weight. No terminal TD on ETC/Mordor: the estimate, as before.
+              HeadChainWeight.posFromGenesisWeight(
+                configBuilder.blockchainConfig.terminalTotalDifficulty,
+                blockchainReader
+              ) match
+                case Some(exact) => calibrateToGenesisWeight(head, exact, peerTD, peerMaxBlock)
+                case None        => calibrateChainWeightEstimate(peerTD, peerMaxBlock)
             case _ => calibrateChainWeightEstimate(peerTD, peerMaxBlock)
           Behaviors.same
 
@@ -2153,11 +2162,12 @@ object SyncController:
       * skipped here is tried again at the next start), and atomic against everything a pass writes. A seed writes only
       * the base's weight (vault N2): an accepted one supersedes the running pass, and the pass started next re-derives
       * the blocks above the base off this thread, then checks from genesis. Refused outright on a chain that was PoS
-      * from genesis (terminal TD 0).
+      * from genesis ([[HeadChainWeight.posFromGenesis]]: terminal TD at or below the genesis difficulty).
       */
     private def applyChainWeightSeeds(): Unit =
       Option(System.getProperty(ChainWeightSeed.Property)).filter(_.trim.nonEmpty).foreach { spec =>
-        val posFromGenesis = configBuilder.blockchainConfig.terminalTotalDifficulty.contains(BigInt(0))
+        val posFromGenesis =
+          HeadChainWeight.posFromGenesis(configBuilder.blockchainConfig.terminalTotalDifficulty, blockchainReader)
         ChainInsertLock.tryExclusive(SyncController.SeedLockWait) {
           chainWeightEpoch.supersede(
             ChainWeightSeed(spec, blockchainReader, blockchainWriter, appStateStorage, posFromGenesis)
@@ -2818,12 +2828,55 @@ object SyncController:
       }
       recentRootBootstrap = None
 
+    /** The best block of a chain that was PoS from genesis (#1654, [[HeadChainWeight.posFromGenesisWeight]]). Its
+      * weight is the genesis weight, exactly: write it if anything else is stored, and never estimate. Without this,
+      * the cascade below ran here: on Platåberget (genesis TD 0) its plausibility gate is `> 0`, so it wrote a peer's
+      * TD; and Tier 3 never finds an anchor above the floor, so it retried every 30 minutes until the chain-weight pass
+      * set the marker.
+      */
+    private def calibrateToGenesisWeight(
+        head: BlockHeader,
+        exact: ChainWeight,
+        peerTD: BigInt,
+        peerMaxBlock: BigInt
+    ): Unit =
+      val stored = blockchainReader.getChainWeightByHash(head.hash)
+      if stored.contains(exact) then
+        calibrationSucceeded = true
+        lastCalibrationSource = "GENESIS_WEIGHT"
+        log.info(
+          "TD_CALIBRATION_SKIPPED: block={} storedTD={} reason=GENESIS_WEIGHT (the chain was PoS from genesis: every " +
+            "block weighs the genesis weight); peer data td={} block={} not used",
+          head.number,
+          exact.totalDifficulty,
+          peerTD,
+          peerMaxBlock
+        )
+      else if writeCalibratedWeight(head, exact) then
+        calibrationSucceeded = true
+        lastCalibrationSource = "GENESIS_WEIGHT"
+        val before = stored.map(_.totalDifficulty.value.toString).getOrElse("none")
+        log.warn(
+          "CHAIN_WEIGHT_REPAIRED: block={} before={} after={} source=GENESIS_WEIGHT (the chain was PoS from genesis: " +
+            "every block weighs the genesis weight; peer data td={} block={} not used)",
+          head.number,
+          before,
+          exact.totalDifficulty,
+          peerTD,
+          peerMaxBlock
+        )
+        log.info(
+          s"TD_CALIBRATION_SUMMARY: block=${head.number} before=$before after=${exact.totalDifficulty} " +
+            s"source=GENESIS_WEIGHT attempt=$tdCalibrationAttempt"
+        )
+
     /** The calibration cascade, for a best block with no exact stored weight (#1654: `HeadChainWeight.Status.NoExact`):
       * a pivot whose parent headers are not backfilled, or a chain built on a proxy base. Tiers 1 and 2 write an
       * ESTIMATE and log it as one.
       *   - Tier 1 (peerTD > 0, peerMaxBlock > 0): linear interpolation `peerTD * ourBest / peerMaxBlock`. The pair
       *     comes from a NewBlock or from an ETH68 STATUS plus the peer's probed height; either way the result is a
-      *     guess.
+      *     guess. A post-merge best block (difficulty 0) takes the peer's TD unscaled (#1654 H6(1),
+      *     [[HeadChainWeight.peerEstimate]]).
       *   - Tier 2 (peerTD > 0, peerMaxBlock = 0): the peer's TD as is (ETH68 STATUS only).
       *   - Tier 3 (peerTD = 0): pure ETH69 sentinel — accumulate from a plausible local anchor
       *     ([[calibrateTDFromLocalChain]]).
@@ -2836,9 +2889,7 @@ object SyncController:
             .getChainWeightByHash(blockchainReader.genesisHeader.hash)
             .map(_.totalDifficulty.value)
             .getOrElse(blockchainReader.genesisHeader.difficulty.value)
-          val calibratedTD =
-            if peerMaxBlock > BigInt(0) then peerTD * bestBlock.header.number.value / peerMaxBlock
-            else peerTD
+          val calibratedTD = HeadChainWeight.peerEstimate(bestBlock.header, peerTD, peerMaxBlock)
           val storedTD: BigInt = blockchainReader
             .getChainWeightByHash(bestBlock.header.hash)
             .map(_.totalDifficulty.value)

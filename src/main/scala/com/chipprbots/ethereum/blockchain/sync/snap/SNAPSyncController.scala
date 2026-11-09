@@ -99,7 +99,10 @@ private class SNAPSyncControllerImpl(
     intakeBudgetOverride: Option[SnapIntakeBudget] = None,
     // #1555: the pivot whose finalization failed in the previous SNAP controller (SyncController's HealingImpossible
     // restart), or None. On PoS, the accounts-complete recovery will not resume healing at or below it.
-    val failedFinalizationPivot: Option[BigInt] = None
+    val failedFinalizationPivot: Option[BigInt] = None,
+    // Test seam (#1654): the terminal total difficulty the pivot-weight writes read. None (production) reads the
+    // process-global chain config. Independent of isPoSChainOverride.
+    terminalTotalDifficultyOverride: Option[BigInt] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -294,6 +297,13 @@ private class SNAPSyncControllerImpl(
   val isPoSChain: Boolean =
     isPoSChainOverride.getOrElse(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
+    )
+
+  // #1654: read by the pivot-weight writes (PivotSelector, SnapFinalization). None on ETC and Mordor; on a chain that
+  // was PoS from genesis (Platåberget, 0) every block's weight is the genesis weight.
+  val terminalTotalDifficulty: Option[BigInt] =
+    terminalTotalDifficultyOverride.orElse(
+      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty
     )
 
   // The hubs implement `SnapSharedState` (spec 016 T041a).
@@ -1482,7 +1492,8 @@ object SNAPSyncController:
       childFactories: ChildFactories = ChildFactories.production,
       heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
       intakeBudgetOverride: Option[SnapIntakeBudget] = None,
-      failedFinalizationPivot: Option[BigInt] = None
+      failedFinalizationPivot: Option[BigInt] = None,
+      terminalTotalDifficultyOverride: Option[BigInt] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -1507,7 +1518,8 @@ object SNAPSyncController:
           childFactories,
           heapWatchdogStart,
           intakeBudgetOverride,
-          failedFinalizationPivot
+          failedFinalizationPivot,
+          terminalTotalDifficultyOverride
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.
