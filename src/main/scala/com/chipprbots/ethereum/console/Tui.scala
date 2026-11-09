@@ -172,11 +172,16 @@ class Tui(
     Duration.ofMillis(2 * config.statusPollIntervalMs + TuiStatusProbe.DefaultAskTimeout.toMillis)
 
   /** The next frame's state: the frame counter moves on (unless paused), and the latest snapshot, if any, applies, read
-    * at this TUI's clock, so a probe that stopped publishing shows ([[NodeStatusSnapshot.agedAt]]).
+    * at this TUI's clock, so a probe that stopped publishing shows ([[NodeStatusSnapshot.agedAt]]). Before the first
+    * snapshot this clock is the state's `now`, so the uptime counts while the node starts; the renderer reads no clock.
     */
   def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit =
     val now = clock.instant()
-    modify(_.nextFrame(snapshot.map(_.agedAt(now, snapshotStaleAfter))))
+    modify { s =>
+      snapshot match
+        case Some(polled) => s.nextFrame(Some(polled.agedAt(now, snapshotStaleAfter)))
+        case None         => s.nextFrame(None).copy(now = now)
+    }
 
   /** Render the TUI, unless the frame equals the last one written (FR-010).
     *

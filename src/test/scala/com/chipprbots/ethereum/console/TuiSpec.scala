@@ -437,3 +437,18 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.getState.syncStatus shouldBe "Unresponsive (sync controller)"
     finally tt.close()
   }
+
+  // prism, slice 2 review: until the first poll the state's `now` stayed at the TUI's start, so the uptime read 0 s
+  // while the node started. Until a snapshot is applied, the TUI's own clock moves it.
+  it should "count uptime on its own clock until the first status poll" taggedAs (UnitTest) in {
+    val clock = new TuiFixtures.TestClock(TuiFixtures.Now)
+    val tt = new TuiTestTerminal()
+    val tui = new Tui(TuiTestTerminal.config, () => tt.terminal, _ => Some(tt.processOutput), clock)
+    try
+      clock.advance(30)
+      tui.nextFrame(None)
+      tui.getState.uptimeSeconds shouldBe 30L
+      tui.nextFrame(Some(TuiFixtures.snapshot(current = 10, best = 20, now = TuiFixtures.Now.plusSeconds(31))))
+      tui.getState.uptimeSeconds shouldBe 31L
+    finally tt.close()
+  }
