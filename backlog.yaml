@@ -2046,3 +2046,13 @@ items:
     refs: [B-184]
     links: {}
     notes: "beacon review of #1781: BlockGeneratorSkeleton.baseFeeFields and the validator gate base fee on olympiaBlockNumber, which ETH configs set to London. Olympia is deferred and ETH EIP-1559 is canonical, so name the gate for London/EIP-1559. Also the applyEip2935 scaladoc (BlockExecution:1033-1036) describes only Olympia."
+  - id: B-187
+    title: Tests leave temp RocksDB dirs and .bin files behind; they filled WSL /tmp and broke a testEssential run
+    priority: P2
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-09
+    refs: []
+    links: {}
+    notes: "Find the test fixtures that create temp dirs without cleanup and delete them in afterAll. Workaround meanwhile: run tests with -Djava.io.tmpdir pointing at a disk-backed dir."
