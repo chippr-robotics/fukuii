@@ -30,6 +30,9 @@ class TuiUpdater(
 ) extends Logger:
 
   @volatile private var running = false
+
+  /** Frames that failed in a row; the loop gives up at [[TuiUpdater.MaxFailedFrames]]. */
+  private var failedFrames = 0
   private var updateThread: Option[Thread] = None
 
   /** Start the updater. */
@@ -90,16 +93,40 @@ class TuiUpdater(
     try
       while running && tui.isEnabled do
         val keepGoing =
-          try tick()
+          try
+            val more = tick()
+            failedFrames = 0
+            more
           catch
             case _: InterruptedException => false
-            case NonFatal(e) =>
-              log.error(s"Error in TUI update loop: ${e.getMessage}", e)
-              true
+            case NonFatal(e) => frameFailed(e)
         if !keepGoing then running = false
     finally running = false
 
+  /** A frame failed. A failure before the key wait is retried at once, so a repeated one is given up on: the terminal
+    * and the console logs go back, and the node keeps running. The first is logged with its stack, the repeats at
+    * DEBUG.
+    *
+    * @return
+    *   whether to keep looping
+    */
+  private def frameFailed(e: Throwable): Boolean =
+    failedFrames += 1
+    if failedFrames == 1 then log.error("Error in TUI update loop: {}", e.getMessage, e)
+    else log.debug("Error in TUI update loop again ({} in a row): {}", failedFrames, e.getMessage)
+    if failedFrames < TuiUpdater.MaxFailedFrames then true
+    else
+      tui.shutdown()
+      log.error(
+        "TUI update loop failed {} frames in a row; the terminal and standard logging are restored",
+        failedFrames
+      )
+      false
+
 object TuiUpdater extends Logger:
+
+  /** Frames that may fail in a row before the loop gives the terminal back. */
+  val MaxFailedFrames: Int = 10
 
   /** The `q` action: restore the terminal, then `exit`.
     *

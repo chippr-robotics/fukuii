@@ -265,3 +265,18 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       updater.isRunning shouldBe false
       tui.isEnabled shouldBe true // the node's shutdown hook restores it; a stop is not a failed read
   }
+
+  // prism, slice 2 review: a frame that failed before its key wait failed again at once, logging every time, for as long
+  // as it kept failing.
+  it should "give up, and give the terminal back, after repeated frame failures" taggedAs (UnitTest) in {
+    val calls = new AtomicInteger(0)
+    // Fails 50 times, then recovers: a loop that never gives up is still running at the end.
+    withUpdater(snapshots =
+      () => if calls.incrementAndGet() <= 50 then throw new IllegalStateException("boom") else Some(snapshot)
+    ) { (updater, tui, _) =>
+      updater.start()
+      eventually(timeout(5.seconds), interval(10.millis))(updater.isRunning shouldBe false)
+      tui.isEnabled shouldBe false
+      calls.get should be < 50
+    }
+  }
