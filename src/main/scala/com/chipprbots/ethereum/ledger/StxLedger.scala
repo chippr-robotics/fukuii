@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
 import com.chipprbots.ethereum.vm.OutOfGas
@@ -283,6 +284,9 @@ class StxLedger(
     *
     * With a tracer, `onTxStart` / `onTxEnd` fire around the frame, and the tracer rides on a VM of its own, as for
     * [[simulateTransactionWithTracer]].
+    *
+    * The frame's [[TxResult]] comes with, beside it, whether a pre-Homestead creation could not pay its code deposit
+    * ([[StxLedger.CallOutcome]]).
     */
   def simulateCall(
       stx: SignedTransactionWithSender,
@@ -290,13 +294,16 @@ class StxLedger(
       world: Option[InMemoryWorldStateProxy],
       options: StxLedger.CallOptions,
       tracer: Option[ExecutionTracer]
-  ): Either[StxLedger.CallPreCheckError, TxResult] =
+  ): Either[StxLedger.CallPreCheckError, StxLedger.CallOutcome] =
     val world1 = world.getOrElse(worldAt(blockHeader))
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
       tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString)))
-      TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
+      StxLedger.CallOutcome(
+        TxResult(result.world, gasUsed, result.logs, result.returnData, result.error),
+        codeDepositShortfall = result.codeDepositShortfall
+      )
     }
 
   /** eth_estimateGas on the message-call path (go-ethereum `eth/gasestimator.Estimate`).
@@ -325,13 +332,16 @@ class StxLedger(
         if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)") else PreCheck(e.message)
       }
       atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
-      // gasestimator.Estimate: a failure at the ceiling that is not out-of-gas is the answer (a revert with its data);
-      // out of gas at the ceiling is "gas required exceeds allowance"
+      // gasestimator.Estimate (gasestimator.go:139-143): a failure at the ceiling that is not out-of-gas is the answer
+      // (a revert with its data); out of gas at the ceiling is "gas required exceeds allowance". A pre-Homestead
+      // creation short of its code deposit is such a failure: go-ethereum's (and core-geth's) `create` returns
+      // ErrCodeStoreOutOfGas as the message's error while it keeps the gas and the state.
       _ <- atHi.error match
-        case Some(RevertOccurs) => Left(Reverted(atHi.returnData))
-        case Some(OutOfGas)     => Left(PreCheck(s"gas required exceeds allowance ($hi)"))
-        case Some(other)        => Left(Failed(other))
-        case None               => Right(())
+        case Some(RevertOccurs)                => Left(Reverted(atHi.returnData))
+        case Some(OutOfGas)                    => Left(PreCheck(s"gas required exceeds allowance ($hi)"))
+        case Some(other)                       => Left(Failed(other))
+        case None if atHi.codeDepositShortfall => Left(Failed(CodeStoreOutOfGas))
+        case None                              => Right(())
     yield
       val lowLimit = estimationLowerBound(stxHi, blockHeader)
       if hi < lowLimit then hi
@@ -408,8 +418,8 @@ class StxLedger(
       blockPreparator.totalGasToRefundWithAuthorizations(stx.tx, withRefund, authRefund, blockHeader.number.value)
 
   /** go-ethereum `StateTransition.preCheck` (London fee checks, blob checks, set-code checks), `buyGas`'s balance check
-    * and `execute`'s intrinsic-gas and EIP-7623 floor checks, with nonce and EOA checks skipped as a call skips them.
-    * Messages are geth's (core/error.go), addresses EIP-55 encoded as geth prints them.
+    * and `execute`'s intrinsic-gas, EIP-7623 floor and top-frame transfer checks, with nonce and EOA checks skipped as
+    * a call skips them. Messages are geth's (core/error.go), addresses EIP-55 encoded as geth prints them.
     */
   private[ledger] def callPreCheck(
       stx: SignedTransactionWithSender,
@@ -429,6 +439,12 @@ class StxLedger(
     val (blobGas, blobFeeCap) = tx match
       case bt: BlobTransaction => (BigInt(bt.blobVersionedHashes.size) * StxLedger.GasPerBlob, bt.maxFeePerBlobGas)
       case _                   => (BigInt(0), BigInt(0))
+    // the blob base fee the frame's upfront charge uses (BlockPreparator.updateSenderAccountBeforeExecution)
+    def blobBaseFee: BigInt = options.blobBaseFeeOverride.getOrElse(
+      blockHeader.excessBlobGas
+        .map(BlobGasUtils.getBlobGasPrice(_, blockHeader.unixTimestamp, blockchainConfig))
+        .getOrElse(BigInt(1))
+    )
     for
       // London: skipped when both caps are 0 under NoBaseFee
       _ <- blockHeader.baseFee match
@@ -457,20 +473,14 @@ class StxLedger(
             bt.blobVersionedHashes.size > StxLedger.BlobTxMaxBlobs
           then Left(E("blob transaction has too many blobs"))
           else if badVersion.isDefined then Left(E(s"blob ${badVersion.get} has invalid hash version"))
-          else
-            val blobBaseFee = options.blobBaseFeeOverride.getOrElse(
-              blockHeader.excessBlobGas
-                .map(BlobGasUtils.getBlobGasPrice(_, blockHeader.unixTimestamp, blockchainConfig))
-                .getOrElse(BigInt(1))
-            )
-            if blobFeeCap != 0 && blobFeeCap < blobBaseFee then
-              Left(
-                E(
-                  s"max fee per blob gas less than block blob gas fee: address $address " +
-                    s"blobGasFeeCap: $blobFeeCap, blobBaseFee: $blobBaseFee"
-                )
+          else if blobFeeCap != 0 && blobFeeCap < blobBaseFee then
+            Left(
+              E(
+                s"max fee per blob gas less than block blob gas fee: address $address " +
+                  s"blobGasFeeCap: $blobFeeCap, blobBaseFee: $blobBaseFee"
               )
-            else Right(())
+            )
+          else Right(())
         case sct: SetCodeTransaction if sct.authorizationList.isEmpty =>
           Left(E(s"EIP-7702 transaction with empty auth list (sender $address)"))
         case _ => Right(())
@@ -498,6 +508,18 @@ class StxLedger(
             case Some(f) if gas < f =>
               Left(E(s"insufficient gas for floor data gas cost: have $gas, want $f"))
             case _ => Right(())
+      // execute's top-frame transfer check (state_transition.go:765-773): after buyGas has taken the upfront charge,
+      // gas * effective price + blob gas * blob base fee, the sender must still cover the value. buyGas reserved at
+      // least that much whenever the blob base fee is within the blob fee cap, which CallTxBuilder ensures as geth's
+      // applyMessage does, so this is go-ethereum's safety net: the frame's InvalidCall is never what a call reports.
+      _ <-
+        if tx.value == 0 then Right(())
+        else
+          val upfront =
+            tx.gasLimit.value * Transaction.effectiveGasPrice(tx, blockHeader.baseFee) + blobGas * blobBaseFee
+          if world.getBalance(sender).toBigInt - upfront < tx.value then
+            Left(E(s"insufficient funds for transfer: address $address"))
+          else Right(())
     yield ()
 
   /** The calldata floor of `stx` where it is a validity rule (EIP-7623 from Prague / ETC Olympia, EIP-7976 at
@@ -568,8 +590,8 @@ class StxLedger(
         // `eth_estimateGas`. Treating it as success here made the binary search converge on the minimum gas to
         // merely RUN the init code, omitting `len(runtimeCode) * G_codedeposit` from the estimate (measured:
         // hive graphql `04_eth_estimateGas_contractDeploy` returned 0xa959, expected 0x1b551 — short by exactly
-        // 343 * 200). `codeDepositShortfall` is read ONLY here; it is not a `ProgramError` and no consensus
-        // path sees it.
+        // 343 * 200). `codeDepositShortfall` is read only by the RPC (here, `estimateCallGas` and `simulateCall`);
+        // it is not a `ProgramError` and no consensus path sees it.
         if result.codeDepositShortfall then Some(StxLedger.CodeDepositShortfall)
         else result.error.map(StxLedger.VmFailure.apply)
       }
@@ -652,6 +674,17 @@ object StxLedger:
 
   object CallOptions:
     val Empty: CallOptions = CallOptions(Map.empty, None, skipExecutionGasCap = false)
+
+  /** What [[StxLedger.simulateCall]] ran: the frame's [[TxResult]] and, beside it, whether the message was a
+    * pre-Homestead creation that ran its init code but could not pay its code deposit.
+    *
+    * That creation is a consensus SUCCESS: Frontier keeps the gas and the state and stores no code, and its `error`
+    * stays `None` (`VM.saveNewContract`). So the flag must never ride on `TxResult`, which block execution and the
+    * receipts consume. Only the RPC reads it: go-ethereum's and core-geth's `create` return `ErrCodeStoreOutOfGas` as
+    * the message's error there, which eth_call answers as -32000 "contract creation code storage out of gas" with no
+    * data, eth_createAccessList puts in its `error`, and GraphQL's `call` reports as status 0.
+    */
+  final case class CallOutcome(txResult: TxResult, codeDepositShortfall: Boolean)
 
   /** A message call refused before execution, with go-ethereum's message. `gasShortfall` marks the intrinsic-gas check,
     * the one go-ethereum's estimator treats as "raise the gas limit" (gasestimator.go `execute`:

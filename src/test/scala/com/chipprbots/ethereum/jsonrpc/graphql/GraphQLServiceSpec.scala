@@ -145,8 +145,13 @@ class GraphQLServiceSpec
     val query: String =
       """{ block { call(data: {from: "0xda714fe079751fa7a1ad80b76571ea6ec52a446c", """ +
         """to: "0xabbb6bebfa05aa13e908eaa492bd7a8343760477"}) { data status gasUsed } } }"""
-    def callField(frame: Either[StxLedger.CallPreCheckError, TxResult]): ACursor =
-      stxLedger.simulateCall.expects(*, *, *, *, *).returning(frame)
+    def callField(
+        frame: Either[StxLedger.CallPreCheckError, TxResult],
+        codeDepositShortfall: Boolean = false
+    ): ACursor =
+      stxLedger.simulateCall
+        .expects(*, *, *, *, *)
+        .returning(frame.map(StxLedger.CallOutcome(_, codeDepositShortfall)))
       val (status, body) = service.execute(query, None, None).unsafeRunSync()
       status shouldBe 200
       body.hcursor.downField("data").downField("block").downField("call")
@@ -165,6 +170,12 @@ class GraphQLServiceSpec
     // success: the frame's output, and the estimate of the same message as gasUsed
     val ok: ACursor = callField(Right(TxResult(world, 21000, Nil, ByteString(1, 2), None)))
     (field(ok, "status"), field(ok, "data"), field(ok, "gasUsed")) shouldBe (("0x1", "0x0102", "0x5208"))
+    // a pre-Homestead creation short of its code deposit: go-ethereum's ErrCodeStoreOutOfGas makes result.Failed()
+    // true, with the init code's output and the gas it used (#1727)
+    val shortfall: ACursor =
+      callField(Right(TxResult(world, 41000, Nil, ByteString(3, 4), None)), codeDepositShortfall = true)
+    (field(shortfall, "status"), field(shortfall, "data"), field(shortfall, "gasUsed")) shouldBe
+      (("0x0", "0x0304", "0xa028"))
     // a pre-check failure is null, as geth returns the error instead of a result
     callField(
       Left(StxLedger.CallPreCheckError("intrinsic gas too low: have 1, want 21000"))

@@ -49,7 +49,7 @@ import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLScalars.*
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLTypes.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
-import com.chipprbots.ethereum.ledger.TxResult
+import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
@@ -313,16 +313,19 @@ object GraphQLSchema:
     * reaches the client. One difference: geth's `UsedGas` is never below the calldata floor (EIP-7623 / EIP-7976) and
     * this is the gas execution took. A successful frame keeps the estimate of the same message as `gasUsed`. A
     * pre-check failure is null.
+    *
+    * A pre-Homestead creation that cannot pay its code deposit is failed too, as go-ethereum's `ErrCodeStoreOutOfGas`
+    * makes it there: status 0 with the frame's output and gas.
     */
   private def callResult(
-      call: Either[JsonRpcError, TxResult],
+      call: Either[JsonRpcError, StxLedger.CallOutcome],
       gas: Either[JsonRpcError, EthInfoService.EstimateGasResponse]
   ): Option[GCallResult] =
-    (call, gas) match
-      case (Right(r), _) if r.vmError.isDefined => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
-      case (Right(r), Right(gasResp))           => Some(GCallResult(r.vmReturnData, gasResp.gas.toLong, 1L))
-      case (Right(r), Left(_))                  => Some(GCallResult(r.vmReturnData, 0L, 1L))
-      case (Left(_), _)                         => None
+    (call.map(o => (o.txResult, o.txResult.vmError.isDefined || o.codeDepositShortfall)), gas) match
+      case (Right((r, true)), _)            => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
+      case (Right((r, false)), Right(resp)) => Some(GCallResult(r.vmReturnData, resp.gas.toLong, 1L))
+      case (Right((r, false)), Left(_))     => Some(GCallResult(r.vmReturnData, 0L, 1L))
+      case (Left(_), _)                     => None
 
   // cast: dynamic GraphQL argument map returns Any; callers supply the expected type A
   private def asOption[A](v: Any): Option[A] = v match

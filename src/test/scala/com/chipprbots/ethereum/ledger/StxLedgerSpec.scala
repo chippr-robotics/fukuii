@@ -163,6 +163,100 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     totalRefunded shouldEqual vmResult.gasRemaining + expectedRefundCredit
     totalRefunded should be > vmResult.gasRemaining
 
+  /** go-ethereum `gasestimator.Estimate` (gasestimator.go:139-143) returns any failure at the ceiling that is not
+    * `ErrOutOfGas`. At the ceiling below, a pre-Homestead CREATE runs its init code but cannot pay the 200,000 deposit
+    * for 1,000 bytes: go-ethereum's (and core-geth's) `create` returns `ErrCodeStoreOutOfGas` as the message's `vmerr`
+    * while keeping the gas and the state, so the estimate fails with "contract creation code storage out of gas". The
+    * frame itself stays a consensus SUCCESS here (`error` None, see the pins above); only the estimator reads the
+    * shortfall.
+    */
+  it should "fail an estimate whose ceiling cannot pay a pre-Homestead code deposit, as go-ethereum does" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    val returns1000Bytes: ByteString = ByteString(Hex.decode("6103e86000f3")) // PUSH2 0x03e8, PUSH1 0, RETURN
+    val atCeiling: SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(60000), None, 0, returns1000Bytes), noSignature),
+      fromAddress
+    )
+    val estimate: Either[StxLedger.CallEstimateFailure, BigInt] =
+      stxLedger.estimateCallGas(atCeiling, block32Header, None, StxLedger.CallOptions.Empty)
+    estimate.left.toOption.collect { case StxLedger.CallEstimateFailure.Failed(error) =>
+      com.chipprbots.ethereum.jsonrpc.CallErrors.vmErrorMessage(error)
+    } shouldBe Some("contract creation code storage out of gas")
+
+  /** The message-call side of the same case: `simulateCall` hands the shortfall to the RPC beside the frame's result,
+    * and the result is the one block execution's frame gives, a success: `vmError` None, the gas kept. Nothing about it
+    * moves onto `TxResult`.
+    */
+  it should "report a pre-Homestead code-deposit shortfall beside the call's result, which stays a success" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    val returns1000Bytes: ByteString = ByteString(Hex.decode("6103e86000f3"))
+    val creation: SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(60000), None, 0, returns1000Bytes), noSignature),
+      fromAddress
+    )
+    val outcome: StxLedger.CallOutcome =
+      stxLedger.simulateCall(creation, block32Header, None, StxLedger.CallOptions.Empty, None).toOption.get
+    outcome.codeDepositShortfall shouldBe true
+    val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, None)
+    (outcome.txResult.vmError, outcome.txResult.gasUsed, outcome.txResult.vmReturnData, outcome.txResult.logs) shouldBe
+      ((None, viaTx.gasUsed, viaTx.vmReturnData, viaTx.logs))
+    outcome.txResult.gasUsed should be < BigInt(60000)
+    // with the gas for the deposit, no shortfall
+    val funded: SignedTransactionWithSender =
+      creation.copy(tx = creation.tx.copy(tx = Transaction.withGasLimit(GasAmount(400000))(creation.tx.tx)))
+    stxLedger
+      .simulateCall(funded, block32Header, None, StxLedger.CallOptions.Empty, None)
+      .toOption
+      .get
+      .codeDepositShortfall shouldBe
+      false
+
+  /** go-ethereum `stateTransition.execute` (state_transition.go:765-773): after `buyGas` has taken the upfront charge,
+    * the sender must still cover the top frame's value, else "insufficient funds for transfer: address <EIP-55>".
+    *
+    * Reached only when the upfront charge exceeds what `buyGas` reserved. `CallTxBuilder` never builds that (a zero
+    * blob fee cap lowers the blob base fee to 0, as geth's `applyMessage` does), so the options are built by hand: a
+    * zero `maxFeePerBlobGas` reserves no blob gas, and a blob base fee of 1 still takes 131,072 wei up front.
+    */
+  it should "refuse a value the sender cannot transfer after the upfront charge, as go-ethereum's execute does" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup:
+    val blobHash: BlobVersionedHash = BlobVersionedHash(ByteString(Hex.decode("01" + "00" * 31)))
+    val blobCall: BlobTransaction = BlobTransaction(
+      chainId = 3,
+      nonce = 0,
+      maxPriorityFeePerGas = 0,
+      maxFeePerGas = 0,
+      gasLimit = GasAmount(21000),
+      receivingAddress = Some(existingEmptyAccountAddres),
+      value = 5,
+      payload = ByteString.empty,
+      accessList = Nil,
+      maxFeePerBlobGas = 0,
+      blobVersionedHashes = List(blobHash)
+    )
+    val stx: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction(blobCall, noSignature), fromAddress)
+    def preCheck(blobBaseFee: BigInt): Either[StxLedger.CallPreCheckError, Unit] =
+      stxLedger.callPreCheck(
+        stx,
+        genesisHeader,
+        worldWithAccount,
+        StxLedger.CallOptions(Map.empty, Some(blobBaseFee), false)
+      )
+
+    // 10 wei: buyGas wants the value, 5; the upfront charge takes 131,072 * 1
+    preCheck(1) shouldBe Left(
+      StxLedger.CallPreCheckError(s"insufficient funds for transfer: address ${StxLedger.checksum(fromAddress)}")
+    )
+    // nothing taken up front: the 10 wei cover the 5 transferred
+    preCheck(0) shouldBe Right(())
+
   it should "correctly estimate gasLimit for value transfer transaction" taggedAs (
     UnitTest,
     StateTest
@@ -324,6 +418,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
     )
   )
 
+  val noSignature: ECDSASignature = ECDSASignature(0, 0, 0)
   val fromBalance: UInt256 = UInt256(10)
   val fromAddress: Address = Address(0)
   val startAccount: Account = Account.empty().increaseBalance(fromBalance)
