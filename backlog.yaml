@@ -439,7 +439,7 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:26Z
-      heartbeat: 2026-11-09T18:55:26Z
+      heartbeat: 2026-11-09T18:55:42Z
       branch: feat/027-s2-motion
   - id: B-040
     title: "Spec 027 slice 3: views, layout, alerts"
@@ -468,7 +468,7 @@ items:
       by: dev-node
       agent: herald
       since: 2026-11-09T18:55:39Z
-      heartbeat: 2026-11-09T18:55:39Z
+      heartbeat: 2026-11-09T18:55:42Z
       branch: feat/027-s4a-peer-scoring
     notes: herald owns it. Needs only staging, not slices 1-3.
   - id: B-042
@@ -510,7 +510,7 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:29Z
-      heartbeat: 2026-11-09T18:55:29Z
+      heartbeat: 2026-11-09T18:55:42Z
       branch: feat/027-s2-motion
     notes: Fold into slice 1 or 2, or a fix PR.
   - id: B-045
@@ -527,7 +527,7 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:32Z
-      heartbeat: 2026-11-09T18:55:32Z
+      heartbeat: 2026-11-09T18:55:42Z
       branch: feat/027-s2-motion
     notes: StdNode shutdown calls Tui.getInstance(), which creates a TUI in non-TUI runs.
   - id: B-046
@@ -820,7 +820,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:43:07Z
+      heartbeat: 2026-11-09T18:55:42Z
   - id: B-072
     title: "Re-validate #1727's eth_simulateV1 fixes against geth on Ephemery (the simulate-165 harness)"
     priority: P2
@@ -836,7 +836,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:43:07Z
+      heartbeat: 2026-11-09T18:55:42Z
     notes: Ask on the PR and dev-node runs its jar; SIM_DANGEROUS=1 gates two cases that wedge an unfixed node.
   - id: B-073
     title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for 0.12.0 ETC changes"
@@ -851,7 +851,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:43:07Z
+      heartbeat: 2026-11-09T18:55:42Z
     notes: Spec 018 moving ETC onto the unified layout will need these runs.
   - id: B-074
     title: SnapFinalization misses an excluded entry inserted between the set read and the flags commit
@@ -1365,7 +1365,7 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:36Z
-      heartbeat: 2026-11-09T18:55:36Z
+      heartbeat: 2026-11-09T18:55:42Z
       branch: feat/027-s2-motion
     notes: |-
       TuiConfig.glyphs holds Auto before TuiEnv.applyTo and Emoji/Ascii after; glyphSet reads an unresolved Auto as emoji.
