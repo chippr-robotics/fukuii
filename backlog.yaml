@@ -1920,3 +1920,13 @@ items:
     refs: [B-133]
     links: {}
     notes: "forge, PR 7b: e.g. Byzantium pricing with a 2^40 exponent length is ~8.6e8 gas in fukuii vs ~4.4e11 in geth. No real block gas limit reaches either, but it is a consensus divergence. forge then beacon, bucket C."
+  - id: B-176
+    title: "Precompile failure fallback: WARN plus a counter when failureReason finds no geth reason (divergence signal); RPC tests for precompile errors"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-133]
+    links: {}
+    notes: "conduit review of #1778: UnexplainedFailure (precompiled contract failed) fires when exec fails but geth checks pass (e.g. Besu lib rejects what geth accepts). Log contract name and input length/hash, not the input; counter json.rpc.precompile.unexplained.counter. Also no RPC-level test for estimateGas/createAccessList/simulateV1 -32015 on a precompile failure (precedents TypedCallPathSpec:607, EthSimulateGethParitySpec:422)."
