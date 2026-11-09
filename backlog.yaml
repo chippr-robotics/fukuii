@@ -426,12 +426,13 @@ items:
   - id: B-039
     title: "Spec 027 slice 2: tick, motion, non-blocking loop"
     priority: P2
-    status: in-progress
+    status: review
     area: tui
     size: M
     opened: 2026-11-07
     refs: []
     links:
+      prs: [1783]
       spec: specs/027-tui-dashboard
       branch: feat/027-s2-motion
     depends_on: [B-038]
@@ -439,9 +440,11 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:26Z
-      heartbeat: 2026-11-09T21:46:47Z
+      heartbeat: 2026-11-09T23:56:00Z
       branch: feat/027-s2-motion
-    notes: "2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR."
+    notes: |-
+      2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
+      2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
   - id: B-040
     title: "Spec 027 slice 3: views, layout, alerts"
     priority: P2
