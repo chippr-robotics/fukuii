@@ -466,8 +466,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned code and then failed its deposit (a first byte of `0xef`, for one) used to return that code. The error text
   is go-ethereum's where fukuii printed a placeholder: an invalid opcode is named (`invalid opcode: INVALID`, not
   `invalid opcode: 0xfffffffe`), a jump to a non-`JUMPDEST` says `invalid jump destination`, a write in a static call
-  `write protection`, and so on. A stack underflow still lacks go-ethereum's `(0 <=> 2)` counts and a precompile failure
-  its reason; both stay under Known issues.
+  `write protection`, and so on. Stack-underflow counts and precompile failure reasons
+  followed (B-133, below).
+- **VM and precompile errors read as go-ethereum v1.17.9's (#1727, B-133). Both chains.** `eth_call`, `eth_estimateGas`,
+  `eth_createAccessList`, `eth_simulateV1` and GraphQL print go-ethereum's texts. Gas, state roots and receipts do not
+  change, and tracers still print the error's name.
+  - **Stack:** `stack underflow (1 <=> 2)` and `stack limit reached 1024 (1023)` carry go-ethereum's counts.
+  - **Contract creation:** `invalid code: must not begin with 0xef`, `max code size exceeded` and `contract creation
+    code storage out of gas`, checked in go-ethereum's order (from Amsterdam the size before the deposit). On ETC
+    before Homestead, where a creation that cannot pay its code deposit succeeds without code, `eth_call`,
+    `eth_createAccessList`, GraphQL and the estimator's ceiling report -32000 `contract creation code storage out of
+    gas`, as go-ethereum does.
+  - **Precompiles:** a failure states its reason (`invalid input length`, `invalid fp.Element encoding`, `point is not
+    on curve`, `g1 point is not on correct subgroup`, `invalid final flag`, `mismatched versioned hash`, and so on),
+    and `MODEXP` above the EIP-7823 limit says `one or more of base/exponent/modulus length exceeded 1024 bytes`.
+    Inputs that always fail are priced as go-ethereum prices them, so the error is the one it reports: `MODEXP` above
+    the limit and `BLAKE2F` with a bad final flag are `out of gas` when the call cannot pay their price, and an empty
+    BLS12-381 MSM is `invalid input length`. Such a call consumes all its gas either way.
+  - **`eth_call`:** an error raised before execution reads `err: <reason> (supplied gas N)`.
 - **`eth_simulateV1` reads `blockOverrides` and `stateOverrides` as go-ethereum v1.17.9 does (#1727, B-128). Both
   chains.** It now decodes them with the decoder `eth_call` and `eth_estimateGas` already used for their overrides, so
   the three RPCs share one set of rules, and every decode error is -32602.
@@ -659,15 +675,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
   unbounded block-gap loop that stalled the node, the malformed override values it accepted, the precompile override
-  cases it got wrong and its `maxUsedGas` are fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on
-  Ephemery found these differences:
+  cases it got wrong, its `maxUsedGas` and its VM and precompile error texts are fixed (see Fixed). A comparison
+  of 815 cases with geth v1.17.9 on Ephemery found this difference:
   - a simulated block before Amsterdam (Prague, Osaka) runs none of the request system calls, which go-ethereum runs
     for every Prague block: its `requestsHash` stays the empty-requests hash, the queues are not dequeued in its
-    state, and an overridden-away request contract is not an error there;
-  - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
-    length`).
+    state, and an overridden-away request contract is not an error there.
 
-  The differences listed do not touch block import or mining.
+  The difference listed does not touch block import or mining.
 - **Path-scheme ETH chains copy the whole state into a second store after a SNAP sync, and the node does not follow
   the chain until the copy ends (removal planned in spec 018).** This applies only when SNAP sync is switched on
   (`fukuii.sync.do-snap-sync = true`); the shipped Sepolia, mainnet, Ephemery and Platåberget configs sync by
