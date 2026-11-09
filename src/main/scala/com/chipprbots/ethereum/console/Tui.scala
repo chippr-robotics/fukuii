@@ -153,19 +153,19 @@ class Tui(
     ()
 
   // State update methods
-  def updatePeerCount(count: Int, max: Int): Unit = modify(_.withPeerCount(count, max))
+  private[console] def updatePeerCount(count: Int, max: Int): Unit = modify(_.withPeerCount(count, max))
 
-  def updateBlockInfo(current: Long, best: Long): Unit = modify(_.withBlockInfo(current, best))
+  private[console] def updateBlockInfo(current: Long, best: Long): Unit = modify(_.withBlockInfo(current, best))
 
   def updateNetwork(name: String): Unit = modify(_.withNetworkName(name))
 
-  def updateSyncStatus(status: String): Unit = modify(_.withSyncStatus(status))
+  private[console] def updateSyncStatus(status: String): Unit = modify(_.withSyncStatus(status))
 
   def updateConnectionStatus(status: String): Unit = modify(_.withConnectionStatus(status))
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
-  def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
+  private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
   /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late. */
   private val snapshotStaleAfter =
