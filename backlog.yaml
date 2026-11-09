@@ -1954,3 +1954,13 @@ items:
     refs: [B-167]
     links: {}
     notes: "ethereumclassic/ECIPs 2e1d632323: credit inside each tx after the tip, block-level credit MUST NOT. fukuii BlockRewards.creditBaseFeeToTreasury and Besu-fork OlympiaBlockProcessor are block-level; roots differ when a tx reads BALANCE(vault) mid-block. User decision first; forge."
+  - id: B-179
+    title: BaseFeeCalculator applies the MIN_BASE_FEE floor only on the decrease path; ECIP-1111 requires it on every path, fork block included
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: Equivalent while floor == INITIAL_BASE_FEE == 1 gwei; ECIP-1111 vector MIN_BASE_FEE > INITIAL_BASE_FEE would fail. ECIP also wants INITIAL_BASE_FEE in chain config (code constant today). forge.
