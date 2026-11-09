@@ -16,6 +16,7 @@ import org.jline.terminal.spi.SystemStream
 import org.jline.terminal.spi.TerminalExt
 import org.jline.utils.AttributedString
 import org.jline.utils.InfoCmp.Capability
+import org.jline.utils.NonBlockingReader
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -71,6 +72,9 @@ class Tui(
   /** The last frame written, so an unchanged frame is not written again (FR-010). */
   private var lastLines: Option[Seq[AttributedString]] = None
   @volatile private var enabled = true
+
+  /** A frame failed to draw: logged at ERROR once, with its stack trace; the ones after it at DEBUG until one draws. */
+  private var renderFailing = false
 
   private val state: AtomicReference[TuiState] =
     val started = clock.instant()
@@ -186,10 +190,16 @@ class Tui(
             // rows, and a trailing newline on the bottom row would scroll the whole screen up by one.
             write(term, clear + Tui.CursorHome + frame.lines.map(_.toAnsi(term)).mkString("\r\n"))
             lastLines = Some(frame.lines)
+          renderFailing = false
           frame.animated
         catch
+          case e: IllegalStateException if Tui.isClosedTerminal(e) =>
+            terminalLost("drawing a frame")
+            false
           case NonFatal(e) =>
-            log.error(s"Error rendering TUI: ${e.getMessage}")
+            if renderFailing then log.debug("Error rendering TUI again: {}", e.getMessage)
+            else log.error("Error rendering TUI: {}", e.getMessage, e)
+            renderFailing = true
             false
       }
   }
@@ -205,8 +215,20 @@ class Tui(
       try
         // NonBlockingReader treats a timeout of 0 as "wait forever" — never pass it through.
         val c = t.reader().read(Math.max(1L, timeoutMs))
-        if c >= 0 then Some(c.toChar.toLower) else None
-      catch case NonFatal(_) => None
+        if c >= 0 then Some(c.toChar.toLower)
+        else
+          // End of input: nothing can be typed again, and every later read would return at once.
+          if c == NonBlockingReader.EOF then terminalLost("reading a key (end of input)")
+          None
+      catch
+        case e: IllegalStateException if Tui.isClosedTerminal(e) =>
+          terminalLost("reading a key")
+          None
+        case NonFatal(e) =>
+          // Keys are how the TUI is left (q, d): without them, give the terminal and the console logs back.
+          log.error("TUI could not read a key ({}); restoring the terminal and standard logging", e.getMessage, e)
+          shutdown()
+          None
     }
 
   /** Handle keyboard commands. While the splash is on screen any key skips it, and does nothing else (FR-013). */
@@ -237,6 +259,16 @@ class Tui(
       TuiCommand.Continue
     case _ =>
       TuiCommand.Continue
+
+  /** The terminal went away under the TUI: JLine's shutdown hook closed it (Ctrl-C, SIGTERM), or its input ended. Stop
+    * drawing and reading at once, and restore what can be restored, so the frame loop ends instead of failing on every
+    * pass (B-045). Logged once, at WARN, by [[releaseTerminal]].
+    */
+  private def terminalLost(during: String): Unit = synchronized {
+    if enabled then
+      log.debug("TUI terminal lost while {}", during)
+      shutdown()
+  }
 
   /** Shutdown and cleanup the TUI: the screen, the cursor and the terminal mode. Idempotent; a second call writes
     * nothing.
@@ -362,8 +394,10 @@ object Tui:
   // Singleton instance
   private var instance: Option[Tui] = None
 
-  /** Get or create the singleton instance with default config. */
-  def getInstance(): Tui = getInstance(TuiConfig.default)
+  /** The instance [[getInstance]] created, if any; never creates one. A node started without `--tui` has none, and
+    * must not get one by asking (B-045).
+    */
+  def current: Option[Tui] = synchronized(instance)
 
   /** Get or create the singleton instance with custom config.
     *

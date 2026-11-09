@@ -315,8 +315,8 @@ abstract class BaseNode extends Node:
 
   /** The TUI's frame loop, before anything else starts: the splash is a view of it (spec 027 FR-013). */
   private def startTuiFrames(): Unit =
-    val tui = Tui.getInstance()
-    if tui.isEnabled then
+    // Tui.current, never getInstance(): a node started without --tui has no TUI, and asking must not make one (B-045).
+    Tui.current.filter(_.isEnabled).foreach { tui =>
       // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
       // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
       // first, leaving the user's shell in the alternate screen with the cursor hidden.
@@ -325,11 +325,11 @@ abstract class BaseNode extends Node:
       val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
       tuiUpdater = Some(updater)
       updater.start()
+    }
 
   /** The TUI's status poll, on its own thread, once the actors it asks exist (spec 027 FR-011). */
   private def startTuiUpdater(): Unit =
-    val tui = Tui.getInstance()
-    if tui.isEnabled then
+    Tui.current.filter(_.isEnabled).foreach { tui =>
       log.info("Starting TUI status probe")
       tui.updateNodeSettings(tuiNodeSettings())
       val probe = new TuiStatusProbe(
@@ -343,6 +343,7 @@ abstract class BaseNode extends Node:
       val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots)
       tuiProbe = Some(thread)
       thread.start()
+    }
 
   private def tuiNodeSettings(): NodeSettings =
     val c = instanceConfig.config
@@ -365,7 +366,7 @@ abstract class BaseNode extends Node:
 
     tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
     tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
-    tryAndLogFailure(() => Tui.getInstance().shutdown())
+    tryAndLogFailure(() => Tui.current.foreach(_.shutdown()))
     tryAndLogFailure(() => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop)
     tryAndLogFailure(() => mining.stopProtocol())
     // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated

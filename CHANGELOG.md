@@ -433,6 +433,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Known gap.** A side payload stored only by hash while the pass repairs, and later made canonical by a
     forkchoiceUpdated reorg, keeps the weight its parent had then. On a PoS chain this affects only the TD it
     advertises.
+- **`--tui` after Ctrl-C, and without `--tui` (B-045).** After Ctrl-C, JLine's shutdown hook closed the terminal and
+  the TUI logged `Error rendering TUI: Terminal has been closed` at ERROR on every frame until the node stopped it. Now
+  the first frame or key read that finds the terminal closed restores the screen through the process output, logs one
+  WARN, and ends the frame loop. A key read that fails for any other reason is logged at ERROR, with the terminal and
+  console logging given back, where before it was swallowed on every frame. A node started without `--tui` no longer
+  creates a TUI instance at shutdown.
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

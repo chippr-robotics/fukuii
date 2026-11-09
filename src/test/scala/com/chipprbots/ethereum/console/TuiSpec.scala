@@ -347,3 +347,59 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.shutdown()
       tt.close()
   }
+
+  // B-045 (#1744 follow-up): after Ctrl-C, JLine's hook closed the terminal and every frame logged
+  // `Error rendering TUI: Terminal has been closed` at ERROR until the node stopped the loop.
+  it should "stop drawing once JLine has closed the terminal: one WARN, no ERROR per frame" taggedAs (UnitTest) in
+    withTui() { (tui, tt) =>
+      tt.terminal.close()
+      val events = tuiLogDuring { tui.render(); tui.render(); tui.render() }
+      events.map(_._1) should not contain Level.ERROR
+      events.size should be <= 1
+      tui.isEnabled shouldBe false
+      // The screen was given back through the process stream, once.
+      occurrences(tt.processText, Tui.ExitAltScreen) shouldBe 1
+    }
+
+  it should "end the frame loop once the terminal is closed" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui()
+    tui.initialize() shouldBe true
+    val updater = new TuiUpdater(tui, TuiTestTerminal.config, () => None, "mordor", () => ())
+    try
+      tt.terminal.close()
+      Await.result(Future(updater.tick()), 5.seconds) shouldBe true // the frame finds the terminal gone ...
+      tui.isEnabled shouldBe false // ... and the loop's condition ends it
+    finally
+      updater.stop()
+      tui.shutdown()
+      tt.close()
+  }
+
+  // B-045: checkInput caught every non-fatal error and returned None, silently, on every frame.
+  it should "report a failed key read, and give the terminal and the logs back" taggedAs (UnitTest) in withTui() {
+    (tui, tt) =>
+      tt.failReads = true
+      val events = tuiLogDuring(tui.checkInput(10) shouldBe None)
+      events.map(_._1) shouldBe List(Level.ERROR)
+      events.head._2 should include("could not read a key")
+      tui.isEnabled shouldBe false
+      tt.output should include(Tui.ExitAltScreen)
+  }
+
+  it should "stop reading once the terminal is closed, without an ERROR" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tt.terminal.close()
+    val events = tuiLogDuring(Await.result(Future(tui.checkInput(5000)), 2.seconds) shouldBe None)
+    events.map(_._1) should not contain Level.ERROR
+    tui.isEnabled shouldBe false
+  }
+  // B-045: StdNode's shutdown asked Tui.getInstance(), which made a TUI in runs started without --tui.
+  "Tui.current" should "be empty until a TUI is made, and never make one" taggedAs (UnitTest) in {
+    Tui.reset()
+    Tui.current shouldBe None
+    Tui.current shouldBe None
+    val tui = Tui.getInstance(TuiTestTerminal.config)
+    try Tui.current shouldBe Some(tui)
+    finally Tui.reset()
+    Tui.current shouldBe None
+  }

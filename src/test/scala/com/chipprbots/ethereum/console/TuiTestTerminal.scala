@@ -25,6 +25,9 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** When set, `writer()` throws — simulates an output failure during teardown. */
   @volatile var failWrites: Boolean = false
 
+  /** When set, `reader()` throws — simulates a failed key read. */
+  @volatile var failReads: Boolean = false
+
   /** When set, the next `setAttributes` closes the terminal first: JLine's shutdown hook winning the race between the
     * TUI's reset write and its mode restore.
     */
@@ -37,6 +40,9 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
       override def writer(): java.io.PrintWriter =
         if failWrites then throw new IllegalStateException("simulated output failure")
         super.writer()
+      override def reader(): org.jline.utils.NonBlockingReader =
+        if failReads then throw new java.io.UncheckedIOException(new java.io.IOException("simulated input failure"))
+        super.reader()
       override def setAttributes(attr: Attributes): Unit =
         if closeOnSetAttributes then
           closeOnSetAttributes = false
