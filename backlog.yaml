@@ -2103,3 +2103,14 @@ items:
     refs: [027 slice 4a pp run 2026-11-09]
     links: {}
     notes: "E2EHandshakeSpec.scala:317 asserts the second peer has NOT synced within 3 s. FastSyncBranchResolverActorSpec: a different case fails on each run (7 s expectMsg timeouts), seen on origin/staging 5c77ecbbc. Neither is gated in CI (nightly only / SyncTest tier); see B-018, B-019."
+  - id: B-189
+    title: "Spec 027 UAT across all slices: the deferred manual gates (T029, T057, T081, T149 and slice 4/5 runs) on Mordor and a live TUI"
+    priority: P2
+    status: open
+    area: tui
+    size: M
+    opened: 2026-11-09
+    refs: [user 2026-11-09]
+    links:
+      spec: specs/027-tui-dashboard
+    notes: "User 2026-11-09: merge each slice PR once green; one UAT across all slices when they are code complete. Includes SC-003 pidstat (<2% animating, <0.5% idle) and the <1 ms render median."
