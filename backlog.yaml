@@ -1767,10 +1767,15 @@ items:
   - id: B-160
     title: SNAP pivot header checks on ETC bootstrap/refresh paths (details in private notes)
     priority: P1
-    status: open
+    status: claimed
     area: sync
     size: M
     opened: 2026-11-09
     refs: []
     links: {}
+    claim:
+      by: fukuii-fc
+      agent: forge
+      since: 2026-11-09T01:17:37Z
+      heartbeat: 2026-11-09T01:17:37Z
     notes: From forge review of B-004, 2026-11-09. forge then herald.
