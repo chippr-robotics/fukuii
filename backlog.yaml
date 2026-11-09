@@ -456,13 +456,19 @@ items:
   - id: B-041
     title: "Spec 027 slice 4a: peer scoring wired (PeerScoringManager, scores through NetworkMetrics)"
     priority: P2
-    status: open
+    status: claimed
     area: p2p
     size: M
     opened: 2026-11-07
     refs: [D-1 (a)]
     links:
       spec: specs/027-tui-dashboard
+      branch: feat/027-s4a-peer-scoring
+    claim:
+      by: dev-node
+      agent: herald
+      since: 2026-11-09T18:55:39Z
+      heartbeat: 2026-11-09T18:55:39Z
       branch: feat/027-s4a-peer-scoring
     notes: herald owns it. Needs only staging, not slices 1-3.
   - id: B-042
