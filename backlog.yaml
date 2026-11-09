@@ -1430,20 +1430,21 @@ items:
   - id: B-131
     title: "1727 PR5: simulated system calls: empty system contract error; moved precompiles; beacon"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-08
     refs: [B-006]
     links:
       issues: [1727]
+      prs: [1774]
       spec: .local/docs/planning/1727-s2-design
       branch: fix/1727-simulate-system-contracts
     claim:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-09T01:55:41Z
-      heartbeat: 2026-11-09T02:56:38Z
+      heartbeat: 2026-11-09T03:46:36Z
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-132
     title: "1727 PR6: ETC simulated blocks pay ECIP-1017 era reward + Olympia treasury, PoW predicate; forge"
