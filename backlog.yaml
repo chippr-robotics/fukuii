@@ -1869,3 +1869,13 @@ items:
     refs: [B-132]
     links: {}
     notes: "beacon nits on #1776: BlockRewards.increaseAccountBalance duplicates BlockPreparator:290-295; simulate gates on difficulty != 0 (geth IsPoSHeader), import on isPoS (base fee too); they differ only for a pre-London zero-difficulty header."
+  - id: B-171
+    title: "Tracer error text: route callTracer/prestate errors through CallErrors.vmErrorMessage (geth err.Error()); re-pin TraceGoldenSpec"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-133]
+    links: {}
+    notes: "beacon review of #1777: tracers print bare Scala names (VM.scala:141,291 -> CallTracer.scala:128). Also optional: a minStack member on ImmediateStackOp for geth stack-underflow text on DUPN/SWAPN/EXCHANGE (bucket C; text only, no consensus difference per execution-specs stack.py:229-237); do not raise delta."
