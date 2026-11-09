@@ -445,7 +445,7 @@ items:
   - id: B-040
     title: "Spec 027 slice 3: views, layout, alerts"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: M
     opened: 2026-11-07
@@ -454,6 +454,12 @@ items:
       spec: specs/027-tui-dashboard
       branch: feat/027-s3-views
     depends_on: [B-039]
+    claim:
+      by: dev-node
+      agent: general-purpose
+      since: 2026-11-09T23:24:19Z
+      heartbeat: 2026-11-09T23:24:19Z
+      branch: feat/027-s3-views
   - id: B-041
     title: "Spec 027 slice 4a: peer scoring wired (PeerScoringManager, scores through NetworkMetrics)"
     priority: P2
