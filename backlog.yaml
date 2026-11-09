@@ -1416,7 +1416,7 @@ items:
       by: fukuii-fc
       agent: conduit
       since: 2026-11-08T23:54:00Z
-      heartbeat: 2026-11-09T00:08:11Z
+      heartbeat: 2026-11-09T00:31:49Z
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-130
     title: "1727 PR4: maxUsedGas = peak gas before refund (+ Prague calldata floor); beacon glance"
