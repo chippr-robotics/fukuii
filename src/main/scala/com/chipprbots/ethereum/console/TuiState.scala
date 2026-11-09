@@ -198,7 +198,7 @@ case class SyncBaseline(block: Long, observedAt: Instant)
   * @param best
   *   highest known block of the network, or 0 when unknown (e.g. the sync controller reports NotSyncing)
   * @param snapSampledAt
-  *   when the SNAP monitor recorded [[snap]] (`SNAPSyncMetrics.latestProgressAt`)
+  *   when the SNAP monitor recorded [[snap]] (`SNAPSyncMetrics.latestSample`)
   */
 final case class SyncSample(
     current: Long,
