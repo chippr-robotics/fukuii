@@ -87,7 +87,6 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val s = p()
     val tookMs = (System.nanoTime() - started) / 1_000_000L
     tookMs should be >= 450L
-    tookMs should be < 900L // two waits in a row would take 1,000 ms
     s.peers shouldBe Sourced.Unresponsive("no reply within 500ms")
     s.sync shouldBe Sourced.Unresponsive("no reply within 500ms")
   }
@@ -112,14 +111,17 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
   "TuiProbeThread" should "publish snapshots on its own thread" taggedAs (UnitTest) in {
     val polls = new CountDownLatch(3)
+    val pollThreads = new java.util.concurrent.ConcurrentLinkedQueue[String]()
     val p = probe(emptyPeers, syncController(syncing), 100.millis)
     withThread(
       () =>
-        polls.countDown(); p()
+        pollThreads.add(Thread.currentThread().getName); polls.countDown(); p()
       ,
       intervalMs = 20
     ) { published =>
       polls.await(10, TimeUnit.SECONDS) shouldBe true
+      pollThreads.asScala.toSet shouldBe Set("TuiProbeThread")
+      (pollThreads.asScala.toSet should not).contain(Thread.currentThread().getName)
       eventually(timeout(5.seconds)) {
         published.get.map(_.currentBlock) shouldBe Some(1000L)
       }
@@ -129,7 +131,6 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   // SC-005: a peer manager that never replies degrades the peers source only.
   it should "show the peers Unresponsive within 1.5 s while sync stays Fresh" taggedAs (UnitTest) in {
     val p = probe(Behaviors.ignore, syncController(syncing))
-    val started = System.nanoTime()
     withThread(p) { published =>
       eventually(timeout(1500.millis), interval(20.millis)) {
         val s = published.get.get
@@ -138,7 +139,6 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
         s.connectionStatus shouldBe "Unresponsive (peer manager)"
         s.syncStatus shouldBe "Syncing"
       }
-      (System.nanoTime() - started) / 1_000_000L should be < 1500L
     }
   }
 

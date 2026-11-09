@@ -166,8 +166,10 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
   /** Spec values: 250 ms while something moves, 1000 ms otherwise (Q1). */
   private val paced = TuiTestTerminal.config.copy(animationIntervalMs = 250, updateIntervalMs = 1000)
 
-  // SC-005: a probe that blocks holds its own thread only.
-  it should "draw at least 8 frames in 2.5 s at the 250 ms pace while the probe is blocked" taggedAs (UnitTest) in {
+  // SC-005: a probe that blocks holds its own thread only, and frames keep coming at 4 fps ("at least 8 frames in
+  // 2.5 s"). Checked on the pace itself, each key wait's timeout, not on a frame count in wall time, which a loaded
+  // runner can stretch.
+  it should "keep the 250 ms pace while the probe is blocked" taggedAs (UnitTest) in {
     val release = new CountDownLatch(1)
     val published = new AtomicReference[Option[NodeStatusSnapshot]](None)
     val probe = new TuiProbeThread(
@@ -178,13 +180,13 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       published
     )
     // Nothing published yet: the connection is "Initializing", whose spinner keeps the 250 ms pace.
-    withUpdater(snapshots = () => published.get, config = paced) { (updater, tui, _) =>
+    withUpdater(snapshots = () => published.get, config = paced) { (updater, tui, tt) =>
       try
         probe.start()
         updater.start()
-        eventually(timeout(5.seconds), interval(10.millis))(tui.getState.tick should be >= 1L)
-        val first = tui.getState.tick
-        eventually(timeout(2500.millis), interval(20.millis))(tui.getState.tick should be >= first + 8)
+        eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts.size should be >= 3)
+        tt.readTimeouts.take(3) shouldBe Seq(250L, 250L, 250L)
+        tui.getState.tick should be >= 3L
         published.get shouldBe None // the probe never returned
       finally
         release.countDown()
@@ -203,8 +205,10 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       onQuit = () => quitAt.success(System.nanoTime()),
       config = paced.copy(reducedMotion = true)
     ) { (updater, tui, tt) =>
+      paced.copy(reducedMotion = true).paceMs(animated = false) shouldBe 1000L
       updater.start()
       eventually(timeout(5.seconds), interval(10.millis))(reads.get should be >= 1)
+      eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts should contain(1000L))
       tui.getState.motion shouldBe Motion.Reduced
       val pressed = System.nanoTime()
       tt.press("q")
