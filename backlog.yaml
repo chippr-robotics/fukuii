@@ -1832,17 +1832,18 @@ items:
   - id: B-167
     title: "PoW block generation cannot produce a valid ETC Olympia block: no base fee in the prepared header; treasury paid against gasUsed 0"
     priority: P1
-    status: claimed
+    status: review
     area: consensus
     size: M
     opened: 2026-11-09
     refs: [B-132]
-    links: {}
+    links:
+      prs: [1779]
     claim:
       by: fukuii-fc
       agent: forge
       since: 2026-11-09T07:43:16Z
-      heartbeat: 2026-11-09T08:36:07Z
+      heartbeat: 2026-11-09T08:38:09Z
     notes: "forge 2026-11-09, read from code only: consensus/blocks/BlockGeneratorSkeleton.scala:42-68 defaultPrepareHeader never sets baseFee; prepareBlock pays the treasury against header gasUsed still 0 (:61, :100 → BlockPreparator.prepareBlock), so a mined Olympia block lacks a base fee and its state root omits the treasury credit that import adds. Must be fixed before Olympia is scheduled. Spec 018 EG-6 would catch it. forge then beacon."
   - id: B-168
     title: "eth_simulateV1 on ETC: first Olympia block header shape keys off the parent base fee; next base fee skips the 1 gwei floor"
