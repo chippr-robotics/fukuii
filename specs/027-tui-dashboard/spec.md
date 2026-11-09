@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-07
 
-**Status**: Active (2026-11-08). Slice 1 (worms, glyphs, tiers) is landing on `feat/027-s1-worms`; slices 2, 3, 4a, 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742.
+**Status**: Active (2026-11-09). Slice 1 (worms, glyphs, tiers) merged as #1752; slices 2, 3, 4a, 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T149 and later) are one UAT across all slices once they are code complete (user, 2026-11-09).
 
-**In flight**: `feat/027-s1-worms` (`fukuii-fc`, local session): slice 1, T001–T026 done; the gate's manual run, reviews and PR (T027–T030) next
+**In flight**: `feat/027-s4a-peer-scoring` and `feat/027-s2-motion` (`dev-node`, local session): slice 4a in PR, slice 2 in review; slice 3 next, on top of slice 2
 
 **Input**: The design proposal #1490 carried as `docs/architecture/tui-design-proposal.md` ("the worm goes to the
 brain": five phased increments, views, tiers, animation, glyph and colour system, data inventory, architecture, testing,
