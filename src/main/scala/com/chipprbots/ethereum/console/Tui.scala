@@ -54,7 +54,9 @@ enum TuiCommand:
   *   the process stream behind a terminal, used to restore the screen when JLine has closed the terminal before
   *   [[shutdown]] runs; None for a terminal that is not the process's own (tests pass an in-memory stream)
   * @param clock
-  *   the TUI's start time, for uptime; after that every time comes from the status snapshots (C-3)
+  *   the TUI's start time and uptime until the first snapshot, and the clock each snapshot is aged against
+  *   ([[NodeStatusSnapshot.agedAt]]). It must agree with the probe's clock (`TuiStatusProbe`'s `clock`), which stamps
+  *   the snapshots: both default to the system UTC clock, and a test that injects one injects both.
   */
 class Tui(
     val config: TuiConfig = TuiConfig.default,

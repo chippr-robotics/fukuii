@@ -37,7 +37,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor
   *   the SNAP monitor's latest progress and when it was recorded, in epoch milliseconds
   *   (`SNAPSyncMetrics.latestSample`): shown while younger than [[TuiStatusProbe.SnapProgressMaxAgeMillis]]
   * @param clock
-  *   the time of each snapshot: the TUI's only clock (C-3)
+  *   the time of each snapshot. The TUI ages snapshots against its own clock (`Tui`'s `clock`), so the two must agree:
+  *   both default to the system UTC clock
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
