@@ -26,7 +26,8 @@ import com.chipprbots.ethereum.utils.Logger
   *   the most peers tracked; when a new peer would exceed it, an entry is evicted: first any never seen alive (no
   *   `lastSeen`: a failed handshake, a timeout, a blacklisting), oldest `firstSeen` first, and only when every entry
   *   has been seen alive, the oldest `lastSeen`. Every failed handshake of a crawler adds a node id, so the map must be
-  *   bounded, and those crawlers must not push out a peer that is connected and merely idle.
+  *   bounded. A crawler that completes the handshake and then drops is seen alive, so enough of them can still evict an
+  *   idle connected peer; that peer is rescored on its next event.
   * @param exporter
   *   receives a [[PeerScoreSnapshot]] on [[publish]] and, throttled to once per `PublishIntervalMs` of `clock`, after
   *   an update. The default exports nothing; NodeBuilder passes `NetworkMetrics.publishPeerScores`.
