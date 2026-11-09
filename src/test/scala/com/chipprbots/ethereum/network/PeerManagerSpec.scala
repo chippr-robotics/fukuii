@@ -28,9 +28,11 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.ScoringBlacklist
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -58,6 +60,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.MockClock
 
 import Arbitrary.arbitrary
 
@@ -1052,6 +1055,12 @@ class PeerManagerSpec
     /** Spec 012: remembered snap peers. None unless a test mixes in [[SnapGoodSetup]]. */
     lazy val snapGoodPeersStore: Option[SnapGoodPeers] = None
 
+    /** Spec 027 slice 4a: the scorer the manager feeds. None unless a test mixes in [[ScoringSetup]]. */
+    lazy val peerScoringManager: Option[PeerScoringManager] = None
+
+    /** The blacklist the manager is given: [[blacklist]], or a decorator over it that records through a scorer. */
+    lazy val managerBlacklist: Blacklist = blacklist
+
     val peerFactory: (
         org.apache.pekko.actor.typed.scaladsl.ActorContext[PeerManagerActor.Command],
         InetSocketAddress,
@@ -1112,9 +1121,10 @@ class PeerManagerSpec
           peerStatistics.ref.toTyped[PeerStatisticsActor.Command],
           peerFactory,
           discoveryConfig,
-          blacklist,
+          managerBlacklist,
           Some(testScheduler),
-          snapGoodPeersStore
+          snapGoodPeersStore,
+          peerScoringManager
         ),
         s"pma-${java.util.UUID.randomUUID()}",
         typed.DispatcherSelector.fromConfig(org.apache.pekko.testkit.CallingThreadDispatcher.Id)
@@ -1363,6 +1373,113 @@ class PeerManagerSpec
     val requestSender: TestProbe = TestProbe()
     peerManager ! PeerManagerActor.GetPeersCmd(requestSender.ref)
     requestSender.expectMsgClass(classOf[Peers]).peers.keys.flatMap(_.nodeId) should not contain goneNodeId
+
+  // ── Peer scoring (spec 027 slice 4a) ───────────────────────────────────────
+
+  /** A manager that feeds a scorer on a fixed clock, with a recording exporter; its blacklist records through it. */
+  trait ScoringSetup extends TestSetup:
+    lazy val scoringClock: MockClock = new MockClock(1_800_000_000_000L)
+    lazy val publishedSnapshots: java.util.concurrent.CopyOnWriteArrayList[PeerScoreSnapshot] =
+      new java.util.concurrent.CopyOnWriteArrayList[PeerScoreSnapshot]()
+    private def recordSnapshot(snapshot: PeerScoreSnapshot): Unit =
+      publishedSnapshots.add(snapshot); ()
+    lazy val scorer: PeerScoringManager = new PeerScoringManager(scoringClock, 64, recordSnapshot)
+    override lazy val peerScoringManager: Option[PeerScoringManager] = Some(scorer)
+    override lazy val managerBlacklist: Blacklist = new ScoringBlacklist(blacklist, scorer)
+
+  it should "record a successful handshake under the node id in hex" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(outbound, outboundProbe) = createdPeers.head
+    val ConnectTo(uri) = outboundProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val hex: String = uri.getUserInfo
+    val nodeId: ByteString = ByteString(Hex.decode(hex))
+    scorer.getAllScores shouldBe empty
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(outbound.copy(id = PeerId(hex), nodeId = Some(nodeId)), initialPeerInfo)
+    )
+
+    eventually {
+      scorer.getAllScores.keySet shouldBe Set(PeerId(hex))
+      scorer.getScore(PeerId(hex)).successfulHandshakes shouldBe 1
+    }
+
+  it should "record the handshake of a peer whose actor has already terminated: it did handshake" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(gone, goneProbe) = createdPeers.head
+    val ConnectTo(goneUri) = goneProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val goneHex: String = goneUri.getUserInfo
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(goneProbe.ref)
+    goneProbe.ref ! PoisonPill
+    watcher.expectTerminated(goneProbe.ref)
+    peerEventBus.fishForMessage(3.seconds, "waiting for the pending peer's PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneProbe.ref.path.name)
+      case _                                => false
+    }
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(
+        gone.copy(id = PeerId(goneHex), nodeId = Some(ByteString(Hex.decode(goneHex)))),
+        initialPeerInfo
+      )
+    )
+
+    eventually(scorer.getScore(PeerId(goneHex)).successfulHandshakes shouldBe 1)
+
+  it should "publish the score snapshot on the 10 s status refresh" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(outbound, outboundProbe) = createdPeers.head
+    val ConnectTo(uri) = outboundProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val hex: String = uri.getUserInfo
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(
+        outbound.copy(id = PeerId(hex), nodeId = Some(ByteString(Hex.decode(hex)))),
+        initialPeerInfo
+      )
+    )
+    // the handshake is the scorer's first update, so it published once, throttled to once a second of its clock
+    eventually(publishedSnapshots.size shouldBe 1)
+
+    testScheduler.timePasses(
+      10.seconds
+    ) // the manager's own tick, with no event and no time passing on the scorer's clock
+
+    eventually {
+      publishedSnapshots.size shouldBe 2
+      publishedSnapshots.get(1).scores.keySet shouldBe Set(PeerId(hex))
+    }
+
+  it should "record nothing when it blacklists a peer by address" taggedAs (UnitTest, NetworkTest) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    createdPeers(1).probe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    peerManager ! PeerManagerActor.HandlePeerConnectionCmd(incomingConnection1.ref, incomingPeerAddress1)
+    val peer: Peer = Peer(
+      PeerId("peer"),
+      incomingPeerAddress1,
+      createdPeers(2).probe.ref.toTyped[PeerActor.Command],
+      incomingConnection = true
+    )
+
+    peerManager ! PeerManagerActor.PeerClosedConnectionCmd(peer.remoteAddress.getHostString, Disconnect.Reasons.Other)
+
+    eventually {
+      blacklist.isBlacklisted(PeerAddress(peer.remoteAddress.getHostString)) shouldBe true
+    }
+    scorer.getAllScores shouldBe empty
 
   // ── Remembered good snap peers (spec 012) ──────────────────────────────────
 

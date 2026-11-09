@@ -141,7 +141,8 @@ object PeerActor:
       peerEventBus: ActorRef[PeerEventBusCommand],
       knownNodesManager: ActorRef[KnownNodesManager.Command],
       incomingConnection: Boolean,
-      initHandshaker: Handshaker[R]
+      initHandshaker: Handshaker[R],
+      peerScoringManager: Option[PeerScoringManager] = None
   ): Behavior[Command] =
     Behaviors.withStash(100) { stash =>
       Behaviors.setup { context =>
@@ -153,6 +154,7 @@ object PeerActor:
           knownNodesManager,
           incomingConnection,
           initHandshaker,
+          peerScoringManager,
           stash,
           context
         ).waitingForInitialCommand()
@@ -172,7 +174,8 @@ object PeerActor:
       incomingConnection: Boolean,
       handshaker: Handshaker[R],
       authHandshaker: AuthHandshaker,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      peerScoringManager: Option[PeerScoringManager] = None
   ): org.apache.pekko.actor.Props =
     org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
       apply(
@@ -182,7 +185,8 @@ object PeerActor:
         peerEventBus,
         knownNodesManager,
         incomingConnection,
-        initHandshaker = handshaker
+        initHandshaker = handshaker,
+        peerScoringManager = peerScoringManager
       )
     )
   // scalastyle:on parameter.number
@@ -219,6 +223,7 @@ object PeerActor:
       knownNodesManager: ActorRef[KnownNodesManager.Command],
       incomingConnection: Boolean,
       initHandshaker: Handshaker[R],
+      peerScoringManager: Option[PeerScoringManager],
       stash: StashBuffer[Command],
       context: ActorContext[Command]
   ):
@@ -236,6 +241,15 @@ object PeerActor:
       val rlpxRef = rlpxConnectionFactory(context)
       context.watchWith(rlpxRef, RlpxTerminated(rlpxRef))
       RLPxConnection(rlpxRef, remoteAddress, uriOpt)
+
+    /** The id every scorer event uses for the peer: the hex of its node id, as in `Peer.id` (see [[handshaked]]). */
+    private def peerIdOf(remoteNodeId: ByteString): PeerId = PeerId(Hex.toHexString(remoteNodeId.toArray))
+
+    /** The peer sent something malformed or invalid, and is being disconnected for it. Scored before the Disconnect
+      * frame goes out. Observation only: nothing reads the score to decide anything.
+      */
+    private def recordProtocolViolation(remoteNodeId: ByteString): Unit =
+      peerScoringManager.foreach(_.recordProtocolViolation(peerIdOf(remoteNodeId)))
 
     private def modifyOutGoingUri(remoteNodeId: ByteString, rlpxConnection: RLPxConnection, uri: URI): URI =
       val host = getHostName(rlpxConnection.remoteAddress.getAddress)
@@ -433,6 +447,9 @@ object PeerActor:
             reason.toHexString,
             Disconnect.reasonToString(reason)
           )
+          // Scored before the Disconnect frame goes out. The manager sees only the host and the reason of a failed
+          // handshake (PeerClosedConnectionCmd), not the node id, so the actor that has it records the failure.
+          peerScoringManager.foreach(_.recordFailedHandshake(peerIdOf(remoteNodeId)))
           rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri))
           // Different networkId or genesis: the node can never be useful, so tell PeerManagerActor to stop re-dialling
           // its node ID (#88). ForkId rejections do not set this flag and keep the ordinary blacklist handling.
@@ -600,7 +617,7 @@ object PeerActor:
         rlpxConnection: RLPxConnection,
         handshakeResult: R
     ): Behavior[Command] = Behaviors.setup { _ =>
-      val peerId: PeerId = PeerId(Hex.toHexString(remoteNodeId.toArray))
+      val peerId: PeerId = peerIdOf(remoteNodeId)
       val source: Source[Message, NotUsed] = PeerEventBusActor
         .messageSource(
           peerEventBus,
@@ -639,6 +656,7 @@ object PeerActor:
                   bru.earliestBlock,
                   bru.latestBlock
                 )
+                recordProtocolViolation(remoteNodeId)
                 disconnectFromPeer(
                   rlpxConnection,
                   com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol
@@ -653,6 +671,8 @@ object PeerActor:
               Behaviors.same
 
         case DisconnectPeer(reason) =>
+          // RLPxConnectionHandler asks for BreachOfProtocol when a message from this peer cannot be decoded.
+          if reason == Disconnect.Reasons.BreachOfProtocol then recordProtocolViolation(remoteNodeId)
           disconnectFromPeer(rlpxConnection, reason)
 
         case SendMessage(message) =>

@@ -155,7 +155,8 @@ object PeerManagerActor:
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler] = None,
-      snapGoodPeers: Option[SnapGoodPeers] = None
+      snapGoodPeers: Option[SnapGoodPeers] = None,
+      peerScoringManager: Option[PeerScoringManager] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       new Impl(
@@ -169,6 +170,7 @@ object PeerManagerActor:
         blacklist,
         externalSchedulerOpt,
         snapGoodPeers,
+        peerScoringManager,
         context
       ).waitingForStart()
     }
@@ -186,6 +188,7 @@ object PeerManagerActor:
       val blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler],
       snapGoodPeers: Option[SnapGoodPeers],
+      peerScoringManager: Option[PeerScoringManager],
       context: TypedActorContext[Command]
   ):
 
@@ -757,6 +760,8 @@ object PeerManagerActor:
 
         case RefreshPeerStatuses =>
           refreshPeerStatusCache(connectedPeers)
+          // The scorer's own export is throttled and event-driven; this tick lets the recency decay show without one.
+          peerScoringManager.foreach(_.publish())
           Some(Behaviors.same)
 
         case PeerStatusCacheUpdated(statuses) =>
@@ -972,6 +977,9 @@ object PeerManagerActor:
         connectedPeers: ConnectedPeers
     ): Behavior[Command] =
       val host = handshakedPeer.remoteAddress.getHostString
+      // The handshake succeeded whatever the manager does with the peer next (stale, excluded, too many, duplicate), so
+      // it is scored first. `handshakedPeer.id` is the hex node id, the id the other scorer events use (PeerActor).
+      peerScoringManager.foreach(_.recordSuccessfulHandshake(handshakedPeer.id))
       consecutiveTcpFailures.remove(host)
       // Track snap-capability per host so the blacklist paths can retain scarce snap peers (see snapCapableHosts).
       // A fresh handshake also proves the host is useful again, so reset its lenient-blacklist flap counter.
@@ -1251,7 +1259,8 @@ object PeerManagerActor:
       knownNodesManager: typed.ActorRef[KnownNodesManager.Command],
       handshaker: Handshaker[R],
       authHandshaker: AuthHandshaker,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      peerScoringManager: Option[PeerScoringManager] = None
   ): (TypedActorContext[Command], InetSocketAddress, Boolean) => typed.ActorRef[PeerActor.Command] =
     (ctx, address, incomingConnection) =>
       val id: String = sanitizeActorPathElement(address.toString)
@@ -1267,7 +1276,8 @@ object PeerManagerActor:
               eventBus,
               knownNodesManager,
               incomingConnection,
-              initHandshaker = handshaker
+              initHandshaker = handshaker,
+              peerScoringManager = peerScoringManager
             )
           )
           .onFailure[Throwable](
