@@ -514,9 +514,11 @@ class EthSimulateService(
     // Build simulated block header
     val simHeader = buildBlockHeader(parentHeader, blockOverrides, validation)
     // execution-apis BlockOverrides: a client that supports `difficulty` MUST reject it with -32602 for a block after
-    // the merge (post-merge difficulty is 0). Post-merge here means the header is not the HefEmpty (pre-London PoW) shape,
-    // the only one buildBlockHeader gives a non-zero difficulty.
-    if blockOverrides.exists(_.difficulty.isDefined) && simHeader.extraFields != BlockHeader.HeaderExtraFields.HefEmpty
+    // the merge (post-merge difficulty is 0). go-ethereum makeHeaders (simulate.go:667-669) refuses it where the
+    // difficulty the block would get without it is zero (see inheritedDifficulty). An ETC block, which never merges,
+    // takes it at every fork, Olympia's included.
+    if blockOverrides.exists(_.difficulty.isDefined) &&
+      inheritedDifficulty(parentHeader, simHeader.number, simHeader.unixTimestamp).value == 0
     then
       break(
         Left(
@@ -621,28 +623,18 @@ class EthSimulateService(
             world = persisted
             Some(BlockExecution.computeRequestsHash(requests))
 
-    // Pre-merge: pay the static block reward (5/3/2 ETH per Byzantium/Constantinople)
-    // to the miner. Geth's eth_simulateV1 reflects the reward in the simulated
-    // stateRoot, so simulated pre-merge blocks must too. Post-merge blocks have no
-    // reward — execution layer pays nothing, withdrawals come from the CL.
-    val isPoW = simHeader.extraFields match
-      case HefEmpty => true
-      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague | _: HefPostAmsterdam =>
-        false
-    if isPoW then
-      val reward = blockchainConfig.monetaryPolicyConfig.firstEraBlockReward
-      val byzantiumReward = blockchainConfig.monetaryPolicyConfig.firstEraReducedBlockReward
-      val constantinopleReward = blockchainConfig.monetaryPolicyConfig.firstEraConstantinopleReducedBlockReward
-      val n = simHeader.number.value
-      val byzantium = blockchainConfig.forkBlockNumbers.byzantiumBlockNumber
-      val constantinople = blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
-      val finalReward =
-        if n >= constantinople then constantinopleReward
-        else if n >= byzantium then byzantiumReward
-        else reward
-      val minerAddr = Address(simHeader.beneficiary)
-      val acct = world.getAccount(minerAddr).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-      world = world.saveAccount(minerAddr, acct.increaseBalance(UInt256(finalReward)))
+    // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
+    // sum ("Gas after Amsterdam"). Before Amsterdam the execution counter IS the receipts' sum.
+    val headerGasUsed =
+      if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
+
+    // The block's rewards, as block import credits them (BlockRewards, the code BlockPreparator.payBlockReward runs).
+    // go-ethereum's processBlock calls the engine's Finalize (simulate.go:511), and the beacon engine pays ethash's
+    // reward for a header with a difficulty and nothing for one without (consensus/beacon IsPoSHeader). So: ECIP-1017's
+    // era reward on ETC, and from Olympia ECIP-1111's base fee times the block's gasUsed to the treasury; on ETH before
+    // the merge, the Frontier, Byzantium or Constantinople reward; after it, nothing. A simulated block has no ommers.
+    if simHeader.difficulty.value != 0 then
+      world = BlockRewards.payProofOfWork(simHeader.copy(gasUsed = GasAmount(headerGasUsed)), Nil, world)
 
     // Compute Merkle roots
     val transactionsRoot = computeTransactionsRoot(txs)
@@ -677,10 +669,6 @@ class EthSimulateService(
           requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
         )
       case other => other
-    // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
-    // sum ("Gas after Amsterdam"). Before Amsterdam the execution counter IS the receipts' sum.
-    val headerGasUsed =
-      if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
     val finalHeader = simHeader.copy(
       stateRoot = TrieRoot(stateRoot),
       transactionsRoot = TrieRoot(transactionsRoot),
@@ -779,6 +767,19 @@ class EthSimulateService(
     Right(())
   }
 
+  /** The difficulty a simulated block gets without a `difficulty` override, as go-ethereum's makeHeaders gives it
+    * (simulate.go:661-666): the previous block's (the base block's for the first simulated block), or zero for a block
+    * after the merge (`BlockchainConfig.isPostMerge`, geth's `IsPostMerge`). A block with a difficulty is paid the
+    * proof-of-work reward (buildAndFinalizeBlock) and reads it with DIFFICULTY.
+    *
+    * The chain decides, through its configuration: an ETC chain never merges, so every ETC block keeps a proof-of-work
+    * difficulty, its Olympia blocks included; on ETH a block before the merge keeps the parent's (a London-era block
+    * included), and one after it, or on a post-merge parent, has zero. This used to be read from the header's shape,
+    * which gave every block with a base fee zero, an ETC Olympia block among them.
+    */
+  private def inheritedDifficulty(parentHeader: BlockHeader, number: BlockNumber, timestamp: Timestamp): Difficulty =
+    if blockchainConfig.isPostMerge(number.value, timestamp) then Difficulty.Zero else parentHeader.difficulty
+
   private def buildBlockHeader(
       parentHeader: BlockHeader,
       overrides: Option[BlockOverrides],
@@ -861,10 +862,10 @@ class EthSimulateService(
       else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // Post-London but pre-Shanghai
       else HefEmpty // Pre-London
 
-    // Pre-merge blocks have non-zero difficulty
-    val difficulty: Difficulty = extraFields match
-      case HefEmpty => ov.difficulty.map(Difficulty(_)).getOrElse(parentHeader.difficulty) // PoW: override or inherit
-      case _        => Difficulty.Zero // Post-merge
+    // The difficulty: the `difficulty` override, or the one the block inherits (see inheritedDifficulty).
+    // buildAndFinalizeBlock refuses an override where the inherited difficulty is zero.
+    val difficulty: Difficulty =
+      ov.difficulty.map(Difficulty(_)).getOrElse(inheritedDifficulty(parentHeader, number, ts))
 
     BlockHeader(
       parentHash = parentHeader.hash,
