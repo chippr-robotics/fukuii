@@ -219,3 +219,40 @@ object NativeBackends:
       case _: CKZGException => false
       case NonFatal(e)      => throw unavailable(Backend.Kzg, "c-kzg could not run", Some(e))
       case e: LinkageError  => throw unavailable(Backend.Kzg, "c-kzg could not run", Some(e))
+
+  // ── For an RPC error message only ─────────────────────────────────────────────────────────────────────────────────
+
+  // `PrecompiledContract.failureReason` (#1727 PR 7b) asks the libraries the questions go-ethereum's reasons depend on
+  // and the input's bytes alone cannot answer: is a BLS12-381 point in the prime-order subgroup, and does a KZG proof
+  // verify. A reason is asked for only after the precompile itself ran on the library, which it could not have done
+  // had the library been missing. Even so, an error message must never halt the node: these probes never raise
+  // NativeBackendUnavailable and never run the `onUnavailable` hook. A library that cannot answer is "unknown".
+
+  /** Whether the BLS12-381 library accepts `input` for `operation`; `None` when it did not load or the call threw. */
+  private[vm] def blsAccepts(native: BlsNative, operation: Byte, input: ByteString): Option[Boolean] =
+    if !native.enabled then None
+    else
+      try Some(native.perform(operation, input.toArray).isDefined)
+      catch case NonFatal(_) | (_: LinkageError) => None
+
+  /** What c-kzg makes of a proof, for an error message. */
+  private[vm] enum KzgVerdict:
+    case Verifies, DoesNotVerify
+
+    /** A `CKZGException` (C_KZG_BADARGS): an argument is not a valid scalar, or not a G1 point in the subgroup. */
+    case RejectsArgument
+
+    /** c-kzg could not run: no library, or no trusted setup. */
+    case Unavailable
+
+  private[vm] def kzgVerdict(
+      native: KzgNative,
+      commitment: Array[Byte],
+      z: Array[Byte],
+      y: Array[Byte],
+      proof: Array[Byte]
+  ): KzgVerdict =
+    try if native.verifyKzgProof(commitment, z, y, proof) then KzgVerdict.Verifies else KzgVerdict.DoesNotVerify
+    catch
+      case _: CKZGException                => KzgVerdict.RejectsArgument
+      case NonFatal(_) | (_: LinkageError) => KzgVerdict.Unavailable
