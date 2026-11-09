@@ -29,17 +29,17 @@ final case class TuiEnv(
     reducedMotion: Option[Boolean] = None,
     noSplash: Boolean = false
 ):
-  /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied over `base`, and
-    * `auto` resolved against the locale into a [[GlyphSet]] (B-124).
+  /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied, and `auto` resolved
+    * against the locale into a [[GlyphSet]] (B-124). Every other field keeps [[TuiConfig.default]]'s value.
     */
-  def applyTo(settings: TuiSettings, base: TuiConfig = TuiConfig.default): TuiConfig =
+  def applyTo(settings: TuiSettings): TuiConfig =
     val glyphSet = glyphs.getOrElse(settings.glyphs) match
       case GlyphChoice.Emoji => GlyphSet.Emoji
       case GlyphChoice.Ascii => GlyphSet.Ascii
       case GlyphChoice.Auto  => if utf8Locale then GlyphSet.Emoji else GlyphSet.Ascii
-    base.copy(
+    TuiConfig.default.copy(
       glyphs = glyphSet,
-      noColor = base.noColor || noColor,
+      noColor = noColor,
       reducedMotion = reducedMotion.getOrElse(settings.reducedMotion),
       animationIntervalMs = settings.animationIntervalMs,
       statusPollIntervalMs = settings.statusPollIntervalMs,
