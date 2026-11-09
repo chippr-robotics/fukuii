@@ -222,6 +222,15 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     TuiStatusProbe.toSnapSyncState(chainDownload).overall shouldBe 0.8 +- 1e-9
   }
 
+  // B-044 (live check 2026-11-07): while SNAP runs the sync controller answers GetStatus with a 0 block target
+  // (SyncController.scala:874-881, runningSnapSync), and the TUI read that as "no target yet" for the whole run.
+  it should "not say 'no target yet' while a SNAP sample shows SNAP running" taggedAs (UnitTest) in {
+    val status = SyncProtocol.Status.Syncing(0, Progress(5, 0), None)
+    val s = probe(peerManager(), syncController(status), best = 5, snap = Some(snapSample))()
+    s.syncStatus shouldBe "Syncing (SNAP)"
+    s.snapSync.map(_.phase) shouldBe Some("AccountRangeSync")
+  }
+
   it should "say so when syncing has no target yet (no peers to pick a pivot from)" taggedAs (UnitTest) in {
     val status = SyncProtocol.Status.Syncing(0, Progress(0, 0), None)
     val s = probe(peerManager(), syncController(status), best = 0)()

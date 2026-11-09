@@ -439,6 +439,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WARN, and ends the frame loop. A key read that fails for any other reason is logged at ERROR, with the terminal and
   console logging given back, where before it was swallowed on every frame. A node started without `--tui` no longer
   creates a TUI instance at shutdown.
+- **`--tui` no longer says "no target yet" during SNAP sync (B-044).** While SNAP runs the sync controller reports no
+  block target, and the dashboard read that as "Syncing (no target yet)" for the whole run; with a SNAP sample in hand
+  it now reads "Syncing (SNAP)".
 - **Quitting `--tui` restores the terminal.** After `Q`, the shell was left in the alternate screen with the cursor
   hidden, and the shutdown logs were drawn over it. The restore was left to a JVM shutdown hook, and shutdown hooks run
   concurrently, in no order: JLine's own hook closed the terminal first (it restores the terminal mode but not the

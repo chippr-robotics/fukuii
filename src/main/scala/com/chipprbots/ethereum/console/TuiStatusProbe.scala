@@ -81,7 +81,7 @@ class TuiStatusProbe(
       .when(status.syncing)(Try(snapProgress()).toOption.flatten)
       .flatten
       .filter(p => ActiveSnapPhases.contains(p.phase))
-    val (current, best, description) = describe(status, localBest)
+    val (current, best, description) = describe(status, localBest, snapRunning = snap.isDefined)
     SyncSample(
       current,
       best,
@@ -114,13 +114,29 @@ object TuiStatusProbe:
       case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
       case Some(Failure(e))                   => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
 
-  /** Map a sync status to (current block, best known block or 0 if unknown, description). */
-  private[console] def describe(status: SyncProtocol.Status, localBest: Long): (Long, Long, String) = status match
+  /** Map a sync status to (current block, best known block or 0 if unknown, description).
+    *
+    * While SNAP runs the sync controller reports no block target (`SyncController` answers `GetStatus` itself in
+    * `runningSnapSync`, with a target of 0), so a 0 target with a SNAP sample in hand is SNAP at work, not a sync
+    * waiting for its target (B-044).
+    *
+    * @param snapRunning
+    *   the SNAP monitor has a recent sample of an active phase
+    */
+  private[console] def describe(
+      status: SyncProtocol.Status,
+      localBest: Long,
+      snapRunning: Boolean
+  ): (Long, Long, String) = status match
     case SyncProtocol.Status.Syncing(_, blocks, stateNodes) =>
       val target = blocks.target.toLong
       val current = if blocks.current > 0 then blocks.current.toLong else localBest
       val state = stateNodes.filter(_.nonEmpty).map(p => f" (state ${p.current}%,d / ${p.target}%,d)").getOrElse("")
-      (current, target, if target > 0 then s"Syncing$state" else "Syncing (no target yet)")
+      val description =
+        if target > 0 then s"Syncing$state"
+        else if snapRunning then "Syncing (SNAP)"
+        else "Syncing (no target yet)"
+      (current, target, description)
     case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")
     case SyncProtocol.Status.NotSyncing => (localBest, 0L, "Not syncing")
 
