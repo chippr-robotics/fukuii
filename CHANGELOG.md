@@ -255,6 +255,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **A PoW block mined from ETC's Olympia block is the block import computes (B-167). ETC and Mordor.** Olympia is not
+  scheduled on any shipped chain yet; this matters once it is. A block from fukuii's PoW miner (internal, or
+  `eth_getWork` / `eth_submitWork`) at or after Olympia differed from import in three ways:
+  - the header had no base fee, so import refused it;
+  - the ECIP-1111 treasury credit was paid on a gas used of 0 instead of the block's real gas used;
+  - the block skipped import's pre-transaction steps, so EIP-2935's history contract and the parent hash (ECIP-1121)
+    were missing from its state.
+  The miner now sets the base fee with the validator's own rule (`BaseFeeCalculator`), runs import's pre-transaction
+  steps (`BlockExecution.applyBlockPreamble`, moved there unchanged), and pays the reward on the executed gas.
+  `eth_simulateV1` on ETC from Olympia also writes the EIP-2935 history now. Blocks before Olympia are unchanged; on
+  ETH configs the PoW miner gives blocks from London a base fee as well (ETH's real blocks come from the Engine API).
 - **A block whose parent this node lacks no longer gets the peer that sent it blacklisted (B-007, #1683).** Regular sync
   read such a block as a bad block, and blacklisted the peer for 60 s. The gap is the node's, not the peer's. T062 (Mordor,
   24 h) blacklisted 33 peers for `Block import error: UNKNOWN_PARENT: parent header not found` in a run with only five
