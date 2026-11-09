@@ -179,3 +179,17 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
     (c.glyphs, c.reducedMotion, c.animationIntervalMs, c.statusPollIntervalMs, c.splashMs) shouldBe
       ((GlyphSet.Ascii, true, 200L, 2000L, 0L))
   }
+
+  // prism, slice 2 review: every non-default `fukuii.tui` value reaches the config the TUI runs with.
+  "TuiConfig.load" should "carry every non-default fukuii.tui value through" taggedAs (UnitTest) in {
+    val fukuii = ConfigFactory.parseString(
+      """tui { glyphs = ascii, reduced-motion = true, animation-interval-ms = 120, status-poll-interval-ms = 3000,
+        |splash-ms = 0 }""".stripMargin
+    )
+    val c = TuiConfig.load(fukuii, TuiEnv.from(Map("LANG" -> "en_US.UTF-8"), Map.empty))
+    (c.glyphs, c.reducedMotion, c.animationIntervalMs, c.statusPollIntervalMs, c.splashMs) shouldBe
+      ((GlyphSet.Ascii, true, 120L, 3000L, 0L))
+    // ... and the fields fukuii.tui does not set keep their defaults.
+    c.copy(glyphs = GlyphSet.Emoji, reducedMotion = false, animationIntervalMs = 250, statusPollIntervalMs = 1000,
+      splashMs = 3000) shouldBe TuiConfig.default
+  }

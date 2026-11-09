@@ -32,7 +32,7 @@ import com.typesafe.config.ConfigException
   * @param splashMs
   *   how long the startup splash shows; 0 for none (`FUKUII_TUI_NO_SPLASH`)
   */
-case class TuiConfig(
+final case class TuiConfig(
     updateIntervalMs: Long = TuiConfig.DefaultUpdateIntervalMs,
     shutdownTimeoutMs: Long = TuiConfig.DefaultShutdownTimeoutMs,
     showLogo: Boolean = true,
