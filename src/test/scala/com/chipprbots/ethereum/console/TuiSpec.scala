@@ -452,3 +452,14 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.getState.uptimeSeconds shouldBe 31L
     finally tt.close()
   }
+
+  // prism, slice 2 review: a terminal lost at the end of its input went quietly; it now says so, once.
+  it should "say so, once, when keyboard input ends" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tt.eofReads = true
+    val events = tuiLogDuring {
+      tui.checkInput(10); tui.checkInput(10)
+    }
+    events.map(_._1) shouldBe List(Level.WARN)
+    events.head._2 should include("end of input")
+    tui.isEnabled shouldBe false
+  }
