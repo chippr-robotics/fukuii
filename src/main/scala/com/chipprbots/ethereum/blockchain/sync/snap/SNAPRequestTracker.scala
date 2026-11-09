@@ -10,6 +10,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.PeerRateTracker
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.utils.Logger
 
@@ -23,11 +24,14 @@ import com.chipprbots.ethereum.utils.Logger
   *   - Adaptive timeout via PeerRateTracker (port of geth's msgrate)
   *   - Response validation and matching
   *   - Peer management for SNAP requests
+  *   - Feeds the peer scorer, if given one (spec 027 slice 4a): a response with its round-trip time at completion, a
+  *     timeout when a request expires. Observation only: nothing in the tracker reads a score.
   */
 class SNAPRequestTracker(
     // Monotonic: a wall-clock (NTP) step must not look like a process stall. Only differences are ever used.
     nowMs: () => Long = () => System.nanoTime() / 1_000_000L,
-    stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default
+    stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default,
+    scorer: Option[PeerScoringManager] = None
 )(implicit scheduler: Scheduler)
     extends Logger:
 
@@ -212,6 +216,8 @@ class SNAPRequestTracker(
     // Record timeout in rate tracker (items=0 slashes capacity to zero)
     val msgType = requestTypeToMsgType(req.requestType)
     rateTracker.update(req.peer.id.value, msgType, elapsed, items = 0)
+    // The one place a request times out, for the timer's own expiry and for the owner's expireRequest alike.
+    scorer.foreach(_.recordTimeout(req.peer.id))
     SNAPSyncMetrics.incrementRequestTimeout()
     recordFailureMetric(req.requestType)
     pendingRequests.remove(requestId)
@@ -257,6 +263,8 @@ class SNAPRequestTracker(
       val msgType = requestTypeToMsgType(request.requestType)
       rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
       recordDownloadTime(request.requestType, elapsed)
+      // The size of the reply is not known here; the byte count is not part of the score.
+      scorer.foreach(_.recordResponse(request.peer.id, bytes = 0L, latencyMs = elapsed))
 
       log.debug(
         s"SNAP request ${request.requestType} completed for request ID $requestId " +
