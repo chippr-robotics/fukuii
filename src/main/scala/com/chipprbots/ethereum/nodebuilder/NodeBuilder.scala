@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.ScoringBlacklist
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
@@ -266,7 +267,16 @@ trait PeerDiscoveryManagerBuilder:
 
 trait BlacklistBuilder:
   private val blacklistSize: Int = 1000
-  lazy val blacklist: Blacklist = CacheBasedBlacklist.empty(blacklistSize)
+
+  /** Spec 027 slice 4a: the one peer scorer of the node, exporting its scores to [[NetworkMetrics]]. It observes: no
+    * dial, peer selection, blacklist or disconnect decision reads it.
+    */
+  lazy val peerScoringManager: PeerScoringManager =
+    new PeerScoringManager(exporter = NetworkMetrics.publishPeerScores)
+
+  /** The node-wide blacklist; the scorer hears of every blacklisting of a peer (not of an address). */
+  lazy val blacklist: Blacklist =
+    new ScoringBlacklist(CacheBasedBlacklist.empty(blacklistSize), peerScoringManager)
 
 trait NodeStatusBuilder:
 
@@ -453,11 +463,13 @@ trait PeerManagerActorBuilder:
           knownNodesManager,
           handshaker,
           authHandshaker,
-          instanceConfig.supportedCapabilities
+          instanceConfig.supportedCapabilities,
+          Some(peerScoringManager)
         ),
         discoveryConfig,
         blacklist,
-        snapGoodPeers = snapGoodPeersOpt
+        snapGoodPeers = snapGoodPeersOpt,
+        peerScoringManager = Some(peerScoringManager)
       ),
       "peer-manager"
     )
@@ -1185,7 +1197,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           messConfigOpt,
           forkChoiceManagerForSync,
           reorgState = blockchain,
-          txGossipGate = txGossipGate
+          txGossipGate = txGossipGate,
+          peerScoringManager = Some(peerScoringManager)
         ),
         "sync-controller"
       )

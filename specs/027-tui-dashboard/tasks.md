@@ -298,7 +298,7 @@ shows a score for every handshaked peer.
 
 ### Pre-flight
 
-- [ ] T128 Dead-code review per `.claude/agent-protocols/dead-code-review.md`: record the "Wire it" verdict in the PR
+- [x] T128 Dead-code review per `.claude/agent-protocols/dead-code-review.md`: record the "Wire it" verdict in the PR
       (plan.md "Decisions": added in `bee01af48` with no caller, never wired; tested by `PeerScoreSpec` and
       `PeerScoreFeedbackSpec`; not superseded by `SnapGoodPeers`). `herald` confirms plan.md's event map before code and
       picks how the scorer reaches `PeerActor` (a factory parameter or a new internal `PeerEvent`). Correct ADR CON-003,
@@ -307,61 +307,61 @@ shows a score for every handshaked peer.
 
 ### Tests for slice 4a (write first, must fail)
 
-- [ ] T129 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoringManagerSpec.scala` (new), with a fixed
+- [x] T129 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoringManagerSpec.scala` (new), with a fixed
       `Clock`: each `record*` call moves the score the expected way; a blacklist event never raises it (fails today:
       `recordBlacklist` refreshes `lastSeen`); events for one peer from four threads lose none (latches; fails today:
       get-then-put); the map never exceeds its cap and evicts the oldest `lastSeen`; `getAllScores` covers every recorded
       peer
-- [ ] T130 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoreSpec.scala` and `PeerScoreFeedbackSpec.scala`:
+- [x] T130 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerScoreSpec.scala` and `PeerScoreFeedbackSpec.scala`:
       explicit times instead of the wall clock, same expectations, no case deleted
-- [ ] T131 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/NetworkMetricsSpec.scala` (new), the gate's
+- [x] T131 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/NetworkMetricsSpec.scala` (new), the gate's
       deterministic test: with a fixed clock, publish; record a timeout for peer P; publish again; P's exported score is
       strictly lower (SC-013). Also: publishing is throttled to once per second of the clock; the aggregate gauges
       (count, average, high/medium/low) equal `getStatistics`; the registry has no per-peer series
-- [ ] T132 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerManagerSpec.scala`: `PeerHandshakeSuccessful`
+- [x] T132 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/PeerManagerSpec.scala`: `PeerHandshakeSuccessful`
       records a successful handshake under the hex node id; `RefreshPeerStatuses` publishes the snapshot; a
       `PeerAddress` blacklist records nothing
-- [ ] T133 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/p2p/PeerActorSpec.scala`: a `HandshakeFailure`
+- [x] T133 [P] [US4] `src/test/scala/com/chipprbots/ethereum/network/p2p/PeerActorSpec.scala`: a `HandshakeFailure`
       records a failed handshake under `PeerId(hex(remoteNodeId))`; `DisconnectPeer(BreachOfProtocol)` on a handshaked
       peer records a protocol violation
-- [ ] T134 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/PeersClientSpec.scala`: `ResponseReceived`
+- [x] T134 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/PeersClientSpec.scala`: `ResponseReceived`
       records a response with its `timeTaken`; `RequestFailed("request timeout")` records a timeout;
       `RequestFailed("connection closed")` records nothing
-- [ ] T135 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPRequestTrackerSpec.scala`: a
+- [x] T135 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPRequestTrackerSpec.scala`: a
       completed request records a response with the elapsed time (injected `nowMs`); the armed timeout records a
       timeout
-- [ ] T136 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/CacheBasedBlacklistSpec.scala`: the scoring
+- [x] T136 [P] [US4] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/CacheBasedBlacklistSpec.scala`: the scoring
       decorator records a blacklist for a `PeerId`, nothing for a `PeerAddress`, and delegates every call unchanged
-- [ ] T137 `sbt "testOnly *PeerScor* *NetworkMetrics* *PeerManagerSpec* *PeerActorSpec* *PeersClientSpec
+- [x] T137 `sbt "testOnly *PeerScor* *NetworkMetrics* *PeerManagerSpec* *PeerActorSpec* *PeersClientSpec
       *SNAPRequestTracker* *CacheBasedBlacklist*"` → T129–T136 fail; record which
 
 ### Implementation for slice 4a
 
-- [ ] T138 [US4] `network/PeerScore.scala` and `network/PeerScoringManager.scala`: an injected `java.time.Clock` (default
+- [x] T138 [US4] `network/PeerScore.scala` and `network/PeerScoringManager.scala`: an injected `java.time.Clock` (default
       `Clock.systemUTC()`) with `now` passed to `PeerScore`; `TrieMap.updateWith` per event; a cap with oldest-`lastSeen`
       eviction (size set by `herald`); the blacklist formula change `herald` picks; the recency comment (`PeerScore.scala:75`)
       corrected
-- [ ] T139 [US4] `network/NetworkMetrics.scala`: the score snapshot (published by the scorer, read by anyone) and the
+- [x] T139 [US4] `network/NetworkMetrics.scala`: the score snapshot (published by the scorer, read by anyone) and the
       aggregate gauges; publishing on update is throttled to once per second of the scorer's clock
-- [ ] T140 [US4] `nodebuilder/NodeBuilder.scala`: `lazy val peerScoringManager` beside `blacklist` (`:269`); wrap
+- [x] T140 [US4] `nodebuilder/NodeBuilder.scala`: `lazy val peerScoringManager` beside `blacklist` (`:269`); wrap
       `blacklist` in the scoring decorator; pass the scorer to `PeerManagerActor` (`:442`), the `PeerActor` factory,
       `PeersClient` and `SNAPRequestTracker`'s owner
-- [ ] T141 [US4] `network/PeerManagerActor.scala`: record the handshake in `handlePeerHandshakeSuccessful` (`:969`);
+- [x] T141 [US4] `network/PeerManagerActor.scala`: record the handshake in `handlePeerHandshakeSuccessful` (`:969`);
       publish on `RefreshPeerStatuses` (`:758`)
-- [ ] T142 [US4] `network/PeerActor.scala`: record the failed handshake (`:428`) and the protocol violation on
+- [x] T142 [US4] `network/PeerActor.scala`: record the failed handshake (`:428`) and the protocol violation on
       `DisconnectPeer(BreachOfProtocol)`, the way `herald` chose in T128
-- [ ] T143 [US4] `blockchain/sync/PeersClient.scala`: record responses and timeouts in the `PRHResultCmd` handler
+- [x] T143 [US4] `blockchain/sync/PeersClient.scala`: record responses and timeouts in the `PRHResultCmd` handler
       (`:263-281`)
-- [ ] T144 [US4] `blockchain/sync/snap/SNAPRequestTracker.scala`: record responses at completion (`:59`) and timeouts in
+- [x] T144 [US4] `blockchain/sync/snap/SNAPRequestTracker.scala`: record responses at completion (`:59`) and timeouts in
       the armed timeout (`:141`); additive only; rebase onto spec 022's latest first
-- [ ] T145 [US4] `blockchain/sync/Blacklist.scala`: the scoring decorator over `Blacklist` (records for `PeerId` ids,
+- [x] T145 [US4] `blockchain/sync/Blacklist.scala`: the scoring decorator over `Blacklist` (records for `PeerId` ids,
       delegates every call)
 
 ### Gate and exit for slice 4a
 
-- [ ] T146 `sbt compile-all`; the T137 command → PASS
-- [ ] T147 `sbt scalafmtAll`; `sbt formatCheck` → clean
-- [ ] T148 `scripts/snap-split/verify.sh --branch feat/027-s4a-peer-scoring origin/staging` → OK
+- [x] T146 `sbt compile-all`; the T137 command → PASS
+- [x] T147 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [x] T148 `scripts/snap-split/verify.sh --branch feat/027-s4a-peer-scoring origin/staging` → OK
 - [ ] T149 [US4] Manual, no sbt running: a Mordor node for 10 minutes; `/metrics` shows the aggregate score gauges; the
       scored-peer count covers every handshaked peer; dial, blacklist and disconnect volumes in the log are in line with
       an unwired run (SC-013)

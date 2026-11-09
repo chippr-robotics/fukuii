@@ -13,6 +13,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.snap.*
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
 import com.chipprbots.ethereum.testing.PeerTestHelpers
@@ -33,9 +34,9 @@ class ByteCodeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
   private def makeWorker(
       coordinator: TestProbe[ByteCodeCoordinator.Command],
-      networkPeerManager: TestProbe[NetworkPeerManagerActor.Command]
+      networkPeerManager: TestProbe[NetworkPeerManagerActor.Command],
+      requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
   ): org.apache.pekko.actor.typed.ActorRef[ByteCodeWorker.Command] =
-    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
     testKit.spawn(
       ByteCodeWorker(coordinator.ref, networkPeerManager.ref, requestTracker)
     )
@@ -162,6 +163,72 @@ class ByteCodeWorkerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     // Unstash triggers second task → GetByteCodes for reqId2
     val sendMsg2 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
     sendMsg2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg.requestId shouldBe reqId2
+  }
+
+  // ---- spec 027 slice 4a: the peer scorer hears of a response, never of an abandoned request ----------------------
+
+  private def scoredTracker(): (SNAPRequestTracker, PeerScoringManager) =
+    val scorer = new PeerScoringManager(java.time.Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC))
+    (new SNAPRequestTracker(scorer = Some(scorer))(using classicSystem.scheduler), scorer)
+
+  it should "forget a released request without crediting its peer with a response" taggedAs UnitTest in {
+    // ByteCodeWorkerRelease is sent when the peer disconnects: the peer has not answered.
+    val coordinator = makeCoordinatorProbe()
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-8", ClassicTestProbe().ref)
+    val (tracker, scorer) = scoredTracker()
+    val worker = makeWorker(coordinator, networkPeerManager, tracker)
+
+    val reqId1 = BigInt(20)
+    worker ! ByteCodeCoordinator.ByteCodeWorkerFetchTask(makeTask(Seq(codeHash1)), peer, reqId1, BigInt(1024 * 1024))
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
+    tracker.isPending(reqId1) shouldBe true
+
+    // A second task waits in the stash: its request going out proves the release was handled.
+    val reqId2 = BigInt(21)
+    worker ! ByteCodeCoordinator.ByteCodeWorkerFetchTask(makeTask(Seq(codeHash2)), peer, reqId2, BigInt(1024 * 1024))
+    worker ! ByteCodeCoordinator.ByteCodeWorkerRelease(reqId1)
+    val sendMsg2 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
+    sendMsg2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg.requestId shouldBe reqId2
+
+    tracker.isPending(reqId1) shouldBe false
+    scorer.getAllScores shouldBe empty
+  }
+
+  it should "credit the peer with a response when the bytecodes arrive" taggedAs UnitTest in {
+    val coordinator = makeCoordinatorProbe()
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-9", ClassicTestProbe().ref)
+    val (tracker, scorer) = scoredTracker()
+    val worker = makeWorker(coordinator, networkPeerManager, tracker)
+
+    val reqId = BigInt(22)
+    worker ! ByteCodeCoordinator.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
+
+    val response = ByteCodes(requestId = reqId, codes = Seq(ByteString("contract bytecode here")))
+    worker ! ByteCodeCoordinator.ByteCodesResponseMsg(response)
+    coordinator.expectMessage(1.second, ByteCodeCoordinator.ByteCodesResponseMsg(response))
+
+    scorer.getScore(peer.id).responsesReceived shouldBe 1
+  }
+
+  it should "credit no response when it is told a request timed out that the tracker still holds" taggedAs UnitTest in {
+    val coordinator = makeCoordinatorProbe()
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-10", ClassicTestProbe().ref)
+    val (tracker, scorer) = scoredTracker()
+    val worker = makeWorker(coordinator, networkPeerManager, tracker)
+
+    val reqId = BigInt(23)
+    worker ! ByteCodeCoordinator.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
+    networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd](1.second)
+
+    worker ! ByteCodeCoordinator.ByteCodeRequestTimeout(reqId)
+    coordinator.expectMessage(1.second, ByteCodeCoordinator.ByteCodeTaskFailed(reqId, "Timeout"))
+
+    tracker.isPending(reqId) shouldBe false
+    scorer.getAllScores shouldBe empty
   }
 
   it should "ignore ByteCodesResponseMsg for mismatched request ID" taggedAs UnitTest in {

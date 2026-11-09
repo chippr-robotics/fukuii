@@ -64,6 +64,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
@@ -105,7 +106,10 @@ private class SNAPSyncControllerImpl(
     terminalTotalDifficultyOverride: Option[BigInt] = None,
     // How the header download checks headers (HeaderChainCheck.forChain; SyncController passes the chain's). Implements
     // the state traits' `headerChainCheck` members.
-    val headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
+    val headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
+    // Spec 027 slice 4a: the node's peer scorer, fed by the request tracker. Observation only; None where nothing
+    // scores (unit suites).
+    peerScoringManager: Option[PeerScoringManager] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -315,7 +319,7 @@ private class SNAPSyncControllerImpl(
     )
 
   // The hubs implement `SnapSharedState` (spec 016 T041a).
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker(scorer = peerScoringManager)(using scheduler)
 
   var currentPhase: SyncPhase = Idle
 
@@ -1517,7 +1521,8 @@ object SNAPSyncController:
       terminalTotalDifficultyOverride: Option[BigInt] = None,
       // The header download's check for this chain (HeaderChainCheck.forChain). Parent-link only by default, which is
       // what suites that drive SNAP with synthetic headers need; production passes the chain's check.
-      headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
+      headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
+      peerScoringManager: Option[PeerScoringManager] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -1544,7 +1549,8 @@ object SNAPSyncController:
           intakeBudgetOverride,
           failedFinalizationPivot,
           terminalTotalDifficultyOverride,
-          headerChainCheck
+          headerChainCheck,
+          peerScoringManager
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

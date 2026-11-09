@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnec
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MaintainedPeersClassifier
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -85,7 +86,8 @@ object PeersClient:
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       peerEventBus: TypedActorRef[PeerEventBusCommand],
       blacklist: Blacklist,
-      syncConfig: SyncConfig
+      syncConfig: SyncConfig,
+      peerScoringManager: Option[PeerScoringManager] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       val handshakedPeersAdapter =
@@ -133,7 +135,8 @@ object PeersClient:
           blacklist,
           syncConfig,
           handshakedPeersAdapter,
-          peerDisconnectedAdapter
+          peerDisconnectedAdapter,
+          peerScoringManager
         ).running(Map.empty)
       }
     }
@@ -147,7 +150,8 @@ object PeersClient:
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers],
-      peerDisconnectedAdapter: TypedActorRef[PeerEvent]
+      peerDisconnectedAdapter: TypedActorRef[PeerEvent],
+      peerScoringManager: Option[PeerScoringManager]
   ):
 
     private var _maintainedNodeIdHexes: Set[String] = Set.empty
@@ -263,6 +267,8 @@ object PeersClient:
         case PRHResultCmd(id, result) =>
           requesters.get(id) match
             case Some(replyTo) =>
+              // Scored before the reply goes out; observation only, nothing here reads the score.
+              peerScoringManager.foreach(recordPeerScore(_, result))
               result match
                 case PeerRequestHandler.ResponseReceived(_, peer, message, timeTaken) =>
                   val (msgType, itemCount) = message match
@@ -503,6 +509,20 @@ object PeersClient:
         (peerNetworkStatus, peerWithInfo.peerInfo)
       }
       ctx.log.debug(s"Handshaked peers status (number of peers: ${handshakedPeersStatus.size}): $handshakedPeersStatus")
+
+  // ---- Peer scoring (spec 027 slice 4a) ----
+
+  /** Feed the peer scorer from a finished request: a response with the time it took, or a timeout. A closed connection
+    * and any other failure are not scored (see [[PeerRequestHandler.ConnectionClosedReason]]). The size of the reply is
+    * not known here, so the response is recorded with 0 bytes; the byte count is not part of the score.
+    */
+  private[sync] def recordPeerScore(scorer: PeerScoringManager, result: PeerRequestHandler.Result): Unit =
+    result match
+      case PeerRequestHandler.ResponseReceived(_, peer, _, timeTaken) =>
+        scorer.recordResponse(peer.id, bytes = 0L, latencyMs = timeTaken)
+      case PeerRequestHandler.RequestFailed(_, peer, PeerRequestHandler.RequestTimeoutReason) =>
+        scorer.recordTimeout(peer.id)
+      case _: PeerRequestHandler.RequestFailed => ()
 
   // ---- Public API ----
 

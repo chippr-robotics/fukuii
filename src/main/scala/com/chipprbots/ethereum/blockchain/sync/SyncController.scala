@@ -60,6 +60,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.ledger.ChainInsertLock
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -263,7 +264,10 @@ object SyncController:
       backgroundAuditEnabled: Boolean = BackgroundAudit.enabledInNodeConfig,
       // #1654: the one-time chain-weight pass. On in production; unit fixtures that set inconsistent weights on purpose,
       // and test something else, turn it off so it does not repair them under the test.
-      chainWeightReconcileOn: Boolean = true
+      chainWeightReconcileOn: Boolean = true,
+      // Spec 027 slice 4a: the node's peer scorer, handed to every PeersClient and to the SNAP controller's request
+      // tracker. Observation only; None where nothing scores (unit fixtures).
+      peerScoringManager: Option[PeerScoringManager] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -294,7 +298,8 @@ object SyncController:
           reorgState,
           txGossipGate,
           backgroundAuditEnabled,
-          chainWeightReconcileOn
+          chainWeightReconcileOn,
+          peerScoringManager
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -337,7 +342,8 @@ object SyncController:
       // regular sync takes over; regular sync marks the node synced once it reaches the network's best block.
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate,
       backgroundAuditEnabled: Boolean,
-      chainWeightReconcileOn: Boolean
+      chainWeightReconcileOn: Boolean,
+      peerScoringManager: Option[PeerScoringManager]
   ):
     // scalastyle:on parameter.number
 
@@ -631,7 +637,9 @@ object SyncController:
             val peersClient =
               ctx.spawn(
                 Behaviors
-                  .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+                  .supervise(
+                    PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+                  )
                   .onFailure[Throwable](
                     // PR #1378: PeersClient is a sync backbone actor. No `.withMaxRestarts` —
                     // a cap would silently stop it forever and stall sync (validated live on Mordor).
@@ -676,7 +684,9 @@ object SyncController:
             val peersClient =
               ctx.spawn(
                 Behaviors
-                  .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+                  .supervise(
+                    PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+                  )
                   .onFailure[Throwable](
                     // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
                     SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -907,7 +917,9 @@ object SyncController:
           val gen = healingServeRootGeneration
           val peersClient = ctx.spawn(
             Behaviors
-              .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+              .supervise(
+                PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+              )
               .onFailure[Throwable](
                 // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
                 SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -951,7 +963,9 @@ object SyncController:
       val peersClient =
         ctx.spawn(
           Behaviors
-            .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+            .supervise(
+              PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+            )
             .onFailure[Throwable](
               // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
               SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -1407,7 +1421,9 @@ object SyncController:
           val newPeersClient =
             ctx.spawn(
               Behaviors
-                .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+                .supervise(
+                  PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+                )
                 .onFailure[Throwable](
                   // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
                   SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -1484,7 +1500,9 @@ object SyncController:
           val newPeersClient =
             ctx.spawn(
               Behaviors
-                .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+                .supervise(
+                  PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+                )
                 .onFailure[Throwable](
                   // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
                   SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -1949,7 +1967,8 @@ object SyncController:
             blacklist,
             syncController = snapAdapter,
             failedFinalizationPivot = snapPivotFailedFinalization,
-            headerChainCheck = snapHeaderChainCheck
+            headerChainCheck = snapHeaderChainCheck,
+            peerScoringManager = peerScoringManager
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2076,7 +2095,9 @@ object SyncController:
       val peersClient =
         ctx.spawn(
           Behaviors
-            .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+            .supervise(
+              PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+            )
             .onFailure[Throwable](
               // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
               SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)
@@ -2898,7 +2919,9 @@ object SyncController:
           val gen = recentRootGeneration
           val peersClient = ctx.spawn(
             Behaviors
-              .supervise(PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig))
+              .supervise(
+                PeersClient.behavior(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager)
+              )
               .onFailure[Throwable](
                 // PR #1378: PeersClient is a sync backbone actor — no `.withMaxRestarts` cap.
                 SupervisorStrategy.restartWithBackoff(500.millis, 10.seconds, 0.2)

@@ -11,6 +11,8 @@ import com.github.blemale.scaffeine.Scaffeine
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.BlacklistReasonType
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
 
@@ -326,6 +328,26 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
   override def keys: Set[BlacklistId] =
     cache.cleanUp() // Remove expired entries before returning keys
     cache.underlying.asMap().keySet().asScala.toSet
+
+/** Spec 027 slice 4a: records a blacklisting of a peer, an id that is a [[PeerId]], with the peer scorer, and delegates
+  * every call to `underlying` unchanged. A blacklisting by address (`PeerManagerActor.PeerAddress`) cannot be tied to
+  * one peer and is not scored. The scorer only observes: nothing here reads a score.
+  */
+final class ScoringBlacklist(underlying: Blacklist, scorer: PeerScoringManager) extends Blacklist:
+
+  override def isBlacklisted(id: BlacklistId): Boolean = underlying.isBlacklisted(id)
+
+  override def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit =
+    underlying.add(id, duration, reason)
+    id match
+      case peerId: PeerId => scorer.recordBlacklist(peerId)
+      case _              => ()
+
+  override def remove(id: BlacklistId): Unit = underlying.remove(id)
+
+  override def keys: Set[BlacklistId] = underlying.keys
+
+  override def reasonFor(id: BlacklistId): Option[BlacklistReasonType] = underlying.reasonFor(id)
 
 object CacheBasedBlacklist:
 
