@@ -394,8 +394,8 @@ object Tui:
   // Singleton instance
   private var instance: Option[Tui] = None
 
-  /** The instance [[getInstance]] created, if any; never creates one. A node started without `--tui` has none, and
-    * must not get one by asking (B-045).
+  /** The instance [[getInstance]] created, if any; never creates one. A node started without `--tui` has none, and must
+    * not get one by asking (B-045).
     */
   def current: Option[Tui] = synchronized(instance)
 

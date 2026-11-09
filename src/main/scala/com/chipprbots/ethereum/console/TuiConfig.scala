@@ -3,8 +3,8 @@ package com.chipprbots.ethereum.console
 import com.typesafe.config.Config as TypesafeConfig
 import com.typesafe.config.ConfigException
 
-/** The TUI's configuration as it runs: `fukuii.tui` ([[TuiSettings]]) with the environment applied ([[TuiEnv.applyTo]]),
-  * plus the display switches the code sets.
+/** The TUI's configuration as it runs: `fukuii.tui` ([[TuiSettings]]) with the environment applied
+  * ([[TuiEnv.applyTo]]), plus the display switches the code sets.
   *
   * @param updateIntervalMs
   *   the frame pace while nothing on screen moves (Q1: 1 fps)

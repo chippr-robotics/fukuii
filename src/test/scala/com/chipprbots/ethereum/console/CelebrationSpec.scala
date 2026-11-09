@@ -109,7 +109,7 @@ class CelebrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
     // The sparkle goes, and "synced" stays in its column: nothing else on the row moves (§3.8's rows are illustrative).
     row(10) should include("🪱[COMPLETE ✓]🧠    synced")
     blocksRow(TuiFixtures.celebration(GlyphSet.Emoji, 12)) should include("🪱[COMPLETE ✓]🧠")
-    blocksRow(TuiFixtures.celebration(GlyphSet.Emoji, 12)) should not include "synced"
+    (blocksRow(TuiFixtures.celebration(GlyphSet.Emoji, 12)) should not).include("synced")
   }
 
   "The celebration" should "match its golden frames at 80×24, frames 0/2/4/6/8/10, in both sets" taggedAs (UnitTest) in {

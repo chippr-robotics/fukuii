@@ -85,7 +85,7 @@ class TuiRenderer(config: TuiConfig):
     sb.toAttributedString
 
   /** The body's rows, and the first of them that moves with `tick`. */
-  private final case class Body(rows: Seq[AttributedString], firstMoving: Option[Int])
+  final private case class Body(rows: Seq[AttributedString], firstMoving: Option[Int])
 
   private def renderBody(
       state: TuiState,

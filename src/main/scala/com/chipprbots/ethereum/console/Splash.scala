@@ -98,7 +98,8 @@ object Splash:
     val body = (Seq.fill(top)(blank) ++ content).take(bodyRows).padTo(bodyRows, blank)
     (body :+ new AttributedString(SkipHint, theme.muted)).map(fitToWidth(_, w))
 
-  private def colsOf(rows: Seq[String]): Int = rows.map(r => new AttributedString(r).columnLength()).maxOption.getOrElse(0)
+  private def colsOf(rows: Seq[String]): Int =
+    rows.map(r => new AttributedString(r).columnLength()).maxOption.getOrElse(0)
 
   /** The whole logo with the wordmark rows not yet revealed left blank: one more row each tick (§3.7). */
   private def revealed(state: TuiState): Seq[String] =
@@ -120,7 +121,9 @@ object Splash:
     val frames = state.splashUntilTick.getOrElse(1L).max(1L)
     val crawled = if state.motion == Motion.Full then state.tick.min(frames - 1).max(0L).toDouble / frames else 0.0
     val sb = new AttributedStringBuilder()
-    sb.append(WormBar.render(WormBar.budgetFor(WormSlots, g), WormProgress.Known(crawled), state.tick, g, t, Motion.Reduced))
+    sb.append(
+      WormBar.render(WormBar.budgetFor(WormSlots, g), WormProgress.Known(crawled), state.tick, g, t, Motion.Reduced)
+    )
     sb.append("  starting node ", t.value)
     sb.append(WormBar.spinner(state.tick, state.motion, g), t.value)
     centred(sb.toAttributedString, width)

@@ -5,9 +5,9 @@ import java.util.Locale
 
 /** Named [[TuiState]] fixtures shared by the golden and property tests (spec 027 T004).
   *
-  * Every fixture is at one fixed `now`, so a fixture renders the same frame on every run. The data is
-  * illustrative (research C-10): it fixes layout and widths, not what a real node reported. Later slices add their own
-  * fixtures here.
+  * Every fixture is at one fixed `now`, so a fixture renders the same frame on every run. The data is illustrative
+  * (research C-10): it fixes layout and widths, not what a real node reported. Later slices add their own fixtures
+  * here.
   */
 object TuiFixtures:
 

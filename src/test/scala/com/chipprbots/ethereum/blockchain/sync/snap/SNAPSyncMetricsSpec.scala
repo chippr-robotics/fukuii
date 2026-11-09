@@ -96,7 +96,7 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     val after = System.currentTimeMillis()
     val at = SNAPSyncMetrics.latestProgressAt
     at should not be empty
-    at.get should (be >= before and be <= after)
+    at.get should ((be >= before).and(be <= after))
     SNAPSyncMetrics.latestProgress(maxAgeMillis = 60_000L) shouldBe Some(progress)
     SNAPSyncMetrics.latestProgressAt shouldBe at // reading does not move it
   }

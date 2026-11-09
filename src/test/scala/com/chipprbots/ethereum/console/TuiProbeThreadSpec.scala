@@ -139,9 +139,7 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val calls = new AtomicInteger(0)
     val p = probe(emptyPeers, syncController(syncing), 100.millis)
     withThread(
-      () =>
-        if calls.incrementAndGet() == 1 then throw new RuntimeException("boom") else p()
-      ,
+      () => if calls.incrementAndGet() == 1 then throw new RuntimeException("boom") else p(),
       intervalMs = 20
     ) { published =>
       eventually(timeout(5.seconds))(published.get should not be empty)

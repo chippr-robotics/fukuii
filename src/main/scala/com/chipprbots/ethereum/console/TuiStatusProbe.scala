@@ -26,9 +26,9 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
   * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
   *
-  * Both asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however
-  * many actors are slow (FR-011). Each source gets its own freshness ([[Sourced]]): a source that misses the wait
-  * shows its last answer as Stale, or Unresponsive if it never answered or failed.
+  * Both asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however many
+  * actors are slow (FR-011). Each source gets its own freshness ([[Sourced]]): a source that misses the wait shows its
+  * last answer as Stale, or Unresponsive if it never answered or failed.
   *
   * Runs on the [[TuiProbeThread]] — the blocking wait never touches an actor or dispatcher thread, nor the frame loop.
   * Not thread-safe: one thread polls it, and it keeps the previous snapshot to tell Stale from Unresponsive.
@@ -110,9 +110,9 @@ object TuiStatusProbe:
   /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
   private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
     ask.value.flatMap(_.toOption) match
-      case Some(Success(a))                   => Sourced.Poll.Answered(f(a))
+      case Some(Success(a))                          => Sourced.Poll.Answered(f(a))
       case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
-      case Some(Failure(e))                   => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+      case Some(Failure(e)) => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
 
   /** Map a sync status to (current block, best known block or 0 if unknown, description).
     *

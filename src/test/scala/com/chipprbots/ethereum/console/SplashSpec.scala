@@ -33,7 +33,7 @@ class SplashSpec
   "FukuiiBanner" should "keep the printBanner literal: 60 logo rows inside blank padding" taggedAs (UnitTest) in {
     FukuiiBanner.Text.linesIterator.size shouldBe 71
     FukuiiBanner.Logo should have size 60
-    FukuiiBanner.Logo.foreach(row => row should not endWith " ")
+    FukuiiBanner.Logo.foreach(row => (row should not).endWith(" "))
     FukuiiBanner.Logo.map(_.takeWhile(_ == ' ').length).min shouldBe 0 // the common indent is gone
   }
 
@@ -81,7 +81,7 @@ class SplashSpec
   it should "crop the logo to the creature where only 52 rows fit (Q2)" taggedAs (UnitTest) in {
     val frame = text(splash(11), 120, 52)
     FukuiiBanner.Creature.foreach(row => frame should include(row))
-    frame should not include FukuiiBanner.Logo(FukuiiBanner.WordmarkRows.start + 1)
+    (frame should not).include(FukuiiBanner.Logo(FukuiiBanner.WordmarkRows.start + 1))
   }
 
   it should "draw the 12-line logo above the FUKUII wordmark from tier M, and the wordmark alone at S" taggedAs (
@@ -90,8 +90,8 @@ class SplashSpec
     text(splash(3), 120, 40) should include("=+#+.")
     text(splash(3), 120, 40) should include(Splash.Wordmark.head.trim)
     text(splash(3), 80, 24) should include(Splash.Wordmark.head.trim)
-    text(splash(3), 80, 24) should not include "=+#+."
-    text(splash(3), 160, 48, TuiRenderer(TuiConfig.minimal.copy(splashMs = 3000))) should not include "=+#+."
+    (text(splash(3), 80, 24) should not).include("=+#+.")
+    (text(splash(3), 160, 48, TuiRenderer(TuiConfig.minimal.copy(splashMs = 3000))) should not).include("=+#+.")
   }
 
   // Research §8.7: the old banner test asserted the name; the wordmark spells it, and the info row says it.
@@ -102,7 +102,7 @@ class SplashSpec
     val frame = text(splash(3), 80, 24)
     frame should include("FUKUII")
     Splash.Wordmark.foreach(row => frame should include(row.trim))
-    frame should not include """/_/    \____/\____/\____/"""
+    (frame should not).include("""/_/    \____/\____/\____/""")
   }
 
   it should "crawl the worm once across, and say what it waits for, with a spinner" taggedAs (UnitTest) in {
@@ -121,7 +121,8 @@ class SplashSpec
   }
 
   it should "draw exactly height × width at every size, tick and glyph set" taggedAs (UnitTest) in {
-    val cases = Gen.zip(Gen.chooseNum(1, 200), Gen.chooseNum(1, 80), Gen.chooseNum(0L, 30L), Gen.oneOf(GlyphSet.values.toSeq))
+    val cases =
+      Gen.zip(Gen.chooseNum(1, 200), Gen.chooseNum(1, 80), Gen.chooseNum(0L, 30L), Gen.oneOf(GlyphSet.values.toSeq))
     forAll(cases, minSuccessful(300)) { case (w, h, tick, set) =>
       val lines = renderer.render(splash(tick, set), w, h, theme)
       lines should have size h.toLong
@@ -152,7 +153,10 @@ class SplashSpec
     val env = TuiEnv.from(Map("FUKUII_TUI_NO_SPLASH" -> "1", "LANG" -> "en_US.UTF-8"), Map.empty)
     val noSplash = env.applyTo(TuiSettings())
     noSplash.splashTicks shouldBe 0L
-    TuiEnv.from(Map("FUKUII_TUI_NO_SPLASH" -> "", "LANG" -> "C.UTF-8"), Map.empty).applyTo(TuiSettings()).splashTicks shouldBe 12L
+    TuiEnv
+      .from(Map("FUKUII_TUI_NO_SPLASH" -> "", "LANG" -> "C.UTF-8"), Map.empty)
+      .applyTo(TuiSettings())
+      .splashTicks shouldBe 12L
     TuiConfig.default.copy(reducedMotion = true).splashTicks shouldBe 2L
     splash(12).copy(motion = Motion.Reduced).splashCover(24) shouldBe None // no hand-over
   }

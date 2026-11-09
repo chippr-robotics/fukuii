@@ -12,8 +12,8 @@ enum WormProgress:
   case Known(fraction: Double)
   case Queued, Active, Complete
 
-/** The worm-to-brain bar the logs draw, for the TUI: budgeted in columns, in either glyph set, moved by `tick` (spec 027
-  * FR-006, research §4.1).
+/** The worm-to-brain bar the logs draw, for the TUI: budgeted in columns, in either glyph set, moved by `tick` (spec
+  * 027 FR-006, research §4.1).
   *
   * A known total draws `[`, the track, `]`, the brain and the percentage padded to 5 columns:
   * {{{

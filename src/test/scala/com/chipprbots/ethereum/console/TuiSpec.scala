@@ -330,7 +330,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.handleCommand('q') shouldBe TuiCommand.Continue // skipped the splash; did not quit
       tui.getState.splashCover(24) shouldBe None
       tui.render()
-      TuiTestTerminal.visible(tt.lastFrame) should not include Splash.SkipHint.trim
+      (TuiTestTerminal.visible(tt.lastFrame) should not).include(Splash.SkipHint.trim)
     finally
       tui.shutdown()
       tt.close()

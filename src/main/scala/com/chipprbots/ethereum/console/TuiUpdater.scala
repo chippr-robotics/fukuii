@@ -7,9 +7,9 @@ import com.chipprbots.ethereum.utils.Logger
 /** The TUI's frame loop (spec 027 FR-010, research §7.2).
   *
   * A background thread repeats [[tick]]: count a frame and take the latest snapshot, redraw, then wait for a key at the
-  * frame's pace — `animationIntervalMs` (250 ms) while anything on screen moves, `updateIntervalMs` (1000 ms)
-  * otherwise (Q1). The key wait IS the frame pacing: a key is handled as soon as it arrives, at either pace, and with
-  * no input the screen still refreshes.
+  * frame's pace — `animationIntervalMs` (250 ms) while anything on screen moves, `updateIntervalMs` (1000 ms) otherwise
+  * (Q1). The key wait IS the frame pacing: a key is handled as soon as it arrives, at either pace, and with no input
+  * the screen still refreshes.
   *
   * Polling is not done here: [[TuiProbeThread]] publishes snapshots, and the loop only reads the latest one, so a slow
   * actor never delays a frame (FR-011).

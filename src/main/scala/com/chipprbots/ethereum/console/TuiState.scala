@@ -161,8 +161,8 @@ case class TuiState(
   def clearSnapSyncState(): TuiState = copy(snapSyncState = None)
 
   /** Apply a status snapshot polled from the running node, at its time. A catch-up (a known target, not reached, then
-    * reached) starts the celebration the first time in this process and the quiet "back at head" frame after that
-    * (Q8). While paused, a catch-up shows nothing: `p` cancels a celebration (FR-014).
+    * reached) starts the celebration the first time in this process and the quiet "back at head" frame after that (Q8).
+    * While paused, a catch-up shows nothing: `p` cancels a celebration (FR-014).
     */
   def withStatus(status: NodeStatusSnapshot): TuiState =
     val next = copy(now = status.now)

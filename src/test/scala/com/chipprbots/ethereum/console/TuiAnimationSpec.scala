@@ -18,7 +18,8 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   private val ticks = 0L to 11L
 
   private def rows(s: TuiState, w: Int, h: Int): Seq[String] = renderer.render(s, w, h).map(_.toString)
-  private def blocksRow(s: TuiState, w: Int = 80, h: Int = 24): String = rows(s, w, h).find(_.trim.startsWith("Blocks")).get
+  private def blocksRow(s: TuiState, w: Int = 80, h: Int = 24): String =
+    rows(s, w, h).find(_.trim.startsWith("Blocks")).get
 
   /** The cells between the bar's brackets. */
   private def track(bar: String): String = bar.substring(bar.indexOf('[') + 1, bar.indexOf(']'))
@@ -58,10 +59,10 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
       def bar(p: Double, motion: Motion = Motion.Full, stalled: Boolean = false) =
         track(WormBar.render(budget, WormProgress.Known(p), tick, g, theme, motion, stalled).toString)
       withClue(s"${g.set} tick $tick: ") {
-        bar(low).replace(g.worm.text, "") should not include "~"
-        bar(0.5, stalled = true).replace(g.worm.text, "") should not include "~"
-        bar(0.5, Motion.Reduced).replace(g.worm.text, "") should not include "~"
-        bar(0.5, Motion.Paused).replace(g.worm.text, "") should not include "~"
+        (bar(low).replace(g.worm.text, "") should not).include("~")
+        (bar(0.5, stalled = true).replace(g.worm.text, "") should not).include("~")
+        (bar(0.5, Motion.Reduced).replace(g.worm.text, "") should not).include("~")
+        (bar(0.5, Motion.Paused).replace(g.worm.text, "") should not).include("~")
       }
   }
 
@@ -83,7 +84,8 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   }
 
   "The spinner" should "show frame tick mod 4 of |/-\\, and a static dot under reduced motion" taggedAs (UnitTest) in {
-    for tick <- ticks do WormBar.spinner(tick, Motion.Full, TuiGlyphs.Emoji) shouldBe "|/-\\".charAt((tick % 4).toInt).toString
+    for tick <- ticks do
+      WormBar.spinner(tick, Motion.Full, TuiGlyphs.Emoji) shouldBe "|/-\\".charAt((tick % 4).toInt).toString
     for g <- sets; motion <- Seq(Motion.Reduced, Motion.Paused); tick <- ticks do
       WormBar.spinner(tick, motion, g) shouldBe g.dot.text
   }
@@ -100,8 +102,11 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
 
   // SC-008: under reduced motion and pause, nothing moves.
   "Reduced motion and pause" should "draw identical frames for ticks 0–11" taggedAs (UnitTest) in {
-    val states = TuiFixtures.all.map(_._2) :+ ((g: GlyphSet) => TuiState(glyphs = g).withConnectionStatus("Starting node..."))
-    for fixture <- states; set <- GlyphSet.values; motion <- Seq(Motion.Reduced, Motion.Paused); (w, h) <- Seq(
+    val states =
+      TuiFixtures.all.map(_._2) :+ ((g: GlyphSet) => TuiState(glyphs = g).withConnectionStatus("Starting node..."))
+    for
+      fixture <- states; set <- GlyphSet.values; motion <- Seq(Motion.Reduced, Motion.Paused);
+      (w, h) <- Seq(
         (80, 24),
         (160, 48)
       )
@@ -119,7 +124,7 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     for set <- GlyphSet.values do
       val g = TuiGlyphs.of(set)
       regularAt(119, set).stalled shouldBe false
-      blocksRow(regularAt(119, set)) should not include g.stalled.text.trim
+      (blocksRow(regularAt(119, set)) should not).include(g.stalled.text.trim)
       regularAt(120, set).stalled shouldBe true
       val row = blocksRow(regularAt(120, set))
       withClue(row)(row should include(g.worm.text + g.stalled.text))
@@ -148,14 +153,16 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     val s = TuiFixtures.regularSyncEtc().copy(lastAdvanceAt = Some(TuiFixtures.Now))
     // A thousand frames without a new snapshot: no time has passed.
     (1 to 1000).foldLeft(s)((st, _) => st.nextFrame(None)).stalled shouldBe false
-    val later = TuiFixtures.snapshot(current = s.currentBlock, best = s.bestBlock, now = TuiFixtures.Now.plusSeconds(120))
+    val later =
+      TuiFixtures.snapshot(current = s.currentBlock, best = s.bestBlock, now = TuiFixtures.Now.plusSeconds(120))
     s.nextFrame(Some(later)).stalled shouldBe true
   }
 
   it should "clear on the next advance" taggedAs (UnitTest) in {
     val stalled = regularAt(300)
     stalled.stalled shouldBe true
-    val advanced = TuiFixtures.snapshot(current = stalled.currentBlock + 1, best = stalled.bestBlock, now = TuiFixtures.Now)
+    val advanced =
+      TuiFixtures.snapshot(current = stalled.currentBlock + 1, best = stalled.bestBlock, now = TuiFixtures.Now)
     val next = stalled.withStatus(advanced)
     next.stalled shouldBe false
     next.lastAdvanceAt shouldBe Some(TuiFixtures.Now)
@@ -191,7 +198,13 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     UnitTest
   ) in {
     animated(TuiFixtures.regularSyncEtc()) shouldBe true // ripple
-    animated(TuiState.initial.withBlockInfo(0, 100).withSnapSyncState(SnapSyncState(phase = "AccountRangeSync", accountsSynced = 5))) shouldBe true // pulse
+    // The pulse alone: connected (no spinner), and an Overall worm at 0 (no ripple).
+    val pulsing = TuiState.initial
+      .withConnectionStatus("Connected")
+      .withBlockInfo(0, 100)
+      .withSnapSyncState(SnapSyncState(phase = "AccountRangeSync", accountsSynced = 5))
+    animated(pulsing) shouldBe true
+    animated(pulsing.copy(snapSyncState = None)) shouldBe false
     animated(TuiState.initial.withConnectionStatus("Searching for peers")) shouldBe true // spinner
     animated(TuiFixtures.splash(GlyphSet.Emoji, tick = 3)) shouldBe true
     animated(TuiFixtures.celebration(GlyphSet.Emoji, frame = 4)) shouldBe true
