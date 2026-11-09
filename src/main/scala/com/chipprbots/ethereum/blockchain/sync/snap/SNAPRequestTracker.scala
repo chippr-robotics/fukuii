@@ -152,6 +152,8 @@ class SNAPRequestTracker(
   ): Cancellable =
     val scheduledAtMs = nowMs()
     scheduler.scheduleOnce(delay) {
+      // The request this timer expired, if it did: scored after the lock is released (see `scoreTimeout`).
+      var expired: Option[PendingRequest] = None
       synchronized {
         pendingRequests.get(requestId).foreach { req =>
           val now = nowMs()
@@ -179,9 +181,11 @@ class SNAPRequestTracker(
             onTimeout
           else
             expire(requestId, req, delay)
+            expired = Some(req)
             onTimeout
         }
       }
+      expired.foreach(scoreTimeout)
     }
 
   /** Expire a request the owner has decided timed out: forget it, slash the peer's rate capacity and count the failure.
@@ -199,13 +203,16 @@ class SNAPRequestTracker(
     * timer only schedules `revertStorageRequest` on the sync loop, and a response that reaches `OnStorage` first is
     * still matched against `storageReqs`.
     */
-  def expireRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
-    pendingRequests.get(requestId).map { req =>
-      req.timeoutTask.foreach(_.cancel())
-      expire(requestId, req, Duration.Zero)
-      req
+  def expireRequest(requestId: BigInt): Option[PendingRequest] =
+    val expired = synchronized {
+      pendingRequests.get(requestId).map { req =>
+        req.timeoutTask.foreach(_.cancel())
+        expire(requestId, req, Duration.Zero)
+        req
+      }
     }
-  }
+    expired.foreach(scoreTimeout)
+    expired
 
   private def expire(requestId: BigInt, req: PendingRequest, delay: FiniteDuration): Unit =
     val elapsed = nowMs() - req.timestamp
@@ -217,11 +224,16 @@ class SNAPRequestTracker(
     // Record timeout in rate tracker (items=0 slashes capacity to zero)
     val msgType = requestTypeToMsgType(req.requestType)
     rateTracker.update(req.peer.id.value, msgType, elapsed, items = 0)
-    // The one place a request times out, for the timer's own expiry and for the owner's expireRequest alike.
-    scorer.foreach(_.recordTimeout(req.peer.id))
     SNAPSyncMetrics.incrementRequestTimeout()
     recordFailureMetric(req.requestType)
     pendingRequests.remove(requestId)
+
+  /** Score a request that expired. `expire` is the one place a request times out, for the timer's own expiry and for
+    * the owner's [[expireRequest]] alike, and both callers score it here, after they have released the tracker's lock:
+    * the scorer's throttled export snapshots every tracked peer, which is not work to do while requests wait on it.
+    */
+  private def scoreTimeout(req: PendingRequest): Unit =
+    scorer.foreach(_.recordTimeout(req.peer.id))
 
   /** Check if a request is pending
     *
@@ -254,29 +266,34 @@ class SNAPRequestTracker(
     * @return
     *   the completed request if it was pending
     */
-  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] = synchronized {
-    pendingRequests.remove(requestId).map { request =>
-      // Cancel timeout
-      request.timeoutTask.foreach(_.cancel())
-      val elapsed = nowMs() - request.timestamp
+  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] =
+    val completed = synchronized {
+      pendingRequests.remove(requestId).map { request =>
+        // Cancel timeout
+        request.timeoutTask.foreach(_.cancel())
+        val elapsed = nowMs() - request.timestamp
 
-      // Record measurement in rate tracker
-      val msgType = requestTypeToMsgType(request.requestType)
-      rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
-      recordDownloadTime(request.requestType, elapsed)
+        // Record measurement in rate tracker
+        val msgType = requestTypeToMsgType(request.requestType)
+        rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
+        recordDownloadTime(request.requestType, elapsed)
+
+        log.debug(
+          s"SNAP request ${request.requestType} completed for request ID $requestId " +
+            s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
+        )
+        (request, elapsed)
+      }
+    }
+    completed.map { case (request, elapsed) =>
+      // Scored after the lock is released: the scorer's throttled export snapshots every tracked peer.
       // Only a reply that carried something is the peer answering. Requesters that abandon a request (the pivot refresh,
       // a peer that disconnected, a coordinator that drained its tasks) complete it with 0 items to forget it, and an
       // empty range with no proof passes 0 too; neither earns the peer a response. The sites that record a real reply
       // pass at least 1. The size of the reply is not known here; the byte count is not part of the score.
       if responseItems > 0 then scorer.foreach(_.recordResponse(request.peer.id, bytes = 0L, latencyMs = elapsed))
-
-      log.debug(
-        s"SNAP request ${request.requestType} completed for request ID $requestId " +
-          s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
-      )
       request
     }
-  }
 
   /** Forget a pending request and cancel its timeout WITHOUT recording any rate or failure metric. For a requester that
     * is abandoning or stopping, where the peer did nothing wrong (unlike [[completeRequest]], whose zero-item form

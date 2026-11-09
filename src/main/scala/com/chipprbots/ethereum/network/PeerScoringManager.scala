@@ -233,13 +233,24 @@ final case class ScoringStatistics(
 object ScoringStatistics:
   val empty: ScoringStatistics = ScoringStatistics(0, 0.0, 0, 0, 0)
 
-  /** High is 0.7 and above, medium is 0.4 up to 0.7, low is below 0.4. */
+  /** High is 0.7 and above, medium is 0.4 up to 0.7, low is below 0.4. One pass: it runs on every export, over up to
+    * the cap's worth of scores.
+    */
   def of(scoreValues: Iterable[Double]): ScoringStatistics =
-    val values = scoreValues.toSeq
+    var total = 0
+    var sum = 0.0
+    var high = 0
+    var medium = 0
+    scoreValues.foreach { value =>
+      total += 1
+      sum += value
+      if value >= 0.7 then high += 1
+      else if value >= 0.4 then medium += 1
+    }
     ScoringStatistics(
-      totalPeers = values.size,
-      averageScore = if values.nonEmpty then values.sum / values.size else 0.0,
-      highScoringPeers = values.count(_ >= 0.7),
-      mediumScoringPeers = values.count(s => s >= 0.4 && s < 0.7),
-      lowScoringPeers = values.count(_ < 0.4)
+      totalPeers = total,
+      averageScore = if total > 0 then sum / total else 0.0,
+      highScoringPeers = high,
+      mediumScoringPeers = medium,
+      lowScoringPeers = total - high - medium
     )
