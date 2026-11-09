@@ -80,7 +80,7 @@ object EthSimulateService:
       status: BigInt,
       returnData: ByteString,
       gasUsed: BigInt,
-      maxUsedGas: BigInt, // Gas used before refunds
+      maxUsedGas: BigInt, // Peak gas before refunds, raised to the EIP-7623 floor from Prague (geth MaxUsedGas)
       logs: Seq[TxLog],
       error: Option[SimulateError] = None
   )
@@ -1229,7 +1229,7 @@ class EthSimulateService(
 
       // Execute transaction
       val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
-      val TxResult(newWorld, gasUsed, logs, returnData, vmError, txExecutionGas, txStateGas) =
+      val TxResult(newWorld, gasUsed, logs, returnData, vmError, txExecutionGas, txStateGas, maxUsedGas) =
         blockPreparator.executeTransactionForSimulation(
           stx,
           sender,
@@ -1364,7 +1364,7 @@ class EthSimulateService(
             status = BigInt(0),
             returnData = ByteString.empty,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = Seq.empty,
             error = Some(SimulateError(3, msg, Some(returnData)))
           )
@@ -1380,7 +1380,7 @@ class EthSimulateService(
             status = BigInt(0),
             returnData = ByteString.empty,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = Seq.empty,
             error = Some(SimulateError(-32015, errMsg))
           )
@@ -1389,7 +1389,7 @@ class EthSimulateService(
             status = BigInt(1),
             returnData = returnData,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = allLogs
           )
       callResults += callResult

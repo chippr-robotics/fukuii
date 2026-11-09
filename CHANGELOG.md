@@ -479,6 +479,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `api.go:1366`). Every `movePrecompileToAddress` there is `account … is not a precompile`, a precompile the block has
     included, and no entry deletes a precompile. It used to move and delete precompiles as `eth_call` does. The other
     overrides apply as before.
+- **`eth_simulateV1` reports `maxUsedGas` as go-ethereum does: the peak gas before the refund, raised to the calldata
+  floor from Prague (#1727, B-130). Both chains.** `maxUsedGas` was a copy of `gasUsed`, which is the gas after the
+  refund, so a call that earned a refund (one that clears a storage slot, for example) reported the same figure twice.
+  It is now the gas the call had used before the refund, which is above `gasUsed` by the refund when no floor applies.
+  From Prague (EIP-7623; on ETC from Olympia, ECIP-1121) it is also never below the calldata floor, which is how
+  go-ethereum's `settleGas` computes it. `gasUsed`, the receipts, the block's `gasUsed` and the state root of a
+  simulated block do not change, and neither does block import: the new `TxResult.maxUsedGas` is read only by this
+  RPC, and `TxResultBlockImportPinSpec` pins the gas, receipts and state roots of block execution on ETH and ETC.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -593,10 +601,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
-  unbounded block-gap loop that stalled the node, the malformed override values it accepted and the precompile override
-  cases it got wrong are fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on Ephemery found these
-  differences:
-  - `maxUsedGas` reports gas after refunds;
+  unbounded block-gap loop that stalled the node, the malformed override values it accepted, the precompile override
+  cases it got wrong and its `maxUsedGas` are fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on
+  Ephemery found these differences:
   - a request system contract whose code is overridden away is skipped instead of failing;
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
     length`).
