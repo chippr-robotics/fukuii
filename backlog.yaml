@@ -1757,3 +1757,13 @@ items:
     refs: [B-155]
     links: {}
     notes: "From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon."
+  - id: B-160
+    title: SNAP pivot header checks on ETC bootstrap/refresh paths (details in private notes)
+    priority: P1
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-09
+    refs: []
+    links: {}
+    notes: From forge review of B-004, 2026-11-09. forge then herald.
