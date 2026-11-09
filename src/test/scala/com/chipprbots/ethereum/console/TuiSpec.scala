@@ -337,12 +337,17 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   }
 
   // B-045 (#1744 follow-up): the banner held the TUI lock through a 1 s Thread.sleep inside initialize().
+  // Checked on what initialize() does, not on how long it takes: it sets the screen up and draws nothing, so there is no
+  // banner or splash for it to hold the lock through; the splash is drawn by the frame loop. The time bounds only stop
+  // a regression from hanging the suite: they are well clear of a loaded runner, and of nothing initialize() waits for.
   it should "initialize without holding the lock through a splash" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal()
     val tui = tt.tui(TuiConfig.default.copy(suppressConsoleLogs = false))
     try
-      Await.result(Future(tui.initialize()), 600.millis) shouldBe true
-      Await.result(Future(tui.isEnabled), 600.millis) shouldBe true
+      tui.getState.splashUntilTick shouldBe Some(12L) // the default config has a splash to show
+      Await.result(Future(tui.initialize()), 10.seconds) shouldBe true
+      tt.output shouldBe Tui.EnterAltScreen + Tui.HideCursor + Tui.ClearScreen // no frame drawn, none held
+      Await.result(Future(tui.isEnabled), 10.seconds) shouldBe true // the lock is free
     finally
       tui.shutdown()
       tt.close()
