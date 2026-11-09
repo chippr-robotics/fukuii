@@ -247,6 +247,23 @@ final case class NodeStatusSnapshot(
 
   def snapSync: Option[SnapSyncState] = sync.value.flatMap(_.snap)
 
+  /** This snapshot read at `now`. A snapshot no newer poll has replaced for `staleAfter` has both sources Stale, and
+    * Unresponsive past [[Sourced.UnresponsiveAfter]], so a probe that hangs or dies shows instead of leaving its last
+    * answers on screen as Fresh.
+    */
+  def agedAt(now: Instant, staleAfter: Duration): NodeStatusSnapshot =
+    val age = Duration.between(this.now, now)
+    if age.compareTo(staleAfter) <= 0 then this
+    else
+      def aged[A](source: Sourced[A]): Sourced[A] =
+        if age.compareTo(Sourced.UnresponsiveAfter) > 0 then
+          Sourced.Unresponsive(s"no status poll for ${age.toSeconds}s")
+        else
+          source match
+            case Sourced.Fresh(last, at) => Sourced.Stale(last, at)
+            case other                   => other
+      copy(peers = aged(peers), sync = aged(sync))
+
 /** Node settings displayed in the TUI. */
 case class NodeSettings(
     dataDir: String = "",

@@ -6,6 +6,7 @@ import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.time.Clock
+import java.time.Duration
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.util.control.NonFatal
@@ -166,8 +167,16 @@ class Tui(
 
   def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
-  /** The next frame's state: the frame counter moves on (unless paused), and the latest snapshot, if any, applies. */
-  def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit = modify(_.nextFrame(snapshot))
+  /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late. */
+  private val snapshotStaleAfter =
+    Duration.ofMillis(2 * config.statusPollIntervalMs + TuiStatusProbe.DefaultAskTimeout.toMillis)
+
+  /** The next frame's state: the frame counter moves on (unless paused), and the latest snapshot, if any, applies, read
+    * at this TUI's clock, so a probe that stopped publishing shows ([[NodeStatusSnapshot.agedAt]]).
+    */
+  def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit =
+    val now = clock.instant()
+    modify(_.nextFrame(snapshot.map(_.agedAt(now, snapshotStaleAfter))))
 
   /** Render the TUI, unless the frame equals the last one written (FR-010).
     *

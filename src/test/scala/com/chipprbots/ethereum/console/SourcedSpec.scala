@@ -73,3 +73,19 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
     s.snapSync shouldBe None
     s.connectionStatus shouldBe "Connected"
   }
+
+  "NodeStatusSnapshot.agedAt" should "turn both sources Stale, then Unresponsive, when no newer poll arrives" taggedAs (
+    UnitTest
+  ) in {
+    val sample = SyncSample(100, 200, "Syncing")
+    val s = NodeStatusSnapshot(t0, 50, 90, Fresh(3, t0), Fresh(sample, t0))
+    val staleAfter = Duration.ofMillis(2_500)
+    s.agedAt(at(2), staleAfter) shouldBe s
+    val late = s.agedAt(at(3), staleAfter)
+    (late.peers, late.sync) shouldBe ((Stale(3, t0), Stale(sample, t0)))
+    late.connectionStatus shouldBe "Connected" // a stale source still shows its last answer
+    val gone = s.agedAt(at(6), staleAfter)
+    gone.peers shouldBe Unresponsive("no status poll for 6s")
+    gone.sync shouldBe Unresponsive("no status poll for 6s")
+    (gone.connectionStatus, gone.syncStatus) shouldBe (("Unresponsive (peer manager)", "Unresponsive (sync controller)"))
+  }

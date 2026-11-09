@@ -420,3 +420,20 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     finally logger.detachAppender(watcher)
     enabledAtError.get shouldBe Some(false)
   }
+
+  // prism, slice 2 review: a probe that hangs or dies left its last snapshot on screen, still Fresh, under frames that
+  // kept moving. Read at the TUI's clock, a snapshot that no newer poll has replaced turns its sources Unresponsive.
+  it should "show the sources Unresponsive when no newer status poll arrives" taggedAs (UnitTest) in {
+    val clock = new TuiFixtures.TestClock(TuiFixtures.Now)
+    val tt = new TuiTestTerminal()
+    val tui = new Tui(TuiTestTerminal.config, () => tt.terminal, _ => Some(tt.processOutput), clock)
+    try
+      val polled = TuiFixtures.snapshot(current = 10, best = 20, now = TuiFixtures.Now)
+      tui.nextFrame(Some(polled))
+      tui.getState.connectionStatus shouldBe "Connected"
+      clock.advance(6)
+      tui.nextFrame(Some(polled))
+      tui.getState.connectionStatus shouldBe "Unresponsive (peer manager)"
+      tui.getState.syncStatus shouldBe "Unresponsive (sync controller)"
+    finally tt.close()
+  }

@@ -11,10 +11,16 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -194,4 +200,22 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       enabled.set(false)
       eventually(timeout(5.seconds))(thread.isRunning shouldBe false)
     finally thread.stop()
+  }
+
+  // prism, slice 2 review: a fatal error escaped the probe loop to the thread's default handler, which can print over
+  // the TUI's screen. It is logged, and polling stops.
+  it should "log a fatal error from a poll, and stop polling" taggedAs (UnitTest) in {
+    val logger = LoggerFactory.getLogger(classOf[TuiProbeThread]).asInstanceOf[LogbackLogger]
+    val appender = new ListAppender[ILoggingEvent]
+    appender.start()
+    logger.addAppender(appender)
+    val published = new AtomicReference[Option[NodeStatusSnapshot]](None)
+    val thread = new TuiProbeThread(() => throw new LinkageError("fatal poll"), 20, published)
+    try
+      thread.start()
+      eventually(timeout(5.seconds))(thread.isRunning shouldBe false)
+      appender.list.asScala.map(_.getLevel) should contain(Level.ERROR)
+    finally
+      thread.stop()
+      logger.detachAppender(appender)
   }

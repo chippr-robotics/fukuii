@@ -166,3 +166,11 @@ object TuiFixtures:
       tick = tick,
       splashUntilTick = Some(12L)
     )
+
+  /** A clock the test moves. */
+  final class TestClock(start: Instant) extends java.time.Clock:
+    @volatile private var current: Instant = start
+    def advance(seconds: Long): Unit = current = current.plusSeconds(seconds)
+    override def instant(): Instant = current
+    override def getZone: java.time.ZoneId = java.time.ZoneOffset.UTC
+    override def withZone(zone: java.time.ZoneId): java.time.Clock = this

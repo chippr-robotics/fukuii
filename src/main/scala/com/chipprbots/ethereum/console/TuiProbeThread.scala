@@ -55,18 +55,31 @@ final class TuiProbeThread(
 
   def isRunning: Boolean = thread.exists(_.isAlive)
 
+  // Nothing escapes this thread: an uncaught throwable would reach the default handler, which can print over the
+  // TUI's screen.
   private def loop(): Unit =
-    while stopped.getCount > 0 && active() do
-      val started = System.nanoTime()
-      try
-        val snapshot = probe()
-        // A poll that was in flight when stop() was called publishes nothing.
-        if stopped.getCount > 0 then published.set(Some(snapshot))
-        failing = false
-      catch
-        case NonFatal(e) =>
-          if failing then log.debug("TUI status poll failed again: {}", e.getMessage)
-          else log.error("TUI status poll failed: {}", e.getMessage, e)
-          failing = true
-      val elapsedMs = (System.nanoTime() - started) / 1_000_000L
-      stopped.await((intervalMs - elapsedMs).max(0L), TimeUnit.MILLISECONDS)
+    try
+      while stopped.getCount > 0 && active() do
+        val started = System.nanoTime()
+        poll()
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000L
+        stopped.await((intervalMs - elapsedMs).max(0L), TimeUnit.MILLISECONDS)
+    catch case _: InterruptedException => () // the JVM is going down; there is nothing left to poll for
+
+  private def poll(): Unit =
+    try
+      val snapshot = probe()
+      // A poll that was in flight when stop() was called publishes nothing.
+      if stopped.getCount > 0 then published.set(Some(snapshot))
+      failing = false
+    catch
+      case e: InterruptedException => throw e
+      case NonFatal(e) =>
+        if failing then log.debug("TUI status poll failed again: {}", e.getMessage)
+        else log.error("TUI status poll failed: {}", e.getMessage, e)
+        failing = true
+      case e: Throwable =>
+        // Fatal (a class that failed to load, out of memory): polling stops, and the frame loop shows both sources
+        // go Unresponsive as the last snapshot ages.
+        log.error("TUI status poll failed fatally; the TUI stops polling: {}", e.toString, e)
+        stopped.countDown()
