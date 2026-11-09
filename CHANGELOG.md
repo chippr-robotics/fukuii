@@ -282,14 +282,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blacklisting of a peer id. Nothing decides on a score: no dial, peer selection, blacklist or disconnect reads it; the
   scores are for the operator and the TUI's Peers view.
   - **Metrics.** Gauges `network_peers_scored_gauge`, `network_peers_score_average_gauge` and
-    `network_peers_score_{high,medium,low}_gauge` (high 0.7 and above, medium 0.4 up to 0.7, low below 0.4). The
-    per-peer scores are not metric series; they are read through `NetworkMetrics.peerScores`.
+    `network_peers_score_{high,medium,low}_gauge` (high 0.7 and above, medium 0.4 up to 0.7, low below 0.4). They count
+    every peer the scorer tracks, connected or not, crawlers that failed a handshake included, so they are not the
+    number of connected peers (compare `network_peers_incoming_handshaked_gauge` and
+    `network_peers_outgoing_handshaked_gauge`). The per-peer scores are not metric series; they are read through `NetworkMetrics.peerScores`.
   - **Scoring changes that wiring needed.** A score is a function of the history and an injected clock (it read the
     wall clock). Events for one peer are applied atomically (the get-then-put lost updates under load). The score map is
     bounded at 4096 peers; entries never seen alive (a crawler's failed handshake) are evicted first, then the oldest
     `lastSeen`, so a connected peer that is merely idle is kept. A failed handshake, a timeout, a protocol violation and
     a blacklisting never raise a score: only a successful handshake and a response refresh `lastSeen`, a blacklisting
-    counts against the compliance term, and timeouts no longer dilute the violation rate.
+    counts against the compliance term, and timeouts no longer dilute the violation rate. The compliance term counts
+    blacklistings as they are added: one request timeout is scored as a timeout and again when the owner blacklists the
+    peer for it, a refresh of a standing blacklisting counts again, and the count never decays.
 - **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a
   throttled walk (25% duty cycle) from the current head checks every node's hash, every account's code and every
   storage trie, fetches what is missing and logs each hole with its position. It does not block import, and it replaces

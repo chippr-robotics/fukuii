@@ -45,26 +45,34 @@ case object NetworkMetrics extends MetricsContainer:
 
   private val peerScoreSnapshot = new AtomicReference[PeerScoreSnapshot](PeerScoreSnapshot.empty)
 
-  private def scoreGauge(name: String)(value: ScoringStatistics => Double): Gauge =
+  private def scoreGauge(name: String, help: String)(value: ScoringStatistics => Double): Gauge =
     Gauge
       .builder(name, peerScoreSnapshot, (ref: AtomicReference[PeerScoreSnapshot]) => value(ref.get().statistics))
+      .description(help + " Counts every peer the scorer tracks, connected or not, crawlers included.")
       .register(metrics.registry)
 
+  // Each gauge counts every peer the scorer tracks (at most its cap), connected or not, crawlers that failed a
+  // handshake included: it is not the number of connected peers, and a gauge's help text says so.
+
   /** Peers with a score. */
-  final val ScoredPeersGauge: Gauge = scoreGauge("network.peers.scored.gauge")(_.totalPeers.toDouble)
+  final val ScoredPeersGauge: Gauge =
+    scoreGauge("network.peers.scored.gauge", "Peers with a reliability score.")(_.totalPeers.toDouble)
 
   /** Mean score over the scored peers; 0 with none. */
-  final val AverageScoreGauge: Gauge = scoreGauge("network.peers.score.average.gauge")(_.averageScore)
+  final val AverageScoreGauge: Gauge =
+    scoreGauge("network.peers.score.average.gauge", "Mean reliability score, 0.0 to 1.0.")(_.averageScore)
 
   /** Peers scoring 0.7 or more. */
-  final val HighScoringPeersGauge: Gauge = scoreGauge("network.peers.score.high.gauge")(_.highScoringPeers.toDouble)
+  final val HighScoringPeersGauge: Gauge =
+    scoreGauge("network.peers.score.high.gauge", "Peers scoring 0.7 or more.")(_.highScoringPeers.toDouble)
 
   /** Peers scoring from 0.4 up to 0.7. */
   final val MediumScoringPeersGauge: Gauge =
-    scoreGauge("network.peers.score.medium.gauge")(_.mediumScoringPeers.toDouble)
+    scoreGauge("network.peers.score.medium.gauge", "Peers scoring from 0.4 up to 0.7.")(_.mediumScoringPeers.toDouble)
 
   /** Peers scoring below 0.4. */
-  final val LowScoringPeersGauge: Gauge = scoreGauge("network.peers.score.low.gauge")(_.lowScoringPeers.toDouble)
+  final val LowScoringPeersGauge: Gauge =
+    scoreGauge("network.peers.score.low.gauge", "Peers scoring below 0.4.")(_.lowScoringPeers.toDouble)
 
   /** Replace the published scores. Called by the PeerScoringManager. */
   def publishPeerScores(snapshot: PeerScoreSnapshot): Unit = peerScoreSnapshot.set(snapshot)

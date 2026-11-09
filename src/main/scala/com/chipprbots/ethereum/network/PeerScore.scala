@@ -74,6 +74,11 @@ final case class PeerScore(
     * 1.0. A blacklisting counts like a violation: the peer misbehaved badly enough for us to exclude it. The divisor
     * ignores timeouts on purpose: counting them made every extra timeout dilute the violation rate, so a timeout could
     * raise the score.
+    *
+    * What the term counts, so nobody reads more into it than it holds (nothing decides on a score): one request timeout
+    * is scored twice, as a timeout (`requestsTimedOut`, the response term) and again as a blacklisting when the owner
+    * blacklists the peer for it; `blacklistCount` counts every `add` to the blacklist, a refresh of a standing
+    * blacklisting included; and it never decays, while the recency term does.
     */
   private def calculateComplianceScore: Double =
     val violationRate = (protocolViolations + blacklistCount).toDouble / (responsesReceived + 1)
