@@ -1,14 +1,20 @@
 package com.chipprbots.ethereum.console
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InterruptedIOException
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentLinkedQueue
+
+import scala.jdk.CollectionConverters.*
 
 import org.jline.terminal.Attributes
 import org.jline.terminal.Size
 import org.jline.terminal.Terminal
 import org.jline.terminal.impl.ExternalTerminal
+import org.jline.utils.NonBlockingReader
 
 /** An in-memory xterm for driving [[Tui]] without a TTY: keys are typed into `keyboard`, frames land in `screen`. */
 final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String = "xterm-256color"):
@@ -25,9 +31,37 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** When set, `writer()` throws — simulates an output failure during teardown. */
   @volatile var failWrites: Boolean = false
 
-  /** When set, `reader()` throws — simulates a failed key read. */
+  /** When set, a key read throws an `IOException`, as a real terminal's reader does when its input fails. */
   @volatile var failReads: Boolean = false
 
+  /** When set, a key read returns end of input. */
+  @volatile var eofReads: Boolean = false
+
+  private val timeouts = new ConcurrentLinkedQueue[java.lang.Long]()
+
+  /** The timeout of every key read so far, in order: the frame loop's pace. */
+  def readTimeouts: Seq[Long] = timeouts.asScala.toSeq.map(_.longValue)
+
+  /** The terminal's reader as a real one behaves (JLine 3.30, `PosixSysTerminal`): a read interrupted while it waits
+    * throws `InterruptedIOException`, and a failed input throws `IOException` from `read`.
+    */
+  final private class ModelledReader(inner: NonBlockingReader) extends NonBlockingReader:
+    override protected def read(timeout: Long, isPeek: Boolean): Int =
+      if !isPeek then timeouts.add(timeout)
+      if failReads then throw new IOException("simulated input failure")
+      if eofReads then NonBlockingReader.EOF
+      else
+        val deadline = if timeout <= 0 then Long.MaxValue else System.nanoTime() + timeout * 1_000_000L
+        var result = NonBlockingReader.READ_EXPIRED
+        while result == NonBlockingReader.READ_EXPIRED && System.nanoTime() < deadline do
+          if Thread.interrupted() then throw new InterruptedIOException("read interrupted")
+          val slice = ((deadline - System.nanoTime()) / 1_000_000L).max(1L).min(10L)
+          result = if isPeek then inner.peek(slice) else inner.read(slice)
+        result
+    override def readBuffered(b: Array[Char], off: Int, len: Int, timeout: Long): Int =
+      inner.readBuffered(b, off, len, timeout)
+    override def available(): Int = inner.available()
+    override def close(): Unit = inner.close()
   /** When set, the next `setAttributes` closes the terminal first: JLine's shutdown hook winning the race between the
     * TUI's reset write and its mode restore.
     */
@@ -40,9 +74,8 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
       override def writer(): java.io.PrintWriter =
         if failWrites then throw new IllegalStateException("simulated output failure")
         super.writer()
-      override def reader(): org.jline.utils.NonBlockingReader =
-        if failReads then throw new java.io.UncheckedIOException(new java.io.IOException("simulated input failure"))
-        super.reader()
+      private lazy val modelled = new ModelledReader(super.reader())
+      override def reader(): NonBlockingReader = modelled
       override def setAttributes(attr: Attributes): Unit =
         if closeOnSetAttributes then
           closeOnSetAttributes = false

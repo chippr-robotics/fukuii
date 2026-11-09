@@ -10,10 +10,16 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.Promise
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.testing.Tags.*
 
@@ -224,4 +230,34 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       eventually(timeout(5.seconds), interval(10.millis))(tui.getState.tick should be > pausedAt)
       tui.getState.motion shouldBe Motion.Full
     }
+  }
+
+  /** The WARN and ERROR events the given classes log, on any thread, while `f` runs. */
+  private def warningsDuring(classes: Class[?]*)(f: => Unit): List[(Level, String)] =
+    val appender = new ListAppender[ILoggingEvent]
+    appender.start()
+    val loggers = classes.map(c => LoggerFactory.getLogger(c).asInstanceOf[LogbackLogger])
+    val levels = loggers.map(_.getLevel)
+    loggers.foreach { l =>
+      l.addAppender(appender); l.setLevel(Level.WARN)
+    }
+    try f
+    finally
+      loggers.zip(levels).foreach { (l, level) =>
+        l.setLevel(level); l.detachAppender(appender)
+      }
+    appender.list.asScala.toList.map(e => (e.getLevel, e.getFormattedMessage))
+
+  // B-045, prism's review of slice 2: Ctrl-C and SIGTERM stop the updater while its thread waits for a key. JLine throws
+  // InterruptedIOException there, which checkInput logged at ERROR as a failed read and answered with a shutdown.
+  "Stopping the updater" should "log no ERROR and leave the TUI up while the loop waits for a key" taggedAs (
+    UnitTest
+  ) in withUpdater(config = TuiTestTerminal.config.copy(updateIntervalMs = 30_000, reducedMotion = true)) {
+    (updater, tui, tt) =>
+      updater.start()
+      eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts should contain(30_000L))
+      val events = warningsDuring(classOf[Tui], classOf[TuiUpdater])(updater.stop())
+      events.map(_._1) should not contain Level.ERROR
+      updater.isRunning shouldBe false
+      tui.isEnabled shouldBe true // the node's shutdown hook restores it; a stop is not a failed read
   }

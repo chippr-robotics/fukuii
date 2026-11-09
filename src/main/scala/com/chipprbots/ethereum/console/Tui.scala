@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.console
 
 import java.io.FileDescriptor
 import java.io.FileOutputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.time.Clock
@@ -224,10 +225,16 @@ class Tui(
         case e: IllegalStateException if Tui.isClosedTerminal(e) =>
           terminalLost("reading a key")
           None
+        case _: InterruptedIOException =>
+          // The frame loop is being stopped (TuiUpdater.stop, on Ctrl-C, SIGTERM or `q`): JLine answers the interrupt
+          // with InterruptedIOException. Not a failed read; keep the interrupt for the loop to see.
+          Thread.currentThread().interrupt()
+          None
         case NonFatal(e) =>
-          // Keys are how the TUI is left (q, d): without them, give the terminal and the console logs back.
-          log.error("TUI could not read a key ({}); restoring the terminal and standard logging", e.getMessage, e)
+          // Keys are how the TUI is left (q, d): without them, give the terminal and the console logs back, then log,
+          // so the ERROR reaches the console.
           shutdown()
+          log.error("TUI could not read a key ({}); the terminal and standard logging are restored", e.getMessage, e)
           None
     }
 

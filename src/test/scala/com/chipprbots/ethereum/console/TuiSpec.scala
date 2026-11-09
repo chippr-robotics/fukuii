@@ -403,3 +403,20 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     finally Tui.reset()
     Tui.current shouldBe None
   }
+
+  // prism, slice 2 review: the failed-read ERROR was logged while the console appenders were still detached, so it
+  // never reached the console. The terminal and the logs are given back first, then the ERROR is logged.
+  it should "give the console back before it logs a failed key read" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    val enabledAtError = new java.util.concurrent.atomic.AtomicReference[Option[Boolean]](None)
+    val logger = LoggerFactory.getLogger(classOf[Tui]).asInstanceOf[LogbackLogger]
+    val watcher = new ch.qos.logback.core.AppenderBase[ILoggingEvent]:
+      override def append(e: ILoggingEvent): Unit =
+        if e.getLevel == Level.ERROR then enabledAtError.compareAndSet(None, Some(tui.isEnabled))
+    watcher.start()
+    logger.addAppender(watcher)
+    try
+      tt.failReads = true
+      tui.checkInput(10) shouldBe None
+    finally logger.detachAppender(watcher)
+    enabledAtError.get shouldBe Some(false)
+  }
