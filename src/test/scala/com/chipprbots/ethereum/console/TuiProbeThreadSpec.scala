@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.console
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -147,14 +148,17 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     }
   }
 
-  // A blocked probe holds only its own thread: stop() still returns, and the latch is released in finally.
-  it should "stop while a poll is blocked" taggedAs (UnitTest) in {
+  // A blocked probe holds only its own thread: stop() returns while it waits, and the poll that was in flight when stop()
+  // was called publishes nothing once it returns. The latch is released in finally.
+  it should "stop while a poll is blocked, and publish nothing after the stop" taggedAs (UnitTest) in {
     val release = new CountDownLatch(1)
     val entered = new CountDownLatch(1)
+    val pollThread = new AtomicReference[Thread]()
     val published = new AtomicReference[Option[NodeStatusSnapshot]](None)
+    val polled = TuiFixtures.snapshot(current = 1, best = 2)
     val thread = new TuiProbeThread(
       () =>
-        entered.countDown(); release.await(); throw new IllegalStateException("released")
+        pollThread.set(Thread.currentThread()); entered.countDown(); release.await(); polled
       ,
       1000,
       published
@@ -163,6 +167,31 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       thread.start()
       entered.await(5, TimeUnit.SECONDS) shouldBe true
       thread.stop(timeoutMs = 50)
-      published.get shouldBe None
     finally release.countDown()
+    pollThread.get.join(5000)
+    pollThread.get.isAlive shouldBe false
+    published.get shouldBe None
+  }
+
+  // prism, slice 2 review: after `d`, a lost terminal or a failed key read the frame loop ends, but the probe went on
+  // asking the actors every second for nobody.
+  it should "stop polling once the TUI it feeds is no longer enabled" taggedAs (UnitTest) in {
+    val enabled = new AtomicBoolean(true)
+    val polls = new AtomicInteger(0)
+    val published = new AtomicReference[Option[NodeStatusSnapshot]](None)
+    val p = probe(emptyPeers, syncController(syncing), 100.millis)
+    val thread = new TuiProbeThread(
+      () =>
+        polls.incrementAndGet(); p()
+      ,
+      20,
+      published,
+      () => enabled.get
+    )
+    try
+      thread.start()
+      eventually(timeout(5.seconds))(polls.get should be >= 2)
+      enabled.set(false)
+      eventually(timeout(5.seconds))(thread.isRunning shouldBe false)
+    finally thread.stop()
   }

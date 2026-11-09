@@ -340,7 +340,8 @@ abstract class BaseNode extends Node:
         () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis),
         snapSampledAt = () => SNAPSyncMetrics.latestProgressAt
       )(using system.scheduler)
-      val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots)
+      // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
+      val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)
       tuiProbe = Some(thread)
       thread.start()
     }

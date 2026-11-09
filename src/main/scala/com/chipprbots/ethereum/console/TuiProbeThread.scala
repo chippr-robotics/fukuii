@@ -18,11 +18,15 @@ import com.chipprbots.ethereum.utils.Logger
   *   one poll ([[TuiStatusProbe]]); may block up to its wait, and may throw
   * @param published
   *   where the latest snapshot goes; [[TuiUpdater]] reads it once a frame
+  * @param active
+  *   whether anyone still reads the snapshots: polling ends once the TUI it feeds is gone (`d`, a lost terminal, a
+  *   failed key read), instead of asking the actors every second for nobody
   */
 final class TuiProbeThread(
     probe: () => NodeStatusSnapshot,
     intervalMs: Long,
-    published: AtomicReference[Option[NodeStatusSnapshot]]
+    published: AtomicReference[Option[NodeStatusSnapshot]],
+    active: () => Boolean = () => true
 ) extends Logger:
 
   private val stopped = new CountDownLatch(1)
@@ -52,10 +56,12 @@ final class TuiProbeThread(
   def isRunning: Boolean = thread.exists(_.isAlive)
 
   private def loop(): Unit =
-    while stopped.getCount > 0 do
+    while stopped.getCount > 0 && active() do
       val started = System.nanoTime()
       try
-        published.set(Some(probe()))
+        val snapshot = probe()
+        // A poll that was in flight when stop() was called publishes nothing.
+        if stopped.getCount > 0 then published.set(Some(snapshot))
         failing = false
       catch
         case NonFatal(e) =>
