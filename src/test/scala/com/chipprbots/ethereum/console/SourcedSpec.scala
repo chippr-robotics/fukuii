@@ -88,5 +88,8 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
     val gone = s.agedAt(at(6), staleAfter)
     gone.peers shouldBe Unresponsive("no status poll for 6s")
     gone.sync shouldBe Unresponsive("no status poll for 6s")
-    (gone.connectionStatus, gone.syncStatus) shouldBe (("Unresponsive (peer manager)", "Unresponsive (sync controller)"))
+    (gone.connectionStatus, gone.syncStatus) shouldBe ((
+      "Unresponsive (peer manager)",
+      "Unresponsive (sync controller)"
+    ))
   }

@@ -60,7 +60,7 @@ object Sourced:
       case Poll.Failed(reason)  => Unresponsive(reason)
       case Poll.Missed =>
         previous match
-          case Some(Fresh(last, at))        => staleOrSilent(last, at)
-          case Some(Stale(last, since))     => staleOrSilent(last, since)
-          case Some(Unresponsive(reason))  => Unresponsive(reason) // the first reason stays
-          case None                         => Unresponsive(missed)
+          case Some(Fresh(last, at))      => staleOrSilent(last, at)
+          case Some(Stale(last, since))   => staleOrSilent(last, since)
+          case Some(Unresponsive(reason)) => Unresponsive(reason) // the first reason stays
+          case None                       => Unresponsive(missed)

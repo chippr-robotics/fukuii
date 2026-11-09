@@ -34,8 +34,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor
   * Not thread-safe: one thread polls it, and it keeps the previous snapshot to tell Stale from Unresponsive.
   *
   * @param snapSample
-  *   the SNAP monitor's latest progress and when it was recorded, in epoch milliseconds (`SNAPSyncMetrics.latestSample`):
-  *   shown while younger than [[TuiStatusProbe.SnapProgressMaxAgeMillis]]
+  *   the SNAP monitor's latest progress and when it was recorded, in epoch milliseconds
+  *   (`SNAPSyncMetrics.latestSample`): shown while younger than [[TuiStatusProbe.SnapProgressMaxAgeMillis]]
   * @param clock
   *   the time of each snapshot: the TUI's only clock (C-3)
   */

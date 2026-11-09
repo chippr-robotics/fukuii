@@ -236,7 +236,8 @@ class Tui(
           if c == NonBlockingReader.EOF then
             val wasUp = synchronized(enabled)
             terminalLost("reading a key (end of input)")
-            if wasUp then log.warn("TUI keyboard input reached end of input; the terminal and standard logging are restored")
+            if wasUp then
+              log.warn("TUI keyboard input reached end of input; the terminal and standard logging are restored")
           None
       catch
         case e: IllegalStateException if Tui.isClosedTerminal(e) =>

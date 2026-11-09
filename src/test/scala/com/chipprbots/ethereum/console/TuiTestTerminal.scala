@@ -62,6 +62,7 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
       inner.readBuffered(b, off, len, timeout)
     override def available(): Int = inner.available()
     override def close(): Unit = inner.close()
+
   /** When set, the next `setAttributes` closes the terminal first: JLine's shutdown hook winning the race between the
     * TUI's reset write and its mode restore.
     */

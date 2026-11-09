@@ -100,7 +100,7 @@ class TuiUpdater(
             more
           catch
             case _: InterruptedException => false
-            case NonFatal(e) => frameFailed(e)
+            case NonFatal(e)             => frameFailed(e)
         if !keepGoing then running = false
     finally running = false
 
