@@ -77,6 +77,9 @@ The console UI is useful when:
 | `Q` | Quit the application |
 | `R` | Refresh/redraw the display |
 | `D` | Disable the console UI (switch to standard logging) |
+| `P` | Pause or resume the motion (the frame counter stops; polling continues) |
+
+Any key skips the startup splash, and does nothing else.
 
 Commands are case-insensitive (both `q` and `Q` work).
 
@@ -135,15 +138,20 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | `Tui` | Owns the terminal: raw mode, alternate screen, frame drawing, key input, teardown. Refuses dumb/non-TTY terminals so escape codes never land in a log stream. |
 | `TuiRenderer` | Pure function `TuiState × width × height → lines`. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the command footer always stays on the bottom row. |
 | `TuiState` | Immutable view model. Sync speed/ETA are measured from the first block the TUI observed (not from genesis). |
-| `TuiStatusProbe` | Polls the node: handshaked peers (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. A slow actor shows as "Unresponsive" rather than freezing the display. |
-| `TuiUpdater` | Daemon thread looping poll → render → wait up to `updateIntervalMs` for a key. The key wait is the frame pacing. |
+| `TuiStatusProbe` | One poll of the node: handshaked peers (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. Both asks start together and share one 500 ms wait. |
+| `Sourced` | Each polled source's freshness: `Fresh`, `Stale` (it missed a wait; its last answer is kept), `Unresponsive` (it never answered, failed, or has been silent for 5 s). A slow actor degrades its own line only. |
+| `TuiProbeThread` | Daemon thread running the probe every `status-poll-interval-ms` and publishing the snapshot; it stops with the TUI. |
+| `TuiUpdater` | Daemon frame loop: count a frame (`tick`), take the latest snapshot, render, then wait for a key at the frame's pace: `animation-interval-ms` (250 ms) while anything on screen moves, 1 s otherwise. The key wait is the pacing, so a key is handled as it arrives. A frame equal to the last is not written. |
+| `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints), skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
 
 ### Lifecycle
 
 1. `Fukuii.main` sees `--tui`, validates config (errors are still printed to the console), then initializes the TUI and registers a JVM shutdown hook that restores the terminal.
-2. `StdNode.start()` → `startTuiUpdater()` wires the probe and starts the updater.
+2. `StdNode.start()` starts the frame loop first (`startTuiFrames()`), so the splash moves while the node starts, then, once the actors it asks exist, the probe thread (`startTuiUpdater()`).
 3. `Q` restores the terminal, then exits the JVM; the node's shutdown hook stops the updater. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI; the restore hook leaves the alternate screen even when JLine's own shutdown hook has closed the terminal first (JVM hooks run in no order), by writing the reset sequence to the process output.
+
+Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the first catch-up's celebration) comes only from the frame counter; the renderer reads no clock. Settings under `fukuii.tui` (`conf/base/tui.conf`): `glyphs`, `animation-interval-ms`, `status-poll-interval-ms`, `reduced-motion` and `splash-ms`; the environment overrides are `NO_COLOR`, `FUKUII_TUI_GLYPHS`, `FUKUII_TUI_MOTION` (`full` or `reduced`) and `FUKUII_TUI_NO_SPLASH`. Spec 027's closing task rewrites this page for the full dashboard.
 
 ### Testing
 
