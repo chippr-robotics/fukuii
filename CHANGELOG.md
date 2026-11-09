@@ -157,6 +157,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `r Redraw  d Detach  q Quit`; the keys are unchanged. The idle SNAP phase no longer carries U+FE0F, which terminals
     drew wider than the TUI counted. A row cut at the right edge through a two-column glyph is padded back to the
     terminal's width instead of ending one column short.
+- **The `--tui` dashboard moves, never waits on the node, and opens on a splash (spec 027 slice 2).**
+  - **Motion, from a frame counter only.** A worm that is moving ripples behind itself, an `[ACTIVE]` row pulses, and a
+    spinner turns beside "Starting node" and "Searching for peers". While anything moves the dashboard draws 4 frames a
+    second, otherwise one. A frame equal to the last one is not written again, so an idle node at the head writes at
+    most one frame a second.
+  - **Stalls.** A Blocks worm whose block has not moved for 2 minutes stops rippling, shows `💤` (ASCII `z`) and turns
+    yellow.
+  - **Catching up.** The first time the node reaches the head, the worm crawls into the brain over 3 s and the header
+    flashes; every later catch-up shows one quiet "✓ back at head" frame.
+  - **Polling off the frame loop.** The peer manager and sync controller are asked together, on their own thread, with
+    one 500 ms wait. A slow actor shows as `Unresponsive` on its own line while the rest keeps updating, and keys are
+    handled when they arrive, at either pace.
+  - **The splash is a view.** It shows the FUKUII logo whole, cropped to the creature, as the 12-line logo or as the
+    wordmark, by terminal size, while the node starts, and any key skips it. It replaces the banner that held the
+    terminal for 1 s with a sleep.
+  - **Keys and settings.** `p` pauses and resumes the motion. New in `fukuii.tui`: `animation-interval-ms` (250),
+    `status-poll-interval-ms` (1000), `reduced-motion` (false) and `splash-ms` (3000). `FUKUII_TUI_MOTION=reduced`
+    (or `full`) and `FUKUII_TUI_NO_SPLASH` override them; under reduced motion only the worm moves, with progress.
 - **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
   `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
   Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the

@@ -56,7 +56,7 @@ class SplashSpec
     Splash.LogoMinCols shouldBe FukuiiBanner.Cols + 2
     (Splash.WholeMinRows, Splash.CroppedMinRows) shouldBe ((66, 52))
     Splash.logoFor(Splash.LogoMinCols, 66) shouldBe SplashLogo.Whole
-    Splash.logoFor(Splash.LogoMinCols - 1, 66) shouldBe SplashLogo.Small
+    Splash.logoFor(Splash.LogoMinCols - 1, 66) shouldBe SplashLogo.Wordmark // 99 columns is tier S
     Splash.logoFor(Splash.LogoMinCols, 65) shouldBe SplashLogo.Cropped
     Splash.logoFor(Splash.LogoMinCols, 52) shouldBe SplashLogo.Cropped
     Splash.logoFor(Splash.LogoMinCols, 51) shouldBe SplashLogo.Small
@@ -134,18 +134,18 @@ class SplashSpec
     config.splashTicks shouldBe config.splashMs / config.animationIntervalMs
     config.splashTicks shouldBe 12L
     (0L to 11L).foreach(t => splash(t).splashCover(24) shouldBe Some(0))
-    val dashboard = renderer.render(splash(0).copy(splashUntilTick = None), 80, 24, theme)
+    def dashboard(tick: Long) = renderer.render(splash(tick).copy(splashUntilTick = None), 80, 24, theme)
     for tick <- 12L to 16L do
       val k = 4 * (tick - 12 + 1).toInt // 4 × ticks since the splash's last frame
       val frame = renderer.render(splash(tick), 80, 24, theme)
       withClue(s"tick $tick: ") {
         splash(tick).splashCover(24) shouldBe Some(k)
-        frame.take(k) shouldBe dashboard.take(k)
+        frame.take(k) shouldBe dashboard(tick).take(k)
         frame.drop(k) shouldBe Splash.render(splash(tick), 80, 24, theme).drop(k)
       }
     // At 24 rows the hand-over takes five ticks; then the dashboard alone.
     splash(17).splashCover(24) shouldBe None
-    renderer.render(splash(17), 80, 24, theme) shouldBe dashboard
+    renderer.render(splash(17), 80, 24, theme) shouldBe dashboard(17)
   }
 
   it should "be off under FUKUII_TUI_NO_SPLASH, and one static frame under reduced motion" taggedAs (UnitTest) in {

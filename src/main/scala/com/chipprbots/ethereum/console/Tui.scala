@@ -4,6 +4,8 @@ import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.time.Clock
+import java.util.concurrent.atomic.AtomicReference
 
 import scala.util.control.NonFatal
 
@@ -12,6 +14,7 @@ import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
 import org.jline.terminal.spi.SystemStream
 import org.jline.terminal.spi.TerminalExt
+import org.jline.utils.AttributedString
 import org.jline.utils.InfoCmp.Capability
 
 import com.chipprbots.ethereum.utils.Logger
@@ -37,7 +40,8 @@ enum TuiCommand:
   *   - Keyboard input handling
   *
   * Threading: `render`, `initialize` and `shutdown` are serialized on this instance. `checkInput` waits for a key
-  * WITHOUT holding the lock, so a pending read never blocks a redraw or a shutdown.
+  * WITHOUT holding the lock, so a pending read never blocks a redraw or a shutdown. The state is one atomic reference:
+  * the frame loop and the node's own updates (network, settings) may change it from different threads.
   *
   * @param config
   *   the TUI's settings, with the environment already applied ([[TuiConfig.load]])
@@ -46,11 +50,14 @@ enum TuiCommand:
   * @param processOutput
   *   the process stream behind a terminal, used to restore the screen when JLine has closed the terminal before
   *   [[shutdown]] runs; None for a terminal that is not the process's own (tests pass an in-memory stream)
+  * @param clock
+  *   the TUI's start time, for uptime; after that every time comes from the status snapshots (C-3)
   */
 class Tui(
     val config: TuiConfig = TuiConfig.default,
     terminalFactory: () => Terminal = Tui.systemTerminal,
-    processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf
+    processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf,
+    clock: Clock = Clock.systemUTC()
 ) extends Logger:
 
   private var terminal: Option[Terminal] = None
@@ -60,8 +67,22 @@ class Tui(
   /** The user's screen is in the alternate buffer with the cursor hidden, and has not been restored yet. */
   private var inAltScreen = false
   private var lastSize: (Int, Int) = (0, 0)
+
+  /** The last frame written, so an unchanged frame is not written again (FR-010). */
+  private var lastLines: Option[Seq[AttributedString]] = None
   @volatile private var enabled = true
-  @volatile private var state: TuiState = TuiState.initial.copy(glyphs = config.glyphSet)
+
+  private val state: AtomicReference[TuiState] =
+    val started = clock.instant()
+    new AtomicReference(
+      TuiState.initial.copy(
+        glyphs = config.glyphSet,
+        motion = config.motion,
+        splashUntilTick = Option.when(config.splashTicks > 0)(config.splashTicks),
+        startTime = started,
+        now = started
+      )
+    )
 
   /** Chosen once the terminal is open, from `NO_COLOR` and the colours it reports (spec 027 FR-009). */
   @volatile private var theme: TuiTheme = TuiTheme.of(config.noColor, Tui.DefaultMaxColors)
@@ -100,9 +121,6 @@ class Tui(
           if logSuppressor.suppressConsoleLogs() then log.debug("Console logs suppressed for TUI")
           else log.warn("Failed to suppress console logs")
 
-        // Show startup banner
-        if config.bannerDisplayDurationMs > 0 then showStartupBanner(term)
-
         log.info("TUI initialized")
         true
       catch
@@ -122,47 +140,57 @@ class Tui(
   def isEnabled: Boolean = synchronized(enabled && terminal.isDefined)
 
   /** Get the current TUI state. */
-  def getState: TuiState = state
+  def getState: TuiState = state.get
+
+  private def modify(f: TuiState => TuiState): Unit =
+    state.updateAndGet(s => f(s))
+    ()
 
   // State update methods
-  def updatePeerCount(count: Int, max: Int): Unit =
-    state = state.withPeerCount(count, max)
+  def updatePeerCount(count: Int, max: Int): Unit = modify(_.withPeerCount(count, max))
 
-  def updateBlockInfo(current: Long, best: Long): Unit =
-    state = state.withBlockInfo(current, best)
+  def updateBlockInfo(current: Long, best: Long): Unit = modify(_.withBlockInfo(current, best))
 
-  def updateNetwork(name: String): Unit =
-    state = state.withNetworkName(name)
+  def updateNetwork(name: String): Unit = modify(_.withNetworkName(name))
 
-  def updateSyncStatus(status: String): Unit =
-    state = state.withSyncStatus(status)
+  def updateSyncStatus(status: String): Unit = modify(_.withSyncStatus(status))
 
-  def updateConnectionStatus(status: String): Unit =
-    state = state.withConnectionStatus(status)
+  def updateConnectionStatus(status: String): Unit = modify(_.withConnectionStatus(status))
 
-  def updateNodeSettings(settings: NodeSettings): Unit =
-    state = state.withNodeSettings(settings)
+  def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
-  def updateStatus(status: NodeStatusSnapshot): Unit =
-    state = state.withStatus(status)
+  def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
-  /** Render the TUI. */
-  def render(): Unit = synchronized {
-    if enabled then
-      terminal.foreach { term =>
+  /** The next frame's state: the frame counter moves on (unless paused), and the latest snapshot, if any, applies. */
+  def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit = modify(_.nextFrame(snapshot))
+
+  /** Render the TUI, unless the frame equals the last one written (FR-010).
+    *
+    * @return
+    *   whether the frame moves with `tick`: the frame loop's pace (Q1)
+    */
+  def render(): Boolean = synchronized {
+    if !enabled then false
+    else
+      terminal.fold(false) { term =>
         try
           val (width, height) = Tui.sizeOf(term)
           // A resize leaves stale glyphs outside the new frame; wipe them.
-          val clear = if lastSize != ((width, height)) then Tui.ClearScreen else ""
+          val resized = lastSize != ((width, height))
           lastSize = (width, height)
 
-          val lines = renderer.render(state, width, height, theme)
-          // Home the cursor and overwrite in place. No newline after the last line: a frame is exactly `height` rows,
-          // and a trailing newline on the bottom row would scroll the whole screen up by one.
-          write(term, clear + Tui.CursorHome + lines.map(_.toAnsi(term)).mkString("\r\n"))
+          val frame = renderer.frame(state.get, width, height, theme)
+          if resized || !lastLines.contains(frame.lines) then
+            val clear = if resized then Tui.ClearScreen else ""
+            // Home the cursor and overwrite in place. No newline after the last line: a frame is exactly `height`
+            // rows, and a trailing newline on the bottom row would scroll the whole screen up by one.
+            write(term, clear + Tui.CursorHome + frame.lines.map(_.toAnsi(term)).mkString("\r\n"))
+            lastLines = Some(frame.lines)
+          frame.animated
         catch
           case NonFatal(e) =>
             log.error(s"Error rendering TUI: ${e.getMessage}")
+            false
       }
   }
 
@@ -181,8 +209,15 @@ class Tui(
       catch case NonFatal(_) => None
     }
 
-  /** Handle keyboard commands. */
-  def handleCommand(command: Char): TuiCommand = command match
+  /** Handle keyboard commands. While the splash is on screen any key skips it, and does nothing else (FR-013). */
+  def handleCommand(command: Char): TuiCommand =
+    val height = synchronized(lastSize._2)
+    if state.get.splashCover(height).isDefined then
+      modify(_.skipSplash)
+      TuiCommand.Continue
+    else dispatch(command)
+
+  private def dispatch(command: Char): TuiCommand = command match
     case 'q' =>
       log.info("Quit command received")
       TuiCommand.Quit
@@ -196,6 +231,10 @@ class Tui(
       shutdown()
       log.info("TUI disabled, switching to standard logging")
       TuiCommand.Disable
+    case 'p' =>
+      // FR-012: pause the frame counter (polling continues), or resume the configured motion.
+      modify(_.togglePause(config.motion))
+      TuiCommand.Continue
     case _ =>
       TuiCommand.Continue
 
@@ -264,14 +303,6 @@ class Tui(
               log.error(s"$closed, but restoring the screen through the process output failed: ${e.getMessage}")
         case None =>
           log.error(s"$closed, but the screen was not restored: the terminal has no process output to write it to")
-
-  private def showStartupBanner(term: Terminal): Unit =
-    val (width, height) = Tui.sizeOf(term)
-    val bannerLines = renderer.renderStartupBanner(width, height, theme)
-    write(term, Tui.CursorHome + bannerLines.map(_.toAnsi(term)).mkString("\r\n"))
-    // Brief pause to show banner
-    Thread.sleep(config.bannerDisplayDurationMs)
-    write(term, Tui.ClearScreen)
 
   private def write(term: Terminal, s: String): Unit =
     term.writer().print(s)

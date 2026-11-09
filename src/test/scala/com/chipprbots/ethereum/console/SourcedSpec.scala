@@ -31,7 +31,7 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
     val stale = next(Some(fresh), Poll.Missed, 1)
     stale shouldBe Stale(7, at(0)) // the last answer, and when it came
     next(Some(stale), Poll.Missed, 5) shouldBe Stale(7, at(0)) // within UnresponsiveAfter of the last answer
-    next(Some(stale), Poll.Missed, 6) shouldBe a[Unresponsive]
+    next(Some(stale), Poll.Missed, 6) should matchPattern { case Unresponsive(_) => }
     Sourced.UnresponsiveAfter shouldBe Duration.ofSeconds(5)
   }
 

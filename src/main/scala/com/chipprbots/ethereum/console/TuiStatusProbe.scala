@@ -1,12 +1,20 @@
 package com.chipprbots.ethereum.console
 
+import java.time.Clock
+import java.time.Instant
+import java.util.concurrent.TimeoutException
+
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.util.Timeout
 
 import scala.concurrent.Await
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
@@ -18,8 +26,17 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
   * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
   *
-  * Runs on the TUI updater thread — the blocking `Await`s never touch an actor or dispatcher thread. A slow or dead
-  * actor degrades one field to an "unresponsive" marker instead of freezing the display.
+  * Both asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however
+  * many actors are slow (FR-011). Each source gets its own freshness ([[Sourced]]): a source that misses the wait
+  * shows its last answer as Stale, or Unresponsive if it never answered or failed.
+  *
+  * Runs on the [[TuiProbeThread]] — the blocking wait never touches an actor or dispatcher thread, nor the frame loop.
+  * Not thread-safe: one thread polls it, and it keeps the previous snapshot to tell Stale from Unresponsive.
+  *
+  * @param snapSampledAt
+  *   when the SNAP monitor recorded its latest progress, in epoch milliseconds (`SNAPSyncMetrics.latestProgressAt`)
+  * @param clock
+  *   the time of each snapshot: the TUI's only clock (C-3)
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
@@ -27,44 +44,50 @@ class TuiStatusProbe(
     bestBlockNumber: () => BigInt,
     maxPeers: Int,
     snapProgress: () => Option[SyncProgress],
-    askTimeout: FiniteDuration = TuiStatusProbe.DefaultAskTimeout
+    wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
+    snapSampledAt: () => Option[Long] = () => None,
+    clock: Clock = Clock.systemUTC()
 )(using scheduler: Scheduler)
     extends (() => NodeStatusSnapshot):
 
-  private given Timeout = Timeout(askTimeout)
+  import TuiStatusProbe.*
+
+  // Longer than the wait, so an actor that is merely slow misses the wait (Stale) instead of failing it.
+  private given Timeout = Timeout(wait * 2)
+
+  private var previous: Option[NodeStatusSnapshot] = None
 
   def apply(): NodeStatusSnapshot =
-    val peers = Try(
-      Await.result(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)), askTimeout).handshaked.size
+    val peersAsk = settled(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
+    val syncAsk = settled(
+      syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r)))
     )
-    val sync = Try(
-      Await.result(
-        syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r))),
-        askTimeout
-      )
-    )
+    // One wait for both: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
+    val deadline = wait.fromNow
+    Seq(peersAsk, syncAsk).foreach(ask => Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero))))
+
+    val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
+    val missed = s"no reply within ${wait.toMillis}ms"
+    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.size), now, missed)
+    val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest)), now, missed)
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync)
+    previous = Some(snapshot)
+    snapshot
 
-    val (current, best, syncStatus) =
-      sync.fold(_ => (localBest, 0L, "Unresponsive (sync controller)"), TuiStatusProbe.describe(_, localBest))
-
-    val snap = sync.toOption
-      .filter(_.syncing)
-      .flatMap(_ => snapProgress())
-      .filter(p => TuiStatusProbe.ActiveSnapPhases.contains(p.phase))
-      .map(TuiStatusProbe.toSnapSyncState)
-
-    NodeStatusSnapshot(
-      connectionStatus = peers.fold(
-        _ => "Unresponsive (peer manager)",
-        n => if n > 0 then "Connected" else "Searching for peers"
-      ),
-      peerCount = peers.getOrElse(0),
-      maxPeers = maxPeers,
-      currentBlock = current,
-      bestBlock = best,
-      syncStatus = syncStatus,
-      snapSync = snap
+  /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running. */
+  private def sample(status: SyncProtocol.Status, localBest: Long): SyncSample =
+    val snap = Option
+      .when(status.syncing)(Try(snapProgress()).toOption.flatten)
+      .flatten
+      .filter(p => ActiveSnapPhases.contains(p.phase))
+    val (current, best, description) = describe(status, localBest)
+    SyncSample(
+      current,
+      best,
+      description,
+      snap.map(toSnapSyncState),
+      snap.flatMap(_ => Try(snapSampledAt()).toOption.flatten.map(Instant.ofEpochMilli))
     )
 
 object TuiStatusProbe:
@@ -80,6 +103,16 @@ object TuiStatusProbe:
     SyncPhase.StateValidation,
     SyncPhase.ChainDownloadCompletion
   )
+
+  /** An ask as a future that never fails: its outcome is the value. */
+  private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
+
+  /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
+  private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
+    ask.value.flatMap(_.toOption) match
+      case Some(Success(a))                   => Sourced.Poll.Answered(f(a))
+      case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
+      case Some(Failure(e))                   => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
 
   /** Map a sync status to (current block, best known block or 0 if unknown, description). */
   private[console] def describe(status: SyncProtocol.Status, localBest: Long): (Long, Long, String) = status match

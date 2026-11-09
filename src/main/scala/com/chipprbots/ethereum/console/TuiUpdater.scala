@@ -4,14 +4,18 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.utils.Logger
 
-/** Periodically updates the TUI with node status information.
+/** The TUI's frame loop (spec 027 FR-010, research §7.2).
   *
-  * A background thread repeats [[tick]]: poll the status source, redraw, then wait up to `updateIntervalMs` for a key
-  * press. The key wait IS the frame pacing — a key is handled as soon as it arrives, and with no input the screen still
-  * refreshes every interval.
+  * A background thread repeats [[tick]]: count a frame and take the latest snapshot, redraw, then wait for a key at the
+  * frame's pace — `animationIntervalMs` (250 ms) while anything on screen moves, `updateIntervalMs` (1000 ms)
+  * otherwise (Q1). The key wait IS the frame pacing: a key is handled as soon as it arrives, at either pace, and with
+  * no input the screen still refreshes.
   *
-  * @param statusSource
-  *   polls the running node; may block briefly (it runs on the updater thread, never on an actor thread) and may throw
+  * Polling is not done here: [[TuiProbeThread]] publishes snapshots, and the loop only reads the latest one, so a slow
+  * actor never delays a frame (FR-011).
+  *
+  * @param snapshots
+  *   the latest published snapshot, if any; a read that never blocks
   * @param onQuit
   *   invoked once, on a fresh thread, when the user presses `q`. It must stop the node (e.g. `sys.exit`), and it may
   *   call [[stop]] — it does not run on the updater thread, so stopping cannot join itself. An exit should restore the
@@ -20,7 +24,7 @@ import com.chipprbots.ethereum.utils.Logger
 class TuiUpdater(
     tui: Tui,
     config: TuiConfig,
-    statusSource: () => NodeStatusSnapshot,
+    snapshots: () => Option[NodeStatusSnapshot],
     networkName: String,
     onQuit: () => Unit
 ) extends Logger:
@@ -58,15 +62,16 @@ class TuiUpdater(
   /** Whether the update loop is running. */
   def isRunning: Boolean = running
 
-  /** One iteration of the update loop.
+  /** One frame: the counter moves on and the latest snapshot applies, the frame is drawn, then a key is awaited at the
+    * pace the frame asks for.
     *
     * @return
     *   true to keep looping
     */
   private[console] def tick(): Boolean =
-    refreshStatus()
-    tui.render()
-    tui.checkInput(config.updateIntervalMs) match
+    tui.nextFrame(snapshots())
+    val animated = tui.render()
+    tui.checkInput(config.paceMs(animated)) match
       case Some(key) =>
         tui.handleCommand(key) match
           case TuiCommand.Continue => true
@@ -94,13 +99,6 @@ class TuiUpdater(
         if !keepGoing then running = false
     finally running = false
 
-  private def refreshStatus(): Unit =
-    try tui.updateStatus(statusSource())
-    catch
-      case NonFatal(e) =>
-        log.debug(s"TUI status poll failed: ${e.getMessage}")
-        tui.updateConnectionStatus(s"Error: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
-
 object TuiUpdater extends Logger:
 
   /** The `q` action: restore the terminal, then `exit`.
@@ -117,18 +115,18 @@ object TuiUpdater extends Logger:
   /** Create a TUI updater with default configuration. */
   def apply(
       tui: Tui,
-      statusSource: () => NodeStatusSnapshot,
+      snapshots: () => Option[NodeStatusSnapshot],
       networkName: String,
       onQuit: () => Unit
   ): TuiUpdater =
-    new TuiUpdater(tui, TuiConfig.default, statusSource, networkName, onQuit)
+    new TuiUpdater(tui, TuiConfig.default, snapshots, networkName, onQuit)
 
   /** Create a TUI updater with custom configuration. */
   def apply(
       tui: Tui,
       config: TuiConfig,
-      statusSource: () => NodeStatusSnapshot,
+      snapshots: () => Option[NodeStatusSnapshot],
       networkName: String,
       onQuit: () => Unit
   ): TuiUpdater =
-    new TuiUpdater(tui, config, statusSource, networkName, onQuit)
+    new TuiUpdater(tui, config, snapshots, networkName, onQuit)

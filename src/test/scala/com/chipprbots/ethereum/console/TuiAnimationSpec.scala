@@ -17,7 +17,7 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   private val theme = TuiTheme.Ansi16
   private val ticks = 0L to 11L
 
-  private def rows(s: TuiState, w: Int = 80, h: Int = 24): Seq[String] = renderer.render(s, w, h).map(_.toString)
+  private def rows(s: TuiState, w: Int, h: Int): Seq[String] = renderer.render(s, w, h).map(_.toString)
   private def blocksRow(s: TuiState, w: Int = 80, h: Int = 24): String = rows(s, w, h).find(_.trim.startsWith("Blocks")).get
 
   /** The cells between the bar's brackets. */
@@ -38,7 +38,7 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
       for tick <- ticks do
         val bar = WormBar.render(budget, WormProgress.Known(p), tick, g, theme).toString
         withClue(s"${g.set} budget $budget p $p tick $tick bar $bar: ") {
-          track(bar).indexOf('~') shouldBe at - 1 - (tick % 3).toInt
+          track(bar).indexOf('~') shouldBe (at - 1 - (tick % 3).toInt).max(0) // clamped to ≥ 0 (§4.1)
           track(bar).count(_ == '~') shouldBe (if g.set == GlyphSet.Ascii then 2 else 1) // ASCII's worm is `~o`
           bar.count(_ == '=') shouldBe at - 1 // one `=` became the ripple
         }
@@ -163,9 +163,11 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
 
   it should "reset the speed baseline when the current block goes down, as a rewind does" taggedAs (UnitTest) in {
     val stalled = regularAt(300)
-    val rewound = TuiFixtures.snapshot(current = stalled.currentBlock - 50, best = stalled.bestBlock, now = TuiFixtures.Now)
+    // Below the baseline (18,300,893), as TuiState.scala:69-72 did it: the speed restarts from the rewound block.
+    val rewoundTo = stalled.syncBaseline.get.block - 1_000
+    val rewound = TuiFixtures.snapshot(current = rewoundTo, best = stalled.bestBlock, now = TuiFixtures.Now)
     val next = stalled.withStatus(rewound)
-    next.syncBaseline shouldBe Some(SyncBaseline(stalled.currentBlock - 50, TuiFixtures.Now))
+    next.syncBaseline shouldBe Some(SyncBaseline(rewoundTo, TuiFixtures.Now))
     next.stalled shouldBe false
   }
 

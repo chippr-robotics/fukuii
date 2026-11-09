@@ -126,7 +126,7 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     withThread(p) { published =>
       eventually(timeout(1500.millis), interval(20.millis)) {
         val s = published.get.get
-        s.peers shouldBe a[Sourced.Unresponsive]
+        s.peers should matchPattern { case Sourced.Unresponsive(_) => }
         s.sync shouldBe a[Sourced.Fresh[?]]
         s.connectionStatus shouldBe "Unresponsive (peer manager)"
         s.syncStatus shouldBe "Syncing"

@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.nodebuilder
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -19,7 +21,9 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.console.NodeSettings
+import com.chipprbots.ethereum.console.NodeStatusSnapshot
 import com.chipprbots.ethereum.console.Tui
+import com.chipprbots.ethereum.console.TuiProbeThread
 import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
@@ -47,12 +51,20 @@ import com.chipprbots.ethereum.utils.Hex
 abstract class BaseNode extends Node:
 
   private var tuiUpdater: Option[TuiUpdater] = None
+  private var tuiProbe: Option[TuiProbeThread] = None
+
+  /** The TUI's latest status snapshot: [[TuiProbeThread]] publishes it, the frame loop reads it (spec 027 FR-011). */
+  private val tuiSnapshots = new AtomicReference[Option[NodeStatusSnapshot]](None)
 
   // Secondary ActorSystem hosting the periodic DB consistency check (see startPeriodicDBConsistencyCheck).
   // Retained so shutdown() can terminate it — otherwise its dispatcher threads outlive node death.
   private var periodicConsistencyCheckSystem: Option[ActorSystem[?]] = None
 
   def start(): Unit =
+    // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
+    // starts in phase 6, once the actors it asks exist.
+    startTuiFrames()
+
     // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
     fixDatabase()
@@ -301,26 +313,36 @@ abstract class BaseNode extends Node:
         )
       )
 
+  /** The TUI's frame loop, before anything else starts: the splash is a view of it (spec 027 FR-013). */
+  private def startTuiFrames(): Unit =
+    val tui = Tui.getInstance()
+    if tui.isEnabled then
+      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
+      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
+      // first, leaving the user's shell in the alternate screen with the cursor hidden.
+      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
+      // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
+      val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
+      tuiUpdater = Some(updater)
+      updater.start()
+
+  /** The TUI's status poll, on its own thread, once the actors it asks exist (spec 027 FR-011). */
   private def startTuiUpdater(): Unit =
     val tui = Tui.getInstance()
     if tui.isEnabled then
-      log.info("Starting TUI updater")
+      log.info("Starting TUI status probe")
       tui.updateNodeSettings(tuiNodeSettings())
       val probe = new TuiStatusProbe(
         peerManager,
         syncController,
         () => blockchainReader.getBestBlockNumber,
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
-        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis)
+        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis),
+        snapSampledAt = () => SNAPSyncMetrics.latestProgressAt
       )(using system.scheduler)
-      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
-      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
-      // first, leaving the user's shell in the alternate screen with the cursor hidden.
-      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
-      // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
-      val updater = TuiUpdater(tui, tui.config, probe, Config.blockchains.network, quit)
-      tuiUpdater = Some(updater)
-      updater.start()
+      val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots)
+      tuiProbe = Some(thread)
+      thread.start()
 
   private def tuiNodeSettings(): NodeSettings =
     val c = instanceConfig.config
@@ -341,6 +363,7 @@ abstract class BaseNode extends Node:
       case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>
 
+    tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
     tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
     tryAndLogFailure(() => Tui.getInstance().shutdown())
     tryAndLogFailure(() => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop)
