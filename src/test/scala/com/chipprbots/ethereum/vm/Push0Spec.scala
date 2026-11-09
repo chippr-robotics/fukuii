@@ -47,7 +47,8 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     val stateIn = Generators.getProgramStateGen().sample.get.withStack(fullStack)
     val stateOut = PUSH0.execute(stateIn)
 
-    stateOut.error shouldBe Some(StackOverflow)
+    // go-ethereum: "stack limit reached 1024 (1023)", maxStack(0, 1)
+    stateOut.error shouldBe Some(StackOverflow(1024, 1023))
   }
 
   test("PUSH0 should fail with OutOfGas when not enough gas", UnitTest, VMTest) {
@@ -179,5 +180,5 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
 
     // The 1025th PUSH0 should fail with StackOverflow
     val finalState = PUSH0.execute(state)
-    finalState.error shouldBe Some(StackOverflow)
+    finalState.error shouldBe Some(StackOverflow(1024, 1023))
   }

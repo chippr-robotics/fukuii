@@ -57,14 +57,16 @@ case class ProgramResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
       * stored. Frontier treats this as a SUCCESS — gas is kept, state is kept, the caller receives the new address —
       * and `error` is therefore `None`, which is what every consensus consumer keys on.
       *
-      * This flag exists solely so gas ESTIMATION can tell the two kinds of success apart: `eth_estimateGas` / GraphQL
-      * `estimateGas` must not converge on "enough gas to RUN the init code" and silently omit the code-deposit cost. It
-      * is deliberately NOT a [[ProgramError]]: nothing on the block-execution path reads it, so it cannot change a
-      * state root, a receipt, or a block hash. See `StxLedger.binarySearchGasEstimation`.
+      * This flag exists solely so the RPC can tell the two kinds of success apart. Gas estimation (`eth_estimateGas` /
+      * GraphQL `estimateGas`) must not converge on "enough gas to RUN the init code" and silently omit the code-deposit
+      * cost, and a message call reports the shortfall as go-ethereum does (`StxLedger.CallOutcome`). It is deliberately
+      * NOT a [[ProgramError]]: nothing on the block-execution path reads it, so it cannot change a state root, a
+      * receipt, or a block hash. See `StxLedger.binarySearchGasEstimation` and `StxLedger.simulateCall`.
       *
       * Matches go-ethereum, where `ErrCodeStoreOutOfGas` is set inside `create()` but discarded by `opCreate` before it
-      * can reach the caller's stack value or the top-level `vmerr`. It is consequently NOT propagated out of a nested
-      * CREATE frame either — only a top-level contract-creation result ever carries it.
+      * can reach the caller's stack value. It is consequently NOT propagated out of a nested CREATE frame either — only
+      * a top-level contract-creation result ever carries it, as only go-ethereum's top-level message result carries the
+      * error (`stateTransition.executeCreate` returns it as `vmerr`, with the gas and the state kept).
       */
     codeDepositShortfall: Boolean = false
 ):

@@ -28,11 +28,14 @@ object CallErrors:
     case InvalidOpCode(code)                  => s"invalid opcode: ${opCodeName(code)}"
     case OpCodeNotAvailableInStaticContext(_) => "write protection"
     case InvalidJump(_)                       => "invalid jump destination"
-    case StackOverflow                        => "stack limit reached 1024 (1023)"
-    case StackUnderflow                       => "stack underflow"
+    case StackOverflow(_, _)                  => "stack limit reached 1024 (1023)"
+    case StackUnderflow(_, _)                 => "stack underflow"
     case ReturnDataOverflow                   => "return data out of bounds"
     case InvalidCode                          => "invalid code: must not begin with 0xef"
     case InitCodeSizeLimit                    => "max initcode size exceeded"
+    // both were OutOfGas until they had names (vm/VM.scala saveNewContract); the text is unchanged for now
+    case MaxCodeSizeExceeded                  => "out of gas"
+    case CodeStoreOutOfGas                    => "out of gas"
     case other                                => other.toString.toLowerCase
 
   /** go-ethereum `OpCode.String()` (`core/vm/opcodes.go`): the name in geth's `opCodeToString`, whether or not the
