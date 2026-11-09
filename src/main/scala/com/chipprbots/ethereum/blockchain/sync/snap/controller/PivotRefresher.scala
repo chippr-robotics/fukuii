@@ -8,6 +8,7 @@ import scala.collection.mutable
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -707,10 +708,7 @@ private[snap] trait PivotRefresher
             // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
             // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
             if currentPhase != StateHealing then
-              stateIngest.appState
-                .putSnapSyncPivotBlock(newPivotBlock)
-                .and(stateIngest.appState.putSnapSyncStateRoot(newStateRoot.value))
-                .commit()
+              PivotAnchor.committed(stateIngest, newPivotBlock, newPivotHeader).commit() // root = newStateRoot
             updateBestBlockForPivot(newPivotHeader, newPivotBlock)
             SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
             SNAPSyncMetrics.incrementPivotRefreshed()

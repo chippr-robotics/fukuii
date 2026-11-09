@@ -9,6 +9,7 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
@@ -169,10 +170,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 else
                   pivotBlock = Some(targetPivot)
                   stateRoot = Some(header.stateRoot)
-                  stateIngest.appState
-                    .putSnapSyncPivotBlock(targetPivot)
-                    .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-                    .commit()
+                  PivotAnchor.committed(stateIngest, targetPivot, header).commit()
                   updateBestBlockForPivot(header, targetPivot)
 
                   SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -207,10 +205,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                       case Some(header) =>
                         pivotBlock = Some(targetPivot)
                         stateRoot = Some(header.stateRoot)
-                        stateIngest.appState
-                          .putSnapSyncPivotBlock(targetPivot)
-                          .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-                          .commit()
+                        PivotAnchor.committed(stateIngest, targetPivot, header).commit()
                         updateBestBlockForPivot(header, targetPivot)
 
                         SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -560,10 +555,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
 
           pivotBlock = Some(header.number.value)
           stateRoot = Some(header.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(header.number.value)
-            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, header.number.value, header).commit()
           updateBestBlockForPivot(header, header.number.value)
 
           SNAPSyncMetrics.setPivotBlockNumber(header.number.value)
@@ -719,10 +711,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(0)
-            .and(stateIngest.appState.putSnapSyncStateRoot(genesisHeader.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, 0, genesisHeader).commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
@@ -804,10 +793,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          stateIngest.appState
-            .putSnapSyncPivotBlock(pivotBlockNumber)
-            .and(stateIngest.appState.putSnapSyncStateRoot(header.stateRoot.value))
-            .commit()
+          PivotAnchor.committed(stateIngest, pivotBlockNumber, header).commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block

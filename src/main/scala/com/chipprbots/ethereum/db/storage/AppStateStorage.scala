@@ -512,6 +512,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 
+  /** The hash of the header the SNAP pivot was taken from: written in the same batch as `SnapSyncPivotBlock` and
+    * `SnapSyncStateRoot` wherever a pivot is committed. Finalisation compares it with the header the validated header
+    * download holds at the pivot's number. Absent on a datadir whose pivot was committed before this key existed, and
+    * where the committed pivot's header could not be identified; finalisation then compares the state root only.
+    */
+  def getSnapSyncPivotHash(): Option[ByteString] =
+    get(Keys.SnapSyncPivotHash).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapSyncPivotHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncPivotHash, Hex.toHexString(hash.toArray))
+
+  def removeSnapSyncPivotHash(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncPivotHash)
+
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     *
     * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is
@@ -842,6 +856,7 @@ object AppStateStorage:
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
+    val SnapSyncPivotHash = "SnapSyncPivotHash"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapAccountResumeCheckpoint = "SnapAccountResumeCheckpoint"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"

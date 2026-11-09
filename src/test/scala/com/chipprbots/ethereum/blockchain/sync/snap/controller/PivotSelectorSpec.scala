@@ -574,3 +574,13 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.blockchainReader.getChainWeightByHash(postMergePivot.hash) shouldBe Some(ChainWeight.zero)
     h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
   }
+
+  it should "commit the pivot header's hash with its number and state root, in the same batch" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(header)))
+
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(header.hash.value)
+  }

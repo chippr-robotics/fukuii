@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.ChildFactories
+import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -164,7 +165,10 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         cfg: SNAPSyncConfig,
         withAncestors: Boolean = false,
         genesis: BlockHeader = Fixtures.Blocks.Genesis.header,
-        terminalTotalDifficulty: Option[BigInt] = None
+        terminalTotalDifficulty: Option[BigInt] = None,
+        headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
+        persistedRoot: ByteString = root,
+        beforeSpawn: () => Unit = () => ()
     ): TypedActorRef[SNAPSyncController.Command] =
       blockchainWriter.save(
         Block(genesis, BlockBody.empty),
@@ -190,8 +194,9 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         .and(appStateStorage.putSnapSyncStorageComplete(true))
         .and(appStateStorage.putSnapSyncBytecodeComplete(true))
         .and(appStateStorage.putSnapSyncPivotBlock(pivot))
-        .and(appStateStorage.putSnapSyncStateRoot(root))
+        .and(appStateStorage.putSnapSyncStateRoot(persistedRoot))
         .commit()
+      beforeSpawn()
       given ExecutionContext = system.executionContext
       val snap = testKit.spawn(
         SNAPSyncController(
@@ -209,7 +214,8 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           CacheBasedBlacklist.empty(100),
           parent.ref,
           childFactories = monitoredChildren,
-          terminalTotalDifficultyOverride = terminalTotalDifficulty
+          terminalTotalDifficultyOverride = terminalTotalDifficulty,
+          headerChainCheck = headerChainCheck
         )
       )
       eventually(pollsAnswered.get() should be >= 1)
@@ -417,6 +423,76 @@ class SNAPDeferredBackfillSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       case _                                                     => FishingOutcomes.continueAndIgnore
     }
     appStateStorage.getBackfillTarget() shouldBe pivot
+
+  // Proof of work: finalisation takes the pivot header from the validated header download, found from its recorded tip.
+  private def validatedCheck: HeaderChainCheck =
+    new HeaderChainCheck.Validated(PoWBlockHeaderValidator, PowHeaderFixtures.mordorConfig)
+
+  /** What the validated header download leaves once it reaches `pivotHeader`: its weight, the cursor and the tip. */
+  private def downloadReachedPivot(f: Fixture, pivotHeader: BlockHeader): Unit =
+    f.storeExactPivotWeight(pivotHeader, Fixtures.Blocks.Genesis.header.difficulty.value * 5000)
+    f.appStateStorage
+      .putBackfillBestHeader(f.pivot)
+      .and(f.appStateStorage.putBackfillBestHeaderHash(pivotHeader.hash.value))
+      .commit()
+
+  it should "hold, then finalise on the validated header chain when the pivot is its header (proof of work)" taggedAs UnitTest in new Fixture:
+    val snap: TypedActorRef[Command] = start(cfg(defer = true), withAncestors = true, headerChainCheck = validatedCheck)
+    awaitProcessed(snap)
+    eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+    val pivotHeader: BlockHeader = blockchainReader.getBlockHeaderByNumber(pivot).get
+
+    snap ! SNAPSyncController.HealingRootUnservable(root)
+    awaitProcessed(snap)
+    snap ! SNAPSyncController.HeaderHoldTick
+    awaitProcessed(snap)
+    parent.expectNoMessage(0.millis) // holding: the download has not reached the pivot
+    appStateStorage.isSnapSyncDone() shouldBe false
+    appStateStorage.getSnapSyncPivotHash() shouldBe Some(pivotHeader.hash.value) // pinned by the hand-off's anchor
+
+    downloadReachedPivot(this, pivotHeader)
+    snap ! SNAPSyncController.HeaderHoldTick
+    awaitFinalized()
+    appStateStorage.isSnapSyncDone() shouldBe true
+    appStateStorage.getBestBlockInfo().hash shouldBe pivotHeader.hash.value
+
+  it should "not finalise a pivot that is not the validated chain's header: re-anchor on that header and restart SNAP" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Fixture:
+    // The committed pivot: a header at the pivot's number on the real parent, with another state root, stored with its
+    // number index entry (as the pivot bootstrap stores it); SNAP synced its state root.
+    val otherRoot = ByteString(Array.fill(32)(0x22.toByte))
+    var validatedPivot: BlockHeader = null
+    val snap: TypedActorRef[Command] = start(
+      cfg(defer = true),
+      withAncestors = true,
+      headerChainCheck = validatedCheck,
+      persistedRoot = otherRoot,
+      beforeSpawn = () =>
+        validatedPivot = blockchainReader.getBlockHeaderByNumber(pivot).get
+        val altered = validatedPivot.copy(stateRoot = TrieRoot(otherRoot))
+        blockchainWriter
+          .storeBlockHeader(altered)
+          .and(appStateStorage.putSnapSyncPivotHash(altered.hash.value))
+          .commit()
+    )
+    awaitProcessed(snap)
+    eventually(appStateStorage.getBackfillTarget() shouldBe pivot)
+    downloadReachedPivot(this, validatedPivot) // the download's header at the pivot is the real one
+
+    snap ! SNAPSyncController.HealingRootUnservable(otherRoot)
+    parent.fishForMessage(15.seconds) {
+      case SyncProtocol.HealingImpossible => FishingOutcomes.complete
+      case SNAPSyncController.SnapSyncFinalized(_) =>
+        fail("a pivot that is not the validated chain's header was finalised")
+      case _ => FishingOutcomes.continueAndIgnore
+    }
+    appStateStorage.isSnapSyncDone() shouldBe false
+    appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+    appStateStorage.getSnapSyncStateRoot() shouldBe Some(validatedPivot.stateRoot.value)
+    appStateStorage.getSnapSyncPivotHash() shouldBe Some(validatedPivot.hash.value)
+    blockchainReader.getBlockHeaderByNumber(pivot) shouldBe Some(validatedPivot)
 
   "SNAPSyncController.chainBackfillDeferredToFinalization" should
     "be true only when download is enabled and deferred" taggedAs UnitTest in {
