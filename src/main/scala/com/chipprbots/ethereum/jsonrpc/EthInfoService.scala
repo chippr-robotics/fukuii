@@ -447,16 +447,18 @@ class EthInfoService(
     * sender, the recipient (for a creation, the address `from` + nonce creates, nonce defaulting to the account's) and
     * the precompiles active at the block, and starts from the caller's accessList when one is given.
     *
-    * Differences from geth, all deliberate:
+    * The state overrides follow geth in a way that differs from eth_call: `AccessList` applies them with no precompiles
+    * at all (`Apply(db, nil)`, api.go:1366), and so does this. Every `movePrecompileToAddress` is `account <address> is
+    * not a precompile`, even for a precompile the block has; no entry deletes a precompile, and the run keeps all of
+    * them. The other overrides apply as in eth_call. (The tracer's exclusions are the block's precompiles all the same:
+    * geth reads `vm.ActivePrecompiles(rules)` for them.)
+    *
+    * Differences from geth, both deliberate:
     *   - no fee defaults: when the call names any fee field geth's `setFeeDefaults` fills the missing ones from its
     *     oracle; fukuii runs with the caller's fees (absent ones 0). With no fee field both run at price 0, which
     *     execution-apis `create-al-unfunded-sender` requires;
     *   - the loop is bounded at [[MaxAccessListIterations]] runs (geth loops until it converges) and says so if it does
-    *     not converge;
-    *   - state overrides that touch a precompile act as they do in eth_call: an entry at a precompile's address deletes
-    *     it, `movePrecompileToAddress` moves it, and the run uses the result. geth's `AccessList` applies the overrides
-    *     with a nil precompile map (`Apply(db, nil)`, api.go:1366), so there every `movePrecompileToAddress` is
-    *     `account <address> is not a precompile`, no entry deletes a precompile, and the run keeps all of them.
+    *     not converge.
     */
   def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
     IO {
@@ -465,16 +467,13 @@ class EthInfoService(
         resolved <- resolveBlock(req.block)
         header = resolved.block.header
         base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
-        // geth applies the overrides straight after loading the state, before reading the sender's nonce
+        // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
+        // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
+        // relocations that come back are always empty
         overridden <- req.stateOverrides.fold[Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])]](
           Right((base, Map.empty[Address, Address]))
         )(
-          EthSimulateService.applyStateOverrides(
-            base,
-            _,
-            EthSimulateService.activePrecompiles(header)(using blockchainConfig),
-            blockchainConfig.accountStartNonce
-          )
+          EthSimulateService.applyStateOverrides(base, _, Set.empty, blockchainConfig.accountStartNonce)
         )
         (world, relocations) = overridden
         gas = CallTxBuilder.callGas(req.tx, gasCap)

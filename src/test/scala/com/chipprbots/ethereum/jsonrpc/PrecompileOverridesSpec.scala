@@ -40,7 +40,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   *     has (`vm.ActivePrecompiledContracts(rules)`), so 0x0a is one and a precompile of a later fork is not;
   *   - F12 (:65, :89): the entries are applied in address order, so of several moves to one target the last wins, and
   *     every source is gone;
-  *   - the "is not a precompile" text carries the EIP-55 address (`addr.Hex()`).
+  *   - the "is not a precompile" text carries the EIP-55 address (`addr.Hex()`);
+  *   - eth_createAccessList applies the overrides with no precompiles at all, as geth's `AccessList` does (`Apply(db,
+  *     nil)`, api.go:1366): every `movePrecompileToAddress` is "is not a precompile" and no entry deletes a precompile.
   *
   * Chain: the Amsterdam fixture schedule (Cancun 60, Prague 120, Osaka 180, Amsterdam 360).
   */
@@ -244,6 +246,9 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
 
   private val Endpoints = List("eth_call", "eth_estimateGas", "eth_createAccessList", "eth_simulateV1")
 
+  /** The endpoints that give an override the block's precompiles; eth_createAccessList gives it none (api.go:1366). */
+  private val PrecompileEndpoints = List("eth_call", "eth_estimateGas", "eth_simulateV1")
+
   // ── F10: any entry at a precompile's address deletes the precompile (override.go:92-94) ───────────────────────────
 
   "eth_simulateV1" should "delete a precompile when any override names its address (override.go:92-94)" taggedAs (
@@ -331,7 +336,7 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
     val osaka = new AtTime(300)
     val cancun = new AtTime(100)
     for
-      endpoint <- Endpoints
+      endpoint <- PrecompileEndpoints
       (chain, source) <- List(
         osaka -> KzgPointEval,
         osaka -> Bls12G1Add,
@@ -414,7 +419,35 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
       }
   }
 
-  // ── The same overrides, through eth_call, eth_estimateGas and eth_createAccessList ────────────────────────────
+  // ── eth_createAccessList: overrides applied with no precompiles, as geth's AccessList does (api.go:1366) ─────
+
+  "eth_createAccessList" should "refuse every movePrecompileToAddress as 'not a precompile', the block's precompiles too" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val osaka = new AtTime(300)
+    for source <- List(Identity, KzgPointEval, Bls12G1Add, P256Verify, Plain) do
+      withClue(s"moving $source: ") {
+        osaka.refusal("eth_createAccessList", Map(source -> moveTo(Moved))) shouldBe
+          Some(notAPrecompile(EthSimulateService.checksumAddress(source)))
+      }
+  }
+
+  it should "report the first such refusal in address order" taggedAs (UnitTest, RPCTest) in new CallNode:
+    val tx: TxArgs = callArgs(Plain, NoData)
+    val moves: Map[Address, StateOverride] = Map(Identity -> moveTo(Moved), Sha256 -> moveTo(Moved))
+    accessList(tx, moves).left.value shouldBe notAPrecompile(EthSimulateService.checksumAddress(Sha256))
+
+  it should "delete no precompile: an entry at a precompile's address leaves it running" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new CallNode(header = preAmsterdamHeader(46, 100)):
+    val tx: TxArgs = callArgs(Identity, ByteString(Array.fill[Byte](100)(1)))
+    val entries: List[StateOverride] = List(StateOverride(balance = Some(1)), StateOverride())
+    accessList(tx, Map()).value.gasUsed shouldBe BigInt(22627)
+    for ov <- entries do accessList(tx, Map(Identity -> ov)).value.gasUsed shouldBe BigInt(22627)
+
+  // ── The same overrides, through eth_call and eth_estimateGas ──────────────────────────────────────────────────
 
   "eth_call" should "delete a precompile when any override names its address, and run the override's code" taggedAs (
     UnitTest,
@@ -454,7 +487,7 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
     service.call(req).unsafeRunSync().map(_.returnData) shouldBe Right(NoData)
 
   // a Cancun-time block has no EIP-7623 floor; 100 bytes of calldata cost 21,000 + 1,600, identity adds 15 + 3 * 4
-  "eth_estimateGas and eth_createAccessList" should "charge no precompile gas once an override deletes it" taggedAs (
+  "eth_estimateGas" should "charge no precompile gas once an override deletes it" taggedAs (
     UnitTest,
     RPCTest
   ) in new CallNode(header = preAmsterdamHeader(46, 100)):
@@ -462,8 +495,6 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
     val deleted: Map[Address, StateOverride] = Map(Identity -> StateOverride(balance = Some(1)))
     estimate(tx, Map()).value shouldBe BigInt(22627)
     estimate(tx, deleted).value shouldBe BigInt(22600)
-    accessList(tx, Map()).value.gasUsed shouldBe BigInt(22627)
-    accessList(tx, deleted).value.gasUsed shouldBe BigInt(22600)
 
   // the target answers with identity (it sorts last), which charges 15 + 3 * 4; sha256 would charge 60 + 12 * 4
   it should "let the last of several moves to one target win" taggedAs (
@@ -473,7 +504,6 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
     val tx: TxArgs = callArgs(Moved, ByteString(Array.fill[Byte](100)(1)))
     val moves: Map[Address, StateOverride] = Map(Sha256 -> moveTo(Moved), Identity -> moveTo(Moved))
     estimate(tx, moves).value shouldBe BigInt(22627)
-    accessList(tx, moves).value.gasUsed shouldBe BigInt(22627)
 
   // ── Moving onto another precompile, and the lifetime of a move ────────────────────────────────────────────────
 

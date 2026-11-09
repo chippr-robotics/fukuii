@@ -217,7 +217,8 @@ object EthSimulateService:
     * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call,
     * eth_estimateGas and eth_createAccessList (go-ethereum uses its one `override.StateOverride.Apply` for all of them,
     * and for each simulated block). `activePrecompiles` is the `precompiles` map `Apply` is given
-    * ([[activePrecompiles]]).
+    * ([[activePrecompiles]]); eth_createAccessList gives it none, as geth's `AccessList` does (`Apply(db, nil)`,
+    * api.go:1366), so there every move is `is not a precompile` and nothing is deleted.
     *
     * The precompile rules are `Apply`'s (override.go:60-127), the entries taken in address order:
     *   - `movePrecompileToAddress` on an address that is not an active precompile is `account <EIP-55> is not a
