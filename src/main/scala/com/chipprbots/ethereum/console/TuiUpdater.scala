@@ -91,7 +91,8 @@ class TuiUpdater(
 
   private def updateLoop(): Unit =
     try
-      while running && tui.isEnabled do
+      // An interrupt ends the loop: checkInput keeps it set, and every later key read would fail at once.
+      while running && tui.isEnabled && !Thread.currentThread().isInterrupted do
         val keepGoing =
           try
             val more = tick()
