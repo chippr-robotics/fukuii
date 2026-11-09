@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.domain.UInt256
 
 /** Marker trait for errors that may occur during program execution.
@@ -50,7 +52,19 @@ case class StackOverflow(stackLen: Int, limit: Int) extends StackError:
   override def toString: String = "StackOverflow"
 
 case object InvalidCall extends ProgramError
-case object PreCompiledContractFail extends ProgramError
+
+/** A precompile that rejected its input once its price was paid: go-ethereum's `RunPrecompiledContract` returning the
+  * error of the precompile's `Run` (core/vm/contracts.go). It consumes the frame's gas like every error but a revert.
+  *
+  * It carries the contract and its input only so that the RPC can say why, in go-ethereum's words:
+  * `jsonrpc.CallErrors.vmErrorMessage` asks [[PrecompiledContracts.PrecompiledContract.failureReason]]. Nothing else
+  * reads them, and block import never computes a reason (#1727 PR 7b).
+  *
+  * `toString` stays the bare name: the tracers print it.
+  */
+case class PreCompiledContractFail(contract: PrecompiledContracts.PrecompiledContract, input: ByteString)
+    extends ProgramError:
+  override def toString: String = "PreCompiledContractFail"
 
 case object RevertOccurs extends ProgramError:
   override val useWholeGas: Boolean = false

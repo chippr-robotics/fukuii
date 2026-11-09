@@ -33,6 +33,8 @@ import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.ActorsTesting.syncStatusAutoPilot
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.vm.PreCompiledContractFail
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 class EthServiceSpec
     extends ScalaTestWithActorTestKit
@@ -193,6 +195,36 @@ class EthServiceSpec
       .returning(Left(StxLedger.CallEstimateFailure.Failed(com.chipprbots.ethereum.vm.CodeStoreOutOfGas)))
     ethService.estimateGas(CallRequest(creation, BlockParam.Latest)).unsafeRunSync() shouldEqual
       Left(JsonRpcError(-32000, codeStorageOutOfGas, None))
+
+  // #1727 PR 7b: a failed precompile reads as the error its go-ethereum Run returns (vm.PrecompileFailureReasonSpec has
+  // every precompile); eth_call answers it as any VM error, -32000 with no data.
+  it should "report a failed precompile with go-ethereum's reason" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val world: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val notOnCurve: ByteString = UInt256(1).bytes ++ UInt256(1).bytes
+    val failed: PreCompiledContractFail = PreCompiledContractFail(PrecompiledContracts.Bn128Add, notOnCurve)
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(
+        Right(StxLedger.CallOutcome(TxResult(world, 50000, Nil, ByteString.empty, Some(failed)), false))
+      )
+    val call: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(PrecompiledContracts.Bn128AddAddr),
+      gas = Some(GasAmount(50000)),
+      data = Some(notOnCurve)
+    )
+    ethService.call(CallRequest(call, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, "point is not on curve", None))
 
   it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup:
     blockchainWriter.storeBlock(blockToRequest).commit()

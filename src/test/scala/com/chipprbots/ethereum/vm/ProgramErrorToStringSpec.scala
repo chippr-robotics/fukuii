@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -32,7 +34,14 @@ class ProgramErrorToStringSpec extends AnyFlatSpec with Matchers:
     InvalidCode.toString shouldBe "InvalidCode"
     InitCodeSizeLimit.toString shouldBe "InitCodeSizeLimit"
     ReturnDataOverflow.toString shouldBe "ReturnDataOverflow"
-    PreCompiledContractFail.toString shouldBe "PreCompiledContractFail"
+    PreCompiledContractFail(
+      PrecompiledContracts.Bn128Add,
+      ByteString(1, 2, 3)
+    ).toString shouldBe "PreCompiledContractFail"
+    PreCompiledContractFail(
+      PrecompiledContracts.BlsPairing,
+      ByteString.empty
+    ).toString shouldBe "PreCompiledContractFail"
     InvalidOpCode(0xfe.toByte).toString shouldBe "InvalidOpCode(0xfe)"
     OpCodeNotAvailableInStaticContext(0x55.toByte).toString shouldBe "OpCodeNotAvailableInStaticContext(0x55)"
     InvalidJump(UInt256(5)).toString shouldBe s"InvalidJump(${UInt256(5).toHexString})"
@@ -57,7 +66,7 @@ class ProgramErrorToStringSpec extends AnyFlatSpec with Matchers:
       InvalidCode,
       InitCodeSizeLimit,
       ReturnDataOverflow,
-      PreCompiledContractFail,
+      PreCompiledContractFail(PrecompiledContracts.Bn128Add, ByteString.empty),
       InvalidOpCode(0xfe.toByte),
       InvalidJump(UInt256(5))
     )

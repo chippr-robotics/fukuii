@@ -9,6 +9,8 @@ import com.chipprbots.ethereum.crypto.Secp256r1
 import com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G1
 import com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G2
 import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
+import com.chipprbots.ethereum.crypto.zksnark.BN128Fp2
+import com.chipprbots.ethereum.crypto.zksnark.Fp
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck
 import com.chipprbots.ethereum.crypto.zksnark.PairingCheck.G1G2Pair
 import com.chipprbots.ethereum.domain.Address
@@ -200,9 +202,27 @@ object PrecompiledContracts:
       byzantiumAtlantisContracts
     else contracts
 
+  /** What [[PrecompiledContract.failureReason]] answers for an input that none of go-ethereum's checks rejects.
+    * go-ethereum runs such an input, so it has no text for it, and `exec` failing one would mean fukuii and go-ethereum
+    * disagree about it. The precompiles that never fail (ecrecover, SHA-256, RIPEMD-160, identity, P256VERIFY) have no
+    * reason at all.
+    */
+  val UnexplainedFailure: String = "precompiled contract failed"
+
   sealed trait PrecompiledContract:
     protected def exec(inputData: ByteString): Option[ByteString]
     protected def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt
+
+    /** Why the precompile fails `inputData`, in go-ethereum v1.17.9's words: the error its `Run` returns, from its
+      * checks in its order (core/vm/contracts.go). Only the RPC reads it, through [[PreCompiledContractFail]]
+      * (`jsonrpc.CallErrors.vmErrorMessage`); block import never asks.
+      *
+      * It decides nothing: `gas` and `exec` alone decide the result, and this is meaningful only for an input `exec`
+      * fails. Where go-ethereum's reason is a check on the input's bytes it is computed from the bytes. The BLS12-381
+      * subgroup checks and KZG's proof check need the native library, and ask it through `NativeBackends`' probes,
+      * which cannot halt the node.
+      */
+    def failureReason(inputData: ByteString): String
 
     def run[W <: WorldStateProxy[W, S], S <: Storage[S]](context: ProgramContext[W, S]): ProgramResult[W, S] =
 
@@ -215,7 +235,7 @@ object PrecompiledContracts:
         if g <= context.startGas then
           exec(context.inputData) match
             case Some(returnData) => (returnData, None, context.startGas - g)
-            case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
+            case None => (ByteString.empty, Some(PreCompiledContractFail(this, context.inputData)), BigInt(0))
         else (ByteString.empty, Some(OutOfGas), BigInt(0))
       ): (ByteString, Option[ProgramError], BigInt)
 
@@ -253,6 +273,9 @@ object PrecompiledContracts:
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(3000)
 
+    /** Never fails: a bad signature returns no output (go-ethereum `ecrecover.Run` returns `nil, nil`). */
+    def failureReason(inputData: ByteString): String = UnexplainedFailure
+
     private def hasOnlyLastByteSet(v: ByteString): Boolean =
       v.dropWhile(_ == 0).size == 1
 
@@ -269,6 +292,9 @@ object PrecompiledContracts:
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
       BigInt(60) + BigInt(12) * wordsForBytes(inputData.size)
 
+    /** Never fails. */
+    def failureReason(inputData: ByteString): String = UnexplainedFailure
+
   object Ripemp160 extends PrecompiledContract:
     def exec(inputData: ByteString): Option[ByteString] =
       Some(ByteUtils.padLeft(ripemd160(inputData), 32))
@@ -276,12 +302,18 @@ object PrecompiledContracts:
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
       BigInt(600) + BigInt(120) * wordsForBytes(inputData.size)
 
+    /** Never fails. */
+    def failureReason(inputData: ByteString): String = UnexplainedFailure
+
   object Identity extends PrecompiledContract:
     def exec(inputData: ByteString): Option[ByteString] =
       Some(inputData)
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
       BigInt(15) + BigInt(3) * wordsForBytes(inputData.size)
+
+    /** Never fails. */
+    def failureReason(inputData: ByteString): String = UnexplainedFailure
 
   // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-198.md
   object ModExp extends PrecompiledContract:
@@ -306,37 +338,38 @@ object PrecompiledContracts:
       // so etcFork >= Olympia is true but EIP-7823 is not yet active pre-Osaka.
       val useEip7823 = isOsaka || (etcFork >= EtcForks.Olympia && !isEthereum)
 
-      // EIP-7823: reject inputs with operand lengths > 1024 bytes
-      if useEip7823 then
-        val baseLength = getLength(context.inputData, 0)
-        val expLength = getLength(context.inputData, 1)
-        val modLength = getLength(context.inputData, 2)
-        if baseLength > maxOperandLength || expLength > maxOperandLength || modLength > maxOperandLength then
-          // DEFER: nested guard inside the EIP-7823 (Unit-typed) validation block; the method
-          // value (ProgramResult / MODEXP output) is produced below. An expression rewrite would
-          // require restructuring the validation into a separate boolean and is byte-level risky
-          // for a precompile result that feeds state. Keep the short-circuit.
-          return frameResult( // scalafix:ok DisableSyntax.return
-            context,
-            ByteString.empty,
-            BigInt(0),
-            Some(PreCompiledContractFail)
-          )
-
       // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
       // (Prague keeps EIP-2565 per execution-specs); on ETC, it activates at Olympia.
       // Hive maps London→olympiaBlockNumber, which we must ignore on ETH to avoid firing
       // EIP-7883 pre-Osaka.
       val g = gasWithOsaka(context.inputData, etcFork, ethFork, isOsaka, isEthereum)
+
+      // go-ethereum `RunPrecompiledContract` (core/vm/contracts.go) charges the price first; only a call that paid it
+      // reaches `bigModExp.Run`, which rejects an operand longer than 1024 bytes (EIP-7823). So an over-long input its
+      // gas cannot pay for is out of gas, like any other (#1727 PR 7b; it used to be rejected before the charge). The
+      // frame is the same either way, all gas consumed and no output: only the error's name depends on the order.
       val (result, error, gasRemaining) = (
-        if g <= context.startGas then
+        if g > context.startGas then (ByteString.empty, Some(OutOfGas), BigInt(0))
+        else if useEip7823 && exceedsEip7823(context.inputData) then
+          (ByteString.empty, Some(PreCompiledContractFail(this, context.inputData)), BigInt(0))
+        else
           exec(context.inputData) match
             case Some(returnData) => (returnData, None, context.startGas - g)
-            case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
-        else (ByteString.empty, Some(OutOfGas), BigInt(0))
-      ): (ByteString, Option[ProgramError], BigInt)
+            case None => (ByteString.empty, Some(PreCompiledContractFail(this, context.inputData)), BigInt(0))
+      ) : (ByteString, Option[ProgramError], BigInt)
 
       frameResult(context, result, gasRemaining, error)
+
+    /** go-ethereum `bigModExp.Run` fails only at EIP-7823's bound, and so does `run` here: `exec` never fails. */
+    def failureReason(inputData: ByteString): String =
+      if exceedsEip7823(inputData) then "one or more of base/exponent/modulus length exceeded 1024 bytes"
+      else UnexplainedFailure
+
+    /** EIP-7823: a base, exponent or modulus length above 1024 bytes. A length word above 2^31 - 1 reads as 2^31 - 1
+      * (`getLength`), so go-ethereum's `inputLenOverflow` (a length of more than 64 bits) is covered too.
+      */
+    private def exceedsEip7823(inputData: ByteString): Boolean =
+      (0 to 2).exists(position => getLength(inputData, position) > maxOperandLength)
 
     def exec(inputData: ByteString): Option[ByteString] =
       val baseLength = getLength(inputData, 0)
@@ -479,6 +512,39 @@ object PrecompiledContracts:
       if expLength <= lengthBytes then highestBitIndex
       else 8L * (expLength - lengthBytes) + highestBitIndex
 
+  /** go-ethereum's checks on a BN254 point, in its order and with its texts: crypto/bn256/gnark `G1.Unmarshal` and
+    * `G2.Unmarshal` (go-ethereum runs bn256 on gnark-crypto on amd64 and arm64), whose coordinate errors are
+    * gnark-crypto `fp.Element.SetBytesCanonical`'s. All zeros is the point at infinity, before any other check.
+    * core-geth words these differently; #1727 takes go-ethereum's text on both chains.
+    *
+    * Pure: the on-curve and subgroup checks are fukuii's own BN128 code, the code `exec` runs.
+    */
+  private object Bn254Reasons:
+    private val NotCanonical = "invalid fp.Element encoding"
+    private val NotOnCurve = "point is not on curve"
+    private val NotInSubgroup = "point is not in correct subgroup"
+
+    private def word(bytes: ByteString, i: Int): ByteString = bytes.slice(32 * i, 32 * (i + 1))
+
+    private def canonical(word: ByteString): Boolean = ByteUtils.toBigInt(word) < Fp.P
+
+    /** A 64-byte G1 point, x then y. Every point on BN254's G1 curve is in G1 (cofactor 1). */
+    def g1(bytes: ByteString): Option[String] =
+      if bytes.forall(_ == 0) then None
+      else if !canonical(word(bytes, 0)) || !canonical(word(bytes, 1)) then Some(NotCanonical)
+      else if BN128Fp.createPoint(word(bytes, 0), word(bytes, 1)).isEmpty then Some(NotOnCurve)
+      else None
+
+    /** A 128-byte G2 point in the EVM's order: x's imaginary part, x's real part, then y's. */
+    def g2(bytes: ByteString): Option[String] =
+      if bytes.forall(_ == 0) then None
+      else if !(0 until 4).forall(i => canonical(word(bytes, i))) then Some(NotCanonical)
+      else
+        val (xImaginary, xReal, yImaginary, yReal) = (word(bytes, 0), word(bytes, 1), word(bytes, 2), word(bytes, 3))
+        if BN128Fp2.createPoint(xReal, xImaginary, yReal, yImaginary).isEmpty then Some(NotOnCurve)
+        else if BN128G2(xReal, xImaginary, yReal, yImaginary).isEmpty then Some(NotInSubgroup)
+        else None
+
   // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-196.md
   object Bn128Add extends PrecompiledContract:
     val expectedBytes: Int = 4 * 32
@@ -503,6 +569,11 @@ object PrecompiledContracts:
       if etcFork >= EtcForks.Phoenix || ethFork >= EthForks.Istanbul then
         BigInt(150) // https://eips.ethereum.org/EIPS/eip-1108
       else BigInt(500)
+
+    /** go-ethereum `runBn256Add`: the first point, then the second, from the input zero-padded to 128 bytes. */
+    def failureReason(inputData: ByteString): String =
+      val padded = inputData.padToByteString(expectedBytes, 0.toByte)
+      Bn254Reasons.g1(padded.slice(0, 64)).orElse(Bn254Reasons.g1(padded.slice(64, 128))).getOrElse(UnexplainedFailure)
 
     private def getCurvePointsBytes(input: ByteString): (ByteString, ByteString, ByteString, ByteString) =
       (input.slice(0, 32), input.slice(32, 64), input.slice(64, 96), input.slice(96, 128))
@@ -535,6 +606,10 @@ object PrecompiledContracts:
         BigInt(6000) // https://eips.ethereum.org/EIPS/eip-1108
       else BigInt(40000)
 
+    /** go-ethereum `runBn256ScalarMul`: the point, from the input zero-padded to 96 bytes. Any scalar is valid. */
+    def failureReason(inputData: ByteString): String =
+      Bn254Reasons.g1(inputData.padToByteString(expectedBytes, 0.toByte).slice(0, 64)).getOrElse(UnexplainedFailure)
+
     private def getCurvePointsBytes(input: ByteString): (ByteString, ByteString, ByteString) =
       (input.slice(0, 32), input.slice(32, 64), input.slice(64, 96))
 
@@ -560,6 +635,16 @@ object PrecompiledContracts:
       if etcFork >= EtcForks.Phoenix || ethFork >= EthForks.Istanbul then // https://eips.ethereum.org/EIPS/eip-1108
         BigInt(34000) * k + BigInt(45000)
       else BigInt(80000) * k + BigInt(100000)
+
+    /** go-ethereum `runBn256Pairing`: the length, then pair by pair the G1 point and the G2 point. */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length % inputLength != 0 then "bad elliptic curve pairing size"
+      else
+        inputData
+          .grouped(inputLength)
+          .flatMap(pair => Bn254Reasons.g1(pair.take(64)).orElse(Bn254Reasons.g2(pair.drop(64))))
+          .nextOption()
+          .getOrElse(UnexplainedFailure)
 
     // Method which stops reading another points if one of earlier ones failed (had invalid coordinates, or was not on
     // BN128 curve
@@ -592,14 +677,24 @@ object PrecompiledContracts:
     def exec(inputData: ByteString): Option[ByteString] =
       Blake2bCompression.blake2bCompress(inputData.toArray).map(ByteString.fromArrayUnsafe)
 
+    /** go-ethereum `blake2F.RequiredGas`: one gas per round for an input of the right length, whatever its final flag,
+      * and 0 for any other length. A flag other than 0 or 1 still fails the call, but only once the rounds are paid
+      * for, so with too little gas it is out of gas, as in go-ethereum (#1727 PR 7b; it used to be priced at 0). The
+      * frame is the same either way, all gas consumed and no output: only the error's name changes.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val inputArray = inputData.toArray
-      if Blake2bCompression.isValidInput(inputArray) then
+      if inputData.length == Blake2bCompression.MessageBytesLength then
         // Each round costs 1gas
-        BigInt(Blake2bCompression.parseNumberOfRounds(inputArray))
+        BigInt(Blake2bCompression.parseNumberOfRounds(inputData.toArray))
       else
         // bad input to contract, contract will not execute, set price to zero
         BigInt(0)
+
+    /** go-ethereum `blake2F.Run`: the length (213 bytes), then the final-block flag (0 or 1). */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != Blake2bCompression.MessageBytesLength then "invalid input length"
+      else if (inputData(Blake2bCompression.MessageBytesLength - 1) & 0xff) > 1 then "invalid final flag"
+      else UnexplainedFailure
 
   /** EIP-7951 P256VERIFY: secp256r1 (P-256) signature verification. Spec: https://eips.ethereum.org/EIPS/eip-7951
     *
@@ -642,6 +737,9 @@ object PrecompiledContracts:
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
 
+    /** Never fails: an input that does not verify returns no output. */
+    def failureReason(inputData: ByteString): String = UnexplainedFailure
+
   // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
   // Uses org.hyperledger.besu:bls12-381 native library: Matter Labs' eth_pairings via JNA (not gnark or Constantine).
   // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
@@ -655,21 +753,117 @@ object PrecompiledContracts:
 
   sealed trait BlsPrecompile extends PrecompiledContract
 
+  /** The BLS12-381 base field modulus p (EIP-2537 "Curve parameters"). */
+  private val Bls12381FieldModulus: BigInt = BigInt(
+    "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+    16
+  )
+
+  /** go-ethereum's checks on EIP-2537 inputs, in its order and with its texts (core/vm/contracts.go
+    * `decodeBLS12381FieldElement`, `decodePointG1` and `decodePointG2`, then the subgroup checks in the MSM and pairing
+    * `Run`s). A coordinate's error is gnark-crypto's `fp.BigEndian.Element`.
+    *
+    * The encoding and curve checks are pure. Subgroup membership is not a property of the bytes alone: Besu's library
+    * is asked, through [[NativeBackends.blsAccepts]], whether it accepts the point in a one-pair MSM with a zero
+    * scalar. EIP-2537 makes an MSM check every point's subgroup whatever its scalar, and the point already decodes, so
+    * a rejection can only be the subgroup. A library that cannot answer leaves the point reported outside the subgroup.
+    */
+  private object Eip2537Reasons:
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+
+    private val P = Bls12381FieldModulus
+
+    val InvalidLength = "invalid input length"
+    private val NotOnCurve = "invalid point: not on curve"
+    private val ZeroScalar = ByteString(new Array[Byte](32))
+
+    private def element(bytes: ByteString, i: Int): ByteString = bytes.slice(64 * i, 64 * (i + 1))
+    private def value(element: ByteString): BigInt = BigInt(1, element.drop(16).toArray)
+
+    /** A 64-byte field element: 16 zero bytes, then a big-endian integer below p. */
+    def fieldElement(element: ByteString): Option[String] =
+      if element.take(16).exists(_ != 0) then Some("invalid field element top bytes")
+      else if value(element) >= P then Some("invalid fp.Element encoding")
+      else None
+
+    /** A 128-byte G1 point: x, y, then y^2 = x^3 + 4. (0, 0) is the point at infinity, which counts as on the curve. */
+    def g1(point: ByteString): Option[String] =
+      fieldElement(element(point, 0)).orElse(fieldElement(element(point, 1))).orElse {
+        val (x, y) = (value(element(point, 0)), value(element(point, 1)))
+        Option.unless((x == 0 && y == 0) || (y * y - x * x * x - 4).mod(P) == 0)(NotOnCurve)
+      }
+
+    /** A 256-byte G2 point: x0, x1, y0, y1, then y^2 = x^3 + 4(1 + u) over Fp2 = Fp[u]/(u^2 + 1), x = x0 + x1 u. */
+    def g2(point: ByteString): Option[String] =
+      (0 until 4).iterator.flatMap(i => fieldElement(element(point, i))).nextOption().orElse {
+        def mul(a: (BigInt, BigInt), b: (BigInt, BigInt)): (BigInt, BigInt) =
+          ((a._1 * b._1 - a._2 * b._2).mod(P), (a._1 * b._2 + a._2 * b._1).mod(P))
+        val c = (0 until 4).map(i => value(element(point, i)))
+        val (x, y) = ((c(0), c(1)), (c(2), c(3)))
+        val xCubed = mul(mul(x, x), x)
+        Option.unless(point.forall(_ == 0) || mul(y, y) == ((xCubed._1 + 4).mod(P), (xCubed._2 + 4).mod(P)))(NotOnCurve)
+      }
+
+    /** For a G1 point that decodes. */
+    def g1Subgroup(point: ByteString): Option[String] =
+      Option.unless(inSubgroup(LibEthPairings.BLS12_G1MULTIEXP_OPERATION_RAW_VALUE, point))(
+        "g1 point is not on correct subgroup"
+      )
+
+    /** For a G2 point that decodes. */
+    def g2Subgroup(point: ByteString): Option[String] =
+      Option.unless(inSubgroup(LibEthPairings.BLS12_G2MULTIEXP_OPERATION_RAW_VALUE, point))(
+        "g2 point is not on correct subgroup"
+      )
+
+    private def inSubgroup(msm: Byte, point: ByteString): Boolean =
+      point.forall(_ == 0) ||
+        NativeBackends.blsAccepts(NativeBackends.LibEthPairingsNative, msm, point ++ ZeroScalar).contains(true)
+
   object BlsG1Add extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_G1ADD_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(375)
 
+    /** go-ethereum `bls12381G1Add.Run`: 256 bytes, then each point. No subgroup check (EIP-2537). */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != 256 then Eip2537Reasons.InvalidLength
+      else
+        Eip2537Reasons
+          .g1(inputData.take(128))
+          .orElse(Eip2537Reasons.g1(inputData.drop(128)))
+          .getOrElse(UnexplainedFailure)
+
   object BlsG1MultiExp extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 160 // 128-byte G1 point + 32-byte scalar
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_G1MULTIEXP_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381G1MultiExp.RequiredGas`: k = floor(length / 160) pairs, and 0 when there is
+      * not one. Such an input always fails; priced at 0 its error is its length, as in go-ethereum, where it used to be
+      * priced as one pair and could run out of gas (#1727 PR 7b). The frame is the same either way.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       val discount = blsG1MsmDiscount(k)
       BigInt(12000) * k * discount / 1000
+
+    /** go-ethereum `bls12381G1MultiExp.Run`: a non-zero multiple of 160 bytes, then pair by pair the point and its
+      * subgroup. Scalars are not checked.
+      */
+    def failureReason(inputData: ByteString): String =
+      if inputData.isEmpty || inputData.length % pairSize != 0 then Eip2537Reasons.InvalidLength
+      else
+        inputData
+          .grouped(pairSize)
+          .flatMap { pair =>
+            val point = pair.take(128)
+            Eip2537Reasons.g1(point).orElse(Eip2537Reasons.g1Subgroup(point))
+          }
+          .nextOption()
+          .getOrElse(UnexplainedFailure)
 
   object BlsG2Add extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
@@ -677,24 +871,76 @@ object PrecompiledContracts:
       blsNativeOp(LibEthPairings.BLS12_G2ADD_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(600)
 
+    /** go-ethereum `bls12381G2Add.Run`: 512 bytes, then each point. No subgroup check (EIP-2537). */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != 512 then Eip2537Reasons.InvalidLength
+      else
+        Eip2537Reasons
+          .g2(inputData.take(256))
+          .orElse(Eip2537Reasons.g2(inputData.drop(256)))
+          .getOrElse(UnexplainedFailure)
+
   object BlsG2MultiExp extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 288 // 256-byte G2 point + 32-byte scalar
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_G2MULTIEXP_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381G2MultiExp.RequiredGas`: k = floor(length / 288) pairs, and 0 when there is
+      * not one (see [[BlsG1MultiExp.gas]]).
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       val discount = blsG2MsmDiscount(k)
       BigInt(22500) * k * discount / 1000
+
+    /** go-ethereum `bls12381G2MultiExp.Run`: a non-zero multiple of 288 bytes, then pair by pair the point and its
+      * subgroup. Scalars are not checked.
+      */
+    def failureReason(inputData: ByteString): String =
+      if inputData.isEmpty || inputData.length % pairSize != 0 then Eip2537Reasons.InvalidLength
+      else
+        inputData
+          .grouped(pairSize)
+          .flatMap { pair =>
+            val point = pair.take(256)
+            Eip2537Reasons.g2(point).orElse(Eip2537Reasons.g2Subgroup(point))
+          }
+          .nextOption()
+          .getOrElse(UnexplainedFailure)
 
   object BlsPairing extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 384 // 128-byte G1 + 256-byte G2
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_PAIR_OPERATION_RAW_VALUE, inputData)
+
+    /** EIP-2537, as go-ethereum `bls12381Pairing.RequiredGas`: 37,700 plus 32,600 for each of floor(length / 384)
+      * pairs. An input of fewer than one pair costs the 37,700 base, where it used to be priced as one pair (#1727 PR
+      * 7b); it always fails, and the frame is the same either way.
+      */
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      val k = math.max(1, inputData.length / pairSize)
+      val k = inputData.length / pairSize
       BigInt(32600) * k + BigInt(37700)
+
+    /** go-ethereum `bls12381Pairing.Run`: a non-zero multiple of 384 bytes, then pair by pair: G1 decodes, G2 decodes,
+      * G1's subgroup, G2's subgroup.
+      */
+    def failureReason(inputData: ByteString): String =
+      if inputData.isEmpty || inputData.length % pairSize != 0 then Eip2537Reasons.InvalidLength
+      else
+        inputData
+          .grouped(pairSize)
+          .flatMap { pair =>
+            val (g1, g2) = (pair.take(128), pair.drop(128))
+            Eip2537Reasons
+              .g1(g1)
+              .orElse(Eip2537Reasons.g2(g2))
+              .orElse(Eip2537Reasons.g1Subgroup(g1))
+              .orElse(Eip2537Reasons.g2Subgroup(g2))
+          }
+          .nextOption()
+          .getOrElse(UnexplainedFailure)
 
   object BlsMapG1 extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
@@ -702,11 +948,25 @@ object PrecompiledContracts:
       blsNativeOp(LibEthPairings.BLS12_MAP_FP_TO_G1_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(5500)
 
+    /** go-ethereum `bls12381MapG1.Run`: 64 bytes, then the field element. */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != 64 then Eip2537Reasons.InvalidLength
+      else Eip2537Reasons.fieldElement(inputData).getOrElse(UnexplainedFailure)
+
   object BlsMapG2 extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     def exec(inputData: ByteString): Option[ByteString] =
       blsNativeOp(LibEthPairings.BLS12_MAP_FP2_TO_G2_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(23800)
+
+    /** go-ethereum `bls12381MapG2.Run`: 128 bytes, then c0 and c1. */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != 128 then Eip2537Reasons.InvalidLength
+      else
+        Eip2537Reasons
+          .fieldElement(inputData.take(64))
+          .orElse(Eip2537Reasons.fieldElement(inputData.drop(64)))
+          .getOrElse(UnexplainedFailure)
 
   /** EIP-4844: KZG point evaluation precompile at address 0x0A. Input: versioned_hash (32) ++ z (32) ++ y (32) ++
     * commitment (48) ++ proof (48) = 192 bytes Output: FIELD_ELEMENTS_PER_BLOB (32) ++ BLS_MODULUS (32) = 64 bytes Gas:
@@ -766,6 +1026,86 @@ object PrecompiledContracts:
           com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(BLS_MODULUS.toByteArray), 32).toArray
       )
       Some(result)
+
+    /** go-ethereum `kzgPointEvaluation.Run`: 192 bytes, then the versioned hash, then `kzg4844.VerifyProof`, whose
+      * error it wraps as "error verifying kzg proof: ...". go-ethereum's default KZG backend is go-eth-kzg (v1.5.0),
+      * whose `Context.VerifyKZGProof` checks y, z, the commitment, the proof, and last the pairing.
+      *
+      * fukuii's `exec` checks in another order (z and y before the hash); any input fails both or neither.
+      */
+    def failureReason(inputData: ByteString): String =
+      if inputData.length != 192 then "invalid input length"
+      else
+        val (z, y) = (inputData.slice(32, 64), inputData.slice(64, 96))
+        val (commitment, proof) = (inputData.slice(96, 144), inputData.slice(144, 192))
+        if versionedHash(commitment) != inputData.slice(0, 32) then "mismatched versioned hash"
+        else verifyProofFailure(z, y, commitment, proof).fold(UnexplainedFailure)("error verifying kzg proof: " + _)
+
+    /** go-ethereum `kZGToVersionedHash`: SHA-256 of the commitment with its first byte replaced by the version. */
+    private def versionedHash(commitment: ByteString): ByteString =
+      val hash = sha256(commitment.toArray)
+      hash(0) = VERSIONED_HASH_VERSION_KZG
+      ByteString(hash)
+
+    /** go-eth-kzg's error for a proof that fails, `None` for one that verifies.
+      *
+      * gnark-crypto checks a point's subgroup as soon as it decodes it, so a commitment outside G1 fails before the
+      * proof is read. The subgroup checks and the pairing are c-kzg's ([[NativeBackends.kzgVerdict]]): with every
+      * encoding already valid, a c-kzg rejection can only be a point outside G1. It answers for the commitment alone
+      * when the proof is the point at infinity. A c-kzg that cannot run leaves the pairing as the reason.
+      */
+    private def verifyProofFailure(
+        z: ByteString,
+        y: ByteString,
+        commitment: ByteString,
+        proof: ByteString
+    ): Option[String] =
+      import NativeBackends.KzgVerdict
+      val subgroup = "invalid point: subgroup check failed"
+      def nonCanonical(scalar: ByteString): Option[String] =
+        Option.when(BigInt(1, scalar.toArray) >= BLS_MODULUS)(
+          "scalar is not canonical when interpreted as a big integer in big-endian"
+        )
+      def verdict(c: ByteString, at: ByteString, value: ByteString, p: ByteString): KzgVerdict =
+        NativeBackends.kzgVerdict(NativeBackends.CkzgNative, c.toArray, at.toArray, value.toArray, p.toArray)
+      def commitmentOutsideG1: Option[String] =
+        Option.when(verdict(commitment, z, y, KzgG1Encoding.Infinity) == KzgVerdict.RejectsArgument)(subgroup)
+      nonCanonical(y)
+        .orElse(nonCanonical(z))
+        .orElse(KzgG1Encoding.decodeFailure(commitment))
+        .orElse(commitmentOutsideG1)
+        .orElse(KzgG1Encoding.decodeFailure(proof))
+        .orElse {
+          verdict(commitment, z, y, proof) match
+            case KzgVerdict.Verifies                               => None
+            case KzgVerdict.RejectsArgument                        => Some(subgroup)
+            case KzgVerdict.DoesNotVerify | KzgVerdict.Unavailable => Some("can't verify opening proof")
+        }
+
+  /** gnark-crypto `bls12381.G1Affine.SetBytes` on 48 bytes, which go-eth-kzg's `DeserializeKZGCommitment` and
+    * `DeserializeKZGProof` call: the three ZCash flag bits, then x below p, then a square root of x^3 + 4. The subgroup
+    * check that follows is c-kzg's (`KzgPointEvaluation.verifyProofFailure`).
+    */
+  private object KzgG1Encoding:
+    private val P = Bls12381FieldModulus
+
+    val Infinity: ByteString = ByteString(0xc0.toByte) ++ ByteString(new Array[Byte](47))
+
+    def decodeFailure(bytes: ByteString): Option[String] =
+      (bytes(0) & 0xe0) match
+        case 0xe0 | 0x60 | 0x20 => Some("invalid point encoding")
+        // the uncompressed encodings need 96 bytes: io.ErrShortBuffer
+        case 0x00 | 0x40 => Some("short buffer")
+        case 0xc0 =>
+          Option.when((bytes(0) & 0x1f) != 0 || bytes.drop(1).exists(_ != 0))("invalid infinity point encoding")
+        case _ => // 0x80 and 0xa0: compressed, the sign of y in the flags
+          val x = BigInt(1, (ByteString((bytes(0) & 0x1f).toByte) ++ bytes.drop(1)).toArray)
+          if x >= P then Some("invalid fp.Element encoding")
+          else
+            val ySquared = (x * x * x + 4).mod(P)
+            Option.unless(ySquared == 0 || ySquared.modPow((P - 1) / 2, P) == 1)(
+              "invalid compressed coordinate: square root doesn't exist"
+            )
 
   /** EIP-2537 G1 MSM discount table, k = 1..128, verbatim from the EIP ("Discounts table for G1 MSM") and identical to
     * go-ethereum params.Bls12381G1MultiExpDiscountTable. max_discount = 519 for k > 128.

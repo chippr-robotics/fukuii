@@ -107,6 +107,40 @@ class NativeBackendsSpec extends AnyFlatSpec with Matchers:
     verifyWith(kzg(false)) shouldBe false
   }
 
+  // ── For an RPC error message only (#1727 PR 7b) ────────────────────────────────────────────────────────────────────
+
+  // `PrecompiledContract.failureReason` asks these. A library that cannot answer is "unknown", never
+  // NativeBackendUnavailable: an error message must not halt the node.
+
+  "The BLS12-381 probe for an error message" should "pass on the library's answer" taggedAs (UnitTest, VMTest) in {
+    blsAccepts(bls(isEnabled = true)(Some(new Array[Byte](128))), G1Add, blsInput) shouldBe Some(true)
+    blsAccepts(bls(isEnabled = true)(None), G1Add, blsInput) shouldBe Some(false)
+  }
+
+  it should "be unknown, not fatal, when the library did not load or the call throws" taggedAs (UnitTest, VMTest) in {
+    blsAccepts(bls(isEnabled = false)(fail("a library that did not load must not be called")), G1Add, blsInput) shouldBe
+      None
+    blsAccepts(bls(isEnabled = true)(throw new IllegalStateException("JNA")), G1Add, blsInput) shouldBe None
+    blsAccepts(bls(isEnabled = true)(throw new UnsatisfiedLinkError("eip2537")), G1Add, blsInput) shouldBe None
+  }
+
+  private def verdictOf(native: KzgNative): KzgVerdict =
+    kzgVerdict(native, new Array[Byte](48), new Array[Byte](32), new Array[Byte](32), new Array[Byte](48))
+
+  "The KZG probe for an error message" should "tell a proof that fails from an argument c-kzg rejects" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    verdictOf(kzg(true)) shouldBe KzgVerdict.Verifies
+    verdictOf(kzg(false)) shouldBe KzgVerdict.DoesNotVerify
+    verdictOf(kzg(throw new CKZGException(1, "Invalid commitment"))) shouldBe KzgVerdict.RejectsArgument
+  }
+
+  it should "be unavailable, not fatal, without the trusted setup or the library" taggedAs (UnitTest, VMTest) in {
+    verdictOf(kzg(throw new RuntimeException("Trusted Setup is not loaded."))) shouldBe KzgVerdict.Unavailable
+    verdictOf(kzg(throw new UnsatisfiedLinkError("verifyKzgProof"))) shouldBe KzgVerdict.Unavailable
+  }
+
   // ── Startup ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   private lazy val shippedRoot = ConfigFactory.parseResources("conf/base/blockchains.conf").atPath("fukuii").resolve()
