@@ -2040,3 +2040,13 @@ items:
     refs: [B-165]
     links: {}
     notes: "herald review of #1780: SyncController ~:905 (serve-root, off by default) and :2826 / StorageRecoveryActor:390 (RecentRoot). Roots are only peer-lookup keys; worst case is a stall or abandon. Details in private notes."
+  - id: B-186
+    title: "Rename: olympiaBlockNumber doubles as ETH London (EIP-1559 base-fee gate); give the base-fee fork its own name"
+    priority: P3
+    status: open
+    area: config
+    size: S
+    opened: 2026-11-09
+    refs: [B-184]
+    links: {}
+    notes: "beacon review of #1781: BlockGeneratorSkeleton.baseFeeFields and the validator gate base fee on olympiaBlockNumber, which ETH configs set to London. Olympia is deferred and ETH EIP-1559 is canonical, so name the gate for London/EIP-1559. Also the applyEip2935 scaladoc (BlockExecution:1033-1036) describes only Olympia."
