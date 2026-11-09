@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.jsonrpc.CallErrors
 import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
@@ -29,7 +30,8 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks
   * Each case runs the precompile and checks, on both chains:
   *   - what consensus sees, which does not change: all the frame's gas consumed, no output, the world untouched;
   *   - the error: [[PreCompiledContractFail]] carrying this precompile and this input;
-  *   - its `failureReason`, against go-ethereum's text for the same input.
+  *   - its `failureReason`, against go-ethereum's text for the same input;
+  *   - the RPC's message for the error (`jsonrpc.CallErrors.vmErrorMessage`), against the same text.
   *
   * The BLS12-381 cases include go-ethereum's own failure vectors, each with the `ExpectedError` its `contracts_test.go`
   * asserts. BN254 is go-ethereum's gnark wrapper (crypto/bn256/gnark); KZG is go-eth-kzg v1.5.0, its default backend.
@@ -100,6 +102,8 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
         result.returnData shouldBe ByteString.empty
         (result.world should be).theSameInstanceAs(context.world)
         reason(context, result.error) shouldBe failing.geth
+        // what eth_call, eth_estimateGas, eth_createAccessList and eth_simulateV1 print
+        CallErrors.vmErrorMessage(result.error.get) shouldBe failing.geth
       }
 
   private def h(s: String): ByteString = ByteString(Hex.decode(s))

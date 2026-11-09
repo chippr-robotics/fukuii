@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -27,6 +29,25 @@ class CallErrorsSpec extends AnyFlatSpec with Matchers:
     vmErrorMessage(MaxCodeSizeExceeded) shouldBe "max code size exceeded" // ErrMaxCodeSizeExceeded
     vmErrorMessage(CodeStoreOutOfGas) shouldBe "contract creation code storage out of gas" // ErrCodeStoreOutOfGas
     vmErrorMessage(InvalidCode) shouldBe "invalid code: must not begin with 0xef" // ErrInvalidCode
+  }
+
+  it should "print a failed precompile as the error of its go-ethereum Run" taggedAs (UnitTest, RPCTest) in {
+    // core/vm/contracts.go v1.17.9; every precompile and both chains are in vm.PrecompileFailureReasonSpec
+    def word(n: Int): ByteString = UInt256(n).bytes
+    vmErrorMessage(PreCompiledContractFail(PrecompiledContracts.Bn128Add, word(1) ++ word(1))) shouldBe
+      "point is not on curve"
+    vmErrorMessage(PreCompiledContractFail(PrecompiledContracts.Bn128Pairing, ByteString(1))) shouldBe
+      "bad elliptic curve pairing size"
+    vmErrorMessage(
+      PreCompiledContractFail(PrecompiledContracts.Blake2bCompress, ByteString(new Array[Byte](212)))
+    ) shouldBe
+      "invalid input length"
+    vmErrorMessage(PreCompiledContractFail(PrecompiledContracts.ModExp, word(1025) ++ word(1) ++ word(1))) shouldBe
+      "one or more of base/exponent/modulus length exceeded 1024 bytes"
+    vmErrorMessage(PreCompiledContractFail(PrecompiledContracts.BlsMapG1, ByteString(new Array[Byte](63)))) shouldBe
+      "invalid input length"
+    vmErrorMessage(PreCompiledContractFail(PrecompiledContracts.KzgPointEvaluation, ByteString.empty)) shouldBe
+      "invalid input length"
   }
 
   it should "keep the messages it already had" taggedAs (UnitTest, RPCTest) in {

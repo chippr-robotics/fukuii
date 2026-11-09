@@ -16,14 +16,15 @@ object CallErrors:
     * non-gas failure at the ceiling, the `error` member of eth_createAccessList, and the `error.message` of an
     * eth_simulateV1 call (#1727; it printed a sign-extended opcode byte and the lower-cased case-class name before).
     *
-    * A stack error carries go-ethereum's counts and a failed code deposit its own name (#1727 PR 7a). A precompile
-    * failure is still not go-ethereum's: it has no reason (`invalid input length`, ...) until #1727 PR 7b.
-    * `InvalidCall` still falls to the case-class name: it carries no reason, and stays a case object (see
-    * `vm.ProgramError`).
+    * A stack error carries go-ethereum's counts and a failed code deposit its own name (#1727 PR 7a). A failed
+    * precompile is the error its go-ethereum `Run` returns ("invalid input length", "point is not on curve", ...),
+    * which the precompile states for its input (`PrecompiledContract.failureReason`, #1727 PR 7b). `InvalidCall` still
+    * falls to the case-class name: it carries no reason, and stays a case object (see `vm.ProgramError`).
     */
   def vmErrorMessage(error: ProgramError): String = error match
-    case RevertOccurs => "execution reverted"
-    case OutOfGas     => "out of gas"
+    case RevertOccurs                             => "execution reverted"
+    case OutOfGas                                 => "out of gas"
+    case PreCompiledContractFail(contract, input) => contract.failureReason(input)
     // geth `ErrInvalidOpCode`: "invalid opcode: " + `OpCode.String()`. Not the operand form ("DUPN (operand: 0x..)")
     // geth prints for a bad EIP-8024 immediate: InvalidOpCode does not carry the operand.
     case InvalidOpCode(code)                  => s"invalid opcode: ${opCodeName(code)}"
