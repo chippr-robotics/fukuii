@@ -1779,3 +1779,13 @@ items:
       since: 2026-11-09T01:17:37Z
       heartbeat: 2026-11-09T01:18:12Z
     notes: From forge review of B-004, 2026-11-09. forge then herald.
+  - id: B-161
+    title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-130]
+    links: {}
+    notes: "From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)."
