@@ -10,25 +10,25 @@ builder must reach the same result by calling the same code, not a copy of it.
 ## Rule 1: the template header carries every field import recomputes from the parent
 
 Set them before any transaction runs, with the function the validator uses, behind the validator's own gate:
-difficulty, gas limit, base fee (`BaseFeeCalculator.calcBaseFee`, gate `number >= olympiaBlockNumber`, as
-`BlockHeaderValidatorSkeleton.validateBaseFee`), excess blob gas. Transactions read these fields (BASEFEE, the
-effective gas price, the miner's tip), so a field filled in after execution gives a different block.
+difficulty, gas limit, base fee (`BaseFeeCalculator.calcBaseFee`, gated as `BlockHeaderValidatorSkeleton.validateBaseFee`
+gates it), excess blob gas. Transactions read these fields (BASEFEE, the effective gas price, the miner's tip), so a
+field filled in after execution gives a different block.
 
 ## Rule 2: the builder runs import's pre-transaction steps
 
 `BlockExecution.applyBlockPreamble` is everything import does before the first transaction: the DAO fork block's drain,
-EIP-4788 and EIP-2935 (system calls from Amsterdam). On ETC from Olympia that is EIP-2935's client-deployed history
-contract and the parent hash. A builder that skips it builds on a state import never sees.
+EIP-4788 and EIP-2935 (system calls from Amsterdam). A builder that skips it builds on a state import never sees.
 
 ## Rule 3: post-execution payments read the sealed header, not the template
 
-A reward or credit that reads a header field the transactions decide is paid against the header as it will be sealed.
-ECIP-1111's treasury credit reads `gasUsed`: `prepareBlock` pays `payBlockReward` on
-`header.copy(gasUsed = executed)`, and eth_simulateV1 pays `BlockRewards.payProofOfWork` on the same.
+A reward or credit that reads a header field the transactions decide (`gasUsed`, for one) is paid against the header
+as it will be sealed: `prepareBlock` pays `payBlockReward` on `header.copy(gasUsed = executed)`, the header block
+validation holds equal to the sealed one.
 
-Reproduced divergence (B-167): a PoW block mined at ETC's Olympia block had no base fee (import:
-`HeaderExtraFieldsError(HefEmpty)`); with one, its state root lacked the treasury credit; with that, it lacked
-EIP-2935's history contract. Each layer was found only by importing the mined block.
+Reproduced divergence (B-167): the PoW builder set no base fee and skipped `applyBlockPreamble`. A PoW block mined on
+an ETH config after London failed import's header rules (`HeaderExtraFieldsError(HefEmpty)`), and one mined at ETH's
+DAO fork block lacked the drain import applies, so import refused its state root. Each was found only by importing
+the mined block.
 
 ## Checklist for a new header field, pre-transaction step or block-level payment
 
@@ -37,4 +37,4 @@ EIP-2935's history contract. Each layer was found only by importing the mined bl
 2. Is the builder's gate the validator's or import's gate? Call the shared predicate; do not restate it.
 3. Does a payment read a field execution fills in? Pay it on the sealed header.
 4. Test by building through the real builder and importing through `ConsensusAdapter.evaluateBranchBlock`, as
-   `OlympiaBlockGenerationSpec` does. A hand-built header proves nothing about the builder.
+   `PowBlockImportParitySpec` does. A hand-built header proves nothing about the builder.
