@@ -31,9 +31,9 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 // scalastyle:off magic.number
 /** Tests for Fix B interpolation math (T5-T6), multi-restart drift regression (T7), and integration scenarios (T8).
   *
-  * T5/T6 are pure algebraic tests that verify the calibratePivotTD formula without instantiating SNAPSyncController
-  * (whose private vars cannot be accessed from tests). The formula under test is extracted inline — any divergence from
-  * the production code would show up as a compile error when the formula changes.
+  * T5/T6 test the rule SnapPeerPool.calibratePivotTD applies to its ETH68 candidates,
+  * [[HeadChainWeight.bestPeerEstimate]], without instantiating SNAPSyncController. Until #1654 they tested a copy of
+  * the formula kept in this file, which no change to the production code could fail.
   *
   * T7/T8 use the SyncController actor (regular-sync mode) to verify end-to-end behaviour.
   */
@@ -41,31 +41,33 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
 
   // ─── T5 / T6: Pure interpolation math ────────────────────────────────────
   //
-  // The calibratePivotTD formula (SNAPSyncController.calibratePivotTD):
+  // The calibratePivotTD rule (HeadChainWeight.bestPeerEstimate):
   //
   //   candidateSources                            // ETH68 peers: (peerTD, peerBlock)
   //     .filter { case (_, peerBlock) =>
   //       peerBlock > pivotBlockNumber            // ETH68_BOOTSTRAP guard
   //     }
   //     .map { case (peerTD, peerBlock) =>
-  //       peerTD * pivotBlockNumber / peerBlock   // scale back to pivot level
+  //       peerTD * pivotBlockNumber / peerBlock   // scale back to pivot level (as is at difficulty 0, #1654)
   //     }
   //     .filter(_ > genesisBlockTD * BigInt(1000))  // plausibility
   //     .maxOption
-  //
-  // These tests verify the formula properties without needing to reach private actor state.
 
-  /** Replicates the calibratePivotTD inner formula for algebraic testing. */
+  /** The calibratePivotTD rule at a PoW pivot (the fixture genesis difficulty) numbered `pivot`, on ETC (no terminal
+    * TD).
+    */
   private def calcPivotTD(
       candidates: Seq[(BigInt, BigInt)],
       pivot: BigInt,
       genesisTD: BigInt
   ): Option[BigInt] =
-    candidates
-      .filter(_._2 > pivot)
-      .map { case (peerTD, peerBlock) => peerTD * pivot / peerBlock }
-      .filter(_ > genesisTD * BigInt(1000))
-      .maxOption
+    HeadChainWeight.bestPeerEstimate(candidates, powPivot(pivot), genesisTD, None)
+
+  private def powPivot(pivot: BigInt): BlockHeader =
+    Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot))
+
+  private def postMergePivot(pivot: BigInt): BlockHeader =
+    Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot), difficulty = Difficulty.Zero)
 
   private val genesisTD: BigInt = Fixtures.Blocks.Genesis.header.difficulty.value // ≈ 1.7×10^10
   private val pivotBlock = BigInt(20000000)
@@ -154,6 +156,56 @@ class CalibratePivotTDSpec extends AnyFlatSpec with Matchers:
     // (checked in T2.2 above). No numeric assertion here — just documentation.
     bestBlockNum should be < BigInt(25000000)
     peerTD should be > BigInt("17179869184000") // definitely above plausibility threshold
+  }
+
+  // ─── #1654 H6(1): a post-merge pivot ──────────────────────────────────────
+  //
+  // Every block past the merge carries difficulty 0, so a peer whose head is past the merge reports the TD frozen at
+  // the merge, which is the weight of every post-merge block, the pivot included. Sepolia's frozen TD, a peer 64 above.
+  private val sepoliaFrozenTD = BigInt("17000018015853232")
+  private val sepoliaTTD: Option[BigInt] = Some(BigInt("17000000000000000"))
+  private val postMergePivotNumber = BigInt(9500000)
+
+  "A post-merge pivot" should "take the peer TD unscaled" taggedAs (UnitTest) in {
+    val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
+    // Before #1654: frozenTD * P / (P + 64), under the frozen TD.
+    HeadChainWeight.bestPeerEstimate(candidates, postMergePivot(postMergePivotNumber), genesisTD, sepoliaTTD) shouldBe
+      Some(sepoliaFrozenTD)
+  }
+
+  it should "still leave out a peer at or below the pivot, and keep the highest of several" taggedAs (UnitTest) in {
+    val pivot = postMergePivot(postMergePivotNumber)
+    HeadChainWeight.bestPeerEstimate(
+      Seq((sepoliaFrozenTD, postMergePivotNumber)),
+      pivot,
+      genesisTD,
+      sepoliaTTD
+    ) shouldBe
+      None
+    HeadChainWeight.bestPeerEstimate(Seq((sepoliaFrozenTD, BigInt(0))), pivot, genesisTD, sepoliaTTD) shouldBe None
+    val lower = sepoliaFrozenTD - 1
+    HeadChainWeight.bestPeerEstimate(
+      Seq((lower, postMergePivotNumber + 1), (sepoliaFrozenTD, postMergePivotNumber + 500)),
+      pivot,
+      genesisTD,
+      sepoliaTTD
+    ) shouldBe Some(sepoliaFrozenTD)
+  }
+
+  "An ETC-like pivot (difficulty > 0)" should "be scaled as before, the same candidates otherwise" taggedAs (
+    UnitTest
+  ) in {
+    val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
+    calcPivotTD(candidates, postMergePivotNumber, genesisTD) shouldBe
+      Some(sepoliaFrozenTD * postMergePivotNumber / (postMergePivotNumber + 64))
+  }
+
+  // forge review: on ETC a SNAP pivot header gets no PoW check on the bootstrap and refresh paths, so a peer could hand
+  // over one of difficulty 0. With no terminal TD configured it is scaled like any other.
+  "A difficulty-0 pivot where no terminal TD is configured (ETC)" should "still be scaled" taggedAs (UnitTest) in {
+    val candidates = Seq((sepoliaFrozenTD, postMergePivotNumber + 64))
+    HeadChainWeight.bestPeerEstimate(candidates, postMergePivot(postMergePivotNumber), genesisTD, None) shouldBe
+      Some(sepoliaFrozenTD * postMergePivotNumber / (postMergePivotNumber + 64))
   }
 
   // ─── T7.1 Multi-restart drift: Fix A corrects ratio-7411× mismatch ─────────

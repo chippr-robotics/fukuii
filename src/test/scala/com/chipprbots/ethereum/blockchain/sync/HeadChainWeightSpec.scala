@@ -21,6 +21,9 @@ class HeadChainWeightSpec extends AnyFlatSpec with Matchers:
   private val MordorHeadTD = BigInt("174823251167868")
   // ETC mainnet genesis difficulty.
   private val EtcGenesisWeight = BigInt("17179869184")
+  // Sepolia: genesis difficulty 0x20000, and the terminal total difficulty.
+  private val SepoliaGenesisDifficulty = BigInt(131072)
+  private val SepoliaTTD = BigInt("17000000000000000")
 
   "HeadChainWeight.isPlausible" should "accept a real Mordor-scale weight that the 10^13-per-block floor rejected" taggedAs (
     UnitTest,
@@ -101,6 +104,83 @@ class HeadChainWeightSpec extends AnyFlatSpec with Matchers:
       HeadChainWeight.classify(blockchainReader, genesis) shouldBe HeadChainWeight.Status.Derivable(None, exact)
       blockchainWriter.storeChainWeight(genesis.hash, exact).commit()
       HeadChainWeight.classify(blockchainReader, genesis) shouldBe HeadChainWeight.Status.Exact(exact)
+
+  "HeadChainWeight.posFromGenesis" should
+    "hold where the terminal TD is at or below the genesis difficulty, and not on ETC, Sepolia or mainnet" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new EphemBlockchainTestSetup:
+      // No genesis indexed: a terminal TD of 0 is at or below any difficulty, so it holds with nothing to read (as
+      // ChainWeightSeed's `contains(0)` had it); any other terminal TD cannot be decided, so it does not.
+      HeadChainWeight.posFromGenesis(Some(BigInt(0)), blockchainReader) shouldBe true
+      HeadChainWeight.posFromGenesis(Some(SepoliaGenesisDifficulty), blockchainReader) shouldBe false
+      HeadChainWeight.posFromGenesis(None, blockchainReader) shouldBe false
+
+      // Sepolia's genesis: its terminal TD is far above the genesis difficulty. A hive genesis whose terminal TD equals
+      // its difficulty is merged at genesis (the only config on which this differs from `contains(0)`).
+      blockchainWriter
+        .storeBlockHeader(Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty(SepoliaGenesisDifficulty)))
+        .commit()
+      HeadChainWeight.posFromGenesis(Some(SepoliaTTD), blockchainReader) shouldBe false
+      HeadChainWeight.posFromGenesis(Some(SepoliaGenesisDifficulty), blockchainReader) shouldBe true
+      HeadChainWeight.posFromGenesis(Some(SepoliaGenesisDifficulty + 1), blockchainReader) shouldBe false
+      HeadChainWeight.posFromGenesis(Some(BigInt(0)), blockchainReader) shouldBe true
+      HeadChainWeight.posFromGenesis(None, blockchainReader) shouldBe false
+
+  "HeadChainWeight.posFromGenesisWeight" should
+    "be the genesis difficulty where the terminal TD is at or below it, and None on ETC, Sepolia and mainnet" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new EphemBlockchainTestSetup:
+      // No genesis indexed: None, whatever the terminal TD (there is no difficulty to read).
+      HeadChainWeight.posFromGenesisWeight(Some(BigInt(0)), blockchainReader) shouldBe None
+
+      // Platåberget: terminal TD 0, genesis difficulty 0. A stored genesis weight that a peer TD overwrote is not read.
+      val platabergetGenesis: BlockHeader = Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty.Zero)
+      blockchainWriter.storeBlockHeader(platabergetGenesis).commit()
+      blockchainWriter
+        .storeChainWeight(platabergetGenesis.hash, ChainWeight.totalDifficultyOnly(SepoliaTTD))
+        .commit()
+      HeadChainWeight.posFromGenesisWeight(Some(BigInt(0)), blockchainReader) shouldBe Some(ChainWeight.zero)
+      // ETC and Mordor: no terminal TD.
+      HeadChainWeight.posFromGenesisWeight(None, blockchainReader) shouldBe None
+
+      // Sepolia's genesis (difficulty 0x20000): its terminal TD is far above it. A terminal TD at or below the genesis
+      // difficulty (a chain merged at genesis, e.g. Hoodi or a hive genesis) gives the genesis difficulty.
+      val sepoliaGenesis: BlockHeader =
+        Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty(SepoliaGenesisDifficulty))
+      blockchainWriter.storeBlockHeader(sepoliaGenesis).commit()
+      HeadChainWeight.posFromGenesisWeight(Some(SepoliaTTD), blockchainReader) shouldBe None
+      HeadChainWeight.posFromGenesisWeight(Some(BigInt(0)), blockchainReader) shouldBe
+        Some(ChainWeight.totalDifficultyOnly(SepoliaGenesisDifficulty))
+      HeadChainWeight.posFromGenesisWeight(Some(SepoliaGenesisDifficulty), blockchainReader) shouldBe
+        Some(ChainWeight.totalDifficultyOnly(SepoliaGenesisDifficulty))
+      HeadChainWeight.posFromGenesisWeight(Some(SepoliaGenesisDifficulty + 1), blockchainReader) shouldBe None
+
+      // The mainnet genesis (ETH and ETC share it, difficulty 2^34) with ETH mainnet's terminal TD (5.875e22): None.
+      blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header).commit()
+      HeadChainWeight.posFromGenesisWeight(Some(BigInt("58750000000000000000000")), blockchainReader) shouldBe None
+
+  "HeadChainWeight.peerEstimate" should
+    "take the peer TD unscaled at difficulty 0 with a terminal TD, and scale it otherwise" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
+      val block = BigInt(9_500_000)
+      val peerTD = BigInt("17000018015853232")
+      val postMerge = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(block), difficulty = Difficulty.Zero)
+      HeadChainWeight.peerEstimate(postMerge, peerTD, block + 64, Some(SepoliaTTD)) shouldBe peerTD
+      // A pre-merge Sepolia block at Ethash's least difficulty: unchanged linear interpolation.
+      val etcLike = postMerge.copy(difficulty = Difficulty.MinimumDifficulty)
+      HeadChainWeight.peerEstimate(etcLike, peerTD, block + 64, Some(SepoliaTTD)) shouldBe peerTD * block / (block + 64)
+      // ETC and Mordor (no terminal TD): scaled at every difficulty, 0 included (forge review: a SNAP pivot header gets
+      // no PoW check there, so a peer could hand over one of difficulty 0).
+      HeadChainWeight.peerEstimate(etcLike, peerTD, block + 64, None) shouldBe peerTD * block / (block + 64)
+      HeadChainWeight.peerEstimate(postMerge, peerTD, block + 64, None) shouldBe peerTD * block / (block + 64)
+      // An unknown peer height (Tier 2): the peer's TD as is, at any difficulty, on any chain.
+      HeadChainWeight.peerEstimate(etcLike, peerTD, BigInt(0), None) shouldBe peerTD
+      HeadChainWeight.peerEstimate(postMerge, peerTD, BigInt(0), Some(SepoliaTTD)) shouldBe peerTD
+    }
 
   /** Store a parent at block 15M-1 (whose own parent is unknown) with `parentTD`, and its child at 15M; return both.
     * The child's weight is left to the caller.

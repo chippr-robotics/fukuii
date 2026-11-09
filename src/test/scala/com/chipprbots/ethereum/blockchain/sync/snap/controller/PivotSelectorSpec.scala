@@ -45,6 +45,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
@@ -91,6 +92,8 @@ private[snap] class StubPivotSelectorState(
   var bootstrapRetryCount: Int = 0
   var posChain: Boolean = false
   def isPoSChain: Boolean = posChain
+  var ttd: Option[BigInt] = None
+  def terminalTotalDifficulty: Option[BigInt] = ttd
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
   def BootstrapCheckKey: String = "bootstrap-check"
   val forwardedPeerEvents: mutable.ArrayBuffer[Command] = mutable.ArrayBuffer.empty
@@ -141,7 +144,7 @@ private[snap] class StubPivotSelectorState(
   // Callee Api traits
   var peers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = None
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = None
   def handshakedPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
   def handleHandshakedPeersBootstrapReactivity(peers: Map[Peer, PeerInfo]): Unit =
     notUsed("handleHandshakedPeersBootstrapReactivity")
@@ -549,5 +552,25 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.dataSourceBatches.get() - before shouldBe 1
     h.module.blockchainReader.getBlockHeaderByHash(header.hash) shouldBe Some(header)
     h.module.blockchainReader.getChainWeightByHash(header.hash).map(_.totalDifficulty.value) shouldBe Some(BigInt(7))
+    h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
+  }
+
+  // #1654: Platåberget (terminal TD 0, genesis difficulty 0). Every block's weight is the genesis weight; the rest of
+  // the cascade stored the block-number proxy (`td = pivot`), or a peer estimate over a stale stored value.
+  it should "store the genesis weight for the pivot on a chain that was PoS from genesis" taggedAs UnitTest in {
+    val h = new Harness()
+    val posGenesis = Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty.Zero)
+    h.module.blockchainWriter
+      .storeBlockHeader(posGenesis)
+      .and(h.module.blockchainWriter.storeChainWeight(posGenesis.hash, ChainWeight.zero))
+      .commit()
+    val postMergePivot = header.copy(difficulty = Difficulty.Zero)
+    // A stale value at the pivot (an earlier selection's proxy) is not kept either.
+    h.module.blockchainWriter.storeChainWeight(postMergePivot.hash, ChainWeight.totalDifficultyOnly(pivot)).commit()
+    h.module.ttd = Some(BigInt(0))
+
+    h.call(m => m.updateBestBlockForPivot(postMergePivot, pivot))
+
+    h.module.blockchainReader.getChainWeightByHash(postMergePivot.hash) shouldBe Some(ChainWeight.zero)
     h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
   }

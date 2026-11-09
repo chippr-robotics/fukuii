@@ -7,10 +7,12 @@ import scala.collection.mutable
 import scala.concurrent.duration.*
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.PeerListHelper
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -18,7 +20,7 @@ import com.chipprbots.ethereum.utils.Hex
 
 private[snap] trait PeerPoolApi:
   def peersToDownloadFrom: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt]
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt]
 
 private[snap] trait HandshakedPeersApi:
   def handshakedPeers: Map[com.chipprbots.ethereum.network.PeerId, PeerListSupportNg.PeerWithInfo]
@@ -44,6 +46,9 @@ private[snap] trait SnapPeerPoolState:
   var snapPeerEvictionStarted: Boolean
   var snapServerPeersSchedulerStarted: Boolean
   def BootstrapCheckKey: String
+
+  /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.bestPeerEstimate]]. */
+  def terminalTotalDifficulty: Option[BigInt]
 
 /** The SNAP peer pool (spec 016 M3, research.md R6 "Peer tracking / eviction"): the handshaked-peer view
   * (`handshakedPeers`, `peersToDownloadFrom`, `snapServingPeers` with its `[SNAP-PEERS]` exclusion log), the peer-list
@@ -347,17 +352,20 @@ private[snap] trait SnapPeerPool
       }
   // end if snapSyncConfig.snapServerPeers.nonEmpty
 
-  /** Estimate the cumulative TD at `pivotBlockNumber` using linear interpolation over connected ETH68 peers.
+  /** Estimate the cumulative TD at `pivot` from connected ETH68 peers ([[HeadChainWeight.bestPeerEstimate]]).
     *
     * ETH68 peers carry their real cumulative TD in the STATUS wire message. ETH69 peers do not (TD was removed from
     * their STATUS). For each ETH68 peer whose reported head is above the pivot, we interpolate: pivotTD ≈ peerTipTD ×
     * (pivotNumber / peerTipNumber) The gap between our pivot and the peer's tip is typically ≤ 128 blocks, giving an
-    * error ≤ 0.0005% — negligible compared to the ~1.4-billion× error of the genesis-proxy fallback.
+    * error ≤ 0.0005% — negligible compared to the ~1.4-billion× error of the genesis-proxy fallback. A post-merge pivot
+    * (difficulty 0, on a chain with a terminal TD) takes the peer's TD unscaled (#1654 H6(1)): no block past the merge
+    * adds weight, so the interpolation would land under the frozen terminal TD.
     *
     * Returns None when no qualified ETH68 peers are connected (e.g. very early in startup before any handshakes). The
     * caller falls back to the block-number proxy in that case.
     */
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] =
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] =
+    val pivotBlockNumber: BigInt = pivot.number.value
     val genesisBlockTD: BigInt = stateIngest.chainReader
       .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
       .map(_.totalDifficulty.value)
@@ -390,7 +398,4 @@ private[snap] trait SnapPeerPool
         s"SNAP_CALIBRATION_STATS: pivot=$pivotBlockNumber currentPeers=${currentPeerCandidates.size} historicalPeer=(td=$histTD block=$histBlock) source=$source"
       )
 
-    allCandidates
-      .map { case (peerTD, peerBlock) => peerTD * pivotBlockNumber / peerBlock }
-      .filter(_ > genesisBlockTD * BigInt(1000))
-      .maxOption
+    HeadChainWeight.bestPeerEstimate(allCandidates, pivot, genesisBlockTD, terminalTotalDifficulty)

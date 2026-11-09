@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -200,7 +201,7 @@ private[snap] class StubHealingOrchestratorState(
     mptStorageRequests += pivotBlockNumber
     mptStorage
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = notUsed("calibratePivotTD")
   def snapServingPeers(): List[Peer] = Nil
   var snapServerSchedulerStarts: Int = 0
   def startSnapServerPeersScheduler(): Unit = snapServerSchedulerStarts += 1

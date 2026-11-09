@@ -329,8 +329,16 @@ object BlockchainConfig:
     val networkType: NetworkType =
       Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
 
+    // A negative terminal TD fails here, outside the Try (#1654): it is a uint256 (EIP-3675), and
+    // HeadChainWeight.posFromGenesis would read one as "PoS from genesis" on any chain.
     val terminalTotalDifficulty: Option[BigInt] =
-      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
+      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption.map { ttd =>
+        if ttd < 0 then
+          throw new IllegalArgumentException(
+            s"terminal-total-difficulty = $ttd: a terminal total difficulty cannot be negative (EIP-3675: a uint256)"
+          )
+        ttd
+      }
 
     val depositContractAddress: Option[Address] =
       Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption

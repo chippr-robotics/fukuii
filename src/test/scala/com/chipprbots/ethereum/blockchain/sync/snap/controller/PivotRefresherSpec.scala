@@ -160,7 +160,7 @@ private[snap] class StubPivotRefresherState(
     restarts += reason
     Behaviors.same
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = notUsed("calibratePivotTD")
   var networkBest: Option[BigInt] = None
   def currentNetworkBestFromSnapPeers(): Option[BigInt] = networkBest
   val bestBlockUpdates: mutable.ArrayBuffer[(BlockHeader, BigInt)] = mutable.ArrayBuffer.empty

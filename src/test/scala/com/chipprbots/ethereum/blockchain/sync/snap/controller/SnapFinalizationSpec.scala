@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -119,6 +120,7 @@ private[snap] class StubSnapFinalizationState(
   var pathPublish: Option[(BigInt, ByteString)] = None
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
+  def terminalTotalDifficulty: Option[BigInt] = None
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -173,7 +175,7 @@ private[snap] class StubSnapFinalizationState(
   def dropHealedCodeNowPresent(): Unit = healedCodeDrops += 1
   def queueHealedCode(codeHashes: Seq[ByteString]): Unit = healedCodeQueued += codeHashes
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = None
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = None
   var stops: Int = 0
   def onStop(): Unit = stops += 1
   def stopSnapOnlySchedules(): Unit = notUsed("stopSnapOnlySchedules")
