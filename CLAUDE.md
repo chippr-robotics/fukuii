@@ -87,6 +87,7 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `dead-code-review.md` | Three verdicts before any deletion: Wire it / Delete it / Defer — assess gap, git history, and supersession before `git rm` |
 | `worktree-protocol.md` | Sprint vs task worktree patterns, naming (`wt/<id>`), lifecycle, bin scripts, agent rules for worktree context |
 | `snap-sync.md` | SNAP routing: phase/module → files → config keys → metrics → log tags → reviewer; pin-test index; spec 016 split status (current vs target) |
+| `proposer-import-parity.md` | Block builders (PoW miner, Engine API payload, eth_simulateV1) reach import's header and state by calling import's code: template fields, `applyBlockPreamble`, post-execution payments on the sealed header |
 | `backlog-tracker.md` | The shared backlog (constitution Principle VIII): claim before work, the status at each transition, a daily heartbeat, follow-ups added before a task ends; CLI `scripts/backlog/backlog.py` |
 
 Working documents (local to each host, code patterns only): `.claude/agent-protocols/working-docs/`. The directory is

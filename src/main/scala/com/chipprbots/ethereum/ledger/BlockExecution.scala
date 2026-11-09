@@ -406,28 +406,7 @@ class BlockExecution(
       initialWorld: InMemoryWorldStateProxy,
       accessList: Option[BlockAccessListBuilder]
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError.TxsExecutionError, BlockResult] =
-    val worldAfterDao = blockchainConfig.daoForkConfig match
-      case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
-        drainDaoForkAccounts(initialWorld, daoForkConfig)
-      case _ => initialWorld
-
-    val inputWorld =
-      if blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then
-        // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
-        // share EIP-7928 block access index 0.
-        val preambleReads = accessList.map(_ => new BlockAccessRecorder)
-        val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
-        for
-          builder <- accessList
-          reads <- preambleReads
-        do builder.addIndex(0L, reads, worldAfterDao, afterPreamble)
-        afterPreamble
-      else
-        // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
-        val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
-
-        // EIP-2935: Store parent block hash in history storage contract
-        applyEip2935(block, worldAfterBeaconRoot)
+    val inputWorld = BlockExecution.applyBlockPreamble(block, blockHeaderNumber, initialWorld, accessList)
 
     val hashAsHexString = block.header.hashAsHexString
     val transactionList = block.body.transactionList
@@ -441,123 +420,6 @@ class BlockExecution(
       case Left(error) =>
         log.debug(s"Not all txs from block $hashAsHexString were executed correctly, due to ${error.describe}")
     blockTxsExecResult
-
-  /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
-    *
-    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract address
-    * (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions. The contract stores: timestamp → root
-    * at slot (timestamp % HISTORY_BUFFER_LENGTH), and root at slot (timestamp % HISTORY_BUFFER_LENGTH +
-    * HISTORY_BUFFER_LENGTH).
-    */
-  private def applyEip4788(
-      block: Block,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    import BlockExecution.*
-    // Only apply post-Cancun (when parentBeaconBlockRoot is present)
-    block.header.parentBeaconBlockRoot match
-      case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
-        // toUInt256, NOT UInt256(_.toLong): the latter sign-extends, so a 2^64-1 timestamp
-        // becomes 2^256-1 and lands at ring index 511 instead of 4095 — AND stores that
-        // wrong value in the slot, which test_beacon_root_equal_to_timestamp reads back.
-        val timestamp = block.header.unixTimestamp.toUInt256
-        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
-        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
-
-        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
-        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
-        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
-        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
-        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
-        // to a non-existent account with zero value returns immediately and creates nothing
-        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
-        //
-        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
-        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
-        // storage slots that the reference client does not have. Observed on hive
-        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
-        // carries parentBeaconBlockRoot (first block past cancunTime).
-        //
-        // The direct storage write below (instead of an EVM system call) is the optimisation the
-        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
-        // set the storage values." It is only valid when the canonical contract is the one
-        // deployed there, which is why the code-presence guard is a hard precondition.
-        if world.getCode(BeaconRootContractAddress).isEmpty then world
-        else
-          val storage = world.getStorage(BeaconRootContractAddress)
-          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-          world.saveStorage(BeaconRootContractAddress, s2)
-
-      case _ => world
-
-  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
-    *
-    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
-    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
-    */
-  private def applyEip2935(
-      block: Block,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    import BlockExecution.*
-    val blockNumber = block.header.number.value
-    // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
-    val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
-    val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
-      blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if !pragueActive && !etcOlympiaActive then world
-    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
-    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
-    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
-    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
-    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
-    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
-    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
-    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
-    else
-      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
-      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
-      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
-      // the account was absent so getStorage threw.
-      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-        val account = world
-          .getAccount(HistoryStorageAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          .copy(nonce = UInt256(1))
-        world
-          .saveAccount(HistoryStorageAddress, account)
-          .saveCode(HistoryStorageAddress, HistoryStorageCode)
-      else world
-
-      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
-      val parentHashValue = UInt256(block.header.parentHash.value)
-      val slot = (blockNumber - 1) % HistoryServeWindow
-      val storage = w1.getStorage(HistoryStorageAddress)
-      val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-      w1.saveStorage(HistoryStorageAddress, updatedStorage)
-
-  /** This function updates worldState transferring balance from drainList accounts to refundContract address
-    *
-    * @param worldState
-    *   initial world state
-    * @param daoForkConfig
-    *   dao fork configuration with drainList and refundContract config
-    * @return
-    *   updated world state proxy
-    */
-  private def drainDaoForkAccounts(
-      worldState: InMemoryWorldStateProxy,
-      daoForkConfig: DaoForkConfig
-  ): InMemoryWorldStateProxy =
-    daoForkConfig.refundContract match
-      case Some(refundContractAddress) =>
-        daoForkConfig.drainList.foldLeft(worldState) { (ws, address) =>
-          ws.getAccount(address)
-            .map(account => ws.transfer(from = address, to = refundContractAddress, account.balance))
-            .getOrElse(ws)
-        }
-      case None => worldState
 
   /** Executes and validates a list of blocks, storing the results in the blockchain.
     *
@@ -1085,10 +947,160 @@ object BlockExecution:
     recorder.recordAccount(target)
     SetCodeTransaction.parseDelegation(world.getCode(target)).foreach(recorder.recordAccount)
 
+  /** A block's state changes before its first transaction, in block import's order: the DAO fork block's drain; then,
+    * from Amsterdam, the EIP-4788 / EIP-2935 system calls (EIP-7928 block access index 0), and before it the direct
+    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia).
+    *
+    * One function for block import (`executeBlockTransactions`) and block building (`BlockPreparator.prepareBlock`), so
+    * the state a miner builds a block on is the state import executes it on.
+    */
+  private[ethereum] def applyBlockPreamble(
+      block: Block,
+      blockHeaderNumber: BigInt,
+      initialWorld: InMemoryWorldStateProxy,
+      accessList: Option[BlockAccessListBuilder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val worldAfterDao = blockchainConfig.daoForkConfig match
+      case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
+        drainDaoForkAccounts(initialWorld, daoForkConfig)
+      case _ => initialWorld
+
+    if blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then
+      // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
+      // share EIP-7928 block access index 0.
+      val preambleReads = accessList.map(_ => new BlockAccessRecorder)
+      val afterPreamble = applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
+      for
+        builder <- accessList
+        reads <- preambleReads
+      do builder.addIndex(0L, reads, worldAfterDao, afterPreamble)
+      afterPreamble
+    else
+      // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
+      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+
+      // EIP-2935: Store parent block hash in history storage contract
+      applyEip2935(block, worldAfterBeaconRoot)
+
+  /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
+    *
+    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract address
+    * (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions. The contract stores: timestamp → root
+    * at slot (timestamp % HISTORY_BUFFER_LENGTH), and root at slot (timestamp % HISTORY_BUFFER_LENGTH +
+    * HISTORY_BUFFER_LENGTH).
+    */
+  private def applyEip4788(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    // Only apply post-Cancun (when parentBeaconBlockRoot is present)
+    block.header.parentBeaconBlockRoot match
+      case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
+        // toUInt256, NOT UInt256(_.toLong): the latter sign-extends, so a 2^64-1 timestamp
+        // becomes 2^256-1 and lands at ring index 511 instead of 4095 — AND stores that
+        // wrong value in the slot, which test_beacon_root_equal_to_timestamp reads back.
+        val timestamp = block.header.unixTimestamp.toUInt256
+        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
+        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
+
+        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
+        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
+        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
+        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
+        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
+        // to a non-existent account with zero value returns immediately and creates nothing
+        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
+        //
+        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
+        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
+        // storage slots that the reference client does not have. Observed on hive
+        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
+        // carries parentBeaconBlockRoot (first block past cancunTime).
+        //
+        // The direct storage write below (instead of an EVM system call) is the optimisation the
+        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
+        // set the storage values." It is only valid when the canonical contract is the one
+        // deployed there, which is why the code-presence guard is a hard precondition.
+        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        else
+          val storage = world.getStorage(BeaconRootContractAddress)
+          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
+          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
+          world.saveStorage(BeaconRootContractAddress, s2)
+
+      case _ => world
+
+  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+    *
+    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
+    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    */
+  private[ethereum] def applyEip2935(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val blockNumber = block.header.number.value
+    // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
+    val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
+    val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+      blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if !pragueActive && !etcOlympiaActive then world
+    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
+    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
+    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
+    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
+    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
+    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
+    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
+    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
+    else
+      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
+      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
+      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
+      // the account was absent so getStorage threw.
+      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
+        val account = world
+          .getAccount(HistoryStorageAddress)
+          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          .copy(nonce = UInt256(1))
+        world
+          .saveAccount(HistoryStorageAddress, account)
+          .saveCode(HistoryStorageAddress, HistoryStorageCode)
+      else world
+
+      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+      val parentHashValue = UInt256(block.header.parentHash.value)
+      val slot = (blockNumber - 1) % HistoryServeWindow
+      val storage = w1.getStorage(HistoryStorageAddress)
+      val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
+      w1.saveStorage(HistoryStorageAddress, updatedStorage)
+
+  /** This function updates worldState transferring balance from drainList accounts to refundContract address
+    *
+    * @param worldState
+    *   initial world state
+    * @param daoForkConfig
+    *   dao fork configuration with drainList and refundContract config
+    * @return
+    *   updated world state proxy
+    */
+  private def drainDaoForkAccounts(
+      worldState: InMemoryWorldStateProxy,
+      daoForkConfig: DaoForkConfig
+  ): InMemoryWorldStateProxy =
+    daoForkConfig.refundContract match
+      case Some(refundContractAddress) =>
+        daoForkConfig.drainList.foldLeft(worldState) { (ws, address) =>
+          ws.getAccount(address)
+            .map(account => ws.transfer(from = address, to = refundContractAddress, account.balance))
+            .getOrElse(ws)
+        }
+      case None => worldState
+
   /** Amsterdam: the EIP-4788 and EIP-2935 block preamble as execution-specs `apply_body` runs it — two
     * `process_unchecked_system_transaction` calls from SYSTEM_ADDRESS, the beacon roots contract with the parent beacon
     * block root, then the history contract with the parent hash — instead of the direct storage writes of the
-    * `BlockExecution` class's `applyEip4788` / `applyEip2935`.
+    * pre-Amsterdam `applyEip4788` / `applyEip2935` above.
     *
     * The direct writes are the shortcut EIP-4788 permits ("clients may decide to omit an explicit EVM call and directly
     * set the storage values"), and they give the same storage only while the canonical contracts are the code at those
