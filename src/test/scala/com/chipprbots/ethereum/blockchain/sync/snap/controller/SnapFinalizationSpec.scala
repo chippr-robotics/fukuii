@@ -553,6 +553,34 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
     rewindsSent(h).map(_.number.value) shouldBe Seq(BigInt(0))
   }
 
+  it should "restart SNAP, keeping the download, when the pinned header itself is not stored" taggedAs UnitTest in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    h.module.blockchainWriter.removeBlockByHash(pinned.hash).commit()
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty // no hold, no rewind
+    h.module.appStateStorage.getBackfillBestHeader() shouldBe BigInt(20)
+  }
+
+  // A rewind sent to a downloader that the hold's stall watchdog then restarts may never be applied: it does not count
+  // toward the second divergence that restarts SNAP.
+  it should "not count a rewind that was never reported applied" taggedAs UnitTest in {
+    // A zero stall timeout: every hold tick restarts the downloader, dropping the rewind in flight.
+    val h = new Harness(SNAPSyncConfig(headerHoldStallTimeout = Duration.Zero))
+    postMergeDivergence(h)
+
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged: rewind sent
+    h.call(_.finalizeSnapSync(PinnedAt)) // the stall restart drops it
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged again: a first rewind, as far as anyone knows
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+
+    h.parent.hasMessages shouldBe false
+    h.module.headerHold shouldBe defined
+  }
+
   it should "restart SNAP when no pinned hash can name the pivot" taggedAs UnitTest in {
     val h = new Harness()
     postMergeDivergence(h, pinTheFork = false)

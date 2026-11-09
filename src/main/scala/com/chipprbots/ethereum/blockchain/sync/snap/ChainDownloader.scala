@@ -920,13 +920,24 @@ class ChainDownloader private (
 
   /** [[RewindTo]]: make `forkPoint`, a stored header of this chain, the tip, so the headers above it are downloaded
     * again. One write: the header cursor and the tip hash, the target hash removed (it named a header above the fork
-    * point), and the body and receipt cursors lowered to the fork point where they are above it. The body and receipt
-    * queues are dropped and the lazy scan clamped (they are rebuilt from the cursors). A header response still in
-    * flight is matched against the new tip like any other. A fork point at or above the cursor changes nothing.
+    * point), the fork point's number→hash index entry put back (so a restart before the download passes it again finds
+    * it at its height), and the body and receipt cursors lowered to the fork point where they are above it. The body
+    * and receipt queues are dropped and the lazy scan clamped (they are rebuilt from the cursors). A header response
+    * still in flight is matched against the new tip like any other. A fork point at or above the cursor changes
+    * nothing.
+    *
+    * Only SNAP finalisation's header hold sends it, and the hold keeps bodies and receipts deferred: no body or receipt
+    * above the fork point has been fetched, and on a restart [[findBestStoredHeader]] trusts the cursor without
+    * scanning the number index above it. Sent at any other time, it is refused (an ERROR), and still answered.
     */
   private def rewindTo(forkPoint: BlockHeader): Unit =
     val n = forkPoint.number.value
-    if n < bestHeaderNumber then
+    if !bodiesReceiptsDeferred then
+      log.error(
+        s"${HeaderChainCheck.LogTag} Chain download: not rewinding to ${forkPoint.idTag}: bodies and receipts are no " +
+          "longer deferred, and a rewind is only valid during SNAP finalisation's header hold"
+      )
+    else if n < bestHeaderNumber then
       log.warn(
         s"${HeaderChainCheck.LogTag} Chain download: discarding the stored headers ${n + 1}..$bestHeaderNumber above " +
           s"${forkPoint.idTag} and downloading them again"
@@ -937,6 +948,7 @@ class ChainDownloader private (
         .putBackfillBestHeader(n)
         .and(appStateStorage.putBackfillBestHeaderHash(forkPoint.hash.value))
         .and(appStateStorage.removeBackfillTargetHash())
+        .and(blockchainWriter.storeBlockHeader(forkPoint))
         .and(lowered(appStateStorage.getBackfillBestBody(), appStateStorage.putBackfillBestBody))
         .and(lowered(appStateStorage.getBackfillBestReceipt(), appStateStorage.putBackfillBestReceipt))
         .commit()

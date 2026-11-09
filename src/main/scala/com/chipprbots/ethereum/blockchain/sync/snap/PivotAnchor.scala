@@ -61,22 +61,30 @@ private[sync] object PivotAnchor:
   def storedHeader(ingest: StateIngest, hash: ByteString): Option[BlockHeader] =
     ingest.chainReader.getBlockHeaderByHash(BlockHash(hash))
 
+  /** What to do with a downloaded chain that does not reach the pinned pivot ([[rewindTarget]]). */
+  enum Rewind:
+    /** Download again above the [[forkPoint]]. */
+    case ToForkPoint(header: BlockHeader)
+
+    /** The pinned header is stored but its stored ancestry holds no header of the downloaded chain: download again
+      * above genesis.
+      */
+    case ToGenesis(genesis: BlockHeader)
+
+    /** The pinned header is not stored: there is nothing to walk, and no reason to discard the download. */
+    case PinnedNotStored
+
   /** Where to rewind a downloaded chain that does not reach the pinned pivot `pinnedHash` (its header at the pivot's
-    * number is `downloaded`): the [[forkPoint]], or genesis when it is not within reach. The flag says whether the fork
-    * point was found.
+    * number is `downloaded`).
     */
-  def rewindTarget(
-      ingest: StateIngest,
-      pinnedHash: Option[ByteString],
-      downloaded: BlockHeader
-  ): (BlockHeader, Boolean) =
+  def rewindTarget(ingest: StateIngest, pinnedHash: Option[ByteString], downloaded: BlockHeader): Rewind =
     val reader = ingest.chainReader
-    val found = pinnedHash
-      .flatMap(h => reader.getBlockHeaderByHash(BlockHash(h)))
-      .flatMap(pinned => forkPoint(reader, pinned, downloaded))
-    found match
-      case Some(fork) => (fork, true)
-      case None       => (reader.genesisHeader, false)
+    pinnedHash.flatMap(h => reader.getBlockHeaderByHash(BlockHash(h))) match
+      case None => Rewind.PinnedNotStored
+      case Some(pinned) =>
+        forkPoint(reader, pinned, downloaded) match
+          case Some(fork) => Rewind.ToForkPoint(fork)
+          case None       => Rewind.ToGenesis(reader.genesisHeader)
   def reanchor(ingest: StateIngest, validated: BlockHeader): Unit =
     reanchor(ingest.appState, ingest.chainWriter, validated)
   def committed(ingest: StateIngest, number: BigInt, header: BlockHeader): DataSourceBatchUpdate =

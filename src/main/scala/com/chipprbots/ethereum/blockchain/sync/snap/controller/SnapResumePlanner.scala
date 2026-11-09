@@ -239,10 +239,17 @@ private[snap] trait SnapResumePlanner
     )
     (target, clPivotHint, clHeadHeader) match
       case (Some(t), Some(hint), Some(head)) =>
-        val depth = (head.number.value - t).max(BigInt(0)).min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+        val wanted = (head.number.value - t).max(BigInt(0))
+        val depth = wanted.min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+        // This branch runs once per SNAP start, so the clamp note is logged once.
+        val clamped =
+          if wanted > depth then
+            s"; sync.snap-sync.pivot-block-offset = ${snapSyncConfig.pivotBlockOffset} is deeper than one ancestry " +
+              "request reaches"
+          else ""
         ctx.log.warn(
           s"Recovery: not resuming healing on pivot $excluded ($reason). All data phases are complete; healing at " +
-            s"pivot ${head.number.value - depth} instead ($depth below the CL head ${head.idTag})."
+            s"pivot ${head.number.value - depth} instead ($depth below the CL head ${head.idTag}$clamped)."
         )
         PivotAnchor.storedAncestor(stateIngest, hint.headHash, depth) match
           case Some(pivot) =>

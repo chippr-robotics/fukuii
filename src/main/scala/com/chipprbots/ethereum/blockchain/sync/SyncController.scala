@@ -968,7 +968,9 @@ object SyncController:
                 headHash,
                 depth,
                 replyTo = pivotBootstrapAdapter,
-                syncConfig
+                syncConfig,
+                // Above PeersClient's own request timeout, so a slow peer's failure names it (applyAncestry).
+                askTimeout = syncConfig.peerResponseTimeout + PivotHeaderBootstrap.AskTimeoutMargin
               )
             )
             .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),

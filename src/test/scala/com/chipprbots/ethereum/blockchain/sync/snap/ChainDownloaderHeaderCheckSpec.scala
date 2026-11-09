@@ -94,9 +94,10 @@ class ChainDownloaderHeaderCheckSpec
       perRequest: Int,
       deferred: Boolean,
       prepare: Rig => Unit,
-      genesisHeader: BlockHeader = genesis
+      genesisHeader: BlockHeader = genesis,
+      // A restarted download shares the stores of the one before it.
+      val storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {}
   ):
-    val storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {}
     val appState: AppStateStorage = storage.storagesInstance.storages.appStateStorage
     val blacklist = new RecordingBlacklist
     // The node's shared sync blacklist, as SNAP and the standalone backfill pass it.
@@ -484,15 +485,24 @@ class ChainDownloaderHeaderCheckSpec
 
   private val ephemery: IndexedSeq[BlockHeader] = PosHeaderFixtures.ephemery165 // 0 (genesis, difficulty 1) .. 3
 
-  private def ephemeryRig(): Rig =
+  private def ephemeryRig(storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {}): Rig =
     new Rig(
       new HeaderChainCheck.ProofOfStake(PosHeaderFixtures.ephemery165Config, BigInt(0)),
       target = BigInt(3),
       perRequest = 3,
       deferred = true,
       _ => (),
-      genesisHeader = ephemery.head
+      genesisHeader = ephemery.head,
+      storage = storage
     )
+
+  /** `headers` (consecutive) moved onto another chain from `parent`: another extra data, each on the one before. Every
+    * post-merge rule still holds; the hashes are another chain's.
+    */
+  private def forkOf(parent: BlockHeader, headers: Seq[BlockHeader]): Seq[BlockHeader] =
+    headers
+      .scanLeft(parent)((prev, h) => h.copy(parentHash = prev.hash, extraData = ByteString("another chain")))
+      .tail
 
   "ChainDownloader on a post-merge chain" should "store real headers on a difficulty-1 genesis, each weighing nothing" taggedAs (
     UnitTest,
@@ -539,12 +549,15 @@ class ChainDownloaderHeaderCheckSpec
     rig.nextRequest().answer(ephemery.slice(1, 4))
     eventually(rig.cursor shouldBe BigInt(3))
     rig.appState.putBackfillBestBody(3).and(rig.appState.putBackfillBestReceipt(2)).commit()
+    // Another writer named another header at the fork point's height.
+    rig.storage.blockchainWriter.storeBlockHeader(ephemery(1).copy(extraData = ByteString("other"))).commit()
     val replies = createTestProbe[ChainDownloader.Rewound]()
 
     rig.downloader ! ChainDownloader.RewindTo(ephemery(1), replies.ref)
 
     replies.expectMessage(ChainDownloader.Rewound(BigInt(1)))
     rig.cursor shouldBe BigInt(1)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(1) shouldBe Some(ephemery(1)) // put back in the same write
     rig.appState.getBackfillBestHeaderHash() shouldBe Some(ephemery(1).hash.value)
     rig.appState.getBackfillTargetHash() shouldBe None // it named the discarded header 3
     rig.appState.getBackfillBestBody() shouldBe BigInt(1)
@@ -556,6 +569,57 @@ class ChainDownloaderHeaderCheckSpec
     eventually(rig.cursor shouldBe BigInt(3))
     rig.appState.getBackfillTargetHash() shouldBe Some(ephemery(3).hash.value)
     rig.blacklist.added shouldBe empty
+    testKit.stop(rig.downloader)
+  }
+
+  it should "resume from the fork point after a restart, though the number index still names the discarded headers" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val rig = ephemeryRig()
+    val discarded = forkOf(ephemery(1), ephemery.slice(2, 4))
+    rig.nextRequest().answer(ephemery(1) +: discarded)
+    eventually(rig.cursor shouldBe BigInt(3))
+    val replies = createTestProbe[ChainDownloader.Rewound]()
+    rig.downloader ! ChainDownloader.RewindTo(ephemery(1), replies.ref)
+    replies.expectMessage(ChainDownloader.Rewound(BigInt(1)))
+    testKit.stop(rig.downloader)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(3) shouldBe Some(discarded.last) // stale
+
+    val restarted = ephemeryRig(rig.storage)
+    val req = restarted.nextRequest()
+    req.from shouldBe BigInt(2)
+    req.answer(ephemery.slice(2, 4))
+    eventually(restarted.cursor shouldBe BigInt(3))
+    restarted.appState.getBackfillBestHeaderHash() shouldBe Some(ephemery(3).hash.value)
+    restarted.storage.blockchainReader.getBlockHeaderByNumber(3) shouldBe Some(ephemery(3))
+    restarted.blacklist.added shouldBe empty
+    testKit.stop(restarted.downloader)
+  }
+
+  it should "rewind to genesis and weigh the headers fetched again from the genesis weight" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val rig = ephemeryRig()
+    rig.nextRequest().answer(forkOf(ephemery.head, ephemery.slice(1, 4)))
+    eventually(rig.cursor shouldBe BigInt(3))
+    val replies = createTestProbe[ChainDownloader.Rewound]()
+
+    rig.downloader ! ChainDownloader.RewindTo(ephemery.head, replies.ref)
+
+    replies.expectMessage(ChainDownloader.Rewound(BigInt(0)))
+    rig.cursor shouldBe BigInt(0)
+    rig.appState.getBackfillBestHeaderHash() shouldBe Some(ephemery.head.hash.value)
+    val again = rig.nextRequest()
+    again.from shouldBe BigInt(1)
+    again.answer(ephemery.slice(1, 4))
+    eventually(rig.cursor shouldBe BigInt(3))
+    // Genesis weighs its difficulty (1); proof-of-stake headers add nothing.
+    rig.storage.blockchainReader.getChainWeightByHash(ephemery(3).hash).map(_.totalDifficulty.value) shouldBe
+      Some(BigInt(1))
+    rig.storage.blockchainReader.getChainWeightByHash(ephemery.head.hash).map(_.totalDifficulty.value) shouldBe
+      Some(BigInt(1))
     testKit.stop(rig.downloader)
   }
 

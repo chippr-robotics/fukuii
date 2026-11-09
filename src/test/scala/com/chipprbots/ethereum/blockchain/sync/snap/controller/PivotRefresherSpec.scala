@@ -209,7 +209,7 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(number), stateRoot = TrieRoot(root))
 
   /** The module on its stub, the kit that runs it, and the inboxes of the parent and two coordinators. */
-  final private class Harness:
+  final private class Harness(config: SNAPSyncConfig = SNAPSyncConfig()):
     val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
     val accounts: TestInbox[AccountRangeCoordinator.Command] = TestInbox[AccountRangeCoordinator.Command]()
     val storage: TestInbox[StorageRangeCoordinator.Command] = TestInbox[StorageRangeCoordinator.Command]()
@@ -218,7 +218,7 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     private var captured: StubPivotRefresherState & PivotRefresher = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
-        captured = new StubPivotRefresherState(ctx, timers, SNAPSyncConfig(), chain) with PivotRefresher
+        captured = new StubPivotRefresherState(ctx, timers, config, chain) with PivotRefresher
         captured.syncControllerRef = Some(parent.ref)
         Behaviors.receiveMessage { _ =>
           action()
@@ -544,6 +544,34 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     // min(5_000, 1_000 + 50) - 50 = 1_000: the CL head itself, walked back zero blocks from its hash.
     h.module.pendingPivotRefresh shouldBe Some((BigInt(1_000), "stateless"))
     h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, 0))
+  }
+
+  it should "back off, 5 s doubling to 60 s, while PoS refresh fetches keep failing, and start again after a header" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    def failOnce(): FiniteDuration =
+      h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+      h.call(m => m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed(PivotHeaderBootstrap.AncestryNotServed)))
+      h.scheduledTimers().collect { case (_, RetryPivotRefresh, delay) => delay }.last
+
+    Seq.fill(7)(failOnce()) shouldBe Seq(5, 10, 20, 40, 60, 60, 60).map(_.seconds)
+
+    // A header arrives: the next failure waits 5 s again.
+    h.module.pendingPivotRefresh = Some((BigInt(500), "stateless peers"))
+    h.call(m => m.pivotRefreshBootstrapCompleteArms(BootstrapComplete(Some(headerAt(500, rootB)))))
+    failOnce() shouldBe 5.seconds
+  }
+
+  it should "take the pivot one ancestry request deep when the configured offset is deeper" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig(pivotBlockOffset = 300))
+    h.module.posChain = true
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(1_000, rootB))))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    val depth = PivotHeaderBootstrap.MaxAncestryDepth
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(1_000 - depth), "stale pivot"))
+    h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, depth))
   }
 
   it should "refresh again from the CL head, not backtrack by number, when a PoS refresh bootstrap failed" taggedAs UnitTest in {

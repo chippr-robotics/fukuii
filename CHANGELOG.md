@@ -41,11 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download is checked against the post-merge rules and anchored to that pivot.**
   - **Pivot refresh.** The new pivot is the header a pivot offset below the CL head, found by walking back from the
     head's hash: through the CL's blocks stored by hash when they are all there, else with one reverse
-    `GetBlockHeaders` request from the head's hash. The run must start at the head and each header must be its
-    predecessor's parent; a run that is not is stored nowhere, its peer is blacklisted (as for a header that fails
-    validation) and another peer is asked. A failed fetch is retried from the newest CL head, not backtracked by block
-    number. The fallback for a pivot no peer serves stays at or below the CL head (the peers' best block may lead it by
-    the serve-window margin only). The heal-at-a-newer-pivot recovery takes its pivot the same way.
+    `GetBlockHeaders` request of 192 headers from the head's hash. The run must start at the head and each header must
+    be its predecessor's parent down to the pivot; the linked part, the pivot's ancestors in it included, is stored
+    with the pivot (by hash only, apart from the pivot). A run that does not start at the head, or is longer than asked, is stored nowhere, its peer is blacklisted
+    (as for a header that fails validation) and another peer is asked; a run that is short, or leaves the head's
+    ancestry above the pivot (Besu answers all but the first header by its canonical number, so after a reorg an honest
+    Besu peer serves one), is skipped without blame. A request is given `sync.peer-response-timeout` plus 5 s, so a
+    peer that times out is not asked again. A failed fetch is retried from the newest CL head, not backtracked by block
+    number, after 5 s doubling to 60 s while fetches keep failing. The pivot is at most 191 blocks below the CL head (a
+    deeper `pivot-block-offset` is clamped, with a warning). The fallback for a pivot no peer serves stays at or below
+    the CL head (the peers' best block may lead it by the serve-window margin only). The heal-at-a-newer-pivot recovery
+    takes its pivot the same way.
   - **Pivot selection.** The CL head's stored header must have its fork's field layout and pass the post-merge
     header-only rules before it is committed. A pivot bootstrap target by block number persisted by an earlier run is
     not resumed. A pivot from the CL is not compared with the peers' advertised heights.
@@ -60,9 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Finalisation.** It waits for the header download to reach the pivot (the header hold is forced on, as on
     proof-of-work chains) and requires the downloaded header there to be the pinned pivot. When it is not, the pivot is
     kept: the downloaded headers above the highest header the two chains share are discarded and downloaded again
-    (from genesis when none is within the pinned pivot's stored ancestry); if the same pivot is missed again, SNAP
-    restarts and chooses a pivot from the CL. A pivot with no pinned hash also restarts SNAP. The pinned hash of a
-    pivot persisted after healing is the one the best-block record names, never the number index.
+    (from genesis when none is within the pinned pivot's stored ancestry), and that header's number-index entry is put
+    back in the same write; if the same pivot is missed again after such a rewind was applied, SNAP restarts and
+    chooses a pivot from the CL. A pivot with no pinned hash, or whose pinned header is not stored, also restarts SNAP.
+    The pinned hash of a pivot persisted after healing is the one the best-block record names, never the number index.
   - Where the hold comes before the Path-scheme publish, the publish now still runs when the hold ends.
 - **Ops templates publish JSON-RPC on localhost only, keep the Engine API on the internal Docker network, and enable
   only the eth, web3, net and fukuii namespaces.** In every `ops/` compose stack (barad-dur ETC, Sepolia, ETH mainnet,

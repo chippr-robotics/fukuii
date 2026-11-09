@@ -185,6 +185,36 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     PivotAnchor.forkPoint(blockchainReader, headers(15), headers(15)) shouldBe Some(headers(15))
     PivotAnchor.forkPoint(blockchainReader, headers(15), headers(16)) shouldBe None
 
+  // The pivot ancestry bootstrap stores the run it fetched from the CL head (PivotHeaderBootstrap.storeAncestry): the pinned
+  // pivot's ancestors, by hash. That is what a fork point below the pivot is found in.
+  "The stored ancestry run" should "give finalisation a fork point below the pinned pivot" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    downloaded(20)
+    // The CL's chain parts from the downloaded one above block 12; its head is 20, the pivot 15. Nothing of it is stored.
+    val clChain: IndexedSeq[BlockHeader] = (13 to 20).scanLeft(headers(12)) { (parent, n) =>
+      headers(n).copy(parentHash = parent.hash, stateRoot = otherRoot)
+    }
+    val pinned: BlockHeader = clChain(3) // block 15
+    pinned.number.value shouldBe 15
+    // With only the pivot stored (by its hash), no fork point is found, so finalisation would download from genesis.
+    blockchainWriter.storeBlockHeader(pinned).commit()
+    PivotAnchor.forkPoint(blockchainReader, pinned, headers(15)) shouldBe None
+    // With the run stored: head 20 down to block 10, the CL chain's ancestors below the pivot included.
+    val linked: IndexedSeq[BlockHeader] = (clChain.reverse ++ Seq(headers(11), headers(10))).toIndexedSeq
+    com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
+      .storeAncestry(
+        blockchainWriter,
+        com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap.AncestryRun(pinned, linked)
+      )
+      .commit()
+    PivotAnchor.forkPoint(blockchainReader, pinned, headers(15)) shouldBe Some(headers(12))
+    // Only the pivot names its height in the number index; the rest of the run is stored by hash.
+    blockchainReader.getBlockHeaderByNumber(15) shouldBe Some(pinned)
+    blockchainReader.getBlockHeaderByNumber(14) shouldBe Some(headers(14))
+    blockchainReader.getBlockHeaderByNumber(18) shouldBe Some(headers(18))
+
   "PivotAnchor.storedAncestor" should "walk back from a head by parent hash through headers stored by hash" taggedAs UnitTest in new Chain:
     downloaded(20)
     PivotAnchor.storedAncestor(blockchainReader, headers(20).hash.value, 5) shouldBe Some(headers(15))

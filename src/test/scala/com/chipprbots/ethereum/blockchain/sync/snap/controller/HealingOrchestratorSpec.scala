@@ -24,6 +24,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChildSpawn
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.RecordingChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -147,6 +148,7 @@ private[snap] class StubHealingOrchestratorState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   def ec: ExecutionContext = ExecutionContext.parasitic
   var trieNodesCachedInMemory: Boolean = false
 

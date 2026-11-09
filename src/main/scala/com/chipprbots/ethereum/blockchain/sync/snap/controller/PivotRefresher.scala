@@ -106,6 +106,15 @@ private[snap] trait PivotRefresher
   // stateless), so its replays keep the #1478 fallback. Set only together with retryRefreshCounts = true; cleared
   // wherever retryRefreshCounts is cleared. Read on PoS only.
   private var retryRefreshUnservable: Boolean = false
+  // Post-merge: the CL-head ancestry fetches that failed in a row since a refresh header last arrived; the retry backs
+  // off with them (clAncestryRetryDelay).
+  private var clAncestryFailures: Int = 0
+  // Post-merge: the warning that a configured pivot-block-offset deeper than one ancestry request is clamped, once.
+  private var ancestryDepthClampWarned: Boolean = false
+
+  /** The retry delay after `failures` CL-head ancestry fetches failed in a row: 5 s, doubling, at most 60 s. */
+  private def clAncestryRetryDelay(failures: Int): FiniteDuration =
+    (5L << math.min(math.max(failures - 1, 0), 4)).seconds.min(60.seconds)
 
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10, CQ-SNAP-016-27), body unchanged:
     * `PivotStateUnservable`, a coordinator's report that peers no longer serve the root: the debounce, the
@@ -226,6 +235,7 @@ private[snap] trait PivotRefresher
           Behaviors.same
         case Some(header) =>
           ctx.log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
+          clAncestryFailures = 0
           completePivotRefreshWithStateRoot(pendingPivot, header, reason)
           Behaviors.same
         case None =>
@@ -262,14 +272,17 @@ private[snap] trait PivotRefresher
         retryRefreshUnservable = false
         timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
       else if isPoSChain then
-        // Post-merge: no backtrack by number. The pivot is the CL head's ancestor; ask again from the newest CL head.
+        // Post-merge: no backtrack by number. The pivot is the CL head's ancestor; ask again from the newest CL head,
+        // backing off while fetches keep failing (no peer serves the head's ancestry, say).
+        clAncestryFailures += 1
+        val delay = clAncestryRetryDelay(clAncestryFailures)
         ctx.log.warn(
           s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
-            "Refreshing again from the CL head in 5s."
+            s"Refreshing again from the CL head in $delay ($clAncestryFailures failed in a row)."
         )
         retryRefreshCounts = false
         retryRefreshUnservable = false
-        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, delay)
       else if backtrackedPivot > 0 then
         ctx.log.warn(
           s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
@@ -622,13 +635,22 @@ private[snap] trait PivotRefresher
     if target > headNumber then
       ctx.log.warn(s"Pivot target $target is above the CL head ${head.idTag}; not a pivot the CL head can confirm")
     else
-      val depth = (headNumber - target).min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+      val wanted = headNumber - target
+      val depth = wanted.min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+      if wanted > depth && !ancestryDepthClampWarned then
+        ancestryDepthClampWarned = true
+        ctx.log.warn(
+          s"SNAP pivot $wanted blocks below the CL head (sync.snap-sync.pivot-block-offset = " +
+            s"${snapSyncConfig.pivotBlockOffset}) is deeper than one ancestry request reaches; the pivot is taken " +
+            s"$depth blocks below the CL head instead"
+        )
       val pivotNumber = headNumber - depth
       PivotAnchor.storedAncestor(stateIngest, headHash, depth) match
         case Some(pivot) =>
           ctx.log.info(
             s"Pivot ${pivot.idTag}: $depth below the CL head ${head.idTag}, walked back through stored headers"
           )
+          clAncestryFailures = 0
           completePivotRefreshWithStateRoot(pivotNumber, pivot, reason)
         case None =>
           ctx.log.info(
