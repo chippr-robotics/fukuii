@@ -1747,3 +1747,13 @@ items:
     refs: [B-128]
     links: {}
     notes: "From #1727 PR 2 (conduit): decodePayload matches blockStateCalls/validation/traceTransfers/returnFullTransactions exact-case (BlockStateCalls answers empty input); extractOpt[Boolean] turns a non-boolean validation into false where geth gives -32602; TxArgsJson/TxArgsSpec:118-119 name hexutil.Big/U256 where geth says *hexutil.Big / *uint256.Int."
+  - id: B-159
+    title: "getContracts decides Cancun (0x0a) from header blob fields, not timestamp: an eth_call time override into Cancun lacks 0x0a (geth has it)"
+    priority: P2
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-09
+    refs: [B-155]
+    links: {}
+    notes: "From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon."
