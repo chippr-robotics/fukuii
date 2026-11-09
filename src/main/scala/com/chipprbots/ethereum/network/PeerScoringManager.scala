@@ -23,9 +23,10 @@ import com.chipprbots.ethereum.utils.Logger
   * @param clock
   *   the only source of time; `Clock.systemUTC()` in production, a fixed or mutable clock in tests
   * @param maxPeers
-  *   the most peers tracked; when a new peer would exceed it, the peer with the oldest `lastSeen` (or `firstSeen`, for
-  *   a peer never seen alive) is evicted. Every failed handshake of a crawler adds a node id, so the map must be
-  *   bounded. The default is a few times the connection limits, so an idle connected peer keeps its entry for hours.
+  *   the most peers tracked; when a new peer would exceed it, an entry is evicted: first any never seen alive (no
+  *   `lastSeen`: a failed handshake, a timeout, a blacklisting), oldest `firstSeen` first, and only when every entry
+  *   has been seen alive, the oldest `lastSeen`. Every failed handshake of a crawler adds a node id, so the map must be
+  *   bounded, and those crawlers must not push out a peer that is connected and merely idle.
   * @param exporter
   *   receives a [[PeerScoreSnapshot]] on [[publish]] and, throttled to once per `PublishIntervalMs` of `clock`, after
   *   an update. The default exports nothing; NodeBuilder passes `NetworkMetrics.publishPeerScores`.
@@ -168,10 +169,16 @@ class PeerScoringManager(
       }
     }
 
-  /** Drop the entry that was seen least recently, ties broken by id so that the choice is reproducible. */
+  /** Drop the entry to forget first: one never seen alive before any that was, then the oldest; ties broken by id so
+    * that the choice is reproducible. A public node's map fills with crawlers that failed a handshake a minute ago
+    * (wrong-network peers, #88); their `firstSeen` is newer than an idle connected peer's `lastSeen`, so ordering by
+    * age alone would evict the connected peer first.
+    */
   private def evictOldest(): Unit =
     scores.iterator
-      .minByOption { case (id, s) => (s.lastSeen.orElse(s.firstSeen).getOrElse(Instant.MIN), id.value) }
+      .minByOption { case (id, s) =>
+        (s.lastSeen.isDefined, s.lastSeen.orElse(s.firstSeen).getOrElse(Instant.MIN), id.value)
+      }
       .foreach { case (id, _) =>
         scores.remove(id)
         log.debug(s"Evicted peer ${id.value} from scoring: the map is at its cap of $maxPeers")

@@ -286,8 +286,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-peer scores are not metric series; they are read through `NetworkMetrics.peerScores`.
   - **Scoring changes that wiring needed.** A score is a function of the history and an injected clock (it read the
     wall clock). Events for one peer are applied atomically (the get-then-put lost updates under load). The score map is
-    bounded at 4096 peers, evicting the oldest `lastSeen`. A failed handshake, a timeout, a protocol violation and a
-    blacklisting never raise a score: only a successful handshake and a response refresh `lastSeen`, a blacklisting
+    bounded at 4096 peers; entries never seen alive (a crawler's failed handshake) are evicted first, then the oldest
+    `lastSeen`, so a connected peer that is merely idle is kept. A failed handshake, a timeout, a protocol violation and
+    a blacklisting never raise a score: only a successful handshake and a response refresh `lastSeen`, a blacklisting
     counts against the compliance term, and timeouts no longer dilute the violation rate.
 - **Background state audit after SNAP or checkpoint hand-off (spec 022, #1693). Both chains.** After hand-off a
   throttled walk (25% duty cycle) from the current head checks every node's hash, every account's code and every

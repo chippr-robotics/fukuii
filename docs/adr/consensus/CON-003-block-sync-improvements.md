@@ -78,7 +78,7 @@ final case class PeerScore(
 **Thread Safety** (corrected 2026-11-09, spec 027 slice 4a): `PeerScoringManager` stores scores in a `TrieMap`, but it
 originally read a score and wrote it back in two steps (`getScore`, then `put`), so concurrent events for one peer lost
 updates; it was not thread-safe. Since slice 4a each event is one atomic `TrieMap.updateWith`, new peers are admitted
-under a lock that also bounds the map (4096 entries; the oldest `lastSeen` is evicted), and every time is read from an
+under a lock that also bounds the map (4096 entries; entries never seen alive go first, then the oldest `lastSeen`), and every time is read from an
 injected `java.time.Clock`. Pinned by `PeerScoringManagerSpec` (four threads, no lost event).
 
 ### Priority 2: Adaptive Sync Strategy with Fallback Chain

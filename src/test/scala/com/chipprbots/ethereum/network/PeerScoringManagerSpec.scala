@@ -261,6 +261,40 @@ class PeerScoringManagerSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
       f.manager.getAllScores.keySet shouldBe Set(ids(1), p4, p5)
     }
 
+  it should "keep a connected peer that went idle while more failed-handshake ids than the cap pass through" taggedAs
+    (UnitTest, NetworkTest) in {
+      // A public node's map fills with crawlers that failed a handshake a minute ago (wrong-network nodes, #88). Their
+      // firstSeen is newer than the idle peer's lastSeen, but they were never seen alive, so they go first.
+      val f = new Fixture(maxPeers = 8)
+      val idle = PeerId("idle-connected")
+      f.manager.recordSuccessfulHandshake(idle)
+      f.clock.windByMillis(1000)
+
+      (1 to 40).foreach { i =>
+        f.manager.recordFailedHandshake(PeerId(s"crawler-$i"))
+        f.clock.windByMillis(60_000L)
+      }
+
+      f.manager.getAllScores.size shouldBe 8
+      f.manager.getAllScores.keySet should contain(idle)
+      f.manager.getScore(idle).successfulHandshakes shouldBe 1
+    }
+
+  it should "evict an entry never seen alive before one that was, whatever their ages" taggedAs
+    (UnitTest, NetworkTest) in {
+      val f = new Fixture(maxPeers = 2)
+      val alive = PeerId("alive")
+      val crawler = PeerId("crawler")
+      f.manager.recordSuccessfulHandshake(alive)
+      f.clock.windByMillis(3_600_000L)
+      f.manager.recordFailedHandshake(crawler)
+      f.clock.windByMillis(1000)
+
+      f.manager.recordFailedHandshake(PeerId("newcomer"))
+
+      f.manager.getAllScores.keySet shouldBe Set(alive, PeerId("newcomer"))
+    }
+
   it should "stay within its cap over many distinct peers" taggedAs (UnitTest, NetworkTest) in {
     val f = new Fixture(maxPeers = 16)
     (1 to 500).foreach { i =>
