@@ -94,8 +94,12 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** What was written around the terminal, straight to [[processOutput]]. */
   def processText: String = processOutput.toString(StandardCharsets.UTF_8)
 
-  /** A [[Tui]] on this terminal, with [[processOutput]] as the process stream behind it. */
-  def tui(config: TuiConfig = TuiTestTerminal.config): Tui = new Tui(config, () => terminal, _ => Some(processOutput))
+  /** A [[Tui]] on this terminal, with [[processOutput]] as the process stream behind it, on the fixtures' clock: the
+    * snapshots tests apply are stamped at [[TuiFixtures.Now]], and a TUI on the wall clock reads them as days old, so
+    * Unresponsive.
+    */
+  def tui(config: TuiConfig = TuiTestTerminal.config, clock: java.time.Clock = TuiFixtures.clock): Tui =
+    new Tui(config, () => terminal, _ => Some(processOutput), clock)
 
   /** Frames written so far: each frame starts at the home position (spec 027 T036 counts them). */
   def framesWritten: Int = output.split(java.util.regex.Pattern.quote(Tui.CursorHome), -1).length - 1

@@ -14,6 +14,9 @@ object TuiFixtures:
   /** The fixtures' "now". */
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 
+  /** A clock stopped at [[Now]]: where a test TUI reads its snapshots ([[TuiTestTerminal.tui]]). */
+  val clock: java.time.Clock = java.time.Clock.fixed(Now, java.time.ZoneOffset.UTC)
+
   /** The locale that breaks default case conversion: there "I".toLowerCase is "ı" and "i".toUpperCase is "İ". */
   val Turkish: Locale = Locale.forLanguageTag("tr-TR")
 
