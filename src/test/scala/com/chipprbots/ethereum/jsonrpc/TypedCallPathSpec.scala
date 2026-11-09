@@ -464,7 +464,7 @@ class TypedCallPathSpec
       .applyStateOverrides(
         ledger.worldAt(head),
         Map(invalid -> over, spin -> StateOverride(code = Some(code("5b600056")))),
-        Map(),
+        Set.empty,
         UInt256.Zero
       )
       .value
@@ -556,7 +556,7 @@ class TypedCallPathSpec
           gasEcho -> StateOverride(code = Some(code("5a60005260206000f3"))),
           burner -> StateOverride(code = Some(code("5b5a620f4240106000570" + "0")))
         ),
-        Map(),
+        Set.empty,
         UInt256.Zero
       )
       .value

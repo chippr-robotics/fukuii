@@ -461,6 +461,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Withdrawals** decode as go-ethereum's `Withdrawal` does: no field is required (one left out is zero), field names
     match case-insensitively, other keys are ignored and the quantities are `hexutil.Uint64`. A `null` entry is still
     refused. A `null` account override is an override that changes nothing, as in go-ethereum; `eth_call` refused it.
+- **State overrides that touch a precompile act as in go-ethereum v1.17.9, in `eth_call`, `eth_estimateGas`,
+  `eth_createAccessList` and `eth_simulateV1` (#1727, B-129). Both chains.** The four RPCs share one implementation of
+  state overrides, and it judged precompiles by a fixed list of addresses that no block's fork matched.
+  - **An entry at a precompile's address deletes the precompile.** Any entry does: a `balance`, `nonce`, `code`, `state`
+    or `stateDiff` override, an empty one and a `null` one. The call then reaches whatever the account holds (the
+    overridden `code`, or nothing), where it used to reach the precompile; `code` at a precompile's address never ran.
+  - **The precompiles an override can name or move are the block's own.** `0x0a` (KZG point evaluation, from Cancun)
+    was refused with `is not a precompile`. BLS12-381 (from Prague) and P256VERIFY (from Osaka; on ETC from Olympia) were
+    accepted at blocks that do not have them, and now are refused. The set is the one the EVM runs the block with, after
+    the block overrides (`number`, `time`) are applied.
+  - **Two moves to one target: the one from the higher source address wins, and both sources are deleted.** Before, both
+    moves were dropped and both sources kept answering. Entries are taken in address order, as geth takes them.
+  - **The `is not a precompile` text** names the account in EIP-55 mixed case (`0x…0A`), as geth prints it.
+  - **`eth_createAccessList` differs from geth on purpose.** geth applies its state overrides with no precompiles at all
+    (`Apply(db, nil)`), so there every `movePrecompileToAddress` is `is not a precompile` and no entry deletes a
+    precompile. fukuii treats the overrides there as in `eth_call`, so the list it returns is for the call `eth_call`
+    would run.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -575,10 +592,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
-  unbounded block-gap loop that stalled the node is fixed (see Fixed), and so are the malformed override values it
-  accepted. A comparison of 815 cases with geth v1.17.9 on Ephemery found these differences:
-  - an override at a precompile's address does not disable the precompile;
-  - `movePrecompileToAddress` refuses 0x0a (KZG), and two moves to the same address are both dropped;
+  unbounded block-gap loop that stalled the node, the malformed override values it accepted and the precompile override
+  cases it got wrong are fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on Ephemery found these
+  differences:
   - `maxUsedGas` reports gas after refunds;
   - a request system contract whose code is overridden away is skipped instead of failing;
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input

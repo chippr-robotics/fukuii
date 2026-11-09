@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthSimulateService:
 
@@ -199,66 +200,85 @@ object EthSimulateService:
       .map { case (c, h) => if c.isLetter && Character.digit(h, 16) >= 8 then c.toUpper else c }
       .mkString
 
+  /** The addresses of the precompiles `header`'s block has: go-ethereum's `vm.ActivePrecompiledContracts(rules)`
+    * (api.go:769 for eth_call, :940 for eth_estimateGas, simulate.go:558-563 for each simulated block). It is read from
+    * the `PrecompiledContracts.getContracts` the EVM dispatches on, so a state override can name exactly the
+    * precompiles the block runs: 0x0a (KZG) from Cancun, BLS12-381 from Prague, P256VERIFY from Osaka (ETC: from
+    * Olympia), and none of a later fork.
+    *
+    * `header` is the block the call runs in with its block overrides applied: geth builds the rules from the overridden
+    * block context (`blockCtx.BlockNumber`, `blockCtx.Time`).
+    */
+  def activePrecompiles(header: BlockHeader)(using blockchainConfig: BlockchainConfig): Set[Address] =
+    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    PrecompiledContracts.getContracts(evmConfig, header).keySet
+
   /** Applies execution-apis state overrides (balance, nonce, code, state, stateDiff, movePrecompileToAddress) to
-    * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call and
-    * eth_estimateGas (go-ethereum uses its one `override.StateOverride.Apply` for all three).
+    * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call,
+    * eth_estimateGas and eth_createAccessList (go-ethereum uses its one `override.StateOverride.Apply` for all of them,
+    * and for each simulated block). `activePrecompiles` is the `precompiles` map `Apply` is given
+    * ([[activePrecompiles]]).
+    *
+    * The precompile rules are `Apply`'s (override.go:60-127), the entries taken in address order:
+    *   - `movePrecompileToAddress` on an address that is not an active precompile is `account <EIP-55> is not a
+    *     precompile`, and to a key of the override set (the precompile's own address included) `account <EIP-55> is
+    *     already overridden`. Both are -32000, and the first one in address order is the one reported.
+    *     (override.go:72-74, "has already been overridden by a precompile", cannot be reached: a target is never a key
+    *     of the set.)
+    *   - ANY entry at an active precompile's address deletes that precompile (:92-94): a balance, nonce, code or
+    *     storage override, an empty override and a null one alike. Code at that address then runs as an ordinary
+    *     account's.
+    *   - Of several moves to one target the last in address order wins (:89 assigns the target's map entry again), and
+    *     every source is deleted all the same.
+    *
+    * The relocations are what `PrecompiledContracts.getContract` reads, keyed by the address that was a precompile:
+    *   - `a -> t`, t != a: the precompile of `a` now answers at `t` and not at `a`;
+    *   - `a -> a`: the precompile of `a` is deleted and answers nowhere, the encoding of a deletion. That is also what
+    *     a move that lost its target to a later one becomes.
+    *
+    * Each block of a simulation, and each call, starts from the block's own precompiles: a move or deletion does not
+    * outlive the block it is in (geth builds `precompiles` per block, simulate.go:366).
     */
   def applyStateOverrides(
       world: InMemoryWorldStateProxy,
       overrides: Map[Address, StateOverride],
-      existingRelocations: Map[Address, Address],
+      activePrecompiles: Set[Address],
       accountStartNonce: UInt256
   ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
     var w = world
-    var relocations = existingRelocations
 
-    // First pass: validate movePrecompileToAddress and detect collisions
-    val allPrecompiles = Set(
-      Address(1),
-      Address(2),
-      Address(3),
-      Address(4),
-      Address(5),
-      Address(6),
-      Address(7),
-      Address(8),
-      Address(9),
-      Address(0x0b),
-      Address(0x0c),
-      Address(0x0d),
-      Address(0x0e),
-      Address(0x0f),
-      Address(0x10),
-      Address(0x11),
-      Address(0x100)
-    )
-    val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
     // go-ethereum's StateOverride.Apply (internal/ethapi/override/override.go:60-127) walks the accounts in address
     // order, so a request with several faults reports the same one. Its errors are plain `fmt.Errorf`s: -32000.
     val sortedOverrides = overrides.toSeq.sortBy { case (address, _) => BigInt(1, address.bytes.toArray) }
     for (address, ov) <- sortedOverrides do
       ov.movePrecompileToAddress.foreach { targetAddr =>
-        if !allPrecompiles.contains(address) then
-          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
+        // override.go:81-83; the address is printed as `addr.Hex()`, EIP-55
+        if !activePrecompiles.contains(address) then
+          break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} is not a precompile")))
         // override.go:84-88: "Refuse to move a precompile to an address that has been or will be overridden" — any
         // key of this override set, the precompile's own address included (not the -38022 of the execution-apis
         // vector, which moves a non-precompile and so stops at the check above).
         if overrides.contains(targetAddr) then
           break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(targetAddr)} is already overridden")))
-        pendingMoves += (address -> targetAddr)
       }
       // override.go:108-110, after the account's nonce, code and balance are set (the error discards them all)
       if ov.state.isDefined && ov.stateDiff.isDefined then
         break(
           Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} has both 'state' and 'stateDiff'"))
         )
-    // Two precompiles moving to the same target is ambiguous — geth silently
-    // drops the colliding moves rather than erroring (matches the
-    // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
-    val targetCounts = pendingMoves.groupBy(_._2).view.mapValues(_.size).toMap
-    pendingMoves.foreach { case (src, tgt) =>
-      if targetCounts.getOrElse(tgt, 0) <= 1 then relocations = relocations + (src -> tgt)
+
+    // override.go:89, in address order: the last move to a target is the one the target keeps
+    val lastClaimant: Map[Address, Address] = sortedOverrides.foldLeft(Map.empty[Address, Address]) {
+      case (claimants, (source, ov)) =>
+        ov.movePrecompileToAddress.fold(claimants)(target => claimants.updated(target, source))
     }
+    // override.go:92-94: every entry at an active precompile's address deletes it. A move was checked above to be at one,
+    // so `source -> target` where it won the target, `source -> source` (deleted, answering nowhere) otherwise.
+    val relocations: Map[Address, Address] = sortedOverrides.collect {
+      case (source, ov) if activePrecompiles.contains(source) =>
+        val kept = ov.movePrecompileToAddress.filter(target => lastClaimant.get(target).contains(source))
+        source -> kept.getOrElse(source)
+    }.toMap
 
     // Second pass: apply overrides — only modify state when something other than
     // movePrecompileToAddress is set; the precompile move is purely a routing
@@ -423,7 +443,6 @@ class EthSimulateService(
           req.validation,
           req.traceTransfers,
           nonceMap,
-          Map.empty,
           globalAccumGas,
           world,
           simulatedBlockHashes
@@ -457,7 +476,6 @@ class EthSimulateService(
         req.validation,
         req.traceTransfers,
         nonceMap,
-        Map.empty,
         globalAccumGas,
         world,
         simulatedBlockHashes
@@ -486,7 +504,6 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
-      existingRelocations: Map[Address, Address],
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
       @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
@@ -521,10 +538,11 @@ class EthSimulateService(
       // Apply EIP-2935: store parent block hash in history storage
       if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
 
-    // Apply state overrides and build precompile relocations
-    var precompileRelocations = existingRelocations
+    // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
+    // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.
+    var precompileRelocations = Map.empty[Address, Address]
     stateOverrides.foreach { overrides =>
-      applyStateOverrides(world, overrides, precompileRelocations) match
+      applyStateOverrides(world, overrides, activePrecompiles(simHeader), blockchainConfig.accountStartNonce) match
         case Right((newWorld, newRelocations)) =>
           world = newWorld
           precompileRelocations = newRelocations
@@ -850,13 +868,6 @@ class EthSimulateService(
       nonce = ByteString(new Array[Byte](8)),
       extraFields = extraFields
     )
-
-  private def applyStateOverrides(
-      world: InMemoryWorldStateProxy,
-      overrides: Map[Address, StateOverride],
-      existingRelocations: Map[Address, Address]
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] =
-    EthSimulateService.applyStateOverrides(world, overrides, existingRelocations, blockchainConfig.accountStartNonce)
 
   /** The call as the transaction the simulated block carries. go-ethereum (internal/ethapi): `sanitizeCall` fills the
     * nonce and gas (simulate.go:439-456), `CallDefaults` the rest (transaction_args.go:401-450), and the block gets
