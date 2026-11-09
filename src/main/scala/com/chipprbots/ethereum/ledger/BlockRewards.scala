@@ -6,9 +6,9 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.NetworkType
 
 /** A proof-of-work block's rewards, credited to the state as block import credits them (yellow paper section 11.3,
-  * ECIP-1017, ECIP-1111). This is the one implementation behind block import and mining
-  * (`BlockPreparator.payBlockReward`) and behind eth_simulateV1 (`EthSimulateService`), so a simulated block's state
-  * root is the one its import would give.
+  * ECIP-1017, ECIP-1111). Block import and mining pay [[payProofOfWork]] (`BlockPreparator.payBlockReward`).
+  * eth_simulateV1 (`EthSimulateService`) pays the miner and ommer rewards only, [[payMinerAndOmmers]], the same code
+  * import pays them with.
   *
   * Which blocks are proof-of-work is each caller's question: block import asks the header (`BlockHeader.isPoS`), and
   * eth_simulateV1 asks the difficulty it gave the block, as go-ethereum's engine does.
@@ -45,6 +45,28 @@ object BlockRewards extends Logger:
       ommers: Seq[BlockHeader],
       world: InMemoryWorldStateProxy
   )(using blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    // ECIP-1111: Treasury credit BEFORE miner/ommer rewards (spec order per ECIP-1111)
+    val worldAfterTreasury = creditBaseFeeToTreasury(header, blockchainConfig.treasuryAddress, world)
+    payMinerAndOmmers(header, ommers, worldAfterTreasury)
+
+  /** Credits a proof-of-work block's miner and ommer rewards, steps 2 and 3 of [[payProofOfWork]]: the miner gets the
+    * block reward (ECIP-1017's era reward on ETC), plus 1/32 of it for each ommer; each ommer's miner gets its
+    * inclusion reward. No header field the transactions decide is read.
+    *
+    * @param header
+    *   the block's header: number and beneficiary are read
+    * @param ommers
+    *   the block's ommer headers (none for a simulated block)
+    * @param world
+    *   the state to credit
+    * @return
+    *   the state after the rewards
+    */
+  def payMinerAndOmmers(
+      header: BlockHeader,
+      ommers: Seq[BlockHeader],
+      world: InMemoryWorldStateProxy
+  )(using blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val rewards = calculator
     val blockNumber = header.number.value
     val minerRewardForBlock = rewards.calculateMiningRewardForBlock(blockNumber)
@@ -53,10 +75,7 @@ object BlockRewards extends Logger:
 
     val minerReward = minerRewardForOmmers + minerRewardForBlock
 
-    // ECIP-1111: Treasury credit BEFORE miner/ommer rewards (spec order per ECIP-1111)
-    val worldAfterTreasury = creditBaseFeeToTreasury(header, blockchainConfig.treasuryAddress, world)
-
-    val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldAfterTreasury)
+    val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(world)
     log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
 
     ommers.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>

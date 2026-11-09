@@ -540,10 +540,6 @@ class EthSimulateService(
 
       // Apply EIP-2935: store parent block hash in history storage
       if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
-      // ETC from Olympia (ECIP-1121): block import's own EIP-2935 step (the client-deployed history contract and the
-      // parent hash), so a simulated block's state root is the one its import gives. On ETH it is a no-op before Prague,
-      // the only ETH blocks that reach this branch.
-      else world = BlockExecution.applyEip2935(Block(simHeader, BlockBody.empty), world)
 
     // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
     // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.
@@ -632,13 +628,12 @@ class EthSimulateService(
     val headerGasUsed =
       if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
 
-    // The block's rewards, as block import credits them (BlockRewards, the code BlockPreparator.payBlockReward runs).
+    // The block's miner reward, by the code block import credits it with (BlockRewards.payMinerAndOmmers).
     // go-ethereum's processBlock calls the engine's Finalize (simulate.go:511), and the beacon engine pays ethash's
     // reward for a header with a difficulty and nothing for one without (consensus/beacon IsPoSHeader). So: ECIP-1017's
-    // era reward on ETC, and from Olympia ECIP-1111's base fee times the block's gasUsed to the treasury; on ETH before
-    // the merge, the Frontier, Byzantium or Constantinople reward; after it, nothing. A simulated block has no ommers.
-    if simHeader.difficulty.value != 0 then
-      world = BlockRewards.payProofOfWork(simHeader.copy(gasUsed = GasAmount(headerGasUsed)), Nil, world)
+    // era reward on ETC; on ETH before the merge, the Frontier, Byzantium or Constantinople reward; after it, nothing.
+    // A simulated block has no ommers.
+    if simHeader.difficulty.value != 0 then world = BlockRewards.payMinerAndOmmers(simHeader, Nil, world)
 
     // Compute Merkle roots
     val transactionsRoot = computeTransactionsRoot(txs)

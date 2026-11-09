@@ -37,8 +37,8 @@ class BlockPreparator(
     *   1. Miner receives 100% of the block reward 2. Miner receives a reward for the inclusion of ommers 3. Ommer
     *      miners receive a reward for their inclusion in this block
     *
-    * From Olympia, ECIP-1111's treasury credit comes first. The rewards themselves are [[BlockRewards.payProofOfWork]],
-    * which eth_simulateV1 pays too.
+    * From Olympia, ECIP-1111's treasury credit comes first. The rewards themselves are [[BlockRewards.payProofOfWork]];
+    * eth_simulateV1 pays its miner and ommer part, [[BlockRewards.payMinerAndOmmers]].
     *
     * @param block
     *   the block being processed
@@ -1029,18 +1029,17 @@ class BlockPreparator(
         )
       )
 
-    // What block import does before the first transaction (on ETC from Olympia: EIP-2935's history contract and the
-    // parent hash), by the function import runs, so the block is built on the state import executes it on.
+    // What block import does before the first transaction (the DAO fork block's drain, EIP-4788, EIP-2935), by the
+    // function import runs, so the block is built on the state import executes it on.
     val preambleWorld =
       BlockExecution.applyBlockPreamble(block, block.header.number.value, initialWorld, accessList = None)
     val prepared = executePreparedTransactions(block.body.transactionList, preambleWorld, block.header)
 
     prepared match
       case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _, _), txExecuted) =>
-        // The rewards are paid on the header the block will be sealed with. A block being built arrives with gasUsed
-        // still 0 (BlockGeneratorSkeleton fills it in from this result afterwards), and ECIP-1111's treasury credit
-        // reads it: import pays baseFee * header.gasUsed, and block validation holds header.gasUsed equal to the gas
-        // executed, so it is paid on the gas executed here too. Before Olympia no reward reads gasUsed.
+        // The rewards are paid on the header the block will be sealed with, as import pays them. A block being built
+        // arrives with gasUsed still 0 (BlockGeneratorSkeleton fills it in from this result afterwards), and block
+        // validation holds the sealed header's gasUsed equal to the gas executed, so the header carries that here.
         val sealedHeader = block.header.copy(gasUsed = GasAmount(execResult.gasUsed))
         val worldToPersist = payBlockReward(block.copy(header = sealedHeader), resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
