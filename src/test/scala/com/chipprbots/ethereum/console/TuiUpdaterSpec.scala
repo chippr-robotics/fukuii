@@ -285,11 +285,10 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
   // terminal in raw mode under a frozen frame, and nothing in the log. stop(), q and d all clear `running` first.
   it should "give the terminal back, with a WARN, when the loop ends without being asked to" taggedAs (UnitTest) in {
     val interrupted = new java.util.concurrent.atomic.AtomicBoolean(false)
-    withUpdater(snapshots =
-      () =>
-        // Once, on the loop's own thread: an interrupt that is not stop()'s.
-        if interrupted.compareAndSet(false, true) then Thread.currentThread().interrupt()
-        Some(snapshot)
+    withUpdater(snapshots = () =>
+      // Once, on the loop's own thread: an interrupt that is not stop()'s.
+      if interrupted.compareAndSet(false, true) then Thread.currentThread().interrupt()
+      Some(snapshot)
     ) { (updater, tui, tt) =>
       val events = warningsDuring(classOf[TuiUpdater]) {
         updater.start()
