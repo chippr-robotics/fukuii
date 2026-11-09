@@ -19,6 +19,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   */
 class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks:
 
+  private val now: Instant = Instant.parse("2026-11-09T12:00:00Z")
+
   // -----------------------------------------------------------------------
   // Score degrades monotonically on consecutive timeouts
   // -----------------------------------------------------------------------
@@ -26,11 +28,11 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
   "PeerScore timeout feedback" should "degrade score monotonically with each timeout" taggedAs
     (UnitTest, NetworkTest) in {
       // A peer that starts neutral and accumulates timeouts — score must strictly decrease each step.
-      val initial = PeerScore.initial
+      val initial = PeerScore.initial(now)
 
       val scores = (1 to 5)
-        .scanLeft(initial)((s, _) => s.recordTimeout)
-        .map(_.score)
+        .scanLeft(initial)((s, _) => s.recordTimeout(now))
+        .map(_.score(now))
 
       scores.sliding(2).foreach { case Seq(prev, next) =>
         prev should be >= next // score should not increase on timeout
@@ -42,10 +44,10 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     // Establish a baseline with some successes so the response ratio degrades as timeouts accumulate.
     // Pure all-timeout runs (0/1 vs 0/10) produce identical ratios; mixing in successes makes the
     // degradation visible through the response-rate component.
-    val base = (1 to 5).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(1024, latencyMs = 50))
-    val after1Timeout = base.recordTimeout // ratio: 5/6 ≈ 0.83
-    val after10Timeouts = (1 to 10).foldLeft(base)((s, _) => s.recordTimeout) // ratio: 5/15 ≈ 0.33
-    after10Timeouts.score should be < after1Timeout.score
+    val base = (1 to 5).foldLeft(PeerScore.initial(now))((s, _) => s.recordResponse(1024, latencyMs = 50, now = now))
+    val after1Timeout = base.recordTimeout(now) // ratio: 5/6 ≈ 0.83
+    val after10Timeouts = (1 to 10).foldLeft(base)((s, _) => s.recordTimeout(now)) // ratio: 5/15 ≈ 0.33
+    after10Timeouts.score(now) should be < after1Timeout.score(now)
   }
 
   // -----------------------------------------------------------------------
@@ -55,18 +57,18 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
   "PeerScore recovery" should "recover score after successful responses following timeouts" taggedAs
     (UnitTest, NetworkTest) in {
       // Degrade the peer with timeouts, then recover with responses.
-      val degraded = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordTimeout)
-      val recovered = (1 to 20).foldLeft(degraded)((s, _) => s.recordResponse(1024, latencyMs = 50))
+      val degraded = (1 to 10).foldLeft(PeerScore.initial(now))((s, _) => s.recordTimeout(now))
+      val recovered = (1 to 20).foldLeft(degraded)((s, _) => s.recordResponse(1024, latencyMs = 50, now = now))
 
-      recovered.score should be > degraded.score
+      recovered.score(now) should be > degraded.score(now)
     }
 
   it should "score higher for a peer with 20 responses after 10 timeouts than 10 timeouts alone" taggedAs
     (UnitTest, NetworkTest) in {
-      val base = PeerScore.initial
-      val bad = (1 to 10).foldLeft(base)((s, _) => s.recordTimeout)
-      val recovering = (1 to 20).foldLeft(bad)((s, _) => s.recordResponse(512, latencyMs = 100))
-      recovering.score should be > bad.score
+      val base = PeerScore.initial(now)
+      val bad = (1 to 10).foldLeft(base)((s, _) => s.recordTimeout(now))
+      val recovering = (1 to 20).foldLeft(bad)((s, _) => s.recordResponse(512, latencyMs = 100, now = now))
+      recovering.score(now) should be > bad.score(now)
     }
 
   // -----------------------------------------------------------------------
@@ -75,16 +77,17 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
 
   "PeerScore ordering" should "rank a peer with 10 successes above a peer with 10 timeouts" taggedAs
     (UnitTest, NetworkTest) in {
-      val goodPeer = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(1024, 50))
-      val badPeer = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordTimeout)
-      goodPeer.score should be > badPeer.score
+      val goodPeer = (1 to 10).foldLeft(PeerScore.initial(now))((s, _) => s.recordResponse(1024, 50, now = now))
+      val badPeer = (1 to 10).foldLeft(PeerScore.initial(now))((s, _) => s.recordTimeout(now))
+      goodPeer.score(now) should be > badPeer.score(now)
     }
 
   it should "rank a low-latency peer above an equal-response-rate high-latency peer" taggedAs
     (UnitTest, NetworkTest) in {
-      val fast = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(1024, latencyMs = 10))
-      val slow = (1 to 10).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(1024, latencyMs = 1900))
-      fast.score should be > slow.score
+      val fast = (1 to 10).foldLeft(PeerScore.initial(now))((s, _) => s.recordResponse(1024, latencyMs = 10, now = now))
+      val slow =
+        (1 to 10).foldLeft(PeerScore.initial(now))((s, _) => s.recordResponse(1024, latencyMs = 1900, now = now))
+      fast.score(now) should be > slow.score(now)
     }
 
   // -----------------------------------------------------------------------
@@ -106,9 +109,9 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
           responsesReceived = resp,
           requestsTimedOut = timeouts,
           protocolViolations = violations,
-          lastSeen = Some(Instant.now())
+          lastSeen = Some(now)
         )
-        s.score should ((be >= 0.0).and(be <= 1.0))
+        s.score(now) should ((be >= 0.0).and(be <= 1.0))
       }
     }
 
@@ -122,19 +125,19 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
       // The cap ensures a peer is retryable after at most 1 hour.
       val manyBlacklists = PeerScore(
         blacklistCount = 100,
-        lastSeen = Some(Instant.now().minusSeconds(3601))
+        lastSeen = Some(now.minusSeconds(3601))
       )
       // After 1 hour + 1 second, the peer must be retryable regardless of blacklist count
-      manyBlacklists.shouldRetry(60.seconds) shouldBe true
+      manyBlacklists.shouldRetry(60.seconds, now) shouldBe true
     }
 
   it should "not allow retry for a heavily blacklisted peer seen just now" taggedAs
     (UnitTest, NetworkTest) in {
       val manyBlacklists = PeerScore(
         blacklistCount = 10,
-        lastSeen = Some(Instant.now())
+        lastSeen = Some(now)
       )
-      manyBlacklists.shouldRetry(60.seconds) shouldBe false
+      manyBlacklists.shouldRetry(60.seconds, now) shouldBe false
     }
 
   // -----------------------------------------------------------------------
@@ -145,17 +148,17 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     (UnitTest, NetworkTest) in {
       // Start with high-latency history, then receive many low-latency responses.
       // After enough samples, the EMA should be close to the recent low value.
-      val highLatency = (1 to 5).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(100, 2000))
-      val converged = (1 to 30).foldLeft(highLatency)((s, _) => s.recordResponse(100, 10))
+      val highLatency = (1 to 5).foldLeft(PeerScore.initial(now))((s, _) => s.recordResponse(100, 2000, now = now))
+      val converged = (1 to 30).foldLeft(highLatency)((s, _) => s.recordResponse(100, 10, now = now))
       converged.averageLatencyMs.get should be < 500.0
     }
 
   it should "weight recent samples more than historical ones (alpha=0.3)" taggedAs
     (UnitTest, NetworkTest) in {
       // First sample establishes baseline
-      val s0 = PeerScore.initial.recordResponse(1, 1000)
+      val s0 = PeerScore.initial(now).recordResponse(1, 1000, now = now)
       // Second sample with very different latency
-      val s1 = s0.recordResponse(1, 0)
+      val s1 = s0.recordResponse(1, 0, now = now)
       // EMA formula: 0.7 * 1000 + 0.3 * 0 = 700
       s1.averageLatencyMs.get shouldBe 700.0 +- 1.0
     }
