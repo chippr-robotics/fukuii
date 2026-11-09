@@ -330,3 +330,22 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       events.head._2 should include("LinkageError: fatal frame")
     }
   }
+
+  // prism, slice 2 final review: when JLine's hook has closed the terminal, a key read can block in native code that
+  // ignores the interrupt, and stop() waited out its join (1 s on every Ctrl-C). Once the TUI is down there is nothing
+  // to wait for. The join here would be 60 s, so the 10 s await tells them apart.
+  it should "not wait for the loop's thread once the TUI is down" taggedAs (UnitTest) in {
+    val held = new CountDownLatch(1)
+    val config =
+      TuiTestTerminal.config.copy(shutdownTimeoutMs = 60_000, updateIntervalMs = 30_000, reducedMotion = true)
+    withUpdater(config = config) { (updater, tui, tt) =>
+      try
+        tt.holdReads = Some(held)
+        updater.start()
+        eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts should not be empty)
+        tui.shutdown() // the TuiRestore hook got there first
+        Await.result(Future(updater.stop())(using ExecutionContext.global), 10.seconds)
+        updater.isRunning shouldBe false
+      finally held.countDown()
+    }
+  }

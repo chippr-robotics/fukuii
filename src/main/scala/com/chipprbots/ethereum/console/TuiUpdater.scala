@@ -59,7 +59,9 @@ class TuiUpdater(
     thread.filterNot(_ eq Thread.currentThread()).foreach { t =>
       log.info("Stopping TUI updater")
       t.interrupt()
-      t.join(config.shutdownTimeoutMs)
+      // Once the TUI is down (the TuiRestore hook ran first) there is nothing to wait for, and a key read blocked in
+      // native code ignores the interrupt: joining would only add the timeout to the node's shutdown.
+      if tui.isEnabled then t.join(config.shutdownTimeoutMs)
     }
 
   /** Whether the update loop is running. */

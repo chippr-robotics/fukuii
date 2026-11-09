@@ -7,6 +7,7 @@ import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 
 import scala.jdk.CollectionConverters.*
 
@@ -37,6 +38,21 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** When set, a key read returns end of input. */
   @volatile var eofReads: Boolean = false
 
+  /** When set, a key read blocks until the latch is released, ignoring interrupts, as a read blocked in native code
+    * does (`FileInputStream.read0` once JLine's shutdown hook has closed the terminal).
+    */
+  @volatile var holdReads: Option[CountDownLatch] = None
+
+  private def awaitIgnoringInterrupts(latch: CountDownLatch): Unit =
+    var interrupted = false
+    var released = false
+    while !released do
+      try
+        latch.await()
+        released = true
+      catch case _: InterruptedException => interrupted = true
+    if interrupted then Thread.currentThread().interrupt()
+
   private val timeouts = new ConcurrentLinkedQueue[java.lang.Long]()
 
   /** The timeout of every key read so far, in order: the frame loop's pace. */
@@ -48,6 +64,7 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   final private class ModelledReader(inner: NonBlockingReader) extends NonBlockingReader:
     override protected def read(timeout: Long, isPeek: Boolean): Int =
       if !isPeek then timeouts.add(timeout)
+      holdReads.foreach(awaitIgnoringInterrupts)
       if failReads then throw new IOException("simulated input failure")
       if eofReads then NonBlockingReader.EOF
       else
