@@ -280,3 +280,23 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       calls.get should be < 50
     }
   }
+
+  // prism, slice 2 re-review: an interrupt from anywhere but stop() ended the loop with `running` still set, leaving the
+  // terminal in raw mode under a frozen frame, and nothing in the log. stop(), q and d all clear `running` first.
+  it should "give the terminal back, with a WARN, when the loop ends without being asked to" taggedAs (UnitTest) in {
+    val interrupted = new java.util.concurrent.atomic.AtomicBoolean(false)
+    withUpdater(snapshots =
+      () =>
+        // Once, on the loop's own thread: an interrupt that is not stop()'s.
+        if interrupted.compareAndSet(false, true) then Thread.currentThread().interrupt()
+        Some(snapshot)
+    ) { (updater, tui, tt) =>
+      val events = warningsDuring(classOf[TuiUpdater]) {
+        updater.start()
+        eventually(timeout(5.seconds), interval(10.millis))(updater.isRunning shouldBe false)
+      }
+      tui.isEnabled shouldBe false
+      tt.output should include(Tui.ExitAltScreen)
+      events.map(_._1) shouldBe List(Level.WARN)
+    }
+  }

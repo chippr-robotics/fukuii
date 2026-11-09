@@ -102,7 +102,14 @@ class TuiUpdater(
             case _: InterruptedException => false
             case NonFatal(e)             => frameFailed(e)
         if !keepGoing then running = false
-    finally running = false
+    finally
+      // stop(), q, d and the give-up all clear `running` first. Anything else that ends the loop (an interrupt from
+      // elsewhere, a throwable that is not NonFatal) would leave the terminal in raw mode under a frozen frame.
+      if running && tui.isEnabled then
+        Thread.interrupted() // the teardown writes to the terminal; do not hand it an interrupted thread
+        tui.shutdown()
+        log.warn("TUI frame loop ended without being stopped; the terminal and standard logging are restored")
+      running = false
 
   /** A frame failed. A failure before the key wait is retried at once, so a repeated one is given up on: the terminal
     * and the console logs go back, and the node keeps running. The first is logged with its stack, the repeats at
