@@ -25,6 +25,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -32,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
+import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -94,6 +97,7 @@ private[snap] class StubPivotSelectorState(
   def isPoSChain: Boolean = posChain
   var ttd: Option[BigInt] = None
   def terminalTotalDifficulty: Option[BigInt] = ttd
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
   def BootstrapCheckKey: String = "bootstrap-check"
   val forwardedPeerEvents: mutable.ArrayBuffer[Command] = mutable.ArrayBuffer.empty
@@ -583,4 +587,30 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
 
     h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
     h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(header.hash.value)
+  }
+
+  it should "not commit a bootstrapped pivot header whose seal fails, on a proof-of-work chain, and re-select" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.headerChainCheck = new HeaderChainCheck.Validated(PoWBlockHeaderValidator, PowHeaderFixtures.mordorConfig)
+    val badSeal = PowHeaderFixtures.fromGenesis(50).copy(nonce = ByteString(Array.fill(8)(1.toByte)))
+
+    h.kit.run(BootstrapComplete(Some(badSeal)))
+
+    h.module.snapSyncStarts shouldBe 1
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe None
+    h.module.accountRangeStarts shouldBe empty
+  }
+
+  it should "commit a bootstrapped pivot header that passes the header-only rules on a proof-of-work chain" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.headerChainCheck = new HeaderChainCheck.Validated(PoWBlockHeaderValidator, PowHeaderFixtures.mordorConfig)
+    val real = PowHeaderFixtures.fromGenesis(50)
+    h.module.blockchainWriter.storeChainWeight(real.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(real)))
+
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(BigInt(50))
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(real.hash.value)
   }

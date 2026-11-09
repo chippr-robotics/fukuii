@@ -8,6 +8,7 @@ import scala.collection.mutable
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
@@ -24,6 +25,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 private[snap] trait PivotRefresherState:
   var clPivotHint: Option[CLPivotHint]
   def isPoSChain: Boolean
+  def headerChainCheck: HeaderChainCheck
   var pendingPivotRefresh: Option[(BigInt, String)]
   var healRepegNoRootAttempts: Int
   var validationGeneration: Long
@@ -650,8 +652,10 @@ private[snap] trait PivotRefresher
               )
         if !deferForProbe then
 
-          // Gate on ETH/Sepolia only — ETC pivot headers use StdBlockHeaderValidator (PoW).
-          val posValidationOk = if isPoSChain then
+          // Pivot header gate. ETH/Sepolia: field count and the post-merge header-only rules. Other chains: the header
+          // download's header-only rules (proof of work: the block-import validator's, Ethash seal included). The header's
+          // place in the chain is checked against the validated header download at finalisation (PivotAnchor).
+          val pivotHeaderValid = if isPoSChain then
             given bc: BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
             BlockHeader.validateFieldCount(newPivotHeader, bc) match
               case Left(msg) =>
@@ -669,9 +673,18 @@ private[snap] trait PivotRefresher
                     )
                     false
                   case Right(_) => true
-          else true
+          else
+            headerChainCheck.validateHeaderOnly(newPivotHeader) match
+              case Left(err) =>
+                ctx.log.error(
+                  "SNAP pivot header {} failed header validation — aborting pivot commit: {}",
+                  newPivotHeader.idTag,
+                  err
+                )
+                false
+              case Right(_) => true
 
-          if posValidationOk then
+          if pivotHeaderValid then
             ctx.log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
 
             // Update internal state
@@ -744,7 +757,7 @@ private[snap] trait PivotRefresher
             // This ensures that repeated stateless-peer pivot cycles don't prevent the
             // stagnation watchdog from eventually triggering a full restart.
             resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshCommit)
-          // end if posValidationOk
+          // end if pivotHeaderValid
         // end if !deferForProbe
       // end else (stateRoot changed)
     // end else (not StateValidation phase)

@@ -548,6 +548,14 @@ object SyncController:
         )
       check
 
+    /** The pivot bootstrap's header-only gate (extra data, gas used, and the Ethash seal on proof of work): a header
+      * that fails it is not stored, and the peer that served it is blacklisted.
+      */
+    private lazy val snapPivotHeaderCheck: BlockHeader => Option[String] =
+      // Settled here, on the actor thread: the bootstrap runs the function on its ask callbacks' threads.
+      val check = snapHeaderChainCheck
+      header => check.validateHeaderOnly(header).left.toOption.map(_.toString)
+
     /** Load SNAP sync configuration with fallback to defaults */
     private def loadSnapSyncConfig(): SNAPSyncConfig =
       val loaded =
@@ -634,7 +642,8 @@ object SyncController:
                         targetBlock,
                         replyTo = pivotBootstrapAdapter,
                         syncConfig,
-                        preferSnapPeers = true
+                        preferSnapPeers = true,
+                        headerCheck = snapPivotHeaderCheck
                       )
                     )
                     // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -1357,7 +1366,8 @@ object SyncController:
                       newTargetBlock,
                       replyTo = pivotBootstrapAdapter,
                       syncConfig,
-                      preferSnapPeers = true
+                      preferSnapPeers = true,
+                      headerCheck = snapPivotHeaderCheck
                     )
                   )
                   // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.

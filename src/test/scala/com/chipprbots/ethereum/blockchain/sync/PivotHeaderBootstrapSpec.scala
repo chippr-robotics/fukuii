@@ -55,7 +55,8 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       maxAttempts: Int = 1,
       retryDelay: FiniteDuration = 50.millis,
       waitForPeerDelay: FiniteDuration = 50.millis,
-      preferSnapPeers: Boolean = false
+      preferSnapPeers: Boolean = false,
+      headerCheck: BlockHeader => Option[String] = PivotHeaderBootstrap.AcceptAll
   ): ActorRef =
     testKit
       .spawn(
@@ -69,7 +70,8 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           initialRetryDelay = retryDelay,
           maxRetryDelay = retryDelay,
           waitForPeerDelay = waitForPeerDelay,
-          preferSnapPeers = preferSnapPeers
+          preferSnapPeers = preferSnapPeers,
+          headerCheck = headerCheck
         )
       )
       .toClassic
@@ -226,6 +228,32 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     // WaitForPeer fires, bootstrap retries — a fresh peer is now available
     peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
       .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader)))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "not store a header its check rejects: blacklist the peer that served it and ask another peer" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    val rejected = correctHeader.copy(difficulty = com.chipprbots.ethereum.domain.Difficulty(BigInt(1)))
+    mkBootstrap(
+      peersClient,
+      parent,
+      maxAttempts = 3,
+      preferSnapPeers = true,
+      headerCheck = h => Option.when(h.difficulty.value == 1)("difficulty 1")
+    )
+
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(rejected)))
+    peersClient.expectMsg(
+      3.seconds,
+      PeersClient.BlacklistPeer(testPeer.id, BlacklistReason.BlockHeaderValidationFailed)
+    )
+
+    val retry = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    retry.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set(testPeer.id))
+    retry.replyTo ! PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader)))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }

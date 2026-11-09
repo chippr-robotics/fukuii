@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **On proof-of-work chains (ETC, Mordor) the SNAP header download validates every header against its parent, and SNAP
+  finalisation takes the pivot from that validated chain.**
+  - **Header download.** Each header must pass the block-import header rules against its parent (extra data including
+    the DAO rule, timestamp, difficulty, gas used and gas limit, number). The Ethash seal is checked on a sample, as
+    go-ethereum and core-geth do: one header at a random position in every 100 of a response, the last header of every
+    response, and every header in the 100 blocks up to the pivot. A response with a header that fails stores nothing;
+    the peer that served it is blacklisted and the range is asked of another peer. The download continues from the
+    hash of the last header it stored (new `AppStateStorage` key `BackfillBestHeaderHash`). Headers a datadir stored
+    before this release, during a SNAP sync still in progress, are downloaded again from genesis once.
+  - **Pivot.** The pivot's header hash is persisted with its number and state root (new key `SnapSyncPivotHash`).
+    Finalisation waits for the header download to reach the pivot, then requires the pivot to be the downloaded chain's
+    header at that number, with the persisted state root. A pivot that is not is replaced by the downloaded chain's
+    header, and SNAP restarts and heals toward its state root. A pivot persisted without a hash (an older datadir) is
+    checked by its state root.
+  - **Pivot bootstrap.** The pivot header's header-only rules, Ethash seal included, are checked when it arrives; a
+    header that fails is not stored, its peer is blacklisted and another peer is asked.
+  - **Config.** On proof-of-work chains the header hold is always on: `sync.snap-sync.chain-download-enabled` and
+    `defer-chain-backfill-until-state-complete` are forced to `true`, and a config that sets either to `false` gets a
+    warning at SNAP start. As a result, the body and receipt backfill after SNAP now runs on these chains even where
+    the config turned `chain-download-enabled` off.
+  - ETH and Sepolia are unchanged: their header download checks parent links only, as before.
 - **Ops templates publish JSON-RPC on localhost only, keep the Engine API on the internal Docker network, and enable
   only the eth, web3, net and fukuii namespaces.** In every `ops/` compose stack (barad-dur ETC, Sepolia, ETH mainnet,
   multi-network, cirith-ungol, gorgoroth) the JSON-RPC HTTP and WebSocket ports, and the Kong Admin API, are published

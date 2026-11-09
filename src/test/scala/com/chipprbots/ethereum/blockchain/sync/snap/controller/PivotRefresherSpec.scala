@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -80,6 +81,7 @@ private[snap] class StubPivotRefresherState(
   var clPivotHint: Option[CLPivotHint] = None
   var posChain: Boolean = false
   def isPoSChain: Boolean = posChain
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   var pendingPivotRefresh: Option[(BigInt, String)] = None
   var healRepegNoRootAttempts: Int = 0
   var validationGeneration: Long = 0L

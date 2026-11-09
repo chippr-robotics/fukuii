@@ -9,6 +9,7 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -43,6 +44,7 @@ private[snap] trait PivotSelectorState:
 
   /** The configured terminal total difficulty (None on ETC, Mordor), for [[HeadChainWeight.posFromGenesisWeight]]. */
   def terminalTotalDifficulty: Option[BigInt]
+  def headerChainCheck: HeaderChainCheck
   def bigIntReverseOrdering: Ordering[BigInt]
   def BootstrapCheckKey: String
   def peerEventArms: PartialFunction[Command, Behavior[Command]]
@@ -143,7 +145,10 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                 // Don't commit a pivot that peers are unlikely to serve.
                 startSnapSync()
               else
-                // Gate on ETH/Sepolia only — ETC pivot headers use StdBlockHeaderValidator (PoW).
+                // Pivot header gate. ETH/Sepolia: field count and the post-merge header-only rules. Other chains: the
+                // header download's header-only rules (proof of work: the block-import validator's, Ethash seal
+                // included). This gate checks the header alone; its place in the chain is checked against the validated
+                // header download at finalisation (SnapFinalization, PivotAnchor).
                 val pivotHeaderValid =
                   if isPoSChain then
                     given bc: BlockchainConfig =
@@ -164,7 +169,16 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
                             )
                             false
                           case Right(_) => true
-                  else true
+                  else
+                    headerChainCheck.validateHeaderOnly(header) match
+                      case Left(err) =>
+                        ctx.log.error(
+                          "SNAP bootstrap pivot header {} failed header validation — aborting commit, restarting sync: {}",
+                          header.idTag,
+                          err
+                        )
+                        false
+                      case Right(_) => true
 
                 if !pivotHeaderValid then startSnapSync()
                 else

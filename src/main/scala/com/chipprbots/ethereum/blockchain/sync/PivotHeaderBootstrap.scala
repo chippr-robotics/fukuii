@@ -15,10 +15,12 @@ import scala.concurrent.duration.*
 
 import org.slf4j.LoggerFactory
 
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeerWithMinBlockExcluding
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerWithMinBlockExcluding
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.BlacklistPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.NoSuitablePeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
@@ -66,7 +68,15 @@ object PivotHeaderBootstrap:
   final case class Completed(targetBlock: BigInt, header: BlockHeader) extends Reply
   final case class Failed(reason: String) extends Reply
 
-  /** Fetch by block number (the standard pre-merge / TD-driven SNAP path). */
+  /** The default `headerCheck`: every header that matches the target is accepted. */
+  val AcceptAll: BlockHeader => Option[String] = _ => None
+
+  /** Fetch by block number (the standard pre-merge / TD-driven SNAP path).
+    *
+    * @param headerCheck
+    *   run on a header that matches the target before it is stored; `Some(reason)` rejects it: the peer that served it
+    *   is blacklisted (`BlockHeaderValidationFailed`) and the fetch is retried from another peer, consuming an attempt.
+    */
   def apply(
       peersClient: ActorRef[PeersClient.Command],
       blockchainWriter: BlockchainWriter,
@@ -77,7 +87,8 @@ object PivotHeaderBootstrap:
       initialRetryDelay: FiniteDuration = 1.second,
       maxRetryDelay: FiniteDuration = 10.seconds,
       waitForPeerDelay: FiniteDuration = 30.seconds,
-      preferSnapPeers: Boolean = false
+      preferSnapPeers: Boolean = false,
+      headerCheck: BlockHeader => Option[String] = AcceptAll
   ): Behavior[Command] =
     behavior(
       peersClient,
@@ -90,7 +101,8 @@ object PivotHeaderBootstrap:
       initialRetryDelay,
       maxRetryDelay,
       waitForPeerDelay,
-      preferSnapPeers
+      preferSnapPeers,
+      headerCheck
     )
 
   /** Fetch by hash — the CL-driven post-merge path (#1207). Block number is unknown until the header arrives;
@@ -119,7 +131,8 @@ object PivotHeaderBootstrap:
       initialRetryDelay,
       maxRetryDelay,
       waitForPeerDelay,
-      preferSnapPeers
+      preferSnapPeers,
+      AcceptAll
     )
 
   private def behavior(
@@ -133,7 +146,8 @@ object PivotHeaderBootstrap:
       initialRetryDelay: FiniteDuration,
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
-      preferSnapPeers: Boolean
+      preferSnapPeers: Boolean,
+      headerCheck: BlockHeader => Option[String]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -150,7 +164,8 @@ object PivotHeaderBootstrap:
           initialRetryDelay,
           maxRetryDelay,
           waitForPeerDelay,
-          preferSnapPeers
+          preferSnapPeers,
+          headerCheck
         ).running()
       }
     }
@@ -167,7 +182,8 @@ object PivotHeaderBootstrap:
       initialRetryDelay: FiniteDuration,
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
-      preferSnapPeers: Boolean
+      preferSnapPeers: Boolean,
+      headerCheck: BlockHeader => Option[String]
   ):
 
     // Safe from any thread (the `peersClient ?` callbacks run off the actor thread).
@@ -319,7 +335,15 @@ object PivotHeaderBootstrap:
           peerOpt.foreach(p => triedPeers += p.id)
           headerOpt match
             case Some(header) if matchesTarget(header) =>
-              ctx.self ! Fetched(header)
+              headerCheck(header) match
+                case None        => ctx.self ! Fetched(header)
+                case Some(error) =>
+                  // Rejected before it is stored: blacklist the peer that served it (the shared sync blacklist, via
+                  // PeersClient) and retry; the peer is already in `triedPeers`, so the next attempt asks another.
+                  peerOpt.foreach(p => peersClient ! BlacklistPeer(p.id, BlacklistReason.BlockHeaderValidationFailed))
+                  ctx.self ! Retry(
+                    s"header ${header.idTag} from peer ${peerOpt.map(_.id.value).getOrElse("?")} failed validation: $error"
+                  )
             case Some(header) =>
               ctx.self ! Retry(
                 s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
