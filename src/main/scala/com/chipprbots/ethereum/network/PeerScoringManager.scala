@@ -129,8 +129,10 @@ class PeerScoringManager(
   /** Get statistics summary */
   def getStatistics: ScoringStatistics = snapshot().statistics
 
-  /** Apply one event to one peer, atomically, then export if due. */
-  private def update(peerId: PeerId, event: String)(change: (PeerScore, Instant) => PeerScore): Unit =
+  /** Apply one event to one peer, atomically, then export if due. `event` is only for the debug log, so it is by-name:
+    * the text of a response event is not built on every response while debug logging is off.
+    */
+  private def update(peerId: PeerId, event: => String)(change: (PeerScore, Instant) => PeerScore): Unit =
     val now = clock.instant()
     val (before, after) = updateExisting(peerId, now, change).getOrElse(admit(peerId, now, change))
     if log.underlying.isDebugEnabled then logScoreUpdate(peerId, before, after, now, event)
