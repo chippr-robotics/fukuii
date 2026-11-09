@@ -14,10 +14,10 @@
 --------------------------------------------------------------------------------
  * SNAP SYNC                                                                    
    Phase: [S]  Downloading bytecodes & storage                                  
-   Overall  [=====~o..............]@@ 27%   ETA 1h 58m 0s                       
+   Overall  [====~~o..............]@@ 27%   ETA 1h 58m 0s                       
    Accounts ~o[COMPLETE +]@@                34.1M                               
-   Storage  [=======~o............]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702
-   Bytecode [=============~o......]@@ 68%   412.0K / ~600.0K @ 310/s            
+   Storage  [======~~o............]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702
+   Bytecode [============~~o......]@@ 68%   412.0K / ~600.0K @ 310/s            
    Healing  ~o[QUEUED]@@                                                        
    Chain: headers 4.2M / 9.1M . bodies 0 . receipts 0                           
    Elapsed: 2h 11m 0s (phase 1h 8m 0s)                                          
