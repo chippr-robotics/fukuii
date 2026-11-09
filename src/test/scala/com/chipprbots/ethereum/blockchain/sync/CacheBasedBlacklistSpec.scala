@@ -11,6 +11,8 @@ import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.testing.Tags.*
 
 class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers with ParallelTestExecution:
@@ -126,5 +128,56 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers with Paralle
       assert(blacklist.isBlacklisted(peer1) === true)
       assert(blacklist.isBlacklisted(peer2) === true)
       assert(blacklist.isBlacklisted(peer3) === true)
+    }
+  }
+
+  // ---- spec 027 slice 4a: the decorator that feeds the peer scorer ------------------------------------------------
+
+  private class ScoringFixture:
+    val scorer = new PeerScoringManager(java.time.Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC))
+    val underlying: CacheBasedBlacklist = CacheBasedBlacklist.empty(10)
+    val blacklist = new ScoringBlacklist(underlying, scorer)
+
+  "ScoringBlacklist" should {
+    "record a blacklist for a PeerId and still blacklist it" taggedAs (UnitTest) in {
+      val f = new ScoringFixture
+      f.blacklist.add(peer1, 1.minute, reason)
+      f.scorer.getAllScores.keySet mustBe Set(peer1)
+      f.scorer.getScore(peer1).blacklistCount mustBe 1
+      f.underlying.isBlacklisted(peer1) mustBe true
+      f.blacklist.isBlacklisted(peer1) mustBe true
+    }
+    "count every blacklisting of the same PeerId" taggedAs (UnitTest) in {
+      val f = new ScoringFixture
+      f.blacklist.add(peer1, 1.minute, reason)
+      f.blacklist.add(peer1, 1.minute, anotherReason)
+      f.scorer.getScore(peer1).blacklistCount mustBe 2
+    }
+    "record nothing for a PeerAddress" taggedAs (UnitTest) in {
+      val f = new ScoringFixture
+      val address = PeerAddress("10.0.0.1")
+      f.blacklist.add(address, 1.minute, reason)
+      f.scorer.getAllScores mustBe empty
+      f.underlying.isBlacklisted(address) mustBe true
+      f.blacklist.isBlacklisted(address) mustBe true
+    }
+    "delegate isBlacklisted, remove, keys and reasonFor unchanged" taggedAs (UnitTest) in {
+      val f = new ScoringFixture
+      val address = PeerAddress("10.0.0.2")
+      f.blacklist.add(peer1, 1.minute, reason)
+      f.blacklist.add(address, 1.minute, anotherReason)
+
+      f.blacklist.keys mustBe f.underlying.keys
+      f.blacklist.keys mustBe Set(peer1, address)
+      f.blacklist.reasonFor(peer1) mustBe Some(reason.reasonType)
+      f.blacklist.reasonFor(address) mustBe Some(anotherReason.reasonType)
+      f.blacklist.reasonFor(peer2) mustBe None
+      f.blacklist.isBlacklisted(peer2) mustBe false
+
+      f.blacklist.remove(peer1)
+      f.underlying.isBlacklisted(peer1) mustBe false
+      f.blacklist.keys mustBe Set(address)
+      // removal is not an event the scorer hears of: the history stays
+      f.scorer.getScore(peer1).blacklistCount mustBe 1
     }
   }
