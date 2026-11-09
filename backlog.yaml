@@ -1845,13 +1845,16 @@ items:
   - id: B-168
     title: "eth_simulateV1 on ETC: first Olympia block header shape keys off the parent base fee; next base fee skips the 1 gwei floor"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-09
     refs: [B-132]
     links: {}
-    notes: "forge 2026-11-09: EthSimulateService.buildBlockHeader checks parentHeader.baseFee.isDefined, but geth decides by the block number; computeNextBaseFee uses the ETH formula, not BaseFeeCalculator, so with validation: true on ETC the 1 gwei floor and the first-Olympia initial base fee are skipped."
+    notes: |-
+      forge 2026-11-09: EthSimulateService.buildBlockHeader checks parentHeader.baseFee.isDefined, but geth decides by the block number; computeNextBaseFee uses the ETH formula, not BaseFeeCalculator, so with validation: true on ETC the 1 gwei floor and the first-Olympia initial base fee are skipped.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
   - id: B-169
     title: "Sepolia pre-merge block reward: sepolia-chain.conf sets every reward to 0 (since 404de9937); geth pays 2 ETH before block 1450409"
     priority: P2
