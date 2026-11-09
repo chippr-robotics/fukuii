@@ -1909,3 +1909,13 @@ items:
     refs: []
     links: {}
     notes: "#1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff."
+  - id: B-175
+    title: "MODEXP length cap: getLength caps base/exp/mod lengths at 2^31-1 where geth uses uint64; gas differs for lengths >= 2^31"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    refs: [B-133]
+    links: {}
+    notes: "forge, PR 7b: e.g. Byzantium pricing with a 2^40 exponent length is ~8.6e8 gas in fukuii vs ~4.4e11 in geth. No real block gas limit reaches either, but it is a consensus divergence. forge then beacon, bucket C."
