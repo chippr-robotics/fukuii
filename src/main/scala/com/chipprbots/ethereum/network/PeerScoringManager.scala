@@ -65,9 +65,10 @@ class PeerScoringManager(
     lastPublishedMs.set(clock.millis())
     exporter(snapshot())
 
-  /** Export after an update, at most once per `PublishIntervalMs` of the clock. */
-  private def publishIfDue(): Unit =
-    val nowMs = clock.millis()
+  /** Export after an update, at most once per `PublishIntervalMs` of the clock. `now` is the instant the update read.
+    */
+  private def publishIfDue(now: Instant): Unit =
+    val nowMs = now.toEpochMilli
     val last = lastPublishedMs.get()
     if (last == NeverPublished || nowMs - last >= PublishIntervalMs) && lastPublishedMs.compareAndSet(last, nowMs) then
       exporter(snapshot())
@@ -136,7 +137,7 @@ class PeerScoringManager(
     val now = clock.instant()
     val (before, after) = updateExisting(peerId, now, change).getOrElse(admit(peerId, now, change))
     if log.underlying.isDebugEnabled then logScoreUpdate(peerId, before, after, now, event)
-    publishIfDue()
+    publishIfDue(now)
 
   /** Update `peerId` if it is tracked; leave the map unchanged if not. The remapping function may run more than once
     * under contention, so it is pure and the result it recorded last (the one that committed) is returned.
