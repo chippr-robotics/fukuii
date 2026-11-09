@@ -1857,3 +1857,13 @@ items:
     refs: [B-132]
     links: {}
     notes: "forge 2026-11-09: EthSimulateService.buildBlockHeader checks parentHeader.baseFee.isDefined, but geth decides by the block number; computeNextBaseFee uses the ETH formula, not BaseFeeCalculator, so with validation: true on ETC the 1 gwei floor and the first-Olympia initial base fee are skipped."
+  - id: B-169
+    title: "Sepolia pre-merge block reward: sepolia-chain.conf sets every reward to 0 (since 404de9937); geth pays 2 ETH before block 1450409"
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    refs: [B-132]
+    links: {}
+    notes: "beacon review of #1776, 2026-11-09: sepolia-chain.conf:103-105. Import and simulate both diverge from geth for pre-merge Sepolia blocks; a full sync from genesis would mismatch state roots (SNAP hides it). Chesterton first: why 404de9937 set 0. beacon."
