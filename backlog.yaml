@@ -1817,7 +1817,7 @@ items:
       by: fukuii-fc
       agent: beacon
       since: 2026-11-09T07:43:13Z
-      heartbeat: 2026-11-09T07:43:13Z
+      heartbeat: 2026-11-09T07:44:00Z
     notes: beacon plan 2026-11-09, details in private notes. Not TransitionBlockHeaderValidator as is (no ETH difficulty-bomb schedule).
   - id: B-166
     title: "eth_simulateV1 pre-Amsterdam: 4788/2935 writes happen before state overrides (stateDiff on those slots lands after); deposit logs parsed after queue calls"
