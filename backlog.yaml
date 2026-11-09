@@ -1475,20 +1475,17 @@ items:
   - id: B-134
     title: "1727 PR7b: precompile failure reasons (failureReason per contract, geth text on both chains)"
     priority: P2
-    status: claimed
+    status: done
     area: evm
     size: M
     opened: 2026-11-08
+    closed: 2026-11-09
     refs: [B-133]
     links:
       issues: [1727]
+      prs: [1778]
       branch: fix/1727-simulate-precompile-reasons
     depends_on: [B-133]
-    claim:
-      by: fukuii-fc
-      agent: main
-      since: 2026-11-09T07:42:41Z
-      heartbeat: 2026-11-09T07:42:41Z
     notes: "forge impact analysis 2026-11-08; exec stays Option; reasons only via CallErrors. PR7 (B-133) is now 7a: stack counts, create split, transfer pre-check, ETC shortfall."
   - id: B-135
     title: "BLS/KZG precompiles turn a missing native library into a precompile FAILURE: consensus split on a misconfigured node"
