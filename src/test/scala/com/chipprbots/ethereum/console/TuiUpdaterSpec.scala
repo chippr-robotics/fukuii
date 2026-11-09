@@ -317,3 +317,16 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       events.map(_._1) shouldBe List(Level.WARN)
     }
   }
+
+  // prism, slice 2 final review: when a throwable ends the loop, the WARN names it.
+  it should "name the throwable that ended the loop, and give the terminal back" taggedAs (UnitTest) in {
+    withUpdater(snapshots = () => throw new LinkageError("fatal frame")) { (updater, tui, _) =>
+      val events = warningsDuring(classOf[TuiUpdater]) {
+        updater.start()
+        eventually(timeout(5.seconds), interval(10.millis))(updater.isRunning shouldBe false)
+      }
+      tui.isEnabled shouldBe false
+      events.map(_._1) shouldBe List(Level.WARN)
+      events.head._2 should include("LinkageError: fatal frame")
+    }
+  }

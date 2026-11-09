@@ -90,6 +90,8 @@ class TuiUpdater(
       case None => true
 
   private def updateLoop(): Unit =
+    // A throwable that is not NonFatal ends the loop; the finally names it. It is rethrown unchanged.
+    var cause: Option[Throwable] = None
     try
       // An interrupt ends the loop: checkInput keeps it set, and every later key read would fail at once.
       while running && tui.isEnabled && !Thread.currentThread().isInterrupted do
@@ -105,13 +107,24 @@ class TuiUpdater(
               true
             case NonFatal(e) => frameFailed(e)
         if !keepGoing then running = false
+    catch
+      case e: Throwable =>
+        cause = Some(e)
+        throw e
     finally
       // stop(), q, d and the give-up all clear `running` first. Anything else that ends the loop (an interrupt from
       // elsewhere, a throwable that is not NonFatal) would leave the terminal in raw mode under a frozen frame.
       if running && tui.isEnabled then
         Thread.interrupted() // the teardown writes to the terminal; do not hand it an interrupted thread
-        tui.shutdown()
-        log.warn("TUI frame loop ended without being stopped; the terminal and standard logging are restored")
+        // A failed restore is logged, and neither skips `running = false` nor replaces the throwable that ended the loop.
+        try tui.shutdown()
+        catch
+          case NonFatal(e) =>
+            log.error("Error restoring the terminal after the TUI frame loop ended: {}", e.getMessage, e)
+        log.warn(
+          "TUI frame loop ended without being stopped ({}); the terminal and standard logging are restored",
+          cause.fold("interrupted")(_.toString)
+        )
       running = false
 
   /** A frame failed. A failure before the key wait is retried at once, so a repeated one is given up on: the terminal
