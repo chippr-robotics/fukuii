@@ -1,13 +1,5 @@
 package com.chipprbots.ethereum.console
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
-
-import scala.io.Source
-import scala.util.Using
-
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -17,19 +9,13 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** Golden frames of the Overview (spec 027 T013, SC-002, SC-007): the synced, SNAP and regular-sync fixtures at 80×24,
   * 120×40 and 160×48, in both glyph sets, compared on the visible text.
   *
-  * The files under `src/test/resources/tui/golden/` are generated, never edited by hand. To rewrite them after an
-  * intended change, run with the system property in the forked test JVM and review the diff:
-  * {{{
-  * sbt 'set Test / javaOptions += "-Dtui.golden.update=true"' "testOnly *TuiGoldenSpec"
-  * }}}
+  * The files under `src/test/resources/tui/golden/` are generated, never edited by hand ([[TuiGoldenFiles]] says how to
+  * rewrite them). Each frame is at tick 0 under full motion, so a worm that ripples shows its ripple behind the worm.
   */
-class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with TuiGoldenFiles:
 
-  private val update = sys.props.get("tui.golden.update").contains("true")
-  private val sourceDir: Path = Paths.get("src", "test", "resources", "tui", "golden")
-
-  private val tt = new TuiTestTerminal()
-  override def afterAll(): Unit = tt.close()
+  protected val goldenTerminal = new TuiTestTerminal()
+  override def afterAll(): Unit = goldenTerminal.close()
 
   private val renderer = TuiRenderer(TuiConfig.default)
 
@@ -45,27 +31,8 @@ class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
   private def fileName(width: Int, height: Int, state: String, set: GlyphSet): String =
     s"overview-${Tier.of(width, height).toString.toLowerCase}-$state-${glyphsName(set)}.txt"
 
-  /** The frame as a terminal shows it: rendered to escape sequences for an xterm, then stripped back to its text. */
-  private def visibleFrame(s: TuiState, width: Int, height: Int, theme: TuiTheme): String =
-    TuiTestTerminal.visible(renderer.render(s, width, height, theme).map(_.toAnsi(tt.terminal)).mkString("\r\n"))
-
-  private def golden(name: String): Option[String] =
-    Option(getClass.getResourceAsStream(s"/tui/golden/$name")).map(in =>
-      Using.resource(Source.fromInputStream(in, StandardCharsets.UTF_8.name()))(_.mkString)
-    )
-
-  /** Fails naming every row that differs (up to five shown), with the expected and the actual row. */
-  private def compareRows(name: String, expected: Seq[String], actual: Seq[String]): Unit =
-    val differing = (0 until expected.size.max(actual.size)).filter(i => expected.lift(i) != actual.lift(i))
-    if differing.nonEmpty then
-      def show(row: Option[String]) = row.fold("<no row>")(r => s"'$r'")
-      val shown = differing.take(5).map { i =>
-        s"  row $i\n    expected: ${show(expected.lift(i))}\n    actual:   ${show(actual.lift(i))}"
-      }
-      fail(
-        s"$name: ${differing.size} row(s) differ (expected ${expected.size} rows, drew ${actual.size}):\n" +
-          shown.mkString("\n")
-      )
+  private def frameText(s: TuiState, width: Int, height: Int, theme: TuiTheme): String =
+    visibleFrame(renderer.render(s, width, height, theme))
 
   "The golden set" should "cover three tiers, three states and two glyph sets: 18 files" taggedAs (UnitTest) in {
     val names = for (w, h) <- sizes; (s, _) <- states; set <- GlyphSet.values.toSeq yield fileName(w, h, s, set)
@@ -77,26 +44,18 @@ class TuiGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     val name = fileName(width, height, stateName, set)
 
     "The Overview" should s"match $name" taggedAs (UnitTest) in {
-      val frame = visibleFrame(fixture(set), width, height, TuiTheme.Ansi16)
+      val frame = frameText(fixture(set), width, height, TuiTheme.Ansi16)
       val rows = frame.split("\n", -1)
       rows should have size height.toLong
       all(rows.map(r => org.jline.utils.AttributedString(r).columnLength())) shouldBe width
 
-      if update then
-        Files.createDirectories(sourceDir)
-        Files.writeString(sourceDir.resolve(name), frame + "\n", StandardCharsets.UTF_8)
-        info(s"wrote ${sourceDir.toAbsolutePath.resolve(name)}")
-      else
-        golden(name) match
-          case None =>
-            fail(s"missing golden file tui/golden/$name; generate it with -Dtui.golden.update=true (see the scaladoc)")
-          case Some(expected) => compareRows(name, expected.stripSuffix("\n").split("\n", -1).toSeq, rows.toSeq)
+      matchGolden(name, frame)
     }
 
     it should s"carry no colour attribute with the monochrome theme ($name)" taggedAs (UnitTest) in {
       val lines = renderer.render(fixture(set), width, height, TuiTheme.Mono)
-      TuiTestTerminal.colourCodes(lines.map(_.toAnsi(tt.terminal)).mkString("\r\n")) shouldBe empty
+      TuiTestTerminal.colourCodes(lines.map(_.toAnsi(goldenTerminal.terminal)).mkString("\r\n")) shouldBe empty
       // The same text as the coloured frame: the theme changes styles, never the layout.
-      visibleFrame(fixture(set), width, height, TuiTheme.Mono) shouldBe
-        visibleFrame(fixture(set), width, height, TuiTheme.Ansi16)
+      frameText(fixture(set), width, height, TuiTheme.Mono) shouldBe
+        frameText(fixture(set), width, height, TuiTheme.Ansi16)
     }

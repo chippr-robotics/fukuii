@@ -112,7 +112,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     val tui = tt.tui(TuiTestTerminal.config.copy(noColor = true))
     try
       tui.initialize() shouldBe true
-      tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+      tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
       tui.render()
       TuiTestTerminal.colourCodes(tt.lastFrame) shouldBe empty
       TuiTestTerminal.visible(tt.lastFrame) should include("7 / 50")
@@ -122,7 +122,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "draw colour on a colour terminal by default" taggedAs (UnitTest) in withTui() { (tui, tt) =>
-    tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+    tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
     tui.render()
     TuiTestTerminal.colourCodes(tt.lastFrame) should not be empty
   }
@@ -133,7 +133,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     val tui = tt.tui(TuiTestTerminal.config.copy(glyphs = GlyphChoice.Ascii))
     try
       tui.initialize() shouldBe true
-      tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+      tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
       tui.render()
       val text = TuiTestTerminal.visible(tt.lastFrame)
       text should include("~o")
@@ -160,7 +160,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "apply a status snapshot" taggedAs (UnitTest) in withTui() { (tui, tt) =>
-    tui.updateStatus(NodeStatusSnapshot("Connected", 7, 50, 1200, 1500, "Syncing"))
+    tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
     tui.render()
     val text = TuiTestTerminal.visible(tt.lastFrame)
     text should include("7 / 50")
@@ -262,4 +262,88 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     tui.shutdown()
     tui.isEnabled shouldBe false
     tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(true)
+  }
+
+  // Spec 027 FR-010, T036: a frame equal to the last one is not written again.
+  it should "not write a frame that equals the last one, and write a changed one" taggedAs (UnitTest) in withTui() {
+    (tui, tt) =>
+      tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
+      tui.render()
+      val written = tt.framesWritten
+      val bytes = tt.output.length
+      tui.render()
+      tui.render()
+      tt.framesWritten shouldBe written
+      tt.output.length shouldBe bytes
+      tui.updateStatus(TuiFixtures.snapshot(current = 1201, best = 1500, peers = 7))
+      tui.render()
+      tt.framesWritten shouldBe written + 1
+      TuiTestTerminal.visible(tt.lastFrame) should include("1,201")
+  }
+
+  it should "still redraw on 'r' when nothing changed" taggedAs (UnitTest) in withTui() { (tui, tt) =>
+    tui.render()
+    val bytes = tt.output.length
+    tui.handleCommand('r') shouldBe TuiCommand.Continue
+    tt.output.substring(bytes) should include(Tui.ClearScreen)
+    TuiTestTerminal.visible(tt.lastFrame) should include("q Quit")
+  }
+
+  // Spec 027 FR-012: `p` pauses the frame counter; a second `p` resumes the configured motion.
+  it should "pause and resume on 'p'" taggedAs (UnitTest) in withTui() { (tui, _) =>
+    tui.getState.motion shouldBe Motion.Full
+    tui.handleCommand('p') shouldBe TuiCommand.Continue
+    tui.getState.motion shouldBe Motion.Paused
+    val tick = tui.getState.tick
+    tui.nextFrame(None)
+    tui.getState.tick shouldBe tick
+    tui.handleCommand('p')
+    tui.getState.motion shouldBe Motion.Full
+    tui.nextFrame(None)
+    tui.getState.tick shouldBe tick + 1
+  }
+
+  it should "resume to reduced motion when that is the configured motion" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui(TuiTestTerminal.config.copy(reducedMotion = true))
+    try
+      tui.initialize() shouldBe true
+      tui.getState.motion shouldBe Motion.Reduced
+      tui.handleCommand('p')
+      tui.getState.motion shouldBe Motion.Paused
+      tui.handleCommand('p')
+      tui.getState.motion shouldBe Motion.Reduced
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
+  // Spec 027 FR-013: the splash is a view, skipped by any key; the key does nothing else.
+  it should "start on the splash and skip it on any key, consuming the key" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal(80, 24)
+    val tui = tt.tui(TuiTestTerminal.config.copy(splashMs = 3000, animationIntervalMs = 250))
+    try
+      tui.initialize() shouldBe true
+      tui.getState.splashUntilTick shouldBe Some(12L)
+      tui.render()
+      TuiTestTerminal.visible(tt.lastFrame) should include(Splash.SkipHint.trim)
+      tui.handleCommand('q') shouldBe TuiCommand.Continue // skipped the splash; did not quit
+      tui.getState.splashCover(24) shouldBe None
+      tui.render()
+      TuiTestTerminal.visible(tt.lastFrame) should not include Splash.SkipHint.trim
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
+  // B-045 (#1744 follow-up): the banner held the TUI lock through a 1 s Thread.sleep inside initialize().
+  it should "initialize without holding the lock through a splash" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val tui = tt.tui(TuiConfig.default.copy(suppressConsoleLogs = false))
+    try
+      Await.result(Future(tui.initialize()), 600.millis) shouldBe true
+      Await.result(Future(tui.isEnabled), 600.millis) shouldBe true
+    finally
+      tui.shutdown()
+      tt.close()
   }

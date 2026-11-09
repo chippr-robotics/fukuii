@@ -65,3 +65,38 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     SNAPSyncMetrics.setHealingInflationRatio(3.5)
     gaugeValue("snapsync.healing.inflation_ratio.gauge") shouldBe 3.5 +- 1e-9
   }
+
+  // Spec 027 T040: the TUI ages the SNAP sample on its own clock, so it needs the time the sample was recorded.
+  it should "report the time measure recorded the latest progress, and leave latestProgress unchanged" taggedAs UnitTest in {
+    val progress = SyncProgress(
+      phase = SNAPSyncController.SyncPhase.AccountRangeSync,
+      accountsSynced = 1,
+      bytecodesDownloaded = 0,
+      storageSlotsSynced = 0,
+      nodesHealed = 0,
+      elapsedSeconds = 1,
+      phaseElapsedSeconds = 1,
+      accountsPerSec = 1,
+      bytecodesPerSec = 0,
+      slotsPerSec = 0,
+      nodesPerSec = 0,
+      recentAccountsPerSec = 1,
+      recentBytecodesPerSec = 0,
+      recentSlotsPerSec = 0,
+      recentNodesPerSec = 0,
+      phaseProgress = 1,
+      estimatedTotalAccounts = 100,
+      estimatedTotalBytecodes = 0,
+      estimatedTotalSlots = 0,
+      startTime = 0,
+      phaseStartTime = 0
+    )
+    val before = System.currentTimeMillis()
+    SNAPSyncMetrics.measure(progress)
+    val after = System.currentTimeMillis()
+    val at = SNAPSyncMetrics.latestProgressAt
+    at should not be empty
+    at.get should (be >= before and be <= after)
+    SNAPSyncMetrics.latestProgress(maxAgeMillis = 60_000L) shouldBe Some(progress)
+    SNAPSyncMetrics.latestProgressAt shouldBe at // reading does not move it
+  }

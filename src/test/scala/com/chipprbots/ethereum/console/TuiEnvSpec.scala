@@ -95,3 +95,36 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
   it should "read the process environment and system properties" taggedAs (UnitTest) in {
     noException should be thrownBy TuiEnv.system()
   }
+
+  // Spec 027 T051, FR-012, FR-013: FUKUII_TUI_MOTION and FUKUII_TUI_NO_SPLASH.
+  it should "read FUKUII_TUI_MOTION = reduced or full, overriding fukuii.tui.reduced-motion" taggedAs (UnitTest) in {
+    env("FUKUII_TUI_MOTION" -> "reduced").reducedMotion shouldBe Some(true)
+    env("FUKUII_TUI_MOTION" -> " FULL ").reducedMotion shouldBe Some(false)
+    env().reducedMotion shouldBe None
+    env("FUKUII_TUI_MOTION" -> "").reducedMotion shouldBe None
+    env("FUKUII_TUI_MOTION" -> "reduced").applyTo(TuiConfig.default).reducedMotion shouldBe true
+    env("FUKUII_TUI_MOTION" -> "full").applyTo(TuiConfig.default.copy(reducedMotion = true)).reducedMotion shouldBe false
+    env().applyTo(TuiConfig.default.copy(reducedMotion = true)).reducedMotion shouldBe true
+  }
+
+  it should "warn about an invalid FUKUII_TUI_MOTION, naming the variable and the accepted values" taggedAs (UnitTest) in {
+    val e = env("FUKUII_TUI_MOTION" -> "slow")
+    e.reducedMotion shouldBe None
+    e.warnings should have size 1
+    e.warnings.head should include("FUKUII_TUI_MOTION")
+    e.warnings.head should include("slow")
+    e.warnings.head should include("full, reduced")
+    e.warnings.head should include("fukuii.tui.reduced-motion")
+  }
+
+  it should "turn the splash off when FUKUII_TUI_NO_SPLASH is set to a non-empty value" taggedAs (UnitTest) in {
+    env("FUKUII_TUI_NO_SPLASH" -> "1").noSplash shouldBe true
+    env("FUKUII_TUI_NO_SPLASH" -> "").noSplash shouldBe false
+    env().noSplash shouldBe false
+    env("FUKUII_TUI_NO_SPLASH" -> "1").applyTo(TuiConfig.default).splashMs shouldBe 0L
+    env().applyTo(TuiConfig.default).splashMs shouldBe TuiConfig.default.splashMs
+  }
+
+  it should "leave motion alone under NO_COLOR (§4.5)" taggedAs (UnitTest) in {
+    env("NO_COLOR" -> "1").applyTo(TuiConfig.default).reducedMotion shouldBe false
+  }

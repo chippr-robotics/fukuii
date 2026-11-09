@@ -147,43 +147,54 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     state.connectionStatus shouldBe "Initializing"
   }
 
+  // Spec 027 C-3, T039: no wall clock. Every duration is measured on the state's `now`, the time of the last snapshot.
+  private val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+  private val at = TuiState(startTime = now, now = now)
+
   it should "measure sync speed from the first observed block, not from genesis" taggedAs (UnitTest) in {
-    val start = java.time.Instant.now().minusSeconds(100)
     // A node restarted at block 15M that imported 1,000 blocks in 100 s syncs at 10 blocks/s, not 150,000.
-    val state = TuiState.initial
-      .copy(syncBaseline = Some(SyncBaseline(15_000_000L, start)))
+    val state = at
+      .copy(syncBaseline = Some(SyncBaseline(15_000_000L, now.minusSeconds(100))))
       .withBlockInfo(15_001_000L, 15_002_000L)
-    state.syncSpeedBlocksPerSec.get shouldBe 10.0 +- 0.5
-    state.estimatedSyncTimeSeconds.get shouldBe 100L +- 5L
+    state.syncSpeedBlocksPerSec shouldBe Some(10.0)
+    state.estimatedSyncTimeSeconds shouldBe Some(100L)
   }
 
-  it should "record the first non-zero block as the speed baseline" taggedAs (UnitTest) in {
-    val s0 = TuiState.initial.withBlockInfo(0, 100)
+  it should "record the first non-zero block as the speed baseline, at the state's now" taggedAs (UnitTest) in {
+    val s0 = at.withBlockInfo(0, 100)
     s0.syncBaseline shouldBe None
     val s1 = s0.withBlockInfo(10, 100)
-    s1.syncBaseline.map(_.block) shouldBe Some(10L)
-    s1.withBlockInfo(20, 100).syncBaseline.map(_.block) shouldBe Some(10L)
-    // A rewind resets the baseline rather than producing a negative speed.
-    s1.withBlockInfo(5, 100).syncBaseline.map(_.block) shouldBe Some(5L)
+    s1.syncBaseline shouldBe Some(SyncBaseline(10L, now))
+    s1.copy(now = now.plusSeconds(5)).withBlockInfo(20, 100).syncBaseline shouldBe Some(SyncBaseline(10L, now))
+  }
+
+  // C-3: the reset on a rewind that TuiState.scala:69-72 did with Instant.now() now uses the snapshot's time.
+  it should "reset the baseline at the snapshot's time when the chain moves backwards" taggedAs (UnitTest) in {
+    val s1 = at.withBlockInfo(10, 100)
+    val later = now.plusSeconds(30)
+    s1.copy(now = later).withBlockInfo(5, 100).syncBaseline shouldBe Some(SyncBaseline(5L, later))
   }
 
   it should "not estimate before the minimum observation window" taggedAs (UnitTest) in {
-    val state = TuiState.initial.withBlockInfo(10, 100).withBlockInfo(50, 100)
+    val state = at.withBlockInfo(10, 100).copy(now = now.plusSeconds(10)).withBlockInfo(50, 100)
     state.syncSpeedBlocksPerSec shouldBe None
     state.estimatedSyncTimeSeconds shouldBe None
+    val after = state.copy(now = now.plusSeconds(20))
+    after.syncSpeedBlocksPerSec shouldBe Some(2.0) // 40 blocks in 20 s
+    after.estimatedSyncTimeSeconds shouldBe Some(25L)
   }
 
-  // Spec 027 T013: golden frames need the same uptime and speed on every run, so time comes from the state's clock.
-  it should "read uptime, speed and the speed baseline from its clock" taggedAs (UnitTest) in {
-    val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
-    val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
-    val state = TuiState(startTime = now.minusSeconds(3_725), clock = clock)
-    state.uptimeSeconds shouldBe 3_725L
-    state.withBlockInfo(10, 100).syncBaseline shouldBe Some(SyncBaseline(10, now))
-    val syncing =
-      state.copy(syncBaseline = Some(SyncBaseline(1_000, now.minusSeconds(100)))).withBlockInfo(2_000, 3_000)
-    syncing.syncSpeedBlocksPerSec shouldBe Some(10.0)
-    syncing.estimatedSyncTimeSeconds shouldBe Some(100L)
+  it should "measure uptime from its start to its now" taggedAs (UnitTest) in {
+    at.copy(now = now.plusSeconds(3_725)).uptimeSeconds shouldBe 3_725L
+    at.uptimeSeconds shouldBe 0L
+    TuiState.initial.uptimeSeconds shouldBe 0L // no snapshot, no start: nothing to measure
+  }
+
+  it should "take its now from each snapshot" taggedAs (UnitTest) in {
+    val polled = at.withStatus(TuiFixtures.snapshot(current = 10, best = 20, now = now.plusSeconds(61)))
+    polled.now shouldBe now.plusSeconds(61)
+    polled.uptimeSeconds shouldBe 61L
+    polled.syncBaseline shouldBe Some(SyncBaseline(10L, now.plusSeconds(61)))
   }
 
   it should "start in the emoji glyph set" taggedAs (UnitTest) in {
@@ -191,10 +202,17 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "apply a node status snapshot" taggedAs (UnitTest) in {
-    val state = TuiState.initial.withStatus(NodeStatusSnapshot("Connected", 4, 25, 10, 20, "Syncing"))
-    (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 25))
+    val state = TuiState.initial.withStatus(TuiFixtures.snapshot(current = 10, best = 20, peers = 4))
+    (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 50))
     (state.currentBlock, state.bestBlock, state.syncStatus) shouldBe ((10L, 20L, "Syncing"))
     state.snapSyncState shouldBe None
+  }
+
+  it should "start the frame counter at 0 with full motion and no splash or celebration" taggedAs (UnitTest) in {
+    val s = TuiState.initial
+    (s.tick, s.motion, s.splashUntilTick, s.celebrationStartedTick, s.celebrated) shouldBe
+      ((0L, Motion.Full, None, None, false))
+    s.lastAdvanceAt shouldBe None
   }
 
 /** Tests for NodeSettings. */

@@ -58,6 +58,9 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
   /** A [[Tui]] on this terminal, with [[processOutput]] as the process stream behind it. */
   def tui(config: TuiConfig = TuiTestTerminal.config): Tui = new Tui(config, () => terminal, _ => Some(processOutput))
 
+  /** Frames written so far: each frame starts at the home position (spec 027 T036 counts them). */
+  def framesWritten: Int = output.split(java.util.regex.Pattern.quote(Tui.CursorHome), -1).length - 1
+
   /** Text drawn by the most recent frame (everything after the last cursor-home). */
   def lastFrame: String =
     val out = output
@@ -68,8 +71,9 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
     terminal.close()
 
 object TuiTestTerminal:
-  /** Config for tests: no banner pause, and the test logger's console appender left alone. */
-  val config: TuiConfig = TuiConfig(bannerDisplayDurationMs = 0, suppressConsoleLogs = false, updateIntervalMs = 20)
+  /** Config for tests: no splash, fast frames at either pace, and the test logger's console appender left alone. */
+  val config: TuiConfig =
+    TuiConfig(splashMs = 0, suppressConsoleLogs = false, updateIntervalMs = 20, animationIntervalMs = 20)
 
   /** Strip ANSI escape sequences (CSI and charset designation) and carriage returns, leaving the visible text.
     *

@@ -118,6 +118,41 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     s.connectionStatus shouldBe "Unresponsive (peer manager)"
     s.syncStatus shouldBe "Unresponsive (sync controller)"
     s.currentBlock shouldBe 5
+    // Spec 027 FR-011: each source carries its own freshness.
+    s.peers shouldBe Sourced.Unresponsive("no reply within 100ms")
+    s.sync shouldBe Sourced.Unresponsive("no reply within 100ms")
+  }
+
+  it should "stamp each snapshot with its clock, and each answer Fresh at that time" taggedAs (UnitTest) in {
+    val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+    val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
+    val s = new TuiStatusProbe(
+      spawn(peerManager(PeerActor.Status.Handshaked)),
+      spawn(syncController(SyncProtocol.Status.SyncDone)),
+      () => 9,
+      50,
+      () => None,
+      300.millis,
+      clock = clock
+    )(using system.scheduler)()
+    s.now shouldBe now
+    s.peers shouldBe Sourced.Fresh(1, now)
+    s.sync shouldBe Sourced.Fresh(SyncSample(9, 9, "Synced"), now)
+  }
+
+  // Spec 027 T050: the sample's own time, for the SNAP sample-age alert (research §6).
+  it should "carry the time the SNAP sample was recorded" taggedAs (UnitTest) in {
+    val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 100), None)
+    val s = new TuiStatusProbe(
+      spawn(peerManager()),
+      spawn(syncController(syncing)),
+      () => 0,
+      50,
+      () => Some(snapSample),
+      300.millis,
+      snapSampledAt = () => Some(1_762_516_800_000L)
+    )(using system.scheduler)()
+    s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(java.time.Instant.ofEpochMilli(1_762_516_800_000L))
   }
 
   it should "show SNAP progress only while syncing" taggedAs (UnitTest) in {
@@ -176,7 +211,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       val s = TuiStatusProbe.toSnapSyncState(p)
       withClue(s"$phase at $phaseProgress%: ") {
         s.overall shouldBe p.globalProgress
-        val frame = renderer.render(TuiState.initial.withSnapSyncState(s), 80, 24).map(_.toString)
+        // Without motion: the log's bar has no ripple.
+        val state = TuiState.initial.withSnapSyncState(s).copy(motion = Motion.Reduced)
+        val frame = renderer.render(state, 80, 24).map(_.toString)
         val overallRow = frame.find(_.startsWith("   Overall")).get
         overallRow.drop(12).trim shouldBe WormToBrainBar.renderKnown(p.globalProgress)
       }

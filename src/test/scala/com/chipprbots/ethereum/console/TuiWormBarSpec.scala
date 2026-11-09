@@ -15,17 +15,24 @@ class TuiWormBarSpec extends AnyFlatSpec with Matchers:
   private val states =
     fractions.map(WormProgress.Known(_)) ++ Seq(WormProgress.Queued, WormProgress.Active, WormProgress.Complete)
 
+  /** The static bar: no ripple or pulse, as the log draws it. */
   private def text(budget: Int, p: WormProgress, g: TuiGlyphs): String =
-    WormBar.render(budget, p, tick = 0L, g, theme).toString
+    WormBar.render(budget, p, tick = 0L, g, theme, Motion.Reduced).toString
 
-  "WormBar" should "be exactly the budget wide for budgets 8 to 80, in both sets" taggedAs (UnitTest) in {
-    for g <- sets; budget <- 8 to 80; p <- states do
-      withClue(s"${g.set} budget=$budget $p: ")(WormBar.render(budget, p, 0L, g, theme).columnLength() shouldBe budget)
+  private val motions = Seq(Motion.Full, Motion.Reduced, Motion.Paused)
+
+  "WormBar" should "be exactly the budget wide for budgets 8 to 80, in both sets, at every tick and motion" taggedAs (
+    UnitTest
+  ) in {
+    for g <- sets; budget <- 8 to 80; p <- states; tick <- 0L to 11L; motion <- motions; stalled <- Seq(false, true) do
+      withClue(s"${g.set} budget=$budget $p tick=$tick $motion stalled=$stalled: ")(
+        WormBar.render(budget, p, tick, g, theme, motion, stalled).columnLength() shouldBe budget
+      )
   }
 
   it should "stay exact below 8 columns, down to 0" taggedAs (UnitTest) in {
-    for g <- sets; budget <- 0 to 7; p <- states do
-      WormBar.render(budget, p, 0L, g, theme).columnLength() shouldBe budget
+    for g <- sets; budget <- 0 to 7; p <- states; tick <- 0L to 3L; stalled <- Seq(false, true) do
+      WormBar.render(budget, p, tick, g, theme, Motion.Full, stalled).columnLength() shouldBe budget
   }
 
   it should "put the worm at (p × (slots − 1)).toInt, as WormToBrainBar.renderKnown does" taggedAs (UnitTest) in {
@@ -48,18 +55,19 @@ class TuiWormBarSpec extends AnyFlatSpec with Matchers:
       )
   }
 
+  // Slice 2: [ACTIVE] is padded to the 11 columns of its pulse's widest frame, [ACTIVE...] (research §4.1).
   it should "give [QUEUED], [ACTIVE] and [COMPLETE ✓] fixed widths, the same in both sets" taggedAs (UnitTest) in {
-    def label(p: WormProgress, g: TuiGlyphs) = WormBar.render(40, p, 0L, g, theme).toString.trim
+    def label(p: WormProgress, g: TuiGlyphs) = WormBar.render(40, p, 0L, g, theme, Motion.Reduced).toString.trim
     for g <- sets do
       label(WormProgress.Queued, g) shouldBe s"${g.worm.text}[QUEUED]${g.brain.text}"
-      label(WormProgress.Active, g) shouldBe s"${g.worm.text}[ACTIVE]${g.brain.text}"
+      label(WormProgress.Active, g) shouldBe s"${g.worm.text}[ACTIVE]   ${g.brain.text}"
       label(WormProgress.Complete, g) shouldBe s"${g.worm.text}[COMPLETE ${g.check.text}]${g.brain.text}"
     for p <- Seq(WormProgress.Queued, WormProgress.Active, WormProgress.Complete) do
       val widths = sets.map(g => org.jline.utils.AttributedString(label(p, g)).columnLength())
       withClue(p.toString)(widths.distinct should have size 1)
-    WormBar.render(40, WormProgress.Queued, 0L, TuiGlyphs.Emoji, theme).toString.trim shouldBe
+    WormBar.render(40, WormProgress.Queued, 0L, TuiGlyphs.Emoji, theme, Motion.Reduced).toString.trim shouldBe
       WormToBrainBar.renderUnknown(WormToBrainBar.WormState.Queued)
-    WormBar.render(40, WormProgress.Complete, 0L, TuiGlyphs.Emoji, theme).toString.trim shouldBe
+    WormBar.render(40, WormProgress.Complete, 0L, TuiGlyphs.Emoji, theme, Motion.Reduced).toString.trim shouldBe
       WormToBrainBar.renderUnknown(WormToBrainBar.WormState.Complete)
   }
 
@@ -84,8 +92,15 @@ class TuiWormBarSpec extends AnyFlatSpec with Matchers:
       all(bar.map(_.toInt)) should be < 0x7f
   }
 
-  it should "not move with the tick: slice 1 draws no motion" taggedAs (UnitTest) in {
-    for g <- sets; p <- states do
-      val frames = (0L to 11L).map(t => WormBar.render(50, p, t, g, theme))
+  it should "not move with the tick under reduced motion or pause" taggedAs (UnitTest) in {
+    for g <- sets; p <- states; motion <- Seq(Motion.Reduced, Motion.Paused) do
+      val frames = (0L to 11L).map(t => WormBar.render(50, p, t, g, theme, motion))
       frames.distinct should have size 1
+  }
+
+  it should "move with the tick under full motion only where it ripples or pulses" taggedAs (UnitTest) in {
+    for g <- sets; p <- states do
+      val frames = (0L to 11L).map(t => WormBar.render(50, p, t, g, theme, Motion.Full))
+      val moves = WormBar.animates(50, p, g, Motion.Full, stalled = false)
+      withClue(s"${g.set} $p: ")(frames.distinct.size > 1 shouldBe moves)
   }
