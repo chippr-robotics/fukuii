@@ -469,17 +469,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write protection`, and so on. Stack-underflow counts and precompile failure reasons
   followed (B-133, below).
 - **VM and precompile errors read as go-ethereum v1.17.9's (#1727, B-133). Both chains.** `eth_call`, `eth_estimateGas`,
-  `eth_createAccessList`, `eth_simulateV1` and GraphQL print go-ethereum's texts. Gas, state roots and receipts do not
-  change, and tracers still print the error's name.
+  `eth_createAccessList` and `eth_simulateV1` print go-ethereum's texts, on ETC too (where core-geth words a few BN254
+  errors differently). Gas, state roots and receipts do not change. Tracers print the error's name, so two names
+  change there: a failed code deposit reads `MaxCodeSizeExceeded` or `CodeStoreOutOfGas` (it read `OutOfGas`), and a
+  call that cannot pay for a precompile input that always fails reads `OutOfGas` (it read `PreCompiledContractFail`).
   - **Stack:** `stack underflow (1 <=> 2)` and `stack limit reached 1024 (1023)` carry go-ethereum's counts.
   - **Contract creation:** `invalid code: must not begin with 0xef`, `max code size exceeded` and `contract creation
     code storage out of gas`, checked in go-ethereum's order (from Amsterdam the size before the deposit). On ETC
     before Homestead, where a creation that cannot pay its code deposit succeeds without code, `eth_call`,
-    `eth_createAccessList`, GraphQL and the estimator's ceiling report -32000 `contract creation code storage out of
-    gas`, as go-ethereum does.
+    `eth_createAccessList` and the estimator's ceiling report -32000 `contract creation code storage out of gas`, as
+    go-ethereum does; GraphQL reports the call as failed.
   - **Precompiles:** a failure states its reason (`invalid input length`, `invalid fp.Element encoding`, `point is not
     on curve`, `g1 point is not on correct subgroup`, `invalid final flag`, `mismatched versioned hash`, and so on),
-    and `MODEXP` above the EIP-7823 limit says `one or more of base/exponent/modulus length exceeded 1024 bytes`.
+    and `MODEXP` above the EIP-7823 limit (from Osaka; on ETC from Olympia) says `one or more of base/exponent/modulus
+    length exceeded 1024 bytes`.
     Inputs that always fail are priced as go-ethereum prices them, so the error is the one it reports: `MODEXP` above
     the limit and `BLAKE2F` with a bad final flag are `out of gas` when the call cannot pay their price, and an empty
     BLS12-381 MSM is `invalid input length`. Such a call consumes all its gas either way.
