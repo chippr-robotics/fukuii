@@ -2082,3 +2082,13 @@ items:
     refs: []
     links: {}
     notes: "Find the test fixtures that create temp dirs without cleanup and delete them in afterAll. Workaround meanwhile: run tests with -Djava.io.tmpdir pointing at a disk-backed dir."
+  - id: B-188
+    title: E2EHandshakeSpec 'peers at genesis' fails whenever regular sync works; FastSyncBranchResolverActorSpec flakes under sbt pp
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-09
+    refs: [027 slice 4a pp run 2026-11-09]
+    links: {}
+    notes: "E2EHandshakeSpec.scala:317 asserts the second peer has NOT synced within 3 s. FastSyncBranchResolverActorSpec: a different case fails on each run (7 s expectMsg timeouts), seen on origin/staging 5c77ecbbc. Neither is gated in CI (nightly only / SyncTest tier); see B-018, B-019."
