@@ -77,6 +77,17 @@ case class BlockchainConfig(
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
 
+  /** go-ethereum's `ChainConfig.IsPostMerge` (params/config.go, v1.17.9): a block at `blockNumber` and `timestamp` is
+    * taken to be after the merge on a chain merged at genesis (terminal total difficulty 0), from the merge netsplit
+    * block, or from Shanghai. A fact of the configuration, for a block that has no header to ask yet (eth_simulateV1
+    * building one); block import asks the header (`BlockHeader.isPoS`). False on every ETC chain: none declares a
+    * terminal total difficulty, a netsplit block (`Long.MaxValue` when absent) or a Shanghai timestamp.
+    */
+  def isPostMerge(blockNumber: BigInt, timestamp: Timestamp): Boolean =
+    terminalTotalDifficulty.contains(BigInt(0)) ||
+      blockNumber >= forkBlockNumbers.mergeNetsplitBlockNumber ||
+      isShanghaiTimestamp(timestamp)
+
   def isShanghaiTimestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.shanghaiTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 

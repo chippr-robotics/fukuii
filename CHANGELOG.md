@@ -529,6 +529,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an empty request contract before any call (`SYSTEM_CONTRACT_EMPTY`), and `RequestSystemCallsBlockImportPinSpec`
   pins the requests, requests hash, receipts and state root of Prague, Osaka and Amsterdam blocks on ETH, and of an
   Olympia block on ETC, as recorded before the change.
+- **`eth_simulateV1` pays a simulated block what block import pays it (#1727, B-132). Both chains.** On ETC a
+  simulated block was paid the first era's 5 ETC at any height, not ECIP-1017's era reward (4 ETC from block 5,000,001
+  on ETC and 2,000,001 on Mordor, and 20% less each era after). An Olympia block got zero difficulty and no reward at
+  all, its base fee was not credited to the treasury, and DIFFICULTY read zero. A simulated block now takes its
+  difficulty as go-ethereum's `makeHeaders` gives it: the previous block's, or zero after the merge (geth's
+  `IsPostMerge`, which no ETC chain ever reaches). A block with a difficulty is paid by the code block import pays it
+  with (`BlockRewards`): the era reward, and from Olympia ECIP-1111's base fee times gas used to the treasury, before
+  the miner. ETC blocks therefore keep their proof-of-work difficulty at every fork and take a `difficulty` override at
+  Olympia too. On ETH, a simulated block after London and before the merge now keeps its parent's difficulty and is paid
+  2 ETH, as in go-ethereum, where it had zero difficulty and no reward. Blocks before London and after the merge are
+  unchanged. core-geth has no `eth_simulateV1`, so on ETC the reference is block import: `EthSimulateEtcRewardSpec`
+  checks a simulated block's state root against `BlockPreparator`'s for the same header and transactions, on Mordor
+  and, at Olympia, on ETC and Mordor. Block import is unchanged: `BlockRewardImportPinSpec` pins the miner, ommer and
+  treasury balances and the state root of blocks with two ommers in several ETC and Mordor eras, at Olympia, and on
+  ETH before and after the merge, as recorded before the change.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -652,8 +667,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
     length`).
 
-  On ETC, simulated blocks pay ETH's 5/3/2 PoW reward, not ECIP-1017. The differences listed do not touch block import
-  or mining.
+  The differences listed do not touch block import or mining.
 - **Path-scheme ETH chains copy the whole state into a second store after a SNAP sync, and the node does not follow
   the chain until the copy ends (removal planned in spec 018).** This applies only when SNAP sync is switched on
   (`fukuii.sync.do-snap-sync = true`); the shipped Sepolia, mainnet, Ephemery and Platåberget configs sync by

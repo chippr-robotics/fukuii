@@ -30,15 +30,15 @@ class BlockPreparator(
 
   // NOTE We need a lazy val here, not a plain val, otherwise a mocked BlockChainConfig
   //      in some irrelevant test can throw an exception.
-  private[ledger] def blockRewardCalculator(implicit blockchainConfig: BlockchainConfig) = new BlockRewardCalculator(
-    blockchainConfig.monetaryPolicyConfig,
-    blockchainConfig.forkBlockNumbers.byzantiumBlockNumber,
-    blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
-  )
+  private[ledger] def blockRewardCalculator(implicit blockchainConfig: BlockchainConfig): BlockRewardCalculator =
+    BlockRewards.calculator
 
   /** This function updates the state in order to pay rewards based on YP section 11.3:
     *   1. Miner receives 100% of the block reward 2. Miner receives a reward for the inclusion of ommers 3. Ommer
     *      miners receive a reward for their inclusion in this block
+    *
+    * From Olympia, ECIP-1111's treasury credit comes first. The rewards themselves are [[BlockRewards.payProofOfWork]],
+    * which eth_simulateV1 pays too.
     *
     * @param block
     *   the block being processed
@@ -55,62 +55,7 @@ class BlockPreparator(
     // BlockExecution.processWithdrawals after payBlockReward returns; applying them here
     // too would double-credit every withdrawal and break state-root validation.
     if block.header.isPoS then worldStateProxy
-    else
-      val blockNumber = block.header.number.value
-      val minerRewardForBlock = blockRewardCalculator.calculateMiningRewardForBlock(blockNumber)
-      val minerRewardForOmmers =
-        blockRewardCalculator.calculateMiningRewardForOmmers(blockNumber, block.body.uncleNodesList.size)
-      val minerAddress = Address(block.header.beneficiary)
-
-      val minerReward = minerRewardForOmmers + minerRewardForBlock
-
-      // ECIP-1111: Treasury credit BEFORE miner/ommer rewards (spec order per ECIP-1111)
-      val worldAfterTreasury = creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldStateProxy)
-
-      val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldAfterTreasury)
-      log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
-
-      block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
-        val ommerAddress = Address(ommer.beneficiary)
-        val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number.value)
-
-        log.debug(
-          "Paying block {} reward of {} to ommer with account address {}",
-          blockNumber,
-          ommerReward,
-          ommerAddress
-        )
-        increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
-      }
-
-  /** ECIP-1111: Credit baseFee * gasUsed to treasury. Applied BEFORE miner and ommer rewards per ECIP-1111 spec. */
-  private def creditBaseFeeToTreasury(
-      blockHeader: BlockHeader,
-      treasuryAddress: Address,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    val isOlympiaActivated = blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if !isOlympiaActivated then world
-    else
-      if treasuryAddress == Address(0) && blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC
-      then
-        throw new IllegalStateException(
-          s"OLYMPIA SAFETY: treasury address is zero at block ${blockHeader.number}. " +
-            "Set treasury-address in chain config before activating Olympia."
-        )
-
-      blockHeader.baseFee match
-        case Some(baseFee) if baseFee > 0 && blockHeader.gasUsed > GasAmount.Zero && treasuryAddress != Address(0) =>
-          val treasuryCredit = baseFee * blockHeader.gasUsed.value
-          log.debug(
-            "Crediting baseFee revenue {} (baseFee={} * gasUsed={}) to treasury {}",
-            treasuryCredit,
-            baseFee,
-            blockHeader.gasUsed,
-            treasuryAddress
-          )
-          increaseAccountBalance(treasuryAddress, UInt256(treasuryCredit))(world)
-        case _ => world
+    else BlockRewards.payProofOfWork(block.header, block.body.uncleNodesList, worldStateProxy)
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68). `tx.gasPrice` is `maxFeePerGas` for the
     * dynamic-fee types, the price go-ethereum's `buyGas` checks the balance against.
