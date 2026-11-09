@@ -1845,3 +1845,13 @@ items:
     refs: [B-132]
     links: {}
     notes: "forge 2026-11-09, read from code only: consensus/blocks/BlockGeneratorSkeleton.scala:42-68 defaultPrepareHeader never sets baseFee; prepareBlock pays the treasury against header gasUsed still 0 (:61, :100 → BlockPreparator.prepareBlock), so a mined Olympia block lacks a base fee and its state root omits the treasury credit that import adds. Must be fixed before Olympia is scheduled. Spec 018 EG-6 would catch it. forge then beacon."
+  - id: B-168
+    title: "eth_simulateV1 on ETC: first Olympia block header shape keys off the parent base fee; next base fee skips the 1 gwei floor"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-132]
+    links: {}
+    notes: "forge 2026-11-09: EthSimulateService.buildBlockHeader checks parentHeader.baseFee.isDefined, but geth decides by the block number; computeNextBaseFee uses the ETH formula, not BaseFeeCalculator, so with validation: true on ETC the 1 gwei floor and the first-Olympia initial base fee are skipped."
