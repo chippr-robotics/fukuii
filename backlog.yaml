@@ -1899,3 +1899,13 @@ items:
     refs: [B-133]
     links: {}
     notes: "conduit review of #1777."
+  - id: B-174
+    title: "CI hive jobs: cache the sbt tarball and back off longer; a GitHub 504 on sbt download fails rpc-compat with zero results"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-09
+    refs: []
+    links: {}
+    notes: "#1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff."
