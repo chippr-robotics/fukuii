@@ -1388,21 +1388,17 @@ items:
   - id: B-128
     title: "1727 PR2: simulate override decoding via CallOverridesJson, case-insensitive keys, beaconRoot"
     priority: P1
-    status: review
+    status: done
     area: rpc
     size: M
     opened: 2026-11-08
+    closed: 2026-11-09
     refs: [B-006]
     links:
       issues: [1727]
       prs: [1770]
       spec: .local/docs/planning/1727-s2-design
       branch: fix/1727-simulate-override-decoding
-    claim:
-      by: fukuii-fc
-      agent: conduit
-      since: 2026-11-08T23:11:46Z
-      heartbeat: 2026-11-08T23:44:13Z
     notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
   - id: B-129
     title: "1727 PR3: precompile overrides (active set incl 0x0a, entry disables, last move wins); shared with eth_call"
