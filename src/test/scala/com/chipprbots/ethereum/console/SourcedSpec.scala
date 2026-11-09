@@ -37,7 +37,8 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
 
   it should "be Unresponsive when a source never answered" taggedAs (UnitTest) in {
     next(None, Poll.Missed, 0) shouldBe Unresponsive(missed)
-    next(Some(Unresponsive("earlier")), Poll.Missed, 1) shouldBe Unresponsive(missed)
+    // The first reason stays: it is the one that says what went wrong (prism, slice 2 review).
+    next(Some(Unresponsive("earlier")), Poll.Missed, 1) shouldBe Unresponsive("earlier")
   }
 
   it should "be Unresponsive on a failure, whatever came before" taggedAs (UnitTest) in {

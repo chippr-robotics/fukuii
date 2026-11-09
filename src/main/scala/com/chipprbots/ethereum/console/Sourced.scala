@@ -40,7 +40,7 @@ object Sourced:
 
   /** The freshness after a poll: Fresh on an answer; Stale on a miss by a source that answered within
     * `unresponsiveAfter`; Unresponsive on a failure, on a miss by a source that never answered, or once a stale source
-    * has been silent for longer than `unresponsiveAfter`.
+    * has been silent for longer than `unresponsiveAfter`. A miss keeps an Unresponsive source's first reason.
     *
     * @param missed
     *   the reason a source that never answered gives, for example "no reply within 500ms"
@@ -62,4 +62,5 @@ object Sourced:
         previous match
           case Some(Fresh(last, at))        => staleOrSilent(last, at)
           case Some(Stale(last, since))     => staleOrSilent(last, since)
-          case Some(Unresponsive(_)) | None => Unresponsive(missed)
+          case Some(Unresponsive(reason))  => Unresponsive(reason) // the first reason stays
+          case None                         => Unresponsive(missed)
