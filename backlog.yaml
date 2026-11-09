@@ -1930,3 +1930,13 @@ items:
     refs: [B-133]
     links: {}
     notes: "conduit review of #1778: UnexplainedFailure (precompiled contract failed) fires when exec fails but geth checks pass (e.g. Besu lib rejects what geth accepts). Log contract name and input length/hash, not the input; counter json.rpc.precompile.unexplained.counter. Also no RPC-level test for estimateGas/createAccessList/simulateV1 -32015 on a precompile failure (precedents TypedCallPathSpec:607, EthSimulateGethParitySpec:422)."
+  - id: B-177
+    title: "Hive ETH chains: BLS12-381 and P256VERIFY precompiles are active from London (getContracts lacks the !isEthereum guard on the Olympia branch)"
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    refs: [B-133]
+    links: {}
+    notes: "beacon review of #1778: PrecompiledContracts.getContracts (~:192) has no isEthereum guard on the Olympia branch (ModExp has one); hive/fukuii/fukuii.sh:141 maps London to olympiaBlockNumber, so on hive ETH configs 0x0b-0x11 and 0x100 are active London..Prague. Pre-existing. beacon then forge."
