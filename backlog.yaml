@@ -426,7 +426,7 @@ items:
   - id: B-039
     title: "Spec 027 slice 2: tick, motion, non-blocking loop"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: M
     opened: 2026-11-07
@@ -435,6 +435,12 @@ items:
       spec: specs/027-tui-dashboard
       branch: feat/027-s2-motion
     depends_on: [B-038]
+    claim:
+      by: dev-node
+      agent: general-purpose
+      since: 2026-11-09T18:55:26Z
+      heartbeat: 2026-11-09T18:55:26Z
+      branch: feat/027-s2-motion
   - id: B-040
     title: "Spec 027 slice 3: views, layout, alerts"
     priority: P2
