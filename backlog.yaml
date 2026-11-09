@@ -1813,3 +1813,13 @@ items:
     refs: []
     links: {}
     notes: "forge, 2026-11-09: the current code throws for difficulty 1 (2^256 overflows 32 bytes), divides by zero for 0, and truncates above 2^63 (difficulty.toLong). Block import never reaches it (the parent difficulty rule runs first). Consensus code: forge then beacon, bucket C, test vectors."
+  - id: B-165
+    title: "ETH SNAP header chain: TTD-chain check mode (link-only pre-merge, PoS validate post-merge, transition rule); authenticate refreshed pivots from the CL head hash"
+    priority: P1
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-09
+    refs: [B-160]
+    links: {}
+    notes: beacon plan 2026-11-09, details in private notes. Not TransitionBlockHeaderValidator as is (no ETH difficulty-bomb schedule).
