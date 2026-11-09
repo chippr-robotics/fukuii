@@ -130,7 +130,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   // Spec 027 FR-008: the glyph set the config resolved is the one drawn.
   it should "draw the ASCII glyph set when the config selects it" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal()
-    val tui = tt.tui(TuiTestTerminal.config.copy(glyphs = GlyphChoice.Ascii))
+    val tui = tt.tui(TuiTestTerminal.config.copy(glyphs = GlyphSet.Ascii))
     try
       tui.initialize() shouldBe true
       tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))

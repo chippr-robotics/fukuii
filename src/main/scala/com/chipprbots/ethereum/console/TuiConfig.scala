@@ -3,7 +3,8 @@ package com.chipprbots.ethereum.console
 import com.typesafe.config.Config as TypesafeConfig
 import com.typesafe.config.ConfigException
 
-/** Configuration for the TUI module.
+/** The TUI's configuration as it runs: `fukuii.tui` ([[TuiSettings]]) with the environment applied ([[TuiEnv.applyTo]]),
+  * plus the display switches the code sets.
   *
   * @param updateIntervalMs
   *   the frame pace while nothing on screen moves (Q1: 1 fps)
@@ -18,7 +19,8 @@ import com.typesafe.config.ConfigException
   * @param suppressConsoleLogs
   *   Whether to suppress console logs while TUI is active
   * @param glyphs
-  *   `fukuii.tui.glyphs`, or `FUKUII_TUI_GLYPHS` once [[TuiEnv.applyTo]] has resolved it (never `Auto` then)
+  *   the glyph set to draw with: `fukuii.tui.glyphs` or `FUKUII_TUI_GLYPHS`, with `auto` already resolved against the
+  *   locale. A [[GlyphSet]] has no `auto`, so nothing can draw an unresolved one (B-124)
   * @param noColor
   *   draw with the monochrome theme (`NO_COLOR`, via [[TuiEnv]])
   * @param animationIntervalMs
@@ -37,18 +39,13 @@ case class TuiConfig(
     showProgressBar: Boolean = true,
     showNodeSettings: Boolean = true,
     suppressConsoleLogs: Boolean = true,
-    glyphs: GlyphChoice = GlyphChoice.Auto,
+    glyphs: GlyphSet = GlyphSet.Emoji,
     noColor: Boolean = false,
     animationIntervalMs: Long = TuiConfig.DefaultAnimationIntervalMs,
     statusPollIntervalMs: Long = TuiConfig.DefaultStatusPollIntervalMs,
     reducedMotion: Boolean = false,
     splashMs: Long = TuiConfig.DefaultSplashMs
 ):
-  /** The glyph set to draw with. An `auto` that no environment has resolved draws emoji. */
-  def glyphSet: GlyphSet = glyphs match
-    case GlyphChoice.Ascii => GlyphSet.Ascii
-    case _                 => GlyphSet.Emoji
-
   /** The motion the TUI starts with, and resumes after `p`. */
   def motion: Motion = if reducedMotion then Motion.Reduced else Motion.Full
 
@@ -93,10 +90,30 @@ object TuiConfig:
     showNodeSettings = false
   )
 
+  /** The TUI configuration a node runs with: `fukuii.tui` from the node's config (the `fukuii` block), with the
+    * environment's overrides applied. A config without the block, such as a full copy written before `tui.conf`
+    * existed, gets the defaults.
+    */
+  def load(fukuii: TypesafeConfig, env: TuiEnv): TuiConfig =
+    val tui = if fukuii.hasPath("tui") then TuiSettings.fromConfig(fukuii.getConfig("tui")) else TuiSettings()
+    env.applyTo(tui)
+
+/** `fukuii.tui` as configured (`conf/base/tui.conf`), before the environment: the glyph choice may still be `auto`.
+  * [[TuiEnv.applyTo]] resolves it into the [[TuiConfig]] the TUI runs with (B-124).
+  */
+final case class TuiSettings(
+    glyphs: GlyphChoice = GlyphChoice.Auto,
+    reducedMotion: Boolean = false,
+    animationIntervalMs: Long = TuiConfig.DefaultAnimationIntervalMs,
+    statusPollIntervalMs: Long = TuiConfig.DefaultStatusPollIntervalMs,
+    splashMs: Long = TuiConfig.DefaultSplashMs
+)
+
+object TuiSettings:
   /** The settings in a `fukuii.tui` block (`conf/base/tui.conf`). An absent key keeps its default; an invalid value
     * fails with a [[ConfigException.BadValue]] that names the key.
     */
-  def fromConfig(tui: TypesafeConfig): TuiConfig =
+  def fromConfig(tui: TypesafeConfig): TuiSettings =
     val glyphs =
       if !tui.hasPath("glyphs") then GlyphChoice.Auto
       else
@@ -117,18 +134,10 @@ object TuiConfig:
         if value < min then
           throw new ConfigException.BadValue(tui.origin(), s"fukuii.tui.$key", s"$value is below the minimum, $min")
         value
-    TuiConfig(
+    TuiSettings(
       glyphs = glyphs,
-      animationIntervalMs = millis("animation-interval-ms", DefaultAnimationIntervalMs, 1),
-      statusPollIntervalMs = millis("status-poll-interval-ms", DefaultStatusPollIntervalMs, 1),
+      animationIntervalMs = millis("animation-interval-ms", TuiConfig.DefaultAnimationIntervalMs, 1),
+      statusPollIntervalMs = millis("status-poll-interval-ms", TuiConfig.DefaultStatusPollIntervalMs, 1),
       reducedMotion = tui.hasPath("reduced-motion") && tui.getBoolean("reduced-motion"),
-      splashMs = millis("splash-ms", DefaultSplashMs, 0)
+      splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0)
     )
-
-  /** The TUI configuration a node runs with: `fukuii.tui` from the node's config (the `fukuii` block), with the
-    * environment's overrides applied. A config without the block, such as a full copy written before `tui.conf`
-    * existed, gets the defaults.
-    */
-  def load(fukuii: TypesafeConfig, env: TuiEnv): TuiConfig =
-    val tui = if fukuii.hasPath("tui") then fromConfig(fukuii.getConfig("tui")) else TuiConfig.default
-    env.applyTo(tui)

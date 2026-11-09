@@ -150,9 +150,9 @@ class SplashSpec
 
   it should "be off under FUKUII_TUI_NO_SPLASH, and one static frame under reduced motion" taggedAs (UnitTest) in {
     val env = TuiEnv.from(Map("FUKUII_TUI_NO_SPLASH" -> "1", "LANG" -> "en_US.UTF-8"), Map.empty)
-    val noSplash = env.applyTo(TuiConfig.default)
+    val noSplash = env.applyTo(TuiSettings())
     noSplash.splashTicks shouldBe 0L
-    TuiEnv.from(Map("FUKUII_TUI_NO_SPLASH" -> "", "LANG" -> "C.UTF-8"), Map.empty).applyTo(TuiConfig.default).splashTicks shouldBe 12L
+    TuiEnv.from(Map("FUKUII_TUI_NO_SPLASH" -> "", "LANG" -> "C.UTF-8"), Map.empty).applyTo(TuiSettings()).splashTicks shouldBe 12L
     TuiConfig.default.copy(reducedMotion = true).splashTicks shouldBe 2L
     splash(12).copy(motion = Motion.Reduced).splashCover(24) shouldBe None // no hand-over
   }

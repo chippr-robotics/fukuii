@@ -29,18 +29,21 @@ final case class TuiEnv(
     reducedMotion: Option[Boolean] = None,
     noSplash: Boolean = false
 ):
-  /** `config` with these overrides applied, and `auto` resolved against the locale. The result's `glyphs` is never
-    * `Auto`.
+  /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied over `base`, and
+    * `auto` resolved against the locale into a [[GlyphSet]] (B-124).
     */
-  def applyTo(config: TuiConfig): TuiConfig =
-    val glyphChoice = glyphs.getOrElse(config.glyphs) match
-      case GlyphChoice.Auto => if utf8Locale then GlyphChoice.Emoji else GlyphChoice.Ascii
-      case chosen           => chosen
-    config.copy(
-      glyphs = glyphChoice,
-      noColor = config.noColor || noColor,
-      reducedMotion = reducedMotion.getOrElse(config.reducedMotion),
-      splashMs = if noSplash then 0L else config.splashMs
+  def applyTo(settings: TuiSettings, base: TuiConfig = TuiConfig.default): TuiConfig =
+    val glyphSet = glyphs.getOrElse(settings.glyphs) match
+      case GlyphChoice.Emoji => GlyphSet.Emoji
+      case GlyphChoice.Ascii => GlyphSet.Ascii
+      case GlyphChoice.Auto  => if utf8Locale then GlyphSet.Emoji else GlyphSet.Ascii
+    base.copy(
+      glyphs = glyphSet,
+      noColor = base.noColor || noColor,
+      reducedMotion = reducedMotion.getOrElse(settings.reducedMotion),
+      animationIntervalMs = settings.animationIntervalMs,
+      statusPollIntervalMs = settings.statusPollIntervalMs,
+      splashMs = if noSplash then 0L else settings.splashMs
     )
 
 object TuiEnv:

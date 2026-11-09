@@ -80,7 +80,7 @@ class Tui(
     val started = clock.instant()
     new AtomicReference(
       TuiState.initial.copy(
-        glyphs = config.glyphSet,
+        glyphs = config.glyphs,
         motion = config.motion,
         splashUntilTick = Option.when(config.splashTicks > 0)(config.splashTicks),
         startTime = started,
