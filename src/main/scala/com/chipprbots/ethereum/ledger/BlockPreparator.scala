@@ -642,12 +642,19 @@ class BlockPreparator(
     // EIP-7778 is why the execution term is computed BEFORE refunds: refunds must not reduce the gas
     // counted toward the block limit, though they still reduce what the sender pays above.
     val txStateGas: BigInt = resultWithAuthRefund.evmStateGasUsed
+    // EIP-8037 `tx_gas_used_before_refund`, hoisted out of the Amsterdam branch below with its expression unchanged.
+    val gasUsedBeforeRefund: BigInt =
+      gasLimit.value - resultWithAuthRefund.gasRemaining - resultWithAuthRefund.stateGasReservoir
     val txExecutionGas: BigInt =
       if !evmConfigForTx.amsterdamEnabled then executionGasToPayToMiner.value
-      else
-        val gasUsedBeforeRefund =
-          gasLimit.value - resultWithAuthRefund.gasRemaining - resultWithAuthRefund.stateGasReservoir
-        (gasUsedBeforeRefund - txStateGas).max(floorDataGas)
+      else (gasUsedBeforeRefund - txStateGas).max(floorDataGas)
+
+    // go-ethereum `settleGas`: `peakUsed = gasUsedBeforeRefund`, then `max(peakUsed, floorDataGas)` from Prague. The
+    // floor applies on exactly the condition `executionGasToPayToMiner` charges it on, so `maxUsedGas >= gasUsed`
+    // always. Report-only: nothing below this line reads it, and only TxResult carries it out (eth_simulateV1).
+    val maxUsedGas: BigInt =
+      if eip7623Active || evmConfigForTx.amsterdamEnabled then gasUsedBeforeRefund.max(floorDataGas)
+      else gasUsedBeforeRefund
 
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
@@ -752,7 +759,8 @@ class BlockPreparator(
       result.returnData,
       result.error,
       executionGasUsed = txExecutionGas,
-      stateGasUsed = txStateGas
+      stateGasUsed = txStateGas,
+      maxUsedGas = maxUsedGas
     )
 
   /** The EIP-7702 authorization phase of one transaction, before its top-level frame (go-ethereum `execute` ->
@@ -972,7 +980,7 @@ class BlockPreparator(
         validatedStx match
           case Right((account, address)) =>
             val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
-            val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas) =
+            val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas, _) =
               ImportProfile.tx(
                 executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
               )
