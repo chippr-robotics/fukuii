@@ -463,3 +463,22 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     events.head._2 should include("end of input")
     tui.isEnabled shouldBe false
   }
+
+  // prism, slice 2 re-review: the late-snapshot threshold scales with the poll interval (two intervals and one wait), so
+  // a node polled every 5 s is not called late after 6 s. From a 2.25 s interval the threshold passes the fixed 5 s of
+  // Sourced.UnresponsiveAfter, and a late snapshot goes straight to Unresponsive.
+  it should "scale the late-snapshot threshold with the poll interval" taggedAs (UnitTest) in {
+    val clock = new TuiFixtures.TestClock(TuiFixtures.Now)
+    val tt = new TuiTestTerminal()
+    val config = TuiTestTerminal.config.copy(statusPollIntervalMs = 5_000)
+    val tui = new Tui(config, () => tt.terminal, _ => Some(tt.processOutput), clock)
+    try
+      val polled = TuiFixtures.snapshot(current = 10, best = 20, now = TuiFixtures.Now)
+      clock.advance(6)
+      tui.nextFrame(Some(polled))
+      tui.getState.connectionStatus shouldBe "Connected" // 6 s is under 2 × 5 s + 0.5 s: not late
+      clock.advance(5) // 11 s: late, and past 5 s, so Unresponsive with no Stale step
+      tui.nextFrame(Some(polled))
+      tui.getState.connectionStatus shouldBe "Unresponsive (peer manager)"
+    finally tt.close()
+  }

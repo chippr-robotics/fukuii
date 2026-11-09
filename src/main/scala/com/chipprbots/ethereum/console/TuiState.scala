@@ -249,7 +249,8 @@ final case class NodeStatusSnapshot(
 
   /** This snapshot read at `now`. A snapshot no newer poll has replaced for `staleAfter` has both sources Stale, and
     * Unresponsive past [[Sourced.UnresponsiveAfter]], so a probe that hangs or dies shows instead of leaving its last
-    * answers on screen as Fresh.
+    * answers on screen as Fresh. With `staleAfter` at 5 s or more there is no Stale step: a late snapshot's sources go
+    * straight to Unresponsive.
     */
   def agedAt(now: Instant, staleAfter: Duration): NodeStatusSnapshot =
     val age = Duration.between(this.now, now)

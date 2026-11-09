@@ -167,7 +167,10 @@ class Tui(
 
   private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
-  /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late. */
+  /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late.
+    * [[Sourced.UnresponsiveAfter]] is a fixed 5 s, so from a poll interval of 2.25 s (when this reaches 5 s) a late
+    * snapshot's sources skip Stale and go straight to Unresponsive ([[NodeStatusSnapshot.agedAt]]).
+    */
   private val snapshotStaleAfter =
     Duration.ofMillis(2 * config.statusPollIntervalMs + TuiStatusProbe.DefaultAskTimeout.toMillis)
 
