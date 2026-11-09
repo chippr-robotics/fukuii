@@ -1974,3 +1974,13 @@ items:
     refs: [B-167]
     links: {}
     notes: "EthSimulateService.applyEip4788/applyEip2935 vs BlockExecution (no code: no change). Call BlockExecution.applyBlockPreamble/applyEip2935 instead. ETC Olympia fixed in B-167. beacon, conduit."
+  - id: B-181
+    title: "Trace replays (StxLedger.advanceWorldToTx) skip the pre-Amsterdam block preamble: DAO drain, EIP-4788, EIP-2935"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: Earlier txs of an ETC Olympia or ETH Cancun/Prague block replay on a state without the history/beacon writes, so a traced tx that reads them sees a different state. Use BlockExecution.applyBlockPreamble.
