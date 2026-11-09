@@ -71,13 +71,21 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     phaseStartTime = 0
   )
 
+  private val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+  private val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
+
+  /** A probe at `now`, whose SNAP sample, if any, was recorded `snapAgeSeconds` before it. */
   private def probe(
       pm: Behavior[PeerManagerActor.Command],
       sc: Behavior[SyncController.Command],
       best: BigInt = 42,
-      snap: Option[SyncProgress] = None
+      snap: Option[SyncProgress] = None,
+      snapAgeSeconds: Long = 5
   ) =
-    new TuiStatusProbe(spawn(pm), spawn(sc), () => best, 50, () => snap, 300.millis)(using system.scheduler)
+    val sampledAt = now.minusSeconds(snapAgeSeconds).toEpochMilli
+    new TuiStatusProbe(spawn(pm), spawn(sc), () => best, 50, () => snap.map(_ -> sampledAt), 300.millis, clock)(using
+      system.scheduler
+    )
 
   "TuiStatusProbe" should "count only handshaked peers" taggedAs (UnitTest) in {
     import PeerActor.Status.*
@@ -124,8 +132,6 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   }
 
   it should "stamp each snapshot with its clock, and each answer Fresh at that time" taggedAs (UnitTest) in {
-    val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
-    val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
     val s = new TuiStatusProbe(
       spawn(peerManager(PeerActor.Status.Handshaked)),
       spawn(syncController(SyncProtocol.Status.SyncDone)),
@@ -143,16 +149,26 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   // Spec 027 T050: the sample's own time, for the SNAP sample-age alert (research §6).
   it should "carry the time the SNAP sample was recorded" taggedAs (UnitTest) in {
     val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 100), None)
-    val s = new TuiStatusProbe(
-      spawn(peerManager()),
-      spawn(syncController(syncing)),
-      () => 0,
-      50,
-      () => Some(snapSample),
-      300.millis,
-      snapSampledAt = () => Some(1_762_516_800_000L)
-    )(using system.scheduler)()
-    s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(java.time.Instant.ofEpochMilli(1_762_516_800_000L))
+    val s = probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 12)()
+    s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(now.minusSeconds(12))
+  }
+
+  it should "hide a SNAP sample older than 90 s" taggedAs (UnitTest) in {
+    val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 100), None)
+    probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 91)().snapSync shouldBe None
+    probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 90)().snapSync should not be
+      empty
+  }
+
+  // prism, slice 2 review (B-044): "Syncing (SNAP)" only on a sample from the SNAP monitor's last two 30 s rounds; an
+  // older one still shows its rows until it is 90 s old, but no longer says SNAP is running.
+  it should "say SNAP is running only on a sample younger than 60 s" taggedAs (UnitTest) in {
+    val status = SyncProtocol.Status.Syncing(0, Progress(5, 0), None)
+    def described(ageSeconds: Long) =
+      probe(peerManager(), syncController(status), best = 5, snap = Some(snapSample), snapAgeSeconds = ageSeconds)()
+    described(60).syncStatus shouldBe "Syncing (SNAP)"
+    described(61).syncStatus shouldBe "Syncing (no target yet)"
+    described(61).snapSync should not be empty
   }
 
   it should "show SNAP progress only while syncing" taggedAs (UnitTest) in {

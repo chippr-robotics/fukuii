@@ -67,7 +67,7 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
   }
 
   // Spec 027 T040: the TUI ages the SNAP sample on its own clock, so it needs the time the sample was recorded.
-  it should "report the time measure recorded the latest progress, and leave latestProgress unchanged" taggedAs UnitTest in {
+  it should "report the latest progress with the time measure recorded it, and leave latestProgress unchanged" taggedAs UnitTest in {
     val progress = SyncProgress(
       phase = SNAPSyncController.SyncPhase.AccountRangeSync,
       accountsSynced = 1,
@@ -94,9 +94,9 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     val before = System.currentTimeMillis()
     SNAPSyncMetrics.measure(progress)
     val after = System.currentTimeMillis()
-    val at = SNAPSyncMetrics.latestProgressAt
-    at should not be empty
-    at.get should ((be >= before).and(be <= after))
+    val sample = SNAPSyncMetrics.latestSample
+    sample.map(_._1) shouldBe Some(progress)
+    sample.get._2 should ((be >= before).and(be <= after))
     SNAPSyncMetrics.latestProgress(maxAgeMillis = 60_000L) shouldBe Some(progress)
-    SNAPSyncMetrics.latestProgressAt shouldBe at // reading does not move it
+    SNAPSyncMetrics.latestSample shouldBe sample // reading does not move it
   }

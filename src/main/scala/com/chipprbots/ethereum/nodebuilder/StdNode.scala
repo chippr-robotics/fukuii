@@ -338,8 +338,7 @@ abstract class BaseNode extends Node:
         syncController,
         () => blockchainReader.getBestBlockNumber,
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
-        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis),
-        snapSampledAt = () => SNAPSyncMetrics.latestProgressAt
+        () => SNAPSyncMetrics.latestSample
       )(using system.scheduler)
       // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
       val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)

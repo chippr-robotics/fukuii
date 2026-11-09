@@ -33,8 +33,9 @@ import com.chipprbots.ethereum.network.PeerManagerActor
   * Runs on the [[TuiProbeThread]] — the blocking wait never touches an actor or dispatcher thread, nor the frame loop.
   * Not thread-safe: one thread polls it, and it keeps the previous snapshot to tell Stale from Unresponsive.
   *
-  * @param snapSampledAt
-  *   when the SNAP monitor recorded its latest progress, in epoch milliseconds (`SNAPSyncMetrics.latestProgressAt`)
+  * @param snapSample
+  *   the SNAP monitor's latest progress and when it was recorded, in epoch milliseconds (`SNAPSyncMetrics.latestSample`):
+  *   shown while younger than [[TuiStatusProbe.SnapProgressMaxAgeMillis]]
   * @param clock
   *   the time of each snapshot: the TUI's only clock (C-3)
   */
@@ -43,9 +44,8 @@ class TuiStatusProbe(
     syncController: ActorRef[SyncController.Command],
     bestBlockNumber: () => BigInt,
     maxPeers: Int,
-    snapProgress: () => Option[SyncProgress],
+    snapSample: () => Option[(SyncProgress, Long)],
     wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
-    snapSampledAt: () => Option[Long] = () => None,
     clock: Clock = Clock.systemUTC()
 )(using scheduler: Scheduler)
     extends (() => NodeStatusSnapshot):
@@ -70,31 +70,38 @@ class TuiStatusProbe(
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
     val missed = s"no reply within ${wait.toMillis}ms"
     val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.size), now, missed)
-    val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest)), now, missed)
+    val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
     val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync)
     previous = Some(snapshot)
     snapshot
 
-  /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running. */
-  private def sample(status: SyncProtocol.Status, localBest: Long): SyncSample =
+  /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
+    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds.
+    */
+  private def sample(status: SyncProtocol.Status, localBest: Long, now: Instant): SyncSample =
     val snap = Option
-      .when(status.syncing)(Try(snapProgress()).toOption.flatten)
+      .when(status.syncing)(Try(snapSample()).toOption.flatten)
       .flatten
-      .filter(p => ActiveSnapPhases.contains(p.phase))
-    val (current, best, description) = describe(status, localBest, snapRunning = snap.isDefined)
-    SyncSample(
-      current,
-      best,
-      description,
-      snap.map(toSnapSyncState),
-      snap.flatMap(_ => Try(snapSampledAt()).toOption.flatten.map(Instant.ofEpochMilli))
-    )
+      .map((progress, at) => (progress, Instant.ofEpochMilli(at)))
+      .filter((progress, at) =>
+        ActiveSnapPhases.contains(progress.phase) && ageMillis(at, now) <= SnapProgressMaxAgeMillis
+      )
+    val running = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
+    val (current, best, description) = describe(status, localBest, snapRunning = running)
+    SyncSample(current, best, description, snap.map((p, _) => toSnapSyncState(p)), snap.map(_._2))
+
+  private def ageMillis(at: Instant, now: Instant): Long = java.time.Duration.between(at, now).toMillis
 
 object TuiStatusProbe:
   val DefaultAskTimeout: FiniteDuration = 500.millis
 
   /** How long a SNAP progress sample stays displayable. SyncProgressMonitor samples every 30 s. */
   val SnapProgressMaxAgeMillis: Long = 90_000L
+
+  /** How young a SNAP sample must be to call the sync "Syncing (SNAP)": the monitor's last two rounds of 30 s
+    * (`SyncProgressMonitor.startPeriodicLogging`). Two poll intervals would be shorter than one round.
+    */
+  val SnapStatusMaxAgeMillis: Long = 60_000L
 
   private val ActiveSnapPhases: Set[SyncPhase] = Set(
     SyncPhase.AccountRangeSync,
