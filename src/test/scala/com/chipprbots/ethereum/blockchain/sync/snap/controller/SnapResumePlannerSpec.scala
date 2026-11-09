@@ -130,8 +130,10 @@ private[snap] class StubSnapResumePlannerState(
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = ExecutionContext.parasitic
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notUsed("networkPeerManager")
-  def blockchainReader: BlockchainReader = notUsed("blockchainReader")
-  def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
+  // The chain stores, for the tests that read headers (the PoS heal pivot walks back from the CL head).
+  var chain: Option[com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup] = None
+  def blockchainReader: BlockchainReader = chain.map(_.blockchainReader).getOrElse(notUsed("blockchainReader"))
+  def blockchainWriter: BlockchainWriter = chain.map(_.blockchainWriter).getOrElse(notUsed("blockchainWriter"))
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   val parent: TestInbox[SyncProtocol.SyncControllerReply] = TestInbox[SyncProtocol.SyncControllerReply]()
   def syncController: ActorRef[SyncProtocol.SyncControllerReply] = parent.ref
@@ -507,8 +509,9 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
 
   it should "heal a PoS recovery whose pivot failed finalization at a newer pivot from the CL head" taggedAs UnitTest in {
     val h = new Harness()
+    h.module.chain = Some(new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {})
     val header = Fixtures.Blocks.ValidBlock.header
-    val target = header.number.value - SNAPSyncConfig().pivotBlockOffset
+    val offset = SNAPSyncConfig().pivotBlockOffset
     h.saveRecovery(BigInt(3_000_000), phasesComplete = true)
     h.module.isPoSChain = true
     h.module.failedFinalizationPivot = Some(BigInt(3_000_000))
@@ -517,13 +520,43 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.recoveryStep() shouldBe false
 
     h.module.bootstrappingEntries shouldBe 1
-    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(target)
-    h.module.parent.receiveMessage() shouldBe StartRegularSyncBootstrap(target)
+    // The CL head's ancestor `offset` blocks down, walked back from the head's hash; never a target by number.
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.module.parent.receiveMessage() shouldBe StartPivotAncestryBootstrap(header.hash.value, offset.toInt)
     h.scheduledTimers() shouldBe empty
     h.module.accountsComplete shouldBe true
     h.module.storagePhaseComplete shouldBe true
     h.module.bytecodePhaseComplete shouldBe true
     h.module.syncingEntries shouldBe 0
+  }
+
+  it should "heal a PoS recovery at the CL head's ancestor found through headers stored by hash, with no request" taggedAs UnitTest in {
+    val h = new Harness()
+    val chain = new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}
+    h.module.chain = Some(chain)
+    val offset = SNAPSyncConfig().pivotBlockOffset.toInt
+    val bottom = Fixtures.Blocks.ValidBlock.header.copy(number = com.chipprbots.ethereum.domain.BlockNumber(4_000_000))
+    val clChain = (1 to offset).scanLeft(bottom)((parent, i) =>
+      bottom.copy(number = com.chipprbots.ethereum.domain.BlockNumber(4_000_000 + i), parentHash = parent.hash)
+    )
+    clChain.foreach(header =>
+      chain.blockchainWriter
+        .storeBlockByHashOnly(
+          com.chipprbots.ethereum.domain.Block(header, com.chipprbots.ethereum.domain.BlockBody.empty)
+        )
+        .commit()
+    )
+    h.saveRecovery(BigInt(3_000_000), phasesComplete = true)
+    h.module.isPoSChain = true
+    h.module.failedFinalizationPivot = Some(BigInt(3_000_000))
+    h.module.clPivotHint = Some(CLPivotHint(clChain.last.hash.value, Some(clChain.last)))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.bootstrappingEntries shouldBe 1
+    h.module.parent.hasMessages shouldBe false
+    // bootstrapping() commits it, as it commits a fetched header.
+    h.kit.selfInbox().receiveMessage() shouldBe BootstrapComplete(Some(bottom))
   }
 
   it should "resume the preserved account cursors inside the drift cap, latch the stale-cursor flag and drop the markers" taggedAs UnitTest in {

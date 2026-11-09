@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
@@ -14,6 +15,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.snap.PosHeaderFixtures
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
@@ -21,6 +23,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
@@ -306,3 +309,169 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   private val rejectDifficultyOne: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = h =>
     if h.difficulty.value == 1 then Left(BlockHeaderError.HeaderUnexpectedError("difficulty 1"))
     else Right(BlockHeaderValid)
+
+  // ── Ancestry mode: the pivot below a CL head, walked back from its hash (real Sepolia headers) ──────────────────
+
+  private val walkRun: IndexedSeq[BlockHeader] = PosHeaderFixtures.sepoliaRun // 11,860,000..11,860,069, ascending
+  private val clHead: BlockHeader = walkRun.last
+  private val Depth: Int = 64
+
+  /** The reverse run a peer serves for `GetBlockHeaders(clHead, Depth + 1, reverse)`: the head first. */
+  private val ancestry: Seq[BlockHeader] = walkRun.takeRight(Depth + 1).reverse
+  private val ancestryPivot: BlockHeader = walkRun(walkRun.size - 1 - Depth)
+
+  def mkAncestry(peersClientProbe: TestProbe, parentProbe: TestProbe, maxAttempts: Int = 3): ActorRef =
+    testKit
+      .spawn(
+        PivotHeaderBootstrap.applyAncestry(
+          peersClient = peersClientProbe.ref.toTyped[PeersClient.Command],
+          blockchainWriter = noopWriter,
+          headHash = clHead.hash.value,
+          depth = Depth,
+          replyTo = parentProbe.ref,
+          syncConfig = null,
+          maxAttempts = maxAttempts,
+          initialRetryDelay = 50.millis,
+          maxRetryDelay = 50.millis,
+          waitForPeerDelay = 50.millis
+        )
+      )
+      .toClassic
+
+  private val otherRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x5a)))
+
+  "PivotHeaderBootstrap.ancestryPivot" should "return the header depth below the head of a run that is its ancestry" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth, ancestry) shouldBe Right(ancestryPivot)
+    ancestryPivot.number.value shouldBe clHead.number.value - Depth
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, 0, Seq(clHead)) shouldBe Right(clHead)
+  }
+
+  it should "call a run that is the head's ancestry but short incomplete, not a fault" taggedAs UnitTest in {
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth, ancestry.take(10)) shouldBe
+      Left(PivotHeaderBootstrap.AncestryProblem.Incomplete(10))
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth, Nil) shouldBe
+      Left(PivotHeaderBootstrap.AncestryProblem.Incomplete(0))
+  }
+
+  it should "reject a run whose pivot has another state root, though it names the real parent" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val altered = ancestryPivot.copy(stateRoot = otherRoot)
+    altered.parentHash shouldBe ancestryPivot.parentHash
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth, ancestry.init :+ altered) match
+      case Left(PivotHeaderBootstrap.AncestryProblem.Mismatch(_, reason)) => reason shouldBe "ParentLink"
+      case other                                                          => fail(s"expected a mismatch, got $other")
+  }
+
+  it should "reject a run with a link broken mid-walk, a run not from the head, and a run longer than asked" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val brokenMidWalk = ancestry.updated(30, ancestry(30).copy(extraData = ByteString("not this one")))
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth, brokenMidWalk) shouldBe a[Left[?, ?]]
+    // A run that skips a block: the header after the gap is not its predecessor's parent.
+    val skipping = ancestry.take(20) ++ ancestry.drop(21)
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth - 1, skipping) shouldBe a[Left[?, ?]]
+    // The real chain, from the block below the head.
+    PivotHeaderBootstrap.ancestryPivot(
+      clHead.hash.value,
+      Depth,
+      walkRun.dropRight(1).takeRight(Depth + 1).reverse
+    ) match
+      case Left(PivotHeaderBootstrap.AncestryProblem.Mismatch(_, reason)) => reason shouldBe "AncestryHead"
+      case other                                                          => fail(s"expected a mismatch, got $other")
+    PivotHeaderBootstrap.ancestryPivot(clHead.hash.value, Depth - 1, ancestry) match
+      case Left(PivotHeaderBootstrap.AncestryProblem.Mismatch(_, reason)) => reason shouldBe "AncestryLength"
+      case other                                                          => fail(s"expected a mismatch, got $other")
+  }
+
+  "PivotHeaderBootstrap in ancestry mode" should "ask for the head's ancestry in reverse and reply with the pivot below it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkAncestry(peersClient, parent)
+
+    val request = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    request.message.block shouldBe Right(clHead.hash.value)
+    request.message.maxHeaders shouldBe BigInt(Depth + 1)
+    request.message.reverse shouldBe true
+    request.peerSelector shouldBe PeersClient.ExcludingPeers(Set.empty)
+    request.replyTo ! PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), ancestry))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(ancestryPivot.number.value, ancestryPivot))
+  }
+
+  it should "not take a pivot with another state root: blacklist the peer that served it and ask another" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkAncestry(peersClient, parent)
+    val altered = ancestry.init :+ ancestryPivot.copy(stateRoot = otherRoot)
+
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), altered))
+    peersClient.expectMsg(
+      3.seconds,
+      PeersClient.BlacklistPeer(testPeer.id, BlacklistReason.BlockHeaderValidationFailed)
+    )
+
+    val retry = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    retry.peerSelector shouldBe PeersClient.ExcludingPeers(Set(testPeer.id))
+    retry.replyTo ! PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), ancestry))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(ancestryPivot.number.value, ancestryPivot))
+  }
+
+  it should "skip, without blame, a peer that holds only part of the run" taggedAs (UnitTest, SyncTest) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkAncestry(peersClient, parent)
+
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), ancestry.take(10)))
+
+    val retry = peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+    retry.peerSelector shouldBe PeersClient.ExcludingPeers(Set(testPeer.id))
+    retry.replyTo ! PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), ancestry))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(ancestryPivot.number.value, ancestryPivot))
+  }
+
+  it should "give up, not wait for a fresh peer, when no eligible peer is left" taggedAs (UnitTest, SyncTest) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkAncestry(peersClient, parent)
+
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Failed(PivotHeaderBootstrap.AncestryNotServed))
+  }
+
+  it should "give up as exhausted after a rejected run leaves no eligible peer" taggedAs (UnitTest, SyncTest) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkAncestry(peersClient, parent)
+    val brokenMidWalk = ancestry.updated(30, ancestry(30).copy(extraData = ByteString("not this one")))
+
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds).replyTo ! PeersClient
+      .Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), brokenMidWalk))
+    peersClient.expectMsg(
+      3.seconds,
+      PeersClient.BlacklistPeer(testPeer.id, BlacklistReason.BlockHeaderValidationFailed)
+    )
+    peersClient
+      .expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+      .replyTo ! PeersClient.NoSuitablePeer
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Failed(PivotHeaderBootstrap.ExhaustedAfterRejection))
+  }

@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PosHeaderFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -534,6 +535,100 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
     h.parent.hasMessages shouldBe false
     h.module.pivotBlock shouldBe None
+  }
+
+  // ── Post-merge: the pivot is the CL head's, never a block number the peers name ─────────────────────────────────
+
+  it should "not take the SNAP peers' best block on a post-merge chain once cl-wait-timeout passes with engine-api-required off" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.peers = Map(peer("snap", 10_000))
+    h.module.syncConfig.engineApiRequired shouldBe false
+    h.module.clHintArrivedAtMs =
+      Some(System.currentTimeMillis() - (h.module.syncConfig.clWaitTimeout + 1.minute).toMillis)
+
+    h.startSteps() shouldBe false
+
+    h.parent.hasMessages shouldBe false
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  private val sepoliaTtd = BigInt("17000000000000000")
+
+  it should "not commit a CL head that fails the post-merge header checks, and try again" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(PosHeaderFixtures.sepoliaConfig, sepoliaTtd)
+    val withNonce = PosHeaderFixtures.sepoliaRun.last.copy(nonce = ByteString(Array.fill[Byte](8)(1)))
+    h.module.clPivotHint = Some(CLPivotHint(withNonce.hash.value, Some(withNonce)))
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe None
+    h.module.accountRangeStarts shouldBe empty
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  it should "commit a real CL head that passes them, pinning its hash" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(PosHeaderFixtures.sepoliaConfig, sepoliaTtd)
+    val head = PosHeaderFixtures.sepoliaRun.last
+    h.module.clPivotHint = Some(CLPivotHint(head.hash.value, Some(head)))
+    h.module.blockchainWriter.storeChainWeight(head.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe Some(head.number.value)
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(head.hash.value)
+    h.module.accountRangeStarts shouldBe Seq(head.stateRoot)
+  }
+
+  it should "not resume a bootstrap target by number on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.startSteps() shouldBe false
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.parent.hasMessages shouldBe false
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  it should "refresh from the CL head, not fetch a backtracked block by number, on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.currentPhase = SyncPhase.AccountRangeSync
+
+    h.call(m => m.retryBootstrapAtBlockArms(RetryBootstrapAtBlock(BigInt(777))))
+
+    h.parent.hasMessages shouldBe false
+    h.module.pendingPivotRefresh shouldBe None
+    h.module.pivotRefreshCommits shouldBe empty
+    h.kit.selfInbox().receiveAll() shouldBe Seq(RetryPivotRefresh)
+  }
+
+  it should "not judge a bootstrapped CL-anchored pivot by the SNAP peers' heights on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.posChain = true
+    // A peer claims a head far beyond the staleness bound: on proof of work that re-selects the pivot.
+    h.module.peers = Map(peer("snap", pivot + 1_000_000))
+    val posPivot = header.copy(
+      difficulty = Difficulty.Zero,
+      nonce = ByteString(new Array[Byte](8)),
+      ommersHash = com.chipprbots.ethereum.domain.BlockHash(BlockHeader.EmptyOmmers),
+      extraFields = BlockHeader.HeaderExtraFields.HefEmpty
+    )
+    h.module.blockchainWriter.storeChainWeight(posPivot.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(posPivot)))
+
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(pivot)
   }
 
   it should "retry a backtracked bootstrap: header fetch when it is not stored, in-place commit when it is" taggedAs UnitTest in {

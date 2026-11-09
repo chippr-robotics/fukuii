@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
 private[snap] trait PivotRefresherState:
@@ -215,6 +216,14 @@ private[snap] trait PivotRefresher
       val (pendingPivot, reason) = pendingPivotRefresh.get
       pendingPivotRefresh = None
       pivotHeaderOpt match
+        case Some(header) if isPoSChain && header.number.value != pendingPivot =>
+          // An ancestry bootstrap returns the head's ancestor at the depth asked, so its number is the one asked for;
+          // a header at another height is a reply to some other request. Refresh again from the CL head.
+          ctx.log.warn(
+            s"Pivot header bootstrap returned ${header.idTag}, not block $pendingPivot; refreshing again from the CL head"
+          )
+          timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+          Behaviors.same
         case Some(header) =>
           ctx.log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
           completePivotRefreshWithStateRoot(pendingPivot, header, reason)
@@ -248,6 +257,15 @@ private[snap] trait PivotRefresher
         ctx.log.warn(
           s"${HeaderChainCheck.LogTag} pivot header bootstrap for block $pendingPivot found no eligible peer after " +
             s"rejecting a header (original: $originalReason); choosing the pivot again from the remaining peers in 5s."
+        )
+        retryRefreshCounts = false
+        retryRefreshUnservable = false
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+      else if isPoSChain then
+        // Post-merge: no backtrack by number. The pivot is the CL head's ancestor; ask again from the newest CL head.
+        ctx.log.warn(
+          s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
+            "Refreshing again from the CL head in 5s."
         )
         retryRefreshCounts = false
         retryRefreshUnservable = false
@@ -395,8 +413,15 @@ private[snap] trait PivotRefresher
     // serve that root either, and we looped forever.
     //
     // Pre-merge chains keep peer-reported best because there's no authoritative tip.
-    val clHeadNumber: Option[BigInt] =
-      if isPoSChain then clPivotHint.flatMap(_.knownHeader).map(_.number.value) else None
+    //
+    // Post-merge the CL head is its hash; its header is the one stored under that hash (the hint's knownHeader, or one
+    // a newPayload stored since). The new pivot is that head's ancestor, found by walking back from it by parent hash
+    // (refreshFromClHead), never a block number taken from the peers.
+    val clHeadHeader: Option[BlockHeader] =
+      if isPoSChain then
+        clPivotHint.flatMap(h => h.knownHeader.orElse(PivotAnchor.storedHeader(stateIngest, h.headHash)))
+      else None
+    val clHeadNumber: Option[BigInt] = clHeadHeader.map(_.number.value)
 
     val newPivotOpt: Option[BigInt] = clHeadNumber match
       case Some(clHead) =>
@@ -410,16 +435,18 @@ private[snap] trait PivotRefresher
           // CL head has not moved far enough to give a newer one: the CL can lag the network (Lighthouse catching up
           // on Platåberget lagged ~110 blocks), and the roots peers still serve are newer than the CL's head. Never
           // leave such a pivot in place: take a smaller offset below the CL head, or the snap peers' advertised
-          // tip (capped to a bounded lead over the CL head), both minus the serve-window margin. The header is
-          // still fetched by the normal pivot bootstrap; the anchor guard does NOT authenticate it (snap root and
-          // stateRoot come from the same peer header), which is why the peer tip is capped.
+          // tip (capped to a bounded lead over the CL head), both minus the serve-window margin. The pivot is the CL
+          // head's ancestor, walked back from its hash (refreshFromClHead), so it is never above the CL head: the peers'
+          // tip may lead it by the margin only. A peer tip that far ahead says the CL lags the network by at least the
+          // margin, so the CL head's own root is inside the peers' serve window; the pivot still comes from the CL head.
           val fallback =
             if pivotUnservable then
               SNAPSyncController.unservablePivotTarget(
                 clHead,
                 currentPivot,
                 currentNetworkBestFromSnapPeers(),
-                SnapServeWindowMargin
+                SnapServeWindowMargin,
+                maxPeerTipLead = SnapServeWindowMargin
               )
             else None
           fallback match
@@ -438,6 +465,15 @@ private[snap] trait PivotRefresher
         else
           ctx.log.info(s"Selected CL-anchored pivot $target (CL head=$clHead, current=$currentPivot)")
           Some(target).filter(_ > 0)
+
+      case None if isPoSChain =>
+        // Post-merge with no CL head known by its header yet: no newer pivot. The peers' best block is not a pivot here.
+        ctx.log.info(
+          s"No CL head with a stored header yet (hint: ${clPivotHint
+              .map(h => ByteStringUtils.hash2string(h.headHash))
+              .getOrElse("none")}); no newer pivot"
+        )
+        None
 
       case None =>
         // Pre-merge fallback: peer-reported best subject to freshness floor.
@@ -548,6 +584,13 @@ private[snap] trait PivotRefresher
         retryRefreshCounts = false // armed outside StateHealing: a replay landing in healing must not count (PoS)
         retryRefreshUnservable = false
         timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 30.seconds)
+    else if isPoSChain then
+      // Post-merge: the target is below the CL head (clHeadNumber is defined whenever newPivotOpt is, on this chain).
+      for
+        hint <- clPivotHint
+        head <- clHeadHeader
+        target <- newPivotOpt
+      do refreshFromClHead(hint.headHash, head, target, reason)
     else
       val newPivotBlock = newPivotOpt.get
       val newPivotHeaderOpt = stateIngest.chainReader.getBlockHeaderByNumber(newPivotBlock)
@@ -567,6 +610,36 @@ private[snap] trait PivotRefresher
         // eventually trigger a full restart rather than cycling pivots indefinitely.
         resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
       else completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
+
+  /** Post-merge refresh: the pivot `head.number - target` blocks below the CL head (`headHash`, stored as `head`),
+    * found by parent hash: through headers stored by hash when they are all there (a newPayload stores each CL block by
+    * its hash), else fetched with one reverse request from the head's hash ([[StartPivotAncestryBootstrap]]). Either
+    * way the pivot is the CL head's ancestor. The walk is at most `PivotHeaderBootstrap.MaxAncestryDepth` blocks: a
+    * target further below the head is raised to that depth.
+    */
+  private def refreshFromClHead(headHash: ByteString, head: BlockHeader, target: BigInt, reason: String): Unit =
+    val headNumber = head.number.value
+    if target > headNumber then
+      ctx.log.warn(s"Pivot target $target is above the CL head ${head.idTag}; not a pivot the CL head can confirm")
+    else
+      val depth = (headNumber - target).min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+      val pivotNumber = headNumber - depth
+      PivotAnchor.storedAncestor(stateIngest, headHash, depth) match
+        case Some(pivot) =>
+          ctx.log.info(
+            s"Pivot ${pivot.idTag}: $depth below the CL head ${head.idTag}, walked back through stored headers"
+          )
+          completePivotRefreshWithStateRoot(pivotNumber, pivot, reason)
+        case None =>
+          ctx.log.info(
+            s"Pivot $pivotNumber ($depth below the CL head ${head.idTag}) is not stored by its ancestry: fetching it " +
+              "by walking back from the head"
+          )
+          // Pause chain download to free up peers for the bootstrap, as the bootstrap by number does.
+          chainDownloader.tell(ChainDownloader.Pause)
+          pendingPivotRefresh = Some((pivotNumber, reason))
+          syncController ! StartPivotAncestryBootstrap(headHash, depth)
+          resetStagnationClocks(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
 
   /** Complete the pivot refresh once we have the header (either from local storage or bootstrapped from peer). */
   def completePivotRefreshWithStateRoot(

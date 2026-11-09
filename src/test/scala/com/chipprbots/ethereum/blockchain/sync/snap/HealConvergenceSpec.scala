@@ -323,7 +323,13 @@ class HealConvergenceControllerSpec
       extraFields = BlockHeader.HeaderExtraFields.HefEmpty
     )
     f.blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
-    val clHead = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + 64))
+    // The CL head is pivot + 64, with its ancestry down to the pivot stored by hash (as newPayload stores the CL's
+    // blocks): the re-peg walks back to the pivot through it.
+    val clChain: Seq[BlockHeader] = (1 to 64).scanLeft(header) { (parent, i) =>
+      Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot + i), parentHash = parent.hash)
+    }
+    clChain.tail.foreach(h => f.blockchainWriter.storeBlockByHashOnly(Block(h, BlockBody.empty)).commit())
+    val clHead = clChain.last
     snap ! CLPivotHint(clHead.hash.value, Some(clHead))
     snap ! HealingAllPeersStateless
     f.awaitProcessed(snap)

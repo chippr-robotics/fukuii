@@ -69,6 +69,7 @@ class SNAPIdleTotalitySpec
     TrieNodesResponse(SNAP.TrieNodes(BigInt(9104), Seq.empty)),
     ChainDownloaderProgress(BigInt(1), BigInt(1), BigInt(1), BigInt(2)),
     ChainDownloaderDone,
+    ChainDownloaderRewound(BigInt(1)),
     HeaderHoldTick,
     WrappedHandshakedPeers(Map.empty),
     WrappedPeerDisconnected(PeerId("idle-totality")),

@@ -141,6 +141,103 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     PivotAnchor.pinFor(appState, blockchainReader, BigInt(12), otherRoot.value).commit()
     appState.getSnapSyncPivotHash() shouldBe None
 
+  // ── A pivot the consensus layer chose (post-merge chains) ────────────────────────────────────────────────────────
+
+  /** A chain that parts from the downloaded one above block `from`, up to block `to`: each header is the real one with
+    * another state root, on the one before it; stored by hash only (as the CL's blocks are), not in the number index.
+    */
+  private def forkAbove(chain: Chain, from: Int, to: Int): IndexedSeq[BlockHeader] =
+    val fork = (from + 1 to to)
+      .scanLeft(headers(from)) { (parent, n) =>
+        headers(n).copy(parentHash = parent.hash, stateRoot = otherRoot)
+      }
+      .tail
+    fork.foreach(h =>
+      chain.blockchainWriter
+        .storeBlockByHashOnly(com.chipprbots.ethereum.domain.Block(h, com.chipprbots.ethereum.domain.BlockBody.empty))
+        .commit()
+    )
+    fork
+
+  "PivotAnchor.forkPoint" should "find the highest header the downloaded chain shares with the pinned pivot's ancestry" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    downloaded(20)
+    val fork: IndexedSeq[BlockHeader] = forkAbove(this, from = 12, to = 15)
+    val pinned = fork.last
+    pinned.number.value shouldBe 15
+    PivotAnchor.forkPoint(blockchainReader, pinned, headers(15)) shouldBe Some(headers(12))
+
+  it should "find the parent of a pinned pivot one block off the downloaded chain" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    val sibling: BlockHeader = forkAbove(this, from = 14, to = 15).last
+    PivotAnchor.forkPoint(blockchainReader, sibling, headers(15)) shouldBe Some(headers(14))
+
+  it should "not decide when the pinned pivot's stored ancestry ends before a common header" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    val fork: IndexedSeq[BlockHeader] = forkAbove(this, from = 12, to = 15)
+    blockchainWriter.removeBlockByHash(fork(1).hash).commit() // block 14 of the fork is not stored
+    PivotAnchor.forkPoint(blockchainReader, fork.last, headers(15)) shouldBe None
+
+  it should "take the pinned header itself when the downloaded chain holds it, and refuse headers at two heights" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    PivotAnchor.forkPoint(blockchainReader, headers(15), headers(15)) shouldBe Some(headers(15))
+    PivotAnchor.forkPoint(blockchainReader, headers(15), headers(16)) shouldBe None
+
+  "PivotAnchor.storedAncestor" should "walk back from a head by parent hash through headers stored by hash" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    PivotAnchor.storedAncestor(blockchainReader, headers(20).hash.value, 5) shouldBe Some(headers(15))
+    PivotAnchor.storedAncestor(blockchainReader, headers(20).hash.value, 0) shouldBe Some(headers(20))
+    val fork: IndexedSeq[BlockHeader] = forkAbove(this, from = 12, to = 15)
+    PivotAnchor.storedAncestor(blockchainReader, fork.last.hash.value, 3) shouldBe Some(headers(12))
+    // Not through the number index: the fork's ancestors are found by hash although the index names the real ones.
+    PivotAnchor.storedAncestor(blockchainReader, fork.last.hash.value, 1) shouldBe Some(fork(1))
+
+  it should "find nothing when a header on the way, or the head, is not stored" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    PivotAnchor.storedAncestor(blockchainReader, headers(20).hash.value, 21) shouldBe None // below genesis
+    PivotAnchor.storedAncestor(blockchainReader, ByteString(Array.fill(32)(0x44.toByte)), 0) shouldBe None
+    val fork: IndexedSeq[BlockHeader] = forkAbove(this, from = 12, to = 15)
+    blockchainWriter.removeBlockByHash(fork(1).hash).commit()
+    PivotAnchor.storedAncestor(blockchainReader, fork.last.hash.value, 3) shouldBe None
+
+  "PivotAnchor.pinForChosenPivot" should "pin the header the best-block record names, never the number index's" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    downloaded(20)
+    // The in-memory pivot (block 15, the fork's root) recorded as the best block, as updateBestBlockForPivot records it.
+    val chosen: BlockHeader = forkAbove(this, from = 12, to = 15).last
+    appState.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(chosen.hash.value, 15)).commit()
+    // The number index names another header at 15 with the same state root.
+    val sameRoot: BlockHeader = headers(15).copy(stateRoot = otherRoot)
+    blockchainWriter.storeBlockHeader(sameRoot).commit()
+
+    PivotAnchor.pinForChosenPivot(appState, blockchainReader, BigInt(15), otherRoot.value).commit()
+    appState.getSnapSyncPivotHash() shouldBe Some(chosen.hash.value)
+
+  it should "keep a pin that already names the pivot (a resumed pivot), and drop one it cannot confirm" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    appState.putSnapSyncPivotHash(headers(15).hash.value).commit()
+    // The best-block record names another block (a re-peg the resume did not persist).
+    appState.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(headers(18).hash.value, 18)).commit()
+
+    PivotAnchor.pinForChosenPivot(appState, blockchainReader, BigInt(15), headers(15).stateRoot.value).commit()
+    appState.getSnapSyncPivotHash() shouldBe Some(headers(15).hash.value)
+
+    PivotAnchor.pinForChosenPivot(appState, blockchainReader, BigInt(15), otherRoot.value).commit()
+    appState.getSnapSyncPivotHash() shouldBe None
+
+  "PivotAnchor.currentPin" should "name the pin only when it can name the pivot" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    appState.putSnapSyncPivotHash(headers(14).hash.value).commit()
+    PivotAnchor.currentPin(appState, blockchainReader, BigInt(15)) shouldBe None // stale: another height
+    appState.putSnapSyncPivotHash(headers(15).hash.value).commit()
+    PivotAnchor.currentPin(appState, blockchainReader, BigInt(15)) shouldBe Some(headers(15).hash.value)
+    appState.removeSnapSyncPivotHash().commit()
+    PivotAnchor.currentPin(appState, blockchainReader, BigInt(15)) shouldBe None
+
   "PivotAnchor.reanchor" should "persist the validated header as the pivot, its index entry and the best block" taggedAs UnitTest in new Chain:
     downloaded(20)
     val altered: BlockHeader = headers(15).copy(stateRoot = otherRoot)

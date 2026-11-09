@@ -75,6 +75,7 @@ class SNAPSyncingDispatchTableSpec
     "TrieNodesResponse" -> TrieNodesResponse(SNAP.TrieNodes(BigInt(9104), Seq.empty)),
     "ChainDownloaderProgress" -> ChainDownloaderProgress(BigInt(1), BigInt(1), BigInt(1), BigInt(2)),
     "ChainDownloaderDone" -> ChainDownloaderDone,
+    "ChainDownloaderRewound" -> ChainDownloaderRewound(BigInt(1)),
     "HeaderHoldTick" -> HeaderHoldTick,
     "WrappedHandshakedPeers" -> WrappedHandshakedPeers(Map.empty),
     "WrappedPeerDisconnected" -> WrappedPeerDisconnected(PeerId("s0d-table")),

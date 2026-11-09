@@ -191,7 +191,13 @@ class SNAPPivotRefreshCharacterizationSpec
         extraFields = BlockHeader.HeaderExtraFields.HefEmpty
       )
       f.blockchainWriter.storeBlock(Block(posHeader, BlockBody.empty)).commit()
-      val clHead = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + Offset))
+      // The CL head is pivot1 + offset; its ancestry down to pivot1 is stored by hash (as newPayload stores the CL's
+      // blocks), and the re-peg walks back to pivot1 through it.
+      val clChain: Seq[BlockHeader] = (1 to Offset.toInt).scanLeft(posHeader) { (parent, i) =>
+        Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + i), parentHash = parent.hash)
+      }
+      clChain.tail.foreach(h => f.blockchainWriter.storeBlockByHashOnly(Block(h, BlockBody.empty)).commit())
+      val clHead = clChain.last
       snap ! SNAPSyncController.CLPivotHint(clHead.hash.value, Some(clHead))
       snap ! SNAPSyncController.HealingAllPeersStateless
       f.awaitProcessed(snap)

@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockReceiptsHashError
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -301,6 +302,14 @@ class ChainDownloader private (
             )
             Behaviors.same
 
+          case RewindTo(forkPoint, replyTo) =>
+            rewindTo(forkPoint)
+            replyTo ! Rewound(forkPoint.number.value)
+            if targetBlock > bestHeaderNumber then
+              scheduleDispatch()
+              downloading()
+            else Behaviors.same
+
           // A header request outlived its downloading() phase: Done fired (bodies/receipts already complete)
           // while this reply was still in flight. Route it through the same handling downloading() uses instead
           // of dropping it — see handleHeaderResult's doc (forge's ETC review, Defect 8). No dispatchRequests()
@@ -380,6 +389,11 @@ class ChainDownloader private (
               receiptsQueue.size
             )
             Behaviors.same
+
+          case RewindTo(forkPoint, replyTo) =>
+            rewindTo(forkPoint)
+            replyTo ! Rewound(forkPoint.number.value)
+            if !paused then dispatchRequests() else Behaviors.same // see Dispatch above: the returned Behavior
 
           // --- Header responses ---
           case PeerResult(ResponseReceived(_, peer, ETHPackets.BlockHeaders(_, headers), _)) =>
@@ -744,7 +758,8 @@ class ChainDownloader private (
     * accepted run.
     *
     * Each header must name the previous one (the tip, for the first) as its parent, and pass `headerChainCheck` against
-    * it: on proof-of-work chains the block-import header rules, with the seal on the positions `sealPositions` picks.
+    * it: on proof-of-work chains the block-import header rules, with the seal on the positions `sealPositions` picks;
+    * on chains with a terminal total difficulty the post-merge rules and the transition, read from the parent's weight.
     * On the first header that fails, the peer that served the response is blacklisted (`ErrorInBlockHeaders` for a
     * broken parent link, `BlockHeaderValidationFailed` for a rule), so the next dispatch asks another peer for the same
     * range. A validated chain stores nothing from such a response; the parent-link-only check keeps the linked prefix,
@@ -779,6 +794,8 @@ class ChainDownloader private (
             case Some(tipWeight) =>
               val seal = headerChainCheck.sealPositions(usable, targetBlock)
               var parent = tip
+              // The parent's weight as it is stored: the tip's, then each accepted header's added (the weights below).
+              var parentWeight = tipWeight
               var accepted = 0
               // The blacklist reason and the metric's reason of the first header that failed.
               var failure: Option[(Blacklist.BlacklistReason, String)] = None
@@ -791,7 +808,7 @@ class ChainDownloader private (
                   )
                   failure = Some((ErrorInBlockHeaders, HeaderChainCheck.ParentLinkReason))
                 else
-                  headerChainCheck.check(header, parent, seal(accepted)) match
+                  headerChainCheck.checkLinked(header, parent, parentWeight, seal(accepted)) match
                     case Left(error) =>
                       log.warn(
                         s"${HeaderChainCheck.LogTag} Chain download: header ${header.number} (${header.hashAsHexString}) " +
@@ -802,6 +819,7 @@ class ChainDownloader private (
                       failure = Some((BlockHeaderValidationFailed, HeaderChainCheck.rejectionReason(error)))
                     case Right(_) =>
                       parent = header
+                      parentWeight = parentWeight.increase(header)
                       accepted += 1
 
               val stored = if failure.isDefined && headerChainCheck.validatesChain then 0 else accepted
@@ -899,6 +917,35 @@ class ChainDownloader private (
         blockchainWriter.storeBlockHeader(tip).commit()
       }
     tipHash = byRecord.orElse(byIndex).map(_.hash.value)
+
+  /** [[RewindTo]]: make `forkPoint`, a stored header of this chain, the tip, so the headers above it are downloaded
+    * again. One write: the header cursor and the tip hash, the target hash removed (it named a header above the fork
+    * point), and the body and receipt cursors lowered to the fork point where they are above it. The body and receipt
+    * queues are dropped and the lazy scan clamped (they are rebuilt from the cursors). A header response still in
+    * flight is matched against the new tip like any other. A fork point at or above the cursor changes nothing.
+    */
+  private def rewindTo(forkPoint: BlockHeader): Unit =
+    val n = forkPoint.number.value
+    if n < bestHeaderNumber then
+      log.warn(
+        s"${HeaderChainCheck.LogTag} Chain download: discarding the stored headers ${n + 1}..$bestHeaderNumber above " +
+          s"${forkPoint.idTag} and downloading them again"
+      )
+      def lowered(cursor: BigInt, put: BigInt => DataSourceBatchUpdate): DataSourceBatchUpdate =
+        if cursor > n then put(n) else appStateStorage.emptyBatchUpdate
+      appStateStorage
+        .putBackfillBestHeader(n)
+        .and(appStateStorage.putBackfillBestHeaderHash(forkPoint.hash.value))
+        .and(appStateStorage.removeBackfillTargetHash())
+        .and(lowered(appStateStorage.getBackfillBestBody(), appStateStorage.putBackfillBestBody))
+        .and(lowered(appStateStorage.getBackfillBestReceipt(), appStateStorage.putBackfillBestReceipt))
+        .commit()
+      bestHeaderNumber = n
+      tipHash = Some(forkPoint.hash.value)
+      bodiesQueue = Vector.empty
+      receiptsQueue = Vector.empty
+      scanPos = scanPos.min(n)
+      scanLimit = scanLimit.min(n)
 
   private def handleBodies(peer: Peer, requestedHashes: Seq[ByteString], bodies: Seq[BlockBody]): Unit =
     if bodies.isEmpty then
@@ -1504,6 +1551,17 @@ object ChainDownloader:
   // SNAP finalised: start fetching bodies and receipts (they were deferred at construction).
   case object ReleaseBodiesAndReceipts extends Command
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command
+
+  /** Discard the stored headers above `forkPoint`, a header of the stored chain, and download them again from there:
+    * SNAP finalisation sends it where the pivot's hash comes from the consensus layer and the stored chain does not
+    * reach it (HeaderChainCheck.trustsPinnedPivot). Applied on this actor's thread, so no response it is handling can
+    * write over it; [[Rewound]] is sent to `replyTo` once it is.
+    */
+  final case class RewindTo(forkPoint: BlockHeader, replyTo: TypedActorRef[Rewound]) extends Command
+
+  /** The reply to [[RewindTo]]: the header cursor is at `forkPoint` (or was already at or below it). NOT a Command. */
+  final case class Rewound(forkPoint: BigInt)
+
   case class Progress( // outbound reply type — NOT a Command
       headersDownloaded: BigInt,
       bodiesDownloaded: BigInt,

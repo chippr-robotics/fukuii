@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeerWithMinBlockE
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestSnapPeerWithMinBlockExcluding
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BlacklistPeer
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.ExcludingPeers
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.NoSuitablePeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
@@ -37,13 +38,16 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Fetches and persists a single pivot header so SNAP can start without importing blocks.
   *
-  * Two modes:
+  * Three modes:
   *   - **By number** (`targetBlock`, `targetHash = None`): the standard pre-merge / non-CL path, used by SNAP's
   *     TD-driven pivot selection.
   *   - **By hash** (`targetBlock = 0`, `targetHash = Some(_)`): the CL-driven post-merge path (#1207). The CL has
   *     pushed a head hash via engine_forkchoiceUpdated; we fetch that hash directly via `GetBlockHeaders(Right(hash))`.
   *     The `Completed` reply uses `header.number` as the targetBlock so callers don't need to special-case the by-hash
   *     mode.
+  *   - **Ancestry** ([[applyAncestry]]): the header `depth` blocks below a CL head hash, from one reverse request
+  *     starting at that hash; the run must be the head's ancestry ([[ancestryPivot]]), so the header is the CL head's
+  *     ancestor whichever peer served it. `Completed` carries its number.
   *
   * Pekko Typed migration (Group ROOT): converted to a `Behavior[Command]` with a sealed inbound ADT. The two outgoing
   * messages [[Completed]] / [[Failed]] are delivered to a Classic `replyTo` ref — the CAPSTONE co-existence bridge on
@@ -64,6 +68,8 @@ object PivotHeaderBootstrap:
   private case object NoEligiblePeer extends Command
   // Sent from the off-thread callback when `headerCheck` rejected the header `peer` served.
   final private case class Rejected(peer: Option[Peer], header: BlockHeader, error: BlockHeaderError) extends Command
+  // Sent from the off-thread callback when an ancestry run is not the head's ancestry (AncestryProblem.Mismatch).
+  final private case class AncestryRejected(peer: Option[Peer], reason: String, metricReason: String) extends Command
   final private case class Retry(reason: String) extends Command
   final private case class Fetched(header: BlockHeader) extends Command
 
@@ -82,6 +88,54 @@ object PivotHeaderBootstrap:
     * the peers that remain (the peer that served the rejected header is blacklisted).
     */
   val ExhaustedAfterRejection: String = "eligible peers exhausted after header rejection"
+
+  /** The `Failed` reason in ancestry mode when every eligible peer was asked and none served the run (each was behind
+    * the head, say): the caller asks again later, from the consensus layer's newest head.
+    */
+  val AncestryNotServed: String = "no peer served the head's ancestry"
+
+  /** The most headers below a head an ancestry fetch asks for: go-ethereum's `MaxHeaderFetch` (192) per request. */
+  val MaxAncestryDepth: Int = 192
+
+  /** Why a reverse header run from a head hash does not give the header `depth` below it ([[ancestryPivot]]). */
+  enum AncestryProblem:
+    /** The run is the head's ancestry so far but shorter than asked: the peer does not hold it all (it is behind the
+      * head, say). Not a fault of the peer.
+      */
+    case Incomplete(received: Int)
+
+    /** The run is not the head's ancestry: the first header is not the head, a header is not its predecessor's parent
+      * (hash and number), or there are more headers than asked for. `metricReason` labels `chain.header.rejected`.
+      */
+    case Mismatch(reason: String, metricReason: String)
+
+  /** The header `depth` blocks below `headHash`, from `headers`, a reverse run that must be exactly `depth + 1`
+    * headers: the first one is the header whose hash is `headHash`, and each one after it is the parent of the one
+    * before it (its hash is that header's parent hash, its number one less). The header returned is then the head's
+    * ancestor by hash, whoever served the run.
+    */
+  def ancestryPivot(headHash: ByteString, depth: Int, headers: Seq[BlockHeader]): Either[AncestryProblem, BlockHeader] =
+    val run = headers.toIndexedSeq
+    val expected = depth + 1
+    if run.isEmpty then Left(AncestryProblem.Incomplete(0))
+    else if run.head.hash.value != headHash then
+      Left(AncestryProblem.Mismatch(s"the first header ${run.head.idTag} is not the head", "AncestryHead"))
+    else
+      val broken = (1 until run.size).find(i =>
+        run(i).hash != run(i - 1).parentHash || run(i).number.value != run(i - 1).number.value - 1
+      )
+      broken match
+        case Some(i) =>
+          Left(
+            AncestryProblem.Mismatch(
+              s"header ${run(i).idTag} (position $i) is not the parent of ${run(i - 1).idTag}",
+              HeaderChainCheck.ParentLinkReason
+            )
+          )
+        case None if run.size < expected => Left(AncestryProblem.Incomplete(run.size))
+        case None if run.size > expected =>
+          Left(AncestryProblem.Mismatch(s"${run.size} headers for $expected asked", "AncestryLength"))
+        case None => Right(run.last)
 
   /** Fetch by block number (the standard pre-merge / TD-driven SNAP path).
     *
@@ -149,6 +203,42 @@ object PivotHeaderBootstrap:
       AcceptAll
     )
 
+  /** Ancestry mode: the header `depth` blocks below the consensus layer's head `headHash` (post-merge chains). One
+    * `GetBlockHeaders(Right(headHash), depth + 1, reverse)` per attempt; the run must be the head's ancestry
+    * ([[ancestryPivot]]). A run that is not is not stored: its peer is blacklisted (`BlockHeaderValidationFailed`) and
+    * another peer is asked. A peer that holds only part of the run is skipped without blame. When no eligible peer is
+    * left the bootstrap replies [[Failed]] ([[ExhaustedAfterRejection]] after a rejected run, else
+    * [[AncestryNotServed]]) instead of waiting: the caller asks again from the newest head.
+    */
+  def applyAncestry(
+      peersClient: ActorRef[PeersClient.Command],
+      blockchainWriter: BlockchainWriter,
+      headHash: ByteString,
+      depth: Int,
+      replyTo: ActorRef[Reply],
+      syncConfig: SyncConfig,
+      maxAttempts: Int = 10,
+      initialRetryDelay: FiniteDuration = 1.second,
+      maxRetryDelay: FiniteDuration = 10.seconds,
+      waitForPeerDelay: FiniteDuration = 30.seconds
+  ): Behavior[Command] =
+    require(depth >= 0 && depth <= MaxAncestryDepth, s"ancestry depth must be in 0..$MaxAncestryDepth, was $depth")
+    behavior(
+      peersClient,
+      blockchainWriter,
+      targetBlock = BigInt(0),
+      targetHash = Some(headHash),
+      replyTo,
+      syncConfig,
+      maxAttempts,
+      initialRetryDelay,
+      maxRetryDelay,
+      waitForPeerDelay,
+      preferSnapPeers = false,
+      headerCheck = AcceptAll,
+      ancestryDepth = Some(depth)
+    )
+
   private def behavior(
       peersClient: ActorRef[PeersClient.Command],
       blockchainWriter: BlockchainWriter,
@@ -161,7 +251,8 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
       preferSnapPeers: Boolean,
-      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid]
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid],
+      ancestryDepth: Option[Int] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -179,7 +270,8 @@ object PivotHeaderBootstrap:
           maxRetryDelay,
           waitForPeerDelay,
           preferSnapPeers,
-          headerCheck
+          headerCheck,
+          ancestryDepth
         ).running()
       }
     }
@@ -197,7 +289,9 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration,
       waitForPeerDelay: FiniteDuration,
       preferSnapPeers: Boolean,
-      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid]
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid],
+      // Ancestry mode (applyAncestry): the header this many blocks below the head `targetHash`.
+      ancestryDepth: Option[Int]
   ):
 
     // Safe from any thread (the `peersClient ?` callbacks run off the actor thread).
@@ -209,9 +303,11 @@ object PivotHeaderBootstrap:
     implicit private val scheduler: Scheduler = ctx.system.scheduler
 
     private val byHashMode: Boolean = targetHash.isDefined
-    private def targetDesc: String = targetHash match
-      case Some(h) => s"hash=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(h)}"
-      case None    => s"block=$targetBlock"
+    private def targetDesc: String = (targetHash, ancestryDepth) match
+      case (Some(h), Some(depth)) =>
+        s"$depth below head=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(h)}"
+      case (Some(h), None) => s"hash=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(h)}"
+      case (None, _)       => s"block=$targetBlock"
 
     private var attempt: Int = 0
     private val triedPeers: scala.collection.mutable.Set[PeerId] = scala.collection.mutable.Set.empty
@@ -288,6 +384,31 @@ object PivotHeaderBootstrap:
         ctx.self ! Retry(s"header ${header.idTag} from peer $peerDesc failed validation: $error")
         Behaviors.same
 
+      case AncestryRejected(peerOpt, reason, metricReason) =>
+        // Not the head's ancestry: nothing is stored; blacklist the peer (as for a header that fails validation) and
+        // ask another (it is in `triedPeers`).
+        rejections += 1
+        val peerDesc = peerOpt.map(_.id.value).getOrElse("?")
+        ctx.log.warn(
+          s"${HeaderChainCheck.LogTag} pivot ancestry run ($targetDesc) from peer $peerDesc is not the head's ancestry " +
+            s"($reason); blacklisting the peer and asking another"
+        )
+        SNAPSyncMetrics.incrementHeaderRejected(metricReason, HeaderChainCheck.Phase.PivotBootstrap)
+        peerOpt.foreach(p => peersClient ! BlacklistPeer(p.id, BlacklistReason.BlockHeaderValidationFailed))
+        ctx.self ! Retry(s"ancestry run from peer $peerDesc rejected: $reason")
+        Behaviors.same
+
+      case NoEligiblePeer if ancestryDepth.isDefined =>
+        // Ancestry mode does not wait for a fresh peer: the head it walks back from ages, and the caller asks again from
+        // the consensus layer's newest one.
+        val reason = if rejections > 0 then ExhaustedAfterRejection else AncestryNotServed
+        ctx.log.warn(
+          s"Pivot ancestry bootstrap ($targetDesc): no eligible peer left (${triedPeers.size} tried, $rejections " +
+            s"rejected run(s)); giving up: $reason"
+        )
+        replyTo ! Failed(reason)
+        Behaviors.stopped
+
       case NoEligiblePeer if rejections > 0 =>
         ctx.log.warn(
           s"${HeaderChainCheck.LogTag} pivot header bootstrap for $targetDesc: no eligible peer left after " +
@@ -324,9 +445,14 @@ object PivotHeaderBootstrap:
     }
 
     private def fetchOnce(): Unit =
-      // Build the GetBlockHeaders request — Right(hash) for by-hash mode, Left(number) for by-number.
+      // Build the GetBlockHeaders request — Right(hash) for by-hash mode, Left(number) for by-number. Ancestry mode: the
+      // head and the `depth` headers below it, in reverse.
       val target: Either[BigInt, ByteString] = targetHash.toRight(targetBlock)
-      val msg = ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+      val msg = ancestryDepth match
+        case Some(depth) =>
+          ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = depth + 1, skip = 0, reverse = true)
+        case None =>
+          ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
 
       // Peer selection:
       //   By-number with preferSnapPeers (standard SNAP pivot bootstrap): BestSnapPeerWithMinBlockExcluding
@@ -337,8 +463,10 @@ object PivotHeaderBootstrap:
       //   By-number without preferSnapPeers: BestPeerWithMinBlockExcluding rotates through the full pool.
       //   By-hash (preferSnapPeers=false in SyncController): BestPeer — CL-driven path.
       //   By-hash + preferSnapPeers: unreachable in production (targetBlock=0, no meaningful minBlock).
+      //   Ancestry: any peer not yet asked (ExcludingPeers), so a peer whose run was rejected or short is not asked again.
       val selector =
-        if preferSnapPeers && !byHashMode then BestSnapPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
+        if ancestryDepth.isDefined then ExcludingPeers(triedPeers.toSet)
+        else if preferSnapPeers && !byHashMode then BestSnapPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
         else if preferSnapPeers then BestSnapPeer
         else if byHashMode then BestPeer
         else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
@@ -367,43 +495,66 @@ object PivotHeaderBootstrap:
         }
         .map {
           case PeersClient.Response(peer, headers: ETHPackets.BlockHeaders) =>
-            (Some(peer), headers.headers.headOption, false)
+            (Some(peer), headers.headers, false)
           case PeersClient.Response(peer, _) =>
-            (Some(peer), None, false)
+            (Some(peer), Seq.empty[BlockHeader], false)
           case NoSuitablePeer =>
-            (None, None, false)
+            (None, Seq.empty[BlockHeader], false)
           case RequestFailed(peer, reason) =>
             asyncLog.warn("Pivot header request failed: {}", reason)
-            (Some(peer), None, true)
+            (Some(peer), Seq.empty[BlockHeader], true)
         }
         .recover { case ex =>
           asyncLog.warn("Pivot header bootstrap ask failed (attempt {}/{}): {}", attempt, maxAttempts, ex.getMessage)
-          (None, None, false)
+          (None, Seq.empty[BlockHeader], false)
         }
-        .foreach { case (peerOpt, headerOpt, isFailed) =>
+        .foreach { case (peerOpt, headers, isFailed) =>
           peerOpt.foreach(p => triedPeers += p.id)
-          headerOpt match
-            case Some(header) if matchesTarget(header) =>
-              headerCheck(header) match
-                case Right(_)    => ctx.self ! Fetched(header)
-                case Left(error) => ctx.self ! Rejected(peerOpt, header, error)
-            case Some(header) =>
-              ctx.self ! Retry(
-                s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
-                    .hash2string(header.hash.value)}) doesn't match target $targetDesc"
-              )
-            case None if peerOpt.isDefined && isFailed =>
-              // RequestFailed: peer explicitly rejected the request — consume an attempt and rotate.
-              ctx.self ! Retry(s"peer ${peerOpt.get.id} request failed")
-            case None if peerOpt.isDefined =>
-              // Empty headers — almost always a connection drop (Besu's ~60s reconnect cycle).
-              // Use WaitForPeer (no attempt consumed) so the retry budget isn't drained by
-              // transient disconnects.
-              ctx.self ! WaitForPeer
-            case None =>
-              // NoSuitablePeer: decided on the actor thread (wait for a fresh peer, or give up after a rejection).
-              ctx.self ! NoEligiblePeer
+          (targetHash, ancestryDepth) match
+            case (Some(head), Some(depth)) if headers.nonEmpty => onAncestryRun(peerOpt, head, depth, headers)
+            case _                                             => onHeader(peerOpt, headers.headOption, isFailed)
         }
+
+    /** One header (by number or by hash), or none, from `peerOpt`. Runs on the ask callback's thread. */
+    private def onHeader(peerOpt: Option[Peer], headerOpt: Option[BlockHeader], isFailed: Boolean): Unit =
+      headerOpt match
+        case Some(header) if matchesTarget(header) =>
+          headerCheck(header) match
+            case Right(_)    => ctx.self ! Fetched(header)
+            case Left(error) => ctx.self ! Rejected(peerOpt, header, error)
+        case Some(header) =>
+          ctx.self ! Retry(
+            s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
+                .hash2string(header.hash.value)}) doesn't match target $targetDesc"
+          )
+        case None if peerOpt.isDefined && isFailed =>
+          // RequestFailed: peer explicitly rejected the request — consume an attempt and rotate.
+          ctx.self ! Retry(s"peer ${peerOpt.get.id} request failed")
+        case None if peerOpt.isDefined =>
+          // Empty headers — almost always a connection drop (Besu's ~60s reconnect cycle).
+          // Use WaitForPeer (no attempt consumed) so the retry budget isn't drained by
+          // transient disconnects.
+          ctx.self ! WaitForPeer
+        case None =>
+          // NoSuitablePeer: decided on the actor thread (wait for a fresh peer, or give up after a rejection).
+          ctx.self ! NoEligiblePeer
+
+    /** Ancestry mode: a non-empty reverse run from `head`. Runs on the ask callback's thread. */
+    private def onAncestryRun(peerOpt: Option[Peer], head: ByteString, depth: Int, headers: Seq[BlockHeader]): Unit =
+      ancestryPivot(head, depth, headers) match
+        case Right(pivot)                               => ctx.self ! Fetched(pivot)
+        case Left(AncestryProblem.Incomplete(received)) =>
+          // The peer holds only part of the run (it is behind the head): ask another, consuming no attempt.
+          asyncLog.debug(
+            "Pivot ancestry ({}): peer {} served {} of {} headers; asking another",
+            targetDesc,
+            peerOpt.map(_.id.value).getOrElse("?"),
+            received,
+            depth + 1
+          )
+          ctx.self ! WaitForPeer
+        case Left(AncestryProblem.Mismatch(reason, metricReason)) =>
+          ctx.self ! AncestryRejected(peerOpt, reason, metricReason)
 
     private def matchesTarget(header: BlockHeader): Boolean =
       targetHash match
