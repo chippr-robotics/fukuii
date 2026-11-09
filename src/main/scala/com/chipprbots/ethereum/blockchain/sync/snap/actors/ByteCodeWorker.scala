@@ -120,7 +120,7 @@ object ByteCodeWorker:
 
         case ByteCodeWorkerRelease(reqId) =>
           if reqId == requestId then
-            requestTracker.completeRequest(requestId)
+            requestTracker.completeRequest(requestId, 0)
             goIdle
           else
             context.log.debug(s"ByteCodeWorkerRelease for unknown request $reqId, ignoring")
