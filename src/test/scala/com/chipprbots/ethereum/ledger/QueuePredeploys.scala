@@ -10,7 +10,8 @@ import org.bouncycastle.util.encoders.Hex
   *
   * A Prague block needs both deployed (`BlockExecution.requireRequestPredeploysPresent`), and they are what turns a
   * transaction into an EIP-7685 execution request, so every spec that builds or executes a Prague block with requests
-  * uses these.
+  * uses these. An Amsterdam block also needs the two EIP-8282 builder queues (`BuilderDepositQueueCode` and
+  * `BuilderExitQueueCode`, from the same file).
   */
 object QueuePredeploys:
 
@@ -46,3 +47,39 @@ object QueuePredeploys:
 
   /** An EIP-7002 add-request call's calldata: pubkey48 || amount8 (big-endian gwei), 56 bytes. */
   val WithdrawalRequestCalldata: ByteString = ByteString(Hex.decode("42" * 48 + "000000003b9aca00"))
+
+  /** The EIP-8282 builder deposit queue predeploy (628 bytes), verbatim from the same `genesis.json`. */
+  val BuilderDepositQueueCode: ByteString = ByteString(
+    Hex.decode(
+      "3373fffffffffffffffffffffffffffffffffffffffe1461011c575f54807fffffffffffffffffffffffffffffffffff" +
+        "ffffffffffffffffffffffffffffff146102705760015460088111605257506058565b60089003015b60119060018202" +
+        "6001905f5b5f821115607f57810190830284830290049160010191906064565b90939004925050503660b814609f5736" +
+        "6102705734610270575f5260205ff35b8034106102705760383567ffffffffffffffff1680633b9aca00116102705763" +
+        "3b9aca00029034031061027057600154600101600155600354806006026004015f358155600101602035815560010160" +
+        "403581556001016060358155600101608035815560010160a035905560b85f5f3760b85fa0600101600355005b600354" +
+        "60025480820380604011610131575060405b5f5b8181146101d7578281016006026004018160b8028154815260200181" +
+        "600101548152602001816002015480825260401c67ffffffffffffffff16816010018160381c81600701538160301c81" +
+        "600601538160281c81600501538160201c81600401538160181c81600301538160101c81600201538160081c81600101" +
+        "5353602001816003015481526020018160040154815260200190600501549052600101610133565b91018092146101e9" +
+        "57906002556101f4565b90505f6002555f6003555b36610242575f54600154817fffffffffffffffffffffffffffffff" +
+        "ffffffffffffffffffffffffffffffffff1461023057600882820111610238575b50505f610264565b01600890036102" +
+        "64565b7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5b5f555f60015560b8025ff3" +
+        "5b5f5ffd"
+    )
+  )
+
+  /** The EIP-8282 builder exit queue predeploy (458 bytes), verbatim from the same `genesis.json`. */
+  val BuilderExitQueueCode: ByteString = ByteString(
+    Hex.decode(
+      "3373fffffffffffffffffffffffffffffffffffffffe1460e1575f54807fffffffffffffffffffffffffffffffffffff" +
+        "ffffffffffffffffffffffffffff146101c65760015460028111605157506057565b60029003015b6011906001820260" +
+        "01905f5b5f821115607e57810190830284830290049160010191906063565b909390049250505036603014609e573661" +
+        "01c657346101c6575f5260205ff35b34106101c657600154600101600155600354806003026004013381556001015f35" +
+        "815560010160203590553360601b5f5260305f60143760445fa0600101600355005b6003546002548082038060101160" +
+        "f5575060105b5f5b81811461012d5782810160030260040181604402815460601b815260140181600101548152602001" +
+        "9060020154905260010160f7565b910180921461013f579060025561014a565b90505f6002555f6003555b3661019857" +
+        "5f54600154817fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff146101865760028282" +
+        "011161018e575b50505f6101ba565b01600290036101ba565b7fffffffffffffffffffffffffffffffffffffffffffff" +
+        "ffffffffffffffffffff5b5f555f6001556044025ff35b5f5ffd"
+    )
+  )

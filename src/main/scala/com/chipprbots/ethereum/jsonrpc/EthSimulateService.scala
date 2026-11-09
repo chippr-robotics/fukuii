@@ -556,7 +556,13 @@ class EthSimulateService(
     if amsterdam then
       val beforePreamble = InMemoryWorldStateProxy.persistState(world)
       val preambleReads = new BlockAccessRecorder
-      val afterPreamble = SimulatedBlockSystemCalls.amsterdamPreamble(simHeader, beforePreamble, Some(preambleReads))
+      val afterPreamble =
+        SimulatedBlockSystemCalls.amsterdamPreamble(
+          simHeader,
+          beforePreamble,
+          Some(preambleReads),
+          precompileRelocations
+        )
       accessList.foreach(_.addIndex(0L, preambleReads, beforePreamble, afterPreamble))
       world = afterPreamble
 
@@ -594,11 +600,20 @@ class EthSimulateService(
 
     // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
     // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
-    // EIP-6110 deposit logs return.
+    // EIP-6110 deposit logs return. As in go-ethereum's PostExecution (simulate.go:499-502 returns its error as it is), a
+    // request contract with no code ends the whole simulation with -32000 `failed to process <queue>: empty system
+    // contract: no code at <address>`, which a state override that clears its code causes; and the calls run on this
+    // block's precompiles, so a move or a deletion reaches them as it reaches a call.
     val amsterdamRequestsHash: Option[ByteString] =
       if !amsterdam then None
       else
-        SimulatedBlockSystemCalls.requests(simHeader, world, receipts, Some(postExecutionReads)) match
+        SimulatedBlockSystemCalls.requests(
+          simHeader,
+          world,
+          receipts,
+          Some(postExecutionReads),
+          precompileRelocations
+        ) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
             val persisted = InMemoryWorldStateProxy.persistState(afterRequests)

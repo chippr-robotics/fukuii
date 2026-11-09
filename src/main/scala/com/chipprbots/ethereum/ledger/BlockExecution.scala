@@ -835,14 +835,56 @@ class BlockExecution(
 
 object BlockExecution:
 
+  /** What [[requestSystemCalls]] does with a request contract that has no code when its turn comes.
+    *
+    * The two policies are the two consumers. Block execution cannot reach an empty contract at all
+    * (`BlockExecution.requireRequestPredeploysPresent` has already made such a block invalid, on the codeHash), so its
+    * `Skip` is only the guard for the direct callers (tests, proposer paths). eth_simulateV1 has no such earlier check
+    * and runs go-ethereum's `processRequestsSystemCall`, which fails the block.
+    */
+  private[ledger] enum EmptyRequestContract:
+    /** Go on to the next contract, and add nothing to the requests. */
+    case Skip
+
+    /** Fail with go-ethereum's `failed to process <queue>: empty system contract: no code at <EIP-55 address>`. */
+    case Fail
+
+  /** go-ethereum's name for the queue a request type comes from, as `PostExecution` words its error (`failed to process
+    * withdrawal queue: ...`, state_processor.go:211, :215, :222, :225).
+    */
+  private def requestQueueName(requestType: Int): String = requestType match
+    case WithdrawalRequestType     => "withdrawal queue"
+    case ConsolidationRequestType  => "consolidation queue"
+    case BuilderDepositRequestType => "builder deposit queue"
+    case BuilderExitRequestType    => "builder exit queue"
+    case other                     => s"request type 0x${other.toHexString}"
+
+  /** go-ethereum `processRequestsSystemCall`'s refusal of a request contract with no code (state_processor.go:470-472:
+    * `empty system contract: no code at %v`), under the wrapper `PostExecution` gives it. `%v` of a `common.Address` is
+    * its EIP-55 form (types.go `Format`), and the code size is read from the world the earlier calls left.
+    */
+  private def emptyRequestContractError(queueAddr: Address, requestType: Int): String =
+    val queue = requestQueueName(requestType)
+    s"failed to process $queue: empty system contract: no code at ${StxLedger.checksum(queueAddr)}"
+
   /** The body of `BlockExecution.processPragueSystemCallsChecked` (see there), on a header rather than a block, so that
     * eth_simulateV1 runs the very same EIP-7002 / EIP-7251 / EIP-8282 system calls a real block does
     * ([[SimulatedBlockSystemCalls]]). Moved here unchanged; block execution delegates to it.
+    *
+    * The two trailing parameters are eth_simulateV1's, and their defaults are block execution's, so a real block runs
+    * exactly as before:
+    *   - `precompileRelocations`: the block's precompile relocations (`a -> t` moved, `a -> a` deleted, as
+    *     [[SimulationOverrides]] and `EthSimulateService.applyStateOverrides` give them). go-ethereum runs these calls
+    *     on the same EVM, with the same overridden precompile set, as the block's transactions (simulate.go:403-409),
+    *     so a contract the call reaches sees the moved or deleted precompile as a transaction would.
+    *   - `emptyContract`: see [[EmptyRequestContract]].
     */
   private[ledger] def requestSystemCalls(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address] = Map.empty,
+      emptyContract: EmptyRequestContract = EmptyRequestContract.Skip
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
     if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then Right((world, Nil))
     else
@@ -871,7 +913,15 @@ object BlockExecution:
           // makes the call, which reads the target as any call does. All four share block access index n + 1.
           accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
           val context =
-            BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
+            BlockExecution.systemCallContext(
+              header,
+              w,
+              queueAddr,
+              ByteString.empty,
+              evmConfig,
+              accessRecorder,
+              precompileRelocations
+            )
           val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
           val result = vm.run(context)
           result.error match
@@ -882,6 +932,10 @@ object BlockExecution:
               // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
               // Empty returndata (no queued requests) means no bytes are emitted for this type.
               if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+        else if failure.isEmpty && emptyContract == EmptyRequestContract.Fail then
+          // Here `code` is empty. go-ethereum checks the code size of each contract on the world the calls before it left,
+          // before it touches the contract (state_processor.go:470), so nothing is recorded for the access list.
+          failure = Some(emptyRequestContractError(queueAddr, requestType))
       failure.toLeft((w, outputs.toSeq))
 
   /** The body of `BlockExecution.collectDepositRequests` (see there), shared with eth_simulateV1. Moved here unchanged.
@@ -980,6 +1034,9 @@ object BlockExecution:
     *
     * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
     * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
+    * context is what it was.
     */
   def systemCallContext(
       header: BlockHeader,
@@ -987,7 +1044,8 @@ object BlockExecution:
       target: Address,
       input: ByteString,
       evmConfig: EvmConfig,
-      accessRecorder: Option[BlockAccessRecorder] = None
+      accessRecorder: Option[BlockAccessRecorder] = None,
+      precompileRelocations: Map[Address, Address] = Map.empty
   ): ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] =
     val stateGasReservoir = if evmConfig.amsterdamEnabled then AmsterdamGas.SystemCallStateGasReservoir else BigInt(0)
     ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
@@ -1008,6 +1066,7 @@ object BlockExecution:
       originalWorld = world,
       warmAddresses = Set(target),
       warmStorage = Set.empty,
+      precompileRelocations = precompileRelocations,
       stateGasReservoir = stateGasReservoir,
       initialStateGasReservoir = stateGasReservoir,
       accessRecorder = accessRecorder
@@ -1046,16 +1105,27 @@ object BlockExecution:
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); block execution and the trace replays
+    * leave it empty.
     */
   private[ledger] def applyAmsterdamPreambleSystemCalls(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address] = Map.empty
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val afterBeaconRoot = header.parentBeaconBlockRoot.fold(world) { root =>
-      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder)
+      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder, precompileRelocations)
     }
-    uncheckedSystemCall(header, afterBeaconRoot, HistoryStorageAddress, header.parentHash.value, accessRecorder)
+    uncheckedSystemCall(
+      header,
+      afterBeaconRoot,
+      HistoryStorageAddress,
+      header.parentHash.value,
+      accessRecorder,
+      precompileRelocations
+    )
 
   /** execution-specs `process_unchecked_system_transaction`: a SYSTEM_ADDRESS call to `target`, whose failure is
     * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
@@ -1066,7 +1136,8 @@ object BlockExecution:
       world: InMemoryWorldStateProxy,
       target: Address,
       input: ByteString,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     // EIP-7928: the target is read even when it has no code (execution-specs `create_evm` resolves its code first;
     // EEST `bal_4788_absent_contract`), and its reads stay when the call fails
@@ -1075,7 +1146,7 @@ object BlockExecution:
     if world.getCode(target).isEmpty then world
     else
       val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
-      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder)
+      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder, precompileRelocations)
       val result =
         new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage].run(context)
       if result.error.isDefined then world else InMemoryWorldStateProxy.persistState(result.world)

@@ -487,6 +487,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go-ethereum's `settleGas` computes it. `gasUsed`, the receipts, the block's `gasUsed` and the state root of a
   simulated block do not change, and neither does block import: the new `TxResult.maxUsedGas` is read only by this
   RPC, and `TxResultBlockImportPinSpec` pins the gas, receipts and state roots of block execution on ETH and ETC.
+- **`eth_simulateV1` refuses a simulated Amsterdam block whose request contract has no code, and runs the block's
+  system calls on its precompiles, as go-ethereum v1.17.9 does (#1727, B-131). ETH only: no ETC chain schedules
+  Amsterdam.** A state override that cleared the code of the EIP-7002 withdrawal queue, the EIP-7251 consolidation
+  queue or either EIP-8282 builder queue was skipped: the block was built without that request call. It now ends the
+  whole simulation with -32000 and go-ethereum's text, `failed to process withdrawal queue: empty system contract: no
+  code at 0x00000961Ef480Eb55e80D19ad83579A64c007002`; the queues are checked in the order withdrawal, consolidation,
+  builder deposit, builder exit (`withdrawal queue`, `consolidation queue`, `builder deposit queue`, `builder exit
+  queue`), and the address is in EIP-55 form. The EIP-4788 and EIP-2935 calls and the request calls also run with the
+  block's precompile moves and deletions (`movePrecompileToAddress`, an entry at a precompile's address), as its
+  transactions do. Before, a contract those calls reached found every precompile where it had been, and a precompile
+  moved onto a request contract's address was not the one called. Block import is unchanged: it still refuses a block
+  with an empty request contract before any call (`SYSTEM_CONTRACT_EMPTY`), and `RequestSystemCallsBlockImportPinSpec`
+  pins the requests, requests hash, receipts and state root of Prague, Osaka and Amsterdam blocks on ETH, and of an
+  Olympia block on ETC, as recorded before the change.
 - **`scripts/ephemery/fetch-genesis.sh` no longer refuses an iteration with Amsterdam at genesis.** It called that
   unverified, which kept fukuii off the live network from `ephemery-165` on, though the genesis loader handles it. Checked
   against the published genesis hash and a live sync to the head.
@@ -604,7 +618,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unbounded block-gap loop that stalled the node, the malformed override values it accepted, the precompile override
   cases it got wrong and its `maxUsedGas` are fixed (see Fixed). A comparison of 815 cases with geth v1.17.9 on
   Ephemery found these differences:
-  - a request system contract whose code is overridden away is skipped instead of failing;
+  - a simulated block before Amsterdam (Prague, Osaka) runs none of the request system calls, which go-ethereum runs
+    for every Prague block: its `requestsHash` stays the empty-requests hash, the queues are not dequeued in its
+    state, and an overridden-away request contract is not an error there;
   - VM and precompile error texts differ (`precompiledcontractfail` where geth says, for example, `invalid input
     length`).
 
