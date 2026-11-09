@@ -93,7 +93,8 @@ object CallTxBuilder:
     * @param gas
     *   the message's gas limit ([[callGas]] / [[estimateGasCeiling]])
     * @param precompileRelocations
-    *   `movePrecompileToAddress` state overrides, already applied to the world
+    *   the precompiles the state overrides moved or deleted, as `EthSimulateService.applyStateOverrides` returns them
+    *   (`a -> t` moved, `a -> a` deleted); the world already has the overrides applied
     * @param skipExecutionGasCap
     *   true for eth_call and the trace calls, false for eth_estimateGas and eth_createAccessList (see
     *   `StxLedger.CallOptions`)

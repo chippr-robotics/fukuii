@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.AccessListTracer
-import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService:
@@ -448,6 +447,12 @@ class EthInfoService(
     * sender, the recipient (for a creation, the address `from` + nonce creates, nonce defaulting to the account's) and
     * the precompiles active at the block, and starts from the caller's accessList when one is given.
     *
+    * The state overrides follow geth in a way that differs from eth_call: `AccessList` applies them with no precompiles
+    * at all (`Apply(db, nil)`, api.go:1366), and so does this. Every `movePrecompileToAddress` is `account <address> is
+    * not a precompile`, even for a precompile the block has; no entry deletes a precompile, and the run keeps all of
+    * them. The other overrides apply as in eth_call. (The tracer's exclusions are the block's precompiles all the same:
+    * geth reads `vm.ActivePrecompiles(rules)` for them.)
+    *
     * Differences from geth, both deliberate:
     *   - no fee defaults: when the call names any fee field geth's `setFeeDefaults` fills the missing ones from its
     *     oracle; fukuii runs with the caller's fees (absent ones 0). With no fee field both run at price 0, which
@@ -462,11 +467,13 @@ class EthInfoService(
         resolved <- resolveBlock(req.block)
         header = resolved.block.header
         base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
-        // geth applies the overrides straight after loading the state, before reading the sender's nonce
+        // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
+        // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
+        // relocations that come back are always empty
         overridden <- req.stateOverrides.fold[Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])]](
           Right((base, Map.empty[Address, Address]))
         )(
-          EthSimulateService.applyStateOverrides(base, _, Map.empty, blockchainConfig.accountStartNonce)
+          EthSimulateService.applyStateOverrides(base, _, Set.empty, blockchainConfig.accountStartNonce)
         )
         (world, relocations) = overridden
         gas = CallTxBuilder.callGas(req.tx, gasCap)
@@ -526,9 +533,8 @@ class EthInfoService(
       )
       CallErrors.createAddress(sender, nonce)
     }
-    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
     val authorities = args.authorizationList.getOrElse(Nil).flatMap(stxLedger.recoverAuthority)
-    Set(sender, recipient) ++ PrecompiledContracts.getContracts(evmConfig, header).keySet ++ authorities
+    Set(sender, recipient) ++ EthSimulateService.activePrecompiles(header)(using blockchainConfig) ++ authorities
 
   /** Resolve the block, apply the overrides and build the message. The world is only built here when state overrides
     * must be applied to it; otherwise the ledger builds its own (or uses the pending block's).
@@ -554,8 +560,12 @@ class EthInfoService(
         case None => Right((resolved.pendingState, Map.empty[Address, Address]))
         case Some(overrides) =>
           val base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
+          // geth builds the precompile rules from the block context after the block overrides (api.go:758-769)
+          val active = EthSimulateService.activePrecompiles(
+            CallTxBuilder.applyBlockOverrides(header, req.blockOverrides)
+          )(using blockchainConfig)
           EthSimulateService
-            .applyStateOverrides(base, overrides, Map.empty, blockchainConfig.accountStartNonce)
+            .applyStateOverrides(base, overrides, active, blockchainConfig.accountStartNonce)
             .map { case (w, relocations) => (Some(w), relocations) }
       (world, relocations) = overridden
       msg <- CallTxBuilder.build(
