@@ -50,8 +50,9 @@ import com.chipprbots.ethereum.utils.Hex
   */
 abstract class BaseNode extends Node:
 
-  private var tuiUpdater: Option[TuiUpdater] = None
-  private var tuiProbe: Option[TuiProbeThread] = None
+  // Set on the thread that starts the node, read by the shutdown hook's.
+  @volatile private var tuiUpdater: Option[TuiUpdater] = None
+  @volatile private var tuiProbe: Option[TuiProbeThread] = None
 
   /** The TUI's latest status snapshot: [[TuiProbeThread]] publishes it, the frame loop reads it (spec 027 FR-011). */
   private val tuiSnapshots = new AtomicReference[Option[NodeStatusSnapshot]](None)
