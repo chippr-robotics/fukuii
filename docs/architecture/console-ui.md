@@ -60,7 +60,7 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
 ────────────────────────────────────────────────────────────────────────────────
  Forks   Mystique ✓ ════════════════════════▶ Spiral @ 19,250,000 (847.9K away)
 ────────────────────────────────────────────────────────────────────────────────
- Node    /var/lib/fukuii/etc · Full sync · archive pruning · 50 peers max · mini
+ Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off
 
 
 
