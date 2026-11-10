@@ -93,7 +93,8 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
       s"SNAP progress reset by a restart (was: phase=$currentPhaseState, accounts=$accountsSynced, " +
         s"bytecodes=$bytecodesDownloaded, slots=$storageSlotsSynced, nodes healed=$nodesHealed, " +
         s"phase progress=${currentProgress.phaseProgress}%); counters and estimates restart from zero, and the accounts " +
-        s"percentage returns, at the keyspace the ranges cover, once 10,000 accounts have been downloaded again"
+        s"percentage returns, at the keyspace the ranges cover, once " +
+        s"${actors.AccountRangeCoordinator.KeyspaceEstimateMinAccounts} accounts have been downloaded again"
     )
     currentPhaseState = Idle
     phaseProgressMark = 0
@@ -460,9 +461,14 @@ case class SyncProgress(
         else (WormToBrainBar.renderUnknown(Queued), "")
       s"  Accounts   $bar$detail"
 
+    // In its own phase the bar is known from the first contract report (the line's percentage needs no slot estimate);
+    // before and after it, from the slot estimate.
+    val storageKnown =
+      if phase == ByteCodeAndStorageSync then storageContractsTotal > 0 else estimatedTotalSlots > 0
+
     val storageBar =
       val (bar, detail) =
-        if estimatedTotalSlots > 0 then
+        if storageKnown then
           (
             WormToBrainBar.renderKnown(storageFraction),
             s" \u2014 ${formatCount(storageSlotsSynced)} slots$contractsStr"
