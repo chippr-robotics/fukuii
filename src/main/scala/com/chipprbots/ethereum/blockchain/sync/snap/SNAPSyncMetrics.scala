@@ -425,6 +425,20 @@ object SNAPSyncMetrics extends MetricsContainer:
   /** Update current phase time in seconds */
   def setPhaseTime(seconds: Double): Unit = PhaseTimeSecondsGauge.set(seconds)
 
+  // ===== Read-only views for the TUI (spec 027 T074: the Sync view's request counters; additive, nothing else reads them)
+
+  def accountRangeRequests: Long = AccountRangeRequestsCounter.count().toLong
+  def accountRangeFailures: Long = AccountRangeFailuresCounter.count().toLong
+  def bytecodeRequests: Long = BytecodeRequestsCounter.count().toLong
+  def bytecodeFailures: Long = BytecodeFailuresCounter.count().toLong
+  def storageRangeRequests: Long = StorageRangeRequestsCounter.count().toLong
+  def storageRangeFailures: Long = StorageRangeFailuresCounter.count().toLong
+  def healingRequests: Long = HealingRequestsCounter.count().toLong
+  def healingFailures: Long = HealingFailuresCounter.count().toLong
+  def requestTimeouts: Long = RequestTimeoutsCounter.count().toLong
+  def peersBlacklisted: Long = PeerBlacklistCounter.count().toLong
+  def snapCapablePeers: Long = SnapCapablePeersGauge.get
+
   @volatile private var latest: Option[(SyncProgress, Long)] = None
 
   /** The most recent progress passed to [[measure]], if recorded within `maxAgeMillis` — read by the TUI, which has no
