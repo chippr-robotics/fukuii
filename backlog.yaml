@@ -2150,3 +2150,13 @@ items:
     links:
       spec: specs/027-tui-dashboard
     notes: "Slice 3 overlaps local reads with the asks, which absorbs a slow read but not a hung one: TuiStatusProbe.apply blocks, no snapshot is published, agedAt flips both sources to Unresponsive and Alerts raise peer manager / sync controller Unresponsive."
+  - id: B-193
+    title: "Engine API metrics mislabel: ACCEPTED counted as INVALID, engine_newpayload_syncing never moves, dedup/early returns unrecorded"
+    priority: P3
+    status: open
+    area: engine
+    size: S
+    opened: 2026-11-10
+    refs: ["beacon pre-flight, 027 slice 5, 2026-11-10"]
+    links: {}
+    notes: EngineApiMetrics.scala:61 case _ folds ACCEPTED (EngineApiService.scala:747) into INVALID; no caller passes SYNCING; newPayload returns at :385/:411/:448 record nothing; FCU INVALID also covers -38002/-38003. Additive fix only; beacon owns.
