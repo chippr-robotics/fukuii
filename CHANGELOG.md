@@ -328,14 +328,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
-- **SNAP progress no longer goes backwards in the log and on the `--tui` dashboard (B-044).** The accounts percentage
-  fell and climbed because the account-count estimate left out a range whose response was still being inserted (it
-  counted the rest of that range as done); the storage percentage swung because it divided the slot count, which rises
-  with every response, by an estimate pushed only when a contract completes (51% against 1% of contracts done, then
-  back down); and the Overall worm dropped to its stage floor when a percentage passed 100. The storage percentage is
-  now the share of contracts done, and the percentage is held at its highest value within a phase, never past 100. A
-  restart still starts from zero, and now logs what it dropped. The Bytecode row, and the Storage row while the account
-  phase is still finding contracts, show a running total of work found so far and can still fall.
+- **SNAP progress no longer goes backwards in the log, in the log's worm block or on the `--tui` Overall worm
+  (B-044).** The accounts percentage fell and climbed because the account-count estimate left out a range whose
+  response was still being inserted (it counted the rest of that range as done); the storage percentage swung because it
+  divided the slot count, which rises with every response, by an estimate pushed only when a contract completes (51%
+  against 1% of contracts done, then back down); and the Overall worm dropped to its stage floor when a percentage
+  passed 100. The storage percentage is now the share of contracts done, and the percentage is held at its highest
+  value within a phase, never past 100. A restart still starts from zero, and now logs what it dropped.
+  - **Fixed here:** the log line, the Accounts and Storage rows of the log's worm block, and the `--tui` Overall worm.
+  - **Not fixed here:** the `--tui` dashboard's own Accounts and Storage rows (`SnapRows`) still divide the raw count by
+    the estimate, so its Storage row can still run ahead of the contracts done between estimate pushes. They follow the
+    held percentage in spec 027 slice 3.
+  - **Still can fall,** because their total is a running count of work found so far: the Bytecode row, and the Storage
+    row while the account phase is still finding contracts.
 - **A PoW block mined by fukuii is built on the state block import computes for it (B-167).** fukuii's PoW miner
   (internal, or `eth_getWork` / `eth_submitWork`) now runs import's steps before the first transaction
   (`BlockExecution.applyBlockPreamble`, moved there unchanged: the DAO fork block's drain, EIP-4788, EIP-2935), and pays
