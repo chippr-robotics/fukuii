@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                      Help 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Keys                                                                           
+   1 2 3 4   1 Overview  2 Sync  3 Peers  4 Chain                               
+   Tab       the next view (wraps)                                              
+   ? h       this help; any key but q, r and d returns                          
+   p         pause or resume the motion (polling continues)                     
+   g         switch the glyph set: emoji / ascii                                
+   r         redraw the screen                                                  
+   d         detach: the TUI closes, the node keeps running                     
+   q         quit: stops the node                                               
+--------------------------------------------------------------------------------
+ Glyphs (ascii, g switches)                                                     
+   ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer 
+   ! warning   x error   > next fork   . to come   [S] SNAP phase               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain | p Pause ? Help r Redraw d Detach q Quit        

@@ -1,24 +1,24 @@
-                           ◆ FUKUII ETHEREUM CLIENT ◆                           
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                  Overview 
 ────────────────────────────────────────────────────────────────────────────────
- ● NETWORK & CONNECTION                                                         
-   Network: ETC                                                                 
-   Connection: ● Connected                                                      
-   Peers: 41 / 50 ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆                                           
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ RPC     :8545 on                 Disk   388G free                              
 ────────────────────────────────────────────────────────────────────────────────
- ● BLOCKCHAIN                                                                   
-   Current Block: 21,884,102                                                    
-   Best Block: 21,884,102                                                       
-   Sync Status: Synced                                                          
+ Sync    ✓ at head                                                              
    Blocks   🪱[COMPLETE ✓]🧠                21,884,102                          
-   Status: ✓ SYNCHRONIZED                                                       
 ────────────────────────────────────────────────────────────────────────────────
- ● NODE SETTINGS                                                                
-   Data Dir: /var/lib/fukuii/etc                                                
-   Sync Mode: SNAP                                                              
-   Pruning: archive                                                             
-   Max Peers: 50                                                                
-   JSON-RPC: Enabled (port 8545)                                                
-   Mining: Enabled                                                              
+ Forks   Spiral ✓ ══════════════════════════════════════▶ Olympia not scheduled 
 ────────────────────────────────────────────────────────────────────────────────
- ● RUNTIME                                                                      
- r Redraw  d Detach  q Quit                                                     
+ Node    /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mini
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain │ p Pause ? Help r Redraw d Detach q Quit        
