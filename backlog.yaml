@@ -2202,3 +2202,13 @@ items:
     refs: ["#1655 part 2, 2026-11-10"]
     links: {}
     notes: fukuii returns {code:3, message:Execution error, data:[{code:100, message:State node doesn't exist}]} for a block 335 back on a pruned Ephemery node. Code 3 means execution reverted; geth uses -32000 (missing trie node / historical state not available). conduit owns.
+  - id: B-198
+    title: engine_getBlobsV2 answer fails Lighthouse parsing (null where BlobAndProofV2 expected); V2 must return null for the whole response if any blob is missing
+    priority: P2
+    status: open
+    area: engine-api
+    size: S
+    opened: 2026-11-10
+    refs: [B-005]
+    links: {}
+    notes: "Sepolia gate 2026-11-10, Lighthouse v8.3.2: ERROR Error fetching or processing blobs from EL: invalid type: null, expected struct BlobAndProofV2. execution-apis Osaka getBlobsV2: all-or-nothing (null response if any blob is missing); per-element nulls are V1 (and V3) semantics. Lighthouse falls back to gossip, so not fatal. beacon/conduit."
