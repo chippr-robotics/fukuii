@@ -46,3 +46,29 @@ object TuiText:
     else if hours > 0 then s"${hours}h ${minutes}m ${secs}s"
     else if minutes > 0 then s"${minutes}m ${secs}s"
     else s"${secs}s"
+
+  /** The two largest units: 12d 7h, 1h 23m, 4m 12s, 31s. For uptimes, ages and ETAs, where seconds of a day are noise. */
+  def formatShort(seconds: Long): String =
+    val s = seconds.max(0L)
+    val days = s / 86400
+    val hours = (s % 86400) / 3600
+    val minutes = (s % 3600) / 60
+    val secs = s % 60
+    if days > 0 then s"${days}d ${hours}h"
+    else if hours > 0 then s"${hours}h ${minutes}m"
+    else if minutes > 0 then s"${minutes}m ${secs}s"
+    else s"${secs}s"
+
+  private val KiB = 1024.0
+
+  /** Bytes as `df -h` writes them, in powers of 1024: 1.2T, 412G, 14.2G, 512M; negative is unknown, `?`. */
+  def formatBytes(bytes: Long): String =
+    val gib = bytes / (KiB * KiB * KiB)
+    if bytes < 0 then "?"
+    else if gib >= 1024 then String.format(Locale.ROOT, "%.1fT", gib / KiB)
+    else if gib >= 100 then String.format(Locale.ROOT, "%.0fG", gib)
+    else if gib >= 1 then String.format(Locale.ROOT, "%.1fG", gib)
+    else String.format(Locale.ROOT, "%.0fM", bytes / (KiB * KiB))
+
+  /** A share of 1 as a percentage with one decimal: 0.3%. */
+  def formatPercent(share: Double): String = String.format(Locale.ROOT, "%.1f%%", share * 100)
