@@ -91,13 +91,14 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   }
 
   it should "turn next to an in-flight connection status" taggedAs (UnitTest) in {
+    // Slice 3: the connection status is in the vitals strip's Peers cell.
     val searching = TuiState.initial.withConnectionStatus("Searching for peers")
-    val lines = ticks.map(t => rows(searching.copy(tick = t), 100, 40).find(_.contains("Connection")).get)
-    lines.take(4).map(_.trim) shouldBe "|/-\\".map(c => s"Connection: $c Searching for peers")
-    val reduced = rows(searching.copy(motion = Motion.Reduced), 100, 40).find(_.contains("Connection")).get
-    reduced.trim shouldBe "Connection: · Searching for peers"
-    // A settled status keeps its bullet.
-    rows(TuiFixtures.syncedEtc(), 100, 40).find(_.contains("Connection")).get.trim shouldBe "Connection: ● Connected"
+    def peersRow(s: TuiState) = rows(s, 100, 40).find(_.contains("Peers")).get
+    val lines = ticks.map(t => peersRow(searching.copy(tick = t)))
+    lines.take(4).zip("|/-\\").foreach((line, c) => line should include(s"0/0 $c searching"))
+    peersRow(searching.copy(motion = Motion.Reduced)) should include("0/0 · searching")
+    // A settled status shows the peers.
+    peersRow(TuiFixtures.syncedEtc()) should include("41/50 ◆◆◆◆◆◆◆◆◆◆")
   }
 
   // SC-008: under reduced motion and pause, nothing moves.

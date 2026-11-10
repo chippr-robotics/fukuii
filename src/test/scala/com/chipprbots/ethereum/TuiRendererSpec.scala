@@ -43,10 +43,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val height = 40
 
     val lines = renderer.render(state, width, height)
-    val output = lines.map(_.toString).mkString("\n").toUpperCase
 
-    output should include("NETWORK")
-    output should include("ETHEREUM-CLASSIC")
+    // Slice 3: the network is in the header band, on every view (FR-018).
+    lines.head.toString should include("ethereum-classic")
   }
 
   it should "include peer status" taggedAs (UnitTest) in {
@@ -70,8 +69,8 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("Current Block")
-    output should include("Best Block")
+    // Slice 3: the vitals strip's Block cell, current → best (research §3.2).
+    output should include("Block  12,345 → 100,000 (−87,655)")
   }
 
   it should "show synchronized status when synced" taggedAs (UnitTest) in {
@@ -82,7 +81,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("SYNCHRONIZED")
+    output should include("at head")
     // US1 scenario 2: the worm has reached the brain.
     output should include("🪱[COMPLETE ✓]🧠")
   }
@@ -99,7 +98,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
     output should include("Blocks")
     output should include("🧠 50%")
-    output should include("Blocks Remaining")
+    output should include("(−50,000)") // the blocks remaining, in the Block cell
     (output should not).include("Sync Progress")
   }
 
@@ -115,7 +114,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
     (output should not).include("Sync Progress")
     (output should not).include(TuiGlyphs.Emoji.brain.text)
-    output should include("Blocks Remaining")
+    output should include("(−50,000)")
   }
 
   it should "include runtime section with uptime" taggedAs (UnitTest) in {
@@ -124,10 +123,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val height = 40
 
     val lines = renderer.render(state, width, height)
-    val output = lines.map(_.toString).mkString("\n")
 
-    output should include("RUNTIME")
-    output should include("Uptime")
+    // Slice 3: the uptime is in the header band (research §3.1).
+    lines.head.toString should include("up 0s")
   }
 
   it should "include footer with keyboard commands, labelling d Detach (Q7)" taggedAs (UnitTest) in {
@@ -164,10 +162,11 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = rendererWithSettings.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("NODE SETTINGS")
-    output should include("Data Dir")
-    output should include("Sync Mode")
-    output should include("Pruning")
+    // Slice 3: one Node row on the Overview.
+    output should include("Node")
+    output should include("/data/fukuii")
+    output should include("fast sync")
+    output should include("archive pruning")
   }
 
   it should "not show node settings when disabled" taggedAs (UnitTest) in {
@@ -190,7 +189,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = rendererNoSettings.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    (output should not).include("NODE SETTINGS")
+    (output should not).include("/data/fukuii")
   }
 
   it should "create renderer with default config" taggedAs (UnitTest) in {
@@ -262,7 +261,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "show an unknown network head as 'unknown', not 0" taggedAs (UnitTest) in {
     val output = renderer.render(TuiState.initial.withBlockInfo(5, 0), 100, 40).map(_.toString).mkString("\n")
-    output should include("Best Block: unknown")
+    output should include("Block  5 → unknown")
   }
 
   it should "keep styles as attributes rather than embedded escape codes" taggedAs (UnitTest) in {
@@ -306,7 +305,8 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     // At tier L the logo column narrows the body; the row still keeps its rate and its contract count.
     text should include("119.6M slots @ 21.4K/s · 2,114/5,702 contracts")
     text should include("headers 4.2M / 9.1M")
-    text should include("phase 1h 8m 0s")
+    // Slice 3: the time in the phase is on the Sync view's phase row.
+    rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 160, 48).mkString("\n") should include("phase 1h 8m")
   }
 
   // Slice 1 review W4: at the tier L minimum the logo column leaves the body 93 columns. The rate survives; the contract
@@ -321,7 +321,8 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "draw the network name the same under a Turkish default locale" taggedAs (UnitTest) in {
     val text = TuiFixtures.withDefaultLocale(TuiFixtures.Turkish)(rows(TuiFixtures.sepoliaNearHead(), 100, 40).mkString)
-    text should include("Network: SEPOLIA")
+    text should include("sepolia (11155111)")
+    text should include("7,412,009 → 7,412,011")
   }
 
   it should "keep each SNAP row's rate on an 80-column screen" taggedAs (UnitTest) in {

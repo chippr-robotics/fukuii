@@ -54,7 +54,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     tui.getState.peerCount shouldBe 3
     tui.getState.currentBlock shouldBe 100
     tui.getState.bestBlock shouldBe 200
-    TuiTestTerminal.visible(tt.lastFrame) should include("3 / 50")
+    TuiTestTerminal.visible(tt.lastFrame) should include("3/50")
   }
 
   it should "advance the frame counter every frame" taggedAs (UnitTest) in withUpdater() { (updater, tui, _) =>

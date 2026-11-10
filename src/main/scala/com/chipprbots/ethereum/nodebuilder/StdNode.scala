@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.console.ChainFacts
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
 import com.chipprbots.ethereum.console.Tui
@@ -37,6 +38,7 @@ import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
+import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
 
@@ -332,13 +334,21 @@ abstract class BaseNode extends Node:
   private def startTuiUpdater(): Unit =
     Tui.current.filter(_.isEnabled).foreach { tui =>
       log.info("Starting TUI status probe")
-      tui.updateNodeSettings(tuiNodeSettings())
+      val settings = tuiNodeSettings()
+      tui.updateNodeSettings(settings)
+      // Display only: the fork configuration is read, never changed (spec 027 FR-017).
+      tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
+      val local = TuiStatusProbe.LocalSources.node(
+        dataDir = Option(settings.dataDir).filter(_.nonEmpty).map(new java.io.File(_)),
+        headTimestamp = () => blockchainReader.getBestBlockHeader.map(_.unixTimestamp.toLong)
+      )
       val probe = new TuiStatusProbe(
         peerManager,
         syncController,
         () => blockchainReader.getBestBlockNumber,
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
-        () => SNAPSyncMetrics.latestSample
+        () => SNAPSyncMetrics.latestSample,
+        local = local
       )(using system.scheduler)
       // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
       val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)
@@ -357,7 +367,12 @@ abstract class BaseNode extends Node:
       maxPeers = peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
       rpcEnabled = opt(c.getBoolean("network.rpc.http.enabled")).getOrElse(false),
       rpcPort = opt(c.getInt("network.rpc.http.port")).getOrElse(0),
-      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false)
+      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false),
+      wsEnabled = opt(c.getBoolean("network.rpc.ws.enabled")).getOrElse(false),
+      wsPort = opt(c.getInt("network.rpc.ws.port")).getOrElse(0),
+      ipcEnabled = opt(c.getBoolean("network.rpc.ipc.enabled")).getOrElse(false),
+      engineEnabled = opt(c.getBoolean("network.engine-api.enabled")).getOrElse(false),
+      enginePort = opt(c.getInt("network.engine-api.port")).getOrElse(0)
     )
 
   override def shutdown: () => Unit = () =>

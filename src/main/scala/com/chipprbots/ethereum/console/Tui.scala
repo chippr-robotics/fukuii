@@ -167,6 +167,9 @@ class Tui(
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
+  /** The chain's identity and fork timeline, once the node has read its configuration (spec 027 FR-017). */
+  def updateChain(chain: ChainFacts): Unit = modify(_.copy(chain = Some(chain)))
+
   private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
   /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late.
@@ -261,15 +264,35 @@ class Tui(
           None
     }
 
-  /** Handle keyboard commands. While the splash is on screen any key skips it, and does nothing else (FR-013). */
+  /** Handle keyboard commands (FR-015, research §2.2). While the splash is on screen any key skips it, and does
+    * nothing else (FR-013). While Help is open, `q`, `r` and `d` keep their meaning and any other key returns to the
+    * view under it.
+    */
   def handleCommand(command: Char): TuiCommand =
     val height = synchronized(lastSize._2)
-    if state.get.splashCover(height).isDefined then
+    val current = state.get
+    if current.splashCover(height).isDefined then
       modify(_.skipSplash)
+      TuiCommand.Continue
+    else if current.helpOpen && !Tui.KeysInHelp.contains(command) then
+      modify(_.closeHelp)
       TuiCommand.Continue
     else dispatch(command)
 
   private def dispatch(command: Char): TuiCommand = command match
+    case key if TuiView.forKey(key).isDefined =>
+      TuiView.forKey(key).foreach(view => modify(_.withView(view)))
+      TuiCommand.Continue
+    case '\t' =>
+      modify(_.nextView)
+      TuiCommand.Continue
+    case '?' | 'h' =>
+      modify(_.openHelp)
+      TuiCommand.Continue
+    case 'g' =>
+      // §3.10: the other glyph set, with the same column budgets.
+      modify(_.toggleGlyphs)
+      TuiCommand.Continue
     case 'q' =>
       log.info("Quit command received")
       TuiCommand.Quit
@@ -381,6 +404,9 @@ object Tui:
 
   /** Leaves the TUI's screen: attributes reset, cursor shown, back to the normal buffer and the user's scrollback. */
   private[console] val RestoreScreen = ResetColors + ShowCursor + ExitAltScreen
+
+  /** The keys that keep their meaning while Help is open; any other key closes it. */
+  private[console] val KeysInHelp: Set[Char] = Set('q', 'r', 'd')
 
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)

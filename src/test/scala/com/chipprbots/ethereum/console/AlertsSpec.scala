@@ -85,10 +85,10 @@ class AlertsSpec extends AnyFlatSpec with Matchers:
     val base = TuiFixtures.syncedEtc()
     texts(withDisk(base, 20 * GiB)) shouldBe empty
     Alerts.of(withDisk(base, 20 * GiB - 1)) shouldBe
-      Seq(Alert(Severity.Warn, "disk 20.0G free on /var/lib/fukuii/etc (warn < 20G)"))
+      Seq(Alert(Severity.Warn, "disk 20.0G free (warn < 20G)"))
     Alerts.of(withDisk(base, 5 * GiB)).map(_.severity) shouldBe Seq(Severity.Warn)
     Alerts.of(withDisk(base, 5 * GiB - 1)) shouldBe
-      Seq(Alert(Severity.Error, "disk 5.0G free on /var/lib/fukuii/etc (error < 5G)"))
+      Seq(Alert(Severity.Error, "disk 5.0G free (error < 5G)"))
     texts(withLocal(base, LocalSample())) shouldBe empty // unknown is not low
   }
 

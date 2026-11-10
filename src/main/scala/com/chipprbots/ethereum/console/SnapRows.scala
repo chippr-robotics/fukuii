@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.console
 
 import com.chipprbots.ethereum.console.TuiText.formatCount
-import com.chipprbots.ethereum.console.TuiText.formatDuration
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 
 /** One worm row: its label, what its bar shows, and the text after the bar. */
@@ -21,7 +20,8 @@ object SnapRows:
     def count(n: Long, unit: String = ""): String = if n > 0 then s"${formatCount(n)}$unit" else ""
     def fraction(done: Long, total: Long): Double = done.toDouble / total.toDouble
 
-    val overall = SnapRow("Overall", Known(snap.overall), snap.etaSeconds.fold("")(s => s"ETA ${formatDuration(s)}"))
+    // The ETA is on the phase row above the worms (spec 027 slice 3, SC-002), so it is not repeated here.
+    val overall = SnapRow("Overall", Known(snap.overall), "")
 
     val accounts =
       val (n, est) = (snap.accountsSynced, snap.estimatedTotalAccounts)

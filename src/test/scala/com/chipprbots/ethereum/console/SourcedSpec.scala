@@ -54,13 +54,16 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
     (Unresponsive("x"): Sourced[Int]).value shouldBe None
   }
 
+  /** `n` handshaked peers (spec 027 slice 3: the peers source carries each peer, not only the count). */
+  private def peers(n: Int): Seq[TuiPeer] = TuiFixtures.peerList(n)
+
   "NodeStatusSnapshot" should "derive the peer line from the peers source only" taggedAs (UnitTest) in {
     val sync = Fresh(SyncSample(100, 200, "Syncing"), t0)
-    def snapshot(peers: Sourced[Int]) = NodeStatusSnapshot(t0, 50, 90, peers, sync)
-    snapshot(Fresh(3, t0)).connectionStatus shouldBe "Connected"
-    snapshot(Fresh(0, t0)).connectionStatus shouldBe "Searching for peers"
-    snapshot(Stale(3, t0)).connectionStatus shouldBe "Connected"
-    snapshot(Stale(3, t0)).peerCount shouldBe 3
+    def snapshot(peers: Sourced[Seq[TuiPeer]]) = NodeStatusSnapshot(t0, 50, 90, peers, sync)
+    snapshot(Fresh(peers(3), t0)).connectionStatus shouldBe "Connected"
+    snapshot(Fresh(peers(0), t0)).connectionStatus shouldBe "Searching for peers"
+    snapshot(Stale(peers(3), t0)).connectionStatus shouldBe "Connected"
+    snapshot(Stale(peers(3), t0)).peerCount shouldBe 3
     snapshot(Unresponsive("x")).connectionStatus shouldBe "Unresponsive (peer manager)"
     snapshot(Unresponsive("x")).peerCount shouldBe 0
     // The sync side is untouched by the peers source.
@@ -69,7 +72,7 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "fall back to the local best block when the sync controller does not answer" taggedAs (UnitTest) in {
-    val s = NodeStatusSnapshot(t0, 50, 90, Fresh(3, t0), Unresponsive("x"))
+    val s = NodeStatusSnapshot(t0, 50, 90, Fresh(peers(3), t0), Unresponsive("x"))
     (s.currentBlock, s.bestBlock, s.syncStatus) shouldBe ((90L, 0L, "Unresponsive (sync controller)"))
     s.snapSync shouldBe None
     s.connectionStatus shouldBe "Connected"
@@ -79,11 +82,11 @@ class SourcedSpec extends AnyFlatSpec with Matchers:
     UnitTest
   ) in {
     val sample = SyncSample(100, 200, "Syncing")
-    val s = NodeStatusSnapshot(t0, 50, 90, Fresh(3, t0), Fresh(sample, t0))
+    val s = NodeStatusSnapshot(t0, 50, 90, Fresh(peers(3), t0), Fresh(sample, t0))
     val staleAfter = Duration.ofMillis(2_500)
     s.agedAt(at(2), staleAfter) shouldBe s
     val late = s.agedAt(at(3), staleAfter)
-    (late.peers, late.sync) shouldBe ((Stale(3, t0), Stale(sample, t0)))
+    (late.peers, late.sync) shouldBe ((Stale(peers(3), t0), Stale(sample, t0)))
     late.connectionStatus shouldBe "Connected" // a stale source still shows its last answer
     val gone = s.agedAt(at(6), staleAfter)
     gone.peers shouldBe Unresponsive("no status poll for 6s")

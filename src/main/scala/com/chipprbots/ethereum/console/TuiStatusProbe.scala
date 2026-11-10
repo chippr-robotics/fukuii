@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.console
 
+import java.io.File
+import java.lang.management.ManagementFactory
 import java.time.Clock
 import java.time.Instant
 import java.util.concurrent.TimeoutException
@@ -13,6 +15,7 @@ import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -20,7 +23,10 @@ import scala.util.Try
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
+import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
@@ -39,6 +45,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor
   * @param clock
   *   the time of each snapshot. The TUI ages snapshots against its own clock (`Tui`'s `clock`), so the two must agree:
   *   both default to the system UTC clock
+  * @param local
+  *   what to read on the node itself, without an actor: disk, JVM, discovery table, head timestamp, SNAP counters
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
@@ -47,7 +55,8 @@ class TuiStatusProbe(
     maxPeers: Int,
     snapSample: () => Option[(SyncProgress, Long)],
     wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
-    clock: Clock = Clock.systemUTC()
+    clock: Clock = Clock.systemUTC(),
+    local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
 )(using scheduler: Scheduler)
     extends (() => NodeStatusSnapshot):
 
@@ -57,6 +66,9 @@ class TuiStatusProbe(
   private given Timeout = Timeout(wait * 2)
 
   private var previous: Option[NodeStatusSnapshot] = None
+
+  /** The cumulative GC time at the previous poll, and when: the GC share is the difference over the interval. */
+  private var previousGc: Option[(Long, Instant)] = None
 
   def apply(): NodeStatusSnapshot =
     val peersAsk = settled(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
@@ -70,26 +82,46 @@ class TuiStatusProbe(
     val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
     val missed = s"no reply within ${wait.toMillis}ms"
-    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.size), now, missed)
+    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.map(tuiPeer)), now, missed)
     val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
-    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync)
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, readLocal(now))
     previous = Some(snapshot)
     snapshot
 
+  /** The node-local readings (research §6): each one that fails is left empty; none fails the poll. */
+  private def readLocal(now: Instant): LocalSample =
+    def read[A](f: => Option[A]): Option[A] = Try(f).toOption.flatten
+    val gcMillis = read(local.gcMillis())
+    val gcShare = for
+      total <- gcMillis
+      (before, at) <- previousGc
+      wall = java.time.Duration.between(at, now).toMillis
+      if wall > 0
+    yield ((total - before).max(0L).toDouble / wall).min(1.0)
+    previousGc = gcMillis.map(_ -> now)
+    LocalSample(
+      diskFree = read(local.dataDir.map(local.usableSpace)),
+      jvm = read(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
+      discovery = read(local.discovery()),
+      headTimestamp = read(local.headTimestamp()),
+      snapCounters = read(local.snapCounters())
+    )
+
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
-    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds.
+    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds. The sample's time is
+    * kept at any age: the alert row warns when it is too old to show (§2.3), so the time outlives the sample. One read
+    * of the sample, so its progress and its time agree.
     */
   private def sample(status: SyncProtocol.Status, localBest: Long, now: Instant): SyncSample =
-    val snap = Option
+    val latest = Option
       .when(status.syncing)(Try(snapSample()).toOption.flatten)
       .flatten
       .map((progress, at) => (progress, Instant.ofEpochMilli(at)))
-      .filter((progress, at) =>
-        ActiveSnapPhases.contains(progress.phase) && ageMillis(at, now) <= SnapProgressMaxAgeMillis
-      )
+      .filter((progress, _) => ActiveSnapPhases.contains(progress.phase))
+    val snap = latest.filter((_, at) => ageMillis(at, now) <= SnapProgressMaxAgeMillis)
     val running = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
     val (current, best, description) = describe(status, localBest, snapRunning = running)
-    SyncSample(current, best, description, snap.map((p, _) => toSnapSyncState(p)), snap.map(_._2))
+    SyncSample(current, best, description, snap.map((p, _) => toSnapSyncState(p)), latest.map(_._2))
 
   private def ageMillis(at: Instant, now: Instant): Long = java.time.Duration.between(at, now).toMillis
 
@@ -111,6 +143,85 @@ object TuiStatusProbe:
     SyncPhase.StateValidation,
     SyncPhase.ChainDownloadCompletion
   )
+
+  /** What the probe reads on the node itself, each read injectable for tests (spec 027 T065). The defaults read
+    * nothing; [[LocalSources.node]] reads the running node.
+    *
+    * @param dataDir
+    *   the datadir, whose file system's free space the disk reading is
+    * @param usableSpace
+    *   bytes usable on a directory's file system
+    * @param heap
+    *   the JVM's (used, max) heap bytes
+    * @param gcMillis
+    *   the JVM's cumulative GC time, all collectors
+    * @param headTimestamp
+    *   the best block header's timestamp, Unix seconds
+    */
+  final case class LocalSources(
+      dataDir: Option[File] = None,
+      usableSpace: File => Long = _.getUsableSpace,
+      heap: () => Option[(Long, Long)] = () => None,
+      gcMillis: () => Option[Long] = () => None,
+      discovery: () => Option[DiscoverySample] = () => None,
+      headTimestamp: () => Option[Long] = () => None,
+      snapCounters: () => Option[SnapCounters] = () => None
+  )
+
+  object LocalSources:
+
+    /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics`, and the best
+      * header's timestamp through `headTimestamp`.
+      */
+    def node(dataDir: Option[File], headTimestamp: () => Option[Long]): LocalSources =
+      LocalSources(
+        dataDir = dataDir,
+        heap = jvmHeap,
+        gcMillis = jvmGcMillis,
+        discovery = networkDiscovery,
+        headTimestamp = headTimestamp,
+        snapCounters = snapMetrics
+      )
+
+    def jvmHeap(): Option[(Long, Long)] =
+      val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
+      Some((heap.getUsed, if heap.getMax > 0 then heap.getMax else Runtime.getRuntime.maxMemory))
+
+    /** The collectors' total time; a collector that cannot tell (-1) adds nothing. */
+    def jvmGcMillis(): Option[Long] =
+      Some(ManagementFactory.getGarbageCollectorMXBeans.asScala.map(_.getCollectionTime.max(0L)).sum)
+
+    def networkDiscovery(): Option[DiscoverySample] =
+      Some(
+        DiscoverySample(
+          NetworkMetrics.DiscoveredPeersSize.get,
+          NetworkMetrics.PendingPeersSize.get,
+          NetworkMetrics.BlacklistedPeersSize.get
+        )
+      )
+
+    def snapMetrics(): Option[SnapCounters] =
+      Some(
+        SnapCounters(
+          accountRequests = SNAPSyncMetrics.accountRangeRequests,
+          accountFailures = SNAPSyncMetrics.accountRangeFailures,
+          storageRequests = SNAPSyncMetrics.storageRangeRequests,
+          storageFailures = SNAPSyncMetrics.storageRangeFailures,
+          bytecodeRequests = SNAPSyncMetrics.bytecodeRequests,
+          bytecodeFailures = SNAPSyncMetrics.bytecodeFailures,
+          healingRequests = SNAPSyncMetrics.healingRequests,
+          healingFailures = SNAPSyncMetrics.healingFailures,
+          timeouts = SNAPSyncMetrics.requestTimeouts,
+          snapCapablePeers = SNAPSyncMetrics.snapCapablePeers,
+          blacklisted = SNAPSyncMetrics.peersBlacklisted
+        )
+      )
+
+  /** A handshaked peer as the TUI shows it: `GetPeersCmd`'s id, address, direction and connection time. */
+  private[console] def tuiPeer(p: Peer): TuiPeer =
+    val address = p.remoteAddress
+    val host = Option(address.getAddress).fold(address.getHostString)(_.getHostAddress)
+    TuiPeer(p.id.value, s"$host:${address.getPort}", p.incomingConnection, Instant.ofEpochMilli(p.createTimeMillis))
 
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)

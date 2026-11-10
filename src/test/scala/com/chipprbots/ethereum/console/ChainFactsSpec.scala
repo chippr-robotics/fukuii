@@ -47,6 +47,9 @@ class ChainFactsSpec extends AnyFlatSpec with Matchers:
     UnitTest
   ) in {
     TuiFixtures.chainEtc.notScheduled shouldBe Seq("Olympia")
+    // The shipped configs' far-future placeholder (etc-chain.conf's olympia-block-number) is not scheduled either.
+    val placeholder = TuiFixtures.etcForks.copy(olympiaBlockNumber = BigInt("1000000000000000000"))
+    ChainFacts.byBlock(BigInt(61), placeholder).notScheduled shouldBe Seq("Olympia")
     (TuiFixtures.chainEtc.forks.map(_.name) should contain).noneOf("Byzantium", "Berlin", "Muir Glacier", "Olympia")
   }
 
