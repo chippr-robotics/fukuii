@@ -1,11 +1,12 @@
 package com.chipprbots.ethereum.console
 
+import scala.collection.mutable.ArrayBuffer
+
 import org.jline.utils.AttributedString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
-import scala.collection.mutable.ArrayBuffer
 
 /** The view keys (spec 027 FR-015, research §2.1–§2.2, T061). `5`, `l`, `+` and `-` arrive with the Logs view in slice
   * 4, so here they are unknown keys.
