@@ -931,8 +931,8 @@ object AccountRangeCoordinator:
     * throughout: 2^256 is far beyond a Double's 15-17 significant digits. A function of its arguments so it can be
     * tested; see `AccountKeyspaceEstimateSpec`.
     *
-    * None before `KeyspaceEstimateMinAccounts` accounts (too early to extrapolate), when the ranges leave no keyspace covered (the same range
-    * counted twice, say), and for a result that is not above the count or is over 2 billion.
+    * None before `KeyspaceEstimateMinAccounts` accounts (too early to extrapolate), when the ranges leave no keyspace
+    * covered (the same range counted twice, say), and for a result that is not above the count or is over 2 billion.
     */
   private[actors] def keyspaceEstimate(
       accountsDownloaded: Long,
