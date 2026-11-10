@@ -2190,3 +2190,13 @@ items:
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links: {}
     notes: PendingTransactionsManager.scala:811-816 runs cleanUp() and copies the pool to answer the TUI's once-a-second size read.
+  - id: B-197
+    title: eth_getBalance on pruned state answers code 3 "Execution error" (the revert code); geth answers missing state with -32000
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-10
+    refs: ["#1655 part 2, 2026-11-10"]
+    links: {}
+    notes: fukuii returns {code:3, message:Execution error, data:[{code:100, message:State node doesn't exist}]} for a block 335 back on a pruned Ephemery node. Code 3 means execution reverted; geth uses -32000 (missing trie node / historical state not available). conduit owns.
