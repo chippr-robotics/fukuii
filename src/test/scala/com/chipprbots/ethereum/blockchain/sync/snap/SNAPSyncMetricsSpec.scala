@@ -159,3 +159,10 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     SNAPSyncMetrics.peersBlacklisted.toDouble shouldBe counter("snapsync.peers.blacklisted.total")
     gaugeValue("snapsync.peers.capable.gauge") shouldBe 9.0 +- 1e-9
   }
+
+  // prism, slice 3 review: the TUI shows the pivot as the target while SNAP runs.
+  it should "read back the pivot block number it was given" taggedAs UnitTest in {
+    SNAPSyncMetrics.setPivotBlockNumber(BigInt(9_118_000))
+    SNAPSyncMetrics.pivotBlockNumber shouldBe 9_118_000L
+    gaugeValue("snapsync.pivot.block.number.gauge") shouldBe 9_118_000.0 +- 1e-9
+  }

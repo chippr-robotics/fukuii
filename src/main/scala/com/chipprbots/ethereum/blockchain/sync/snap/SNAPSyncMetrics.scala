@@ -439,6 +439,9 @@ object SNAPSyncMetrics extends MetricsContainer:
   def peersBlacklisted: Long = PeerBlacklistCounter.count().toLong
   def snapCapablePeers: Long = SnapCapablePeersGauge.get
 
+  /** The pivot block number last set ([[setPivotBlockNumber]]), 0 before SNAP chooses one. */
+  def pivotBlockNumber: Long = PivotBlockNumberGauge.get.toLong
+
   @volatile private var latest: Option[(SyncProgress, Long)] = None
 
   /** The most recent progress passed to [[measure]], if recorded within `maxAgeMillis` — read by the TUI, which has no
