@@ -22,18 +22,23 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerScoreSnapshot
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.Logger
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
-  * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
+  * (the same query `net_peerCount` and `eth_syncing` answer), each peer's client id and best block from the network
+  * peer manager, the txpool, the local best block, and the latest SNAP progress.
   *
-  * Both asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however many
+  * All asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however many
   * actors are slow (FR-011). Each source gets its own freshness ([[Sourced]]): a source that misses the wait shows its
   * last answer as Stale, or Unresponsive if it never answered or failed.
   *
@@ -47,7 +52,12 @@ import com.chipprbots.ethereum.utils.Logger
   *   the time of each snapshot. The TUI ages snapshots against its own clock (`Tui`'s `clock`), so the two must agree:
   *   both default to the system UTC clock
   * @param local
-  *   what to read on the node itself, without an actor: disk, JVM, discovery table, head timestamp, SNAP counters
+  *   what to read on the node itself, without an actor: disk, JVM, discovery table, head timestamp, SNAP counters, peer
+  *   scores, the last import
+  * @param networkPeerManager
+  *   asked `GetHandshakedPeersCmd` for each peer's client id and best block; None asks nothing
+  * @param txPool
+  *   asked `GetPendingTransactionsReq` for the txpool's size and blob count; None asks nothing
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
@@ -57,7 +67,9 @@ class TuiStatusProbe(
     snapSample: () => Option[(SyncProgress, Long)],
     wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
     clock: Clock = Clock.systemUTC(),
-    local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
+    local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources(),
+    networkPeerManager: Option[ActorRef[NetworkPeerManagerActor.Command]] = None,
+    txPool: Option[ActorRef[PendingTransactionsManager.Command]] = None
 )(using scheduler: Scheduler)
     extends (() => NodeStatusSnapshot)
     with Logger:
@@ -80,18 +92,33 @@ class TuiStatusProbe(
     val syncAsk = settled(
       syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r)))
     )
-    // One wait for both: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
+    val detailsAsk = networkPeerManager.map(ref =>
+      settled(ref.ask[NetworkPeerManagerActor.HandshakedPeers](NetworkPeerManagerActor.GetHandshakedPeersCmd(_)))
+    )
+    val txpoolAsk = txPool.map(ref =>
+      settled(
+        ref.ask[PendingTransactionsManager.PendingTransactionsResponse](
+          PendingTransactionsManager.GetPendingTransactionsReq(_)
+        )
+      )
+    )
+    // One wait for all: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
     // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
     val deadline = wait.fromNow
     val localSample = readLocal(clock.instant())
-    Seq(peersAsk, syncAsk).foreach(ask => Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero))))
+    (Seq(peersAsk, syncAsk) ++ detailsAsk ++ txpoolAsk).foreach(ask =>
+      Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero)))
+    )
 
     val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
     val missed = s"no reply within ${wait.toMillis}ms"
     val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.map(tuiPeer)), now, missed)
     val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
-    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample)
+    val details =
+      detailsAsk.map(ask => Sourced.next(previous.flatMap(_.details), poll(ask)(peerDetails), now, missed))
+    val txpool = txpoolAsk.map(ask => Sourced.next(previous.flatMap(_.txpool), poll(ask)(txpoolSample), now, missed))
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample, details, txpool)
     previous = Some(snapshot)
     snapshot
 
@@ -123,7 +150,9 @@ class TuiStatusProbe(
       discovery = read("the discovery counts")(local.discovery()),
       headTimestamp = read("the head timestamp")(local.headTimestamp()),
       snapCounters = read("the SNAP counters")(local.snapCounters()),
-      snapPivot = read("the SNAP pivot")(local.snapPivot())
+      snapPivot = read("the SNAP pivot")(local.snapPivot()),
+      peerScores = read("the peer scores")(local.peerScores()),
+      lastImport = read("the last import")(local.lastImport())
     )
 
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
@@ -201,7 +230,9 @@ object TuiStatusProbe:
       discovery: () => Option[DiscoverySample] = () => None,
       headTimestamp: () => Option[Long] = () => None,
       snapCounters: () => Option[SnapCounters] = () => None,
-      snapPivot: () => Option[Long] = () => None
+      snapPivot: () => Option[Long] = () => None,
+      peerScores: () => Option[PeerScores] = () => None,
+      lastImport: () => Option[ImportSample] = () => None
   )
 
   object LocalSources:
@@ -217,8 +248,17 @@ object TuiStatusProbe:
         discovery = networkDiscovery,
         headTimestamp = headTimestamp,
         snapCounters = snapMetrics,
-        snapPivot = snapPivotBlock
+        snapPivot = snapPivotBlock,
+        peerScores = networkScores,
+        lastImport = regularSyncImport
       )
+
+    /** The peer scores slice 4a last published to `NetworkMetrics` (Q5: the export, not the scorer). */
+    def networkScores(): Option[PeerScores] = TuiStatusProbe.peerScores(NetworkMetrics.peerScores)
+
+    /** The last import regular sync timed (`RegularSyncMetrics`, C-7). */
+    def regularSyncImport(): Option[ImportSample] =
+      RegularSyncMetrics.lastImport.map(last => ImportSample(last.blocks, java.time.Duration.ofNanos(last.nanos)))
 
     /** The SNAP pivot's block number, once SNAP has chosen one. */
     def snapPivotBlock(): Option[Long] = Some(SNAPSyncMetrics.pivotBlockNumber).filter(_ > 0)
@@ -275,24 +315,39 @@ object TuiStatusProbe:
     val host = Option(address.getAddress).fold(address.getHostString)(_.getHostAddress)
     TuiPeer(p.id.value, s"$host:${address.getPort}", p.incomingConnection, Instant.ofEpochMilli(p.createTimeMillis))
 
+  /** A published score snapshot by peer id; None before slice 4a's scorer has published one. */
+  def peerScores(snapshot: PeerScoreSnapshot): Option[PeerScores] =
+    Option.when(snapshot.takenAt != PeerScoreSnapshot.empty.takenAt || snapshot.scores.nonEmpty)(
+      PeerScores(snapshot.takenAt, snapshot.scores.map((id, score) => id.value -> score))
+    )
+
+  /** Each handshaked peer's client id, sanitised as it is read (C-16), and best block, by peer id. */
+  private[console] def peerDetails(handshaked: NetworkPeerManagerActor.HandshakedPeers): Map[String, PeerDetails] =
+    handshaked.peers.map { (peer, info) =>
+      peer.id.value -> PeerDetails(
+        Sanitize.line(info.remoteStatus.remoteClientId),
+        info.maxBlockNumber.min(BigInt(Long.MaxValue)).toLong
+      )
+    }
+
+  /** The pending transactions, and how many carry a blob sidecar: the sidecars the pool holds, one per blob transaction
+    * (`blobTxNetworkBytes`, research §6).
+    */
+  private[console] def txpoolSample(response: PendingTransactionsManager.PendingTransactionsResponse): TxpoolSample =
+    TxpoolSample(response.pendingTransactions.size, response.blobTxNetworkBytes.size)
+
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
 
   /** The longest failure reason the TUI shows. */
   val MaxReasonChars: Int = 120
 
-  /** A failure as the alert row shows it: its message (or its class), one line, with no control character (an exception
-    * message can carry anything, peer data included), at most [[MaxReasonChars]] characters.
+  /** A failure as the alert row shows it: its message (or its class), through the one sanitiser for text from outside
+    * the node ([[Sanitize.line]]: an exception message can carry anything, peer data included), at most
+    * [[MaxReasonChars]] code points.
     */
   private[console] def reason(e: Throwable): String =
-    val raw = Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
-    val clean = raw.map(ch => if Character.isISOControl(ch) then ' ' else ch).trim
-    if clean.length <= MaxReasonChars then clean
-    else
-      // Never cut between the two halves of a surrogate pair (an emoji in a peer's message).
-      val keep = MaxReasonChars - 3
-      val end = if Character.isHighSurrogate(clean.charAt(keep - 1)) then keep - 1 else keep
-      clean.take(end) + "..."
+    Sanitize.line(Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName), MaxReasonChars)
 
   /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
   private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =

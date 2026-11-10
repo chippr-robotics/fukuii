@@ -39,7 +39,7 @@ enum TuiCommand:
   *   - Terminal initialization and management
   *   - State management through TuiState
   *   - Rendering through TuiRenderer
-  *   - Log suppression through TuiLogSuppressor
+  *   - Log suppression through TuiLogSuppressor, and the log tail through TuiLogRingAppender
   *   - Keyboard input handling
   *
   * Threading: `render`, `initialize` and `shutdown` are serialized on this instance. `checkInput` waits for a key
@@ -57,12 +57,16 @@ enum TuiCommand:
   *   the TUI's start time and uptime until the first snapshot, and the clock each snapshot is aged against
   *   ([[NodeStatusSnapshot.agedAt]]). It must agree with the probe's clock (`TuiStatusProbe`'s `clock`), which stamps
   *   the snapshots: both default to the system UTC clock, and a test that injects one injects both.
+  * @param logRing
+  *   the log tail; None builds one from `config` ([[TuiLogRingAppender.of]]). It is attached once the console is
+  *   suppressed and detached before the console is restored (C-11)
   */
 class Tui(
     val config: TuiConfig = TuiConfig.default,
     terminalFactory: () => Terminal = Tui.systemTerminal,
     processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf,
-    clock: Clock = Clock.systemUTC()
+    clock: Clock = Clock.systemUTC(),
+    logRing: Option[TuiLogRingAppender] = None
 ) extends Logger:
 
   private var terminal: Option[Terminal] = None
@@ -97,6 +101,13 @@ class Tui(
 
   private val renderer: TuiRenderer = TuiRenderer(config)
   private val logSuppressor: TuiLogSuppressor = TuiLogSuppressor()
+  private val ring: TuiLogRingAppender = logRing.getOrElse(TuiLogRingAppender.of(config))
+
+  /** The ring is on the root logger: set once its attach returns, cleared before its detach runs. */
+  private var ringAttached = false
+
+  /** The ring's next sequence number when the frame loop last read its lines: unchanged, nothing new to read. */
+  @volatile private var logsRead = -1L
 
   /** Initialize the TUI.
     *
@@ -129,12 +140,16 @@ class Tui(
           if logSuppressor.suppressConsoleLogs() then log.debug("Console logs suppressed for TUI")
           else log.warn("Failed to suppress console logs")
 
+        // The log tail goes on once the console is off (C-11). It is attached whether or not there was a console to
+        // suppress: it is the Logs view's only source. A failure here gives the terminal and the console back, below.
+        ring.attach()
+        ringAttached = true
+
         log.info("TUI initialized")
         true
       catch
         case NonFatal(e) =>
-          if logSuppressor.isConsoleSuppressed then logSuppressor.restoreConsoleLogs()
-          releaseTerminal()
+          teardown()
           log.warn(s"Failed to initialize TUI: ${e.getMessage}. Falling back to standard logging.")
           enabled = false
           false
@@ -185,11 +200,22 @@ class Tui(
     */
   def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit =
     val now = clock.instant()
+    val logs = newLogLines()
     modify { s =>
-      snapshot match
+      val next = snapshot match
         case Some(polled) => s.nextFrame(Some(polled.agedAt(now, snapshotStaleAfter)))
         case None         => s.nextFrame(None).copy(now = now)
+      logs.fold(next)(next.withLogs)
     }
+
+  /** The ring's lines, if it has kept any since the last frame read them; the read takes no lock (FR-021). */
+  private def newLogLines(): Option[Vector[LogLine]] =
+    if ring.appended == logsRead then None
+    else
+      val lines = ring.lines
+      // A line whose writer has its number but has not stored it yet is read on the next frame.
+      logsRead = lines.lastOption.fold(0L)(_.seq + 1)
+      Some(lines)
 
   /** Render the TUI, unless the frame equals the last one written (FR-010).
     *
@@ -283,15 +309,24 @@ class Tui(
     else if current.helpOpen && !Tui.KeysInHelp.contains(command) then
       modify(_.closeHelp)
       TuiCommand.Continue
-    else dispatch(command)
+    else dispatch(command, height)
 
-  private def dispatch(command: Char): TuiCommand = TuiView.forKey(command) match
+  private def dispatch(command: Char, height: Int): TuiCommand = TuiView.forKey(command) match
     case Some(view) =>
       modify(_.withView(view))
       TuiCommand.Continue
-    case None => dispatchKey(command)
+    case None => dispatchKey(command, height)
 
-  private def dispatchKey(command: Char): TuiCommand = command match
+  private def dispatchKey(command: Char, height: Int): TuiCommand = command match
+    case 'l' =>
+      modify(_.withView(TuiView.Logs))
+      TuiCommand.Continue
+    case '+' | '-' =>
+      // The Logs view only: `-` a page back to older lines, `+` a page forward to newer ones (§2.2).
+      val page = (height - panels.LogsPanel.ChromeRows).max(1)
+      val lines = if command == '-' then page else -page
+      modify(s => if s.view == TuiView.Logs then s.scrollLogs(lines, page) else s)
+      TuiCommand.Continue
     case '\t' =>
       modify(_.nextView)
       TuiCommand.Continue
@@ -340,12 +375,32 @@ class Tui(
     */
   def shutdown(): Unit = synchronized {
     val wasActive = terminal.isDefined
-    if logSuppressor.isConsoleSuppressed && !logSuppressor.restoreConsoleLogs() then
-      log.error("Failed to restore console logs")
-    releaseTerminal()
+    teardown()
     enabled = false
     if wasActive then log.info("TUI shutdown complete")
   }
+
+  /** The teardown ladder (C-11), in the reverse of `initialize`'s order: the log ring off the root logger, the console
+    * appenders back, the terminal released. Each rung runs whatever the one before it did, so a ring that will not
+    * detach still leaves the console logging and the terminal out of raw mode.
+    */
+  private def teardown(): Unit =
+    attempt("detach the log ring") {
+      if ringAttached then
+        ringAttached = false
+        ring.detach()
+    }
+    attempt("restore console logs") {
+      if logSuppressor.isConsoleSuppressed && !logSuppressor.restoreConsoleLogs() then
+        log.error("Failed to restore console logs")
+    }
+    releaseTerminal()
+
+  /** One rung of the teardown ladder: `f` runs, and a failure is logged with the rung's name and stops no later rung.
+    */
+  private def attempt(name: String)(f: => Unit): Unit =
+    try f
+    catch case NonFatal(e) => log.error(s"Error shutting down TUI ($name): ${e.getMessage}")
 
   /** Restore the terminal to the state the user had before the TUI took it over.
     *
@@ -361,10 +416,10 @@ class Tui(
       var closedAt: Option[String] = None
       def step(name: String)(f: => Unit): Unit =
         if closedAt.isEmpty then
-          try f
-          catch
-            case e: IllegalStateException if Tui.isClosedTerminal(e) => closedAt = Some(name)
-            case NonFatal(e) => log.error(s"Error shutting down TUI ($name): ${e.getMessage}")
+          attempt(name) {
+            try f
+            catch case e: IllegalStateException if Tui.isClosedTerminal(e) => closedAt = Some(name)
+          }
       step("reset screen") {
         write(term, Tui.RestoreScreen)
         inAltScreen = false

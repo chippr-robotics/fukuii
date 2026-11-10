@@ -498,8 +498,8 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   private def consoleOnRoot: Boolean =
     rootLogger.iteratorForAppenders().asScala.exists(_.isInstanceOf[ConsoleAppender[?]])
 
-  /** A ring that notes whether a console appender was on the root logger when it was attached and when it was
-    * detached, and can fail either step.
+  /** A ring that notes whether a console appender was on the root logger when it was attached and when it was detached,
+    * and can fail either step.
     */
   private class WatchedRing(failAttach: Boolean = false, failDetach: Boolean = false)
       extends TuiLogRingAppender(100, Level.INFO, java.time.ZoneOffset.UTC):
@@ -521,7 +521,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       () => tt.terminal,
       _ => Some(tt.processOutput),
       TuiFixtures.clock,
-      ring
+      Some(ring)
     )
 
   "The log ring" should "attach after the console is suppressed and detach before it is restored (C-11)" taggedAs (

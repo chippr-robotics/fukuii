@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.console
 
+import ch.qos.logback.classic.Level
 import com.typesafe.config.Config as TypesafeConfig
 import com.typesafe.config.ConfigException
 
@@ -31,6 +32,10 @@ import com.typesafe.config.ConfigException
   *   nothing moves but the worm with progress (`fukuii.tui.reduced-motion`, `FUKUII_TUI_MOTION=reduced`, §4.5)
   * @param splashMs
   *   how long the startup splash shows; 0 for none (`FUKUII_TUI_NO_SPLASH`)
+  * @param logRingSize
+  *   the log lines the Logs view keeps (`fukuii.tui.log-ring-size`, FR-021)
+  * @param logLevel
+  *   the lowest level the log ring keeps (`fukuii.tui.log-level`, Q4); the loggers' own levels apply first
   */
 final case class TuiConfig(
     updateIntervalMs: Long = TuiConfig.DefaultUpdateIntervalMs,
@@ -44,7 +49,9 @@ final case class TuiConfig(
     animationIntervalMs: Long = TuiConfig.DefaultAnimationIntervalMs,
     statusPollIntervalMs: Long = TuiConfig.DefaultStatusPollIntervalMs,
     reducedMotion: Boolean = false,
-    splashMs: Long = TuiConfig.DefaultSplashMs
+    splashMs: Long = TuiConfig.DefaultSplashMs,
+    logRingSize: Int = TuiConfig.DefaultLogRingSize,
+    logLevel: Level = TuiConfig.DefaultLogLevel
 ):
   /** The motion the TUI starts with, and resumes after `p`. */
   def motion: Motion = if reducedMotion then Motion.Reduced else Motion.Full
@@ -72,6 +79,18 @@ object TuiConfig:
 
   /** The splash's length (research §7.5). */
   val DefaultSplashMs: Long = 3000
+
+  /** The log lines the ring keeps (FR-021, SC-009). */
+  val DefaultLogRingSize: Int = 1000
+
+  /** The ring keeps INFO and above (Q4). */
+  val DefaultLogLevel: Level = Level.INFO
+
+  /** The levels `fukuii.tui.log-level` accepts. */
+  val LogLevels: Seq[Level] = Seq(Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR)
+
+  /** The largest ring `fukuii.tui.log-ring-size` may ask for: a line is at most 512 characters (FR-020). */
+  val MaxLogRingSize: Int = 100_000
 
   /** The reduced-motion splash: drawn at the TUI's start, and by the loop's first frame, which then waits one pace. */
   private val ReducedSplashTicks: Long = 2
@@ -106,7 +125,9 @@ final case class TuiSettings(
     reducedMotion: Boolean = false,
     animationIntervalMs: Long = TuiConfig.DefaultAnimationIntervalMs,
     statusPollIntervalMs: Long = TuiConfig.DefaultStatusPollIntervalMs,
-    splashMs: Long = TuiConfig.DefaultSplashMs
+    splashMs: Long = TuiConfig.DefaultSplashMs,
+    logRingSize: Int = TuiConfig.DefaultLogRingSize,
+    logLevel: Level = TuiConfig.DefaultLogLevel
 )
 
 object TuiSettings:
@@ -134,10 +155,36 @@ object TuiSettings:
         if value < min then
           throw new ConfigException.BadValue(tui.origin(), s"fukuii.tui.$key", s"$value is below the minimum, $min")
         value
+    val logLevel =
+      if !tui.hasPath("log-level") then TuiConfig.DefaultLogLevel
+      else
+        val value = tui.getString("log-level")
+        TuiConfig.LogLevels
+          .find(_.toString.equalsIgnoreCase(value.trim))
+          .getOrElse(
+            throw new ConfigException.BadValue(
+              tui.origin(),
+              "fukuii.tui.log-level",
+              s"'$value' is not one of ${TuiConfig.LogLevels.mkString(", ")}"
+            )
+          )
+    val logRingSize =
+      if !tui.hasPath("log-ring-size") then TuiConfig.DefaultLogRingSize
+      else
+        val value = tui.getInt("log-ring-size")
+        if value < 1 || value > TuiConfig.MaxLogRingSize then
+          throw new ConfigException.BadValue(
+            tui.origin(),
+            "fukuii.tui.log-ring-size",
+            s"$value is not between 1 and ${TuiConfig.MaxLogRingSize}"
+          )
+        value
     TuiSettings(
       glyphs = glyphs,
       animationIntervalMs = millis("animation-interval-ms", TuiConfig.DefaultAnimationIntervalMs, 50),
       statusPollIntervalMs = millis("status-poll-interval-ms", TuiConfig.DefaultStatusPollIntervalMs, 100),
       reducedMotion = tui.hasPath("reduced-motion") && tui.getBoolean("reduced-motion"),
-      splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0)
+      splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0),
+      logRingSize = logRingSize,
+      logLevel = logLevel
     )

@@ -10,10 +10,12 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   */
 private[console] object HelpPanel:
 
-  /** Each key and what it does. `5`, `l`, `+` and `-` arrive with the Logs view (slice 4). */
+  /** Each key and what it does. */
   val Keys: Seq[(String, String)] = Seq(
-    "1 2 3 4" -> "1 Overview  2 Sync  3 Peers  4 Chain",
+    "1 2 3 4 5" -> "1 Overview  2 Sync  3 Peers  4 Chain  5 Logs",
     "Tab" -> "the next view (wraps)",
+    "l" -> "the Logs view",
+    "+ -" -> "Logs: + newer lines, - older lines, a page at a time",
     "? h" -> "this help; any key but q, r and d returns",
     "p" -> "pause or resume the motion (polling continues)",
     "g" -> "switch the glyph set: emoji / ascii",

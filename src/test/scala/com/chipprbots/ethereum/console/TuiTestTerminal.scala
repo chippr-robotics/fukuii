@@ -121,7 +121,7 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
       clock: java.time.Clock = TuiFixtures.clock,
       logRing: Option[TuiLogRingAppender] = None
   ): Tui =
-    new Tui(config, () => terminal, _ => Some(processOutput), clock, logRing.getOrElse(TuiLogRingAppender.of(config)))
+    new Tui(config, () => terminal, _ => Some(processOutput), clock, logRing)
 
   /** Frames written so far: each frame starts at the home position (spec 027 T036 counts them). */
   def framesWritten: Int = output.split(java.util.regex.Pattern.quote(Tui.CursorHome), -1).length - 1

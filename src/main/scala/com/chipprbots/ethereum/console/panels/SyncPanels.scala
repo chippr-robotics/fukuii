@@ -12,16 +12,20 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   * with its rates, request counters, snap-capable peers and phase timeline from tier M; or a regular sync's Blocks
   * worm, session and lag.
   *
-  * Not here yet: the L tier's rate sparkline (it needs the rate history slice 4 keeps), the S tier's Import row (slice
-  * 4's import-duration gauge) and its Fetcher row (no metric source, C-7).
+  * A regular sync also shows the last import: its blocks and how long their consensus call took (`RegularSyncMetrics`,
+  * C-7). The view ends with the Recent (sync) strip: the newest lines of the loggers under `blockchain.sync`.
+  *
+  * Not here: the L tier's rate sparkline (no rate history is kept), the Import row's transactions and gas (they are
+  * `BlockMetrics` gauges, outside this spec's files) and the Fetcher row (no metric source, C-7).
   */
 private[console] object SyncPanels:
 
   def panels(c: Ctx): Seq[Panel] =
     val vitals = vitalsPanel(c, withSummary = false)
+    val recent = LogsPanel.recent(c, "Recent (sync)", _.logger.startsWith(LogsPanel.SyncLoggers))
     c.state.snapSyncState match
-      case Some(snap) => Seq(vitals) ++ snapPanels(c, snap) :+ fillPanel
-      case None       => Seq(vitals) ++ regularPanels(c) :+ fillPanel
+      case Some(snap) => Seq(vitals) ++ snapPanels(c, snap) :+ recent
+      case None       => Seq(vitals) ++ regularPanels(c) :+ recent
 
   private def snapPanels(c: Ctx, snap: SnapSyncState): Seq[Panel] =
     val detail = Option.when(c.tier != Tier.S)(
@@ -105,7 +109,19 @@ private[console] object SyncPanels:
       val budget = wormBudget(c, c.tier.trackSlots, w)
       (if c.config.showProgressBar then blocksRow(c, budget, w).toSeq else Nil) ++ session(c, w)
     Seq(Panel(1, 1, 2, (w, _) => header(w), separated = true)) ++
-      Option.when(s.bestBlock > 0)(Panel(1, 3, 3, (w, _) => blocks(w)))
+      Option.when(s.bestBlock > 0)(Panel(1, 3, 3, (w, _) => blocks(w))) ++
+      lastImport(c).map(row => Panel(1, 1, 4, (w, _) => Seq(row(w)), separated = true))
+
+  /** ` Import     last 3 blocks in 61ms`: the last import regular sync timed, once there is one. */
+  private def lastImport(c: Ctx): Option[Int => AttributedString] =
+    c.state.snapshot.flatMap(_.local.lastImport).filter(_.blocks > 0).map { last =>
+      val millis = last.duration.toNanos / 1_000_000.0
+      val took =
+        if millis >= 1_000 then String.format(java.util.Locale.ROOT, "%.1fs", millis / 1_000)
+        else String.format(java.util.Locale.ROOT, "%.0fms", millis)
+      val blocks = if last.blocks == 1 then "1 block" else s"${formatNumber(last.blocks.toLong)} blocks"
+      w => fit(field("Import", text(s"   last $blocks in $took", c.t.value), c.t), w, c.g)
+    }
 
   /** `Session  imported 101,220 blocks since 18,300,893 (9m 9s ago)` and `Lag  3,481,989 blocks behind best known`. */
   private def session(c: Ctx, w: Int): Seq[AttributedString] =

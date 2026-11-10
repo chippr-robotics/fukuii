@@ -43,7 +43,9 @@ final case class TuiEnv(
       reducedMotion = reducedMotion.getOrElse(settings.reducedMotion),
       animationIntervalMs = settings.animationIntervalMs,
       statusPollIntervalMs = settings.statusPollIntervalMs,
-      splashMs = if noSplash then 0L else settings.splashMs
+      splashMs = if noSplash then 0L else settings.splashMs,
+      logRingSize = settings.logRingSize,
+      logLevel = settings.logLevel
     )
 
 object TuiEnv:

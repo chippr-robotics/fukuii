@@ -49,7 +49,7 @@ enum Catchup:
   * @param lastAdvanceAt
   *   when the current block last moved; a bar unchanged for [[TuiState.StallAfter]] is stalled
   * @param view
-  *   the view on screen (`1`–`4`, `Tab`)
+  *   the view on screen (`1`–`5`, `l`, `Tab`)
   * @param helpOpen
   *   Help is open over [[view]] (`?`, `h`); any key but `q`, `r` and `d` closes it
   * @param chain
@@ -58,6 +58,12 @@ enum Catchup:
   *   the latest status snapshot applied: each source's freshness, the peers, and what the probe read on the node
   * @param zeroPeersSince
   *   when the peer count, known, was last seen to become 0: the alert row's "0 peers for …" (§2.3)
+  * @param logs
+  *   the log ring's newest lines, oldest first ([[TuiLogRingAppender]]): the Logs view and the Recent strips
+  * @param logScroll
+  *   how many lines the Logs view is scrolled back from the newest; 0 follows the tail
+  * @param scores
+  *   the last two peer-score snapshots slice 4a published: the score column and its trend (FR-019, D-1)
   */
 case class TuiState(
     networkName: String = "unknown",
@@ -84,7 +90,10 @@ case class TuiState(
     helpOpen: Boolean = false,
     chain: Option[ChainFacts] = None,
     snapshot: Option[NodeStatusSnapshot] = None,
-    zeroPeersSince: Option[Instant] = None
+    zeroPeersSince: Option[Instant] = None,
+    logs: Vector[LogLine] = Vector.empty,
+    logScroll: Int = 0,
+    scores: ScoreHistory = ScoreHistory()
 ):
 
   import TuiState.*
@@ -195,7 +204,12 @@ case class TuiState(
       .withBlockInfo(status.currentBlock, status.bestBlock)
       .withSyncStatus(status.syncStatus)
       .withConnectionStatus(status.connectionStatus)
-      .copy(snapSyncState = snap, snapshot = Some(status), zeroPeersSince = zeroSince)
+      .copy(
+        snapSyncState = snap,
+        snapshot = Some(status),
+        zeroPeersSince = zeroSince,
+        scores = scores.next(status.local.peerScores)
+      )
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
     if !caughtUp then next
     else if motion == Motion.Paused then next.copy(celebrated = true)
@@ -215,11 +229,13 @@ case class TuiState(
   /** Any key on the splash: the dashboard, at once. */
   def skipSplash: TuiState = copy(splashUntilTick = None)
 
-  /** `1`–`4`: the view, with Help closed. A change of view cancels a catch-up on screen (FR-014). */
+  /** `1`–`5`, `l`: the view, with Help closed. A change of view cancels a catch-up on screen (FR-014); opening the Logs
+    * view shows its newest lines.
+    */
   def withView(next: TuiView): TuiState =
     if next == view && !helpOpen then this
     else if next == view then copy(helpOpen = false)
-    else copy(view = next, helpOpen = false).cancelCatchup
+    else copy(view = next, helpOpen = false, logScroll = if next == TuiView.Logs then 0 else logScroll).cancelCatchup
 
   /** `Tab`: the next view, wrapping. */
   def nextView: TuiState = withView(view.next)
@@ -239,6 +255,41 @@ case class TuiState(
 
   private def cancelCatchup: TuiState = copy(celebrationStartedTick = None, backAtHeadTick = None)
 
+  /** The log ring's lines, newest last. While the Logs view is scrolled back, the lines on screen stay on screen: the
+    * scroll grows by the lines that arrived since.
+    */
+  def withLogs(lines: Vector[LogLine]): TuiState =
+    val arrived = (for
+      newest <- lines.lastOption
+      before <- logs.lastOption
+    yield (newest.seq - before.seq).max(0L)).getOrElse(0L)
+    val scroll = if logScroll <= 0 then 0 else (logScroll + arrived).min((lines.size - 1).max(0).toLong).toInt
+    copy(logs = lines, logScroll = scroll)
+
+  /** `-` (`lines` > 0, older) and `+` (`lines` < 0, newer): the Logs view moves by `lines`, from the newest page (0) to
+    * the oldest, whose first line is the ring's oldest.
+    */
+  def scrollLogs(lines: Int, page: Int): TuiState =
+    copy(logScroll = (logScroll + lines).max(0).min((logs.size - page.max(1)).max(0)))
+
+  /** A peer's score in the latest published snapshot; none for a peer it does not have, never zero (Q5). */
+  def peerScore(peerId: String): Option[Double] = scores.current.flatMap(_.scores.get(peerId))
+
+  /** The sign of a peer's score change from the previous published snapshot, at the precision the column shows
+    * ([[TuiState.ScoreDigits]] decimals): the recency term drifts every score down a little between snapshots, which is
+    * not a trend.
+    */
+  def scoreTrend(peerId: String): Option[Trend] =
+    for
+      now <- peerScore(peerId)
+      before <- scores.previous.flatMap(_.scores.get(peerId))
+    yield
+      val step = math.pow(10, ScoreDigits)
+      math.round(now * step).compareTo(math.round(before * step)) match
+        case d if d > 0 => Trend.Up
+        case d if d < 0 => Trend.Down
+        case _          => Trend.Steady
+
   /** The view's name, as the header shows it. */
   def viewTitle: String = if helpOpen then "Help" else view.title
 
@@ -252,6 +303,24 @@ case class TuiState(
   /** How old the SNAP sample on screen is, if the probe said when it was taken. */
   def snapSampleAge: Option[Duration] =
     snapshot.flatMap(_.sync.value).flatMap(_.snapSampledAt).map(at => Duration.between(at, now))
+
+/** Which way a peer's score went between the last two published snapshots (spec 027 FR-019, research §6). */
+enum Trend:
+  case Up, Down, Steady
+
+/** Every peer's score at one instant, as slice 4a published it to `NetworkMetrics`, by peer id (the remote node id in
+  * hex, as [[TuiPeer.id]]).
+  */
+final case class PeerScores(takenAt: Instant, scores: Map[String, Double])
+
+/** The two latest published score snapshots: the trend is the change from `previous` to `current` (T098). The probe
+  * reads the same snapshot every poll until the scorer publishes the next one (at most once a second on an event, every
+  * 10 s on the peer manager's tick), so history moves on only when the snapshot's time changes.
+  */
+final case class ScoreHistory(previous: Option[PeerScores] = None, current: Option[PeerScores] = None):
+  def next(published: Option[PeerScores]): ScoreHistory = published match
+    case Some(p) if !current.exists(_.takenAt == p.takenAt) => ScoreHistory(current, Some(p))
+    case _                                                  => this
 
 /** First block observed by the TUI and when — the reference point for sync-speed estimates. */
 case class SyncBaseline(block: Long, observedAt: Instant)
@@ -295,6 +364,11 @@ final case class SyncSample(
   *   the sync status, from the sync controller
   * @param local
   *   what the probe read on the node itself, at `now`: no actor, so always as fresh as the snapshot
+  * @param details
+  *   each handshaked peer's client id and best block, by peer id, from the network peer manager
+  *   (`GetHandshakedPeersCmd`); None when the probe does not ask it
+  * @param txpool
+  *   the txpool's size and blob count, from the pending transactions manager; None when the probe does not ask it
   */
 final case class NodeStatusSnapshot(
     now: Instant,
@@ -302,7 +376,9 @@ final case class NodeStatusSnapshot(
     localBest: Long,
     peers: Sourced[Seq[TuiPeer]],
     sync: Sourced[SyncSample],
-    local: LocalSample = LocalSample()
+    local: LocalSample = LocalSample(),
+    details: Option[Sourced[Map[String, PeerDetails]]] = None,
+    txpool: Option[Sourced[TxpoolSample]] = None
 ):
   def peerCount: Int = peers.value.fold(0)(_.size)
 
@@ -337,7 +413,7 @@ final case class NodeStatusSnapshot(
           source match
             case Sourced.Fresh(last, at) => Sourced.Stale(last, at)
             case other                   => other
-      copy(peers = aged(peers), sync = aged(sync))
+      copy(peers = aged(peers), sync = aged(sync), details = details.map(aged), txpool = txpool.map(aged))
 
 /** Node settings displayed in the TUI. */
 case class NodeSettings(
@@ -369,6 +445,15 @@ case class NodeSettings(
   */
 final case class TuiPeer(id: String, address: String, incoming: Boolean, connectedAt: Instant)
 
+/** A handshaked peer's client id (sanitised, FR-020) and best block, as the network peer manager reports them. */
+final case class PeerDetails(clientId: String, bestBlock: Long)
+
+/** The txpool: pending transactions, and how many of them carry a blob sidecar. */
+final case class TxpoolSample(size: Int, blobs: Int)
+
+/** The last block import's size and how long its consensus call took (`RegularSyncMetrics`, C-7). */
+final case class ImportSample(blocks: Int, duration: Duration)
+
 /** What the probe reads on the node itself, without an actor (spec 027 research §6, FR-025): each `None` when the read
   * is not wired or failed.
   *
@@ -384,6 +469,10 @@ final case class TuiPeer(id: String, address: String, incoming: Boolean, connect
   *   SNAP's request counters (`SNAPSyncMetrics`)
   * @param snapPivot
   *   SNAP's pivot block (`SNAPSyncMetrics`), once one is chosen
+  * @param peerScores
+  *   the peer scores slice 4a last published to `NetworkMetrics`, once it has
+  * @param lastImport
+  *   the last block import regular sync timed (`RegularSyncMetrics`), once there is one
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
@@ -391,7 +480,9 @@ final case class LocalSample(
     discovery: Option[DiscoverySample] = None,
     headTimestamp: Option[Long] = None,
     snapCounters: Option[SnapCounters] = None,
-    snapPivot: Option[Long] = None
+    snapPivot: Option[Long] = None,
+    peerScores: Option[PeerScores] = None,
+    lastImport: Option[ImportSample] = None
 )
 
 /** The JVM's heap in bytes, and the share of wall time spent in GC between the last two polls (0 to 1). */
@@ -508,6 +599,9 @@ object TuiState:
 
   /** The time of a state that has seen no snapshot and no start time: uptime and rates read 0. */
   val Origin: Instant = Instant.EPOCH
+
+  /** The score column's decimals, and the precision of the trend. */
+  val ScoreDigits: Int = 3
 
   /** Create an initial TUI state. */
   def initial: TuiState = TuiState()
