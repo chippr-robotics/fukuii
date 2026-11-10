@@ -454,8 +454,7 @@ private[actors] class AccountRangeCoordinatorImpl(
     if durable then
       taskStackTries.values.foreach(_.flushEmitted())
       syncTaskFiles()
-    val allTasks =
-      pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ storingTasks.values ++ completedTasks
+    val allTasks = tasksWithWork ++ completedTasks
     val progress: Map[ByteString, ByteString] = allTasks.map(t => t.last -> t.next).toMap
     val files = ContractTaskFiles(
       storagePath = contractStorageFile.toString,
@@ -888,31 +887,69 @@ private[actors] class AccountRangeCoordinatorImpl(
       dispatchPaused = dispatchDeliberatelyPaused
     )
 
+  /** Every range that still has work: queued (`pendingTasks`), asked of a peer (`activeTasks`), or answered and being
+    * inserted chunk by chunk (`storingTasks`, whose `next` is already past the response but not past its end). The one
+    * definition behind completion, the resume snapshot and the keyspace estimate, so the three cannot disagree about
+    * which ranges are unfinished (B-044: the estimate left `storingTasks` out).
+    */
+  private def tasksWithWork: Iterator[AccountTask] =
+    AccountRangeCoordinator.tasksWithWork(
+      pending = pendingTasks,
+      active = activeTasks.valuesIterator.map(_._1),
+      storing = storingTasks.valuesIterator
+    )
+
   // Also wait for responses still being inserted (storingTasks) and for the carried contract work to be replayed —
   // completion sends NoMore{Storage,ByteCode}Tasks downstream, which must not overtake either.
   private def isComplete: Boolean =
-    pendingTasks.isEmpty && activeTasks.isEmpty && storingTasks.isEmpty && replayDone
+    tasksWithWork.isEmpty && replayDone
 
-  /** Estimate total accounts from keyspace coverage. Uses completed tasks' ranges to compute keyspace density (accounts
-    * per unit of keyspace), then extrapolates to the full 2^256 space. Only considers tasks that have actually been
-    * explored, avoiding inflation from un-dispatched chunks.
-    *
-    * Uses BigInt arithmetic throughout to avoid precision loss — 2^256 is far beyond Double's 15-17 significant digits,
-    * so `covered.toDouble / keyspaceSize.toDouble` always produces 0.0.
+  /** The estimated total of accounts, from how much of the keyspace the ranges with work left have covered; see
+    * [[AccountRangeCoordinator.keyspaceEstimate]].
     */
   private def computeKeyspaceEstimate(): Option[Long] =
-    if accountsDownloaded < 10000 then None // too early for reliable estimate
+    AccountRangeCoordinator.keyspaceEstimate(accountsDownloaded, tasksWithWork)
+
+object AccountRangeCoordinator:
+
+  /** The ranges that still have work, given the three places a range can be: queued, asked of a peer, and answered and
+    * being inserted (see `tasksWithWork` on the coordinator). The membership is the point of this function: it decides
+    * completion (`AccountRangeSyncComplete` and the `NoMore*` signals fire when it is empty), the resume snapshot and
+    * the keyspace estimate, and a coordinator is too much to build to test which sets it reads, so it is tested here
+    * (`AccountKeyspaceEstimateSpec`).
+    */
+  private[actors] def tasksWithWork(
+      pending: IterableOnce[AccountTask],
+      active: IterableOnce[AccountTask],
+      storing: IterableOnce[AccountTask]
+  ): Iterator[AccountTask] =
+    pending.iterator ++ active.iterator ++ storing.iterator
+
+  /** The fewest accounts downloaded for which the keyspace estimate extrapolates; before it, the density is too noisy.
+    * The progress monitor's reset log names it: it is when the accounts percentage returns after a restart.
+    */
+  private[snap] val KeyspaceEstimateMinAccounts: Long = 10_000L
+
+  /** The account-count estimate from keyspace coverage: `accountsDownloaded * 2^256 / covered`, where `covered` is the
+    * keyspace not left in a range with work (`unfinished`, from `tasksWithWork`: queued, asked of a peer, or being
+    * stored). Uses BigInt throughout: 2^256 is far beyond a Double's 15-17 significant digits. A function of its
+    * arguments so it can be tested; see `AccountKeyspaceEstimateSpec`.
+    *
+    * None before `KeyspaceEstimateMinAccounts` accounts (too early to extrapolate), when the ranges leave no keyspace
+    * covered (the same range counted twice, say), and for a result that is not above the count or is over 2 billion.
+    */
+  private[actors] def keyspaceEstimate(
+      accountsDownloaded: Long,
+      unfinished: IterableOnce[AccountTask]
+  ): Option[Long] =
+    if accountsDownloaded < KeyspaceEstimateMinAccounts then None // too early for reliable estimate
     else
       val keyspaceSize = BigInt(2).pow(256)
-      val nonCompleteTasks = pendingTasks.toSeq ++ activeTasks.values.map(_._1)
-      val remaining =
-        if nonCompleteTasks.isEmpty then BigInt(0)
-        else
-          nonCompleteTasks.foldLeft(BigInt(0)) { case (sum, task) =>
-            val taskEnd = BigInt(1, task.last.toArray)
-            val taskPos = BigInt(1, task.next.toArray)
-            sum + (taskEnd - taskPos).max(0)
-          }
+      val remaining = unfinished.iterator.foldLeft(BigInt(0)) { case (sum, task) =>
+        val taskEnd = BigInt(1, task.last.toArray)
+        val taskPos = BigInt(1, task.next.toArray)
+        sum + (taskEnd - taskPos).max(0)
+      }
 
       val covered = keyspaceSize - remaining
       if covered <= 0 then None
@@ -924,8 +961,6 @@ private[actors] class AccountRangeCoordinatorImpl(
         // ETC mainnet has ~600M addresses per blockscout; cap at 2B for safety margin
         if estimatedBig <= accountsDownloaded || estimatedBig > BigInt(2000000000L) then None
         else Some(estimatedBig.toLong)
-
-object AccountRangeCoordinator:
 
   /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia's logs show 13.5M through the old filter
     * (3M entries at 1e-4), whose false-positive rate had reached about 0.53 by then, which implies about 16M. ETH
