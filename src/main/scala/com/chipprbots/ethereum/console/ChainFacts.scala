@@ -105,7 +105,14 @@ object ChainFacts:
       "BPO2" -> forks.bpo2Timestamp
     )
     val scheduled = named.collect { case (name, Some(at)) => ForkPoint(name, at) }.sortBy(_.at)
-    ChainFacts(chainId, ChainFamily.PoS, ForkSchedule.ByTimestamp, scheduled, named.collect { case (n, None) => n }, version)
+    ChainFacts(
+      chainId,
+      ChainFamily.PoS,
+      ForkSchedule.ByTimestamp,
+      scheduled,
+      named.collect { case (n, None) => n },
+      version
+    )
 
   /** A Unix timestamp in UTC, ISO-8601: `2026-10-06T13:53:36Z`. */
   def utc(epochSeconds: Long): String = Instant.ofEpochSecond(epochSeconds).toString

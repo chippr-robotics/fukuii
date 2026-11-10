@@ -51,7 +51,10 @@ private[console] object HelpPanel:
       g.dot -> "to come",
       g.storage -> "SNAP phase"
     ).map((glyph, what) => s"${glyph.text} $what")
-    val title = fitToWidth(text(s" Glyphs (${g.set.toString.toLowerCase(java.util.Locale.ROOT)}, g switches)", c.t.healthy.bold()), w)
+    val title = fitToWidth(
+      text(s" Glyphs (${g.set.toString.toLowerCase(java.util.Locale.ROOT)}, g switches)", c.t.healthy.bold()),
+      w
+    )
     val gap = "   "
     val rows = items.foldLeft(Vector.empty[String]) { (rows, item) =>
       rows.lastOption match

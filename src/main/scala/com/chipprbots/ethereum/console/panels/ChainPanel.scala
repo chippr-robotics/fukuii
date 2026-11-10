@@ -18,17 +18,29 @@ private[console] object ChainPanel:
     val vitals = Panel(2, 2, 1, (w, _) => Seq(vitalsRow(c, w), syncSummaryRow(c, w)))
     c.state.chain match
       case None =>
-        Seq(vitals, Panel(1, 1, 2, (w, _) => Seq(fitToWidth(field("Chain", text("not read yet", c.t.muted), c.t), w)), separated = true))
+        Seq(
+          vitals,
+          Panel(
+            1,
+            1,
+            2,
+            (w, _) => Seq(fitToWidth(field("Chain", text("not read yet", c.t.muted), c.t), w)),
+            separated = true
+          )
+        )
       case Some(chain) =>
         val identity = Panel(1, 1, 2, (w, _) => Seq(identityRow(c, chain, w)), separated = true)
         val forks =
-          if c.tier == Tier.S then Panel(1, 2, 3, (w, _) => ForkRows.lastAndNext(c, chain, w), separated = true, fill = true)
+          if c.tier == Tier.S then
+            Panel(1, 2, 3, (w, _) => ForkRows.lastAndNext(c, chain, w), separated = true, fill = true)
           else
             Panel(
               1,
               1,
               3,
-              (w, _) => fitToWidth(text(s" Forks (${chain.scheduleLabel})", c.t.healthy.bold()), w) +: ForkRows.timeline(c, chain, w),
+              (w, _) =>
+                fitToWidth(text(s" Forks (${chain.scheduleLabel})", c.t.healthy.bold()), w) +: ForkRows
+                  .timeline(c, chain, w),
               separated = true,
               fill = true
             )

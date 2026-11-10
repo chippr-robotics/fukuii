@@ -66,7 +66,9 @@ private[console] object OverviewPanels:
 
   /** The longest-connected peers (tier L): slice 4 adds the client, best block and score, and sorts by score. */
   def peers(c: Ctx): Option[Panel] =
-    Option.when(c.state.snapshot.isDefined)(Panel(3, 10, 4, (w, n) => PeersPanel.table(c, w, n, top = true), separated = true))
+    Option.when(c.state.snapshot.isDefined)(
+      Panel(3, 10, 4, (w, n) => PeersPanel.table(c, w, n, top = true), separated = true)
+    )
 
   /** The sync panel, forks and peers on the left, and the 12-line logo centred in a column on the right (§3.4). Its
     * body takes tier M's worm track: the logo column leaves fewer columns than a tier-M screen has (C-18).

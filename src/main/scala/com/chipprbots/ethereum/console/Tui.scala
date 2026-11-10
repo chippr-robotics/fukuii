@@ -264,9 +264,9 @@ class Tui(
           None
     }
 
-  /** Handle keyboard commands (FR-015, research §2.2). While the splash is on screen any key skips it, and does
-    * nothing else (FR-013). While Help is open, `q`, `r` and `d` keep their meaning and any other key returns to the
-    * view under it.
+  /** Handle keyboard commands (FR-015, research §2.2). While the splash is on screen any key skips it, and does nothing
+    * else (FR-013). While Help is open, `q`, `r` and `d` keep their meaning and any other key returns to the view under
+    * it.
     */
   def handleCommand(command: Char): TuiCommand =
     val height = synchronized(lastSize._2)

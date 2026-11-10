@@ -6,9 +6,9 @@ import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.panels.Rows.*
 
-/** The handshaked peers, from the peer manager's `GetPeersCmd`: id, direction, address and how long connected (spec
-  * 027 FR-019, research §3.1). Slice 4 adds the client id and best block (`GetHandshakedPeersCmd`) and the score with
-  * its trend, and sorts by score; until then the longest-connected come first.
+/** The handshaked peers, from the peer manager's `GetPeersCmd`: id, direction, address and how long connected (spec 027
+  * FR-019, research §3.1). Slice 4 adds the client id and best block (`GetHandshakedPeersCmd`) and the score with its
+  * trend, and sorts by score; until then the longest-connected come first.
   */
 private[console] object PeersPanel:
 
@@ -45,7 +45,10 @@ private[console] object PeersPanel:
         val title = fitToWidth(text(heading, if stale.nonEmpty then c.t.warn else c.t.healthy.bold()), w)
         val heads = fitToWidth(line("id", "dir", "address", "connected", c.t.muted), w)
         val body = peers.take(shown).map { p =>
-          fitToWidth(line(shortId(p.id, c.g), if p.incoming then "in" else "out", p.address, ago(c, p.connectedAt), c.t.value), w)
+          fitToWidth(
+            line(shortId(p.id, c.g), if p.incoming then "in" else "out", p.address, ago(c, p.connectedAt), c.t.value),
+            w
+          )
         }
         if peers.isEmpty then Seq(title, fitToWidth(text("   no handshaked peer", c.t.muted), w))
         else Seq(title, heads) ++ body

@@ -20,7 +20,14 @@ class LayoutSpec extends AnyFlatSpec with Matchers:
       fill: Boolean = false,
       separated: Boolean = false
   ): Panel =
-    Panel(min, preferred, priority, (_, rows) => (1 to rows).map(i => new AttributedString(s"$name$i")), separated, fill)
+    Panel(
+      min,
+      preferred,
+      priority,
+      (_, rows) => (1 to rows).map(i => new AttributedString(s"$name$i")),
+      separated,
+      fill
+    )
 
   private val separator = new AttributedString("-" * 10)
 
@@ -41,7 +48,8 @@ class LayoutSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "let the fill panel absorb the rest" taggedAs (UnitTest) in {
-    val panels = Seq(panel("a", 1, 2, priority = 1), panel("logs", 0, 0, priority = 9, fill = true), panel("b", 1, 1, 2))
+    val panels =
+      Seq(panel("a", 1, 2, priority = 1), panel("logs", 0, 0, priority = 9, fill = true), panel("b", 1, 1, 2))
     Layout.allocate(panels, 3) shouldBe Seq(2, 0, 1)
     Layout.allocate(panels, 10) shouldBe Seq(2, 7, 1)
   }

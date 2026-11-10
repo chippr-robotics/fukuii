@@ -71,7 +71,7 @@ class TuiRenderer(config: TuiConfig):
     val body = Layout.render(Views.panels(c, w), w, bodyRows, c.separator(w))
     (top ++ body :+ footer).map(fitToWidth(_, w))
 
-  /** ` ◆ FUKUII  etc (61) · PoW · up 1h 23m … Overview `; from tier M the head and the peers, at tier L the version
+  /** ` ◆ FUKUII etc (61) · PoW · up 1h 23m … Overview `; from tier M the head and the peers, at tier L the version
     * (§3.1). In the accent style; during the celebration's flash (frames 2–6, §3.8) in the flash style.
     */
   private def createHeader(c: Ctx, width: Int): AttributedString =
@@ -84,7 +84,8 @@ class TuiRenderer(config: TuiConfig):
         s.chain.map(_.family.label) ++
         (if c.tier == Tier.S then Nil else Seq(s"head ${formatNumber(s.currentBlock)}", peers)) ++
         Seq(s"up ${formatShort(s.uptimeSeconds)}") ++
-        (if c.tier == Tier.L then s.chain.map(_.version).filter(_.nonEmpty).map(v => if v.startsWith("v") then v else s"v$v")
+        (if c.tier == Tier.L then
+           s.chain.map(_.version).filter(_.nonEmpty).map(v => if v.startsWith("v") then v else s"v$v")
          else None)
     val left = new AttributedString(s" ${c.g.diamond.text} FUKUII  ${parts.mkString(s" ${c.g.dot.text} ")}", style)
     val right = new AttributedString(s"${s.viewTitle} ", style)

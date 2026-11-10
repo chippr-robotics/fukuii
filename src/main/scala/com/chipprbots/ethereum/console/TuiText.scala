@@ -47,7 +47,8 @@ object TuiText:
     else if minutes > 0 then s"${minutes}m ${secs}s"
     else s"${secs}s"
 
-  /** The two largest units: 12d 7h, 1h 23m, 4m 12s, 31s. For uptimes, ages and ETAs, where seconds of a day are noise. */
+  /** The two largest units: 12d 7h, 1h 23m, 4m 12s, 31s. For uptimes, ages and ETAs, where seconds of a day are noise.
+    */
   def formatShort(seconds: Long): String =
     val s = seconds.max(0L)
     val days = s / 86400

@@ -176,7 +176,8 @@ private[console] object Rows:
     val rpc = field("RPC", endpointsValue(c), c.t)
     val cells = c.tier match
       case Tier.S => Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 7))
-      case Tier.M => Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 8), at(2) -> field("JVM", heapValue(c), c.t))
+      case Tier.M =>
+        Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 8), at(2) -> field("JVM", heapValue(c), c.t))
       case Tier.L => Seq(at(0) -> rpc, at(2) -> field("Discovery", discoveryValue(c), c.t, 11))
     strip(width, cells)
 
@@ -223,7 +224,8 @@ private[console] object Rows:
   def wormBudget(c: Ctx, slots: Int, width: Int): Int =
     WormBar.budgetFor(slots, c.g).min(width - WormIndentCols).max(0)
 
-  /** `   Label    [===🪱....]🧠 52%  detail`: without the progress bar, the row says in words what the bar would show. */
+  /** ` Label [===🪱....]🧠 52% detail`: without the progress bar, the row says in words what the bar would show.
+    */
   def wormRow(
       c: Ctx,
       label: String,
@@ -303,7 +305,8 @@ private[console] object Rows:
   /** `0x3fa1…e2` for a hex node id, else the id cut to 12 columns. */
   def shortId(id: String, g: TuiGlyphs): String =
     val hex = id.stripPrefix("0x")
-    if hex.length > 8 && hex.forall(Character.digit(_, 16) >= 0) then s"0x${hex.take(4)}${g.ellipsis.text}${hex.takeRight(2)}"
+    if hex.length > 8 && hex.forall(Character.digit(_, 16) >= 0) then
+      s"0x${hex.take(4)}${g.ellipsis.text}${hex.takeRight(2)}"
     else if id.length > 12 then id.take(11) + g.ellipsis.text
     else id
 

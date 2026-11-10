@@ -10,8 +10,8 @@ import com.chipprbots.ethereum.console.TuiText.formatShort
 import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** The Sync view (spec 027 research §3.5, §3.6): SNAP's phase and worm rows on the tier's track (20, 40 or 60 slots),
-  * with its rates, request counters, snap-capable peers and phase timeline from tier M; or a regular sync's Blocks worm,
-  * session and lag.
+  * with its rates, request counters, snap-capable peers and phase timeline from tier M; or a regular sync's Blocks
+  * worm, session and lag.
   *
   * Not here yet: the L tier's rate sparkline (it needs the rate history slice 4 keeps), the S tier's Import row (slice
   * 4's import-duration gauge) and its Fetcher row (no metric source, C-7).
@@ -100,7 +100,8 @@ private[console] object SyncPanels:
     val sep = text(s" ${c.g.separator.text * 2} ", c.t.muted)
     val parts = PhaseNames.zipWithIndex.map { case ((_, name), i) =>
       if current >= 0 && i < current then text(s"$name ${c.g.check.text}", c.t.healthy)
-      else if i == current then text(s"$name ${c.g.bullet.text} ${formatShort(snap.phaseElapsedSeconds.toLong)}", c.t.value)
+      else if i == current then
+        text(s"$name ${c.g.bullet.text} ${formatShort(snap.phaseElapsedSeconds.toLong)}", c.t.value)
       else text(s"$name ${c.g.dot.text}", c.t.muted)
     }
     val timeline = parts.zipWithIndex.flatMap((p, i) => if i == 0 then Seq(p) else Seq(sep, p))
@@ -113,7 +114,8 @@ private[console] object SyncPanels:
     val s = c.state
     def header(w: Int): Seq[AttributedString] =
       val row =
-        if s.isSynchronized then fitToWidth(field("Sync", text(s"${c.g.check.text} at head", c.t.healthy.bold()), c.t), w)
+        if s.isSynchronized then
+          fitToWidth(field("Sync", text(s"${c.g.check.text} at head", c.t.healthy.bold()), c.t), w)
         else if s.bestBlock > 0 then
           leftRight(text(" Regular sync", c.t.healthy.bold()), text(rateAndEta(c), c.t.value), w)
         else fitToWidth(field("Sync", text(s.syncStatus, c.t.value), c.t), w)

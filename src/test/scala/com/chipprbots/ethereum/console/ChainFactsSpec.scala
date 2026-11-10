@@ -4,9 +4,9 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
-import com.chipprbots.ethereum.testing.Tags.*
 
 /** The chain's identity and fork timeline, for display only (spec 027 FR-017, C-4, C-5, T062). Nothing here changes a
   * fork's configuration or how `forBlock` and `forTimestamp` dispatch.
@@ -69,7 +69,7 @@ class ChainFactsSpec extends AnyFlatSpec with Matchers:
   it should "come from the shipped ETC and Mordor configs, with their chain ids, as PoW (C-4)" taggedAs (UnitTest) in {
     val etc = ChainFacts.from(chain("etc"), "v")
     (etc.chainId, etc.family, etc.version) shouldBe ((BigInt(61), ChainFamily.PoW, "v"))
-    etc.forks.map(_.name) should contain allOf ("Atlantis", "Mystique", "Spiral")
+    (etc.forks.map(_.name) should contain).allOf("Atlantis", "Mystique", "Spiral")
     etc.notScheduled should contain("Olympia")
     ChainFacts.from(chain("mordor")).chainId shouldBe BigInt(63)
     ChainFacts.from(chain("mordor")).family shouldBe ChainFamily.PoW

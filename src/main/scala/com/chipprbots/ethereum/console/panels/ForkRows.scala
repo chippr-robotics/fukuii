@@ -24,10 +24,10 @@ private[console] object ForkRows:
   private def ahead(c: Ctx, chain: ChainFacts, at: Long): String =
     chain.next(at) match
       case Some(next) => s"${c.g.arrow.text} ${next.name} @ ${chain.when(next)} (${chain.distance(next, at)})"
-      case None       => chain.notScheduled.headOption.fold("no fork scheduled")(n => s"${c.g.arrow.text} $n not scheduled")
+      case None => chain.notScheduled.headOption.fold("no fork scheduled")(n => s"${c.g.arrow.text} $n not scheduled")
 
-  /** The Overview's forks: one row at S (`Forks   Mystique ✓ ═══▶ Spiral @ …`), else a title, the latest active
-    * forks with the next one, and a detail row.
+  /** The Overview's forks: one row at S (`Forks Mystique ✓ ═══▶ Spiral @ …`), else a title, the latest active forks
+    * with the next one, and a detail row.
     */
   def overview(c: Ctx, chain: ChainFacts, w: Int, oneLine: Boolean): Seq[AttributedString] =
     val check = c.g.check.text
@@ -57,7 +57,11 @@ private[console] object ForkRows:
             .lastOption
             .getOrElse(Nil)
           val timeline =
-            concat(text("   ", c.t.value), text(shown.mkString(sep) + (if shown.nonEmpty then " " else ""), c.t.healthy), right)
+            concat(
+              text("   ", c.t.value),
+              text(shown.mkString(sep) + (if shown.nonEmpty then " " else ""), c.t.healthy),
+              right
+            )
           Seq(title(c, chain, w), fitToWidth(timeline, w), fitToWidth(detail(c, chain, at, last), w))
 
   private def title(c: Ctx, chain: ChainFacts, w: Int): AttributedString =
@@ -71,13 +75,14 @@ private[console] object ForkRows:
       case ForkSchedule.ByTimestamp => s"head ${ChainFacts.utc(at)}"
     val since = last.map(f => s"${f.name} since ${chain.when(f)}")
     val upcoming = chain.next(at) match
-      case Some(next) if chain.schedule == ForkSchedule.ByTimestamp => Some(s"${next.name} activates ${chain.when(next)}")
-      case Some(_)                                                  => None
-      case None => chain.notScheduled.headOption.map(n => s"$n not scheduled on this network")
+      case Some(next) if chain.schedule == ForkSchedule.ByTimestamp =>
+        Some(s"${next.name} activates ${chain.when(next)}")
+      case Some(_) => None
+      case None    => chain.notScheduled.headOption.map(n => s"$n not scheduled on this network")
     text("   " + (Seq(where) ++ since ++ upcoming).mkString(s" $dot "), c.t.value)
 
-  /** The Chain view's timeline, one row per fork: active (✓), next (▶, with its distance), later (·), and the forks
-    * not scheduled.
+  /** The Chain view's timeline, one row per fork: active (✓), next (▶, with its distance), later (·), and the forks not
+    * scheduled.
     */
   def timeline(c: Ctx, chain: ChainFacts, w: Int): Seq[AttributedString] =
     val at = position(c, chain)

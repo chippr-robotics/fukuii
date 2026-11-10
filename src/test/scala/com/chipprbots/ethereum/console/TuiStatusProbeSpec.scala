@@ -269,7 +269,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
   it should "read the disk free on the datadir through the injected File => Long" taggedAs (UnitTest) in {
     val dataDir = new java.io.File("/var/lib/fukuii/etc")
-    val p = localProbe(TuiStatusProbe.LocalSources(dataDir = Some(dataDir), usableSpace = f => if f == dataDir then 42L else -1L))
+    val p = localProbe(
+      TuiStatusProbe.LocalSources(dataDir = Some(dataDir), usableSpace = f => if f == dataDir then 42L else -1L)
+    )
     p().local.diskFree shouldBe Some(42L)
     localProbe(TuiStatusProbe.LocalSources())().local.diskFree shouldBe None // no datadir, no reading
   }
@@ -294,7 +296,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     com.chipprbots.ethereum.network.NetworkMetrics.PendingPeersSize.set(14L)
     com.chipprbots.ethereum.network.NetworkMetrics.BlacklistedPeersSize.set(3L)
     TuiStatusProbe.LocalSources.networkDiscovery() shouldBe Some(DiscoverySample(1_912L, 14L, 3L))
-    localProbe(TuiStatusProbe.LocalSources(discovery = TuiStatusProbe.LocalSources.networkDiscovery))().local.discovery shouldBe
+    localProbe(
+      TuiStatusProbe.LocalSources(discovery = TuiStatusProbe.LocalSources.networkDiscovery)
+    )().local.discovery shouldBe
       Some(DiscoverySample(1_912L, 14L, 3L))
   }
 
@@ -335,7 +339,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       )
     val pm: Behavior[PeerManagerActor.Command] = Behaviors.receiveMessage {
       case PeerManagerActor.GetPeersCmd(replyTo) =>
-        replyTo ! PeerManagerActor.Peers(Map(inbound -> PeerActor.Status.Handshaked, peer("x") -> PeerActor.Status.Connecting))
+        replyTo ! PeerManagerActor.Peers(
+          Map(inbound -> PeerActor.Status.Handshaked, peer("x") -> PeerActor.Status.Connecting)
+        )
         Behaviors.same
       case _ => Behaviors.same
     }

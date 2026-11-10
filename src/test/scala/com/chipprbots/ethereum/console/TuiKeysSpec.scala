@@ -98,6 +98,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
   it should "not shift the layout: every label starts in the same column in both sets" taggedAs (UnitTest) in {
     val renderer = TuiRenderer(TuiConfig.default)
     val labels = Seq("Peers", "Block", "RPC", "Disk", "Overall", "Accounts", "Storage", "Bytecode", "Healing", "Forks")
+
     /** The column a label starts at in each row that has it. */
     def columns(s: TuiState, w: Int, h: Int): Seq[(Int, String, Int)] =
       renderer.render(s, w, h).zipWithIndex.flatMap { (row, i) =>
@@ -107,8 +108,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
           Option.when(at >= 0)((i, label, new AttributedString(text.substring(0, at)).columnLength()))
         }
       }
-    for
-      (name, fixture) <- TuiFixtures.all; view <- TuiView.values.toSeq; (w, h) <- Seq((80, 24), (120, 40), (160, 48))
+    for (name, fixture) <- TuiFixtures.all; view <- TuiView.values.toSeq; (w, h) <- Seq((80, 24), (120, 40), (160, 48))
     do
       val emoji = fixture(GlyphSet.Emoji).copy(view = view, motion = Motion.Reduced)
       withClue(s"$name $view ${w}x$h: ") {

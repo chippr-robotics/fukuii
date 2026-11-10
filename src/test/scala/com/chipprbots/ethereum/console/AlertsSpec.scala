@@ -98,7 +98,9 @@ class AlertsSpec extends AnyFlatSpec with Matchers:
     severities(peersAt(1, 12)) shouldBe Seq(Severity.Warn)
     // No peer at all is the 0-peers rule's, with its 30 s grace.
     texts(peersAt(10, 0)) shouldBe empty
-    texts(TuiState(maxPeers = 0, now = t0).withStatus(TuiFixtures.snapshot(1, 1, t0, peers = 1)).copy(maxPeers = 0)) shouldBe
+    texts(
+      TuiState(maxPeers = 0, now = t0).withStatus(TuiFixtures.snapshot(1, 1, t0, peers = 1)).copy(maxPeers = 0)
+    ) shouldBe
       empty
   }
 
@@ -116,7 +118,8 @@ class AlertsSpec extends AnyFlatSpec with Matchers:
 
   // ---- the row --------------------------------------------------------------------------------------------------
 
-  private def alertRow(s: TuiState, w: Int = 80, h: Int = 24): String = renderer.render(s, w, h).map(_.toString).apply(2)
+  private def alertRow(s: TuiState, w: Int = 80, h: Int = 24): String =
+    renderer.render(s, w, h).map(_.toString).apply(2)
 
   "The alert row" should "read '✓ no alerts' when nothing holds" taggedAs (UnitTest) in {
     alertRow(TuiFixtures.syncedEtc()).trim shouldBe "✓ no alerts"

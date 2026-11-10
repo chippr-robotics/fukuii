@@ -82,7 +82,9 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
       val top = topRows(s, w, h)
       withClue(s"$name, ${if s.helpOpen then "Help" else s.view.toString}, ${w}x$h, $set:\n$top\n") {
         top should include(s.networkName)
-        top should include(if s.connectionStatus.startsWith("Unresponsive") then "Unresponsive" else s"${s.peerCount}/50")
+        top should include(
+          if s.connectionStatus.startsWith("Unresponsive") then "Unresponsive" else s"${s.peerCount}/50"
+        )
         top should include(formatNumber(s.currentBlock))
         top should include(if s.isSynchronized then "at head" else formatNumber(s.bestBlock))
         if !s.isSynchronized then top should include("ETA")

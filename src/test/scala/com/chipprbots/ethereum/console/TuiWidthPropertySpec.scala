@@ -122,7 +122,9 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       peerSource <- sourced(Gen.const(list))
       sampledAgo <- Gen.option(Gen.chooseNum(0L, 1_000L))
       status <- text
-      syncSource <- sourced(Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds))))
+      syncSource <- sourced(
+        Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds)))
+      )
       l <- local
     yield NodeStatusSnapshot(TuiFixtures.Now, maxPeers, current, peerSource, syncSource, l)
 
