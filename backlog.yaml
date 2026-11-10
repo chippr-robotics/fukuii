@@ -2170,3 +2170,13 @@ items:
     refs: ["beacon/forge pre-flights, 027 slice 5, 2026-11-10"]
     links: {}
     notes: cats-effect onFatalFailure shuts down all IORuntimes on a LinkageError (e.g. ExceptionInInitializerError from a metrics object). Initialise metrics objects off the hot IO paths (EngineApiMetrics, PoWMiningMetrics); add a rule to .claude/agent-protocols/.
+  - id: B-195
+    title: "Peer scorer: does the recency term lower every idle peer's score between publishes? (TUI trend column noise)"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-10
+    refs: ["prism review of 027 slice 4, 2026-11-10"]
+    links: {}
+    notes: network/PeerScore.scala recency term drifts idle scores; the TUI compares at 3 decimals. If drift per publish exceeds 0.001 every idle peer shows a down trend. herald owns; check in the B-189 UAT.
