@@ -5,6 +5,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
+import scala.collection.mutable.ArrayBuffer
 
 /** The view keys (spec 027 FR-015, research §2.1–§2.2, T061). `5`, `l`, `+` and `-` arrive with the Logs view in slice
   * 4, so here they are unknown keys.
@@ -184,4 +185,43 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     tui.handleCommand('r') shouldBe TuiCommand.Continue
     tt.output.substring(bytes) should include(Tui.ClearScreen)
     tui.getState.helpOpen shouldBe true
+  }
+
+  // prism, slice 3 re-review: a sequence that arrives in two writes is still one sequence.
+  it should "be dropped whole when it arrives in two writes" taggedAs (UnitTest) in withTui { (tui, tt) =>
+    tt.press("\u001b[1;")
+    tt.press("5D")
+    tui.checkInput(1000) shouldBe None
+    tui.checkInput(50) shouldBe None
+    tui.isEnabled shouldBe true
+  }
+
+  // A stall past the drain's deadline (a GC pause on a loaded host) must not leave the buffered tail to be dispatched:
+  // every byte gets at least one 1 ms read.
+  it should "be drained after a stall that outlasts the deadline" taggedAs (UnitTest) in {
+    final class Buffered(bytes: String) extends org.jline.utils.NonBlockingReader:
+      private val queue = scala.collection.mutable.Queue.from(bytes.map(_.toInt))
+      val waits: ArrayBuffer[Long] = scala.collection.mutable.ArrayBuffer.empty[Long]
+      override protected def read(timeout: Long, isPeek: Boolean): Int =
+        waits += timeout
+        if queue.isEmpty then org.jline.utils.NonBlockingReader.READ_EXPIRED
+        else if isPeek then queue.head
+        else queue.dequeue()
+      override def readBuffered(b: Array[Char], off: Int, len: Int, timeout: Long): Int = 0
+      override def available(): Int = queue.size
+      override def close(): Unit = ()
+    // The clock jumps a second ahead after the first read: the deadline is long gone when the rest is read.
+    var now = 0L
+    val reader = new Buffered("[3~x")
+    Tui.drainEscape(
+      reader,
+      () =>
+        val t = now; now += 1_000_000_000L; t
+    )
+    reader.read(1L) shouldBe 'x'.toInt // only what follows the sequence is left
+    reader.waits.take(3).foreach(_ should be >= 1L) // each of the sequence's reads waited at least 1 ms
+    // A CSI sequence that never ends is drained for at most EscapeMaxBytes bytes.
+    val endless = new Buffered("[" + "1;" * 40)
+    Tui.drainEscape(endless, () => 0L)
+    endless.waits.size shouldBe 1 + Tui.EscapeMaxBytes // the introducer, then at most 32 bytes
   }

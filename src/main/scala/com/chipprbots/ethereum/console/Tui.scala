@@ -417,21 +417,33 @@ object Tui:
   private[console] val Esc: Int = 0x1b
 
   /** How long the rest of an escape sequence may take to arrive: a terminal sends it in one write. */
-  private[console] val EscapeTailMillis: Long = 20L
+  private[console] val EscapeTailMillis: Long = 50L
 
-  /** Reads and drops the rest of an escape sequence whose ESC was just read, within [[EscapeTailMillis]] in all: a CSI
-    * sequence (`ESC [` parameters, then a final byte in `@`–`~`), an SS3 one (`ESC O` and one byte, F1–F4), or ESC and
-    * one more byte (Alt and a key). A lone ESC drops nothing more.
+  /** The longest CSI sequence drained: parameters and intermediates, then the final byte. */
+  private[console] val EscapeMaxBytes: Int = 32
+
+  /** Reads and drops the rest of an escape sequence whose ESC was just read: a CSI sequence (`ESC [` parameters, then a
+    * final byte in `@`–`~`), an SS3 one (`ESC O` and one byte, F1–F4), or ESC and one more byte (Alt and a key). A lone
+    * ESC drops nothing more.
+    *
+    * The wait is bounded twice: by [[EscapeTailMillis]] in all, and by [[EscapeMaxBytes]] for a CSI sequence. Every
+    * byte is read with at least a 1 ms wait, even once the time is up, so a tail already buffered behind a stall (a GC
+    * pause on a loaded host) is still read here and never dispatched as keys (`D` would detach, `H` open Help).
+    *
+    * @param nanoTime
+    *   the clock the deadline is measured on; tests move it
     */
-  private[console] def drainEscape(reader: NonBlockingReader): Unit =
-    val deadline = System.nanoTime() + EscapeTailMillis * 1_000_000L
-    def next(): Int =
-      val left = (deadline - System.nanoTime()) / 1_000_000L
-      if left <= 0 then NonBlockingReader.READ_EXPIRED else reader.read(left.max(1L))
+  private[console] def drainEscape(reader: NonBlockingReader, nanoTime: () => Long = () => System.nanoTime()): Unit =
+    val deadline = nanoTime() + EscapeTailMillis * 1_000_000L
+    def next(): Int = reader.read(((deadline - nanoTime()) / 1_000_000L).max(1L))
+    def isFinal(b: Int): Boolean = b >= '@'.toInt && b <= '~'.toInt
     val introducer = next()
     if introducer == '['.toInt then
       var b = next()
-      while b >= 0 && !(b >= '@'.toInt && b <= '~'.toInt) do b = next()
+      var read = 1
+      while b >= 0 && !isFinal(b) && read < EscapeMaxBytes do
+        b = next()
+        read += 1
     else if introducer == 'O'.toInt then
       val _ = next()
 
