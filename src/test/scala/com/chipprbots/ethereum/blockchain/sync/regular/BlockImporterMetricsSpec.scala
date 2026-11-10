@@ -4,6 +4,7 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 
+import cats.data.NonEmptyList
 import cats.effect.IO
 
 import scala.concurrent.Future
@@ -39,6 +40,8 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
 
   class ImporterFixture extends RegularSyncFixture:
 
+    // No retry ticks within a test: the one PickBlocks an importer sends is then the one its own ImportDone asks for, so
+    // `awaitIdle` says exactly that an import has ended.
     override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(syncRetryInterval = 1.hour)
 
     /** An importer of its own, outside `regularSync`, driving `fetcher` (as `UnknownParentImportSpec` builds one). */
@@ -84,6 +87,53 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
 
   "BlockImporter" should {
 
+    "set the last-import duration around the consensus call of a batch it imports, with the batch's block count" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("timed-batch-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "timed-batch-importer")
+        // A batch on the local best block (genesis): evaluateBranch imports it block by block, 50 ms each.
+        val batch: List[Block] = BlockHelpers.generateChain(3, BlockHelpers.genesis)
+        batch.foreach(b => setImportResult(b, IO.sleep(50.millis) *> IO.pure(imported(b))))
+        RegularSyncMetrics.clearLastImport()
+        try
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(batch)))
+          awaitIdle(fetcher)
+
+          val last: RegularSyncMetrics.LastImport = RegularSyncMetrics.lastImport.getOrElse(fail("no import recorded"))
+          last.blocks shouldBe 3
+          last.nanos should be >= 150.millis.toNanos
+        finally RegularSyncMetrics.clearLastImport()
+        testKit.stop(importer)
+    )
+
+    "count a reorganisation's new branch, not its old one" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("timed-reorg-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "timed-reorg-importer")
+        val block: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+        val newBranch: List[Block] = block :: BlockHelpers.generateChain(2, block)
+        val oldBranch: List[Block] = List(BlockHelpers.generateBlock(BlockHelpers.genesis))
+        setImportResult(
+          block,
+          IO.sleep(30.millis) *> IO.pure(
+            ChainReorganised(oldBranch, newBranch, newBranch.map(b => ChainWeight.totalDifficultyOnly(b.number.value)))
+          )
+        )
+        RegularSyncMetrics.clearLastImport()
+        try
+          importer ! BlockImporter.ImportNewBlock(block, peerId(1))
+          awaitIdle(fetcher)
+
+          val last: RegularSyncMetrics.LastImport = RegularSyncMetrics.lastImport.getOrElse(fail("no import recorded"))
+          last.blocks shouldBe 3
+          last.nanos should be >= 30.millis.toNanos
+        finally RegularSyncMetrics.clearLastImport()
+        testKit.stop(importer)
+    )
+
     "set the last-import duration around the consensus call of a block it imports (C-7)" taggedAs (
       UnitTest,
       SyncTest
@@ -93,14 +143,15 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
         val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "timed-import-importer")
         val block: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
         setImportResult(block, IO.sleep(120.millis) *> IO.pure(imported(block)))
-        RegularSyncMetrics.recordLastImport(blocks = 0, nanos = 0L)
+        RegularSyncMetrics.clearLastImport()
+        try
+          importer ! BlockImporter.ImportNewBlock(block, peerId(1))
+          awaitIdle(fetcher)
 
-        importer ! BlockImporter.ImportNewBlock(block, peerId(1))
-        awaitIdle(fetcher)
-
-        val last: RegularSyncMetrics.LastImport = RegularSyncMetrics.lastImport.getOrElse(fail("no import recorded"))
-        last.blocks shouldBe 1
-        last.nanos should be >= 120.millis.toNanos
+          val last: RegularSyncMetrics.LastImport = RegularSyncMetrics.lastImport.getOrElse(fail("no import recorded"))
+          last.blocks shouldBe 1
+          last.nanos should be >= 120.millis.toNanos
+        finally RegularSyncMetrics.clearLastImport()
         testKit.stop(importer)
     )
 
@@ -111,11 +162,12 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
         val block: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
         setImportResult(block, IO.sleep(50.millis) *> IO.pure(DuplicateBlock))
         RegularSyncMetrics.recordLastImport(blocks = 7, nanos = 3_000L)
+        try
+          importer ! BlockImporter.ImportNewBlock(block, peerId(1))
+          awaitIdle(fetcher)
 
-        importer ! BlockImporter.ImportNewBlock(block, peerId(1))
-        awaitIdle(fetcher)
-
-        RegularSyncMetrics.lastImport shouldBe Some(RegularSyncMetrics.LastImport(7, 3_000L))
+          RegularSyncMetrics.lastImport shouldBe Some(RegularSyncMetrics.LastImport(7, 3_000L))
+        finally RegularSyncMetrics.clearLastImport()
         testKit.stop(importer)
     )
   }

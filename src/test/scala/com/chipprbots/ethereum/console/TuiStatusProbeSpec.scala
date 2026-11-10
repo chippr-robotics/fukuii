@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
-import com.chipprbots.ethereum.crypto.generateKeyPair
+import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.GasAmount
@@ -491,7 +491,8 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       case _ => Behaviors.same
     }
 
-  private val keyPair = generateKeyPair(new java.security.SecureRandom())
+  /** A fixed key: the transactions are the same on every run. */
+  private val keyPair = keyPairFromPrvKey(BigInt(0x1234567890abcdefL))
 
   private def pendingTx(nonce: Int) =
     val tx = LegacyTransaction(nonce, GasPrice(1), GasAmount(21_000), Address("0x1234"), 0, ByteString())
@@ -583,18 +584,22 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     TuiStatusProbe.peerScores(published) shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
 
     // NetworkMetrics is process-wide: the empty snapshot goes back, whatever the assertions do.
+    val before = NetworkMetrics.peerScores
     NetworkMetrics.publishPeerScores(published)
     try
       TuiStatusProbe.LocalSources.networkScores() shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
       detailedProbe(local =
         TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores)
       )().local.peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
-    finally NetworkMetrics.publishPeerScores(PeerScoreSnapshot.empty)
+    finally NetworkMetrics.publishPeerScores(before)
   }
 
   it should "read the last import from RegularSyncMetrics" taggedAs (UnitTest) in {
-    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.recordLastImport(blocks = 3, nanos = 61_000_000L)
-    TuiStatusProbe.LocalSources.regularSyncImport() shouldBe Some(ImportSample(3, java.time.Duration.ofMillis(61)))
+    val metrics = com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
+    metrics.recordLastImport(blocks = 3, nanos = 61_000_000L)
+    try TuiStatusProbe.LocalSources.regularSyncImport() shouldBe Some(ImportSample(3, java.time.Duration.ofMillis(61)))
+    finally metrics.clearLastImport()
+    TuiStatusProbe.LocalSources.regularSyncImport() shouldBe None
     detailedProbe(local =
       TuiStatusProbe.LocalSources(lastImport = () => Some(ImportSample(1, java.time.Duration.ZERO)))
     )().local.lastImport shouldBe Some(ImportSample(1, java.time.Duration.ZERO))

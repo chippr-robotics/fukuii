@@ -265,7 +265,7 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     val views: Seq[TuiState => TuiState] =
       TuiView.values.toSeq.map(v => (s: TuiState) => s.withView(v)) :+ ((s: TuiState) => s.openHelp)
     // Slice 4 (prism, on slice 3): a worm at cell 2 draws its ripple at cells 1, 0, 0, so ticks 1 and 2 (mod 3) draw
-    // the same frame and a one-tick lookahead calls it still. Ticks 0 to 3, each compared with the next two.
+    // the same frame and a one-tick lookahead calls it still. Ticks 0 to 3, each compared with the next six.
     val fixtures = TuiFixtures.all.map(_._2) ++ TuiFixtures.alerts.map(_._2) ++
       Seq((g: GlyphSet) => TuiFixtures.earlyRegularEtc(g)) :+
       ((g: GlyphSet) => TuiState(glyphs = g).withConnectionStatus("Starting node..."))
@@ -275,8 +275,9 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     do
       val s = view(fixture(set)).copy(tick = tick, motion = Motion.Full)
       val now = renderer.render(s, w, h)
-      val moves =
-        now != renderer.render(s.copy(tick = tick + 1), w, h) || now != renderer.render(s.copy(tick = tick + 2), w, h)
+      // Any of the next six ticks, not the renderer's own lookahead: an animation that holds a frame for three ticks or
+      // more would show here (prism, slice 4 review).
+      val moves = (1L to 6L).exists(k => now != renderer.render(s.copy(tick = tick + k), w, h))
       withClue(s"${s.viewTitle} $set tick $tick ${w}x$h: ") {
         if moves then renderer.frame(s, w, h, theme).animated shouldBe true
       }

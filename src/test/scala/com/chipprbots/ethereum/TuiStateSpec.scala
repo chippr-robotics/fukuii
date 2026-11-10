@@ -215,42 +215,6 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     s.lastAdvanceAt shouldBe None
   }
 
-/** Tests for NodeSettings. */
-class NodeSettingsSpec extends AnyFlatSpec with Matchers:
-
-  "NodeSettings" should "have empty default values" taggedAs (UnitTest) in {
-    val settings = NodeSettings()
-    settings.dataDir shouldBe ""
-    settings.network shouldBe ""
-    settings.syncMode shouldBe ""
-    settings.pruningMode shouldBe ""
-    settings.maxPeers shouldBe 0
-    settings.rpcEnabled shouldBe false
-    settings.rpcPort shouldBe 0
-    settings.miningEnabled shouldBe false
-  }
-
-  it should "support full configuration" taggedAs (UnitTest) in {
-    val settings = NodeSettings(
-      dataDir = "/var/lib/fukuii",
-      network = "etc",
-      syncMode = "full",
-      pruningMode = "basic",
-      maxPeers = 50,
-      rpcEnabled = true,
-      rpcPort = 8546,
-      miningEnabled = true
-    )
-    settings.dataDir shouldBe "/var/lib/fukuii"
-    settings.network shouldBe "etc"
-    settings.syncMode shouldBe "full"
-    settings.pruningMode shouldBe "basic"
-    settings.maxPeers shouldBe 50
-    settings.rpcEnabled shouldBe true
-    settings.rpcPort shouldBe 8546
-    settings.miningEnabled shouldBe true
-  }
-
   // ---- Spec 027 slice 4 (T088): the score history and its trend, computed here; the log tail --------------------------
 
   private def scored(takenAt: java.time.Instant, scores: (String, Double)*): NodeStatusSnapshot =
@@ -304,4 +268,52 @@ class NodeSettingsSpec extends AnyFlatSpec with Matchers:
     back.scrollLogs(-50, page = 20).logScroll shouldBe 0
     back.scrollLogs(500, page = 20).logScroll shouldBe 80 // the oldest page at the top, no further
     TuiState.initial.scrollLogs(10, page = 20).logScroll shouldBe 0 // nothing to scroll
+  }
+
+  it should "move a whole page on the first + after new lines anchored a view past the oldest page" taggedAs (
+    UnitTest
+  ) in {
+    def lines(from: Int, to: Int) = (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    // Scrolled to the oldest page (80 of 100 with a page of 20), then 15 newer lines keep the same lines on screen: the
+    // scroll passes the bound the next key works against.
+    val anchored = TuiState.initial.withLogs(lines(0, 99)).scrollLogs(80, page = 20).withLogs(lines(15, 114))
+    anchored.logScroll shouldBe 95
+    // `+` is a page newer than what is on screen, the oldest page (bound 80): 60, not 75.
+    anchored.scrollLogs(-20, page = 20).logScroll shouldBe 60
+  }
+
+/** Tests for NodeSettings. */
+class NodeSettingsSpec extends AnyFlatSpec with Matchers:
+
+  "NodeSettings" should "have empty default values" taggedAs (UnitTest) in {
+    val settings = NodeSettings()
+    settings.dataDir shouldBe ""
+    settings.network shouldBe ""
+    settings.syncMode shouldBe ""
+    settings.pruningMode shouldBe ""
+    settings.maxPeers shouldBe 0
+    settings.rpcEnabled shouldBe false
+    settings.rpcPort shouldBe 0
+    settings.miningEnabled shouldBe false
+  }
+
+  it should "support full configuration" taggedAs (UnitTest) in {
+    val settings = NodeSettings(
+      dataDir = "/var/lib/fukuii",
+      network = "etc",
+      syncMode = "full",
+      pruningMode = "basic",
+      maxPeers = 50,
+      rpcEnabled = true,
+      rpcPort = 8546,
+      miningEnabled = true
+    )
+    settings.dataDir shouldBe "/var/lib/fukuii"
+    settings.network shouldBe "etc"
+    settings.syncMode shouldBe "full"
+    settings.pruningMode shouldBe "basic"
+    settings.maxPeers shouldBe 50
+    settings.rpcEnabled shouldBe true
+    settings.rpcPort shouldBe 8546
+    settings.miningEnabled shouldBe true
   }

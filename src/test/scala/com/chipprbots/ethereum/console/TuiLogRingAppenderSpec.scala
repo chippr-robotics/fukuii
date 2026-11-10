@@ -112,8 +112,9 @@ class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
   it should "keep every line appended from four threads, each thread's lines in the order it logged them" taggedAs (
     UnitTest
   ) in {
+    // 8,000 lines into a ring of 1,000: the ring wraps eight times while four writers race (prism, slice 4 review).
     val r = ring(capacity = 1000)
-    val perThread = 250
+    val perThread = 2000
     val start = new CountDownLatch(1)
     val done = new CountDownLatch(4)
     val threads = (0 until 4).map { t =>
@@ -130,7 +131,9 @@ class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
 
     val lines = r.lines
     lines should have size 1000
-    lines.map(_.seq) shouldBe (0L until 1000L)
+    r.appended shouldBe 8000L
+    lines.map(_.seq) shouldBe (7000L until 8000L)
     for t <- 0 until 4 do
-      lines.map(_.text).filter(_.startsWith(s"t$t-")) shouldBe (0 until perThread).map(i => s"t$t-$i")
+      val kept = lines.map(_.text).filter(_.startsWith(s"t$t-")).map(_.stripPrefix(s"t$t-").toInt)
+      withClue(s"thread $t: ")(kept.zip(kept.drop(1)).foreach((a, b) => a should be < b))
   }

@@ -72,6 +72,9 @@ object RegularSyncMetrics extends MetricsContainer:
   /** The last import BlockImporter timed, if any. Safe to read from any thread. */
   def lastImport: Option[LastImport] = lastImportRef.get()
 
+  /** Back to "no import yet": for tests, which share this process-wide value. */
+  private[ethereum] def clearLastImport(): Unit = lastImportRef.set(None)
+
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordDefaultBlockPropagationTimer(nanos: Long): Unit = DefaultBlockPropagationTimer.record(nanos, NANOSECONDS)

@@ -137,3 +137,39 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
     body.zip(top).foreach((row, p) => row should include(panels.Rows.shortId(p.id, TuiGlyphs.Emoji)))
     (rows(title + 10) should not).include("0x") // no ninth peer
   }
+
+  // ---- prism, slice 4 review -----------------------------------------------------------------------------------------
+
+  "An Unresponsive reason" should "reach the Peers view through the sanitiser: ASCII only under the ASCII set" taggedAs (
+    UnitTest
+  ) in {
+    val reason = "peer said \u001b[2J ünreachable 中"
+    val peersDown = TuiFixtures.withPeers(synced, Sourced.Unresponsive(reason))
+    val detailsDown =
+      synced.copy(snapshot = synced.snapshot.map(_.copy(details = Some(Sourced.Unresponsive(reason)))))
+    for s <- Seq(peersDown, detailsDown); (w, h) <- Seq((80, 24), (120, 40), (160, 48)) do
+      val rows = peersView(s.copy(glyphs = GlyphSet.Ascii), w, h)
+      withClue(s"${w}x$h:\n${rows.mkString("\n")}\n") {
+        all(rows.mkString.map(_.toInt)) should be < 0x7f
+        if w >= 160 then rows.mkString should include("?nreachable ??")
+      }
+  }
+
+  "The Peers table" should "order peers whose scores round alike by how long they have been connected" taggedAs (
+    UnitTest
+  ) in {
+    val two = TuiFixtures.peerList(2) // the first connected longest ago
+    val s = TuiFixtures
+      .polled(TuiFixtures.syncedEtc().copy(peerCount = 2), two, TuiFixtures.local())
+      .copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(two(0).id -> 0.5001, two(1).id -> 0.5004)))))
+    val rows = peersView(s, 120, 40)
+    val first = rows.indexWhere(_.trim.startsWith("id ")) + 1
+    rows(first) should include(panels.Rows.shortId(two(0).id, TuiGlyphs.Emoji)) // 0.500 and 0.500: the older first
+  }
+
+  "The Overview's top table" should "not call a peer without a score one of the top by score" taggedAs (UnitTest) in {
+    val s = few.copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(fewPeers(0).id -> 0.9)))))
+    val title = frame(s, 160, 48).find(_.contains(" Peers (top ")).getOrElse(fail("no top table"))
+    title should not include "by score"
+    title should include("1 scored")
+  }
