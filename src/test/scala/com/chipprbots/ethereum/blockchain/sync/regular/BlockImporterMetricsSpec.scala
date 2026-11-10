@@ -105,6 +105,8 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
           val last: RegularSyncMetrics.LastImport = RegularSyncMetrics.lastImport.getOrElse(fail("no import recorded"))
           last.blocks shouldBe 3
           last.nanos should be >= 150.millis.toNanos
+          // The duration is for the whole batch, so /metrics carries the batch's size beside it.
+          RegularSyncMetrics.metrics.registry.find("regularsync.import.last.blocks.gauge").gauge().value() shouldBe 3d
         finally RegularSyncMetrics.clearLastImport()
         testKit.stop(importer)
     )

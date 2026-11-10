@@ -65,6 +65,15 @@ object RegularSyncMetrics extends MetricsContainer:
     )
     .description("How long the last block import's consensus call took, for one block or a batch.")
     .register(metrics.registry)
+  // The duration is for the whole call, so it needs the block count beside it: 61 ms for one block and for 128 differ.
+  Gauge
+    .builder(
+      "regularsync.import.last.blocks.gauge",
+      lastImportRef,
+      (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.blocks.toDouble)
+    )
+    .description("How many blocks the last block import's consensus call put on the chain.")
+    .register(metrics.registry)
 
   /** Called by BlockImporter after a consensus call that imported `blocks` blocks, taking `nanos`. */
   def recordLastImport(blocks: Int, nanos: Long): Unit = lastImportRef.set(Some(LastImport(blocks, nanos)))
