@@ -237,8 +237,14 @@ class Tui(
     term.flatMap { t =>
       try
         // NonBlockingReader treats a timeout of 0 as "wait forever" — never pass it through.
-        val c = t.reader().read(Math.max(1L, timeoutMs))
-        if c >= 0 then Some(c.toChar.toLower)
+        val reader = t.reader()
+        val c = reader.read(Math.max(1L, timeoutMs))
+        // An arrow, Home, Insert, Delete or a function key is an escape sequence. Its tail must not be read as keys
+        // (Left arrow ends in `D`: Detach; Home in `H`: Help), so the whole sequence is consumed and dropped (§2.2).
+        if c == Tui.Esc then
+          Tui.drainEscape(reader)
+          None
+        else if c >= 0 then Some(c.toChar.toLower)
         else
           // End of input: nothing can be typed again, and every later read would return at once.
           if c == NonBlockingReader.EOF then
@@ -279,10 +285,13 @@ class Tui(
       TuiCommand.Continue
     else dispatch(command)
 
-  private def dispatch(command: Char): TuiCommand = command match
-    case key if TuiView.forKey(key).isDefined =>
-      TuiView.forKey(key).foreach(view => modify(_.withView(view)))
+  private def dispatch(command: Char): TuiCommand = TuiView.forKey(command) match
+    case Some(view) =>
+      modify(_.withView(view))
       TuiCommand.Continue
+    case None => dispatchKey(command)
+
+  private def dispatchKey(command: Char): TuiCommand = command match
     case '\t' =>
       modify(_.nextView)
       TuiCommand.Continue
@@ -404,6 +413,27 @@ object Tui:
 
   /** Leaves the TUI's screen: attributes reset, cursor shown, back to the normal buffer and the user's scrollback. */
   private[console] val RestoreScreen = ResetColors + ShowCursor + ExitAltScreen
+
+  private[console] val Esc: Int = 0x1b
+
+  /** How long the rest of an escape sequence may take to arrive: a terminal sends it in one write. */
+  private[console] val EscapeTailMillis: Long = 20L
+
+  /** Reads and drops the rest of an escape sequence whose ESC was just read, within [[EscapeTailMillis]] in all: a CSI
+    * sequence (`ESC [` parameters, then a final byte in `@`–`~`), an SS3 one (`ESC O` and one byte, F1–F4), or ESC and
+    * one more byte (Alt and a key). A lone ESC drops nothing more.
+    */
+  private[console] def drainEscape(reader: NonBlockingReader): Unit =
+    val deadline = System.nanoTime() + EscapeTailMillis * 1_000_000L
+    def next(): Int =
+      val left = (deadline - System.nanoTime()) / 1_000_000L
+      if left <= 0 then NonBlockingReader.READ_EXPIRED else reader.read(left.max(1L))
+    val introducer = next()
+    if introducer == '['.toInt then
+      var b = next()
+      while b >= 0 && !(b >= '@'.toInt && b <= '~'.toInt) do b = next()
+    else if introducer == 'O'.toInt then
+      val _ = next()
 
   /** The keys that keep their meaning while Help is open; any other key closes it. */
   private[console] val KeysInHelp: Set[Char] = Set('q', 'r', 'd')

@@ -149,3 +149,39 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
       "1 Overview  2 Sync  3 Peers  4 Chain │ p Pause  ? Help  r Redraw  d Detach  q Quit"
     renderer.render(s.copy(glyphs = GlyphSet.Ascii), 80, 24).last.toString should include("4 Chain | p Pause")
   }
+
+  // prism, slice 3 review: an arrow, Home, Insert, Delete or a function key is an escape sequence, and its tail was
+  // dispatched as keys: Left arrow (ESC [ D) detached the TUI, Home (ESC [ H) opened Help.
+  "An escape sequence" should "be read whole and dropped, never dispatched as keys" taggedAs (UnitTest) in withTui {
+    (tui, tt) =>
+      val sequences = Seq(
+        "\u001b[D" -> "Left arrow",
+        "\u001b[H" -> "Home",
+        "\u001b[2~" -> "Insert",
+        "\u001b[3~" -> "Delete",
+        "\u001bOP" -> "F1",
+        "\u001b[1;5D" -> "Ctrl-Left"
+      )
+      for (keys, name) <- sequences do
+        withClue(s"$name: ") {
+          tt.press(keys)
+          tui.checkInput(1000) shouldBe None
+          tui.checkInput(50) shouldBe None // nothing of it is left to read
+        }
+      tui.isEnabled shouldBe true
+      tui.getState.helpOpen shouldBe false
+      tui.getState.motion shouldBe Motion.Full
+      // A key typed after a sequence is still read.
+      tt.press("\u001b[C2")
+      tui.checkInput(1000) shouldBe None
+      tui.checkInput(1000) shouldBe Some('2')
+  }
+
+  "r in Help" should "redraw and leave Help open" taggedAs (UnitTest) in withTui { (tui, tt) =>
+    tui.handleCommand('?')
+    tui.render()
+    val bytes = tt.output.length
+    tui.handleCommand('r') shouldBe TuiCommand.Continue
+    tt.output.substring(bytes) should include(Tui.ClearScreen)
+    tui.getState.helpOpen shouldBe true
+  }
