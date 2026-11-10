@@ -47,7 +47,7 @@ class SanitizeSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChec
     Sanitize.line("first\nsecond") shouldBe "first…"
     Sanitize.line("first\r\nsecond\nthird") shouldBe "first…"
     Sanitize.line("first\rsecond") shouldBe "first…"
-    Sanitize.line("first second") shouldBe "first…"
+    Sanitize.line("first\u2028second") shouldBe "first…" // U+2028, the line separator
     Sanitize.line("only\n") shouldBe "only"
     Sanitize.line("only\n  \n") shouldBe "only"
     Sanitize.line("  padded  ") shouldBe "padded"
