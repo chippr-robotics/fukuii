@@ -392,9 +392,13 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   }
 
   it should "read SNAP's pivot block" taggedAs (UnitTest) in {
-    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setPivotBlockNumber(BigInt(9_118_000))
-    TuiStatusProbe.LocalSources.snapPivotBlock() shouldBe Some(9_118_000L)
-    localProbe(TuiStatusProbe.LocalSources(snapPivot = () => Some(42L)))().local.snapPivot shouldBe Some(42L)
+    import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+    val saved = SNAPSyncMetrics.pivotBlockNumber
+    try
+      SNAPSyncMetrics.setPivotBlockNumber(BigInt(9_118_000))
+      TuiStatusProbe.LocalSources.snapPivotBlock() shouldBe Some(9_118_000L)
+      localProbe(TuiStatusProbe.LocalSources(snapPivot = () => Some(42L)))().local.snapPivot shouldBe Some(42L)
+    finally SNAPSyncMetrics.setPivotBlockNumber(BigInt(saved)) // the gauge is process-wide
   }
 
   it should "clean a failure's reason before it reaches the screen: one line, no control character, capped" taggedAs (
@@ -405,9 +409,13 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     long.length shouldBe TuiStatusProbe.MaxReasonChars
     long should endWith("...")
     TuiStatusProbe.reason(new IllegalStateException()) shouldBe "IllegalStateException"
+    // An emoji (a surrogate pair) across the cut is dropped whole, not split.
+    val emoji = TuiStatusProbe.reason(new RuntimeException("x" * (TuiStatusProbe.MaxReasonChars - 4) + "🪱" * 10))
+    emoji shouldBe "x" * (TuiStatusProbe.MaxReasonChars - 4) + "..."
+    emoji.exists(Character.isSurrogate) shouldBe false
   }
 
-  it should "take the local readings while the asks are in flight" taggedAs (UnitTest) in {
+  it should "take the local readings even when both asks miss their wait" taggedAs (UnitTest) in {
     val s = new TuiStatusProbe(
       spawn(silent),
       spawn(silent),

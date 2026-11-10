@@ -138,8 +138,8 @@ class TuiStatusProbe(
       .map((progress, at) => (progress, Instant.ofEpochMilli(at)))
       .filter((progress, _) => ActiveSnapPhases.contains(progress.phase))
     val snap = latest.filter((_, at) => ageMillis(at, now) <= SnapProgressMaxAgeMillis)
-    val running = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
-    val (current, best, description) = describe(status, localBest, snapRunning = running)
+    val fresh = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
+    val (current, best, description) = describe(status, localBest, snapSampleFresh = fresh)
     SyncSample(
       current,
       best,
@@ -287,7 +287,12 @@ object TuiStatusProbe:
   private[console] def reason(e: Throwable): String =
     val raw = Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
     val clean = raw.map(ch => if Character.isISOControl(ch) then ' ' else ch).trim
-    if clean.length <= MaxReasonChars then clean else clean.take(MaxReasonChars - 3) + "..."
+    if clean.length <= MaxReasonChars then clean
+    else
+      // Never cut between the two halves of a surrogate pair (an emoji in a peer's message).
+      val keep = MaxReasonChars - 3
+      val end = if Character.isHighSurrogate(clean.charAt(keep - 1)) then keep - 1 else keep
+      clean.take(end) + "..."
 
   /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
   private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
@@ -302,13 +307,14 @@ object TuiStatusProbe:
     * `runningSnapSync`, with a target of 0), so a 0 target with a SNAP sample in hand is SNAP at work, not a sync
     * waiting for its target (B-044).
     *
-    * @param snapRunning
-    *   the SNAP monitor has a recent sample of an active phase
+    * @param snapSampleFresh
+    *   the SNAP monitor has a sample of an active phase from its last two rounds ([[SnapStatusMaxAgeMillis]]): enough
+    *   to say "Syncing (SNAP)". Not [[SyncSample.snapRunning]], whose window is longer
     */
   private[console] def describe(
       status: SyncProtocol.Status,
       localBest: Long,
-      snapRunning: Boolean
+      snapSampleFresh: Boolean
   ): (Long, Long, String) = status match
     case SyncProtocol.Status.Syncing(_, blocks, stateNodes) =>
       val target = blocks.target.toLong
@@ -316,7 +322,7 @@ object TuiStatusProbe:
       val state = stateNodes.filter(_.nonEmpty).map(p => f" (state ${p.current}%,d / ${p.target}%,d)").getOrElse("")
       val description =
         if target > 0 then s"Syncing$state"
-        else if snapRunning then "Syncing (SNAP)"
+        else if snapSampleFresh then "Syncing (SNAP)"
         else "Syncing (no target yet)"
       (current, target, description)
     case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")
