@@ -34,6 +34,13 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   private var storageContractsCompleted: Int = 0
   private var storageContractsTotal: Int = 0
 
+  // B-044: the highest `phaseProgress` (percent) reported in the current phase. The estimates behind the percentage are
+  // pushed in rounds while the counters rise between them, so the ratio can fall at a round (a larger estimate, a
+  // sampling step) even when the work did not go back. The percentage, and the Overall worm drawn from it, are held at
+  // this mark within a phase. It is cleared when the phase changes and by `reset()`: a restart really does start again,
+  // and a new phase is measured on its own.
+  private var phaseProgressMark: Int = 0
+
   // Chain download tracking (parallel header/body/receipt download)
   private var chainHeaders: BigInt = BigInt(0)
   private var chainBodies: BigInt = BigInt(0)
@@ -80,7 +87,14 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   def setBytecodeComplete(): Unit = synchronized { bytecodesDone = true }
 
   def reset(): Unit = synchronized {
+    // A restart zeroes every counter, so the percentage and the worms start again from nothing. Say what they drop.
+    log.info(
+      s"SNAP progress reset by a restart (was: phase=$currentPhaseState, accounts=$accountsSynced, " +
+        s"bytecodes=$bytecodesDownloaded, slots=$storageSlotsSynced, nodes healed=$nodesHealed, " +
+        s"phase progress=$phaseProgressMark%); counters, estimates and the progress percentage start again from zero"
+    )
     currentPhaseState = Idle
+    phaseProgressMark = 0
     accountsSynced = 0
     bytecodesDownloaded = 0
     storageSlotsSynced = 0
@@ -103,15 +117,22 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   }
 
   def startPhase(phase: SyncPhase): Unit =
-    val previousPhase = currentPhaseState
-    if previousPhase != phase then
-      currentPhaseState = phase
-      phaseStartTime = System.currentTimeMillis()
-      log.info(s"SNAP Sync phase transition: $previousPhase -> $phase")
+    val previousPhase = synchronized {
+      val previous = currentPhaseState
+      if previous != phase then
+        currentPhaseState = phase
+        phaseStartTime = System.currentTimeMillis()
+        phaseProgressMark = 0
+      previous
+    }
+    if previousPhase != phase then log.info(s"SNAP Sync phase transition: $previousPhase -> $phase")
     logProgress()
 
   def complete(): Unit =
-    currentPhaseState = Completed
+    synchronized {
+      currentPhaseState = Completed
+      phaseProgressMark = 0
+    }
     stopPeriodicLogging()
     log.info("SNAP Sync completed!")
     logProgress()
@@ -135,7 +156,18 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     val now = System.currentTimeMillis()
     slotsHistory.enqueue((now, storageSlotsSynced))
     cleanupHistory(slotsHistory, now)
+    rescaleSlotEstimate()
   }
+
+  /** The slot estimate is `slots / completed contracts * total contracts` (`DownloadSupervisor`'s
+    * `ProgressStorageContracts` arm pushes the same figure), so `slots / estimate` is the share of contracts done. It
+    * was only refreshed when a contract completed, while the slot count rose with every response: a large contract in
+    * flight pushed the ratio past the share of contracts done (and past 100%), and the next completion pulled it back
+    * down (B-044). Following the count keeps `slots / estimate` equal to `completed / total` between reports.
+    */
+  private def rescaleSlotEstimate(): Unit =
+    if storageContractsCompleted > 0 && storageContractsTotal > 0 then
+      estimatedTotalSlots = (storageSlotsSynced.toDouble / storageContractsCompleted * storageContractsTotal).toLong
 
   def incrementNodesHealed(count: Long): Unit = synchronized {
     nodesHealed += count
@@ -144,6 +176,9 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     cleanupHistory(nodesHistory, now)
   }
 
+  /** Replace the estimated totals (a zero leaves a total as it is). The totals are kept as given; the reported
+    * percentage is held by `phaseProgressMark`, not by holding the estimates back.
+    */
   def updateEstimates(accounts: Long = 0, bytecodes: Long = 0, slots: Long = 0): Unit = synchronized {
     if accounts > 0 then estimatedTotalAccounts = accounts
     if bytecodes > 0 then estimatedTotalBytecodes = bytecodes
@@ -219,12 +254,17 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     val recentSlotsPerSec = calculateRecentThroughput(slotsHistory)
     val recentNodesPerSec = calculateRecentThroughput(nodesHistory)
 
-    val phaseProgress = currentPhaseState match
+    val rawPhaseProgress = currentPhaseState match
       case AccountRangeSync if estimatedTotalAccounts > 0 =>
         (accountsSynced.toDouble / estimatedTotalAccounts * 100).toInt
       case ByteCodeAndStorageSync if estimatedTotalSlots > 0 =>
         (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
       case _ => 0
+
+    // Held at the highest value reported in this phase, and never past 100 (B-044). `currentProgress` is the one place
+    // that reads the percentage, so the mark is the highest value anyone has been shown.
+    val phaseProgress = math.min(100, math.max(rawPhaseProgress, phaseProgressMark))
+    phaseProgressMark = phaseProgress
 
     val finalizeElapsedSec =
       if finalizingTrie then ((System.currentTimeMillis() - finalizeStartTimeMs) / 1000.0).toInt else 0
@@ -317,8 +357,8 @@ case class SyncProgress(
       case i  => i
 
     val stageSize = if stages.size <= 1 then 1.0 else 1.0 / (stages.size - 1)
-    val withinStage =
-      if phaseProgress > 0 && phaseProgress <= 100 then (phaseProgress / 100.0) * stageSize else 0.0
+    // Past 100 the stage is full, not empty: an out-of-range percentage must not drop the worm to the stage floor.
+    val withinStage = if phaseProgress > 0 then (math.min(phaseProgress, 100) / 100.0) * stageSize else 0.0
 
     math.max(0.0, math.min(1.0, stageIndex * stageSize + withinStage))
 
@@ -398,11 +438,21 @@ case class SyncProgress(
       if storageContractsTotal > 0 then s" (${storageContractsCompleted}/${storageContractsTotal} contracts)"
       else ""
 
+    // In its own phase a row draws the held percentage the log line shows, so a line and its worm never disagree.
+    val accountsFraction =
+      if phase == AccountRangeSync then phaseProgress / 100.0
+      else if estimatedTotalAccounts > 0 then accountsSynced.toDouble / estimatedTotalAccounts
+      else 0.0
+    val storageFraction =
+      if phase == ByteCodeAndStorageSync then phaseProgress / 100.0
+      else if estimatedTotalSlots > 0 then storageSlotsSynced.toDouble / estimatedTotalSlots
+      else 0.0
+
     val accountsBar =
       val (bar, detail) =
         if estimatedTotalAccounts > 0 then
           (
-            WormToBrainBar.renderKnown(accountsSynced.toDouble / estimatedTotalAccounts),
+            WormToBrainBar.renderKnown(accountsFraction),
             s" \u2014 ${formatCount(accountsSynced)} / ~${formatCount(estimatedTotalAccounts)} @ ${accountsPerSec.toInt}/s"
           )
         else if accountsSynced > 0 then
@@ -417,7 +467,7 @@ case class SyncProgress(
       val (bar, detail) =
         if estimatedTotalSlots > 0 then
           (
-            WormToBrainBar.renderKnown(storageSlotsSynced.toDouble / estimatedTotalSlots),
+            WormToBrainBar.renderKnown(storageFraction),
             s" \u2014 ${formatCount(storageSlotsSynced)} slots$contractsStr"
           )
         else if storageSlotsSynced > 0 then
