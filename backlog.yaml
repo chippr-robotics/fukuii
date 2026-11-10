@@ -1359,26 +1359,21 @@ items:
   - id: B-124
     title: "Spec 027: give the resolved TuiConfig glyph choice its own type"
     priority: P3
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-08
+    closed: 2026-11-10
     refs: [prism review of 027 slice 1]
     links:
       prs: [1783]
       spec: specs/027-tui-dashboard
       branch: feat/027-s2-motion
     depends_on: [B-038]
-    claim:
-      by: dev-node
-      agent: general-purpose
-      since: 2026-11-09T18:55:36Z
-      heartbeat: 2026-11-09T23:56:06Z
-      branch: feat/027-s2-motion
     notes: |-
-      Split the fukuii.tui choice from the resolved set (slice 2, B-039).
       2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
       2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
+      2026-11-10 done: Merged as b971c9dae. Manual gates (T057) move to the UAT item B-189.
   - id: B-125
     title: "Launcher: silence the JDK 25 sun.misc.Unsafe warning that overprints the TUI's first frame"
     priority: P3
