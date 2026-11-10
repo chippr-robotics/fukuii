@@ -444,23 +444,20 @@ items:
   - id: B-040
     title: "Spec 027 slice 3: views, layout, alerts"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: M
     opened: 2026-11-07
+    closed: 2026-11-10
     refs: []
     links:
       prs: [1784]
       spec: specs/027-tui-dashboard
       branch: feat/027-s3-views
     depends_on: [B-039]
-    claim:
-      by: dev-node
-      agent: general-purpose
-      since: 2026-11-09T23:24:19Z
-      heartbeat: 2026-11-10T01:20:44Z
-      branch: feat/027-s3-views
-    notes: "2026-11-10 review: PR #1784: prism (3 rounds) + eye passed; merge after the B-044 PR."
+    notes: |-
+      2026-11-10 review: PR #1784: prism (3 rounds) + eye passed; merge after the B-044 PR.
+      2026-11-10 done: Merged as 1aa158894. T081 manual run moves to UAT B-189. Follow-up B-192.
   - id: B-041
     title: "Spec 027 slice 4a: peer scoring wired (PeerScoringManager, scores through NetworkMetrics)"
     priority: P2
