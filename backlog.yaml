@@ -823,18 +823,20 @@ items:
   - id: B-071
     title: "#1655 part 2: Ephemery staking (partial withdrawal matched geth; exit request next, then the write-up)"
     priority: P2
-    status: in-progress
+    status: review
     area: ops
     size: M
     opened: 2026-11-07
     refs: [handoff §4]
     links:
       issues: [1655]
+      prs: [1786]
     claim:
       by: dev-node
       agent: main
       since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:55:42Z
+      heartbeat: 2026-11-10T23:44:42Z
+    notes: "2026-11-10 review: Sweep matched geth (block 122552, 834.07 ETH). Runbook PR #1786; close #1655 when it merges."
   - id: B-072
     title: "Re-validate #1727's eth_simulateV1 fixes against geth on Ephemery (the simulate-165 harness)"
     priority: P2
