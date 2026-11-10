@@ -518,24 +518,19 @@ items:
   - id: B-044
     title: "TUI display defects: SNAP progress goes backwards, \"no target yet\" during SNAP, duplicated Accounts/rate lines"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-07
+    closed: 2026-11-10
     refs: [027 live check 2026-11-07]
     links:
       prs: [1783, 1785]
       spec: specs/027-tui-dashboard
-    claim:
-      by: dev-node
-      agent: general-purpose
-      since: 2026-11-09T18:55:29Z
-      heartbeat: 2026-11-10T01:40:40Z
-      branch: feat/027-s2-motion
     notes: |-
-      2026-11-09 in-progress: TUI part in #1783; SyncProgressMonitor part still open (separate fix).
       2026-11-10 in-progress: TUI part merged in #1783 (b971c9dae); SyncProgressMonitor part in progress on fix/b044-snap-progress.
       2026-11-10 review: PR #1785 (SyncProgressMonitor part): prism 3 rounds + eye passed; merges before #1784.
+      2026-11-10 done: TUI part #1783, monitor part #1785 (ba2361acf), dashboard rows #1784. Follow-ups B-190, B-191.
   - id: B-045
     title: "TUI lifecycle defects: ERROR loop after Ctrl-C, checkInput swallows errors, banner holds the lock, StdNode makes a Tui"
     priority: P2
