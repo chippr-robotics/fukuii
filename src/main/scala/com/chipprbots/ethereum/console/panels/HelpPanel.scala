@@ -12,7 +12,7 @@ private[console] object HelpPanel:
 
   /** Each key and what it does. */
   val Keys: Seq[(String, String)] = Seq(
-    "1 2 3 4 5" -> "1 Overview  2 Sync  3 Peers  4 Chain  5 Logs",
+    "1-5" -> "1 Overview  2 Sync  3 Peers  4 Chain  5 Logs",
     "Tab" -> "the next view (wraps)",
     "l" -> "the Logs view",
     "+ -" -> "Logs: + newer lines, - older lines, a page at a time",
@@ -50,7 +50,9 @@ private[console] object HelpPanel:
       g.error -> "error",
       g.arrow -> "next fork",
       g.dot -> "to come",
-      g.storage -> "SNAP phase"
+      g.storage -> "SNAP phase",
+      Glyph(s"${g.up.text} ${g.down.text} ${g.steady.text}", 5) -> "score trend",
+      g.missing -> "no score yet"
     ).map((glyph, what) => s"${glyph.text} $what")
     val title = fit(
       text(s" Glyphs (${g.set.toString.toLowerCase(java.util.Locale.ROOT)}, g switches)", c.t.healthy.bold()),

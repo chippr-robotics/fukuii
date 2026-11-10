@@ -5,7 +5,7 @@
  Sync    + at head                                                                                                                                              
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  Keys                                                                                                                                                           
-   1 2 3 4 5 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs                                                                                                       
+   1-5       1 Overview  2 Sync  3 Peers  4 Chain  5 Logs                                                                                                       
    Tab       the next view (wraps)                                                                                                                              
    l         the Logs view                                                                                                                                      
    + -       Logs: + newer lines, - older lines, a page at a time                                                                                               
@@ -18,7 +18,7 @@
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  Glyphs (ascii, g switches)                                                                                                                                     
    ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer   ! warning   x error   > next fork   . to come   [S] SNAP phase                
-                                                                                                                                                                
+   ^ v - score trend   - no score yet                                                                                                                           
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
